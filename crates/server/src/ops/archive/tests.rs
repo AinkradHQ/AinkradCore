@@ -129,3 +129,41 @@ fn refuses_a_forged_a_tampered_and_an_unsigned_archive() {
     assert!(e.to_string().contains("after the last file"), "{e}");
     assert!(unpack(b"PK\x03\x04", &fp, &d).is_err());
 }
+
+#[test]
+fn carries_the_core_identity_under_the_signature() {
+    let d = dir("identity");
+    let key = key();
+    let fp = signer_fingerprint(&key);
+    fs::write(d.0.join("db"), b"SQLite format 3\0 pages").unwrap();
+    fs::write(d.0.join("mk"), [9u8; 32]).unwrap();
+    fs::write(d.0.join("id"), b"a pkcs8 identity key").unwrap();
+    let mut bytes = Vec::new();
+    write(
+        &mut bytes,
+        &key,
+        "backup",
+        "2026-10-29T10:00:00.000Z",
+        &[
+            ("core.db", &d.0.join("db")),
+            ("keys/master.key", &d.0.join("mk")),
+            (IDENTITY, &d.0.join("id")),
+        ],
+    )
+    .unwrap();
+    let m = unpack(&bytes, &fp, &d).unwrap();
+    assert_eq!(m.files[2].name, "core-identity.p8");
+    assert_eq!(
+        fs::read(d.0.join("out/core-identity.p8")).unwrap(),
+        b"a pkcs8 identity key"
+    );
+    // Its last byte changed: the signed manifest's hash catches it.
+    let mut changed = bytes.clone();
+    *changed.last_mut().unwrap() ^= 1;
+    let e = unpack(&changed, &fp, &d).unwrap_err();
+    assert!(
+        e.to_string()
+            .contains("core-identity.p8 does not match its signed hash"),
+        "{e}"
+    );
+}

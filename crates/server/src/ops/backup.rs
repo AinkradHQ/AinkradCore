@@ -1,7 +1,7 @@
 //! `backup` and `backup-keygen` (E1-13.2, E1-13.6; threat model T-BAK-1..3).
 //!
 //! A backup is: a consistent snapshot of the database (`store::backup`, `VACUUM INTO`) plus the
-//! master key, in a signed archive (`archive`), encrypted with `age` to the configured recipient,
+//! master key and the Core identity key, in a signed archive (`archive`), encrypted with `age` to the configured recipient,
 //! kept in `<home>/backups/` and PUT once to the bucket under a new name. The host holds only the
 //! recipient (public); the identity that decrypts lives offline (Q-TM2).
 
@@ -35,8 +35,8 @@ pub(crate) async fn snapshot(home: &Home, dest: &Path) -> Result_ {
     Ok(done?)
 }
 
-/// Writes the signed archive of the home's snapshot and master key through `out` (an `age`
-/// writer for a backup, a plain file for an export). The plaintext snapshot lives only in the
+/// Writes the signed archive of the home's snapshot and master key (and, in a backup, the Core
+/// identity key) through `out` (an `age` writer for a backup, a plain file for an export). The plaintext snapshot lives only in the
 /// 0700 `backups/` directory, and only while this runs.
 pub(crate) async fn archive_home(
     home: &Home,
@@ -48,10 +48,16 @@ pub(crate) async fn archive_home(
     let made = async {
         snapshot(home, &plain).await?;
         let master = home.master_key();
-        let files = [
+        let identity = home.identity();
+        let mut files = vec![
             ("core.db", plain.as_path()),
             ("keys/master.key", master.as_path()),
         ];
+        // The Core identity only inside the encrypted backup, never in a plaintext export. A
+        // home that never served has none yet.
+        if kind == "backup" && identity.exists() {
+            files.push((archive::IDENTITY, identity.as_path()));
+        }
         Ok(archive::write(
             out,
             &signer,

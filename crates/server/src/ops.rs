@@ -36,8 +36,9 @@ The config is --config <file>, else $AINKRAD_CONFIG. Keys: home, listen, hostnam
 acme_contact, log_format (text|json), backup_recipient (age1...), backup_keep_local; each is
 overridden by AINKRAD_<KEY in upper case>. serve --config takes --listen, --hostname,
 --acme-contact and --log-format from it unless given on the command line.
-backup takes a consistent snapshot, signs it (manifest: version, time, size, SHA-256; the
-signer's key and fingerprint) and encrypts it to backup_recipient with age, into
+backup takes a consistent snapshot, adds the master key and the Core identity key, signs it
+(manifest: version, time, each file's size and SHA-256; the signer's key and fingerprint) and
+encrypts it to backup_recipient with age, into
 <home>/backups/<UTC time>-<random>.age (keeping backup_keep_local), then PUTs it once, as a
 new object <prefix><UTC time>-<random>.age, to the bucket named by AINKRAD_BACKUP_ENDPOINT,
 _BUCKET, _REGION, _PREFIX (default core/), _ACCESS_KEY, _SECRET_KEY (from the environment only,
@@ -46,10 +47,12 @@ snapshot above the single-PUT limit (multipart needs overwrite rights the backup
 backup-keygen prints a new age identity and its recipient once: keep the identity OFF the host.
 restore decrypts a backup (a file, or s3:<key> fetched from the bucket), checks the signature
 against --signer before writing anything, and builds a new home in a fresh directory: the
-database (integrity and schema checked, then migrated) and the master key from the backup, a
-new config and a new signing key. export writes the same signed archive unencrypted, 0600,
-never over an existing file: it holds the master key, so move it like a private key. import
-is restore for an export.";
+database (integrity and schema checked, then migrated), the master key and the Core identity
+key (core-identity.p8, 0600; so paired devices and runners still accept it) from the backup, a
+new config and a new signing key; a backup without the identity restores with a warning that
+everything must be paired again. export writes the same signed archive unencrypted, 0600,
+never over an existing file: it holds the master key, so move it like a private key; it never
+holds the Core identity. import is restore for an export (a new identity: pair again).";
 
 /// Runs an operations verb; `None` when `args` is not one (the caller prints the usage).
 pub async fn run(args: &[&str]) -> Option<Result_> {

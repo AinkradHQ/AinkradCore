@@ -187,6 +187,10 @@ impl Home {
     pub fn signing_key(&self) -> PathBuf {
         self.keys().join("backup-signing.p8")
     }
+    /// PKCS#8 P-256, 0600, made on first serve: the Core identity devices and runners pin.
+    pub fn identity(&self) -> PathBuf {
+        self.0.join(crate::auth::identity::FILE)
+    }
     pub fn backups(&self) -> PathBuf {
         self.0.join("backups")
     }

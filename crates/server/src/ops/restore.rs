@@ -2,7 +2,7 @@
 //! directory only. Order: the target is checked fresh; the archive is unpacked into a staging
 //! directory beside it, which checks the signature against the pinned `--signer` before writing
 //! a byte and every file's hash after; only then is the home laid out (with the archive's master
-//! key, a new signing key and a default config), the database swapped in through
+//! key and Core identity key, a new signing key and a default config), the database swapped in through
 //! `store::restore` (`integrity_check`, schema not newer than this binary) and migrated.
 
 use std::fs::File;
@@ -13,6 +13,7 @@ use super::config::Home;
 use super::init::{fresh, lay_out, migrate, undo};
 use super::s3::Bucket;
 use super::{Result_, archive, private_dir, random_hex};
+use crate::auth::Identity;
 use crate::store;
 
 /// `restore <file|s3:<key>> --identity <file> --signer <fp> <home>`.
@@ -81,15 +82,27 @@ async fn build(
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(e.into()),
         };
+        // The Core identity, checked before the home is touched: a key that does not load would
+        // only fail later, at serve.
+        let identity = files.join(archive::IDENTITY);
+        let core_fp = match std::fs::read(&identity) {
+            Ok(der) => Some(Identity::from_pkcs8(&der)?.fp),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        };
         created = true;
         let (h, fp) = lay_out(home, master.as_deref())?;
+        if core_fp.is_some() {
+            // Staged 0600 beside the home (same filesystem), so a rename keeps it private.
+            std::fs::rename(&identity, h.identity())?;
+        }
         store::restore(&files.join("core.db"), &h.db(), false).await?;
         migrate(&h).await?;
-        Ok::<_, Box<dyn std::error::Error>>((manifest, h, fp, master.is_some()))
+        Ok::<_, Box<dyn std::error::Error>>((manifest, h, fp, master.is_some(), core_fp))
     }
     .await;
     archive::discard(&staging);
-    let (manifest, h, fp, kept_master) = match done {
+    let (manifest, h, fp, kept_master, core_fp) = match done {
         Ok(d) => d,
         Err(e) => {
             if created {
@@ -99,6 +112,19 @@ async fn build(
         }
     };
     report(&manifest, &h, &fp, signer, kept_master);
+    match core_fp {
+        Some(core_fp) => eprintln!(
+            "The Core identity was restored ({core_fp}): paired devices and runners accept it."
+        ),
+        None => eprintln!(
+            "WARNING: the {} has no Core identity key ({}): it was made before backups carried \
+             it, or it is an export, or the Core never served. The restored Core makes a NEW \
+             identity on first serve, and every paired device and runner refuses it \
+             (core_identity_mismatch) until it is paired again.",
+            manifest.kind,
+            archive::IDENTITY
+        ),
+    }
     Ok(())
 }
 
