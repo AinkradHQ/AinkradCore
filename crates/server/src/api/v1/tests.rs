@@ -31,6 +31,7 @@ mod me;
 mod modules;
 mod pairing;
 mod pairing_abuse;
+mod passkeys;
 mod preauth;
 mod revocation;
 mod runners;
@@ -40,6 +41,8 @@ mod sessions;
 mod settings;
 mod signed;
 mod stepup;
+mod web;
+mod web_socket;
 
 pub(super) const NOW: &str = "2026-10-22T10:00:00.000Z";
 pub(super) const HOST: &str = "core.test";

@@ -36,7 +36,11 @@
 /// 8: runner health (E1-11.4/.6): `listRunners`, `getRunner`, `runNoop`, the
 ///    `runner.connected`/`.disconnected`/`.degraded` event kinds (scope `read`), the
 ///    `runner.command` audit action.
-pub const API_MINOR: u32 = 8;
+/// 9: passkeys and the web client (E1-08): `passkeyRegistrationOptions`,
+///    `claimPasskeyPairing`, `webSignInOptions`, `webSignIn`, `createWsTicket`; the pairing kind
+///    `passkey`; `StepUpRequest.assertion` (and `stepup_sig` optional), `Challenge.options`; the
+///    `passkey.locked` audit action.
+pub const API_MINOR: u32 = 9;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

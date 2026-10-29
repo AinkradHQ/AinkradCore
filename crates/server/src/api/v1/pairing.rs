@@ -1,8 +1,8 @@
 //! Pairing, the approver's side (handshake spec §7.2 steps 1, 5 and 7): an `admin` device
 //! creates a pairing bound to a name, kind and scopes (never wider than its own), sees the
 //! claimant and the SAS the Core computed, and approves by sending that SAS back, or rejects.
-//! Every route needs `admin` (`scopes`); elevation (step-up) for them comes with E1-09.3. The
-//! new device's side is `pair`.
+//! Every route needs `admin` (`scopes`) and a live elevation (`scopes::DESTRUCTIVE`). The new
+//! device's side is `pair` (`passkey` for a browser's passkey).
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
@@ -23,7 +23,7 @@ use crate::store::gov::{self, Decider, Decision, NewPairing, SCOPES};
 pub struct NewPairingBody {
     /// What to call the new device.
     pub name: String,
-    /// `device` or `runner` (`passkey` comes with E1-08).
+    /// `device`, `runner`, or `passkey` (a browser, E1-08; only when the Core has passkeys).
     pub kind: String,
     /// What it may do: within the approver's own scopes; a runner gets exactly `runner`.
     pub scopes: Vec<String>,
@@ -106,7 +106,20 @@ pub async fn create(
                 "a runner gets exactly the runner scope",
             ));
         }
-        _ => return Err(ApiError::bad_request("kind is device or runner")),
+        // A browser's passkey (E1-08.2): created only here, by an elevated admin device, never
+        // by the browser itself; it never holds `runner`.
+        "passkey" if app.passkeys.is_none() => {
+            return Err(ApiError::bad_request(
+                "passkeys are not enabled on this Core",
+            ));
+        }
+        "passkey" if scopes.iter().any(|s| s == "runner") => {
+            return Err(ApiError::bad_request(
+                "a passkey never gets the runner scope",
+            ));
+        }
+        "passkey" => {}
+        _ => return Err(ApiError::bad_request("kind is device, runner or passkey")),
     }
     if scopes.iter().any(|s| !SCOPES.contains(&s.as_str())) {
         return Err(ApiError::bad_request("unknown scope"));

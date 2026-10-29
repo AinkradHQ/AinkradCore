@@ -15,7 +15,21 @@
 use std::io::{self, Write};
 
 use ainkrad_proto::redact::Redactor;
+use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
+/// What never reaches the log, at any level: the passkey verifier's own lines (E1-08). At
+/// debug and trace webauthn-rs prints its ceremony state and the browser's responses (the
+/// challenge, the credential, the attestation) and its parse errors carry input bytes; the
+/// Core logs its own reason for every passkey refusal instead.
+pub fn quiet() -> Targets {
+    Targets::new()
+        .with_default(LevelFilter::TRACE)
+        .with_target("webauthn_rs", LevelFilter::OFF)
+        .with_target("webauthn_rs_core", LevelFilter::OFF)
+}
 
 /// Installs the global subscriber: JSON lines when `json`, else text; both redacted.
 pub fn init(json: bool) {
@@ -27,9 +41,9 @@ pub fn init(json: bool) {
         .with_writer(writer)
         .with_ansi(false);
     if json {
-        fmt.json().init();
+        fmt.json().finish().with(quiet()).init();
     } else {
-        fmt.init();
+        fmt.finish().with(quiet()).init();
     }
 }
 

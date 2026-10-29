@@ -32,8 +32,8 @@ use crate::module::Module;
 use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{
-    audit, devices, events, handshake, lockouts, me, pair, pairing, runners, session, settings,
-    stepup, types,
+    audit, devices, events, handshake, lockouts, me, pair, pairing, passkey, runners, session,
+    settings, stepup, ticket, types, websession,
 };
 
 #[derive(OpenApi)]
@@ -50,11 +50,16 @@ use super::{
         events::replay,
         events::ws,
         events::latest,
+        ticket::issue,
         handshake::handshake,
+        websession::options,
+        websession::session,
         session::challenge,
         session::session,
         pair::claim,
         pair::status,
+        passkey::options_route,
+        passkey::claim_route,
         pairing::create,
         pairing::get,
         pairing::approve,
@@ -86,7 +91,10 @@ cover an exact canonical string of the Core identity fingerprint, the method, pa
 time, nonce and the body's SHA-256 (handshake spec §5). A session comes from \
 POST /handshake/challenge then POST /handshake/session and lasts 15 minutes; there is no bearer \
 secret, and an Authorization header is refused. Requests carry the server's own Host and no \
-Origin. Times are RFC 3339 UTC with milliseconds. Versioning: within /api/v1, enum values, \
+Origin, or the Core's own origin from its web client. A web client signs in with a passkey \
+(POST /handshake/passkey/options, then POST /handshake/passkey/session) and signs every request \
+with a non-extractable WebCrypto P-256 session key in the same way; its event socket takes a \
+one-time ticket (POST /api/v1/ws-ticket) in Sec-WebSocket-Protocol. Times are RFC 3339 UTC with milliseconds. Versioning: within /api/v1, enum values, \
 union variants, optional fields and operations may be added; a client must keep an unknown enum \
 value (every enum is open) and skip an event or union variant it cannot decode. Anything \
 removed or renamed is a new /api/v2. `info.version` is `1.<minor>.0`; the minor \

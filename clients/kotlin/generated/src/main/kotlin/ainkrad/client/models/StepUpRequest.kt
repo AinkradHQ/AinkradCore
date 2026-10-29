@@ -24,7 +24,8 @@ import kotlinx.serialization.Contextual
  * 
  *
  * @param challenge The challenge from `POST /api/v1/auth/step-up/challenge` for this session.
- * @param stepupSig The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string `AINKRAD-STEPUP-V1` LF `<core_fp>` LF `<device_id>` LF `<session_id>` LF `<challenge>`, no trailing newline. The device's OS releases that key only after user verification.
+ * @param assertion A passkey device's proof: the WebAuthn `PublicKeyCredential` answering the challenge's `options`, with user verification.
+ * @param stepupSig The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string `AINKRAD-STEPUP-V1` LF `<core_fp>` LF `<device_id>` LF `<session_id>` LF `<challenge>`, no trailing newline. The device's OS releases that key only after user verification. Required for a native device; a passkey device sends `assertion` instead.
  */
 @Serializable
 
@@ -34,9 +35,13 @@ data class StepUpRequest (
     @SerialName(value = "challenge")
     val challenge: kotlin.String,
 
-    /* The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string `AINKRAD-STEPUP-V1` LF `<core_fp>` LF `<device_id>` LF `<session_id>` LF `<challenge>`, no trailing newline. The device's OS releases that key only after user verification. */
+    /* A passkey device's proof: the WebAuthn `PublicKeyCredential` answering the challenge's `options`, with user verification. */
+    @Contextual @SerialName(value = "assertion")
+    val assertion: kotlin.Any? = null,
+
+    /* The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string `AINKRAD-STEPUP-V1` LF `<core_fp>` LF `<device_id>` LF `<session_id>` LF `<challenge>`, no trailing newline. The device's OS releases that key only after user verification. Required for a native device; a passkey device sends `assertion` instead. */
     @SerialName(value = "stepup_sig")
-    val stepupSig: kotlin.String
+    val stepupSig: kotlin.String? = null
 
 ) {
 

@@ -8,6 +8,8 @@ use ring::rand::SystemRandom;
 use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
 use sqlx::SqlitePool;
 
+pub mod authenticator;
+
 use super::crypto::{b64, random, random_id, spki_of};
 use super::signed::{self, ALG, Canonical};
 use crate::scheduler::Clock;

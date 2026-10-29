@@ -28,6 +28,7 @@ const USAGE: &str = "usage:
                  [--hostname <dns-name> --acme-contact <email>
                  [--acme-directory <url>] [--acme-http01]]
                  [--trusted-proxy <addr|cidr>[,…]]
+                 [--passkeys] [--allow-origin <origin>[,…]]
                  [--apns-key <file.p8> --apns-key-id <id> --apns-team-id <id>
                  --apns-topic <bundle-id>] [--log-format text|json]
   ainkrad-core-server openapi
@@ -47,7 +48,10 @@ the challenge is TLS-ALPN-01 on :443, or HTTP-01 on :80 with --acme-http01. Unsi
 (0600), made on first start; its fingerprint is what /handshake shows and every request signs.
 --host is the Host header clients must send (default: localhost on a socket, the address on loopback, the hostname in public); --trusted-proxy the
 proxies whose X-Forwarded-For names the client for the lockouts and logs (default: none; the
-Core terminates TLS itself). SIGTERM or Ctrl-C shuts serve
+Core terminates TLS itself). --passkeys turns on passkeys for the web client (E1-08): the
+relying party is the --host name (a DNS name, never an IP; localhost only on loopback), paired
+from an elevated admin device only. A browser Origin is refused unless it is the Core's own
+(https://<host>, http://localhost:<port> on loopback) or one --allow-origin names. SIGTERM or Ctrl-C shuts serve
 down: it stops accepting, gives requests in flight up to 10 s, closes event sockets so they
 reconnect, and checkpoints the database. Limits and intervals are settings (`setting list`),
 read when serve starts. With the four --apns-* flags, what a module's push rules pick is pushed
@@ -221,6 +225,10 @@ struct Serve {
     apns: Option<[String; 4]>,
     trusted_proxies: Option<Vec<ainkrad_core_server::api::limit::Cidr>>,
     log_json: bool,
+    /// `--passkeys`.
+    passkeys: bool,
+    /// `--allow-origin`: browser origins let through beside the Core's own.
+    origins: Vec<String>,
 }
 
 /// `serve`'s flags; `None` (after saying why) on anything else.
@@ -235,12 +243,18 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
         apns: None,
         trusted_proxies: None,
         log_json: false,
+        passkeys: false,
+        origins: Vec::new(),
     };
     let mut apns: [Option<String>; 4] = Default::default();
     let mut it = flags.iter();
     while let Some(flag) = it.next() {
         if *flag == "--acme-http01" {
             s.acme_http01 = true;
+            continue;
+        }
+        if *flag == "--passkeys" {
+            s.passkeys = true;
             continue;
         }
         let value = (*it.next()?).to_owned();
@@ -257,6 +271,23 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
                 _ => return None,
             },
             "--hostname" => s.hostname = Some(value),
+            "--allow-origin" => {
+                for o in comma_list(&value) {
+                    let localhost = o == "http://localhost"
+                        || o.strip_prefix("http://localhost:").is_some_and(|p| {
+                            !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())
+                        });
+                    let https = o
+                        .strip_prefix("https://")
+                        .is_some_and(|h| !h.is_empty() && !h.contains(['/', '?', '#', '@']));
+                    let ok = https || localhost;
+                    if !ok {
+                        eprintln!("ainkrad-core-server: --allow-origin {o}: an https:// origin");
+                        return None;
+                    }
+                    s.origins.push(o.to_ascii_lowercase());
+                }
+            }
             "--acme-contact" => s.acme_contact = Some(value),
             "--acme-directory" => s.acme_directory = value,
             "--trusted-proxy" => {
@@ -425,6 +456,25 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
     app.limits = limits;
     if let Some(list) = flags.trusted_proxies {
         app.trusted_proxies = list.into();
+    }
+    if !flags.origins.is_empty() {
+        app.origins = app.origins.iter().cloned().chain(flags.origins).collect();
+    }
+    if flags.passkeys {
+        let loopback = match &listen {
+            gateway::Listen::Unix(_) => true,
+            gateway::Listen::Tcp(addr) => addr
+                .parse::<std::net::SocketAddr>()
+                .is_ok_and(|a| a.ip().is_loopback()),
+            gateway::Listen::Public { .. } => false,
+        };
+        let passkeys = ainkrad_core_server::auth::web::Passkeys::new(&app.host, loopback)?;
+        tracing::info!(
+            rp_id = passkeys.rp_id,
+            origin = passkeys.origin,
+            "passkeys on"
+        );
+        app.passkeys = Some(Arc::new(passkeys));
     }
     let (closing, pool) = (Arc::clone(&app.closing), app.pool.clone());
     let server = gateway.serve(router(app), Arc::clone(&closing), gateway::SHUTDOWN_GRACE);

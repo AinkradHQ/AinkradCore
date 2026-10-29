@@ -33,15 +33,18 @@ mod lockouts;
 mod me;
 pub mod pair;
 mod pairing;
+pub mod passkey;
 mod runners;
 pub mod scopes;
 pub mod session;
 mod settings;
 pub mod spec;
 mod stepup;
+pub mod ticket;
 mod trace;
 pub use trace::{ApiError, ApiResult};
 pub mod types;
+pub mod websession;
 
 /// The one admin user every device acts as (#18).
 pub const ADMIN: UserId = UserId(1);
@@ -147,6 +150,7 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/events", get(events::replay))
         .route("/api/v1/events/ws", get(events::ws))
         .route("/api/v1/events/latest", get(events::latest))
+        .route("/api/v1/ws-ticket", post(ticket::issue))
         .route("/api/v1/audit", get(audit::list))
         .route("/api/v1/runners", get(runners::list))
         .route("/api/v1/runners/{id}", get(runners::get))

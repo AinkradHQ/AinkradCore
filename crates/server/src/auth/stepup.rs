@@ -21,6 +21,9 @@
 //!   one when there is nothing to check) and no sooner than the gate's `FAIL_FLOOR`.
 //! - **The host's socket** (`ip:local`) is never refused by the address budget
 //!   (`AddressFailures`), so outside traffic cannot stop the operator stepping up.
+//! - **A passkey device** (E1-08.3) proves with a WebAuthn assertion, user verification set,
+//!   over a challenge the Core issued for that very session ([`Auth::prove_assertion`], the
+//!   ceremony in `web::Passkeys`): same budgets, same single use, same elevation.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -43,6 +46,25 @@ pub enum Proof {
     Failed,
     /// The device's (or address's) failure budget is spent: nothing was evaluated.
     Throttled,
+}
+
+/// What a passkey step-up came to.
+#[derive(Debug)]
+pub enum Assertion {
+    Verified,
+    Failed,
+    Throttled,
+    /// The assertion verified but its sign count did not grow: a cloned authenticator.
+    Cloned(u32),
+}
+
+/// A passkey step-up as sent: the Core's passkeys (if on), the challenge, the assertion, and
+/// the device's stored passkey (updated in place on success).
+pub struct AssertionProof<'a> {
+    pub passkeys: Option<&'a super::web::Passkeys>,
+    pub challenge: &'a str,
+    pub cred: Option<&'a webauthn_rs::prelude::PublicKeyCredential>,
+    pub passkey: Option<&'a mut webauthn_rs::prelude::Passkey>,
 }
 
 /// Devices tracked before windows that are over are swept.
@@ -136,6 +158,62 @@ impl Auth {
             return Proof::Throttled;
         }
         Proof::Failed
+    }
+
+    /// Checks a passkey step-up by `device` on `session` from `addr`: the budgets, then the
+    /// session's ceremony (spent whatever happens next), then the assertion over its challenge
+    /// against the device's `passkey`, user verification required. Synchronous on purpose, as
+    /// `prove_stepup`; on success the caller stores the passkey's new count.
+    pub fn prove_assertion(
+        &self,
+        addr: &str,
+        device: &Device,
+        session: &str,
+        proof: AssertionProof<'_>,
+        now: i64,
+    ) -> Assertion {
+        use webauthn_rs::prelude::WebauthnError;
+        let AssertionProof {
+            passkeys,
+            challenge,
+            cred,
+            passkey,
+        } = proof;
+        if !self.stepup_failures.take(&device.id, now) {
+            return Assertion::Throttled;
+        }
+        let state = passkeys.and_then(|p| p.take_stepup(session, challenge, now).map(|s| (p, s)));
+        let out = match (state, cred, passkey, device.kind == "passkey") {
+            (Some((p, st)), Some(c), Some(key), true) => {
+                match p.webauthn.finish_passkey_authentication(c, &st) {
+                    Ok(r)
+                        if r.user_verified()
+                            && key.cred_id().as_slice() == r.cred_id().as_slice() =>
+                    {
+                        key.update_credential(&r);
+                        Assertion::Verified
+                    }
+                    Err(WebauthnError::CredentialPossibleCompromise) => {
+                        let n = c
+                            .response
+                            .authenticator_data
+                            .get(33..37)
+                            .map_or(0, |b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+                        Assertion::Cloned(n)
+                    }
+                    _ => Assertion::Failed,
+                }
+            }
+            _ => Assertion::Failed,
+        };
+        match out {
+            Assertion::Failed if !self.failures.count(addr, now) => Assertion::Throttled,
+            Assertion::Failed => Assertion::Failed,
+            other => {
+                self.stepup_failures.give_back(&device.id);
+                other
+            }
+        }
     }
 
     /// Elevates `session` of `device` until `until`, replacing any elevation it had (a new one

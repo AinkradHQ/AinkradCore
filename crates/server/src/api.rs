@@ -3,8 +3,12 @@
 //!
 //! - `Host` must be the configured server name, so a page on a rebound DNS name cannot
 //!   reach a loopback server (403). Paperclip had exactly that hole.
-//! - Any `Origin` header is refused (403): clients are not browsers until passkeys (E1-08), and
-//!   a browser always sends one on a WebSocket, so no web page can open a socket here.
+//! - An `Origin` header is refused (403 `origin_refused`) unless it is the Core's own origin
+//!   (`https://<host>`, `http://localhost:<port>` on loopback) or one configured with
+//!   `serve --allow-origin` (handshake spec §9, E1-08.5). Native clients send none. There is no
+//!   CORS: no `Access-Control-Allow-*` is ever sent, so a page elsewhere cannot read an answer,
+//!   and since a browser sends `Origin` on every cross-origin request and every WebSocket, no
+//!   page elsewhere reaches a route either.
 //! - An `Authorization` header is refused (400): there are no bearer secrets, and this catches
 //!   a leftover bearer client (handshake spec §5.1).
 //! - A request-target path that is not canonical (`..`, `//`, NUL, a lowercase escape) is
@@ -57,6 +61,10 @@ pub struct App {
     pub closing: Arc<tokio::sync::watch::Sender<bool>>,
     /// The runner hub: runner connections and command routing (`crate::hub`).
     pub hub: Arc<crate::hub::Hub>,
+    /// The only `Origin` values let through: the Core's own first (`refusal`).
+    pub origins: Arc<[String]>,
+    /// Passkeys and the web client (E1-08), when `serve --passkeys` turned them on.
+    pub passkeys: Option<Arc<crate::auth::web::Passkeys>>,
 }
 
 /// Resolves once serve is stopping (`App::closing`).
@@ -74,6 +82,7 @@ impl App {
         identity: Arc<Identity>,
     ) -> Self {
         Self {
+            origins: Arc::from([crate::auth::web::own_origin(&host)]),
             pool,
             clock,
             host,
@@ -84,6 +93,7 @@ impl App {
             modules: Arc::from([]),
             closing: Arc::new(tokio::sync::watch::Sender::new(false)),
             hub: Arc::new(crate::hub::Hub::new(crate::hub::HubConfig::default())),
+            passkeys: None,
         }
     }
 }
@@ -98,6 +108,10 @@ pub fn router(app: App) -> Router {
         .route("/handshake/session", post(v1::session::session))
         .route("/pair/claim", post(v1::pair::claim))
         .route("/pair/status", post(v1::pair::status))
+        .route("/pair/passkey/options", post(v1::passkey::options_route))
+        .route("/pair/passkey/claim", post(v1::passkey::claim_route))
+        .route("/handshake/passkey/options", post(v1::websession::options))
+        .route("/handshake/passkey/session", post(v1::websession::session))
         .route("/healthz", get(preauth::healthz))
         .route(crate::hub::connect::PATH, get(crate::hub::connect::connect))
         .layer(DefaultBodyLimit::max(preauth::PREAUTH_BODY))
@@ -108,7 +122,7 @@ pub fn router(app: App) -> Router {
         .layer(axum::middleware::from_fn_with_state(app, preauth::gate))
 }
 
-/// The shared checks as a status, code and reason: the `Host`, no `Origin`, no `Authorization`, a
+/// The shared checks as a status, code and reason: the `Host`, an allowed `Origin` or none, no `Authorization`, a
 /// canonical path, and a query string only when `query_ok` accepts it.
 pub(crate) fn refusal(
     app: &App,
@@ -124,11 +138,15 @@ pub(crate) fn refusal(
     if !host.is_some_and(|h| h.eq_ignore_ascii_case(&app.host)) {
         return Some((StatusCode::FORBIDDEN, "unknown_host", "unknown host"));
     }
-    if headers.contains_key(header::ORIGIN) {
+    if let Some(origin) = headers.get(header::ORIGIN)
+        && !origin
+            .to_str()
+            .is_ok_and(|o| app.origins.iter().any(|a| a.eq_ignore_ascii_case(o)))
+    {
         return Some((
             StatusCode::FORBIDDEN,
             "origin_refused",
-            "browsers may not connect",
+            "this origin may not connect",
         ));
     }
     if headers.contains_key(header::AUTHORIZATION) {

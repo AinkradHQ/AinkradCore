@@ -94,18 +94,33 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/settings/{scope}/{key}/history`.
     /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/{key}/history/get(settingHistory)`.
     func settingHistory(_ input: Operations.SettingHistory.Input) async throws -> Operations.SettingHistory.Output
+    /// - Remark: HTTP `POST /api/v1/ws-ticket`.
+    /// - Remark: Generated from `#/paths//api/v1/ws-ticket/post(createWsTicket)`.
+    func createWsTicket(_ input: Operations.CreateWsTicket.Input) async throws -> Operations.CreateWsTicket.Output
     /// - Remark: HTTP `GET /handshake`.
     /// - Remark: Generated from `#/paths//handshake/get(getHandshake)`.
     func getHandshake(_ input: Operations.GetHandshake.Input) async throws -> Operations.GetHandshake.Output
     /// - Remark: HTTP `POST /handshake/challenge`.
     /// - Remark: Generated from `#/paths//handshake/challenge/post(createChallenge)`.
     func createChallenge(_ input: Operations.CreateChallenge.Input) async throws -> Operations.CreateChallenge.Output
+    /// - Remark: HTTP `POST /handshake/passkey/options`.
+    /// - Remark: Generated from `#/paths//handshake/passkey/options/post(webSignInOptions)`.
+    func webSignInOptions(_ input: Operations.WebSignInOptions.Input) async throws -> Operations.WebSignInOptions.Output
+    /// - Remark: HTTP `POST /handshake/passkey/session`.
+    /// - Remark: Generated from `#/paths//handshake/passkey/session/post(webSignIn)`.
+    func webSignIn(_ input: Operations.WebSignIn.Input) async throws -> Operations.WebSignIn.Output
     /// - Remark: HTTP `POST /handshake/session`.
     /// - Remark: Generated from `#/paths//handshake/session/post(createSession)`.
     func createSession(_ input: Operations.CreateSession.Input) async throws -> Operations.CreateSession.Output
     /// - Remark: HTTP `POST /pair/claim`.
     /// - Remark: Generated from `#/paths//pair/claim/post(claimPairing)`.
     func claimPairing(_ input: Operations.ClaimPairing.Input) async throws -> Operations.ClaimPairing.Output
+    /// - Remark: HTTP `POST /pair/passkey/claim`.
+    /// - Remark: Generated from `#/paths//pair/passkey/claim/post(claimPasskeyPairing)`.
+    func claimPasskeyPairing(_ input: Operations.ClaimPasskeyPairing.Input) async throws -> Operations.ClaimPasskeyPairing.Output
+    /// - Remark: HTTP `POST /pair/passkey/options`.
+    /// - Remark: Generated from `#/paths//pair/passkey/options/post(passkeyRegistrationOptions)`.
+    func passkeyRegistrationOptions(_ input: Operations.PasskeyRegistrationOptions.Input) async throws -> Operations.PasskeyRegistrationOptions.Output
     /// - Remark: HTTP `POST /pair/status`.
     /// - Remark: Generated from `#/paths//pair/status/post(pairStatus)`.
     func pairStatus(_ input: Operations.PairStatus.Input) async throws -> Operations.PairStatus.Output
@@ -388,6 +403,11 @@ extension APIProtocol {
             headers: headers
         ))
     }
+    /// - Remark: HTTP `POST /api/v1/ws-ticket`.
+    /// - Remark: Generated from `#/paths//api/v1/ws-ticket/post(createWsTicket)`.
+    public func createWsTicket(headers: Operations.CreateWsTicket.Input.Headers = .init()) async throws -> Operations.CreateWsTicket.Output {
+        try await createWsTicket(Operations.CreateWsTicket.Input(headers: headers))
+    }
     /// - Remark: HTTP `GET /handshake`.
     /// - Remark: Generated from `#/paths//handshake/get(getHandshake)`.
     public func getHandshake(headers: Operations.GetHandshake.Input.Headers = .init()) async throws -> Operations.GetHandshake.Output {
@@ -400,6 +420,28 @@ extension APIProtocol {
         body: Operations.CreateChallenge.Input.Body
     ) async throws -> Operations.CreateChallenge.Output {
         try await createChallenge(Operations.CreateChallenge.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /handshake/passkey/options`.
+    /// - Remark: Generated from `#/paths//handshake/passkey/options/post(webSignInOptions)`.
+    public func webSignInOptions(
+        headers: Operations.WebSignInOptions.Input.Headers = .init(),
+        body: Operations.WebSignInOptions.Input.Body
+    ) async throws -> Operations.WebSignInOptions.Output {
+        try await webSignInOptions(Operations.WebSignInOptions.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /handshake/passkey/session`.
+    /// - Remark: Generated from `#/paths//handshake/passkey/session/post(webSignIn)`.
+    public func webSignIn(
+        headers: Operations.WebSignIn.Input.Headers = .init(),
+        body: Operations.WebSignIn.Input.Body
+    ) async throws -> Operations.WebSignIn.Output {
+        try await webSignIn(Operations.WebSignIn.Input(
             headers: headers,
             body: body
         ))
@@ -422,6 +464,28 @@ extension APIProtocol {
         body: Operations.ClaimPairing.Input.Body
     ) async throws -> Operations.ClaimPairing.Output {
         try await claimPairing(Operations.ClaimPairing.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /pair/passkey/claim`.
+    /// - Remark: Generated from `#/paths//pair/passkey/claim/post(claimPasskeyPairing)`.
+    public func claimPasskeyPairing(
+        headers: Operations.ClaimPasskeyPairing.Input.Headers = .init(),
+        body: Operations.ClaimPasskeyPairing.Input.Body
+    ) async throws -> Operations.ClaimPasskeyPairing.Output {
+        try await claimPasskeyPairing(Operations.ClaimPasskeyPairing.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /pair/passkey/options`.
+    /// - Remark: Generated from `#/paths//pair/passkey/options/post(passkeyRegistrationOptions)`.
+    public func passkeyRegistrationOptions(
+        headers: Operations.PasskeyRegistrationOptions.Input.Headers = .init(),
+        body: Operations.PasskeyRegistrationOptions.Input.Body
+    ) async throws -> Operations.PasskeyRegistrationOptions.Output {
+        try await passkeyRegistrationOptions(Operations.PasskeyRegistrationOptions.Input(
             headers: headers,
             body: body
         ))
