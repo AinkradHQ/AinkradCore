@@ -1,23 +1,22 @@
-# Hardened systemd unit for ainkrad-runner (E1-12.2). Install with deploy/install-linux.sh.
+# Hardened systemd unit for ainkrad-runner (E1-12.2), serving an Ainkrad Core over protocol v2
+# (`ainkrad-runner connect`, E1-11). Install with deploy/install-linux.sh.
 #
-# Layout (all of it matches what crates/runner/src/main.rs does):
+# Layout:
 #   binary        /usr/local/bin/ainkrad-runner
-#   config        /etc/ainkrad-runner/runner.env  (RUNNER_URL, RUNNER_ARGS; optional)
-#                 /etc/ainkrad-runner/runner.key  (the runner key, read via --key-file; never on the
-#                                                  command line; mode 0640 root:ainkrad-runner)
-#   HOME          /var/lib/ainkrad-runner         (runner git config + harness logins live in
-#                                                  $HOME/.ainkrad-runner)
-#   work root     /var/lib/ainkrad-runner-work/citadel-runs   (git worktrees; the runner runs
-#                 std::env::temp_dir()/citadel-runs and refuses a work root inside $HOME, so TMPDIR
-#                 points at a sibling of HOME, not under it)
-#
-# /etc/ainkrad-runner/runner.env, e.g.:
-#   RUNNER_URL=wss://core.example.com/runner/v1/connect
-#   RUNNER_ARGS=--tags linux,arm64 --git-name ainkrad-runner --git-email runner@example.com
+#   enrolment     /var/lib/ainkrad-runner/core/{device.p8,enrolment.json} (0600), made once by
+#                   sudo -u ainkrad-runner ainkrad-runner pair https://<core> --code <CODE> \
+#                     --state /var/lib/ainkrad-runner/core
+#                 (it pins the Core's identity; compare the SAS it prints with the approver's)
+#   config        /etc/ainkrad-runner/runner.env  (RUNNER_ARGS; optional), e.g.
+#                   RUNNER_ARGS=--ca /etc/ainkrad-runner/ca.pem   (a test Core's CA only)
+#                 `exec.run` stays off unless RUNNER_ARGS has --enable-exec: it lets the Core run any
+#                 program as this user.
+#   HOME          /var/lib/ainkrad-runner
+#   work root     /var/lib/ainkrad-runner-work (TMPDIR; a sibling of HOME, not under it)
 # ($RUNNER_ARGS is split on whitespace by systemd: no values containing spaces.)
 
 [Unit]
-Description=Ainkrad runner (dials out to the Core over WSS)
+Description=Ainkrad runner (dials out to the Core, protocol v2)
 Documentation=https://github.com/AinkradHQ/AinkradCore
 After=network-online.target
 Wants=network-online.target
@@ -33,8 +32,8 @@ EnvironmentFile=-/etc/ainkrad-runner/runner.env
 Environment=HOME=/var/lib/ainkrad-runner
 Environment=TMPDIR=/var/lib/ainkrad-runner-work
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/local/bin/ainkrad-runner $RUNNER_URL --key-file /etc/ainkrad-runner/runner.key $RUNNER_ARGS
-# The runner drains on SIGTERM for up to 15 s (STOP_GRACE) before it drops the run in flight.
+ExecStart=/usr/local/bin/ainkrad-runner connect --state /var/lib/ainkrad-runner/core $RUNNER_ARGS
+# SIGTERM stops it; commands still running are killed.
 TimeoutStopSec=30
 Restart=on-failure
 RestartSec=5s
