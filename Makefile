@@ -1,6 +1,6 @@
 CARGO ?= cargo
 
-.PHONY: test-web soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel release-dry release-repro release-test fuzz-smoke audit-fuzz
+.PHONY: test-web e1-exit e1-exit-faults soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel release-dry release-repro release-test fuzz-smoke audit-fuzz
 build: lint ; $(CARGO) build --workspace
 test: lint ; $(CARGO) test --workspace
 lint: format-check ; $(CARGO) clippy --workspace --all-targets -- -D warnings
@@ -33,6 +33,11 @@ clean-linux: ; docker volume rm -f $(LINUX_VOL)-arm64 $(LINUX_VOL)-amd64
 # A real browser with a virtual authenticator (E1-08.4): pairs, signs in, steps up, streams and is revoked over
 # CDP. Not part of `test` (a browser is heavy). Chromium: $CHROME, else Playwright's cached chrome-headless-shell.
 test-web: ; $(CARGO) test -p ainkrad-core-server --test web_passkey -- --ignored --nocapture
+# The E1 exit gate (E1-14): the six steps against a Core the script starts (PASS/FAIL table), and the fault suite
+# on the real binaries (Core kill -9 with a command in flight, runner kill + revoke, proxy cut, wrong Core, expired
+# certificate, read-only database, stalled events client), one at a time. Neither is part of `test`.
+e1-exit: ; $(CARGO) build -p ainkrad-core-server -p ainkrad-ctl -p ainkrad-runner && scripts/e1-exit.sh
+e1-exit-faults: ; $(CARGO) test -p ainkrad-ctl --test it fault -- --ignored --test-threads=1 --nocapture
 # Event bus soak (E1-04.5): 10k events/min to 20 clients, one stalled, for an hour; flat memory and
 # only the stalled client closed. Not part of `test`. `CORE_SOAK_SECS=300 make soak` for five minutes.
 soak: ; CORE_SOAK_SECS=$${CORE_SOAK_SECS:-3600} $(CARGO) test -p ainkrad-core-server --test soak -- --ignored --nocapture

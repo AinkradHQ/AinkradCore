@@ -49,8 +49,17 @@ impl LinkError {
     }
 }
 
-fn transport(e: impl std::fmt::Display) -> LinkError {
-    LinkError::Transport(e.to_string())
+/// The error and its causes: reqwest's own text hides why (an expired or untrusted
+/// certificate, a refused connection), which is in its source chain.
+fn transport(e: reqwest::Error) -> LinkError {
+    let mut text = e.to_string();
+    let mut cause = std::error::Error::source(&e);
+    while let Some(c) = cause {
+        text.push_str(": ");
+        text.push_str(&c.to_string());
+        cause = c.source();
+    }
+    LinkError::Transport(text)
 }
 
 fn loopback(host: &str) -> bool {

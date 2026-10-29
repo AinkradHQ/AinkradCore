@@ -13,6 +13,7 @@ pub mod keystore;
 pub mod net;
 pub mod pair;
 pub mod proto;
+pub mod runners;
 pub mod stepup;
 
 /// Why a command failed; each kind has its own exit code (`code`).
@@ -110,7 +111,8 @@ pub const EXIT_CODES: &str = "Exit codes:
   3  core_identity_mismatch: the Core is not the pinned one (nothing was signed or sent)
   4  refused by the Core (auth_failed, forbidden_scope, step_up_failed, not_found,
      conflict: the last admin device, ...); step_up_required only if it persists after
-     the one automatic elevation
+     the one automatic elevation; for `run noop`: runner_offline, unsupported_command
+     (409), runner_busy (503), runner_lost, runner_timeout (504), runner_failed (502)
   5  past_retention: the resume point was trimmed (the floor is printed)
   6  revoked: the Core closed this device's stream with 4001
   7  the pairing was rejected or expired

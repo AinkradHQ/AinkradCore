@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs the ainkrad-runner systemd unit (E1-12.3). Idempotent; does not start unless --start.
+# Installs the ainkrad-runner systemd unit (E1-12.3; protocol v2 since E1-14.5). Idempotent; does not start unless --start.
 #   install-linux.sh [--binary PATH] [--prefix DIR] [--start] [--dry-run]
 # --prefix installs under DIR (a throwaway root, for tests): no user creation, no systemctl.
 set -euo pipefail
@@ -25,6 +25,8 @@ if [ -z "$prefix" ]; then
     run useradd --system --user-group --home-dir /var/lib/ainkrad-runner --no-create-home \
       --shell /usr/sbin/nologin ainkrad-runner
   run install -d -m 0750 -o root -g ainkrad-runner /etc/ainkrad-runner
+  # `pair` runs as the user before the unit's StateDirectory exists.
+  run install -d -m 0700 -o ainkrad-runner -g ainkrad-runner /var/lib/ainkrad-runner
 fi
 run install -d "$prefix/usr/local/bin" "$prefix/etc/systemd/system"
 run install -m 0755 "$binary" "$prefix/usr/local/bin/ainkrad-runner"
@@ -32,9 +34,9 @@ run install -m 0644 "$HERE/systemd/ainkrad-runner.service" "$prefix/etc/systemd/
 if [ -z "$prefix" ]; then
   run systemctl daemon-reload
   if [ "$start" = 1 ]; then
-    [ -r /etc/ainkrad-runner/runner.key ] || { echo "put the runner key in /etc/ainkrad-runner/runner.key (0640 root:ainkrad-runner) and RUNNER_URL in runner.env first" >&2; exit 1; }
+    [ -e /var/lib/ainkrad-runner/core/enrolment.json ] || { echo "pair it first: sudo -u ainkrad-runner ainkrad-runner pair https://<core> --code <CODE> --state /var/lib/ainkrad-runner/core" >&2; exit 1; }
     run systemctl enable --now ainkrad-runner.service
   else
-    echo "installed, not started. Create /etc/ainkrad-runner/{runner.key,runner.env}, then: systemctl enable --now ainkrad-runner"
+    echo "installed, not started. Pair it (see the unit's header), then: systemctl enable --now ainkrad-runner"
   fi
 fi
