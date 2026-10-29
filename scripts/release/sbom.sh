@@ -4,6 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 out=${1:?dist dir}/sbom; mkdir -p "$out"
+trap 'rm -f crates/*/*.cdx.json' EXIT   # cargo-cyclonedx writes beside each manifest; leave the tree clean
 for crate in ainkrad-core-server ainkrad-runner; do
   dir=crates/${crate#ainkrad-}; [ "$crate" = ainkrad-core-server ] && dir=crates/server
   cargo cyclonedx --manifest-path "$dir/Cargo.toml" --format json --describe binaries --target all -q
