@@ -5,6 +5,10 @@
 //! elevation it had; it is audited as `auth.step_up`. Nothing else ever extends it. Elevation
 //! lives with the session in memory, so revocation and a restart end it.
 //!
+//! A passkey device (E1-08.3) gets WebAuthn request options with its challenge, bound to the
+//! session, and answers with `assertion` (user verification required) instead of `stepup_sig`:
+//! the same elevation, budgets and audit. Either proof opens the destructive routes.
+//!
 //! Every failed proof is the same 403 `step_up_failed`, no sooner than `gate::FAIL_FLOOR`; a
 //! spent budget is a 429 that writes nothing. Neither is audited per request
 //! (`trace::AGGREGATED`): a lock is audited once (`auth.lockout`), a grant once (`auth.step_up`).
@@ -23,10 +27,11 @@ use super::session::Challenge;
 use super::types::{Timestamp, ts};
 use super::{ApiError, ApiResult, BY, Caller, Client, too_many};
 use crate::api::App;
-use crate::auth::{CHALLENGE_SECS, Proof, crypto};
+use crate::auth::{Assertion, AssertionProof, CHALLENGE_SECS, Proof, crypto};
 use crate::scheduler::iso_of_unix;
 use crate::store::gov::{self, STEP_UP};
 use crate::store::{audit, begin_write};
+use webauthn_rs::prelude::{Passkey, PublicKeyCredential};
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -36,7 +41,15 @@ pub struct StepUpRequest {
     /// The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string
     /// `AINKRAD-STEPUP-V1` LF `<core_fp>` LF `<device_id>` LF `<session_id>` LF `<challenge>`,
     /// no trailing newline. The device's OS releases that key only after user verification.
-    pub stepup_sig: String,
+    /// Required for a native device; a passkey device sends `assertion` instead.
+    #[serde(default)]
+    #[schema(nullable = false)]
+    pub stepup_sig: Option<String>,
+    /// A passkey device's proof: the WebAuthn `PublicKeyCredential` answering the challenge's
+    /// `options`, with user verification.
+    #[serde(default)]
+    #[schema(value_type = Option<Object>)]
+    pub assertion: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -63,6 +76,21 @@ pub async fn challenge(
     Extension(me): Extension<Caller>,
 ) -> ApiResult<Challenge> {
     let now = app.clock.unix();
+    if me.device.kind == "passkey" {
+        let stored = gov::device_credential(&app.pool, &me.device.id).await?;
+        let key = stored
+            .filter(|c| !c.revoked)
+            .and_then(|c| serde_json::from_str::<Passkey>(&c.passkey).ok());
+        let (Some(pk), Some(key)) = (app.passkeys.as_deref(), key) else {
+            return Err(failed());
+        };
+        let (c, options) = pk.start_stepup(&me.session, &key, now);
+        return Ok(Json(Challenge {
+            challenge: Some(c),
+            expires_in: Some(crate::auth::web::CEREMONY_SECS),
+            options: Some(options),
+        }));
+    }
     let c = app
         .auth
         .stepup_challenge(&me.session, &me.device.id, now)
@@ -70,6 +98,7 @@ pub async fn challenge(
     Ok(Json(Challenge {
         challenge: Some(c),
         expires_in: Some(CHALLENGE_SECS),
+        options: None,
     }))
 }
 
@@ -103,15 +132,20 @@ async fn elevate(
     if let Some(until) = gov::locked_until(&app.pool, &[&key], now).await? {
         return Ok(throttled(until - now));
     }
-    let sig = crypto::unb64(&b.stepup_sig, 86);
-    let proof = app.auth.prove_stepup(
-        addr,
-        &me.device,
-        &me.session,
-        &b.challenge,
-        sig.as_deref(),
-        now,
-    );
+    let proof = match &b.assertion {
+        Some(a) => prove_passkey(app, me, addr, &b.challenge, a, now).await?,
+        None => {
+            let sig = b.stepup_sig.as_deref().and_then(|s| crypto::unb64(s, 86));
+            app.auth.prove_stepup(
+                addr,
+                &me.device,
+                &me.session,
+                &b.challenge,
+                sig.as_deref(),
+                now,
+            )
+        }
+    };
     match proof {
         Proof::Verified => {}
         Proof::Throttled => {
@@ -149,6 +183,57 @@ async fn elevate(
         elevated_until: Some(ts(&iso_of_unix(until))),
     })
     .into_response())
+}
+
+/// A passkey step-up: the assertion against the device's stored passkey. A verified one moves
+/// the stored count on; a clone locks the passkey (and fails).
+async fn prove_passkey(
+    app: &App,
+    me: &Caller,
+    addr: &str,
+    challenge: &str,
+    assertion: &serde_json::Value,
+    now: i64,
+) -> Result<Proof, ApiError> {
+    let cred = serde_json::from_value::<PublicKeyCredential>(assertion.clone()).ok();
+    let stored = match me.device.kind.as_str() {
+        "passkey" => gov::device_credential(&app.pool, &me.device.id).await?,
+        _ => None,
+    }
+    .filter(|c| !c.revoked);
+    let mut key = stored
+        .as_ref()
+        .and_then(|c| serde_json::from_str::<Passkey>(&c.passkey).ok());
+    let proof = AssertionProof {
+        passkeys: app.passkeys.as_deref(),
+        challenge,
+        cred: cred.as_ref(),
+        passkey: key.as_mut(),
+    };
+    Ok(
+        match app
+            .auth
+            .prove_assertion(addr, &me.device, &me.session, proof, now)
+        {
+            Assertion::Verified => {
+                if let (Some(c), Some(k)) = (&stored, &key) {
+                    let record = serde_json::to_string(k).expect("a passkey serialises");
+                    let n = crate::auth::web::passkey_count(k);
+                    gov::credential_used(&app.pool, &c.credential_id, &record, n, &app.clock.now())
+                        .await?;
+                }
+                Proof::Verified
+            }
+            Assertion::Cloned(n) => {
+                if let Some(c) = &stored {
+                    super::websession::lock(app, &me.device, &c.credential_id, n).await?;
+                }
+                Proof::Failed
+            }
+            Assertion::Failed => Proof::Failed,
+            Assertion::Throttled => Proof::Throttled,
+        },
+    )
 }
 
 fn throttled(secs: i64) -> Response {

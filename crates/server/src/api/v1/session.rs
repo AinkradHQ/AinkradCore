@@ -31,6 +31,11 @@ pub struct Challenge {
     /// 32 random bytes, base64url; spend it once within `expires_in` seconds.
     pub challenge: Option<String>,
     pub expires_in: Option<i64>,
+    /// A passkey device's step-up only: `{"publicKey": PublicKeyCredentialRequestOptions}`
+    /// over `challenge`, for `navigator.credentials.get`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
+    pub options: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -98,6 +103,7 @@ pub async fn challenge(State(app): State<App>, req: Request) -> Response {
         Some(c) => Json(Challenge {
             challenge: Some(c),
             expires_in: Some(CHALLENGE_SECS),
+            options: None,
         })
         .into_response(),
         None => too_many(std::time::Duration::from_secs(CHALLENGE_SECS as u64)),
