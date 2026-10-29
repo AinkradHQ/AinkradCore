@@ -11,6 +11,7 @@ use ainkrad_core_server::store::{self, settings};
 use crate::{ADMIN, Result_};
 
 mod audit;
+pub mod bootstrap;
 
 pub const USAGE: &str = "  ainkrad-core-server setting list <db> [--scope <scope>]
   ainkrad-core-server setting get <db> <key> [--scope <scope>]

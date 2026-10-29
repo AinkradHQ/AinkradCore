@@ -15,9 +15,10 @@ mod admin;
 
 fn usage() -> String {
     format!(
-        "{USAGE}\nSettings (E15.17, as the admin):\n{}\n{}",
+        "{USAGE}\nSettings (E15.17, as the admin):\n{}\n{}\n{}",
         admin::USAGE,
-        ainkrad_core_server::ops::USAGE
+        ainkrad_core_server::ops::USAGE,
+        admin::bootstrap::USAGE
     )
 }
 
@@ -55,7 +56,7 @@ nothing. --log-format json writes JSON lines; both formats are redacted (E1-13.4
 openapi prints the client API's contract (api/openapi.json; `make contract`).
 device list shows every device (id, kind, name, status, fingerprint); device revoke stops one at
 once (its open sockets close within 2 s); the row stays listed. A device enrolls only by
-pairing: there are no keys to hand out.
+pairing (bootstrap for the first): there are no keys to hand out.
 backup <db> <dest> is a raw, unencrypted local snapshot (VACUUM INTO); restore [--force] <src>
 <db> swaps such a snapshot over a stopped database in place. The encrypted, signed backups and
 the fresh-home restore are under Operations.";
@@ -121,6 +122,8 @@ async fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         ["device", "list", db] => list_devices(Path::new(db)).await,
+        ["bootstrap", db] => admin::bootstrap::run(Path::new(db), "first device").await,
+        ["bootstrap", db, name] => admin::bootstrap::run(Path::new(db), name).await,
         ["device", "revoke", db, id] => revoke_device(Path::new(db), id).await,
         _ => {
             eprintln!("{}", usage());
@@ -375,7 +378,11 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
         every: push_every,
     };
     let host = flags.host.clone().unwrap_or_else(|| listen.default_host());
-    let gateway = gateway::Gateway::bind(listen.clone(), gateway::Limits::default()).await?;
+    let mut gateway = gateway::Gateway::bind(listen.clone(), gateway::Limits::default()).await?;
+    // On TCP the host still gets a Unix socket, for `bootstrap`'s first device (§7.3).
+    if !matches!(listen, gateway::Listen::Unix(_)) {
+        gateway = gateway.with_admin_socket(&state_dir(db).join("admin.sock"))?;
+    }
     tracing::info!(listen = ?ListenLog(&listen), %host, "serving");
     let scheduler = Scheduler {
         pool: pool.clone(),
