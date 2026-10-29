@@ -231,9 +231,32 @@
     },
     "CoreWelcome": {
       "properties": {
+        "boot": {
+          "description": "The Core process's random id (E1-11.4): another than last time means the Core\nrestarted, and every stream the runner held is gone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "heartbeat_ms": {
+          "description": "Between heartbeats, each way; silent for three is a dead connection.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "protocol": {
           "description": "The version the Core speaks on this connection.",
           "type": "string"
+        },
+        "streams": {
+          "description": "Every command stream the Core still has in flight for this runner, with how many runner\nframes it received on each: the runner resends the rest. A stream the runner holds that\nis not listed is over for the Core (answered, or reported lost).",
+          "items": {
+            "$ref": "#/$defs/StreamState"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -964,6 +987,13 @@
             "null"
           ]
         },
+        "boot": {
+          "description": "The runner process's random id (E1-11.4). The same `boot` as the last connection means\nits streams survived and are resumed; another means they are gone (reported `lost`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "device_id": {
           "description": "The runner device, `d_…`: the one that signed the upgrade (E1-11.3). The Core refuses a\nhello without it.",
           "type": [
@@ -998,6 +1028,13 @@
         },
         "runner_version": {
           "type": "string"
+        },
+        "streams": {
+          "description": "Every command stream the runner still holds, with how many Core frames it received on\neach: the Core resends the rest.",
+          "items": {
+            "$ref": "#/$defs/StreamState"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -1117,6 +1154,26 @@
       "required": [
         "code",
         "message"
+      ],
+      "type": "object"
+    },
+    "StreamState": {
+      "description": "Resume by `seq` (E1-11.4): how many of the peer's frames one side received on a stream.\nFrames are numbered from 0, so this is also the next `seq` it expects.",
+      "properties": {
+        "received": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stream_id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "stream_id",
+        "received"
       ],
       "type": "object"
     },

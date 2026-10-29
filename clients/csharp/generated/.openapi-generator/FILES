@@ -10,6 +10,7 @@ src/Ainkrad.Client/Api/DevicesApi.cs
 src/Ainkrad.Client/Api/EventsApi.cs
 src/Ainkrad.Client/Api/HandshakeApi.cs
 src/Ainkrad.Client/Api/PairingApi.cs
+src/Ainkrad.Client/Api/RunnersApi.cs
 src/Ainkrad.Client/Api/SettingsApi.cs
 src/Ainkrad.Client/Client/ApiClient.cs
 src/Ainkrad.Client/Client/ApiException.cs
@@ -48,12 +49,15 @@ src/Ainkrad.Client/Model/LatestEvent.cs
 src/Ainkrad.Client/Model/Me.cs
 src/Ainkrad.Client/Model/Named.cs
 src/Ainkrad.Client/Model/NewPairingBody.cs
+src/Ainkrad.Client/Model/NoopResult.cs
 src/Ainkrad.Client/Model/PageEvent.cs
 src/Ainkrad.Client/Model/PairStatus.cs
 src/Ainkrad.Client/Model/PairingCreated.cs
 src/Ainkrad.Client/Model/PairingView.cs
 src/Ainkrad.Client/Model/PastRetention.cs
 src/Ainkrad.Client/Model/PushToken.cs
+src/Ainkrad.Client/Model/Runner.cs
+src/Ainkrad.Client/Model/RunnerDriver.cs
 src/Ainkrad.Client/Model/SessionGrant.cs
 src/Ainkrad.Client/Model/SessionRequest.cs
 src/Ainkrad.Client/Model/SetSetting.cs

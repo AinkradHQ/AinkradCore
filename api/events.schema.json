@@ -56,6 +56,9 @@
   ],
   "title": "Ainkrad event stream",
   "x-event-kinds": [
-    "audit"
+    "audit",
+    "runner.connected",
+    "runner.degraded",
+    "runner.disconnected"
   ]
 }

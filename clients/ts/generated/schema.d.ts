@@ -197,6 +197,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runners": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listRunners"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runners/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRunner"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runners/{id}/noop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["runNoop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings": {
         parameters: {
             query?: never;
@@ -565,6 +613,16 @@ export interface components {
             /** @description What it may do: within the approver's own scopes; a runner gets exactly `runner`. */
             scopes: string[];
         };
+        /** @description The no-op's answer. */
+        NoopResult: {
+            /**
+             * Format: int64
+             * @description From dispatch to answer.
+             */
+            duration_ms?: number | null;
+            /** @description The runner answered. */
+            ok?: boolean | null;
+        };
         /** @description A page of a list. `next_after` is the cursor of the next page, absent on the last. */
         Page_Event: {
             items: components["schemas"]["Event"][];
@@ -624,6 +682,44 @@ export interface components {
             sandbox?: boolean;
             /** @description The device token, hex, as the app got it from APNs. */
             token: string;
+        };
+        /** @description A paired runner and its live state. */
+        Runner: {
+            /**
+             * Format: int32
+             * @description Commands it takes at once.
+             */
+            capacity?: number | null;
+            /** @description Connected but silent past two heartbeats. */
+            degraded?: boolean | null;
+            /** @description What it last advertised (empty until it first connected since the Core started). */
+            drivers?: components["schemas"]["RunnerDriver"][] | null;
+            /** @description The runner's device id, `d_…`. */
+            id: string;
+            /** @description Its last frame or request; null if never seen. */
+            last_seen?: components["schemas"]["Timestamp"];
+            /**
+             * Format: int32
+             * @description Commands in flight.
+             */
+            load?: number | null;
+            name: string;
+            /** @description Connected to this Core now. */
+            online?: boolean | null;
+            /** @description Its `ainkrad-runner` version, once connected. */
+            version?: string | null;
+        };
+        /** @description A driver a runner offers, as it advertised it. */
+        RunnerDriver: {
+            /**
+             * Format: int32
+             * @description How many of its commands run at once.
+             */
+            capacity?: number | null;
+            /** @description The command ops it takes: `noop`, `exec.run`. */
+            commands?: string[] | null;
+            /** @description `exec` now; `pty`, `harness` later. */
+            name?: string | null;
         };
         SessionGrant: {
             /** @description Until when the session is elevated (E1-09); null when it is not. */
@@ -1160,6 +1256,93 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Device"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listRunners: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every paired runner that is not revoked, with its live state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Runner"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getRunner: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The runner's device id, `d_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One runner and its live state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Runner"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    runNoop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The runner's device id, `d_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The runner ran the no-op command (audited as `runner.command`). 409 `runner_offline` or `unsupported_command`, 503 `runner_busy`, 504 `runner_lost` or `runner_timeout`, 502 `runner_failed` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NoopResult"];
                 };
             };
             400: components["responses"]["BadRequest"];
