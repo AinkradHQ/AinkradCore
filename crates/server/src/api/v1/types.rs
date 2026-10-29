@@ -22,7 +22,7 @@ use utoipa::ToSchema;
 
 /// RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a
 /// client's date parser never meets a second one (E0.4).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
 #[schema(value_type = String, format = DateTime)]
 pub struct Timestamp(String);
 

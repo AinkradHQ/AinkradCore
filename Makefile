@@ -6,8 +6,8 @@ test: lint ; $(CARGO) test --workspace
 lint: format-check ; $(CARGO) clippy --workspace --all-targets -- -D warnings
 format: ; $(CARGO) fmt --all
 format-check: ; $(CARGO) fmt --all --check
-# The client API contract (E10.1); `make test` fails while api/openapi.json is stale.
-contract: ; mkdir -p api && $(CARGO) run -q -p ainkrad-core-server -- openapi > api/openapi.json
+# The contract (E10.1, E1-05.1): api/openapi.json, events.schema.json, runner.schema.json; `make test` fails while openapi.json is stale.
+contract: ; scripts/contract.sh api
 # Supply chain (E1-01.3): advisories, licences, bans, sources; see deny.toml.
 audit: ; $(CARGO) deny check
 # Linux runs in Docker with the pinned toolchain (E1-01.4). Colima/Docker on Apple silicon runs arm64 natively.

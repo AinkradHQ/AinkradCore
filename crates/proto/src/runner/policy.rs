@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// A project's harness permission policy (1.3). Never full-auto by default.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Policy {
     pub mode: PermissionMode,
     /// Tools the harness may use without asking: a tool name (`Edit`, `fileChange`), or
@@ -17,7 +17,9 @@ pub struct Policy {
     pub sandboxed: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionMode {
     /// Everything outside the allowlist asks.

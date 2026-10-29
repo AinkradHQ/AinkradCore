@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Where an issue's run works: a git worktree of `repo` on `branch`, cut from `base`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Workspace {
     /// A URL or path git can clone, never holding credentials (`repo_url_problem`).
     pub repo: String,
@@ -76,7 +76,7 @@ pub fn branch_name_ok(name: &str) -> bool {
 }
 
 /// One repo's worktree against its base (1.18): `git diff --numstat` plus untracked files.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RepoDiff {
     /// The repo's name in its project; empty for an issue's only repo.
     #[serde(default)]

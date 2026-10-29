@@ -1,0 +1,50 @@
+{
+  "$defs": {
+    "Timestamp": {
+      "description": "RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a\nclient's date parser never meets a second one (E0.4).",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "description": "One entry of the event stream. `seq` only grows: it is the replay cursor. New kinds may be\nadded: a client skips an event whose kind it does not know.",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "kind": {
+          "description": "What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,\n`action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `details`), or a kind a\nmodule writes.",
+          "type": "string"
+        },
+        "payload": true,
+        "seq": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "at",
+        "kind",
+        "payload"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The newest event's seq a client would be shown: the catch-up target.",
+      "properties": {
+        "seq": {
+          "description": "0 when there is none yet.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "Ainkrad event stream"
+}
