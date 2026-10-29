@@ -177,7 +177,7 @@ pub enum Control {
     Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RunnerHello {
     /// `PROTOCOL_VERSION` of the runner; the Core refuses a major it does not speak.
     pub protocol: String,
@@ -196,6 +196,22 @@ pub struct RunnerHello {
     /// `nonce_r`, 32 random bytes, base64url (`auth`). The Core refuses a hello without it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
+    /// The runner process's random id (E1-11.4). The same `boot` as the last connection means
+    /// its streams survived and are resumed; another means they are gone (reported `lost`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot: Option<String>,
+    /// Every command stream the runner still holds, with how many Core frames it received on
+    /// each: the Core resends the rest.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub streams: Vec<StreamState>,
+}
+
+/// Resume by `seq` (E1-11.4): how many of the peer's frames one side received on a stream.
+/// Frames are numbered from 0, so this is also the next `seq` it expects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct StreamState {
+    pub stream_id: u64,
+    pub received: u64,
 }
 
 /// A driver a runner offers (`exec` now; `pty`, `harness` later).
@@ -208,10 +224,22 @@ pub struct DriverInfo {
     pub capacity: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CoreWelcome {
     /// The version the Core speaks on this connection.
     pub protocol: String,
+    /// The Core process's random id (E1-11.4): another than last time means the Core
+    /// restarted, and every stream the runner held is gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot: Option<String>,
+    /// Between heartbeats, each way; silent for three is a dead connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heartbeat_ms: Option<u64>,
+    /// Every command stream the Core still has in flight for this runner, with how many runner
+    /// frames it received on each: the runner resends the rest. A stream the runner holds that
+    /// is not listed is over for the Core (answered, or reported lost).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub streams: Vec<StreamState>,
 }
 
 /// Bytes on a stream (exec output later, terminal `out`/`in`), standard base64.

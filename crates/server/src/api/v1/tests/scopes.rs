@@ -67,9 +67,10 @@ async fn read_and_runner_devices_are_refused_what_their_scopes_do_not_allow() {
         let r = send(&fx.app, as_(&runner)).await;
         assert!(refused(r.clone()), "runner {m} {uri}: {r:?}");
         let r = send(&fx.app, as_(&reader)).await;
+        // The reader holds `read` and `approve`: anything else (`admin`, `agent`) is refused.
         assert_eq!(
             refused(r.clone()),
-            scope == "admin",
+            !["read", "approve"].contains(&scope.as_str()),
             "read {m} {uri}: {r:?}"
         );
         let r = send(&fx.app, as_(&fx.dev)).await;

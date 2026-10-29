@@ -1,0 +1,1 @@
+{"stream_id":0,"kind":"control","seq":1,"payload":{"boot":"b_core","heartbeat_ms":15000,"protocol":"2.0","streams":[{"received":0,"stream_id":3}],"type":"welcome"}}

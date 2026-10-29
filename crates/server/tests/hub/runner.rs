@@ -18,14 +18,14 @@ use ainkrad_runner::v2::{ExecConfig, ExecDriver};
 use super::proof::tls_core;
 use super::{Core, quick};
 
-fn state(name: &str) -> State {
+pub(super) fn state(name: &str) -> State {
     let dir = std::env::temp_dir().join(format!("runner-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     State(dir)
 }
 
 /// Pairs a runner with `core` through `/pair/claim`, approving with the SAS it showed.
-async fn paired(
+pub(super) async fn paired(
     core: &Core,
     base: &str,
     tls: Option<Arc<rustls::ClientConfig>>,
@@ -100,7 +100,7 @@ async fn paired(
     e
 }
 
-fn driver() -> Arc<ExecDriver> {
+pub(super) fn driver() -> Arc<ExecDriver> {
     Arc::new(ExecDriver::new(ExecConfig::default(), Redactor::new()))
 }
 
@@ -140,6 +140,23 @@ async fn a_paired_runner_connects_and_runs_the_noop_over_loopback() {
         .noop(&e.device_id)
         .await
         .expect("the no-op ran on the real runner");
+    // A default runner (security review RH3) advertises only `noop`; `exec.run` is refused
+    // in the hub and never sent.
+    let live = core.app.hub.runners();
+    assert_eq!(live[&e.device_id].drivers[0].commands, ["noop"]);
+    let exec = ainkrad_proto::v2::Command::ExecRun(ainkrad_proto::v2::ExecRun {
+        program: "/bin/true".to_owned(),
+        args: vec![],
+        cwd: None,
+        env: Default::default(),
+        env_pass: vec![],
+        limits: Default::default(),
+    });
+    let refused = core.app.hub.dispatch(&e.device_id, exec).err().unwrap();
+    assert_eq!(
+        refused.code,
+        ainkrad_proto::v2::ErrorCode::UnsupportedCommand
+    );
     core.app.closing.send_replace(true);
     let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
     let _ = std::fs::remove_dir_all(&st.0);

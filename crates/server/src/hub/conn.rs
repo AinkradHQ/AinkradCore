@@ -12,6 +12,8 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use tokio::sync::{Notify, mpsc};
 use tokio::time::Instant;
 
+use serde_json::{Value, json};
+
 use super::OUT_QUEUE;
 use super::connect::send;
 use crate::api::App;
@@ -40,10 +42,29 @@ pub(super) async fn run(
     let cfg = hub.config.clone();
     let (out_tx, mut out_rx) = mpsc::channel(OUT_QUEUE);
     let replaced = Arc::new(Notify::new());
-    let generation = hub.register(&device.id, hello, out_tx, Arc::clone(&replaced));
+    let connected = json!({
+        "device_id": device.id,
+        "name": device.name,
+        "version": hello.runner_version,
+        "drivers": hello.drivers.iter().map(|d| &d.name).collect::<Vec<_>>(),
+    });
+    let now = app.clock.unix();
+    let (generation, streams) = hub.register(
+        &device.id,
+        &device.name,
+        hello,
+        out_tx,
+        Arc::clone(&replaced),
+        now,
+    );
+    emit(&app, CONNECTED, connected).await;
+    mark_used(&app, &device).await;
     let mut control_seq = 1;
     let welcome = Control::Welcome(CoreWelcome {
         protocol: PROTOCOL_VERSION.to_owned(),
+        boot: Some(hub.boot.clone()),
+        heartbeat_ms: Some(u64::try_from(cfg.heartbeat.as_millis()).unwrap_or(u64::MAX)),
+        streams,
     });
     let mut end = match send(
         &mut socket,
@@ -75,6 +96,12 @@ pub(super) async fn run(
                 if heard.elapsed() > cfg.heartbeat * 3 {
                     break End::Silent;
                 }
+                let silent = heard.elapsed() > cfg.heartbeat * 2;
+                let at = app.clock.unix() - i64::try_from(heard.elapsed().as_secs()).unwrap_or(0);
+                if hub.seen(&device.id, at, silent) {
+                    tracing::warn!(device = device.id, "runner degraded: silent past two heartbeats");
+                    emit(&app, DEGRADED, json!({"device_id": device.id, "reason": "silent"})).await;
+                }
                 control_seq += 1;
                 match timed(&mut socket, Frame::new(CONTROL_STREAM, control_seq, Body::Heartbeat), cfg.send_timeout).await {
                     Ok(Ok(())) => {}
@@ -96,7 +123,22 @@ pub(super) async fn run(
             },
         }
     };
-    hub.unregister(&device.id, generation);
+    hub.unregister(&device.id, generation, app.clock.unix());
+    mark_used(&app, &device).await;
+    let reason = match end {
+        End::Gone => "gone",
+        End::Replaced => "replaced",
+        End::Revoked => "revoked",
+        End::Restart => "restart",
+        End::Silent => "silent",
+        End::Slow => "slow",
+    };
+    emit(
+        &app,
+        DISCONNECTED,
+        json!({"device_id": device.id, "reason": reason}),
+    )
+    .await;
     let (code, why) = match end {
         End::Gone => {
             tracing::info!(device = device.id, "runner disconnected");
@@ -133,4 +175,35 @@ async fn timed(
 ) -> Result<Result<(), axum::Error>, tokio::time::error::Elapsed> {
     let text = serde_json::to_string(&frame).expect("a frame serializes");
     tokio::time::timeout(limit, socket.send(Message::Text(text.into()))).await
+}
+
+/// The platform's runner event kinds (`store::kinds`).
+pub const CONNECTED: &str = "runner.connected";
+pub const DISCONNECTED: &str = "runner.disconnected";
+pub const DEGRADED: &str = "runner.degraded";
+
+/// Appends one event in its own write; a failure is logged, never fatal to the connection.
+async fn emit(app: &App, kind: &str, payload: Value) {
+    let written = async {
+        let mut tx = crate::store::begin_write(&app.pool).await?;
+        crate::store::events::append(&mut tx, kind, &payload).await?;
+        tx.commit().await
+    };
+    if let Err(e) = written.await {
+        tracing::error!(error = %e, kind, "writing a runner event failed");
+    }
+}
+
+/// Records the device's use (`last_used_at`, at most once a minute).
+async fn mark_used(app: &App, device: &Device) {
+    let now = app.clock.now();
+    let last = crate::store::gov::get_device(&app.pool, &device.id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|d| d.last_used_at);
+    if let Err(e) = crate::store::gov::mark_used(&app.pool, &device.id, last.as_deref(), &now).await
+    {
+        tracing::error!(error = %e, "marking a runner used failed");
+    }
 }

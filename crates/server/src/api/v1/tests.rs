@@ -33,6 +33,7 @@ mod pairing;
 mod pairing_abuse;
 mod preauth;
 mod revocation;
+mod runners;
 mod scoped;
 mod scopes;
 mod sessions;

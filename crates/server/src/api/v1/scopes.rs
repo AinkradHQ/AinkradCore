@@ -6,6 +6,7 @@
 //!
 //! - `read`: what the device itself shows (its own identity and push token, events, settings).
 //! - `admin`: devices, pairing, setting changes, the audit log.
+//! - `agent`: sending a runner a command (`POST /api/v1/runners/{id}/noop`).
 //! - A module's routes need the module's own `Module::scope` (`admin` unless it says otherwise).
 //! - A `runner` device holds only `runner`, which no `/api/v1` route takes: it can call nothing
 //!   here (the runner hub is E1-11).
@@ -51,12 +52,20 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("PUT", "/api/v1/devices/{id}/scopes", "admin"),
     ("GET", "/api/v1/auth/lockouts", "admin"),
     ("POST", "/api/v1/auth/lockouts/clear", "admin"),
+    ("GET", "/api/v1/runners", "read"),
+    ("GET", "/api/v1/runners/{id}", "read"),
+    ("POST", "/api/v1/runners/{id}/noop", "agent"),
 ];
 
 /// `(method, path template)` of every route that needs a live elevation (spec §8): device
 /// admin (pairing create, approve and reject; revoke, rename, scope change; clearing a lockout)
 /// and every setting write (one flag per route, and some settings weaken security, the step-up
 /// window itself among them). Each must also be in [`ROUTES`] (a test checks).
+///
+/// `POST /api/v1/runners/{id}/noop` is not here: it runs one fixed op that takes no input,
+/// reads nothing and changes nothing on the runner (it proves the path), so it needs `agent`
+/// but no elevation. A route that runs caller-chosen commands on a runner (`exec.run`, E2) is
+/// arbitrary code execution there and must be listed.
 pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("DELETE", "/api/v1/devices/{id}"),
     ("PATCH", "/api/v1/devices/{id}"),

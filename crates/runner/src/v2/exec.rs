@@ -35,6 +35,11 @@ const DRAIN: Duration = Duration::from_secs(2);
 /// The runner's side of the limits: ceilings the Core's asks are clamped to, and what an
 /// absent ask gets.
 pub struct ExecConfig {
+    /// Whether `exec.run` is offered at all. Off by default: whoever holds the Core's key (or
+    /// a compromised Core) could otherwise run anything as the runner's user, its own key file
+    /// included. E1 needs only `noop` (security review RH3); `ainkrad-runner connect
+    /// --enable-exec` turns it on.
+    pub run_enabled: bool,
     pub capacity: u32,
     pub max_timeout: Duration,
     pub max_output_bytes: u64,
@@ -49,6 +54,7 @@ pub struct ExecConfig {
 impl Default for ExecConfig {
     fn default() -> Self {
         Self {
+            run_enabled: false,
             capacity: 4,
             max_timeout: Duration::from_secs(600),
             max_output_bytes: 1 << 20,
@@ -81,13 +87,24 @@ impl ExecDriver {
     pub fn info(&self) -> DriverInfo {
         DriverInfo {
             name: DRIVER.to_owned(),
-            commands: vec![OP_NOOP.to_owned(), OP_EXEC_RUN.to_owned()],
+            commands: if self.config.run_enabled {
+                vec![OP_NOOP.to_owned(), OP_EXEC_RUN.to_owned()]
+            } else {
+                vec![OP_NOOP.to_owned()]
+            },
             capacity: self.config.capacity,
         }
     }
 
-    /// A slot for one `exec.run`, or `busy`.
+    /// A slot for one `exec.run`: `unsupported_command` when `exec.run` is off, `busy` at
+    /// capacity.
     pub fn slot(&self) -> Result<OwnedSemaphorePermit, StreamError> {
+        if !self.config.run_enabled {
+            return Err(StreamError::new(
+                ErrorCode::UnsupportedCommand,
+                "exec.run is off on this runner (ainkrad-runner connect --enable-exec)",
+            ));
+        }
         self.slots.clone().try_acquire_owned().map_err(|_| {
             let cap = self.config.capacity;
             StreamError::new(ErrorCode::Busy, format!("exec is at capacity ({cap})"))

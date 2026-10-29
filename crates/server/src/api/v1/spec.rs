@@ -32,8 +32,8 @@ use crate::module::Module;
 use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{
-    audit, devices, events, handshake, lockouts, me, pair, pairing, session, settings, stepup,
-    types,
+    audit, devices, events, handshake, lockouts, me, pair, pairing, runners, session, settings,
+    stepup, types,
 };
 
 #[derive(OpenApi)]
@@ -61,6 +61,9 @@ use super::{
         pairing::reject,
         me::me,
         audit::list,
+        runners::list,
+        runners::get,
+        runners::noop,
         settings::list_server,
         settings::list,
         settings::get,
@@ -367,18 +370,33 @@ mod tests {
         }
         let spec: Value = serde_json::from_str(&json_for(&[Arc::new(Toy)])).unwrap();
         let s = &spec["components"]["schemas"];
-        assert_eq!(s["Event"]["x-event-kinds"], json!(["audit", "toy.line"]));
-        // A module's kinds default to its route scope (`admin`).
+        assert_eq!(
+            s["Event"]["x-event-kinds"],
+            json!([
+                "audit",
+                "runner.connected",
+                "runner.degraded",
+                "runner.disconnected",
+                "toy.line"
+            ])
+        );
+        // A module's kinds default to its route scope (`admin`); runner presence is `read`.
         assert_eq!(
             s["Event"]["x-event-scopes"],
-            json!({"audit": "admin", "toy.line": "admin"})
+            json!({"audit": "admin", "runner.connected": "read", "runner.degraded": "read",
+                "runner.disconnected": "read", "toy.line": "admin"})
         );
         let actions = s["AuditEntry"]["x-audit-actions"].as_array().unwrap();
         assert!(actions.contains(&json!("toy.made")) && actions.contains(&json!("setting.set")));
         let plain: Value = serde_json::from_str(&json()).unwrap();
         assert_eq!(
             plain["components"]["schemas"]["Event"]["x-event-kinds"],
-            json!(["audit"])
+            json!([
+                "audit",
+                "runner.connected",
+                "runner.degraded",
+                "runner.disconnected"
+            ])
         );
     }
 

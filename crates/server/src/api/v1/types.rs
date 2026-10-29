@@ -33,7 +33,10 @@
 /// 6: scoped event streams (E1-04.3): `Event.seq` counts the device's own view, and
 ///    `x-event-scopes` lists each kind's scope.
 /// 7: the runner hub (E1-11.2/.3): the `runner.refused` audit action.
-pub const API_MINOR: u32 = 7;
+/// 8: runner health (E1-11.4/.6): `listRunners`, `getRunner`, `runNoop`, the
+///    `runner.connected`/`.disconnected`/`.degraded` event kinds (scope `read`), the
+///    `runner.command` audit action.
+pub const API_MINOR: u32 = 8;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

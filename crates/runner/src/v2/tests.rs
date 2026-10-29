@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Close, CoreWelcome, DriverInfo, ExecResult, ExecRun, NO_CHANNEL_BINDING, OP_EXEC_RUN, OP_NOOP,
-    Rotation, rotation_message,
+    Close, Command, CoreWelcome, DriverInfo, ExecResult, ExecRun, NO_CHANNEL_BINDING, OP_EXEC_RUN,
+    OP_NOOP, Reply, Rotation, rotation_message,
 };
 use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair};
 
@@ -18,7 +18,7 @@ use super::*;
 
 struct Core {
     ws: WebSocketStream<DuplexStream>,
-    runner: JoinHandle<Result<(), StreamError>>,
+    runner: JoinHandle<Result<Option<u16>, StreamError>>,
     seq: u64,
     key: Key,
     enrolment: Arc<std::sync::Mutex<Enrolment>>,
@@ -55,6 +55,7 @@ impl Core {
             CONTROL_STREAM,
             Body::Control(Control::Welcome(CoreWelcome {
                 protocol: PROTOCOL_VERSION.to_owned(),
+                ..Default::default()
             })),
         )
         .await;
@@ -186,7 +187,7 @@ async fn hello_lists_the_exec_driver_and_its_capacity_then_noop_answers() {
     assert_eq!(core.answer(1).await, Body::Result(Reply::Noop));
     // The Core closes: the runner returns.
     core.ws.close(None).await.unwrap();
-    assert_eq!(core.runner.await.unwrap(), Ok(()));
+    assert_eq!(core.runner.await.unwrap(), Ok(None));
 }
 
 #[tokio::test]
@@ -326,6 +327,7 @@ async fn a_rotation_by_the_pinned_key_moves_the_pin_and_anything_else_is_ignored
         CONTROL_STREAM,
         Body::Control(Control::Welcome(CoreWelcome {
             protocol: PROTOCOL_VERSION.to_owned(),
+            ..Default::default()
         })),
     )
     .await;
@@ -377,6 +379,7 @@ async fn a_core_of_another_major_or_a_refusal_ends_the_session() {
     let (mut core, _) = Core::connect(1).await;
     let welcome = CoreWelcome {
         protocol: "3.0".to_owned(),
+        ..Default::default()
     };
     core.send(CONTROL_STREAM, Body::Control(Control::Welcome(welcome)))
         .await;
@@ -388,4 +391,17 @@ async fn a_core_of_another_major_or_a_refusal_ends_the_session() {
     core.send(CONTROL_STREAM, Body::Error(refusal.clone()))
         .await;
     assert_eq!(core.runner.await.unwrap(), Err(refusal));
+}
+
+/// Security review RH1: a Core frame whose `seq` has no successor is refused as `bad_frame`
+/// on its stream, and the session carries on.
+#[tokio::test]
+async fn a_seq_at_its_maximum_is_refused_and_the_session_serves_on() {
+    let (mut core, _) = Core::start(1).await;
+    let hostile = Frame::new(1, u64::MAX, Body::Command(Command::Noop));
+    let text = serde_json::to_string(&hostile).unwrap();
+    core.ws.send(Message::Text(text.into())).await.unwrap();
+    assert_eq!(error(core.answer(1).await), ErrorCode::BadFrame);
+    core.send(3, Body::Command(Command::Noop)).await;
+    assert_eq!(core.answer(3).await, Body::Result(Reply::Noop));
 }

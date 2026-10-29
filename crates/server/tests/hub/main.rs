@@ -3,7 +3,10 @@
 //! `routing` covers commands, capabilities, backpressure and connection ends; `proof` the
 //! upgrade's authentication and the channel-bound proof, over loopback and over TLS.
 
+mod fault;
+mod health;
 mod proof;
+mod resume;
 mod routing;
 mod runner;
 
@@ -89,7 +92,7 @@ pub fn quick() -> HubConfig {
 
 impl Core {
     pub async fn start(name: &str, hub: HubConfig) -> Self {
-        Self::start_on(name, hub, Listen::Tcp("127.0.0.1:0".to_owned()), None).await
+        Self::start_on(name, hub, Listen::Tcp("127.0.0.1:0".to_owned()), None, None).await
     }
 
     /// Serves `listen`; `host` overrides the Host clients send (TLS: `localhost:<port>`).
@@ -98,6 +101,7 @@ impl Core {
         hub: HubConfig,
         listen: Listen,
         dir: Option<&std::path::Path>,
+        host: Option<&str>,
     ) -> Self {
         log();
         let dir = dir.map(ToOwned::to_owned).unwrap_or_else(|| {
@@ -111,7 +115,9 @@ impl Core {
         let tls = matches!(listen, Listen::Public { .. });
         let gateway = Gateway::bind(listen, Limits::default()).await.unwrap();
         let port = gateway.local_addr().unwrap().port();
-        let host = if tls {
+        let host = if let Some(h) = host {
+            h.to_owned()
+        } else if tls {
             format!("localhost:{port}")
         } else {
             format!("127.0.0.1:{port}")
@@ -180,6 +186,9 @@ pub async fn upgrade(
 pub struct Fake {
     pub ws: Ws,
     seq: u64,
+    /// What `hello` claims for resume (E1-11.4).
+    pub boot: Option<String>,
+    pub streams: Vec<StreamState>,
 }
 
 pub fn exec_driver(commands: &[&str], capacity: u32) -> DriverInfo {
@@ -198,7 +207,16 @@ impl Fake {
         let ws = upgrade(Box::new(tcp), &core.host, Some(dev))
             .await
             .expect("upgraded");
-        Self { ws, seq: 0 }
+        Self::new(ws)
+    }
+
+    pub fn new(ws: Ws) -> Self {
+        Self {
+            ws,
+            seq: 0,
+            boot: None,
+            streams: Vec::new(),
+        }
     }
 
     /// Connected and welcomed, with `drivers`, over loopback.
@@ -237,6 +255,8 @@ impl Fake {
             arch: None,
             device_id: Some(dev.id.clone()),
             nonce: Some(b64(nonce_r)),
+            boot: self.boot.clone(),
+            streams: self.streams.clone(),
         };
         self.send(CONTROL_STREAM, Body::Control(Control::Hello(hello)))
             .await;
@@ -254,9 +274,9 @@ impl Fake {
         self.send(CONTROL_STREAM, Body::Control(proof)).await;
     }
 
-    pub async fn welcome(&mut self) {
+    pub async fn welcome(&mut self) -> CoreWelcome {
         match self.next().await.body().unwrap() {
-            Some(Body::Control(Control::Welcome(_))) => {}
+            Some(Body::Control(Control::Welcome(w))) => w,
             other => panic!("expected welcome, got {other:?}"),
         }
     }

@@ -33,6 +33,7 @@ mod lockouts;
 mod me;
 pub mod pair;
 mod pairing;
+mod runners;
 pub mod scopes;
 pub mod session;
 mod settings;
@@ -147,6 +148,9 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/events/ws", get(events::ws))
         .route("/api/v1/events/latest", get(events::latest))
         .route("/api/v1/audit", get(audit::list))
+        .route("/api/v1/runners", get(runners::list))
+        .route("/api/v1/runners/{id}", get(runners::get))
+        .route("/api/v1/runners/{id}/noop", post(runners::noop))
         .route("/api/v1/me", get(me::me))
         .route("/api/v1/auth/step-up/challenge", post(stepup::challenge))
         .route("/api/v1/auth/step-up", post(stepup::step_up))

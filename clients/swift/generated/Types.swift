@@ -67,6 +67,15 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `DELETE /api/v1/push-token`.
     /// - Remark: Generated from `#/paths//api/v1/push-token/delete(clearPushToken)`.
     func clearPushToken(_ input: Operations.ClearPushToken.Input) async throws -> Operations.ClearPushToken.Output
+    /// - Remark: HTTP `GET /api/v1/runners`.
+    /// - Remark: Generated from `#/paths//api/v1/runners/get(listRunners)`.
+    func listRunners(_ input: Operations.ListRunners.Input) async throws -> Operations.ListRunners.Output
+    /// - Remark: HTTP `GET /api/v1/runners/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/runners/{id}/get(getRunner)`.
+    func getRunner(_ input: Operations.GetRunner.Input) async throws -> Operations.GetRunner.Output
+    /// - Remark: HTTP `POST /api/v1/runners/{id}/noop`.
+    /// - Remark: Generated from `#/paths//api/v1/runners/{id}/noop/post(runNoop)`.
+    func runNoop(_ input: Operations.RunNoop.Input) async throws -> Operations.RunNoop.Output
     /// - Remark: HTTP `GET /api/v1/settings`.
     /// - Remark: Generated from `#/paths//api/v1/settings/get(listServerSettings)`.
     func listServerSettings(_ input: Operations.ListServerSettings.Input) async throws -> Operations.ListServerSettings.Output
@@ -289,6 +298,33 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//api/v1/push-token/delete(clearPushToken)`.
     public func clearPushToken(headers: Operations.ClearPushToken.Input.Headers = .init()) async throws -> Operations.ClearPushToken.Output {
         try await clearPushToken(Operations.ClearPushToken.Input(headers: headers))
+    }
+    /// - Remark: HTTP `GET /api/v1/runners`.
+    /// - Remark: Generated from `#/paths//api/v1/runners/get(listRunners)`.
+    public func listRunners(headers: Operations.ListRunners.Input.Headers = .init()) async throws -> Operations.ListRunners.Output {
+        try await listRunners(Operations.ListRunners.Input(headers: headers))
+    }
+    /// - Remark: HTTP `GET /api/v1/runners/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/runners/{id}/get(getRunner)`.
+    public func getRunner(
+        path: Operations.GetRunner.Input.Path,
+        headers: Operations.GetRunner.Input.Headers = .init()
+    ) async throws -> Operations.GetRunner.Output {
+        try await getRunner(Operations.GetRunner.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/runners/{id}/noop`.
+    /// - Remark: Generated from `#/paths//api/v1/runners/{id}/noop/post(runNoop)`.
+    public func runNoop(
+        path: Operations.RunNoop.Input.Path,
+        headers: Operations.RunNoop.Input.Headers = .init()
+    ) async throws -> Operations.RunNoop.Output {
+        try await runNoop(Operations.RunNoop.Input(
+            path: path,
+            headers: headers
+        ))
     }
     /// - Remark: HTTP `GET /api/v1/settings`.
     /// - Remark: Generated from `#/paths//api/v1/settings/get(listServerSettings)`.

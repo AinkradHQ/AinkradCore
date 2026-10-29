@@ -20,16 +20,27 @@ use sqlx::sqlite::SqlitePool;
 pub const PLATFORM: &str = "core";
 
 /// The platform's event kinds: `audit`, one per audit row, written by the `events_from_audit`
-/// trigger.
-pub const PLATFORM_EVENT_KINDS: &[&str] = &["audit"];
+/// trigger; and the runner hub's presence (`hub`): `runner.connected`, `runner.disconnected`,
+/// `runner.degraded` (silent past two heartbeats).
+pub const PLATFORM_EVENT_KINDS: &[&str] = &[
+    "audit",
+    "runner.connected",
+    "runner.degraded",
+    "runner.disconnected",
+];
 
 /// The scopes an event kind may be visible to (a runner reads no event stream).
 pub const VISIBLE: [&str; 5] = ["read", "approve", "terminal", "agent", "admin"];
 
-/// The scope each platform event kind is visible to.
-pub fn platform_scope(_kind: &str) -> &'static str {
-    // `audit`, the only one, is the audit log: `admin`, as `GET /api/v1/audit` is.
-    "admin"
+/// The scope each platform event kind is visible to: `audit` is the audit log, `admin` as
+/// `GET /api/v1/audit` is; runner presence (`runner.*`) is `read`, as `GET /api/v1/runners`
+/// is. A `runner` device sees neither: it reads no event stream at all.
+pub fn platform_scope(kind: &str) -> &'static str {
+    if kind.starts_with("runner.") {
+        "read"
+    } else {
+        "admin"
+    }
 }
 
 /// The platform's audit actions.
@@ -51,6 +62,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "pairing.refused",
     "pairing.rejected",
     "recover.started",
+    "runner.command",
     "runner.refused",
     "setting.reset",
     "setting.set",

@@ -17,6 +17,7 @@ pub(crate) fn driver(capacity: u32) -> ExecDriver {
     let mut env: Vec<(OsString, OsString)> = std::env::vars_os().collect();
     env.push(("AWS_SECRET_ACCESS_KEY".into(), PLANTED.into()));
     let config = ExecConfig {
+        run_enabled: true,
         capacity,
         kill_grace: Duration::from_millis(300),
         env_allow: vec!["PATH".to_owned()],
@@ -215,5 +216,18 @@ async fn bad_requests_are_refused_before_spawning() {
     assert_eq!(
         d.run(&req, never()).await.unwrap_err().code,
         ErrorCode::SpawnFailed
+    );
+}
+
+/// Security review RH3: by default a runner offers only `noop`, and refuses `exec.run` itself
+/// too (should a Core send it anyway).
+#[test]
+fn exec_run_is_off_by_default() {
+    let d = ExecDriver::new(ExecConfig::default(), Redactor::new());
+    assert_eq!(d.info().commands, [OP_NOOP]);
+    assert_eq!(d.slot().unwrap_err().code, ErrorCode::UnsupportedCommand);
+    assert!(
+        driver(1).info().commands.contains(&OP_EXEC_RUN.to_owned()),
+        "when enabled"
     );
 }

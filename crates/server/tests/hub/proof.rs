@@ -120,6 +120,7 @@ async fn a_bad_proof_a_foreign_hello_or_an_old_major_is_refused_and_audited() {
         arch: None,
         device_id: Some(other.id.clone()),
         nonce: Some(b64(&random32())),
+        ..RunnerHello::default()
     };
     f.send(CONTROL_STREAM, Body::Control(Control::Hello(hello.clone())))
         .await;
@@ -186,7 +187,7 @@ pub async fn tls_core(name: &str) -> Tls {
         http01: None,
         acme,
     };
-    let core = Core::start_on(name, quick(), listen, Some(&dir)).await;
+    let core = Core::start_on(name, quick(), listen, Some(&dir), None).await;
     Tls { root, core }
 }
 
@@ -227,7 +228,7 @@ async fn over_tls_the_proof_is_bound_to_the_session_and_nothing_of_it_is_logged(
     let ws = upgrade(io, &core.host, Some(&dev))
         .await
         .expect("upgraded over TLS");
-    let mut f = Fake { ws, seq: 0 };
+    let mut f = Fake::new(ws);
     let nonce_r = random32();
     let auth = f
         .hello(&dev, vec![exec_driver(&[OP_NOOP], 1)], &nonce_r)
@@ -255,7 +256,7 @@ async fn over_tls_the_proof_is_bound_to_the_session_and_nothing_of_it_is_logged(
         &sig_core
     ));
     let ws = upgrade(io, &core.host, Some(&dev)).await.unwrap();
-    let mut f2 = Fake { ws, seq: 0 };
+    let mut f2 = Fake::new(ws);
     let auth2 = f2.hello(&dev, vec![], &random32()).await;
     // A proof for the plain-text binding (or the old session) is refused over TLS.
     f2.prove(&dev, &auth2, &NO_CHANNEL_BINDING, &identity.fp)

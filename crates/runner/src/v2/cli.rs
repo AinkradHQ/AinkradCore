@@ -107,3 +107,64 @@ pub async fn pair_main(args: &[&str]) -> ExitCode {
         }
     }
 }
+
+pub const CONNECT_USAGE: &str = "usage:
+  ainkrad-runner connect [--state <dir>] [--ca <pem>] [--enable-exec]
+
+Serves the Core it paired with (`ainkrad-runner pair`) over protocol v2, reconnecting with a
+jittered backoff and resuming commands in flight. Stops on SIGTERM or Ctrl-C; commands still
+running are killed. It offers only `noop` unless --enable-exec is given: `exec.run` lets the
+Core run any program as this runner's user (bounded in time and output, with an empty
+environment), so turn it on only where that is wanted.";
+
+pub async fn connect_main(args: &[&str]) -> ExitCode {
+    let run_enabled = args.contains(&"--enable-exec");
+    let args: Vec<&str> = args
+        .iter()
+        .copied()
+        .filter(|a| *a != "--enable-exec")
+        .collect();
+    let args = args.as_slice();
+    if !args.len().is_multiple_of(2) || args.chunks(2).any(|f| !matches!(f[0], "--state" | "--ca"))
+    {
+        eprintln!("{CONNECT_USAGE}");
+        return ExitCode::from(2);
+    }
+    let tls = match flag(args, "--ca").map(tls_from_ca).transpose() {
+        Ok(tls) => tls,
+        Err(e) => {
+            eprintln!("ainkrad-runner: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let state = state_dir(flag(args, "--state"));
+    let exec = Arc::new(super::ExecDriver::new(
+        super::ExecConfig {
+            run_enabled,
+            ..super::ExecConfig::default()
+        },
+        ainkrad_proto::redact::Redactor::new(),
+    ));
+    let (stop, stopping) = tokio::sync::watch::channel(false);
+    let mut term = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        Ok(term) => term,
+        Err(e) => {
+            eprintln!("ainkrad-runner: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+        stop.send_replace(true);
+    });
+    match super::daemon::from_state(&state, exec, tls, stopping).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("ainkrad-runner: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
