@@ -147,6 +147,52 @@ fn v2_frames_are_pinned() {
             }],
             os: Some("linux".to_owned()),
             arch: Some("aarch64".to_owned()),
+            device_id: None,
+            nonce: None,
+        })),
+    );
+    v2(
+        "hello_auth",
+        CONTROL_STREAM,
+        0,
+        Body::Control(Control::Hello(RunnerHello {
+            protocol: PROTOCOL_VERSION.to_owned(),
+            runner_version: "0.1.0".to_owned(),
+            drivers: vec![],
+            os: None,
+            arch: None,
+            device_id: Some("d_5v0v4qa7a8h2tb3219mtz5znvv".to_owned()),
+            nonce: Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8".to_owned()),
+        })),
+    );
+    v2(
+        "auth",
+        CONTROL_STREAM,
+        1,
+        Body::Control(Control::Auth(CoreAuth {
+            core_spki: "MFkw…".to_owned(),
+            nonce: "nonce_c".to_owned(),
+            sig: "sig_core".to_owned(),
+        })),
+    );
+    v2(
+        "proof",
+        CONTROL_STREAM,
+        1,
+        Body::Control(Control::Proof(RunnerProof {
+            sig: "sig_runner".to_owned(),
+        })),
+    );
+    v2(
+        "rotation",
+        CONTROL_STREAM,
+        3,
+        Body::Control(Control::Rotation(Rotation {
+            old_fp: "old".to_owned(),
+            new_fp: "new".to_owned(),
+            not_before: 1761730000,
+            seq: 1,
+            sig: "sig_old".to_owned(),
         })),
     );
     v2(

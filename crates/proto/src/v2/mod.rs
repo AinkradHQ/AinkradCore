@@ -38,7 +38,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod auth;
 mod command;
+pub use auth::*;
 pub use command::*;
 
 /// The v2 protocol version, `major.minor`; minors only add optional fields and kinds.
@@ -46,6 +48,27 @@ pub const PROTOCOL_VERSION: &str = "2.0";
 
 /// The connection's own stream.
 pub const CONTROL_STREAM: u64 = 0;
+
+/// The `output` bytes either side may send on a new stream before the receiver grants more
+/// with `credit`.
+pub const STREAM_WINDOW: u64 = 64 * 1024;
+
+/// WebSocket close codes the Core uses on a runner connection.
+pub mod close_code {
+    /// The runner device was revoked (handshake spec §10).
+    pub const REVOKED: u16 = 4001;
+    /// A newer connection of the same runner took over. The runner backs off long: another
+    /// process holds its key.
+    pub const REPLACED: u16 = 4009;
+    /// The runner went silent past three heartbeats.
+    pub const SILENT: u16 = 1001;
+    /// The protocol or the proof was broken (`error` says how, if it could).
+    pub const POLICY: u16 = 1008;
+    /// The Core is stopping; reconnect.
+    pub const RESTART: u16 = 1012;
+    /// The runner fell behind the Core's sends.
+    pub const SLOW: u16 = 1013;
+}
 
 /// One WebSocket text message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -143,6 +166,12 @@ pub enum Control {
     Hello(RunnerHello),
     /// Core to runner: the hello is accepted.
     Welcome(CoreWelcome),
+    /// Core to runner: the Core's half of the connection proof (`auth`).
+    Auth(CoreAuth),
+    /// Runner to Core: the runner's half of the connection proof (`auth`).
+    Proof(RunnerProof),
+    /// Core to runner: a planned identity key rotation (`auth`).
+    Rotation(Rotation),
     /// A type from a newer peer: ignored. Never sent.
     #[serde(other)]
     Unknown,
@@ -160,6 +189,13 @@ pub struct RunnerHello {
     pub os: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arch: Option<String>,
+    /// The runner device, `d_…`: the one that signed the upgrade (E1-11.3). The Core refuses a
+    /// hello without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    /// `nonce_r`, 32 random bytes, base64url (`auth`). The Core refuses a hello without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
 }
 
 /// A driver a runner offers (`exec` now; `pty`, `harness` later).
@@ -233,6 +269,15 @@ pub enum ErrorCode {
     Cancelled,
     /// Anything else on the runner's side.
     Internal,
+    /// The connection proof failed (`auth`); the same answer whatever the reason.
+    AuthFailed,
+    /// The Core's identity is not the one the runner pinned. Logged by the runner; never sent.
+    CoreIdentityMismatch,
+    /// The runner is not connected (Core side, to whoever dispatched).
+    Offline,
+    /// The connection went while the command was in flight and its outcome is unknown: it may
+    /// or may not have run. Reported once per command, never followed by a result.
+    Lost,
     /// A code from a newer peer. Never sent.
     #[serde(other)]
     Unknown,
