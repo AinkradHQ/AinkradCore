@@ -37,6 +37,7 @@ use super::{ApiError, Caller, Client, query_ok, too_many};
 use crate::api::{App, limit, refusal};
 use crate::auth::signed::{self, Canonical};
 use crate::auth::{Replay, SKEW, Session, crypto};
+use crate::gateway::preauth::PREAUTH_BODY;
 use crate::store::gov::{self, ADDRESS, ADDRESS_DEVICE, Device};
 
 /// The largest body a signed request may carry (the gateway's own cap is the same).
@@ -136,12 +137,25 @@ pub async fn verify(
         e.server_time = Some(now);
         return Err(e.into_response().into());
     }
-    let bytes = body(raw, limit).await?;
-    let body: &[u8] = &bytes;
     let started = tokio::time::Instant::now();
     let device = gov::get_device(&app.pool, &h.device)
         .await
         .map_err(|e| ApiError::from(e).into_response())?;
+    // Only a usable device's request may carry the full body; anything else is held to the
+    // pre-auth 16 KiB before it is hashed (review L1).
+    let usable = device.as_ref().is_some_and(Device::usable);
+    let cap = if usable {
+        limit
+    } else {
+        limit.min(PREAUTH_BODY)
+    };
+    let bytes = match body(raw, cap).await {
+        Ok(b) => b,
+        Err(too_large) if usable => return Err(too_large),
+        // Not usable: it fails below whatever the body; a 413 here would tell it apart.
+        Err(_) => Bytes::new(),
+    };
+    let body: &[u8] = &bytes;
     let message = Canonical {
         core_fp: &app.auth.identity.fp,
         device: &h.device,
@@ -155,7 +169,7 @@ pub async fn verify(
     }
     .bytes();
     let refused = match &device {
-        Some(d) if d.usable() => {
+        Some(d) if usable => {
             if !crypto::verify(&d.routine_spki, &message, &h.signature) {
                 Some("bad signature")
             } else {
@@ -229,6 +243,11 @@ pub async fn fail(
     now: i64,
 ) -> Response {
     tracing::warn!(addr, device, why, "signed request refused");
+    // Counted in memory first, in one critical section: past the address's budget a refusal
+    // is a cheap 429 that writes nothing, however many arrive at once (review M2).
+    if !app.auth.failures.count(addr, now) {
+        return too_many(std::time::Duration::from_secs(ADDRESS.lock as u64));
+    }
     for (key, rule) in [(addr, ADDRESS), (ipdev, ADDRESS_DEVICE)] {
         if let Err(e) = gov::record_failure(&app.pool, key, rule, now).await {
             return ApiError::from(e).into_response();

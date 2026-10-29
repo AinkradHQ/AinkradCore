@@ -122,6 +122,40 @@ pub async fn record_failure(
     Ok(locked)
 }
 
+/// Rows kept in `core_auth_limits` at most; past it the oldest unlocked ones go first.
+pub const LIMITS_MAX: i64 = 100_000;
+
+/// Drops the counters that no longer mean anything at `now` (unlocked, their window over,
+/// their strikes forgotten), then holds the table to `LIMITS_MAX` by dropping the oldest
+/// unlocked rows: unauthenticated failures can never grow it without bound (review M4). The
+/// scheduler's tick; returns how many rows went.
+pub async fn prune_limits(pool: &SqlitePool, now: i64) -> Result<u64, Error> {
+    let window = ADDRESS.window.max(ADDRESS_DEVICE.window);
+    let mut tx = crate::store::begin_write(pool).await?;
+    let stale = sqlx::query(
+        "DELETE FROM core_auth_limits WHERE locked_until <= ?1 AND ?1 - window_start >= ?2 \
+         AND (strikes = 0 OR ?1 - strikes_at >= ?3)",
+    )
+    .bind(now)
+    .bind(window)
+    .bind(STRIKE_DECAY)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    let over = sqlx::query(
+        "DELETE FROM core_auth_limits WHERE key IN (SELECT key FROM core_auth_limits \
+         WHERE locked_until <= ?1 ORDER BY window_start LIMIT max(0, \
+         (SELECT count(*) FROM core_auth_limits) - ?2))",
+    )
+    .bind(now)
+    .bind(LIMITS_MAX)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    tx.commit().await?;
+    Ok(stale + over)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,6 +204,24 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(audited, 2, "one audit row per lock");
+
+        // The sweep drops what no longer counts and keeps what still does.
+        let rows = |pool: SqlitePool| async move {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM core_auth_limits")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+        let before = rows(pool.clone()).await;
+        assert!(before >= 2, "{before}");
+        assert_eq!(
+            prune_limits(&pool, t + 10_000).await.unwrap(),
+            0,
+            "strikes still count"
+        );
+        let later = t + 10_000 + 2 * STRIKE_DECAY;
+        assert_eq!(prune_limits(&pool, later).await.unwrap() as i64, before);
+        assert_eq!(rows(pool.clone()).await, 0);
         pool.close().await;
         std::fs::remove_dir_all(&dir).unwrap();
     }

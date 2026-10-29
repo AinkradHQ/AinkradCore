@@ -143,6 +143,10 @@ impl<C: Clock> Scheduler<C> {
                     if let Err(e) = trim_events(&self.pool, &now).await {
                         eprintln!("ainkrad-core-server: trimming events failed: {e}");
                     }
+                    let unix = unix_secs(&now).unwrap_or_default();
+                    if let Err(e) = crate::store::gov::prune_limits(&self.pool, unix).await {
+                        eprintln!("ainkrad-core-server: pruning lockouts failed: {e}");
+                    }
                     ticks += 1;
                 }
             }

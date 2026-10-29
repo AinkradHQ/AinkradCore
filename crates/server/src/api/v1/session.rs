@@ -89,7 +89,12 @@ pub async fn challenge(State(app): State<App>, req: Request) -> Response {
     if !crypto::is_id(&body.device_id, "d_") {
         return ApiError::bad_request("device_id is not a device id").into_response();
     }
-    match app.auth.challenge(&body.device_id, now) {
+    // Only a usable device's challenge is kept; any other id gets one that is never stored.
+    let known = match gov::device_usable(&app.pool, &body.device_id).await {
+        Ok(k) => k,
+        Err(e) => return ApiError::from(e).into_response(),
+    };
+    match app.auth.challenge(&body.device_id, known, now) {
         Some(c) => Json(Challenge {
             challenge: Some(c),
             expires_in: Some(CHALLENGE_SECS),

@@ -56,20 +56,29 @@ impl Identity {
     /// others may read is refused rather than used.
     pub fn load_or_create(dir: &Path) -> std::io::Result<Self> {
         let path = dir.join(FILE);
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)
-        {
-            Ok(mut file) => {
-                let der = Self::generate_pkcs8()?;
+        if !path.exists() {
+            // Written whole to a private temp file, then linked into place: the key file is
+            // either absent or complete, and a racing creator's key is kept, never replaced.
+            let tmp = dir.join(format!(
+                ".{FILE}.{}",
+                super::crypto::random_id("t_").trim_start_matches("t_")
+            ));
+            let der = Self::generate_pkcs8()?;
+            let written = (|| {
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&tmp)?;
                 file.write_all(&der)?;
                 file.sync_all()?;
-                return Self::from_pkcs8(&der);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(e),
+                match std::fs::hard_link(&tmp, &path) {
+                    Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => Err(e),
+                    _ => Ok(()),
+                }
+            })();
+            let _ = std::fs::remove_file(&tmp);
+            written?;
         }
         let mode = std::fs::metadata(&path)?.permissions().mode();
         if mode & 0o077 != 0 {

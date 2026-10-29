@@ -23,6 +23,7 @@ use crate::auth::testing::TestDevice;
 use crate::scheduler::Clock;
 use crate::store::connect;
 
+mod abuse;
 mod events;
 mod me;
 mod modules;

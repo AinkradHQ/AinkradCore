@@ -3,7 +3,8 @@
 //! survives. That is what closes replay across a restart (§6.4).
 //!
 //! - **Challenges** (`POST /handshake/challenge`): 32 random bytes, 60 s, single use, bound to
-//!   the device id they were asked for; at most 10,000 live.
+//!   the device id they were asked for; stored only for a usable device, at most 3 live each
+//!   (review M1: a flood of made-up ids allocates nothing).
 //! - **Sessions** (`POST /handshake/session`): a non-secret `s_…` handle for 15 minutes. Useless
 //!   without a valid signature; there is no bearer secret and no refresh token.
 //! - **Replay cache**: `(device, nonce)` for 125 s, at most 4,096 per device; when full, the
@@ -35,7 +36,10 @@ pub const REPLAY_TTL: i64 = 125;
 pub const REPLAY_MAX: usize = 4096;
 pub const SESSION_SECS: i64 = 15 * 60;
 pub const CHALLENGE_SECS: i64 = 60;
+/// A safety net only: unknown ids allocate nothing, so this holds a few per real device.
 pub const CHALLENGES_MAX: usize = 10_000;
+/// Live challenges per device; a new one replaces the oldest.
+pub const CHALLENGES_PER_DEVICE: usize = 3;
 /// Live sessions kept per device; the oldest goes first.
 pub const SESSIONS_PER_DEVICE: usize = 32;
 /// How often a socket re-checks its device in the database (§10 backstop).
@@ -58,16 +62,88 @@ pub enum Replay {
     Full,
 }
 
+/// Failures per address in this process (§11, review M2): counted and checked under one lock,
+/// so concurrent requests cannot all slip under the limit, and anything past it is refused
+/// without touching the database. The persisted lockout (`store::gov::limits`) carries the
+/// lock across restarts; this only gates the work and the writes.
+#[derive(Default)]
+pub struct AddressFailures {
+    /// address → (failures in the window, window start, evaluations in flight).
+    slots: Mutex<HashMap<String, (i64, i64, i64)>>,
+}
+
+/// Addresses tracked before the stale ones are dropped; past it a new address's failure is
+/// refused like one over its budget.
+const ADDRESSES_MAX: usize = 65_536;
+
+impl AddressFailures {
+    fn with<T>(
+        &self,
+        addr: &str,
+        now: i64,
+        f: impl FnOnce(&mut (i64, i64, i64)) -> T,
+    ) -> Option<T> {
+        use crate::store::gov::ADDRESS;
+        let mut slots = self.slots.lock().unwrap();
+        if slots.len() >= ADDRESSES_MAX && !slots.contains_key(addr) {
+            slots.retain(|_, (_, start, inflight)| *inflight > 0 || now - *start < ADDRESS.window);
+            if slots.len() >= ADDRESSES_MAX {
+                return None;
+            }
+        }
+        let slot = slots.entry(addr.to_owned()).or_insert((0, now, 0));
+        if now - slot.1 >= ADDRESS.window {
+            (slot.0, slot.1) = (0, now);
+        }
+        Some(f(slot))
+    }
+
+    /// Counts one failure from `addr`; `false` when the address is at its budget already (the
+    /// caller refuses with 429 and writes nothing).
+    pub fn count(&self, addr: &str, now: i64) -> bool {
+        let threshold = crate::store::gov::ADDRESS.threshold;
+        self.with(addr, now, |s| {
+            let ok = s.0 < threshold;
+            s.0 += i64::from(ok);
+            ok
+        })
+        .unwrap_or(false)
+    }
+
+    /// Takes one evaluation slot for `addr` (a pairing claim): `false` when its failures plus
+    /// the claims in flight reach the budget. Give it back with `release`.
+    pub fn reserve(&self, addr: &str, now: i64) -> bool {
+        let threshold = crate::store::gov::ADDRESS.threshold;
+        self.with(addr, now, |s| {
+            let ok = s.0 + s.2 < threshold;
+            s.2 += i64::from(ok);
+            ok
+        })
+        .unwrap_or(false)
+    }
+
+    /// Gives back a slot from `reserve`, counting it as a failure when `failed`.
+    pub fn release(&self, addr: &str, failed: bool, now: i64) {
+        self.with(addr, now, |s| {
+            s.2 = (s.2 - 1).max(0);
+            s.0 += i64::from(failed);
+        });
+    }
+}
+
 pub struct Auth {
     pub identity: Arc<Identity>,
     sessions: Mutex<HashMap<String, Session>>,
-    /// challenge → (device it was issued for, expiry).
-    challenges: Mutex<HashMap<String, (String, i64)>>,
+    /// challenge → (device it was issued for, expiry, issue order).
+    challenges: Mutex<HashMap<String, (String, i64, u64)>>,
+    issued: std::sync::atomic::AtomicU64,
     /// device → nonce → expiry.
     nonces: Mutex<HashMap<String, HashMap<String, i64>>>,
     revoked: broadcast::Sender<String>,
     /// Challenge issuance per address: 30 a minute (§11).
     pub challenge_limit: Limiter,
+    /// Authentication failures per address, in memory (`AddressFailures`).
+    pub failures: AddressFailures,
 }
 
 impl Auth {
@@ -76,23 +152,43 @@ impl Auth {
             identity,
             sessions: Mutex::default(),
             challenges: Mutex::default(),
+            issued: std::sync::atomic::AtomicU64::new(0),
             nonces: Mutex::default(),
             revoked: broadcast::channel(64).0,
             challenge_limit: Limiter::new(30, 0.5),
+            failures: AddressFailures::default(),
         }
     }
 
-    /// A new challenge for `device`; `None` while 10,000 are live.
-    pub fn challenge(&self, device: &str, now: i64) -> Option<String> {
+    /// A new challenge for `device`. Only a `known` (usable) device gets one stored, at most
+    /// `CHALLENGES_PER_DEVICE` live (a new one replaces its oldest); an unknown id gets an
+    /// equally random challenge that is never stored, so a flood of made-up ids allocates
+    /// nothing. `None` only when the global safety cap is full of live challenges.
+    pub fn challenge(&self, device: &str, known: bool, now: i64) -> Option<String> {
+        let c = crypto::b64(&crypto::random::<32>());
+        if !known {
+            return Some(c);
+        }
         let mut live = self.challenges.lock().unwrap();
-        if live.len() >= CHALLENGES_MAX {
-            live.retain(|_, (_, exp)| *exp > now);
-            if live.len() >= CHALLENGES_MAX {
-                return None;
+        live.retain(|_, (_, exp, _)| *exp > now);
+        let mut mine: Vec<(u64, String)> = live
+            .iter()
+            .filter(|(_, (d, _, _))| d == device)
+            .map(|(k, (_, _, n))| (*n, k.clone()))
+            .collect();
+        if mine.len() >= CHALLENGES_PER_DEVICE {
+            mine.sort();
+            for (_, k) in &mine[..=mine.len() - CHALLENGES_PER_DEVICE] {
+                live.remove(k);
             }
         }
-        let c = crypto::b64(&crypto::random::<32>());
-        live.insert(c.clone(), (device.to_owned(), now + CHALLENGE_SECS));
+        if live.len() >= CHALLENGES_MAX {
+            return None;
+        }
+        let n = self
+            .issued
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        live.insert(c.clone(), (device.to_owned(), now + CHALLENGE_SECS, n));
         Some(c)
     }
 
@@ -101,11 +197,11 @@ impl Auth {
     pub fn take_challenge(&self, challenge: &str, device: &str, now: i64) -> bool {
         let mut live = self.challenges.lock().unwrap();
         match live.get(challenge) {
-            Some((_, exp)) if *exp <= now => {
+            Some((_, exp, _)) if *exp <= now => {
                 live.remove(challenge);
                 false
             }
-            Some((d, _)) if d == device => {
+            Some((d, _, _)) if d == device => {
                 live.remove(challenge);
                 true
             }
@@ -219,12 +315,23 @@ mod tests {
     #[test]
     fn challenges_are_single_use_bound_and_expire() {
         let a = auth();
-        let c = a.challenge("d_a", 100).unwrap();
+        let c = a.challenge("d_a", true, 100).unwrap();
         assert!(!a.take_challenge(&c, "d_b", 100), "another device's");
         assert!(a.take_challenge(&c, "d_a", 100));
         assert!(!a.take_challenge(&c, "d_a", 100), "single use");
-        let c = a.challenge("d_a", 100).unwrap();
+        let c = a.challenge("d_a", true, 100).unwrap();
         assert!(!a.take_challenge(&c, "d_a", 160), "expired at 60 s");
+        let unknown = a.challenge("d_x", false, 100).unwrap();
+        assert!(!a.take_challenge(&unknown, "d_x", 100), "never stored");
+        let first = a.challenge("d_a", true, 200).unwrap();
+        for _ in 0..CHALLENGES_PER_DEVICE {
+            a.challenge("d_a", true, 200).unwrap();
+        }
+        assert!(
+            !a.take_challenge(&first, "d_a", 200),
+            "the oldest was replaced"
+        );
+        assert_eq!(a.challenges.lock().unwrap().len(), CHALLENGES_PER_DEVICE);
     }
 
     #[test]
@@ -241,6 +348,24 @@ mod tests {
             a.issue_session("d_a", t);
         }
         assert!(a.session(&first, "d_a", 10).is_none(), "the oldest went");
+    }
+
+    #[test]
+    fn address_failures_are_counted_and_reserved_under_one_lock() {
+        let f = AddressFailures::default();
+        for _ in 0..20 {
+            assert!(f.count("a", 0));
+        }
+        assert!(!f.count("a", 1), "at the budget");
+        assert!(f.count("b", 1), "per address");
+        assert!(f.count("a", 600), "a new window");
+        for _ in 0..19 {
+            assert!(f.reserve("c", 0));
+        }
+        assert!(f.count("c", 0));
+        assert!(!f.reserve("c", 0), "19 in flight + 1 failure");
+        f.release("c", false, 0);
+        assert!(f.reserve("c", 0), "a slot came back");
     }
 
     #[test]
