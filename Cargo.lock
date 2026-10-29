@@ -11,6 +11,7 @@ name = "ainkrad-core-server"
 version = "0.1.0"
 dependencies = [
  "ainkrad-core",
+ "ainkrad-proto",
  "axum",
  "base64 0.22.1",
  "futures-util",

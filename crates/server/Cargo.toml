@@ -11,6 +11,8 @@ workspace = true
 axum = { version = "0.8.9", features = ["ws"] }
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "json"] }
 ainkrad-core = { path = "../core" }
+# Secret shapes for redaction at append (E1-10.2).
+ainkrad-proto = { path = "../proto" }
 getrandom = "0.4.3"
 # APNs (E10.4): the .p8 key's PEM, and HTTP/2 to Apple; ES256 signing with ring, which
 # rustls already brings in.

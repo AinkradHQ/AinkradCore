@@ -59,6 +59,14 @@ pub(super) async fn fx() -> Fx {
     let dir = std::env::temp_dir().join(format!("core-v1-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let pool = connect(&dir.join("core.db")).await.unwrap();
+    // The kinds and actions the route tests write, as a module would declare them.
+    let actions = [
+        "thing.started",
+        "thing.done",
+        "thing.archived",
+        "thing.reopened",
+    ];
+    crate::store::kinds::allow(&pool, &["ops.line", "ops.blob"], &actions).await;
     let clock = Arc::new(FixedClock(Mutex::new(NOW.to_owned())));
     let app = App::new(pool, clock.clone(), HOST.to_owned());
     let (_, key) = issue_device_key(&app.pool, "test", super::BY)

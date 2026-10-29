@@ -36,12 +36,20 @@ pub const CORE: &str = "core";
 
 /// The platform's migrations, in order. A file, once in a release, never changes: its
 /// checksum is recorded, and a changed text refuses to start.
-pub static CORE_MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "core_0001",
-    up: include_str!("../../migrations/0001_core_0001.up.sql"),
-    down: include_str!("../../migrations/0001_core_0001.down.sql"),
-}];
+pub static CORE_MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "core_0001",
+        up: include_str!("../../migrations/0001_core_0001.up.sql"),
+        down: include_str!("../../migrations/0001_core_0001.down.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "events_audit",
+        up: include_str!("../../migrations/0002_events_audit.up.sql"),
+        down: include_str!("../../migrations/0002_events_audit.down.sql"),
+    },
+];
 
 #[derive(Debug)]
 pub enum MigrateError {
@@ -282,7 +290,8 @@ async fn platform_objects() -> Result<Vec<String>, sqlx::Error> {
 }
 
 /// Applies each module's pending migrations, in the order given, after the platform's
-/// (`migrate_core`, which `connect` runs).
+/// (`migrate_core`, which `connect` runs), then registers each module's event kinds and audit
+/// actions (`Module::event_kinds`, `Module::audit_actions`).
 ///
 /// Refuses a module whose id is illegal, reserved (`core`, `sqlite`), a duplicate, or whose
 /// prefix `<id>_` would also cover a platform object (`audit_` covers `audit_events`) or
@@ -320,6 +329,18 @@ pub async fn migrate_modules(
         let prefix = format!("{id}_");
         apply(pool, id, module.migrations(), Some((&prefix, &platform))).await?;
     }
+    // Then their event kinds and audit actions (E1-04.2), so a refused name stops the start too.
+    let mut tx = begin_write(pool).await?;
+    for module in modules {
+        let (kinds, actions) = (module.event_kinds(), module.audit_actions());
+        crate::store::kinds::register(&mut tx, module.id(), kinds, actions)
+            .await
+            .map_err(|e| match e {
+                sqlx::Error::InvalidArgument(why) => refused(module.id(), why),
+                e => e.into(),
+            })?;
+    }
+    tx.commit().await?;
     Ok(())
 }
 

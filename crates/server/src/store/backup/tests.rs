@@ -25,7 +25,8 @@ fn dir() -> Dir {
 
 /// One user plus its audit event, in one transaction.
 async fn write(pool: &SqlitePool, i: usize) {
-    let mut tx = pool.begin().await.unwrap();
+    crate::store::kinds::allow(pool, &[], &["user.created"]).await;
+    let mut tx = crate::store::begin_write(pool).await.unwrap();
     let id: i64 = sqlx::query_scalar("INSERT INTO users (name) VALUES (?) RETURNING id")
         .bind(format!("c{i}"))
         .fetch_one(&mut *tx)
@@ -40,7 +41,7 @@ async fn write(pool: &SqlitePool, i: usize) {
         }),
         details: "{}".to_owned(),
     };
-    audit::append(&mut *tx, &e).await.unwrap();
+    audit::append(&mut tx, &e).await.unwrap();
     tx.commit().await.unwrap();
 }
 

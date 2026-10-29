@@ -65,6 +65,18 @@ async fn pushes_what_the_classifier_picks_to_live_devices_once() {
     let dir = std::env::temp_dir().join(format!("core-push-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let pool = connect(&dir.join("core.db")).await.unwrap();
+    crate::store::kinds::allow(
+        &pool,
+        &[],
+        &[
+            "alert.before",
+            "alert.first",
+            "alert.second",
+            "alert.third",
+            "thing.routine",
+        ],
+    )
+    .await;
 
     let by = AuditActor::User(UserId(1));
     let token = |n: u8| format!("{n:02x}").repeat(32);
@@ -90,13 +102,13 @@ async fn pushes_what_the_classifier_picks_to_live_devices_once() {
         every: Duration::from_secs(1),
     };
     let alerts = pusher(Arc::new(Alerts));
-    audit::append(&pool, &audited("alert.before"))
+    audit::append_one(&pool, &audited("alert.before"))
         .await
         .unwrap();
     assert_eq!(alerts.tick().await.unwrap(), 0, "history is not pushed");
 
     for action in ["alert.first", "thing.routine", "alert.second"] {
-        audit::append(&pool, &audited(action)).await.unwrap();
+        audit::append_one(&pool, &audited(action)).await.unwrap();
     }
     assert_eq!(alerts.tick().await.unwrap(), 2);
     let sent = recorder.take();
@@ -115,7 +127,9 @@ async fn pushes_what_the_classifier_picks_to_live_devices_once() {
     assert_eq!(alerts.tick().await.unwrap(), 0, "each once");
 
     // The platform's default pushes nothing, and still moves the cursor.
-    audit::append(&pool, &audited("alert.third")).await.unwrap();
+    audit::append_one(&pool, &audited("alert.third"))
+        .await
+        .unwrap();
     assert_eq!(pusher(Arc::new(Silent)).tick().await.unwrap(), 0);
     assert_eq!(alerts.tick().await.unwrap(), 0);
     assert!(recorder.take().is_empty());

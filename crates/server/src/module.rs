@@ -10,9 +10,12 @@
 //! A module's migrations run in their own namespace, after the platform's, and may touch only
 //! its own `<id>_` tables (`crate::store::migrate`).
 //!
-//! Deliberately not here yet: event kinds (E1-04.2), scopes (E1-09.1) and scheduler jobs
-//! (E2-11). Each lands on this trait with its own
-//! consumer; guessing their shape now would be speculation.
+//! A module declares the event kinds it emits and the audit actions it records
+//! (`crate::store::kinds`, E1-04.2, E1-10.2): each starts with `<id>.`. `migrate_modules`
+//! registers them; an event or audit row of an undeclared name is refused at append.
+//!
+//! Deliberately not here yet: scopes (E1-09.1) and scheduler jobs (E2-11). Each lands on this
+//! trait with its own consumer; guessing their shape now would be speculation.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -35,6 +38,16 @@ pub trait Module: Send + Sync + 'static {
     /// `serve` mounts no module yet; whoever mounts the first must run `migrate_modules`
     /// before `mount`, so a refused migration or id stops the start.
     fn migrations(&self) -> &'static [Migration] {
+        &[]
+    }
+
+    /// The event kinds the module emits, each `<id>.<…>` (`crate::store::kinds`).
+    fn event_kinds(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// The audit actions the module records, each `<id>.<…>`.
+    fn audit_actions(&self) -> &'static [&'static str] {
         &[]
     }
 }
