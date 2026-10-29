@@ -32,9 +32,9 @@ PIDS=()
 cleanup() {
   local p
   # A backgrounded function (`a … &`) is a subshell: its children go too.
-  for p in "${PIDS[@]}"; do pkill -P "$p" 2>/dev/null || true; kill "$p" 2>/dev/null || true; done
+  for p in ${PIDS[@]+"${PIDS[@]}"}; do pkill -P "$p" 2>/dev/null || true; kill "$p" 2>/dev/null || true; done
   sleep 0.5
-  for p in "${PIDS[@]}"; do pkill -9 -P "$p" 2>/dev/null || true; kill -9 "$p" 2>/dev/null || true; done
+  for p in ${PIDS[@]+"${PIDS[@]}"}; do pkill -9 -P "$p" 2>/dev/null || true; kill -9 "$p" 2>/dev/null || true; done
   if [ "${E1_KEEP:-0}" = 1 ]; then echo "e1-exit: kept $W" >&2; else rm -rf "$W"; fi
 }
 trap cleanup EXIT
