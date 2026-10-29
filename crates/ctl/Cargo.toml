@@ -10,6 +10,10 @@ workspace = true
 # The reference client (E1-14): an independent implementation of the handshake spec
 # (`Docs/Specs/2026-10-29-core-handshake-spec.md`), written from the spec and never from the
 # server's code, so a server that drifts from the spec fails here.
+[[bin]]
+name = "ainkradctl"
+path = "src/main.rs"
+
 [dependencies]
 base64 = "0.22.1"
 futures-util = "0.3.34"

@@ -6,8 +6,11 @@
 //! or a signature.
 
 pub mod client;
+pub mod cmd;
+pub mod events;
 pub mod keystore;
 pub mod net;
+pub mod pair;
 pub mod proto;
 
 /// Why a command failed; each kind has its own exit code (`code`).
