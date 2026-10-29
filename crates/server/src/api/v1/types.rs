@@ -27,7 +27,9 @@
 /// 4: pairing (E1-07.4, .7): `createPairing`, `getPairing`, `approvePairing`, `rejectPairing`,
 ///    and the pre-auth `claimPairing` and `pairStatus`.
 /// 5: the runner hub (E1-11.2/.3): the `runner.refused` audit action.
-pub const API_MINOR: u32 = 5;
+/// 6: runner health (E1-11.4/.6): `listRunners`, `getRunner`, `runNoop`, the
+///    `runner.connected`/`.disconnected`/`.degraded` event kinds, the `runner.command` audit action.
+pub const API_MINOR: u32 = 6;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

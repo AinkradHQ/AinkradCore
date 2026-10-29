@@ -4,6 +4,7 @@
 //! upgrade's authentication and the channel-bound proof, over loopback and over TLS.
 
 mod fault;
+mod health;
 mod proof;
 mod resume;
 mod routing;

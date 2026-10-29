@@ -6,6 +6,7 @@
 //!
 //! - `read`: what the device itself shows (its own identity and push token, events, settings).
 //! - `admin`: devices, pairing, setting changes, the audit log.
+//! - `agent`: sending a runner a command (`POST /api/v1/runners/{id}/noop`).
 //! - A module's routes need the module's own `Module::scope` (`admin` unless it says otherwise).
 //! - A `runner` device holds only `runner`, which no `/api/v1` route takes: it can call nothing
 //!   here (the runner hub is E1-11).
@@ -40,6 +41,9 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/pairings/{id}", "admin"),
     ("POST", "/api/v1/pairings/{id}/approve", "admin"),
     ("POST", "/api/v1/pairings/{id}/reject", "admin"),
+    ("GET", "/api/v1/runners", "read"),
+    ("GET", "/api/v1/runners/{id}", "read"),
+    ("POST", "/api/v1/runners/{id}/noop", "agent"),
 ];
 
 /// Whether `path` fits `template` segment by segment.

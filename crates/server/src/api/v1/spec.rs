@@ -31,7 +31,9 @@ use utoipa::OpenApi;
 use crate::module::Module;
 use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
-use super::{audit, devices, events, handshake, me, pair, pairing, session, settings, types};
+use super::{
+    audit, devices, events, handshake, me, pair, pairing, runners, session, settings, types,
+};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -55,6 +57,9 @@ use super::{audit, devices, events, handshake, me, pair, pairing, session, setti
         pairing::reject,
         me::me,
         audit::list,
+        runners::list,
+        runners::get,
+        runners::noop,
         settings::list_server,
         settings::list,
         settings::get,
