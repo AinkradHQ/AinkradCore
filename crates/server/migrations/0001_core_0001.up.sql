@@ -5,6 +5,13 @@
 --   user_id INTEGER NOT NULL DEFAULT 1 REFERENCES users(id)
 -- so roles and more users can come later without a data migration.
 -- Today there is a single admin user (id 1).
+-- Rule (E1-03.5), for the platform's and every module's migrations: a table without a
+-- `user_id` column must be in the allow-list of `user_owned_tables_carry_user_id`
+-- (crates/server/src/store/migrate/tests.rs) with the reason its rows belong to no user, or
+-- `make test` fails. The platform's: users (the owners themselves), device_pairings (a code
+-- belongs to no one until it is spent; then its device key carries the user), events (each
+-- describes a row that carries its own user), push_cursor (one row, the process's) and
+-- settings (owned by their scope; a user scope comes as a scope kind, not a column).
 CREATE TABLE users (
     id         INTEGER PRIMARY KEY,
     name       TEXT    NOT NULL UNIQUE,

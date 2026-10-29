@@ -315,3 +315,53 @@ fn the_schema_diff_flags_objects_outside_the_prefix() {
         "a dropped platform table"
     );
 }
+
+/// E1-03.5: every table carries `user_id` unless it is allow-listed here with the reason its
+/// rows belong to no user (the rule is in the header of the baseline migration). Checked over
+/// the platform's schema and a module's, so a module table is held to it too.
+#[tokio::test]
+async fn user_owned_tables_carry_user_id() {
+    const NOT_USER_OWNED: [&str; 5] = [
+        // The owners themselves.
+        "users",
+        // A code belongs to no one until it is spent; then its device key carries the user.
+        "device_pairings",
+        // Each describes a row that carries its own user.
+        "events",
+        // One row: the pusher's position, the process's.
+        "push_cursor",
+        // Owned by their scope; a user scope is a scope kind, not a column.
+        "settings",
+    ];
+    static V1: &[Migration] = &[TOY_1];
+    let db = db().await;
+    migrate_modules(&db.pool, &toy("toy", V1)).await.unwrap();
+    // GLOB, not LIKE: `_` is a LIKE wildcard.
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'table' \
+         AND name NOT GLOB 'sqlite_*' AND name NOT GLOB '_migrations_*' ORDER BY name",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert!(tables.contains(&"toy_items".to_owned()), "{tables:?}");
+    let mut missing = Vec::new();
+    for table in &tables {
+        let has: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM pragma_table_info(?) WHERE name = 'user_id'")
+                .bind(table)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        if has == 0 && !NOT_USER_OWNED.contains(&table.as_str()) {
+            missing.push(table.clone());
+        }
+    }
+    assert!(missing.is_empty(), "tables without user_id: {missing:?}");
+    for table in NOT_USER_OWNED {
+        assert!(
+            tables.iter().any(|t| t == table),
+            "stale allow-list entry {table}"
+        );
+    }
+}
