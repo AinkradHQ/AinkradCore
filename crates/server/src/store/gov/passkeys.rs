@@ -112,27 +112,57 @@ pub async fn credential_used(
     .map(drop)
 }
 
+/// What `lock_credential` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lock {
+    /// Revoked and its device locked, now.
+    Locked,
+    /// Revoked before: nothing written, so a clone cannot grow the audit log.
+    Already,
+    /// Not a clone: a lower count than one stored by a use in the last `recent_secs`, which is
+    /// two ceremonies of the same authenticator finishing out of order (two tabs). Nothing written.
+    Raced,
+}
+
 /// A verified assertion whose sign count did not grow (a cloned authenticator): revokes the
 /// credential and locks its device, audited once as `passkey.locked`, in one transaction.
-/// `false` when it was locked already (nothing written, so a clone cannot grow the audit log).
+/// A count *below* the stored one, stored by a use within `recent_secs` (the ceremony
+/// lifetime), is `Raced` instead: a concurrent sign-in moved the count on after this
+/// ceremony's options were issued. An equal count is always a clone.
 pub async fn lock_credential(
     pool: &SqlitePool,
     id: &[u8],
     reported: u32,
     now: &str,
-) -> Result<bool, Error> {
+    recent_secs: i64,
+) -> Result<Lock, Error> {
     let mut tx = begin_write(pool).await?;
-    let hit: Option<(String, i64)> = sqlx::query_as(
-        "UPDATE core_passkeys SET revoked_at = ? WHERE credential_id = ? AND revoked_at IS NULL \
-         RETURNING device_id, sign_count",
+    let row: Option<(i64, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT sign_count, last_used_at, revoked_at FROM core_passkeys WHERE credential_id = ?",
     )
-    .bind(now)
     .bind(id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((device, stored)) = hit else {
-        return Ok(false);
+    let Some((stored, used, None)) = row else {
+        return Ok(Lock::Already);
     };
+    let unix = crate::scheduler::unix_secs;
+    let recent = match (used.as_deref().and_then(unix), unix(now)) {
+        (Some(used), Some(now)) => now - used < recent_secs,
+        _ => false,
+    };
+    // ponytail: a clone answering within `recent_secs` of a real use only fails, unlocked; its
+    // next try outside that window locks it. Exact ordering needs per-ceremony sequence numbers.
+    if i64::from(reported) < stored && recent {
+        return Ok(Lock::Raced);
+    }
+    let device: String = sqlx::query_scalar(
+        "UPDATE core_passkeys SET revoked_at = ? WHERE credential_id = ? RETURNING device_id",
+    )
+    .bind(now)
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
     let seq: Option<i64> = sqlx::query_scalar(
         "UPDATE core_devices SET status = 'locked' WHERE id = ? AND status = 'active' RETURNING seq",
     )
@@ -145,5 +175,5 @@ pub async fn lock_credential(
         audit_device(&mut tx, seq, "passkey.locked", AuditActor::System, details).await?;
     }
     tx.commit().await?;
-    Ok(true)
+    Ok(Lock::Locked)
 }
