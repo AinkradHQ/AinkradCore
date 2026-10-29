@@ -47,8 +47,25 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 CONF
 
-# 6. Report what a reviewer needs to see.
+# 6. No memory on disk: the Core holds key material in RAM, so a crash must not write a core dump
+#    (apport would otherwise copy process memory under /var/crash), and nothing may reach swap.
+install -d /etc/sysctl.d /etc/systemd/coredump.conf.d /etc/security/limits.d
+cat > /etc/sysctl.d/60-ainkrad-nodump.conf <<'CONF'
+fs.suid_dumpable = 0
+kernel.core_pattern = |/bin/false
+CONF
+printf '[Coredump]\nStorage=none\nProcessSizeMax=0\n' > /etc/systemd/coredump.conf.d/10-ainkrad.conf
+printf '* hard core 0\n' > /etc/security/limits.d/10-ainkrad-nocore.conf
+systemctl disable --now apport.service 2>/dev/null || true
+# Stopping apport resets core_pattern, so the sysctl is applied after it.
+sysctl --system >/dev/null
+rm -rf /var/crash/*
+swapoff -a
+sed -i -E 's/^([^#].*[[:space:]]swap[[:space:]].*)$/# \1  # disabled by ainkrad harden.sh/' /etc/fstab
+
+# 7. Report what a reviewer needs to see.
 echo "--- kvm: $([ -e /dev/kvm ] && echo present || echo absent)"
 echo "--- listening:"; ss -tlnp | awk 'NR>1 {print "  " $4}'
 echo "--- iptables:"; { iptables -S INPUT; iptables -S AINKRAD_IN; } | sed 's/^/  /'
 echo "--- service account: $(getent passwd ainkrad | cut -d: -f1,6,7)"
+echo "--- core_pattern: $(cat /proc/sys/kernel/core_pattern); suid_dumpable: $(cat /proc/sys/fs/suid_dumpable); swap devices: $(swapon --show --noheadings | wc -l)"
