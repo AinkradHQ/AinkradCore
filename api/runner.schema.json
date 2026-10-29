@@ -38,6 +38,158 @@
       ],
       "type": "object"
     },
+    "Captured": {
+      "description": "One output pipe: redacted UTF-8 (lossy), cut at the limit with a marker.",
+      "properties": {
+        "bytes": {
+          "description": "How many bytes the process wrote, kept or not.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        },
+        "truncated": {
+          "description": "`text` was cut at the limit and ends in `TRUNCATED_MARKER`.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "text",
+        "bytes",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "Close": {
+      "description": "A stream given up. From the Core on a running command: cancel it.",
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Command": {
+      "description": "Core to runner, the first frame of a command stream.",
+      "oneOf": [
+        {
+          "description": "Answers `result` at once: proves the path end to end.",
+          "properties": {
+            "op": {
+              "const": "noop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ExecRun",
+          "properties": {
+            "op": {
+              "const": "exec.run",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An op from a newer Core: answered `unsupported_command`. Never sent.",
+          "properties": {
+            "op": {
+              "const": "Unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Control": {
+      "description": "`control` payloads, tagged by `type`.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/RunnerHello",
+          "description": "Runner to Core, the first frame of a connection, on stream 0.",
+          "properties": {
+            "type": {
+              "const": "hello",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/CoreWelcome",
+          "description": "Core to runner: the hello is accepted.",
+          "properties": {
+            "type": {
+              "const": "welcome",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A type from a newer peer: ignored. Never sent.",
+          "properties": {
+            "type": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CoreWelcome": {
+      "properties": {
+        "protocol": {
+          "description": "The version the Core speaks on this connection.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "Credit": {
+      "description": "Flow control: the sender of this frame accepts `bytes` more `output` bytes on the stream.",
+      "properties": {
+        "bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "bytes"
+      ],
+      "type": "object"
+    },
     "DiskReport": {
       "description": "A runner's disk use (1.15, E15.9), as measured after its last clean-up pass.",
       "properties": {
@@ -94,6 +246,234 @@
         "full"
       ],
       "type": "object"
+    },
+    "DriverInfo": {
+      "description": "A driver a runner offers (`exec` now; `pty`, `harness` later).",
+      "properties": {
+        "capacity": {
+          "description": "How many of its commands run at once; one more is answered `busy`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "commands": {
+          "description": "The command ops it takes, e.g. `noop`, `exec.run`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "commands",
+        "capacity"
+      ],
+      "type": "object"
+    },
+    "ErrorCode": {
+      "description": "Machine codes, snake_case like the client API's (handshake spec §14).",
+      "oneOf": [
+        {
+          "const": "bad_frame",
+          "description": "A frame or payload that does not parse, or a stream id that breaks the rules.",
+          "type": "string"
+        },
+        {
+          "const": "unsupported_version",
+          "description": "The peer's protocol major is not one this side speaks.",
+          "type": "string"
+        },
+        {
+          "const": "unsupported_command",
+          "description": "No advertised driver takes this command op.",
+          "type": "string"
+        },
+        {
+          "const": "invalid_args",
+          "description": "The command's arguments are refused (e.g. a relative `cwd`).",
+          "type": "string"
+        },
+        {
+          "const": "busy",
+          "description": "The driver is at its advertised capacity; retry later.",
+          "type": "string"
+        },
+        {
+          "const": "spawn_failed",
+          "description": "The program could not be started.",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "description": "The command was cancelled by a `close`.",
+          "type": "string"
+        },
+        {
+          "const": "internal",
+          "description": "Anything else on the runner's side.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A code from a newer peer. Never sent.",
+          "type": "string"
+        }
+      ]
+    },
+    "ExecLimits": {
+      "description": "What the Core asks for; the runner clamps each to its own ceiling and uses its default\nfor an absent one.",
+      "properties": {
+        "max_output_bytes": {
+          "description": "The most of stdout, and of stderr, kept; the rest is dropped and marked.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "timeout_ms": {
+          "description": "Wall clock until the process group gets TERM, then KILL.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ExecResult": {
+      "properties": {
+        "duration_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "exit_code": {
+          "description": "Absent when it was ended by a signal (its timeout included).",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "$ref": "#/$defs/Captured"
+        },
+        "stdout": {
+          "$ref": "#/$defs/Captured"
+        },
+        "timed_out": {
+          "description": "It ran past its timeout and was killed.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "timed_out",
+        "duration_ms",
+        "stdout",
+        "stderr"
+      ],
+      "type": "object"
+    },
+    "ExecRun": {
+      "description": "Runs `program args…` to its end, bounded, and answers with its exit and output.",
+      "properties": {
+        "args": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cwd": {
+          "description": "An absolute directory; absent, the runner's own working directory.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Variables set in the child as given.",
+          "type": "object"
+        },
+        "env_pass": {
+          "description": "Names of the runner's own variables to pass on. Only those also on the runner's\nallow-list are; the child's environment starts empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limits": {
+          "$ref": "#/$defs/ExecLimits",
+          "default": {}
+        },
+        "program": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "program"
+      ],
+      "type": "object"
+    },
+    "Frame": {
+      "description": "One WebSocket text message.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/FrameKind"
+        },
+        "payload": {
+          "description": "The body for `kind` (`Body`; schema `V2Payload`); absent for `heartbeat`."
+        },
+        "seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stream_id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "stream_id",
+        "kind",
+        "seq"
+      ],
+      "type": "object"
+    },
+    "FrameKind": {
+      "oneOf": [
+        {
+          "enum": [
+            "control",
+            "command",
+            "result",
+            "error",
+            "output",
+            "credit",
+            "close",
+            "heartbeat"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A kind from a newer peer: skipped. Never sent.",
+          "type": "string"
+        }
+      ]
     },
     "HostLoad": {
       "description": "The host's load when a heartbeat was sent (1.26): its one-minute load average and its CPU\ncount. The server stretches a loaded runner's lease by `avg1 / cores`, up to a cap.",
@@ -221,6 +601,18 @@
         }
       ]
     },
+    "Output": {
+      "description": "Bytes on a stream (exec output later, terminal `out`/`in`), standard base64.",
+      "properties": {
+        "data": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "type": "object"
+    },
     "PermissionMode": {
       "oneOf": [
         {
@@ -264,6 +656,49 @@
         "mode"
       ],
       "type": "object"
+    },
+    "Reply": {
+      "description": "Runner to Core, a command's last frame when it ran.",
+      "oneOf": [
+        {
+          "properties": {
+            "op": {
+              "const": "noop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ExecResult",
+          "properties": {
+            "op": {
+              "const": "exec.run",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An op from a newer runner. Never sent.",
+          "properties": {
+            "op": {
+              "const": "Unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "RepoDiff": {
       "description": "One repo's worktree against its base (1.18): `git diff --numstat` plus untracked files.",
@@ -402,6 +837,43 @@
       "description": "A run token on the wire. Its `Debug` is redacted, so logging a message never logs it;\n`expose` is the one way to read it.",
       "type": "string"
     },
+    "RunnerHello": {
+      "properties": {
+        "arch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "drivers": {
+          "description": "What it can run. The Core sends only commands listed here.",
+          "items": {
+            "$ref": "#/$defs/DriverInfo"
+          },
+          "type": "array"
+        },
+        "os": {
+          "description": "`macos`/`linux` and `aarch64`/`x86_64`, as Rust names them.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "protocol": {
+          "description": "`PROTOCOL_VERSION` of the runner; the Core refuses a major it does not speak.",
+          "type": "string"
+        },
+        "runner_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocol",
+        "runner_version",
+        "drivers"
+      ],
+      "type": "object"
+    },
     "RunnerInfo": {
       "description": "What a runner says of itself (1.20).",
       "properties": {
@@ -486,6 +958,22 @@
       ],
       "type": "object"
     },
+    "StreamError": {
+      "description": "A command's failure, or (on stream 0) a connection's. `message` is human text, redacted.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
     "TokenCaps": {
       "description": "A run's caps, split (1.27): what the runner counts its tokens against. A run stops when\neither applies. Its tokens are counted from its events, and the caps stay exact for the\nbudgets and the issue; only `run` is weighted.",
       "properties": {
@@ -557,6 +1045,32 @@
         "cache_write"
       ],
       "type": "object"
+    },
+    "V2Payload": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Control"
+        },
+        {
+          "$ref": "#/$defs/Command"
+        },
+        {
+          "$ref": "#/$defs/Reply"
+        },
+        {
+          "$ref": "#/$defs/StreamError"
+        },
+        {
+          "$ref": "#/$defs/Output"
+        },
+        {
+          "$ref": "#/$defs/Credit"
+        },
+        {
+          "$ref": "#/$defs/Close"
+        }
+      ],
+      "description": "A v2 Frame's payload by kind: control Control, command Command, result Reply, error StreamError, output Output, credit Credit, close Close, heartbeat none."
     },
     "Workspace": {
       "description": "Where an issue's run works: a git worktree of `repo` on `branch`, cut from `base`.",
@@ -637,7 +1151,7 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "RunnerMessage: runner to server. ServerMessage: server to runner.",
+  "description": "RunnerMessage: runner to server (v1). ServerMessage: server to runner (v1). Frame: either way (v2, multiplexed streams).",
   "oneOf": [
     {
       "description": "Runner → server.",
@@ -1649,6 +2163,9 @@
           "type": "object"
         }
       ]
+    },
+    {
+      "$ref": "#/$defs/Frame"
     }
   ],
   "title": "Ainkrad runner protocol"

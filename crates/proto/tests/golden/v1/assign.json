@@ -1,0 +1,1 @@
+{"type":"assign","run":7,"agent":2,"issue":9,"harness":"claude","model":"opus","context_ref":"ctx","workspace":null,"token_cap":1000,"token_caps":null,"policy":{"mode":"ask","allow":[],"sandboxed":false},"issue_key":null,"instructions":null,"account":null,"fallbacks":[],"limits":null,"resume_session":null,"prompt":null}
