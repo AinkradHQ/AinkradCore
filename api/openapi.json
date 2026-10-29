@@ -29,7 +29,7 @@
             }
           }
         },
-        "description": "Wrong Host (unknown_host), or an Origin header (origin_refused)"
+        "description": "Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)"
       },
       "InternalError": {
         "content": {
@@ -876,7 +876,8 @@
         },
         "tags": [
           "events"
-        ]
+        ],
+        "x-ainkrad-scope": "admin"
       }
     },
     "/api/v1/devices": {
@@ -920,7 +921,8 @@
         },
         "tags": [
           "devices"
-        ]
+        ],
+        "x-ainkrad-scope": "admin"
       }
     },
     "/api/v1/devices/{id}": {
@@ -973,7 +975,8 @@
         "summary": "Revokes at once, the calling device included; the row stays, marked revoked.",
         "tags": [
           "devices"
-        ]
+        ],
+        "x-ainkrad-scope": "admin"
       }
     },
     "/api/v1/events": {
@@ -1045,7 +1048,8 @@
         },
         "tags": [
           "events"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/api/v1/events/latest": {
@@ -1086,7 +1090,8 @@
         },
         "tags": [
           "events"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/api/v1/events/ws": {
@@ -1136,6 +1141,7 @@
         "tags": [
           "events"
         ],
+        "x-ainkrad-scope": "read",
         "x-citadel-frame": "#/components/schemas/Event"
       }
     },
@@ -1177,7 +1183,8 @@
         },
         "tags": [
           "devices"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/api/v1/push-token": {
@@ -1218,7 +1225,8 @@
         },
         "tags": [
           "devices"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       },
       "put": {
         "operationId": "setPushToken",
@@ -1267,7 +1275,8 @@
         },
         "tags": [
           "devices"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/api/v1/settings": {
@@ -1311,7 +1320,8 @@
         },
         "tags": [
           "settings"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/api/v1/settings/{scope}": {
@@ -1366,7 +1376,8 @@
         },
         "tags": [
           "settings"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/api/v1/settings/{scope}/{key}": {
@@ -1427,7 +1438,8 @@
         },
         "tags": [
           "settings"
-        ]
+        ],
+        "x-ainkrad-scope": "admin"
       },
       "get": {
         "operationId": "getSetting",
@@ -1486,7 +1498,8 @@
         },
         "tags": [
           "settings"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       },
       "put": {
         "operationId": "setSetting",
@@ -1555,7 +1568,8 @@
         },
         "tags": [
           "settings"
-        ]
+        ],
+        "x-ainkrad-scope": "admin"
       }
     },
     "/api/v1/settings/{scope}/{key}/history": {
@@ -1619,7 +1633,8 @@
         },
         "tags": [
           "settings"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/handshake": {

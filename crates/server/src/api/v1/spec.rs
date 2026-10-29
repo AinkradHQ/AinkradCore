@@ -257,7 +257,8 @@ const ERRORS: [(&str, &str, &str); 7] = [
     (
         "403",
         "Forbidden",
-        "Wrong Host (unknown_host), or an Origin header (origin_refused)",
+        "Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device \
+         lacks (forbidden_scope; see each operation's x-ainkrad-scope)",
     ),
     ("404", "NotFound", "No such resource"),
     ("409", "Conflict", "Conflicts with the current state"),
@@ -272,6 +273,15 @@ fn security_and_errors(spec: &mut Value) {
             Ainkrad-Session, Ainkrad-Alg, Ainkrad-Timestamp and Ainkrad-Nonce alongside \
             (handshake spec §5)"}});
     spec["security"] = json!([{"device_signature": []}]);
+    // The scope each authenticated operation needs (`scopes::ROUTES`); the pre-auth ones have
+    // `security: [{}]` and none.
+    for (path, item) in spec["paths"].as_object_mut().into_iter().flatten() {
+        for (method, op) in item.as_object_mut().into_iter().flatten() {
+            if let Some(scope) = super::scopes::declared(method, path) {
+                op["x-ainkrad-scope"] = json!(scope);
+            }
+        }
+    }
     let error = json!({"application/json": {"schema": {"$ref": "#/components/schemas/ErrorBody"}}});
     for (_, name, description) in ERRORS {
         spec["components"]["responses"][name] =

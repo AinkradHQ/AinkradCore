@@ -42,8 +42,12 @@ async fn a_mounted_module_answers_behind_the_signature() {
 }
 
 #[tokio::test]
-async fn an_unmounted_module_has_no_routes() {
+async fn an_unmounted_module_has_no_routes_and_no_scope() {
     let fx = fx().await;
     let (status, _) = send(&fx.app, req(Method::GET, PING, Some(&fx.dev), None)).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "no module, no declared scope"
+    );
 }

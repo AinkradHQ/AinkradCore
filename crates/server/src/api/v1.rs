@@ -30,6 +30,7 @@ pub mod events;
 pub mod gate;
 pub mod handshake;
 mod me;
+pub mod scopes;
 pub mod session;
 mod settings;
 pub mod spec;

@@ -119,9 +119,13 @@ async fn only_the_allowed_prefixes_answer_unsigned() {
     let stranger = fx.stranger();
     let (status, _) = send(&fx.app, req(Method::GET, "/nope", Some(&stranger), None)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    // A live device gets past the gate: an unknown path is a 404.
-    let (status, _) = send(&fx.app, req(Method::GET, "/nope", Some(&fx.dev), None)).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    // A live device gets past authentication, but no scope is declared for an unknown path:
+    // deny by default.
+    let (status, body) = send(&fx.app, req(Method::GET, "/nope", Some(&fx.dev), None)).await;
+    assert_eq!(
+        (status, &body["code"]),
+        (StatusCode::FORBIDDEN, &json!("forbidden_scope"))
+    );
 }
 
 #[tokio::test]

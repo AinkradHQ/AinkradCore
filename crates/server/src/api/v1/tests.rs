@@ -28,6 +28,7 @@ mod me;
 mod modules;
 mod preauth;
 mod revocation;
+mod scopes;
 mod sessions;
 mod settings;
 mod signed;

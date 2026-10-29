@@ -94,7 +94,7 @@ async fn the_golden_vector_is_reproduced_and_accepted() {
     let mut fx = fx().await;
     fx.app.auth = Arc::new(crate::auth::Auth::new(Arc::new(core)));
     fx.app.clock = clock;
-    let scopes: Vec<String> = vec![];
+    let scopes: Vec<String> = vec!["read".to_owned()];
     crate::store::gov::enroll_for_tests(
         &fx.app.pool,
         &crate::store::gov::NewDevice {

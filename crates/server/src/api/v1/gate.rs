@@ -14,7 +14,8 @@
 //!    cannot burn another device's nonces.
 //! 8. The session: live and the device's, else 401 `session_expired` (only reached with a valid
 //!    signature, so it leaks nothing).
-//! 9. Scopes and step-up come with E1-09.
+//! 9. The route's declared scope (`scopes`, deny by default) → 403 `forbidden_scope`; step-up
+//!    comes with E1-09.3.
 //! 10. The device's request bucket (429).
 //!
 //! Steps 5 to 7 fail with the identical 401 `auth_failed`, take at least `FAIL_FLOOR`, and
@@ -257,6 +258,17 @@ pub(crate) async fn client_gate(State(app): State<App>, req: Request, next: Next
         Ok(v) => v,
         Err(r) => return *r,
     };
+    // Deny by default: the route's declared scope, or nothing (`scopes`).
+    let need = super::scopes::required(&parts.method, parts.uri.path(), &app.modules);
+    if !need.is_some_and(|s| v.device.scopes.iter().any(|d| d == s)) {
+        tracing::warn!(device = v.device.id, need, "scope refused");
+        return ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden_scope",
+            "this device's scopes do not allow that",
+        )
+        .into_response();
+    }
     let session = v.session.expect("Mode::Session has one").id;
     parts.extensions.insert(Caller {
         device: v.device,

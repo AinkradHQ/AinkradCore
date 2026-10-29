@@ -14,8 +14,8 @@
 //! (`crate::store::kinds`, E1-04.2, E1-10.2): each starts with `<id>.`. `migrate_modules`
 //! registers them; an event or audit row of an undeclared name is refused at append.
 //!
-//! Deliberately not here yet: scopes (E1-09.1) and scheduler jobs (E2-11). Each lands on this
-//! trait with its own consumer; guessing their shape now would be speculation.
+//! A module's routes need its one `scope` (`admin` unless it declares another; per-route scopes
+//! come when a module needs them). Scheduler jobs (E2-11) are not here yet.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -49,6 +49,11 @@ pub trait Module: Send + Sync + 'static {
     /// The audit actions the module records, each `<id>.<…>`.
     fn audit_actions(&self) -> &'static [&'static str] {
         &[]
+    }
+
+    /// The scope a device needs for any of the module's routes (`api::v1::scopes`).
+    fn scope(&self) -> &'static str {
+        "admin"
     }
 }
 
