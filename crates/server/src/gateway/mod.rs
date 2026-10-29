@@ -18,6 +18,7 @@ use tokio::net::{TcpListener, UnixListener};
 
 pub mod acme;
 mod conn;
+mod idle;
 pub mod preauth;
 pub mod tls;
 
@@ -83,8 +84,9 @@ impl Gateway {
                     std::fs::remove_file(&path)?;
                 }
                 let listener = UnixListener::bind(&path)?;
-                // ponytail: a moment at the umask's mode before this; put the socket in a 0700
-                // state dir (the default) and nobody else can reach it meanwhile.
+                // ponytail: the socket has the umask's mode for a moment before this; in a 0700
+                // directory nobody else can reach it meanwhile (`make run`'s `state/` is 0755).
+                // A bind under a 0077 umask closes the gap, which needs libc (`crates/sys`).
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
                 (Listener::Unix(listener), None, None)
             }

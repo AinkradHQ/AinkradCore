@@ -1,7 +1,7 @@
 //! The accept loop and connection limits, the same for every listener, and the drain.
 //!
-//! Limits: a TLS handshake, the request headers (slowloris) and a whole request each get a
-//! deadline; the header block is capped in bytes and in count; a body is capped at
+//! Limits: a TLS handshake, the request headers (slowloris), a whole request and a silent
+//! connection (`idle`) each get a deadline; the header block is capped in bytes and in count; a body is capped at
 //! `Limits::body` (`preauth` caps pre-auth bodies lower). A WebSocket upgrade answers at
 //! once, so the request deadline does not cut a socket short.
 //!
@@ -45,6 +45,9 @@ pub struct Limits {
     pub headers: usize,
     /// A request body in bytes.
     pub body: usize,
+    /// With no byte moving either way (`idle`); longer than `request`, so a slow handler is
+    /// cut by its deadline (408), not by this.
+    pub idle: Duration,
 }
 
 impl Default for Limits {
@@ -56,6 +59,7 @@ impl Default for Limits {
             header_bytes: 16 * 1024,
             headers: 64,
             body: 1024 * 1024,
+            idle: Duration::from_secs(60),
         }
     }
 }
@@ -152,14 +156,19 @@ async fn accept(
                     if stream.get_ref().1.alpn_protocol() == Some(tls::ACME_ALPN) {
                         return;
                     }
-                    serve_conn(stream, peer, app, &limits, watcher).await;
+                    let h2 = stream.get_ref().1.alpn_protocol() == Some(b"h2");
+                    serve_conn(stream, h2, peer, app, &limits, watcher).await;
                 });
             }
             (Stream::Tcp(tcp), None) => {
-                tokio::spawn(async move { serve_conn(tcp, peer, app, &limits, watcher).await });
+                tokio::spawn(
+                    async move { serve_conn(tcp, false, peer, app, &limits, watcher).await },
+                );
             }
             (Stream::Unix(unix), _) => {
-                tokio::spawn(async move { serve_conn(unix, peer, app, &limits, watcher).await });
+                tokio::spawn(
+                    async move { serve_conn(unix, false, peer, app, &limits, watcher).await },
+                );
             }
         }
     }
@@ -180,8 +189,14 @@ async fn next(listener: &Listener) -> std::io::Result<(Stream, Option<SocketAddr
 /// HTTP/1.1 or HTTP/2 on one connection, upgrades (WebSockets) included. The peer address
 /// reaches handlers as `ConnectInfo` (a socket peer has none: the client gate calls it
 /// `local`).
-async fn serve_conn<I>(io: I, peer: Option<SocketAddr>, app: Router, limits: &Limits, w: Watcher)
-where
+async fn serve_conn<I>(
+    io: I,
+    h2: bool,
+    peer: Option<SocketAddr>,
+    app: Router,
+    limits: &Limits,
+    w: Watcher,
+) where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let service = hyper::service::service_fn(move |mut req: hyper::Request<Incoming>| {
@@ -190,7 +205,13 @@ where
         }
         app.clone().oneshot(req.map(axum::body::Body::new))
     });
-    let mut builder = auto::Builder::new(TokioExecutor::new());
+    // The protocol is known (ALPN on TLS, HTTP/1.1 otherwise), so hyper does not sniff for
+    // the HTTP/2 preface first: that read has no deadline, and a silent client would sit in it.
+    let builder = auto::Builder::new(TokioExecutor::new());
+    let mut builder = match h2 {
+        true => builder.http2_only(),
+        false => builder.http1_only(),
+    };
     builder
         .http1()
         .timer(TokioTimer::new())
@@ -201,9 +222,24 @@ where
         .http2()
         .timer(TokioTimer::new())
         .max_header_list_size(u32::try_from(limits.header_bytes).unwrap_or(u32::MAX));
-    let conn = builder.serve_connection_with_upgrades(TokioIo::new(io), service);
-    if let Err(e) = w.watch(conn).await {
-        tracing::debug!(error = %e, "connection ended");
+    let (io, activity) = super::idle::wrap(io);
+    let conn = w.watch(builder.serve_connection_with_upgrades(TokioIo::new(io), service));
+    tokio::pin!(conn);
+    loop {
+        tokio::select! {
+            ended = &mut conn => {
+                if let Err(e) = ended {
+                    tracing::debug!(error = %e, "connection ended");
+                }
+                return;
+            }
+            () = tokio::time::sleep_until(activity.deadline(limits.idle)) => {
+                if activity.deadline(limits.idle) <= tokio::time::Instant::now() {
+                    tracing::debug!("idle connection closed");
+                    return;
+                }
+            }
+        }
     }
 }
 
