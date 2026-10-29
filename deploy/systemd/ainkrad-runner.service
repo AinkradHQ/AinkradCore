@@ -1,0 +1,91 @@
+# Hardened systemd unit for ainkrad-runner (E1-12.2). Install with deploy/install-linux.sh.
+#
+# Layout (all of it matches what crates/runner/src/main.rs does):
+#   binary        /usr/local/bin/ainkrad-runner
+#   config        /etc/ainkrad-runner/runner.env  (RUNNER_URL, RUNNER_ARGS; optional)
+#                 /etc/ainkrad-runner/runner.key  (the runner key, read via --key-file; never on the
+#                                                  command line; mode 0640 root:ainkrad-runner)
+#   HOME          /var/lib/ainkrad-runner         (runner git config + harness logins live in
+#                                                  $HOME/.ainkrad-runner)
+#   work root     /var/lib/ainkrad-runner-work/citadel-runs   (git worktrees; the runner runs
+#                 std::env::temp_dir()/citadel-runs and refuses a work root inside $HOME, so TMPDIR
+#                 points at a sibling of HOME, not under it)
+#
+# /etc/ainkrad-runner/runner.env, e.g.:
+#   RUNNER_URL=wss://core.example.com/runner/v1/connect
+#   RUNNER_ARGS=--tags linux,arm64 --git-name ainkrad-runner --git-email runner@example.com
+# ($RUNNER_ARGS is split on whitespace by systemd: no values containing spaces.)
+
+[Unit]
+Description=Ainkrad runner (dials out to the Core over WSS)
+Documentation=https://github.com/AinkradHQ/AinkradCore
+After=network-online.target
+Wants=network-online.target
+# Backoff: at most 5 starts per 5 minutes, then the unit stays failed instead of hammering the Core.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=ainkrad-runner
+Group=ainkrad-runner
+EnvironmentFile=-/etc/ainkrad-runner/runner.env
+Environment=HOME=/var/lib/ainkrad-runner
+Environment=TMPDIR=/var/lib/ainkrad-runner-work
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/local/bin/ainkrad-runner $RUNNER_URL --key-file /etc/ainkrad-runner/runner.key $RUNNER_ARGS
+# The runner drains on SIGTERM for up to 15 s (STOP_GRACE) before it drops the run in flight.
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=5s
+RestartSteps=6
+RestartMaxDelaySec=2min
+
+StateDirectory=ainkrad-runner ainkrad-runner-work
+StateDirectoryMode=0700
+ConfigurationDirectory=ainkrad-runner
+ConfigurationDirectoryMode=0750
+UMask=0077
+
+# --- Filesystem: read-only system, writable only where the runner works ---
+ProtectSystem=strict
+# StateDirectory already makes both writable; spelled out so the work root is explicit.
+ReadWritePaths=/var/lib/ainkrad-runner-work
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+
+# --- Privileges ---
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Relaxed: PrivateUsers is not set. The harnesses (codex, claude) may build their own user
+# namespaces; revisit when E2 pins which sandboxes are used.
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+
+# --- Network: the runner dials out over WSS and harnesses/git reach the internet.
+# Relaxed on purpose: no IPAddressDeny, no PrivateNetwork. Only socket families are limited.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# --- Exec: harnesses and git are child processes. ---
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+# Relaxed on purpose: MemoryDenyWriteExecute is NOT set. The runner itself is plain Rust and
+# would survive it, but the agent harnesses it spawns (claude, codex, opencode are Node/Bun) JIT
+# compile and inherit the setting; it would break them.
+
+[Install]
+WantedBy=multi-user.target
