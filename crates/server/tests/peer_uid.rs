@@ -34,6 +34,38 @@ fn uid_of(user: &str) -> (u32, u32) {
     (id("-u"), id("-g"))
 }
 
+/// The test's private directory, removed on drop, so a panic cleans up too (review L1). It is
+/// `PEER_UID_DIR` when the script made one (`mktemp -d`, which also covers a kill), else a new
+/// `/tmp/pu-<random>` made by `create_dir`, which refuses any existing path, a planted symlink
+/// included. `/tmp`, not `$TMPDIR`: macOS caps a socket path at 104 bytes.
+struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    fn new() -> Self {
+        let dir = match std::env::var_os("PEER_UID_DIR") {
+            Some(d) => std::path::PathBuf::from(d),
+            None => {
+                let d = std::path::PathBuf::from(format!(
+                    "/tmp/pu-{}",
+                    ainkrad_core_server::auth::crypto::random_id("x_").trim_start_matches("x_")
+                ));
+                std::fs::create_dir(&d).unwrap();
+                d
+            }
+        };
+        let s = Self(dir);
+        let meta = std::fs::symlink_metadata(&s.0).unwrap();
+        assert!(meta.is_dir(), "{} is a real directory", s.0.display());
+        s
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// `curl` over the socket as `uid`/`gid`: the status code and the body.
 fn claim_as(uid: u32, gid: u32, sock: &str, host: &str, body: &str) -> (String, String) {
     let o = std::process::Command::new("curl")
@@ -63,18 +95,17 @@ fn claim_as(uid: u32, gid: u32, sock: &str, host: &str, body: &str) -> (String, 
 #[tokio::test]
 #[ignore = "needs root to run a peer as another uid: scripts/peer-uid-test.sh"]
 async fn another_uid_on_the_admin_socket_cannot_claim_a_bootstrap_pairing() {
-    // Short: macOS caps a socket path at 104 bytes.
-    let dir = std::path::PathBuf::from(format!("/tmp/pu-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let me = std::fs::metadata(&dir).unwrap().uid();
+    let scratch = Scratch::new();
+    let dir = scratch.0.clone();
+    let me = std::fs::symlink_metadata(&dir).unwrap().uid();
     assert_eq!(
         me, 0,
         "run as root: scripts/peer-uid-test.sh (this test must not pass by skipping)"
     );
     let (nobody, nogroup) = uid_of("nobody");
     assert_ne!(nobody, me);
+    // Only now, once it is known to be root's own new directory: `nobody` must reach the socket.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     let pool = store::connect(&dir.join("core.db")).await.unwrap();
     let identity = Arc::new(Identity::load_or_create(&dir).unwrap());
@@ -124,5 +155,4 @@ async fn another_uid_on_the_admin_socket_cannot_claim_a_bootstrap_pairing() {
 
     closing.send_replace(true);
     let _ = tokio::time::timeout(Duration::from_secs(5), served).await;
-    let _ = std::fs::remove_dir_all(&dir);
 }
