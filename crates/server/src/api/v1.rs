@@ -518,6 +518,8 @@ pub fn router(app: App) -> Router {
         .merge(stuck::routes())
         .merge(quest::routes())
         .merge(library::routes())
+        // Modules sit inside the same gate: they never authenticate for themselves.
+        .merge(crate::module::mount(&app.modules))
         // Inner: the company a request works in (E15.14), checked once it is authenticated.
         .route_layer(middleware::from_fn_with_state(
             app.clone(),

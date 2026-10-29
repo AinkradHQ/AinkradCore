@@ -66,6 +66,8 @@ pub struct App {
     /// Log tails the admin asked runners for (1.20).
     pub log_tails: Arc<runner::LogTails>,
     pub probes: Arc<runner::Probes>,
+    /// Modules mounted on the client API under `/modules/<id>/v1` (`crate::module`).
+    pub modules: Arc<[Arc<dyn crate::module::Module>]>,
     /// Set when serve is stopping: runner and event sockets close so their clients reconnect
     /// to the next server.
     pub closing: Arc<tokio::sync::watch::Sender<bool>>,
@@ -101,6 +103,7 @@ impl App {
             next_connection: Arc::default(),
             log_tails: Arc::default(),
             probes: Arc::default(),
+            modules: Arc::from([]),
             closing: Arc::new(tokio::sync::watch::Sender::new(false)),
         }
     }
