@@ -18,14 +18,14 @@ use ainkrad_runner::v2::{ExecConfig, ExecDriver};
 use super::proof::tls_core;
 use super::{Core, quick};
 
-fn state(name: &str) -> State {
+pub(super) fn state(name: &str) -> State {
     let dir = std::env::temp_dir().join(format!("runner-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     State(dir)
 }
 
 /// Pairs a runner with `core` through `/pair/claim`, approving with the SAS it showed.
-async fn paired(
+pub(super) async fn paired(
     core: &Core,
     base: &str,
     tls: Option<Arc<rustls::ClientConfig>>,
@@ -100,7 +100,7 @@ async fn paired(
     e
 }
 
-fn driver() -> Arc<ExecDriver> {
+pub(super) fn driver() -> Arc<ExecDriver> {
     Arc::new(ExecDriver::new(ExecConfig::default(), Redactor::new()))
 }
 

@@ -18,6 +18,7 @@ const USAGE: &str = "usage:
   ainkrad-runner install-launchd <server-url> --key-file <path> [runner flags…] [--load]
   ainkrad-runner uninstall-launchd [--unload]
   ainkrad-runner pair …          (protocol v2: enrol with an Ainkrad Core; `pair` alone for help)
+  ainkrad-runner connect …       (protocol v2: serve the paired Core; `connect --help`)
 
 The runner key comes from CITADEL_RUNNER_KEY, or else from --key-file; never from the
 command line. The URL is wss://<server>/runner/v1/connect (ws:// only to loopback).
@@ -187,6 +188,12 @@ async fn main() -> ExitCode {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
         ["pair", rest @ ..] => return ainkrad_runner::v2::cli::pair_main(rest).await,
+        ["connect", rest @ ..] => {
+            tracing_subscriber::fmt()
+                .with_writer(std::io::stderr)
+                .init();
+            return ainkrad_runner::v2::cli::connect_main(rest).await;
+        }
         ["install-launchd", rest @ ..] => return install_launchd(rest),
         ["uninstall-launchd"] => return uninstall_launchd(false),
         ["uninstall-launchd", "--unload"] => return uninstall_launchd(true),

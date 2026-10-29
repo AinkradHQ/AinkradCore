@@ -15,8 +15,14 @@ use sqlx::sqlite::SqlitePool;
 pub const PLATFORM: &str = "core";
 
 /// The platform's event kinds: `audit`, one per audit row, written by the `events_from_audit`
-/// trigger.
-pub const PLATFORM_EVENT_KINDS: &[&str] = &["audit"];
+/// trigger; and the runner hub's presence (`hub`): `runner.connected`, `runner.disconnected`,
+/// `runner.degraded` (silent past two heartbeats).
+pub const PLATFORM_EVENT_KINDS: &[&str] = &[
+    "audit",
+    "runner.connected",
+    "runner.degraded",
+    "runner.disconnected",
+];
 
 /// The platform's audit actions.
 pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[

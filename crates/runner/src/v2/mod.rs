@@ -8,29 +8,31 @@
 //! the hello carries the device id and a nonce; the Core's `auth` must come from the pinned
 //! identity and sign this connection's exporter, or the runner closes and sends nothing more;
 //! then the runner's own `proof`. A `rotation` from the Core moves the pin (`Enrolment::rotate`).
-//! `client` and `pair` are the HTTP side; reconnect/resume (E1-11.4) comes with the daemon.
+//! `client` and `pair` are the HTTP side. A [`Session`] outlives connections: the daemon
+//! (`daemon`) reconnects with backoff and resumes its streams by `seq` (E1-11.4).
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use ainkrad_proto::runner::protocol_major;
 use ainkrad_proto::v2::{
-    Body, CONTROL_STREAM, Command, Control, CoreAuth, ErrorCode, Frame, PROTOCOL_VERSION, Reply,
+    Body, CONTROL_STREAM, Control, CoreAuth, CoreWelcome, ErrorCode, Frame, PROTOCOL_VERSION,
     RunnerHello, RunnerProof, StreamError, core_auth_message, runner_auth_message,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 
 pub mod cli;
 pub mod client;
+pub mod daemon;
 pub mod dial;
 mod exec;
 pub mod key;
 pub mod pair;
+mod session;
 pub use exec::{ExecConfig, ExecDriver};
+pub use session::Session;
 
 /// What the runner proves itself with on one connection.
 pub struct Link {
@@ -43,19 +45,32 @@ pub struct Link {
     pub exporter: [u8; 32],
 }
 
-/// Serves the Core on `ws` until it closes the connection (`Ok`) or refuses the runner, or
-/// the connection fails (`Err`); `core_identity_mismatch` when the Core is not the pinned one.
-/// Commands still running when it ends are killed.
+/// Serves the Core on `ws` with a fresh [`Session`] until the connection ends: the Core's
+/// close code (`Ok`), or why it failed or refused (`Err`; `core_identity_mismatch` when the
+/// Core is not the pinned one). Commands still running when it ends are killed.
 pub async fn serve<S>(
     ws: WebSocketStream<S>,
     exec: Arc<ExecDriver>,
     link: &Link,
-) -> Result<(), StreamError>
+) -> Result<Option<u16>, StreamError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let (mut sink, mut source) = ws.split();
-    let mut out = Seqs::default();
+    Session::new(exec).serve(ws, link).await
+}
+
+/// The connection proof, runner side: `hello` (with what `session` holds), the Core's `auth`
+/// checked against the pin, our `proof`, then the Core's `welcome`. Returns the welcome and
+/// the Core's SPKI.
+async fn handshake<S>(
+    sink: &mut futures_util::stream::SplitSink<WebSocketStream<S>, Message>,
+    source: &mut futures_util::stream::SplitStream<WebSocketStream<S>>,
+    link: &Link,
+    hello: RunnerHello,
+) -> Result<(CoreWelcome, Vec<u8>), StreamError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let (device, pin) = {
         let e = link.enrolment.lock().unwrap();
         (e.device_id.clone(), e.core_fp.clone())
@@ -64,18 +79,14 @@ where
     let hello = Control::Hello(RunnerHello {
         protocol: PROTOCOL_VERSION.to_owned(),
         runner_version: env!("CARGO_PKG_VERSION").to_owned(),
-        drivers: vec![exec.info()],
         os: Some(std::env::consts::OS.to_owned()),
         arch: Some(std::env::consts::ARCH.to_owned()),
         device_id: Some(device.clone()),
         nonce: Some(key::b64(&nonce_r)),
+        ..hello
     });
-    send(
-        &mut sink,
-        out.frame(CONTROL_STREAM, Body::Control(hello), false),
-    )
-    .await?;
-    let auth = match next_control(&mut source).await? {
+    send(sink, Frame::new(CONTROL_STREAM, 0, Body::Control(hello))).await?;
+    let auth = match next_control(source).await? {
         Control::Auth(auth) => auth,
         _ => return Err(StreamError::new(ErrorCode::BadFrame, "expected auth")),
     };
@@ -89,103 +100,8 @@ where
     let proof = Control::Proof(RunnerProof {
         sig: key::b64(&sig),
     });
-    send(
-        &mut sink,
-        out.frame(CONTROL_STREAM, Body::Control(proof), false),
-    )
-    .await?;
-    welcome(&mut source).await?;
-
-    let (done_tx, mut done_rx) = mpsc::channel::<(u64, Body)>(64);
-    // Each running command's cancel; dropping one (or the map) cancels it too.
-    let mut running: HashMap<u64, oneshot::Sender<()>> = HashMap::new();
-    loop {
-        let frame = tokio::select! {
-            Some((stream, body)) = done_rx.recv() => {
-                running.remove(&stream);
-                send(&mut sink, out.frame(stream, body, true)).await?;
-                continue;
-            }
-            msg = source.next() => match msg {
-                Some(Ok(Message::Text(text))) => match serde_json::from_str::<Frame>(&text) {
-                    Ok(frame) => frame,
-                    Err(e) => {
-                        let e = StreamError::new(ErrorCode::BadFrame, format!("not a frame: {e}"));
-                        send(&mut sink, out.frame(CONTROL_STREAM, Body::Error(e), false)).await?;
-                        continue;
-                    }
-                },
-                Some(Ok(Message::Close(_))) | None => return Ok(()),
-                Some(Ok(_)) => continue,
-                Some(Err(e)) => return Err(lost(e)),
-            },
-        };
-        let stream = frame.stream_id;
-        let reply = match frame.body() {
-            Ok(Some(Body::Command(command)))
-                if stream % 2 == 1 && !running.contains_key(&stream) =>
-            {
-                start(&exec, stream, command, &done_tx, &mut running)
-            }
-            Ok(Some(Body::Command(_))) => Some(Body::Error(StreamError::new(
-                ErrorCode::BadFrame,
-                format!("stream {stream} cannot open a command"),
-            ))),
-            Ok(Some(Body::Control(Control::Rotation(r)))) if stream == CONTROL_STREAM => {
-                rotate(link, &r, &core_spki);
-                None
-            }
-            Ok(Some(Body::Close(_))) => {
-                if let Some(cancel) = running.remove(&stream) {
-                    let _ = cancel.send(());
-                }
-                None
-            }
-            // Heartbeats, credit, output (no driver takes input yet), unknown kinds.
-            Ok(_) => None,
-            Err(e) => Some(Body::Error(e)),
-        };
-        if let Some(body) = reply {
-            // A refusal ends its stream, unless that stream is a command still running.
-            let last = stream != CONTROL_STREAM && !running.contains_key(&stream);
-            send(&mut sink, out.frame(stream, body, last)).await?;
-        }
-    }
-}
-
-/// Starts `command` on `stream`: an immediate answer, or `None` when a task answers later.
-fn start(
-    exec: &Arc<ExecDriver>,
-    stream: u64,
-    command: Command,
-    done: &mpsc::Sender<(u64, Body)>,
-    running: &mut HashMap<u64, oneshot::Sender<()>>,
-) -> Option<Body> {
-    match command {
-        Command::Noop => Some(Body::Result(Reply::Noop)),
-        Command::ExecRun(req) => {
-            let slot = match exec.slot() {
-                Ok(slot) => slot,
-                Err(e) => return Some(Body::Error(e)),
-            };
-            let (cancel_tx, cancel_rx) = oneshot::channel();
-            running.insert(stream, cancel_tx);
-            let (exec, done) = (exec.clone(), done.clone());
-            tokio::spawn(async move {
-                let body = match exec.run(&req, cancel_rx).await {
-                    Ok(result) => Body::Result(Reply::ExecRun(result)),
-                    Err(e) => Body::Error(e),
-                };
-                drop(slot);
-                let _ = done.send((stream, body)).await;
-            });
-            None
-        }
-        Command::Unknown => Some(Body::Error(StreamError::new(
-            ErrorCode::UnsupportedCommand,
-            "no driver of this runner takes that command",
-        ))),
-    }
+    send(sink, Frame::new(CONTROL_STREAM, 1, Body::Control(proof))).await?;
+    Ok((welcome(source).await?, core_spki))
 }
 
 /// The Core's `auth` checked against the pin and this connection: its SPKI when it holds.
@@ -268,7 +184,7 @@ where
 /// Waits for the Core's `welcome`; its `error` (or a major it does not share) is a refusal.
 async fn welcome<S>(
     source: &mut futures_util::stream::SplitStream<WebSocketStream<S>>,
-) -> Result<(), StreamError>
+) -> Result<CoreWelcome, StreamError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -284,7 +200,7 @@ where
         match frame.body()? {
             Some(Body::Control(Control::Welcome(w))) => {
                 return if protocol_major(&w.protocol) == protocol_major(PROTOCOL_VERSION) {
-                    Ok(())
+                    Ok(w)
                 } else {
                     let m = format!("the Core speaks {}", w.protocol);
                     Err(StreamError::new(ErrorCode::UnsupportedVersion, m))
@@ -309,23 +225,6 @@ where
 {
     let text = serde_json::to_string(&frame).expect("a frame serializes");
     sink.send(Message::Text(text.into())).await.map_err(lost)
-}
-
-/// The runner's next `seq` per stream; a stream's counter goes with its last frame.
-#[derive(Default)]
-struct Seqs(HashMap<u64, u64>);
-
-impl Seqs {
-    fn frame(&mut self, stream: u64, body: Body, last: bool) -> Frame {
-        let seq = if last {
-            self.0.remove(&stream).unwrap_or(0)
-        } else {
-            let next = self.0.entry(stream).or_insert(0);
-            *next += 1;
-            *next - 1
-        };
-        Frame::new(stream, seq, body)
-    }
 }
 
 #[cfg(test)]

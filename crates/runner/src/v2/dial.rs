@@ -98,5 +98,8 @@ pub async fn connect_once(
         save,
         exporter,
     };
-    serve(ws, exec, &link).await.map_err(LinkError::Protocol)
+    serve(ws, exec, &link)
+        .await
+        .map(drop)
+        .map_err(LinkError::Protocol)
 }

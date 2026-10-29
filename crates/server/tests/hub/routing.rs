@@ -77,6 +77,12 @@ async fn past_its_capacity_a_runner_is_busy_and_output_is_held_to_its_credit() {
     );
     fake.send(sa, Body::Result(Reply::Noop)).await;
     assert_eq!(a.next().await, Some(Body::Result(Reply::Noop)));
+    // The answer is acknowledged with a close: the runner may forget the stream.
+    let ack = fake.next().await;
+    assert_eq!(
+        (ack.stream_id, ack.kind, ack.seq),
+        (sa, FrameKind::Close, 2)
+    );
 
     // Past the window: the stream fails, the runner is told to close it, and a slot frees.
     let past = "AAAA".repeat((STREAM_WINDOW as usize / 3) + 1);
