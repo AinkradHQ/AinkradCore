@@ -18,6 +18,13 @@ macos-arm64)
   td=${DIST_TARGET_DIR:-$PWD/target/dist-$tag}
   sysroot=$(rustc --print sysroot)
   export RUSTFLAGS="--remap-path-prefix=$PWD=. --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=$sysroot=/rustup"
+  # OpenSSL (webauthn-rs) linked STATICALLY from Homebrew's openssl@3 (the major Linux ships): a
+  # dynamic Homebrew dylib is refused by the hardened runtime's library validation (another Team ID)
+  # and is absent on most Macs. This build only; dev builds and Linux are unchanged. The release
+  # then carries OpenSSL's code (Apache-2.0): its patching follows `brew upgrade openssl@3` here.
+  OPENSSL_DIR=${OPENSSL_DIR:-$(brew --prefix openssl@3)}
+  [ -f "$OPENSSL_DIR/lib/libssl.a" ] || { echo "build: no static OpenSSL at $OPENSSL_DIR (brew install openssl@3)" >&2; exit 1; }
+  export OPENSSL_DIR OPENSSL_STATIC=1
   CARGO_TARGET_DIR=$td $cmd
   for b in "${bins[@]}"; do cp "$td/dist/$b" "$out/$target/$b"; done ;;
 linux-*)
