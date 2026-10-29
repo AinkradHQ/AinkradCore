@@ -190,6 +190,16 @@ async fn rejects_invalid_details_action_and_actor() {
     .unwrap_err();
     assert!(is_constraint(&err), "{err}");
     let err = sqlx::query(
+        "INSERT INTO audit_events (actor_kind, actor_id, action) VALUES ('robot', 1, 'a.b')",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap_err();
+    assert!(
+        is_constraint(&err),
+        "an actor the platform cannot read back: {err}"
+    );
+    let err = sqlx::query(
         "INSERT INTO audit_events (actor_kind, action, entity_kind) VALUES ('system', 'a.b', 'thing')",
     )
     .execute(&db.pool)

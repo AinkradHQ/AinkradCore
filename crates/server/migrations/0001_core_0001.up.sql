@@ -48,9 +48,9 @@ CREATE TABLE audit_events (
     seq         INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id     INTEGER NOT NULL DEFAULT 1 REFERENCES users(id),
     at          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    -- `user` or `system` from the platform; a module may bring its own kinds of actor.
-    actor_kind  TEXT    NOT NULL
-                CHECK (actor_kind GLOB '[a-z]*' AND actor_kind NOT GLOB '*[^a-z_]*'),
+    -- The platform's actors; a module's own kinds of actor widen this with the namespaced
+    -- migrations (E1-03.2).
+    actor_kind  TEXT    NOT NULL CHECK (actor_kind IN ('user', 'system')),
     -- The actor's id; NULL for the system.
     actor_id    INTEGER,
     -- Dotted lowercase, e.g. `device_key.revoked`.
@@ -125,8 +125,7 @@ CREATE TABLE settings (
     scope_kind      TEXT    NOT NULL CHECK (scope_kind IN ('server')),
     scope_id        INTEGER NOT NULL CHECK ((scope_kind = 'server') = (scope_id = 0)),
     value           TEXT    NOT NULL CHECK (json_valid(value)),
-    updated_by_kind TEXT    NOT NULL
-                    CHECK (updated_by_kind GLOB '[a-z]*' AND updated_by_kind NOT GLOB '*[^a-z_]*'),
+    updated_by_kind TEXT    NOT NULL CHECK (updated_by_kind IN ('user', 'system')),
     updated_by_id   INTEGER,
     updated_at      TEXT    NOT NULL,
     PRIMARY KEY (key, scope_kind, scope_id)
