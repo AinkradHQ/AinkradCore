@@ -294,3 +294,52 @@ async fn a_scope_change_closes_the_devices_socket_with_4003() {
         .unwrap();
     assert!(msg.is_text(), "{msg:?}");
 }
+
+/// Spec §3, §15.4 (KAN-252): the audit log and its events name a device by its `d_…` id
+/// (`entity_ref`), never by its row number; `target=device:d_…` filters by it.
+#[tokio::test]
+async fn audit_rows_name_devices_by_their_opaque_id() {
+    let fx = fx().await;
+    let phone = fx.enroll("phone", &["read"]).await;
+    let page = fx
+        .ok(&format!("/api/v1/audit?target=device:{}", phone.id))
+        .await;
+    let items = page["items"].as_array().unwrap();
+    assert!(!items.is_empty(), "{page}");
+    for e in items {
+        assert_eq!(e["entity_kind"], "device");
+        assert_eq!(e["entity_id"], Value::Null, "{e}");
+        assert_eq!(e["entity_ref"], phone.id.as_str(), "{e}");
+    }
+    let none = fx
+        .ok("/api/v1/audit?target=device:d_00000000000000000000000000")
+        .await;
+    assert_eq!(none["items"], json!([]));
+    let (status, _) = send(
+        &fx.app,
+        req(
+            Method::GET,
+            "/api/v1/audit?target=device:3",
+            Some(&fx.dev),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "row numbers are not accepted"
+    );
+    let payloads: Vec<String> =
+        sqlx::query_scalar("SELECT payload FROM events WHERE kind = 'audit'")
+            .fetch_all(&fx.app.pool)
+            .await
+            .unwrap();
+    let mine: Vec<Value> = payloads
+        .iter()
+        .map(|p| serde_json::from_str::<Value>(p).unwrap())
+        .filter(|p| p["entity_ref"] == phone.id.as_str())
+        .collect();
+    assert!(!mine.is_empty());
+    assert!(mine.iter().all(|p| p["entity_id"].is_null()));
+}

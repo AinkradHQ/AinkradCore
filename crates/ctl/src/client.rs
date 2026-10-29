@@ -8,18 +8,22 @@ use serde_json::Value;
 use crate::Error;
 use crate::keystore::Keystore;
 use crate::net::{Net, Response};
-use crate::proto::{Canonical, b64, nonce};
+use crate::proto::{Canonical, b64, fp, nonce, unb64, verify};
 use crate::stepup::{self, Passphrase};
 
 /// Renew a session this many seconds before it expires (§6.3: refresh before expiry).
 const RENEW_BEFORE: i64 = 60;
 
-/// `GET /handshake`, the fields ctl reads.
+/// `GET`/`POST /handshake`, the fields ctl reads; `POST` adds the proof.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Handshake {
     pub server_version: Option<String>,
     pub api_minor: Option<u32>,
     pub identity_fingerprint: Option<String>,
+    #[serde(default)]
+    core_spki: Option<String>,
+    #[serde(default)]
+    core_sig: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -106,13 +110,62 @@ pub fn parse<T: DeserializeOwned>(res: &Response) -> Result<T, Error> {
         .map_err(|e| Error::Protocol(format!("an answer that is not the contract's: {e}")))
 }
 
-/// `GET /handshake`: unsigned, so nothing about this device goes out.
-pub async fn handshake(net: &Net) -> Result<Handshake, Error> {
-    let res = net.send("GET", "/handshake", &[], Vec::new()).await?;
-    if res.status != 200 {
+/// A pre-auth `POST`, retried once after `Retry-After` on a 429 (§11: 30 a minute per address,
+/// shared by `/handshake` and `/handshake/challenge`).
+async fn post_preauth(net: &Net, path: &str, body: Vec<u8>) -> Result<Response, Error> {
+    let res = net.send("POST", path, &[], body.clone()).await?;
+    if res.status != 429 {
+        return Ok(res);
+    }
+    let wait = res
+        .headers
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok()?.parse::<u64>().ok())
+        .unwrap_or(1)
+        .min(60);
+    tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+    net.send("POST", path, &[], body).await
+}
+
+/// `POST /handshake {nonce}` (spec §4, §13): the Core proves, over a fresh nonce, that it holds
+/// the key `pinned` names. Returns what it said and the fingerprint it proved; with no pin yet
+/// (a typed code, trust on first use confirmed by the SAS) that is `fp(core_spki)`, still only
+/// after the signature verifies. Fails closed: a status other than 200 (a 429 aside, which is
+/// the rate), a missing or malformed `core_spki`/`core_sig`, a key that is not the pinned one or
+/// a signature that does not verify is `core_identity_mismatch`. Never falls back to `GET`.
+pub async fn prove(net: &Net, pinned: Option<&str>) -> Result<(Handshake, String), Error> {
+    let nonce = nonce();
+    let body = serde_json::to_vec(&serde_json::json!({"nonce": nonce})).expect("serialisable");
+    let res = post_preauth(net, "/handshake", body).await?;
+    if res.status == 429 {
         return Err(refusal(&res, unix_now()));
     }
-    parse(&res)
+    let mismatch = |served: String| Error::Identity {
+        pinned: pinned.unwrap_or("(nothing yet)").to_owned(),
+        served,
+    };
+    if res.status != 200 {
+        return Err(mismatch(format!(
+            "unproven (POST /handshake {})",
+            res.status
+        )));
+    }
+    let h: Handshake = serde_json::from_slice(&res.body)
+        .map_err(|_| mismatch("unproven (not a handshake)".into()))?;
+    let spki = h.core_spki.as_deref().and_then(unb64);
+    let sig = h.core_sig.as_deref().and_then(unb64);
+    let (Some(spki), Some(sig)) = (spki, sig) else {
+        return Err(mismatch("unproven (no core_spki/core_sig)".into()));
+    };
+    let served = fp(&spki);
+    if pinned.is_some_and(|p| p != served) {
+        return Err(mismatch(served));
+    }
+    let message = format!("AINKRAD-CORE-V1\n{}\n{nonce}", net.host);
+    if !verify(&spki, message.as_bytes(), &sig) {
+        return Err(mismatch(format!("{served} (core_sig does not verify)")));
+    }
+    Ok((h, served))
 }
 
 impl Client {
@@ -131,19 +184,10 @@ impl Client {
         unix_now() + self.clock_offset
     }
 
-    /// The Core must be the pinned one before anything is signed (§13: native clients check
-    /// `/handshake` on each connect). The served fingerprint is a claim, not a proof: the
-    /// server's `/handshake` carries no `core_sig` (see the conformance notes).
+    /// The Core must prove it is the pinned one before anything is signed (§13: native clients
+    /// check `POST /handshake`'s `core_sig` at the start of each session).
     pub async fn check_identity(&self) -> Result<Handshake, Error> {
-        let h = handshake(&self.net).await?;
-        let served = h.identity_fingerprint.clone().unwrap_or_default();
-        if served != self.store.core_fp {
-            return Err(Error::Identity {
-                pinned: self.store.core_fp.clone(),
-                served,
-            });
-        }
-        Ok(h)
+        Ok(prove(&self.net, Some(&self.store.core_fp)).await?.0)
     }
 
     /// The signed headers for one request (§5.1).
@@ -182,24 +226,7 @@ impl Client {
         self.check_identity().await?;
         let ask = serde_json::to_vec(&serde_json::json!({"device_id": self.store.device_id}))
             .expect("serialisable");
-        let mut res = self
-            .net
-            .send("POST", "/handshake/challenge", &[], ask.clone())
-            .await?;
-        if res.status == 429 {
-            // Honour Retry-After once (§11: 30 challenges a minute per address).
-            let wait = res
-                .headers
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok()?.parse::<u64>().ok())
-                .unwrap_or(1)
-                .min(60);
-            tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
-            res = self
-                .net
-                .send("POST", "/handshake/challenge", &[], ask)
-                .await?;
-        }
+        let res = post_preauth(&self.net, "/handshake/challenge", ask).await?;
         if res.status != 200 {
             return Err(refusal(&res, self.now()));
         }

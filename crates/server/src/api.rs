@@ -103,7 +103,10 @@ impl App {
 pub fn router(app: App) -> Router {
     use crate::gateway::preauth;
     let preauth_routes = Router::new()
-        .route("/handshake", get(v1::handshake::handshake))
+        .route(
+            "/handshake",
+            get(v1::handshake::handshake).post(v1::handshake::prove),
+        )
         .route("/handshake/challenge", post(v1::session::challenge))
         .route("/handshake/session", post(v1::session::session))
         .route("/pair/claim", post(v1::pair::claim))

@@ -16,7 +16,7 @@ use ainkrad_ctl::stepup::{self, Passphrase};
 use serde_json::Value;
 
 use crate::common::*;
-use crate::fake::Fake;
+use crate::fake::{Fake, PINNED, proof, test_core};
 
 fn stderr(o: &std::process::Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
@@ -119,15 +119,14 @@ async fn only_the_step_up_key_over_the_stepup_message_elevates() {
     assert_eq!(c.current().unwrap().elevated_until, Some(until));
 }
 
-const PINNED: &str = "PINNEDPINNEDPINNEDPINNEDPINNEDPINNEDPINNEDA";
 const DEVICE: &str = "d_00000000000000000000000000";
 const TARGET: &str = "/api/v1/devices/d_11111111111111111111111111";
 
 /// A Core that grants sessions and step-ups and still answers `step_up_required`.
-fn insists(method: &str, path: &str) -> (u16, String) {
+fn insists(method: &str, path: &str, body: &str) -> (u16, String) {
     let ch = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
     match (method, path) {
-        ("GET", "/handshake") => (200, format!(r#"{{"identity_fingerprint":"{PINNED}"}}"#)),
+        ("POST", "/handshake") => proof(test_core(), body),
         ("POST", "/handshake/challenge" | "/api/v1/auth/step-up/challenge") => {
             (200, format!(r#"{{"challenge":"{ch}","expires_in":60}}"#))
         }

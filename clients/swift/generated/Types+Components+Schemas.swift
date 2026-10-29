@@ -91,10 +91,16 @@ extension Components {
             public var at: Components.Schemas.Timestamp
             /// - Remark: Generated from `#/components/schemas/AuditEntry/details`.
             public var details: OpenAPIRuntime.OpenAPIObjectContainer
+            /// A numeric entity id; absent for a device, which is named by `entity_ref` only.
+            ///
             /// - Remark: Generated from `#/components/schemas/AuditEntry/entity_id`.
             public var entityId: Swift.Int64?
             /// - Remark: Generated from `#/components/schemas/AuditEntry/entity_kind`.
             public var entityKind: Swift.String?
+            /// The entity's public id: a device's opaque `d_…` id, else `entity_id` as text.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AuditEntry/entity_ref`.
+            public var entityRef: Swift.String?
             /// - Remark: Generated from `#/components/schemas/AuditEntry/seq`.
             public var seq: Swift.Int64
             /// Creates a new `AuditEntry`.
@@ -104,8 +110,9 @@ extension Components {
             ///   - actor:
             ///   - at:
             ///   - details:
-            ///   - entityId:
+            ///   - entityId: A numeric entity id; absent for a device, which is named by `entity_ref` only.
             ///   - entityKind:
+            ///   - entityRef: The entity's public id: a device's opaque `d_…` id, else `entity_id` as text.
             ///   - seq:
             public init(
                 action: Swift.String,
@@ -114,6 +121,7 @@ extension Components {
                 details: OpenAPIRuntime.OpenAPIObjectContainer,
                 entityId: Swift.Int64? = nil,
                 entityKind: Swift.String? = nil,
+                entityRef: Swift.String? = nil,
                 seq: Swift.Int64
             ) {
                 self.action = action
@@ -122,6 +130,7 @@ extension Components {
                 self.details = details
                 self.entityId = entityId
                 self.entityKind = entityKind
+                self.entityRef = entityRef
                 self.seq = seq
             }
             public enum CodingKeys: String, CodingKey {
@@ -131,6 +140,7 @@ extension Components {
                 case details
                 case entityId = "entity_id"
                 case entityKind = "entity_kind"
+                case entityRef = "entity_ref"
                 case seq
             }
         }
@@ -162,7 +172,8 @@ extension Components {
         }
         /// - Remark: Generated from `#/components/schemas/Challenge`.
         public struct Challenge: Codable, Hashable, Sendable {
-            /// 32 random bytes, base64url; spend it once within `expires_in` seconds.
+            /// 32 bytes, base64url (43 characters), opaque to the client; spend it once within
+            /// `expires_in` seconds.
             ///
             /// - Remark: Generated from `#/components/schemas/Challenge/challenge`.
             public var challenge: Swift.String?
@@ -176,7 +187,7 @@ extension Components {
             /// Creates a new `Challenge`.
             ///
             /// - Parameters:
-            ///   - challenge: 32 random bytes, base64url; spend it once within `expires_in` seconds.
+            ///   - challenge: 32 bytes, base64url (43 characters), opaque to the client; spend it once within
             ///   - expiresIn:
             ///   - options: A passkey device's step-up only: `{"publicKey": PublicKeyCredentialRequestOptions}`
             public init(
@@ -605,7 +616,8 @@ extension Components {
             /// - Remark: Generated from `#/components/schemas/Event/at`.
             public var at: Components.Schemas.Timestamp
             /// What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,
-            /// `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `details`), or a kind a
+            /// `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;
+            /// a device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a
             /// module writes. The registered kinds are listed in `x-event-kinds`.
             ///
             /// - Remark: Generated from `#/components/schemas/Event/kind`.
@@ -781,6 +793,107 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case apiMajor = "api_major"
                 case apiMinor = "api_minor"
+                case gitSha = "git_sha"
+                case identityFingerprint = "identity_fingerprint"
+                case serverVersion = "server_version"
+                case supportedMinors = "supported_minors"
+            }
+        }
+        /// A liveness proof request: a fresh nonce from the client.
+        ///
+        /// - Remark: Generated from `#/components/schemas/HandshakeBody`.
+        public struct HandshakeBody: Codable, Hashable, Sendable {
+            /// 16 random bytes, base64url without padding (22 characters).
+            ///
+            /// - Remark: Generated from `#/components/schemas/HandshakeBody/nonce`.
+            public var nonce: Swift.String
+            /// Creates a new `HandshakeBody`.
+            ///
+            /// - Parameters:
+            ///   - nonce: 16 random bytes, base64url without padding (22 characters).
+            public init(nonce: Swift.String) {
+                self.nonce = nonce
+            }
+            public enum CodingKeys: String, CodingKey {
+                case nonce
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.nonce = try container.decode(
+                    Swift.String.self,
+                    forKey: .nonce
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "nonce"
+                ])
+            }
+        }
+        /// `POST /handshake`'s answer: `GET`'s fields plus the proof, which is always present (review
+        /// L4). A client that pinned `core_fp` aborts with `core_identity_mismatch` when either is
+        /// missing or fails, and never falls back to `GET /handshake` (spec §13).
+        ///
+        /// - Remark: Generated from `#/components/schemas/HandshakeProof`.
+        public struct HandshakeProof: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/HandshakeProof/api_major`.
+            public var apiMajor: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/HandshakeProof/api_minor`.
+            public var apiMinor: Swift.Int32?
+            /// The Core identity key's ES256 signature (raw r||s, base64url) over the UTF-8 string
+            /// `AINKRAD-CORE-V1` LF `<host>` LF `<nonce>`, no trailing newline; `host` is the Core's
+            /// configured Host (the `Host` it requires), `nonce` the text the client sent.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HandshakeProof/core_sig`.
+            public var coreSig: Swift.String
+            /// The Core identity key, a P-256 SubjectPublicKeyInfo, base64url. Its fingerprint is
+            /// `identity_fingerprint`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HandshakeProof/core_spki`.
+            public var coreSpki: Swift.String
+            /// - Remark: Generated from `#/components/schemas/HandshakeProof/git_sha`.
+            public var gitSha: Swift.String?
+            /// `core_fp`, as in `GET /handshake`; a client checks `fp(core_spki)`, not this claim.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HandshakeProof/identity_fingerprint`.
+            public var identityFingerprint: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/HandshakeProof/server_version`.
+            public var serverVersion: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/HandshakeProof/supported_minors`.
+            public var supportedMinors: [Swift.Int32]?
+            /// Creates a new `HandshakeProof`.
+            ///
+            /// - Parameters:
+            ///   - apiMajor:
+            ///   - apiMinor:
+            ///   - coreSig: The Core identity key's ES256 signature (raw r||s, base64url) over the UTF-8 string
+            ///   - coreSpki: The Core identity key, a P-256 SubjectPublicKeyInfo, base64url. Its fingerprint is
+            ///   - gitSha:
+            ///   - identityFingerprint: `core_fp`, as in `GET /handshake`; a client checks `fp(core_spki)`, not this claim.
+            ///   - serverVersion:
+            ///   - supportedMinors:
+            public init(
+                apiMajor: Swift.String? = nil,
+                apiMinor: Swift.Int32? = nil,
+                coreSig: Swift.String,
+                coreSpki: Swift.String,
+                gitSha: Swift.String? = nil,
+                identityFingerprint: Swift.String? = nil,
+                serverVersion: Swift.String? = nil,
+                supportedMinors: [Swift.Int32]? = nil
+            ) {
+                self.apiMajor = apiMajor
+                self.apiMinor = apiMinor
+                self.coreSig = coreSig
+                self.coreSpki = coreSpki
+                self.gitSha = gitSha
+                self.identityFingerprint = identityFingerprint
+                self.serverVersion = serverVersion
+                self.supportedMinors = supportedMinors
+            }
+            public enum CodingKeys: String, CodingKey {
+                case apiMajor = "api_major"
+                case apiMinor = "api_minor"
+                case coreSig = "core_sig"
+                case coreSpki = "core_spki"
                 case gitSha = "git_sha"
                 case identityFingerprint = "identity_fingerprint"
                 case serverVersion = "server_version"

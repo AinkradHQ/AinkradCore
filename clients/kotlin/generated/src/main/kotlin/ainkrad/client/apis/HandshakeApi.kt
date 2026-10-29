@@ -19,6 +19,8 @@ import ainkrad.client.models.Challenge
 import ainkrad.client.models.ChallengeRequest
 import ainkrad.client.models.ErrorBody
 import ainkrad.client.models.Handshake
+import ainkrad.client.models.HandshakeBody
+import ainkrad.client.models.HandshakeProof
 import ainkrad.client.models.SessionGrant
 import ainkrad.client.models.SessionRequest
 import ainkrad.client.models.WebOptions
@@ -145,6 +147,39 @@ import io.ktor.http.ParametersBuilder
             )
 
             return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /handshake
+        * 
+        * 
+         * @param handshakeBody  
+         * @return HandshakeProof
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun proveHandshake(handshakeBody: HandshakeBody): HttpResponse<HandshakeProof> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = handshakeBody
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/handshake",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames

@@ -3,17 +3,8 @@
 # unlisted break still fails. Once the baseline (newest v* tag, else origin/development) no
 # longer has the old shape, a line can never match again: delete it in the next change to api/.
 #
-# E1-07 (device identity, handshake spec §3, §5): bearer device keys are gone before any client
-# shipped (P1.1, P1.4). Device ids become random `d_…` strings, the key-issuing createDevice and
-# the six-character pairing (startPairing, pairDevice) go, and the bearer security scheme is
-# replaced by the signed-request scheme.
-openapi.json: type narrowed at /components/schemas/Device/properties/id: ['integer'] -> ['string']
-openapi.json: type narrowed at /components/schemas/Named/properties/id: ['integer'] -> ['string']
-openapi.json: removed /components/schemas/IssuedDevice
-openapi.json: removed /components/schemas/NewDevice
-openapi.json: removed /components/schemas/PairBody
-openapi.json: removed /components/schemas/Pairing
-openapi.json: removed /components/securitySchemes/device_key
-openapi.json: removed /paths//api/v1/devices/post
-openapi.json: removed /paths//api/v1/devices/pair
-openapi.json: removed /paths//api/v1/devices/pairing
+# Handshake review L4 (minor 11): POST /handshake answers its own HandshakeProof with core_spki and
+# core_sig required; GET's Handshake never sent them and no longer lists them. Minor 10 was never
+# tagged and no client has shipped.
+openapi.json: removed /components/schemas/Handshake/properties/core_sig
+openapi.json: removed /components/schemas/Handshake/properties/core_spki

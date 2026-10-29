@@ -3,7 +3,7 @@
 //! client: ctl's own types read the contract's fields, and this keeps its routes honest.
 
 const CALLS: &[(&str, &str, Option<&str>)] = &[
-    ("get", "/handshake", None),
+    ("post", "/handshake", None),
     ("post", "/handshake/challenge", None),
     ("post", "/handshake/session", None),
     ("post", "/pair/claim", None),
@@ -34,8 +34,14 @@ fn every_call_is_in_the_contract_with_its_scope() {
     let schema = |name: &str| api["components"]["schemas"][name]["properties"].clone();
     for (name, fields) in [
         (
-            "Handshake",
-            &["identity_fingerprint", "server_version", "api_minor"][..],
+            "HandshakeProof",
+            &[
+                "identity_fingerprint",
+                "server_version",
+                "api_minor",
+                "core_spki",
+                "core_sig",
+            ][..],
         ),
         ("Challenge", &["challenge"]),
         ("SessionGrant", &["session_id", "expires_at", "scopes"]),

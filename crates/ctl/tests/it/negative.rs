@@ -9,9 +9,8 @@ use ainkrad_ctl::net::{Endpoint, Net};
 use ainkrad_ctl::proto::{Key, b64, unb64};
 
 use crate::common::*;
-use crate::fake::Fake;
+use crate::fake::{Fake, PINNED, proof, test_core};
 
-const PINNED: &str = "PINNEDPINNEDPINNEDPINNEDPINNEDPINNEDPINNEDA";
 const OTHER: &str = "OTHERCOREOTHERCOREOTHERCOREOTHERCOREOTHERCA";
 const DEVICE: &str = "d_00000000000000000000000000";
 
@@ -39,15 +38,12 @@ fn keystore_for(
     path
 }
 
-fn serves_other(method: &str, path: &str) -> (u16, String) {
+/// Another Core: it proves a key of its own, not the pinned one.
+fn serves_other(method: &str, path: &str, body: &str) -> (u16, String) {
+    static OTHER_KEY: std::sync::OnceLock<Key> = std::sync::OnceLock::new();
     match (method, path) {
         ("GET", "/healthz") => (200, "ok".into()),
-        ("GET", "/handshake") => (
-            200,
-            format!(
-                r#"{{"server_version":"0.1.0","api_minor":4,"identity_fingerprint":"{OTHER}"}}"#
-            ),
-        ),
+        ("POST", "/handshake") => proof(OTHER_KEY.get_or_init(Key::generate), body),
         _ => (500, "{}".into()),
     }
 }
@@ -61,7 +57,7 @@ fn another_core_identity_gets_nothing_signed() {
     assert_eq!(o.status.code(), Some(3), "{o:?}");
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(
-        err.contains("core_identity_mismatch") && err.contains(PINNED) && err.contains(OTHER),
+        err.contains("core_identity_mismatch") && err.contains(PINNED),
         "{err}"
     );
 
@@ -86,7 +82,7 @@ fn another_core_identity_gets_nothing_signed() {
     assert!(!seen.is_empty());
     for r in &seen {
         assert!(
-            r.starts_with("get /healthz") || r.starts_with("get /handshake "),
+            r.starts_with("get /healthz") || r.starts_with("post /handshake "),
             "only unsigned probes: {r}"
         );
         assert!(
@@ -95,6 +91,81 @@ fn another_core_identity_gets_nothing_signed() {
         );
     }
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Spec §13 (review L4): a pinned client that gets no valid proof aborts with
+/// `core_identity_mismatch` and never falls back to `GET /handshake`, which still claims the
+/// pinned fingerprint here.
+fn no_post(method: &str, path: &str, _: &str) -> (u16, String) {
+    match (method, path) {
+        ("GET", "/handshake") => (200, format!(r#"{{"identity_fingerprint":"{PINNED}"}}"#)),
+        ("GET", "/healthz") => (200, "ok".into()),
+        _ => (404, "{}".into()),
+    }
+}
+
+fn no_sig(method: &str, path: &str, body: &str) -> (u16, String) {
+    match (method, path) {
+        ("POST", "/handshake") => {
+            let mut v: serde_json::Value =
+                serde_json::from_str(&proof(test_core(), body).1).unwrap();
+            v.as_object_mut().unwrap().remove("core_sig");
+            (200, v.to_string())
+        }
+        _ => no_post(method, path, body),
+    }
+}
+
+/// The pinned key's signature, but over another host (a proof relayed from elsewhere).
+fn other_host(method: &str, path: &str, body: &str) -> (u16, String) {
+    match (method, path) {
+        ("POST", "/handshake") => {
+            let mut v: serde_json::Value =
+                serde_json::from_str(&proof(test_core(), body).1).unwrap();
+            let n: serde_json::Value = serde_json::from_str(body).unwrap();
+            let m = format!(
+                "AINKRAD-CORE-V1\nother.example\n{}",
+                n["nonce"].as_str().unwrap()
+            );
+            v["core_sig"] = b64(&test_core().sign(m.as_bytes())).into();
+            (200, v.to_string())
+        }
+        _ => no_post(method, path, body),
+    }
+}
+
+/// The pinned key's signature over a nonce the client did not send (a replayed proof).
+fn stale_nonce(method: &str, path: &str, body: &str) -> (u16, String) {
+    match (method, path) {
+        ("POST", "/handshake") => proof(test_core(), r#"{"nonce":"AAECAwQFBgcICQoLDA0ODw"}"#),
+        _ => no_post(method, path, body),
+    }
+}
+
+#[test]
+fn a_core_that_does_not_prove_the_pinned_key_gets_nothing_signed() {
+    for (name, answer) in [
+        ("nopost", no_post as crate::fake::Answer),
+        ("nosig", no_sig),
+        ("host", other_host),
+        ("nonce", stale_nonce),
+    ] {
+        let dir = scratch(&format!("proof-{name}"));
+        let fake = Fake::start(dir.join("f.sock"), answer);
+        let ks = keystore_for(&dir, &fake.sock, PINNED);
+        let o = ctl(&s(&["--keystore", &ks.display().to_string(), "health"]));
+        assert_eq!(o.status.code(), Some(3), "{name}: {o:?}");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(err.contains("core_identity_mismatch"), "{name}: {err}");
+        for r in &fake.requests() {
+            assert!(
+                r.starts_with("get /healthz") || r.starts_with("post /handshake "),
+                "{name}: nothing but the proof request, no GET fallback: {r}"
+            );
+            assert!(!r.contains(DEVICE), "{name}: {r}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 #[test]
@@ -189,9 +260,9 @@ async fn tampered_replayed_and_skewed_requests_are_refused() {
     assert_eq!(c.call("GET", me, "", None).await.unwrap().status, 200);
 }
 
-fn past_retention(method: &str, path: &str) -> (u16, String) {
+fn past_retention(method: &str, path: &str, body: &str) -> (u16, String) {
     match (method, path) {
-        ("GET", "/handshake") => (200, format!(r#"{{"identity_fingerprint":"{PINNED}"}}"#)),
+        ("POST", "/handshake") => proof(test_core(), body),
         ("POST", "/handshake/challenge") => (200, format!(r#"{{"challenge":"{}","expires_in":60}}"#, "A".repeat(43))),
         ("POST", "/handshake/session") => (
             200,
@@ -230,9 +301,8 @@ fn a_resume_point_past_retention_exits_5_with_the_floor() {
 
 /// Spec §4: `POST /handshake {nonce}` → `{server_version, api_minor, core_spki, core_sig}`, with
 /// `core_sig` the Core key over `"AINKRAD-CORE-V1\n" + host + "\n" + nonce`; §13 has native
-/// clients verify it against the pinned fingerprint on each connect.
+/// clients verify it against the pinned fingerprint at the start of each session.
 #[tokio::test]
-#[ignore = "server deviation: /handshake is GET-only with identity_fingerprint and no core_spki/core_sig (crates/server/src/api.rs router, api/v1/handshake.rs); the pin check cannot be a proof"]
 async fn handshake_proves_the_core_key() {
     let core = Core::start("hsproof");
     let net = Net::new(Endpoint::Unix(core.sock.clone()), None, None).unwrap();
@@ -248,9 +318,8 @@ async fn handshake_proves_the_core_key() {
 }
 
 /// Spec §3 and §15.4: devices are named by random opaque `d_…` ids, never by an autoincrement
-/// integer that repeats across Cores and invites enumeration.
+/// integer that repeats across Cores and invites enumeration (KAN-252: `entity_ref`).
 #[test]
-#[ignore = "server deviation: audit rows (and so every audit event) name a device by its integer row, entity_id 1, 2, … (crates/server/src/store/gov/devices.rs audit_device, AuditEntity.id is i64); the d_ id is only in details"]
 fn audit_events_name_devices_by_their_opaque_id() {
     let core = Core::start("entity");
     let ks = core.keystore("mac");
@@ -269,5 +338,7 @@ fn audit_events_name_devices_by_their_opaque_id() {
         .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
         .find(|e| e["payload"]["action"] == "pairing.claimed")
         .unwrap();
-    assert_eq!(claimed["payload"]["entity_id"], *dev);
+    // The row number never leaves: `entity_id` is null and `entity_ref` is the opaque id.
+    assert_eq!(claimed["payload"]["entity_id"], serde_json::Value::Null);
+    assert_eq!(claimed["payload"]["entity_ref"], *dev);
 }

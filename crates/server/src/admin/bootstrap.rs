@@ -70,9 +70,19 @@ fn owner_only(db: &Path) -> Result_ {
         })?
         .uid();
     // This process's uid, without libc: the owner of a file it creates.
-    let probe = state_dir(db).join(format!(".uid-probe-{}", std::process::id()));
-    std::fs::write(&probe, b"")?;
-    let me = std::fs::metadata(&probe).map(|m| m.uid());
+    // A random name, created new: O_CREAT|O_EXCL refuses an existing path, a symlink included,
+    // so nothing planted there is written through (review R5).
+    let probe = state_dir(db).join(format!(
+        ".uid-probe-{}",
+        ainkrad_core_server::auth::crypto::random_id("p_").trim_start_matches("p_")
+    ));
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)?;
+    // fstat on the handle, not the path: a swap after the create cannot change the answer
+    // (review L2).
+    let me = file.metadata().map(|m| m.uid());
     let _ = std::fs::remove_file(&probe);
     if me? != owner {
         return Err(format!("{} belongs to another user: run as its owner", db.display()).into());

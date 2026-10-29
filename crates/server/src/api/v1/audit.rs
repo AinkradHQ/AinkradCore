@@ -43,7 +43,8 @@ pub struct AuditQuery {
     pub limit: Option<u32>,
     /// Only actions starting with this: `device.` or `setting.set`.
     pub kind: Option<String>,
-    /// Only rows about this entity: its kind (`device`), or kind and id (`device:3`).
+    /// Only rows about this entity: its kind (`device`), or kind and id (`device:d_…`, or
+    /// `<kind>:<n>` for a kind with numeric ids).
     pub target: Option<String>,
     /// Only rows done by this kind of actor: `user` or `system`; another value is a 400.
     pub actor: Option<String>,
@@ -58,7 +59,10 @@ pub struct AuditEntry {
     pub action: String,
     pub actor: EventActor,
     pub entity_kind: Option<String>,
+    /// A numeric entity id; absent for a device, which is named by `entity_ref` only.
     pub entity_id: Option<i64>,
+    /// The entity's public id: a device's opaque `d_…` id, else `entity_id` as text.
+    pub entity_ref: Option<String>,
     #[schema(value_type = Object)]
     pub details: Value,
 }
@@ -74,7 +78,7 @@ pub struct AuditPage {
 #[utoipa::path(get, path = "/api/v1/audit", operation_id = "listAudit", tag = "events",
     params(AuditQuery),
     responses((status = 200, description = "Audit rows, newest first. A `target` id that is \
-        not a number, or an unknown `actor`, is a 400",
+        not a `d_…` device id or a number, or an unknown `actor`, is a 400",
         body = AuditPage)))]
 pub async fn list(State(app): State<App>, Query(q): Query<AuditQuery>) -> ApiResult<AuditPage> {
     let limit = q.limit.unwrap_or(AUDIT_PAGE).clamp(1, AUDIT_PAGE);
@@ -82,9 +86,13 @@ pub async fn list(State(app): State<App>, Query(q): Query<AuditQuery>) -> ApiRes
         None => None,
         Some(None) => q.target.as_deref().map(|kind| (kind, None)),
         Some(Some((kind, id))) => {
-            let id = id
-                .parse::<i64>()
-                .map_err(|_| ApiError::bad_request("target is <kind> or <kind>:<id>"))?;
+            let bad = || ApiError::bad_request("target is <kind> or <kind>:<id>");
+            let id = if kind == DEVICE {
+                // A device unknown here matches nothing (row numbers start at 1).
+                device_seq(&app, id).await?.unwrap_or(0)
+            } else {
+                id.parse::<i64>().map_err(|_| bad())?
+            };
             Some((kind, Some(id)))
         }
     };
@@ -103,7 +111,42 @@ pub async fn list(State(app): State<App>, Query(q): Query<AuditQuery>) -> ApiRes
         limit + 1,
     )
     .await?;
-    Ok(Json(page_of(rows, limit)))
+    let mut page = page_of(rows, limit);
+    for e in &mut page.items {
+        if e.entity_kind.as_deref() == Some(DEVICE) {
+            let seq = e.entity_id.take();
+            e.entity_ref = match seq {
+                Some(seq) => device_ref(&app, seq).await?,
+                None => None,
+            };
+        }
+    }
+    Ok(Json(page))
+}
+
+/// The entity kind whose public id is opaque (handshake spec §3): its rows' numbers never leave.
+const DEVICE: &str = "device";
+
+async fn device_seq(app: &App, id: &str) -> Result<Option<i64>, ApiError> {
+    if !crate::auth::crypto::is_id(id, "d_") {
+        return Err(ApiError::bad_request("a device target is device:d_…"));
+    }
+    Ok(
+        sqlx::query_scalar("SELECT seq FROM core_devices WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&app.pool)
+            .await?,
+    )
+}
+
+// ponytail: one primary-key lookup per device row, at most 100 a page.
+async fn device_ref(app: &App, seq: i64) -> Result<Option<String>, ApiError> {
+    Ok(
+        sqlx::query_scalar("SELECT id FROM core_devices WHERE seq = ?")
+            .bind(seq)
+            .fetch_optional(&app.pool)
+            .await?,
+    )
 }
 
 /// `rows` (read with one more than `limit`) as a page.
@@ -118,6 +161,7 @@ fn page_of(rows: Vec<ainkrad_core::audit::AuditEvent>, limit: u32) -> AuditPage 
             action: e.action,
             actor: e.actor.into(),
             entity_kind: e.entity.as_ref().map(|x| x.kind.clone()),
+            entity_ref: e.entity.as_ref().map(|x| x.id.to_string()),
             entity_id: e.entity.map(|x| x.id),
             details: serde_json::from_str(&e.details).unwrap_or(Value::Null),
         })

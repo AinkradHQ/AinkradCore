@@ -414,7 +414,7 @@ export interface paths {
         };
         get: operations["getHandshake"];
         put?: never;
-        post?: never;
+        post: operations["proveHandshake"];
         delete?: never;
         options?: never;
         head?: never;
@@ -576,9 +576,14 @@ export interface components {
             actor: components["schemas"]["EventActor"];
             at: components["schemas"]["Timestamp"];
             details: Record<string, never>;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description A numeric entity id; absent for a device, which is named by `entity_ref` only.
+             */
             entity_id?: number | null;
             entity_kind?: string | null;
+            /** @description The entity's public id: a device's opaque `d_…` id, else `entity_id` as text. */
+            entity_ref?: string | null;
             /** Format: int64 */
             seq: number;
         };
@@ -592,7 +597,10 @@ export interface components {
             next_before?: number | null;
         };
         Challenge: {
-            /** @description 32 random bytes, base64url; spend it once within `expires_in` seconds. */
+            /**
+             * @description 32 bytes, base64url (43 characters), opaque to the client; spend it once within
+             *     `expires_in` seconds.
+             */
             challenge?: string | null;
             /** Format: int64 */
             expires_in?: number | null;
@@ -710,7 +718,8 @@ export interface components {
             at: components["schemas"]["Timestamp"];
             /**
              * @description What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,
-             *     `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `details`), or a kind a
+             *     `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;
+             *     a device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a
              *     module writes. The registered kinds are listed in `x-event-kinds`.
              */
             kind: string;
@@ -758,6 +767,37 @@ export interface components {
              * @description Every minor a client may have been built against and still be served: 0 up to
              *     `api_minor`.
              */
+            supported_minors?: number[] | null;
+        };
+        /** @description A liveness proof request: a fresh nonce from the client. */
+        HandshakeBody: {
+            /** @description 16 random bytes, base64url without padding (22 characters). */
+            nonce: string;
+        };
+        /**
+         * @description `POST /handshake`'s answer: `GET`'s fields plus the proof, which is always present (review
+         *     L4). A client that pinned `core_fp` aborts with `core_identity_mismatch` when either is
+         *     missing or fails, and never falls back to `GET /handshake` (spec §13).
+         */
+        HandshakeProof: {
+            api_major?: string | null;
+            /** Format: int32 */
+            api_minor?: number | null;
+            /**
+             * @description The Core identity key's ES256 signature (raw r||s, base64url) over the UTF-8 string
+             *     `AINKRAD-CORE-V1` LF `<host>` LF `<nonce>`, no trailing newline; `host` is the Core's
+             *     configured Host (the `Host` it requires), `nonce` the text the client sent.
+             */
+            core_sig: string;
+            /**
+             * @description The Core identity key, a P-256 SubjectPublicKeyInfo, base64url. Its fingerprint is
+             *     `identity_fingerprint`.
+             */
+            core_spki: string;
+            git_sha?: string | null;
+            /** @description `core_fp`, as in `GET /handshake`; a client checks `fp(core_spki)`, not this claim. */
+            identity_fingerprint?: string | null;
+            server_version?: string | null;
             supported_minors?: number[] | null;
         };
         /** @description The newest event's seq a client would be shown: the catch-up target. */
@@ -1165,7 +1205,10 @@ export interface operations {
                 limit?: number;
                 /** @description Only actions starting with this: `device.` or `setting.set`. */
                 kind?: string;
-                /** @description Only rows about this entity: its kind (`device`), or kind and id (`device:3`). */
+                /**
+                 * @description Only rows about this entity: its kind (`device`), or kind and id (`device:d_…`, or
+                 *     `<kind>:<n>` for a kind with numeric ids).
+                 */
                 target?: string;
                 /** @description Only rows done by this kind of actor: `user` or `system`; another value is a 400. */
                 actor?: string;
@@ -1176,7 +1219,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Audit rows, newest first. A `target` id that is not a number, or an unknown `actor`, is a 400 */
+            /** @description Audit rows, newest first. A `target` id that is not a `d_…` device id or a number, or an unknown `actor`, is a 400 */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2090,6 +2133,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Handshake"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    proveHandshake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HandshakeBody"];
+            };
+        };
+        responses: {
+            /** @description As `GET /handshake`, plus `core_spki` and `core_sig`, the Core identity key's signature over the client's nonce: check `fp(core_spki)` is the pinned `core_fp` and that `core_sig` verifies before trusting this Core; anything else, a missing proof or a status other than 200 included, is `core_identity_mismatch`, with no fallback to `GET`. 400 for a nonce that is not 16 bytes of base64url; 429 past 30 a minute from one address, shared with `POST /handshake/challenge`. Needs no signature */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HandshakeProof"];
                 };
             };
             400: components["responses"]["BadRequest"];

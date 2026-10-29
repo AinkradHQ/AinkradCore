@@ -23,7 +23,7 @@ import kotlinx.serialization.Contextual
 /**
  * 
  *
- * @param challenge 32 random bytes, base64url; spend it once within `expires_in` seconds.
+ * @param challenge 32 bytes, base64url (43 characters), opaque to the client; spend it once within `expires_in` seconds.
  * @param expiresIn 
  * @param options A passkey device's step-up only: `{\"publicKey\": PublicKeyCredentialRequestOptions}` over `challenge`, for `navigator.credentials.get`.
  */
@@ -31,7 +31,7 @@ import kotlinx.serialization.Contextual
 
 data class Challenge (
 
-    /* 32 random bytes, base64url; spend it once within `expires_in` seconds. */
+    /* 32 bytes, base64url (43 characters), opaque to the client; spend it once within `expires_in` seconds. */
     @SerialName(value = "challenge")
     val challenge: kotlin.String? = null,
 

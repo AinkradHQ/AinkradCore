@@ -156,3 +156,21 @@ fn stepup_v1_message_and_signature() {
         &bytes(&v, "stepup_sig")
     ));
 }
+
+/// `POST /handshake`'s `core_sig` (spec §4, §13): the message ctl builds verifies the
+/// committed signature under the committed key, and is bound to the host.
+#[test]
+fn core_sig_v1_message_and_signature() {
+    let v = vector("core-sig-v1.json");
+    let message = format!("AINKRAD-CORE-V1\n{}\n{}", s(&v, "host"), s(&v, "nonce"));
+    assert_eq!(message, s(&v, "message"));
+    let core = bytes(&v, "core_spki");
+    assert_eq!(fp(&core), s(&v, "core_fp"));
+    assert_eq!(
+        fp(&spki(&vector("handshake-v1.json"), "core_pkcs8")),
+        s(&v, "core_fp")
+    );
+    assert!(verify(&core, message.as_bytes(), &bytes(&v, "core_sig")));
+    let other = format!("AINKRAD-CORE-V1\nevil.example\n{}", s(&v, "nonce"));
+    assert!(!verify(&core, other.as_bytes(), &bytes(&v, "core_sig")));
+}

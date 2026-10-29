@@ -219,14 +219,15 @@ async fn dropped_claims_give_their_slots_back() {
     assert_eq!(send(&fx.app, claim).await.0, StatusCode::ACCEPTED);
 }
 
-/// N1: with the global budget held by 20 claims in flight from outside, a claim from the
-/// host's own socket (how `bootstrap` and `recover` are claimed) still goes through.
+/// R1: 20 claims drip-feeding their bodies from ONE address hold no slot (the body is read
+/// before a slot is taken), so a claim with the right code from another TCP address still
+/// pairs, and so does one from the host's own socket (N1).
 #[tokio::test]
-async fn the_hosts_socket_claims_while_the_budget_is_held_from_outside() {
+async fn drip_fed_claims_from_one_address_do_not_hold_the_budget() {
     let fx = fx().await;
     let held: Vec<_> = (0..20)
-        .map(|i| {
-            let (app, r) = (fx.app.clone(), hanging_claim(&format!("10.13.0.{i}")));
+        .map(|_| {
+            let (app, r) = (fx.app.clone(), hanging_claim("10.13.0.1"));
             tokio::spawn(async move { send(&app, r).await })
         })
         .collect();
@@ -234,21 +235,41 @@ async fn the_hosts_socket_claims_while_the_budget_is_held_from_outside() {
     let body = json!({"name": "Phone", "kind": "device", "scopes": ["read"]});
     let (_, created) = send(
         &fx.app,
+        req(
+            Method::POST,
+            "/api/v1/pairings",
+            Some(&fx.dev),
+            Some(body.clone()),
+        ),
+    )
+    .await;
+    let dev = TestDevice::new(&fx.app.auth.identity.fp, fx.clock.clone());
+    let outside = from(
+        "10.13.1.1",
+        req(
+            Method::POST,
+            "/pair/claim",
+            None,
+            Some(dev.claim_body(created["code"].as_str(), None)),
+        ),
+    );
+    assert_eq!(
+        send(&fx.app, outside).await.0,
+        StatusCode::ACCEPTED,
+        "the right code over TCP, with 20 claims dripping"
+    );
+    let (_, created) = send(
+        &fx.app,
         req(Method::POST, "/api/v1/pairings", Some(&fx.dev), Some(body)),
     )
     .await;
     let dev = TestDevice::new(&fx.app.auth.identity.fp, fx.clock.clone());
-    let body = dev.claim_body(created["code"].as_str(), None);
-    let outside = from(
-        "10.13.1.1",
-        req(Method::POST, "/pair/claim", None, Some(body.clone())),
+    let mut local = req(
+        Method::POST,
+        "/pair/claim",
+        None,
+        Some(dev.claim_body(created["code"].as_str(), None)),
     );
-    assert_eq!(
-        send(&fx.app, outside).await.0,
-        StatusCode::TOO_MANY_REQUESTS,
-        "held from outside"
-    );
-    let mut local = req(Method::POST, "/pair/claim", None, Some(body));
     local
         .extensions_mut()
         .insert(crate::gateway::Local { same_user: true });
@@ -258,6 +279,15 @@ async fn the_hosts_socket_claims_while_the_budget_is_held_from_outside() {
         "the host's socket"
     );
     for h in held {
+        assert!(!h.is_finished(), "still dripping");
         h.abort();
     }
+}
+
+/// R1: a body that does not arrive within the wait is a 400, not a wrong claim.
+#[tokio::test]
+async fn a_claim_body_that_never_arrives_is_cut_at_the_wait() {
+    let fx = fx().await;
+    let (status, body) = send(&fx.app, hanging_claim("10.13.2.1")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }

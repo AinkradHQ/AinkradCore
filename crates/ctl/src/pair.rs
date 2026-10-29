@@ -11,7 +11,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::Error;
-use crate::client::{Client, handshake, parse, refusal, unix_now};
+use crate::client::{Client, parse, prove, refusal, unix_now};
 use crate::keystore::Keystore;
 use crate::net::{Endpoint, Net};
 use crate::proto::{
@@ -92,20 +92,14 @@ pub async fn pair(cred: Credential, p: Pairing<'_>, out: &mut impl Write) -> Res
         }
     };
     let net = Net::new(endpoint.clone(), p.host.clone(), p.ca)?;
-    // The fingerprint the proof binds: the QR's, else the one the host printed, else what
-    // the Core says (trust on first use, confirmed by the SAS). Any two must agree.
-    let served = handshake(&net)
-        .await?
-        .identity_fingerprint
-        .unwrap_or_default();
-    let pinned = match (&cred, &p.core_fp) {
-        (Credential::Qr(q), _) => q.core_fp.clone(),
-        (_, Some(f)) => f.clone(),
-        _ => served.clone(),
+    // The fingerprint the proof binds: the QR's, else the one the host printed, else the key
+    // the Core proves it holds (trust on first use, confirmed by the SAS). `prove` refuses a
+    // Core that does not sign a fresh nonce with the pinned key (§13).
+    let given = match (&cred, &p.core_fp) {
+        (Credential::Qr(q), _) => Some(q.core_fp.clone()),
+        (_, f) => f.clone(),
     };
-    if served != pinned {
-        return Err(Error::Identity { pinned, served });
-    }
+    let (_, pinned) = prove(&net, given.as_deref()).await?;
     // Asked before the claim, so a failed prompt does not spend the pairing.
     let sealing = match &p.stepup {
         Some(source) => Some(source.read(true).map_err(Error::StepUp)?),

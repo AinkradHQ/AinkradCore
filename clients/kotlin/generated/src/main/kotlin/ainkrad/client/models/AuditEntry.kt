@@ -29,8 +29,9 @@ import kotlinx.serialization.Contextual
  * @param at RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param details 
  * @param seq 
- * @param entityId 
+ * @param entityId A numeric entity id; absent for a device, which is named by `entity_ref` only.
  * @param entityKind 
+ * @param entityRef The entity's public id: a device's opaque `d_…` id, else `entity_id` as text.
  */
 @Serializable
 
@@ -53,11 +54,16 @@ data class AuditEntry (
     @SerialName(value = "seq")
     val seq: kotlin.Long,
 
+    /* A numeric entity id; absent for a device, which is named by `entity_ref` only. */
     @SerialName(value = "entity_id")
     val entityId: kotlin.Long? = null,
 
     @SerialName(value = "entity_kind")
-    val entityKind: kotlin.String? = null
+    val entityKind: kotlin.String? = null,
+
+    /* The entity's public id: a device's opaque `d_…` id, else `entity_id` as text. */
+    @SerialName(value = "entity_ref")
+    val entityRef: kotlin.String? = null
 
 ) {
 

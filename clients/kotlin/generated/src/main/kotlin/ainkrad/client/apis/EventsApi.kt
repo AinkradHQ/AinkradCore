@@ -111,7 +111,7 @@ import io.ktor.http.ParametersBuilder
          * @param before Only rows with a &#x60;seq&#x60; below this (the previous page&#39;s &#x60;next_before&#x60;). (optional)
          * @param limit At most this many (default and most 100). (optional)
          * @param kind Only actions starting with this: &#x60;device.&#x60; or &#x60;setting.set&#x60;. (optional)
-         * @param target Only rows about this entity: its kind (&#x60;device&#x60;), or kind and id (&#x60;device:3&#x60;). (optional)
+         * @param target Only rows about this entity: its kind (&#x60;device&#x60;), or kind and id (&#x60;device:d_…&#x60;, or &#x60;&lt;kind&gt;:&lt;n&gt;&#x60; for a kind with numeric ids). (optional)
          * @param actor Only rows done by this kind of actor: &#x60;user&#x60; or &#x60;system&#x60;; another value is a 400. (optional)
          * @return AuditPage
         */

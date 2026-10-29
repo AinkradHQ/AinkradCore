@@ -4,7 +4,7 @@ public import struct Foundation.URL
 public import struct Foundation.Data
 public import struct Foundation.Date
 import HTTPTypes
-/// The Ainkrad Core client API, for the Ainkrad app. Every request is signed by the device's own P-256 key (ES256, raw r||s): the headers Ainkrad-Device, Ainkrad-Session, Ainkrad-Alg (ES256), Ainkrad-Timestamp, Ainkrad-Nonce and Ainkrad-Signature cover an exact canonical string of the Core identity fingerprint, the method, path, query, time, nonce and the body's SHA-256 (handshake spec §5). A session comes from POST /handshake/challenge then POST /handshake/session and lasts 15 minutes; there is no bearer secret, and an Authorization header is refused. Requests carry the server's own Host and no Origin, or the Core's own origin from its web client. A web client signs in with a passkey (POST /handshake/passkey/options, then POST /handshake/passkey/session) and signs every request with a non-extractable WebCrypto P-256 session key in the same way; its event socket takes a one-time ticket (POST /api/v1/ws-ticket) in Sec-WebSocket-Protocol. Times are RFC 3339 UTC with milliseconds. Versioning: within /api/v1, enum values, union variants, optional fields and operations may be added; a client must keep an unknown enum value (every enum is open) and skip an event or union variant it cannot decode. Anything removed or renamed is a new /api/v2. `info.version` is `1.<minor>.0`; the minor (`GET /api/v1/me`, `versions.api.minor`) is bumped on every addition.
+/// The Ainkrad Core client API, for the Ainkrad app. Every request is signed by the device's own P-256 key (ES256, raw r||s): the headers Ainkrad-Device, Ainkrad-Session, Ainkrad-Alg (ES256), Ainkrad-Timestamp, Ainkrad-Nonce and Ainkrad-Signature cover an exact canonical string of the Core identity fingerprint, the method, path, query, time, nonce and the body's SHA-256 (handshake spec §5). A session comes from POST /handshake/challenge then POST /handshake/session and lasts 15 minutes; there is no bearer secret, and an Authorization header is refused. A signed body is at most 1 MiB: a larger one is answered 401 auth_failed and counted as a failure against the address, so keep uploads below it. Before trusting a Core, POST /handshake with a fresh nonce and check that core_sig verifies under core_spki and that its fingerprint is the pinned one. Requests carry the server's own Host and no Origin, or the Core's own origin from its web client. A web client signs in with a passkey (POST /handshake/passkey/options, then POST /handshake/passkey/session) and signs every request with a non-extractable WebCrypto P-256 session key in the same way; its event socket takes a one-time ticket (POST /api/v1/ws-ticket) in Sec-WebSocket-Protocol. Times are RFC 3339 UTC with milliseconds. Versioning: within /api/v1, enum values, union variants, optional fields and operations may be added; a client must keep an unknown enum value (every enum is open) and skip an event or union variant it cannot decode. Anything removed or renamed is a new /api/v2. `info.version` is `1.<minor>.0`; the minor (`GET /api/v1/me`, `versions.api.minor`) is bumped on every addition.
 public struct Client: APIProtocol {
     /// The underlying HTTP client.
     private let client: UniversalClient
@@ -6596,6 +6596,227 @@ public struct Client: APIProtocol {
                     case "application/json":
                         body = try await converter.getResponseBodyAsJSON(
                             Components.Schemas.Handshake.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .ok(.init(body: body))
+                case 400:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Components.Responses.BadRequest.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.ErrorBody.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .badRequest(.init(body: body))
+                case 401:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Components.Responses.Unauthorized.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.ErrorBody.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .unauthorized(.init(body: body))
+                case 403:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Components.Responses.Forbidden.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.ErrorBody.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .forbidden(.init(body: body))
+                case 404:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Components.Responses.NotFound.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.ErrorBody.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .notFound(.init(body: body))
+                case 409:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Components.Responses.Conflict.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.ErrorBody.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .conflict(.init(body: body))
+                case 429:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Components.Responses.TooManyRequests.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.ErrorBody.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .tooManyRequests(.init(body: body))
+                case 500:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Components.Responses.InternalError.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.ErrorBody.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .internalServerError(.init(body: body))
+                default:
+                    return .undocumented(
+                        statusCode: response.status.code,
+                        .init(
+                            headerFields: response.headerFields,
+                            body: responseBody
+                        )
+                    )
+                }
+            }
+        )
+    }
+    /// - Remark: HTTP `POST /handshake`.
+    /// - Remark: Generated from `#/paths//handshake/post(proveHandshake)`.
+    public func proveHandshake(_ input: Operations.ProveHandshake.Input) async throws -> Operations.ProveHandshake.Output {
+        try await client.send(
+            input: input,
+            forOperation: Operations.ProveHandshake.id,
+            serializer: { input in
+                let path = try converter.renderedPath(
+                    template: "/handshake",
+                    parameters: []
+                )
+                var request: HTTPTypes.HTTPRequest = .init(
+                    soar_path: path,
+                    method: .post
+                )
+                suppressMutabilityWarning(&request)
+                converter.setAcceptHeader(
+                    in: &request.headerFields,
+                    contentTypes: input.headers.accept
+                )
+                let body: OpenAPIRuntime.HTTPBody?
+                switch input.body {
+                case let .json(value):
+                    body = try converter.setRequiredRequestBodyAsJSON(
+                        value,
+                        headerFields: &request.headerFields,
+                        contentType: "application/json; charset=utf-8"
+                    )
+                }
+                return (request, body)
+            },
+            deserializer: { response, responseBody in
+                switch response.status.code {
+                case 200:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.ProveHandshake.Output.Ok.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.HandshakeProof.self,
                             from: responseBody,
                             transforming: { value in
                                 .json(value)

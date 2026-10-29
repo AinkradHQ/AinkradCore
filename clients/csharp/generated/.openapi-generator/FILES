@@ -48,6 +48,8 @@ src/Ainkrad.Client/Model/EventActor.cs
 src/Ainkrad.Client/Model/EventActorSystem.cs
 src/Ainkrad.Client/Model/EventActorUser.cs
 src/Ainkrad.Client/Model/Handshake.cs
+src/Ainkrad.Client/Model/HandshakeBody.cs
+src/Ainkrad.Client/Model/HandshakeProof.cs
 src/Ainkrad.Client/Model/LatestEvent.cs
 src/Ainkrad.Client/Model/Lockout.cs
 src/Ainkrad.Client/Model/Me.cs
