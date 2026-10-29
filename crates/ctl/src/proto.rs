@@ -204,12 +204,17 @@ pub fn secret_hash(secret: &[u8]) -> [u8; 32] {
     sha256(secret)
 }
 
-/// The string the claimant's keys sign (§7.2 step 3).
-pub fn pop_message(core_fp: &str, credential_hash: &[u8], routine_fp: &str) -> String {
-    // A step-up key (`fp(stepup)` here) comes with ctl's step-up key (spec Q6).
+/// The string the claimant's keys sign (§7.2 step 3); `stepup_fp` is `-` without a step-up key.
+pub fn pop_message(
+    core_fp: &str,
+    credential_hash: &[u8],
+    routine_fp: &str,
+    stepup_fp: Option<&str>,
+) -> String {
     format!(
-        "AINKRAD-PAIR-V1\n{core_fp}\n{}\n{routine_fp}\n-",
-        b64(credential_hash)
+        "AINKRAD-PAIR-V1\n{core_fp}\n{}\n{routine_fp}\n{}",
+        b64(credential_hash),
+        stepup_fp.unwrap_or("-")
     )
 }
 

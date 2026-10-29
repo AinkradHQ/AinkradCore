@@ -1,5 +1,6 @@
 //! Pairing as the new device (spec §7.2 steps 2–4 and 8; §7.3 for the first device, whose
-//! claim is the same call over the host's Unix socket): generate the routine key here, claim
+//! claim is the same call over the host's Unix socket): generate the routine key and the
+//! step-up key (§8, Q6: sealed under a passphrase, `stepup`) here, claim
 //! with the typed code or the QR secret and the proof of possession, pin the Core, show the
 //! SAS computed locally, then poll `/pair/status` until the approver decides.
 
@@ -16,6 +17,7 @@ use crate::net::{Endpoint, Net};
 use crate::proto::{
     Key, Qr, b64, code_hash, fp, normal_code, pop_message, sas, secret_hash, unb64,
 };
+use crate::stepup::{self, Passphrase};
 
 /// What was typed or scanned.
 pub enum Credential {
@@ -57,6 +59,9 @@ pub struct Pairing<'a> {
     pub json: bool,
     /// How long to wait for the approver (the pairing lives 5 minutes).
     pub wait: Duration,
+    /// Where the step-up key's passphrase comes from; `None` enrols no step-up key
+    /// (`--no-stepup`), and the device can then never elevate.
+    pub stepup: Option<Passphrase>,
 }
 
 fn say(out: &mut impl Write, json: bool, line: &str, value: serde_json::Value) {
@@ -70,7 +75,7 @@ fn say(out: &mut impl Write, json: bool, line: &str, value: serde_json::Value) {
 /// Claims, shows the SAS, waits for approval. The keystore is written once the claim is
 /// accepted and removed again if the pairing ends unapproved.
 pub async fn pair(cred: Credential, p: Pairing<'_>, out: &mut impl Write) -> Result<(), Error> {
-    if p.keystore.exists() {
+    if p.keystore.exists() || stepup::path_for(p.keystore).exists() {
         return Err(Error::Usage(format!(
             "{} exists: this device is paired already (use another --keystore)",
             p.keystore.display()
@@ -101,19 +106,31 @@ pub async fn pair(cred: Credential, p: Pairing<'_>, out: &mut impl Write) -> Res
     if served != pinned {
         return Err(Error::Identity { pinned, served });
     }
+    // Asked before the claim, so a failed prompt does not spend the pairing.
+    let sealing = match &p.stepup {
+        Some(source) => Some(source.read(true).map_err(Error::StepUp)?),
+        None => None,
+    };
     let key = Key::generate();
     let routine = key.spki();
+    let second = sealing.as_ref().map(|_| Key::generate());
+    let second_spki = second.as_ref().map(Key::spki);
+    let second_fp = second_spki.as_deref().map(fp);
     let (field, value, hash) = match &cred {
         Credential::Code(c) => ("code", c.clone(), code_hash(c)),
         Credential::Qr(q) => ("secret", b64(&q.secret), secret_hash(&q.secret)),
     };
-    let pop = key.sign(pop_message(&pinned, &hash, &fp(&routine)).as_bytes());
+    let message = pop_message(&pinned, &hash, &fp(&routine), second_fp.as_deref());
     let mut body = serde_json::json!({
         "routine_spki": b64(&routine),
         "platform": std::env::consts::OS,
         "key_storage": "software",
-        "pop": b64(&pop),
+        "pop": b64(&key.sign(message.as_bytes())),
     });
+    if let (Some(k), Some(spki)) = (&second, &second_spki) {
+        body["stepup_spki"] = b64(spki).into();
+        body["pop_stepup"] = b64(&k.sign(message.as_bytes())).into();
+    }
     body[field] = value.into();
     let res = net
         .send(
@@ -158,6 +175,13 @@ pub async fn pair(cred: Credential, p: Pairing<'_>, out: &mut impl Write) -> Res
         key,
     };
     store.save(p.keystore).map_err(Error::Usage)?;
+    let stepup_file = stepup::path_for(p.keystore);
+    if let (Some(k), Some(pass)) = (&second, &sealing) {
+        stepup::save(&stepup_file, k, pass, &device_id, &store.core_fp).map_err(|e| {
+            let _ = std::fs::remove_file(p.keystore);
+            Error::Usage(e)
+        })?;
+    }
     say(
         out,
         p.json,
@@ -185,6 +209,7 @@ pub async fn pair(cred: Credential, p: Pairing<'_>, out: &mut impl Write) -> Res
         }
         Ok(other) => {
             let _ = std::fs::remove_file(p.keystore);
+            let _ = std::fs::remove_file(&stepup_file);
             Err(Error::NotApproved(other.to_owned()))
         }
         Err(_) => status.map(drop),
