@@ -177,7 +177,7 @@ pub fn router(app: App) -> Router {
         .with_state(app)
 }
 
-async fn client_gate(State(app): State<App>, mut req: Request, next: Next) -> Response {
+pub(crate) async fn client_gate(State(app): State<App>, mut req: Request, next: Next) -> Response {
     if let Some((status, why)) = refusal(&app, req.uri(), req.headers(), query_ok) {
         tracing::warn!(%status, why, "client request refused");
         return ApiError::new(status, "refused", why).into_response();

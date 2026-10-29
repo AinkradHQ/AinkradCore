@@ -85,3 +85,24 @@ fn settings_are_set_refused_reset_and_their_history_listed() {
     assert!(lines[0].contains("server\t500 -> inherited"), "{history}");
     assert!(lines[1].contains("server\tinherited -> 500"), "{history}");
 }
+
+#[test]
+fn public_serve_refuses_to_start_without_a_hostname_and_an_acme_contact() {
+    let db = db("public");
+    for flags in [
+        &["--listen", "public"][..],
+        &["--listen", "public", "--hostname", "core.example"],
+        &["--listen", "public", "--acme-contact", "ops@example.test"],
+        &["--listen", "loopback:0", "--hostname", "core.example"],
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ainkrad-core-server"))
+            .arg("serve")
+            .arg(&db.0)
+            .args(flags)
+            .output()
+            .unwrap();
+        let err = String::from_utf8(out.stderr).unwrap();
+        assert!(!out.status.success(), "{flags:?} started");
+        assert!(err.contains("--hostname"), "{flags:?}: {err}");
+    }
+}

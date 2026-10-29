@@ -1,0 +1,141 @@
+//! The pre-auth gate (E1-06.4, handshake spec §4): before routing, only four route prefixes
+//! answer without a key, on segment boundaries (`/handshake` and `/handshake/…`, never
+//! `/handshakes`):
+//!
+//! - `/handshake`: what the server is (`api::v1::handshake`);
+//! - pairing: `/pair` (the spec's, from E1-07) and today's `POST /api/v1/devices/pair`;
+//! - `/.well-known/acme-challenge/` on the :80 listener only, when HTTP-01 is on
+//!   (`http01_router`);
+//! - `/healthz`: `ok`, nothing else.
+//!
+//! They still pass the shared checks (Host, no Origin, no query string) and take at most a
+//! 16 KiB body (413). Every other request runs the client gate (`api::v1::client_gate`) here,
+//! before routing, so without a live key every path, unknown ones included, gets the same
+//! 401 and the routes cannot be enumerated.
+
+use std::sync::Arc;
+
+use axum::Router;
+use axum::extract::{Path, Request, State};
+use axum::http::{StatusCode, header};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+
+use super::tls::Certs;
+use crate::api::v1::ApiError;
+use crate::api::{App, refusal};
+
+/// The largest body a pre-auth route takes.
+pub const PREAUTH_BODY: usize = 16 * 1024;
+
+/// The route prefixes reachable without a key on the main listener.
+pub const ALLOWED: [&str; 4] = ["/handshake", "/pair", "/api/v1/devices/pair", "/healthz"];
+
+/// The HTTP-01 challenge prefix, served on :80 only.
+pub const ACME_CHALLENGE: &str = "/.well-known/acme-challenge";
+
+/// `path` is `prefix` or below it.
+fn under(path: &str, prefix: &str) -> bool {
+    path.strip_prefix(prefix)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// Whether a path needs no key.
+pub fn allowed(path: &str) -> bool {
+    ALLOWED.iter().any(|p| under(path, p))
+}
+
+/// The gate, as an outer layer on the whole router (fallback included).
+pub async fn gate(State(app): State<App>, req: Request, next: Next) -> Response {
+    if !allowed(req.uri().path()) {
+        return crate::api::v1::client_gate(State(app), req, next).await;
+    }
+    if let Some((status, why)) = refusal(&app, req.uri(), req.headers(), str::is_empty) {
+        return ApiError::new(status, "refused", why).into_response();
+    }
+    let length = req
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok()?.parse::<usize>().ok());
+    if length.is_some_and(|n| n > PREAUTH_BODY) {
+        return too_large();
+    }
+    // A body without a length is cut by `DefaultBodyLimit` as the handler reads it; answer
+    // that 413 in the same shape.
+    match next.run(req).await {
+        r if r.status() == StatusCode::PAYLOAD_TOO_LARGE => too_large(),
+        r => r,
+    }
+}
+
+pub fn too_large() -> Response {
+    ApiError::new(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "too_large",
+        "the request is too large",
+    )
+    .into_response()
+}
+
+/// `GET /healthz`: up, and nothing about what or which version.
+pub async fn healthz() -> &'static str {
+    "ok"
+}
+
+/// The :80 listener: the HTTP-01 answers and nothing else.
+pub fn http01_router(certs: Arc<Certs>) -> Router {
+    Router::new()
+        .route(&format!("{ACME_CHALLENGE}/{{token}}"), get(http01))
+        .fallback(refused)
+        .with_state(certs)
+}
+
+async fn http01(State(certs): State<Arc<Certs>>, Path(token): Path<String>) -> Response {
+    match certs.http01(&token) {
+        Some(key_authorization) => key_authorization.into_response(),
+        None => refused().await,
+    }
+}
+
+/// What an unauthenticated request outside the allowlist gets, the same everywhere.
+pub async fn refused() -> Response {
+    ApiError::new(
+        StatusCode::UNAUTHORIZED,
+        "unauthorized",
+        "missing device key",
+    )
+    .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefixes_match_whole_segments() {
+        for ok in [
+            "/handshake",
+            "/handshake/session",
+            "/pair",
+            "/pair/claim",
+            "/api/v1/devices/pair",
+            "/healthz",
+        ] {
+            assert!(allowed(ok), "{ok}");
+        }
+        for no in [
+            "/handshakes",
+            "/pairing",
+            "/api/v1/devices/pairing",
+            "/api/v1/devices",
+            "/healthzz",
+            "/",
+            "",
+            "/.well-known/acme-challenge/x",
+            "/API/V1/DEVICES/PAIR",
+        ] {
+            assert!(!allowed(no), "{no}");
+        }
+    }
+}

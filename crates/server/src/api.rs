@@ -84,13 +84,17 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
 
 /// The shared checks as a status and reason: the `Host`, no `Origin`, and a query string
 /// only when `query_ok` accepts it.
-fn refusal(
+pub(crate) fn refusal(
     app: &App,
     uri: &Uri,
     headers: &HeaderMap,
     query_ok: fn(&str) -> bool,
 ) -> Option<(StatusCode, &'static str)> {
-    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
+    // HTTP/2 carries the host as the `:authority`, which hyper puts in the URI.
+    let host = match headers.get(header::HOST) {
+        Some(h) => h.to_str().ok(),
+        None => uri.authority().map(|a| a.as_str()),
+    };
     if !host.is_some_and(|h| h.eq_ignore_ascii_case(&app.host)) {
         return Some((StatusCode::FORBIDDEN, "unknown host"));
     }

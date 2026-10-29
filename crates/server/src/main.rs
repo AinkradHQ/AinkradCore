@@ -6,9 +6,9 @@ use std::time::Duration;
 use ainkrad_core::audit::AuditActor;
 use ainkrad_core::ids::{DeviceKeyId, UserId};
 use ainkrad_core_server::api::{App, router};
-use ainkrad_core_server::push;
 use ainkrad_core_server::scheduler::{Clock, Scheduler, SystemClock};
 use ainkrad_core_server::store::{self, gov};
+use ainkrad_core_server::{gateway, push};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 
 mod admin;
@@ -21,7 +21,10 @@ fn usage() -> String {
 }
 
 const USAGE: &str = "usage:
-  ainkrad-core-server serve <db> [--bind <addr:port>] [--host <name>]
+  ainkrad-core-server serve <db> [--listen unix:<path>|loopback:<port>|public]
+                 [--bind <addr:port>] [--host <name>]
+                 [--hostname <dns-name> --acme-contact <email>
+                 [--acme-directory <url>] [--acme-http01]]
                  [--trusted-proxy <addr|cidr>[,…]]
                  [--apns-key <file.p8> --apns-key-id <id> --apns-team-id <id>
                  --apns-topic <bundle-id>]
@@ -32,9 +35,15 @@ const USAGE: &str = "usage:
   ainkrad-core-server device list <db>
   ainkrad-core-server device revoke <db> <device-id>
 
-serve binds 127.0.0.1:7700 by default and serves the app at /api/v1 (a device key) and the
-modules mounted inside it; --host is the Host header clients must send (default: the bind
-address); --trusted-proxy the proxies whose X-Forwarded-For names the client for the API's
+serve listens on a Unix socket next to the database (<db dir>/core.sock, 0600) by default and
+serves the app at /api/v1 (a device key) and the modules mounted inside it. --listen
+loopback:<port> serves 127.0.0.1, --bind any address (plain HTTP, as before). --listen public
+serves TLS 1.3 on :443 with a certificate from ACME (Let's Encrypt production unless
+--acme-directory says otherwise, kept in <db dir>/tls) and needs --hostname and --acme-contact;
+the challenge is TLS-ALPN-01 on :443, or HTTP-01 on :80 with --acme-http01. Without a key only
+/handshake, pairing and /healthz answer. --host is the Host header clients must send (default:
+localhost on a socket, the address on loopback, the hostname in public); --trusted-proxy the
+proxies whose X-Forwarded-For names the client for the API's
 failure limit and logs (default: loopback, 127.0.0.0/8 and ::1). SIGTERM or Ctrl-C shuts serve
 down: it stops accepting, gives requests in flight up to 10 s, closes event sockets so they
 reconnect, and checkpoints the database. Limits and intervals are settings (`setting list`),
@@ -164,57 +173,121 @@ async fn backup(db: &Path, dest: &Path) -> Result<(), store::BackupError> {
 
 /// `serve`'s flags.
 struct Serve {
-    bind: String,
-    host: String,
+    /// `--listen` or `--bind`; `None` is the default socket next to the database.
+    listen: Option<String>,
+    host: Option<String>,
+    hostname: Option<String>,
+    acme_contact: Option<String>,
+    acme_directory: String,
+    acme_http01: bool,
     /// `--apns-key`, `--apns-key-id`, `--apns-team-id`, `--apns-topic`, all or none.
     apns: Option<[String; 4]>,
     trusted_proxies: Option<Vec<ainkrad_core_server::api::limit::Cidr>>,
 }
 
-/// `--bind`, `--host`, `--trusted-proxy` and the `--apns-*` flags for `serve`; `None` on
-/// anything else.
+/// `serve`'s flags; `None` (after saying why) on anything else.
 fn serve_flags(flags: &[&str]) -> Option<Serve> {
-    let (mut bind, mut host) = ("127.0.0.1:7700".to_owned(), None);
+    let mut s = Serve {
+        listen: None,
+        host: None,
+        hostname: None,
+        acme_contact: None,
+        acme_directory: gateway::acme::LETS_ENCRYPT.to_owned(),
+        acme_http01: false,
+        apns: None,
+        trusted_proxies: None,
+    };
     let mut apns: [Option<String>; 4] = Default::default();
-    let mut trusted_proxies = None;
-    for pair in flags.chunks(2) {
-        match pair {
-            ["--bind", addr] => bind = (*addr).to_owned(),
-            ["--host", name] => host = Some((*name).to_owned()),
-            ["--trusted-proxy", list] => {
+    let mut it = flags.iter();
+    while let Some(flag) = it.next() {
+        if *flag == "--acme-http01" {
+            s.acme_http01 = true;
+            continue;
+        }
+        let value = (*it.next()?).to_owned();
+        match *flag {
+            "--bind" | "--listen" if s.listen.is_some() => {
+                eprintln!("ainkrad-core-server: one of --bind and --listen");
+                return None;
+            }
+            "--bind" => s.listen = Some(format!("tcp:{value}")),
+            "--listen" => s.listen = Some(value),
+            "--host" => s.host = Some(value),
+            "--hostname" => s.hostname = Some(value),
+            "--acme-contact" => s.acme_contact = Some(value),
+            "--acme-directory" => s.acme_directory = value,
+            "--trusted-proxy" => {
                 let parsed: Result<Vec<_>, _> =
-                    comma_list(list).iter().map(|c| c.parse()).collect();
+                    comma_list(&value).iter().map(|c| c.parse()).collect();
                 match parsed {
-                    Ok(list) => trusted_proxies = Some(list),
+                    Ok(list) => s.trusted_proxies = Some(list),
                     Err(why) => {
                         eprintln!("ainkrad-core-server: --trusted-proxy: {why}");
                         return None;
                     }
                 }
             }
-            ["--apns-key", v] => apns[0] = Some((*v).to_owned()),
-            ["--apns-key-id", v] => apns[1] = Some((*v).to_owned()),
-            ["--apns-team-id", v] => apns[2] = Some((*v).to_owned()),
-            ["--apns-topic", v] => apns[3] = Some((*v).to_owned()),
+            "--apns-key" => apns[0] = Some(value),
+            "--apns-key-id" => apns[1] = Some(value),
+            "--apns-team-id" => apns[2] = Some(value),
+            "--apns-topic" => apns[3] = Some(value),
             _ => return None,
         }
     }
-    let host = host.unwrap_or_else(|| bind.clone());
-    let apns = match apns {
+    s.apns = match apns {
         [Some(a), Some(b), Some(c), Some(d)] => Some([a, b, c, d]),
         [None, None, None, None] => None,
         _ => return None,
     };
-    Some(Serve {
-        bind,
-        host,
-        apns,
-        trusted_proxies,
-    })
+    Some(s)
 }
 
-/// How long requests in flight get to finish once serve is told to stop.
-const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
+/// Where to listen, from the flags: `unix:<path>`, `loopback:<port>`, `public[:<port>]`
+/// (443), or `--bind`'s address; a socket next to the database by default. Public needs a
+/// hostname and an ACME contact.
+fn listen(db: &Path, flags: &Serve) -> Result<gateway::Listen, String> {
+    let state = db
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let spec = flags.listen.as_deref().unwrap_or("unix:");
+    let port = |p: &str| p.parse::<u16>().map_err(|_| format!("{p:?} is not a port"));
+    let public = matches!(spec.split(':').next(), Some("public"));
+    if !public && (flags.hostname.is_some() || flags.acme_contact.is_some() || flags.acme_http01) {
+        return Err("--hostname, --acme-* only go with --listen public".into());
+    }
+    Ok(match spec.split_once(':').unwrap_or((spec, "")) {
+        ("unix", "") => gateway::Listen::Unix(state.join("core.sock")),
+        ("unix", path) => gateway::Listen::Unix(path.into()),
+        ("loopback", p) => gateway::Listen::Tcp(format!("127.0.0.1:{}", port(p)?)),
+        ("tcp", addr) => gateway::Listen::Tcp(addr.to_owned()),
+        ("public", p) => {
+            let (Some(hostname), Some(contact)) = (&flags.hostname, &flags.acme_contact) else {
+                return Err("--listen public needs --hostname and --acme-contact".into());
+            };
+            if hostname.is_empty() || !contact.contains('@') {
+                return Err("--hostname must be a name and --acme-contact an email".into());
+            }
+            gateway::Listen::Public {
+                port: if p.is_empty() { 443 } else { port(p)? },
+                http01: flags.acme_http01.then_some(80),
+                acme: gateway::acme::Acme {
+                    hostname: hostname.clone(),
+                    contact: contact.clone(),
+                    directory: flags.acme_directory.clone(),
+                    http01: flags.acme_http01,
+                    ca_root: None,
+                    dir: state.join("tls"),
+                },
+            }
+        }
+        _ => {
+            return Err(format!(
+                "--listen {spec}: unix:<path>, loopback:<port> or public"
+            ));
+        }
+    })
+}
 
 /// SIGTERM (systemd's stop) or Ctrl-C.
 async fn stop_signal() {
@@ -225,6 +298,29 @@ async fn stop_signal() {
             _ = tokio::signal::ctrl_c() => {}
         },
         Err(_) => drop(tokio::signal::ctrl_c().await),
+    }
+}
+
+/// The listener for the log, without the ACME account's contact.
+struct ListenLog<'a>(&'a gateway::Listen);
+
+impl std::fmt::Debug for ListenLog<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            gateway::Listen::Unix(path) => write!(f, "unix:{}", path.display()),
+            gateway::Listen::Tcp(addr) => write!(f, "tcp:{addr}"),
+            gateway::Listen::Public { port, http01, acme } => write!(
+                f,
+                "public:{port} {} via {}{}",
+                acme.hostname,
+                acme.directory,
+                if http01.is_some() {
+                    " (HTTP-01 on :80)"
+                } else {
+                    ""
+                }
+            ),
+        }
     }
 }
 
@@ -252,8 +348,10 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
         classifier: Arc::new(push::Silent),
         every: push_every,
     };
-    let listener = tokio::net::TcpListener::bind(&flags.bind).await?;
-    tracing::info!(addr = %listener.local_addr()?, host = %flags.host, "serving");
+    let listen = listen(db, &flags)?;
+    let host = flags.host.clone().unwrap_or_else(|| listen.default_host());
+    let gateway = gateway::Gateway::bind(listen.clone(), gateway::Limits::default()).await?;
+    tracing::info!(listen = ?ListenLog(&listen), %host, "serving");
     let scheduler = Scheduler {
         pool: pool.clone(),
         clock: SystemClock,
@@ -269,29 +367,22 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
     });
     let ticking =
         tokio::spawn(async move { scheduler.run(async { drop(stopped.changed().await) }).await });
-    let mut app = App::new(pool, Arc::new(SystemClock), flags.host);
+    let mut app = App::new(pool, Arc::new(SystemClock), host);
     app.limits = limits;
     if let Some(list) = flags.trusted_proxies {
         app.trusted_proxies = list.into();
     }
     let (closing, pool) = (Arc::clone(&app.closing), app.pool.clone());
-    // The peer address feeds the client API's per-address failure limit.
-    let service = router(app).into_make_service_with_connect_info::<std::net::SocketAddr>();
-    let mut stopping = closing.subscribe();
-    let server = axum::serve(listener, service)
-        .with_graceful_shutdown(async move { drop(stopping.wait_for(|c| *c).await) })
-        .into_future();
+    let server = gateway.serve(router(app), Arc::clone(&closing), gateway::SHUTDOWN_GRACE);
     tokio::pin!(server);
     tokio::select! {
         served = &mut server => served?,
         () = stop_signal() => {
             tracing::info!("stopping: finishing requests in flight, closing sockets");
-            // Stops accepting; event sockets close themselves (`App::closing`).
+            // Stops accepting; event sockets close themselves (`App::closing`); requests in
+            // flight get the grace.
             closing.send_replace(true);
-            match tokio::time::timeout(SHUTDOWN_GRACE, server).await {
-                Ok(served) => served?,
-                Err(_) => tracing::warn!("requests still in flight after 10 s; dropped"),
-            }
+            server.await?;
         }
     }
     drop(stop);
