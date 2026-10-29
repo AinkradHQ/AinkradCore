@@ -344,13 +344,27 @@ mod tests {
         }
         let spec: Value = serde_json::from_str(&json_for(&[Arc::new(Toy)])).unwrap();
         let s = &spec["components"]["schemas"];
-        assert_eq!(s["Event"]["x-event-kinds"], json!(["audit", "toy.line"]));
+        assert_eq!(
+            s["Event"]["x-event-kinds"],
+            json!([
+                "audit",
+                "runner.connected",
+                "runner.degraded",
+                "runner.disconnected",
+                "toy.line"
+            ])
+        );
         let actions = s["AuditEntry"]["x-audit-actions"].as_array().unwrap();
         assert!(actions.contains(&json!("toy.made")) && actions.contains(&json!("setting.set")));
         let plain: Value = serde_json::from_str(&json()).unwrap();
         assert_eq!(
             plain["components"]["schemas"]["Event"]["x-event-kinds"],
-            json!(["audit"])
+            json!([
+                "audit",
+                "runner.connected",
+                "runner.degraded",
+                "runner.disconnected"
+            ])
         );
     }
 
