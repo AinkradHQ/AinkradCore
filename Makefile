@@ -1,6 +1,6 @@
 CARGO ?= cargo
 
-.PHONY: clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel
+.PHONY: soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel
 build: lint ; $(CARGO) build --workspace
 test: lint ; $(CARGO) test --workspace
 lint: format-check ; $(CARGO) clippy --workspace --all-targets -- -D warnings
@@ -30,6 +30,9 @@ test-linux-arm64: ; $(call DOCKER_RUN,arm64) --platform linux/arm64 $(RUST_IMAGE
 build-linux-x86_64: ; $(call DOCKER_RUN,amd64) --platform linux/amd64 $(RUST_IMAGE) sh -c 'rustup show >/dev/null && cargo build --workspace'
 # Frees this checkout's Linux build caches (they are several GB); run it when you are done with a checkout.
 clean-linux: ; docker volume rm -f $(LINUX_VOL)-arm64 $(LINUX_VOL)-amd64
+# Event bus soak (E1-04.5): 10k events/min to 20 clients, one stalled, for an hour; flat memory and
+# only the stalled client closed. Not part of `test`. `CORE_SOAK_SECS=300 make soak` for five minutes.
+soak: ; CORE_SOAK_SECS=$${CORE_SOAK_SECS:-3600} $(CARGO) test -p ainkrad-core-server --test soak -- --ignored --nocapture
 # The parked Citadel monolith (P1.11), its own workspace; not part of `build`/`test`.
 CITADEL = --manifest-path modules/citadel/Cargo.toml --workspace
 build-citadel: ; $(CARGO) build $(CITADEL)
