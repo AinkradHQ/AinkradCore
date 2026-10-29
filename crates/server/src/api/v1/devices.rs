@@ -1,6 +1,6 @@
 //! Device keys (E10.3): list, add (the key is in the answer, once), revoke.
 
-use ainkrad_core::gov::DeviceKeyId;
+use ainkrad_core::ids::DeviceKeyId;
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use serde::{Deserialize, Serialize};
@@ -22,8 +22,8 @@ pub struct Device {
     pub revoked_at: Option<Timestamp>,
 }
 
-impl From<ainkrad_core::gov::DeviceKey> for Device {
-    fn from(d: ainkrad_core::gov::DeviceKey) -> Self {
+impl From<ainkrad_core::device::DeviceKey> for Device {
+    fn from(d: ainkrad_core::device::DeviceKey) -> Self {
         Self {
             id: d.id.0,
             name: d.name,
@@ -94,8 +94,8 @@ pub struct PushToken {
 
 #[utoipa::path(put, path = "/api/v1/push-token", operation_id = "setPushToken", tag = "devices",
     request_body = PushToken,
-    responses((status = 200, description = "The calling device now gets pushes for new \
-        approvals, blocked and stuck issues and escalations", body = Device)))]
+    responses((status = 200, description = "The calling device now gets pushes: what the \
+        modules' push rules pick", body = Device)))]
 pub async fn set_push(
     State(app): State<App>,
     Extension(me): Extension<super::Device>,

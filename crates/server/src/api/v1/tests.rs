@@ -12,13 +12,6 @@ use axum::http::{Method, Request, StatusCode, header};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use ainkrad_core::audit::AuditActor;
-use ainkrad_core::exec::{NewRunner, NewWakeRequest, Run, RunnerId, WakeSource};
-use ainkrad_core::org::{AgentId, AgentStatus, CompanyId, Harness, NewAgent, OrgRole};
-use ainkrad_core::work::{
-    IssueId, IssueKind, IssueState, NewIssue, NewProject, NextActor, ProjectId, ProjectMode,
-    SprintApproval,
-};
 use sqlx::SqlitePool;
 
 use super::Limits;
@@ -26,46 +19,16 @@ use crate::api::limit::Limiter;
 use crate::api::{App, router};
 use crate::scheduler::Clock;
 use crate::store::connect;
-use crate::store::exec::{dispatch_next, enqueue_wake, register_runner, start_run};
 use crate::store::gov::issue_device_key;
-use crate::store::org::{create_agent, create_company};
-use crate::store::work::{create_issue, create_project};
 
-mod accounts;
-mod agents;
-mod artifacts;
-mod avatars;
-mod companies;
-mod controls;
-mod disk;
 mod events;
-mod gov;
-mod issues;
-mod library;
 mod me;
 mod modules;
-mod money;
-mod ops;
-mod org;
-mod parity_b1;
-mod profile;
-mod projects;
-mod quest;
-mod reads;
-mod repos;
-mod requirements;
-mod review;
-mod routing;
-mod runners;
-mod runs;
+mod pairing;
 mod settings;
-mod staffing;
-mod structure;
-mod stuck;
-mod wakes;
 
 pub(super) const NOW: &str = "2026-10-22T10:00:00.000Z";
-pub(super) const HOST: &str = "citadel.test";
+pub(super) const HOST: &str = "core.test";
 
 pub(super) struct FixedClock(pub Mutex<String>);
 
@@ -92,9 +55,9 @@ impl Drop for Fx {
 pub(super) async fn fx() -> Fx {
     static N: AtomicUsize = AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("citadel-v1-{}-{n}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("core-v1-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let pool = connect(&dir.join("citadel.db")).await.unwrap();
+    let pool = connect(&dir.join("core.db")).await.unwrap();
     let clock = Arc::new(FixedClock(Mutex::new(NOW.to_owned())));
     let app = App::new(pool, clock.clone(), HOST.to_owned());
     let (_, key) = issue_device_key(&app.pool, "test", super::BY)
@@ -170,85 +133,6 @@ impl Fx {
     }
 }
 
-/// A company with an active agent, a project, an issue waiting on the agent, and the
-/// agent's run on it, started on a runner.
-pub(super) struct Seed {
-    pub company: CompanyId,
-    pub agent: AgentId,
-    pub project: ProjectId,
-    pub issue: IssueId,
-    pub runner: RunnerId,
-    pub run: Run,
-}
-
-pub(super) async fn seed(pool: &SqlitePool, name: &str, key: &str, mode: ProjectMode) -> Seed {
-    let company = create_company(pool, name).await.unwrap().id;
-    let a = NewAgent {
-        company_id: company,
-        name: format!("{name} dev"),
-        role: "Developer".to_owned(),
-        org_role: OrgRole::None,
-        reports_to: None,
-        harness: Harness::Opencode,
-        model: String::new(),
-        runner_tags: vec![],
-        status: AgentStatus::Active,
-    };
-    let agent = create_agent(pool, &a).await.unwrap().id;
-    let p = NewProject {
-        company_id: company,
-        team_id: None,
-        name: format!("{name} project"),
-        key: key.to_owned(),
-        mode,
-        sprint_approval: SprintApproval::Owner,
-    };
-    let project = create_project(pool, &p).await.unwrap().id;
-    let i = NewIssue {
-        project_id: project,
-        epic_id: None,
-        parent_id: None,
-        kind: IssueKind::Task,
-        title: format!("{name} work"),
-        body: "Do the thing.".to_owned(),
-        state: IssueState::Todo,
-        owner: None,
-        next_actor: Some(NextActor::Agent(agent)),
-        points: None,
-        sprint_id: None,
-    };
-    let issue = create_issue(pool, &i).await.unwrap().id;
-    let wake = NewWakeRequest {
-        agent_id: agent,
-        issue_id: Some(issue),
-        source: WakeSource::Assignment,
-        reason: "test".to_owned(),
-        idempotency_key: format!("v1-test-{name}"),
-        not_before: None,
-    };
-    enqueue_wake(pool, &wake).await.unwrap();
-    let r = NewRunner {
-        name: format!("{name}-runner"),
-        tags: vec![],
-    };
-    let (runner, _) = register_runner(pool, &r).await.unwrap();
-    let run = dispatch_next(pool, runner.id, &[], &Harness::ALL, NOW)
-        .await
-        .unwrap()
-        .expect("a run is due");
-    let (run, _) = start_run(pool, run.id, AuditActor::Runner(runner.id), None, NOW)
-        .await
-        .unwrap();
-    Seed {
-        company,
-        agent,
-        project,
-        issue,
-        runner: runner.id,
-        run,
-    }
-}
-
 /// Every operation in the contract is routed, and answers 401 without a key.
 #[tokio::test]
 async fn every_operation_in_the_contract_is_routed_and_needs_a_key() {
@@ -278,7 +162,7 @@ async fn every_operation_in_the_contract_is_routed_and_needs_a_key() {
             n += 1;
         }
     }
-    assert!(n >= 39, "{n} operations");
+    assert!(n >= 18, "{n} operations");
 }
 
 #[tokio::test]
@@ -403,10 +287,14 @@ async fn the_gate_refuses_hosts_origins_query_keys_and_bad_bearers() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(res.headers()[header::WWW_AUTHENTICATE], "Bearer");
-    let run_token_shape = "cit_run_0123";
     let (status, _) = send(
         &fx.app,
-        req(Method::GET, "/api/v1/devices", Some(run_token_shape), None),
+        req(
+            Method::GET,
+            "/api/v1/devices",
+            Some("cit_device_0123"),
+            None,
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);

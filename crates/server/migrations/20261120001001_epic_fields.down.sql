@@ -1,3 +1,0 @@
-ALTER TABLE epics DROP COLUMN ends_on;
-ALTER TABLE epics DROP COLUMN starts_on;
-ALTER TABLE epics DROP COLUMN color;

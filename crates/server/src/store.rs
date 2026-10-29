@@ -14,48 +14,17 @@ use sqlx::sqlite::{
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-/// SQL: whether agent `$agent`'s work on issue `$issue` waits on the plan of the issue's
-/// requirement (plan-first, E15.10): the requirement is `planning`, `plan_review` or `cancelled`,
-/// and the agent does not plan the issue's project (its product owner or team lead, the CEO or
-/// the CTO), or the requirement is paused (`paused_at`, for everyone). Dispatch skips such a wake, the stuck detector leaves such an issue alone, and
-/// `start` is refused.
-macro_rules! plan_held {
-    ($agent:literal, $issue:literal) => {
-        concat!(
-            "EXISTS (SELECT 1 FROM issues ph_i \
-             JOIN requirements ph_q ON ph_q.id = ph_i.requirement_id \
-             JOIN projects ph_p ON ph_p.id = ph_i.project_id \
-             JOIN agents ph_a ON ph_a.id = ",
-            $agent,
-            " WHERE ph_i.id = ",
-            $issue,
-            " AND (ph_q.paused_at IS NOT NULL \
-             OR (ph_q.state IN ('planning', 'plan_review', 'cancelled') \
-             AND ph_a.org_role NOT IN ('ceo', 'cto') \
-             AND NOT EXISTS (SELECT 1 FROM team_memberships ph_m \
-                 WHERE ph_m.team_id = ph_p.team_id AND ph_m.agent_id = ph_a.id \
-                 AND ph_m.team_role IN ('product_owner', 'team_lead')))))"
-        )
-    };
-}
-
-pub mod artifacts;
 pub mod audit;
 mod backup;
 pub mod events;
-pub mod exec;
-pub mod forge;
 pub mod gov;
-pub mod linear;
-pub mod org;
 pub mod settings;
-pub mod work;
 
 pub use backup::{BackupError, backup, restore};
 
 pub static MIGRATOR: Migrator = sqlx::migrate!();
 
-/// What the store keeps of a runner or device key: its SHA-256, never the key. Keys are
+/// What the store keeps of a device key or pairing code: its SHA-256, never the key. Keys are
 /// random, so an unsalted digest is enough.
 fn key_hash(key: &str) -> Vec<u8> {
     use sha2::{Digest, Sha256};
@@ -146,60 +115,14 @@ pub async fn connect(path: &Path) -> Result<SqlitePool, sqlx::Error> {
 mod tests {
     use super::*;
 
-    const TABLES: [&str; 53] = [
+    const TABLES: [&str; 7] = [
         "users",
-        "companies",
-        "departments",
-        "teams",
-        "agents",
-        "team_memberships",
-        "projects",
-        "epics",
-        "sprints",
-        "issues",
-        "labels",
-        "issue_labels",
-        "blocker_links",
-        "comments",
-        "runners",
-        "wake_requests",
-        "runs",
-        "leases",
-        "cost_events",
-        "approvals",
-        "budgets",
-        "skills",
-        "knowledge_entries",
         "device_keys",
+        "device_pairings",
         "audit_events",
-        "run_tokens",
-        "project_repos",
-        "run_events",
-        "issue_state_history",
-        "wip_limits",
-        "sprint_retro_items",
-        "budget_spend",
-        "prices",
-        "harness_billing",
-        "issue_repos",
-        "issue_prs",
-        "project_linear",
-        "linear_issues",
         "events",
         "push_cursor",
-        "accounts",
-        "account_companies",
-        "account_limits",
-        "account_events",
-        "agent_fallbacks",
         "settings",
-        "requirements",
-        "requirement_plans",
-        "questions",
-        "artifacts",
-        "artifact_reads",
-        "run_controls",
-        "issue_allow_rules",
     ];
 
     async fn tables_present(pool: &SqlitePool) -> usize {
@@ -218,9 +141,9 @@ mod tests {
 
     #[tokio::test]
     async fn migrates_up_down_up_with_pragmas() {
-        let dir = std::env::temp_dir().join(format!("citadel-store-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("core-store-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let pool = connect(&dir.join("citadel.db")).await.unwrap();
+        let pool = connect(&dir.join("core.db")).await.unwrap();
 
         let journal: String = sqlx::query_scalar("PRAGMA journal_mode")
             .fetch_one(&pool)
@@ -254,10 +177,10 @@ mod tests {
     /// `busy_timeout`, and the waiter gets `database is locked`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_waiting_writer_is_not_overtaken_and_never_times_out() {
-        let dir = std::env::temp_dir().join(format!("citadel-store-gate-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("core-store-gate-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let options = SqliteConnectOptions::new()
-            .filename(dir.join("citadel.db"))
+            .filename(dir.join("core.db"))
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .busy_timeout(Duration::from_millis(500));

@@ -1,33 +1,77 @@
-//! Governance repository: the provider account pool (E15.1) in `accounts`; the approvals service (E7.1) in `approvals`; budgets and their
-//! running spend (E7.2) in `budgets`; prices, billing and cost reports (E7.3) in `ledger`, and per task (E15.5) in `tasks`; skills, knowledge entries and device keys in `library`; issuing,
-//! authorizing and revoking device keys (E10.3) in `devices`.
-//!
-//! `update_*` / `delete_*` return `false` when no row matched. Same-company rules are
-//! enforced by triggers at insert and surface as `Error::Database`.
+//! Devices: reading device keys here; issuing, authorizing and revoking them, and where their
+//! pushes go (E10.3, E10.4), in `devices`; pairing a new device with a one-time code in
+//! `pairing`.
 
-use sqlx::sqlite::SqliteRow;
+use ainkrad_core::device::DeviceKey;
+use ainkrad_core::ids::DeviceKeyId;
+use sqlx::sqlite::{SqlitePool, SqliteRow};
 use sqlx::{Error, Row};
 
-mod accounts;
-mod approvals;
-mod budgets;
-mod devices;
-mod ledger;
-mod library;
-mod pairing;
-mod tasks;
-pub use accounts::*;
-pub use approvals::*;
-pub use budgets::*;
-pub use devices::*;
-pub use ledger::*;
-pub use library::*;
-pub use pairing::*;
-pub use tasks::*;
+use crate::store::key_hash;
 
-fn id_column(row: &SqliteRow, column: &str) -> Result<Option<i64>, Error> {
-    row.try_get(column)
+mod devices;
+mod pairing;
+pub use devices::*;
+pub use pairing::*;
+
+macro_rules! device_key_columns {
+    () => {
+        "id, name, created_at, last_used_at, revoked_at"
+    };
 }
 
-#[cfg(test)]
-mod tests;
+fn device_key(row: SqliteRow) -> Result<DeviceKey, Error> {
+    Ok(DeviceKey {
+        id: DeviceKeyId(row.try_get("id")?),
+        name: row.try_get("name")?,
+        created_at: row.try_get("created_at")?,
+        last_used_at: row.try_get("last_used_at")?,
+        revoked_at: row.try_get("revoked_at")?,
+    })
+}
+
+pub async fn get_device_key(
+    pool: &SqlitePool,
+    id: DeviceKeyId,
+) -> Result<Option<DeviceKey>, Error> {
+    sqlx::query(concat!(
+        "SELECT ",
+        device_key_columns!(),
+        " FROM device_keys WHERE id = ?"
+    ))
+    .bind(id.0)
+    .fetch_optional(pool)
+    .await?
+    .map(device_key)
+    .transpose()
+}
+
+/// The device key matching `key`, revoked or not; the caller checks `revoked_at`.
+pub async fn get_device_key_by_key(
+    pool: &SqlitePool,
+    key: &str,
+) -> Result<Option<DeviceKey>, Error> {
+    sqlx::query(concat!(
+        "SELECT ",
+        device_key_columns!(),
+        " FROM device_keys WHERE key_hash = ?"
+    ))
+    .bind(key_hash(key))
+    .fetch_optional(pool)
+    .await?
+    .map(device_key)
+    .transpose()
+}
+
+pub async fn list_device_keys(pool: &SqlitePool) -> Result<Vec<DeviceKey>, Error> {
+    sqlx::query(concat!(
+        "SELECT ",
+        device_key_columns!(),
+        " FROM device_keys ORDER BY id"
+    ))
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(device_key)
+    .collect()
+}
