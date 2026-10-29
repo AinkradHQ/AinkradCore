@@ -74,6 +74,7 @@ pub mod load;
 pub mod mac;
 mod messages;
 mod state;
+pub mod v2;
 mod work;
 mod workspace;
 use connect::request;
