@@ -173,10 +173,12 @@ pub fn router(app: App) -> Router {
             app.clone(),
             trace::audit_refusals,
         ))
-        .route_layer(middleware::from_fn_with_state(app.clone(), client_gate))
         .with_state(app)
 }
 
+/// The key check every route but the pre-auth ones passes. It runs before routing, as the
+/// outer layer `gateway::preauth::gate`, so an unknown path without a key is the same 401 as a
+/// known one.
 pub(crate) async fn client_gate(State(app): State<App>, mut req: Request, next: Next) -> Response {
     if let Some((status, why)) = refusal(&app, req.uri(), req.headers(), query_ok) {
         tracing::warn!(%status, why, "client request refused");
