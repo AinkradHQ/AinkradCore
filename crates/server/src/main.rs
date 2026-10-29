@@ -15,8 +15,9 @@ mod admin;
 
 fn usage() -> String {
     format!(
-        "{USAGE}\nSettings (E15.17, as the admin):\n{}",
-        admin::USAGE
+        "{USAGE}\nSettings (E15.17, as the admin):\n{}\n{}",
+        admin::USAGE,
+        ainkrad_core_server::ops::USAGE
     )
 }
 
@@ -27,10 +28,11 @@ const USAGE: &str = "usage:
                  [--acme-directory <url>] [--acme-http01]]
                  [--trusted-proxy <addr|cidr>[,…]]
                  [--apns-key <file.p8> --apns-key-id <id> --apns-team-id <id>
-                 --apns-topic <bundle-id>]
+                 --apns-topic <bundle-id>] [--log-format text|json]
   ainkrad-core-server openapi
   ainkrad-core-server backup <db> <dest>
   ainkrad-core-server restore [--force] <src> <db>
+  ainkrad-core-server --help
   ainkrad-core-server device add <db> <name>
   ainkrad-core-server device list <db>
   ainkrad-core-server device revoke <db> <device-id>
@@ -49,10 +51,13 @@ down: it stops accepting, gives requests in flight up to 10 s, closes event sock
 reconnect, and checkpoints the database. Limits and intervals are settings (`setting list`),
 read when serve starts. With the four --apns-* flags, what a module's push rules pick is pushed
 to the app's devices through APNs; without them it is only logged. The platform alone pushes
-nothing.
+nothing. --log-format json writes JSON lines; both formats are redacted (E1-13.4).
 openapi prints the client API's contract (api/openapi.json; `make contract`).
 device add prints a new device key for the app (E10.3) once; only its hash is kept. It goes
-in `Authorization: Bearer` on /api/v1. device revoke stops it at once; the row stays listed.";
+in `Authorization: Bearer` on /api/v1. device revoke stops it at once; the row stays listed.
+backup <db> <dest> is a raw, unencrypted local snapshot (VACUUM INTO); restore [--force] <src>
+<db> swaps such a snapshot over a stopped database in place. The encrypted, signed backups and
+the fresh-home restore are under Operations.";
 
 /// Device keys are issued and revoked as the one admin user (#18).
 pub(crate) const ADMIN: AuditActor = AuditActor::User(UserId(1));
@@ -63,6 +68,9 @@ async fn main() -> ExitCode {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let seeded = match args.first() {
         Some(&"setting" | &"audit") => admin::run(&args).await,
+        Some(&("init" | "backup" | "backup-keygen" | "restore" | "export" | "import")) => {
+            ainkrad_core_server::ops::run(&args).await
+        }
         _ => None,
     };
     let result = match args.as_slice() {
@@ -70,6 +78,26 @@ async fn main() -> ExitCode {
         [] => {
             println!("ainkrad-core-server {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
+        }
+        ["--help" | "-h" | "help"] => {
+            println!("{}", usage());
+            return ExitCode::SUCCESS;
+        }
+        ["serve", "--config", file, given @ ..] => {
+            match ainkrad_core_server::ops::config::Config::load(Path::new(file)) {
+                Ok(config) => {
+                    let flags = config.serve_flags(given);
+                    let flags: Vec<&str> = flags.iter().map(String::as_str).collect();
+                    match serve_flags(&flags) {
+                        Some(flags) => serve(&config.home().db(), flags).await,
+                        None => {
+                            eprintln!("{}", usage());
+                            return ExitCode::from(2);
+                        }
+                    }
+                }
+                Err(e) => Err(e.into()),
+            }
         }
         ["serve", db, flags @ ..] => match serve_flags(flags) {
             Some(flags) => serve(Path::new(db), flags).await,
@@ -183,6 +211,7 @@ struct Serve {
     /// `--apns-key`, `--apns-key-id`, `--apns-team-id`, `--apns-topic`, all or none.
     apns: Option<[String; 4]>,
     trusted_proxies: Option<Vec<ainkrad_core_server::api::limit::Cidr>>,
+    log_json: bool,
 }
 
 /// `serve`'s flags; `None` (after saying why) on anything else.
@@ -196,6 +225,7 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
         acme_http01: false,
         apns: None,
         trusted_proxies: None,
+        log_json: false,
     };
     let mut apns: [Option<String>; 4] = Default::default();
     let mut it = flags.iter();
@@ -213,6 +243,10 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
             "--bind" => s.listen = Some(format!("tcp:{value}")),
             "--listen" => s.listen = Some(value),
             "--host" => s.host = Some(value),
+            "--log-format" => match value.as_str() {
+                "text" | "json" => s.log_json = value == "json",
+                _ => return None,
+            },
             "--hostname" => s.hostname = Some(value),
             "--acme-contact" => s.acme_contact = Some(value),
             "--acme-directory" => s.acme_directory = value,
@@ -327,9 +361,7 @@ impl std::fmt::Debug for ListenLog<'_> {
 /// Serves the client API and runs the scheduler and the pusher until SIGTERM or Ctrl-C, then
 /// shuts down cleanly (`USAGE`).
 async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .init();
+    ainkrad_core_server::ops::logging::init(flags.log_json);
     // Flags first: a refused --listen never creates or migrates the database.
     let listen = listen(db, &flags)?;
     let pool = store::connect(db).await?;
