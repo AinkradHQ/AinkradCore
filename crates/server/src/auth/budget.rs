@@ -167,6 +167,56 @@ impl AddressFailures {
     }
 }
 
+/// The global wrong-claim budget (§7.4): 20 wrong pairing claims from anywhere within 5
+/// minutes burn every live pairing. A claim in flight holds a slot, so concurrent guesses cannot
+/// overrun it (review M2); a slot lapses after `SLOT_SECS` even if never given back (N1). The
+/// host's socket does not take part (`api::v1::pair`). In memory: a restart starts it again.
+#[derive(Default)]
+pub struct PairBudget {
+    /// (wrong claims in the window, window start, when each claim in flight started).
+    slot: Mutex<(i64, i64, Vec<i64>)>,
+}
+
+pub const PAIR_BUDGET: i64 = 20;
+pub const PAIR_WINDOW: i64 = 300;
+
+impl PairBudget {
+    fn fresh(s: &mut (i64, i64, Vec<i64>), now: i64) {
+        if now - s.1 >= PAIR_WINDOW {
+            (s.0, s.1) = (0, now);
+        }
+        s.2.retain(|t| now - t < SLOT_SECS);
+    }
+
+    /// Takes a slot for one claim; `false` when the wrong claims and the claims in flight
+    /// reach the budget.
+    pub fn reserve(&self, now: i64) -> bool {
+        let mut s = self.slot.lock().unwrap();
+        Self::fresh(&mut s, now);
+        let ok = s.0 + (s.2.len() as i64) < PAIR_BUDGET;
+        if ok {
+            s.2.push(now);
+        }
+        ok
+    }
+
+    /// Gives the slot back; a `wrong` claim counts. `true` when that spends the budget: the
+    /// caller burns every live pairing, and the budget starts again.
+    pub fn release(&self, wrong: bool, now: i64) -> bool {
+        let mut s = self.slot.lock().unwrap();
+        Self::fresh(&mut s, now);
+        if !s.2.is_empty() {
+            s.2.remove(0);
+        }
+        s.0 += i64::from(wrong);
+        let spent = s.0 >= PAIR_BUDGET;
+        if spent {
+            (s.0, s.1) = (0, now);
+        }
+        spent
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

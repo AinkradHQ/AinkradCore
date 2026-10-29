@@ -87,20 +87,6 @@ async fn append(
     audit::append(conn, &event).await.map(drop)
 }
 
-/// Audits a refused pairing call (a wrong code, …) on its own.
-pub async fn audit_refusal(pool: &SqlitePool, details: Value) -> Result<(), Error> {
-    let mut tx = begin_write(pool).await?;
-    append(
-        &mut tx,
-        AuditActor::System,
-        "pairing.refused",
-        None,
-        details,
-    )
-    .await?;
-    tx.commit().await
-}
-
 /// Whether any device row exists, revoked ones included (bootstrap's guard, §7.3).
 pub async fn any_device(conn: &mut SqliteConnection) -> Result<bool, Error> {
     sqlx::query_scalar("SELECT count(*) > 0 FROM core_devices")
@@ -447,8 +433,11 @@ pub async fn burn_pairings(pool: &SqlitePool) -> Result<Vec<String>, Error> {
     )
     .fetch_all(&mut *tx)
     .await?;
-    let details = json!({"pairings": burned, "reason": "wrong-claim budget spent"});
-    append(&mut tx, AuditActor::System, "pairing.burned", None, details).await?;
+    // Nothing live, nothing burned, nothing to record (review M4).
+    if !burned.is_empty() {
+        let details = json!({"pairings": burned, "reason": "wrong-claim budget spent"});
+        append(&mut tx, AuditActor::System, "pairing.burned", None, details).await?;
+    }
     tx.commit().await?;
     Ok(burned)
 }

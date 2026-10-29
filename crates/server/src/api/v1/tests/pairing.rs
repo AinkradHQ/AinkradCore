@@ -281,8 +281,8 @@ async fn the_sas_must_match_and_scopes_only_narrow() {
     );
 }
 
-/// §17.21: 20 wrong claims from 20 addresses burn every live pairing (one audit row); 20 from
-/// one address lock it.
+/// §17.21: 20 wrong claims from 20 addresses burn every live pairing (one audit row, and none
+/// per claim); 20 from one address lock it.
 #[tokio::test]
 async fn wrong_claims_burn_live_pairings_and_lock_the_address() {
     let fx = fx().await;
@@ -304,7 +304,11 @@ async fn wrong_claims_burn_live_pairings_and_lock_the_address() {
         "burned"
     );
     assert_eq!(audited(&fx, "pairing.burned").await, 1);
-    assert_eq!(audited(&fx, "pairing.refused").await, 20, "every refusal");
+    assert_eq!(
+        audited(&fx, "pairing.refused").await,
+        0,
+        "no row per wrong claim (M4)"
+    );
     let (s, _) = claim(&fx, &newcomer(&fx), live["code"].as_str(), None, "10.4.1.1").await;
     assert_eq!(s, StatusCode::UNAUTHORIZED, "a burned code is dead");
 

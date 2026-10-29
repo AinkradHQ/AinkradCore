@@ -12,7 +12,6 @@ use axum::extract::{Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use utoipa::ToSchema;
 
 use super::gate::{self, Mode};
@@ -73,21 +72,21 @@ fn pairing_failed() -> Response {
     ApiError::new(StatusCode::UNAUTHORIZED, "pairing_failed", "pairing failed").into_response()
 }
 
-/// A wrong claim: counted against the address and the global budget (which, once spent,
-/// burns every live pairing), audited, and answered as the one `pairing_failed`.
-async fn wrong(app: &App, addr: &str, why: &'static str) -> Response {
+/// A wrong claim: persisted against the address (its lockout survives a restart), and when it
+/// spent the global budget, every live pairing is burned. Answered as the one
+/// `pairing_failed`. No audit row per claim (review M4): the lockout and the burn are audited.
+async fn wrong(app: &App, addr: &str, why: &'static str, spent: bool, now: i64) -> Response {
     tracing::warn!(addr, why, "pairing claim refused");
-    let now = app.clock.unix();
     let counted = async {
         gov::record_failure(&app.pool, addr, ADDRESS, now).await?;
-        if gov::spend_pair_budget(&app.pool, now).await? {
+        if spent {
             let burned = gov::burn_pairings(&app.pool).await?;
             tracing::warn!(
                 burned = burned.len(),
                 "wrong-claim budget spent: pairings burned"
             );
         }
-        gov::audit_refusal(&app.pool, json!({"reason": why, "address": addr})).await
+        Ok::<(), sqlx::Error>(())
     };
     match counted.await {
         Ok(()) => pairing_failed(),
@@ -113,47 +112,75 @@ pub async fn claim(State(app): State<App>, req: Request) -> Response {
         Ok(None) => {}
         Err(e) => return ApiError::from(e).into_response(),
     }
+    // One evaluation slot from the address's budget and one from the global one, taken under
+    // their locks before any lookup: concurrent claims cannot all be guesses, and the ones
+    // past either budget are a cheap 429 that reads and writes nothing more (review M2).
+    let busy = || too_many(std::time::Duration::from_secs(ADDRESS.lock as u64));
+    if !app.auth.failures.reserve(&addr, now) {
+        return busy();
+    }
+    if !app.auth.pair_budget.reserve(now) {
+        app.auth.failures.release(&addr, false, now);
+        return busy();
+    }
+    let out = evaluate(&app, &parts, raw, now).await;
+    app.auth.failures.release(&addr, out.is_err(), now);
+    let spent = app.auth.pair_budget.release(out.is_err(), now);
+    match out {
+        Ok(r) => r,
+        Err(why) => wrong(&app, &addr, why, spent, now).await,
+    }
+}
+
+/// A claim's evaluation: its answer, or why it is a wrong claim.
+async fn evaluate(
+    app: &App,
+    parts: &axum::http::request::Parts,
+    raw: axum::body::Body,
+    now: i64,
+) -> Result<Response, &'static str> {
     let bytes = match gate::body(raw, PREAUTH_BODY).await {
         Ok(b) => b,
-        Err(r) => return *r,
+        Err(r) => return Ok(*r),
     };
     let Ok(b) = serde_json::from_slice::<ClaimBody>(&bytes) else {
-        return bad("malformed body");
+        return Ok(bad("malformed body"));
     };
     let (hash, by_code) = match (&b.code, &b.secret) {
         (Some(code), None) => match normal_code(code) {
             Some(c) => (code_hash(&c), true),
-            None => return wrong(&app, &addr, "malformed code").await,
+            None => return Err("malformed code"),
         },
         (None, Some(secret)) => match unb64(secret, 22) {
             Some(s) => (secret_hash(&s), false),
-            None => return wrong(&app, &addr, "malformed secret").await,
+            None => return Err("malformed secret"),
         },
-        _ => return bad("send one of code and secret"),
+        _ => return Ok(bad("send one of code and secret")),
     };
     let pairing = match gov::find_pairing(&app.pool, &hash, by_code).await {
         Ok(Some(p)) if p.status == "live" => p,
-        Ok(_) => return wrong(&app, &addr, "no live pairing").await,
-        Err(e) => return ApiError::from(e).into_response(),
+        Ok(_) => return Err("no live pairing"),
+        Err(e) => return Ok(ApiError::from(e).into_response()),
     };
     let local = parts.extensions.get::<Local>().is_some_and(|l| l.same_user);
     if pairing.bootstrap && !local {
-        return wrong(
-            &app,
-            &addr,
-            "bootstrap claimed from outside the host's socket",
-        )
-        .await;
+        return Err("bootstrap claimed from outside the host's socket");
     }
     // The keys and their proofs; a failure here does not spend the pairing.
     let key = |text: &str| unb64(text, 122).filter(|k| spki_point(k).is_some());
     let Some(routine) = key(&b.routine_spki) else {
-        return bad("routine_spki is a P-256 SubjectPublicKeyInfo, base64url");
+        return Ok(bad(
+            "routine_spki is a P-256 SubjectPublicKeyInfo, base64url",
+        ));
     };
     let stepup = match &b.stepup_spki {
         Some(s) => match key(s) {
             Some(k) => Some(k),
-            None => return bad("stepup_spki is a P-256 SubjectPublicKeyInfo, base64url"),
+            None => {
+                return Ok(bad(
+                    "stepup_spki is a P-256 SubjectPublicKeyInfo, base64url",
+                ));
+            }
         },
         None => None,
     };
@@ -162,7 +189,7 @@ pub async fn claim(State(app): State<App>, req: Request) -> Response {
         .is_some_and(|k| !KEY_STORAGE.contains(&k))
         || b.platform.as_deref().is_some_and(|p| p.len() > 64)
     {
-        return bad("unknown key_storage, or a platform over 64 bytes");
+        return Ok(bad("unknown key_storage, or a platform over 64 bytes"));
     }
     let stepup_fp = stepup.as_deref().map(fingerprint);
     let message = pop_message(
@@ -180,7 +207,7 @@ pub async fn claim(State(app): State<App>, req: Request) -> Response {
             .as_ref()
             .is_some_and(|k| !proves(k, b.pop_stepup.as_ref()))
     {
-        return bad("a proof of possession does not verify");
+        return Ok(bad("a proof of possession does not verify"));
     }
     let device_id = random_id("d_");
     let sas = sas(&app.auth.identity.spki, &routine, &pairing.id);
@@ -195,11 +222,11 @@ pub async fn claim(State(app): State<App>, req: Request) -> Response {
     };
     match gov::claim_pairing(&app.pool, &claim, now).await {
         Ok(true) => {}
-        Ok(false) => return wrong(&app, &addr, "pairing no longer live").await,
+        Ok(false) => return Err("pairing no longer live"),
         Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-            return ApiError::conflict("this key is enrolled already").into_response();
+            return Ok(ApiError::conflict("this key is enrolled already").into_response());
         }
-        Err(e) => return ApiError::from(e).into_response(),
+        Err(e) => return Ok(ApiError::from(e).into_response()),
     }
     tracing::info!(device = device_id, pairing = pairing.id, "pairing claimed");
     let body = Claimed {
@@ -207,7 +234,7 @@ pub async fn claim(State(app): State<App>, req: Request) -> Response {
         core_spki: Some(b64(&app.auth.identity.spki)),
         sas: Some(sas),
     };
-    (StatusCode::ACCEPTED, Json(body)).into_response()
+    Ok((StatusCode::ACCEPTED, Json(body)).into_response())
 }
 
 #[utoipa::path(post, path = "/pair/status", operation_id = "pairStatus", tag = "pairing",

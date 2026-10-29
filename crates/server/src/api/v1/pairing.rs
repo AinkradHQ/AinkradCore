@@ -1,7 +1,8 @@
 //! Pairing, the approver's side (handshake spec §7.2 steps 1, 5 and 7): an `admin` device
 //! creates a pairing bound to a name, kind and scopes (never wider than its own), sees the
 //! claimant and the SAS the Core computed, and approves by sending that SAS back, or rejects.
-//! Elevation (step-up) for these calls comes with E1-09. The new device's side is `pair`.
+//! Every route needs `admin` (`scopes`); elevation (step-up) for them comes with E1-09.3. The
+//! new device's side is `pair`.
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
@@ -71,13 +72,6 @@ pub struct ApproveBody {
     pub scopes: Option<Vec<String>>,
 }
 
-fn admin(me: &Caller) -> Result<(), ApiError> {
-    match me.device.scopes.iter().any(|s| s == "admin") {
-        true => Ok(()),
-        false => Err(forbidden_scope()),
-    }
-}
-
 fn forbidden_scope() -> ApiError {
     ApiError::new(
         StatusCode::FORBIDDEN,
@@ -96,7 +90,6 @@ pub async fn create(
     Extension(me): Extension<Caller>,
     Json(b): Json<NewPairingBody>,
 ) -> ApiResult<PairingCreated> {
-    admin(&me)?;
     let mut scopes = b.scopes;
     scopes.sort();
     scopes.dedup();
@@ -176,12 +169,7 @@ async fn view(app: &App, id: &str) -> ApiResult<PairingView> {
     params(("id" = String, Path, description = "Pairing id, `p_…`")),
     responses((status = 200, description = "The pairing, and once claimed the claimant and the \
         SAS to compare. Needs `admin`", body = PairingView)))]
-pub async fn get(
-    State(app): State<App>,
-    Extension(me): Extension<Caller>,
-    Path(id): Path<String>,
-) -> ApiResult<PairingView> {
-    admin(&me)?;
+pub async fn get(State(app): State<App>, Path(id): Path<String>) -> ApiResult<PairingView> {
     view(&app, &id).await
 }
 
@@ -213,7 +201,6 @@ pub async fn approve(
     Path(id): Path<String>,
     Json(b): Json<ApproveBody>,
 ) -> ApiResult<PairingView> {
-    admin(&me)?;
     let by = Decider {
         actor: BY,
         device: Some(&me.device.id),
@@ -233,7 +220,6 @@ pub async fn reject(
     Extension(me): Extension<Caller>,
     Path(id): Path<String>,
 ) -> ApiResult<PairingView> {
-    admin(&me)?;
     let by = Decider {
         actor: BY,
         device: Some(&me.device.id),

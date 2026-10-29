@@ -156,43 +156,6 @@ pub async fn prune_limits(pool: &SqlitePool, now: i64) -> Result<u64, Error> {
     Ok(stale + over)
 }
 
-/// The global wrong-claim budget (§7.4): 20 wrong pairing claims from anywhere within 5
-/// minutes burn every live pairing.
-pub const PAIR_GLOBAL: &str = "pair:global";
-pub const PAIR_BUDGET: i64 = 20;
-pub const PAIR_WINDOW: i64 = 300;
-
-/// Counts one wrong pairing claim at `now`; `true` when that spends the budget, which then
-/// starts again.
-pub async fn spend_pair_budget(pool: &SqlitePool, now: i64) -> Result<bool, Error> {
-    let mut tx = crate::store::begin_write(pool).await?;
-    let row: Option<(i64, i64)> =
-        sqlx::query_as("SELECT fails, window_start FROM core_auth_limits WHERE key = ?")
-            .bind(PAIR_GLOBAL)
-            .fetch_optional(&mut *tx)
-            .await?;
-    let (mut fails, mut start) = row.unwrap_or((0, now));
-    if now - start >= PAIR_WINDOW {
-        (fails, start) = (0, now);
-    }
-    fails += 1;
-    let spent = fails >= PAIR_BUDGET;
-    if spent {
-        (fails, start) = (0, now);
-    }
-    sqlx::query(
-        "INSERT INTO core_auth_limits (key, fails, window_start) VALUES (?1, ?2, ?3) \
-         ON CONFLICT (key) DO UPDATE SET fails = ?2, window_start = ?3",
-    )
-    .bind(PAIR_GLOBAL)
-    .bind(fails)
-    .bind(start)
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    Ok(spent)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -36,6 +36,10 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/devices", "admin"),
     ("DELETE", "/api/v1/devices/{id}", "admin"),
     ("GET", "/api/v1/audit", "admin"),
+    ("POST", "/api/v1/pairings", "admin"),
+    ("GET", "/api/v1/pairings/{id}", "admin"),
+    ("POST", "/api/v1/pairings/{id}/approve", "admin"),
+    ("POST", "/api/v1/pairings/{id}/reject", "admin"),
 ];
 
 /// Whether `path` fits `template` segment by segment.

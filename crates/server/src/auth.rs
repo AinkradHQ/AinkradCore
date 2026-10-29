@@ -30,7 +30,7 @@ pub mod signed;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 
-pub use budget::AddressFailures;
+pub use budget::{AddressFailures, PairBudget};
 pub use identity::Identity;
 
 /// `|now − timestamp|` allowed, seconds.
@@ -88,6 +88,8 @@ pub struct Auth {
     pub challenge_limit: Limiter,
     /// Authentication failures per address, in memory (`AddressFailures`).
     pub failures: AddressFailures,
+    /// The global wrong-claim budget (`PairBudget`).
+    pub pair_budget: PairBudget,
 }
 
 impl Auth {
@@ -101,6 +103,7 @@ impl Auth {
             revoked: broadcast::channel(64).0,
             challenge_limit: Limiter::new(30, 0.5),
             failures: AddressFailures::default(),
+            pair_budget: PairBudget::default(),
         }
     }
 
