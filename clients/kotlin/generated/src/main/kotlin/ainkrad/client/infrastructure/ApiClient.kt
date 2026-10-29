@@ -44,7 +44,7 @@ open class ApiClient(
 
     private val authentications: kotlin.collections.Map<String, Authentication> by lazy {
         mapOf(
-                "device_key" to HttpBearerAuth("bearer"))
+                "device_signature" to ApiKeyAuth("header", "Ainkrad-Signature"))
     }
 
     companion object {

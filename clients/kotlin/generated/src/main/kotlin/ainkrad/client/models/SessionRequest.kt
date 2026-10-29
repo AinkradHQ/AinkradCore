@@ -15,27 +15,23 @@
 
 package ainkrad.client.models
 
-import ainkrad.client.models.Device
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual
 
 /**
- * A new device and its key: the only time the key is ever shown.
+ * 
  *
- * @param device 
- * @param key 
+ * @param challenge A live challenge issued for the signing device.
  */
 @Serializable
 
-data class IssuedDevice (
+data class SessionRequest (
 
-    @SerialName(value = "device")
-    val device: Device,
-
-    @SerialName(value = "key")
-    val key: kotlin.String
+    /* A live challenge issued for the signing device. */
+    @SerialName(value = "challenge")
+    val challenge: kotlin.String
 
 ) {
 

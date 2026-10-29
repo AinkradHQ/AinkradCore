@@ -8,6 +8,8 @@ these fails: a removed path, operation, schema, property, enum value or oneOf va
 is narrowed or changed; a property that is required now and was not (this also enforces the rule
 that every NEW field is `required = false`: a new property listed in `required` is "required now,
 not before"). A schema that is new as a whole is not compared: it has no old shape.
+
+A deliberate break is allowed only by its exact message in `<new-dir>/compat-allow.txt`.
 """
 import json
 import sys
@@ -82,6 +84,15 @@ def main(base, new):
         found = []
         walk(old, cur, "", found)
         problems += [f"{name}: {p}" for p in found]
+    allow_file = Path(new) / "compat-allow.txt"
+    allowed = set()
+    if allow_file.exists():
+        allowed = {l.strip() for l in allow_file.read_text().splitlines() if l.strip() and not l.startswith("#")}
+    for p in [p for p in problems if p in allowed]:
+        print("schema-compat: allowed by api/compat-allow.txt:", p, file=sys.stderr)
+    for a in sorted(allowed - set(problems)):
+        print("schema-compat: unused line in api/compat-allow.txt (delete it):", a, file=sys.stderr)
+    problems = [p for p in problems if p not in allowed]
     for p in problems:
         print("schema-compat:", p, file=sys.stderr)
     return 1 if problems else 0

@@ -26,6 +26,7 @@ import kotlinx.serialization.Contextual
  * @param code 
  * @param errorId `err_` and a ULID, unique to this answer: logged with it (and, for a refused write, audited as `api.refused`), for the app's \"Copy error\".
  * @param message 
+ * @param serverTime The server's clock in unix seconds, on a `clock_skew` refusal only (handshake spec §5.3).
  */
 @Serializable
 
@@ -39,7 +40,11 @@ data class ErrorBody (
     val errorId: kotlin.String,
 
     @SerialName(value = "message")
-    val message: kotlin.String
+    val message: kotlin.String,
+
+    /* The server's clock in unix seconds, on a `clock_skew` refusal only (handshake spec §5.3). */
+    @SerialName(value = "server_time")
+    val serverTime: kotlin.Long? = null
 
 ) {
 

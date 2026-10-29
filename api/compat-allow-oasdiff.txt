@@ -1,0 +1,8 @@
+GET /api/v1/devices the '/items/id' response's property type/format changed from 'integer'/'int64' to 'string'/'' for status '200'
+POST /api/v1/devices api removed without deprecation
+POST /api/v1/devices/pair api path removed without deprecation
+POST /api/v1/devices/pairing api path removed without deprecation
+DELETE /api/v1/devices/{id} the 'id' response's property type/format changed from 'integer'/'int64' to 'string'/'' for status '200'
+GET /api/v1/me the 'device/id' response's property type/format changed from 'integer'/'int64' to 'string'/'' for status '200'
+DELETE /api/v1/push-token the 'id' response's property type/format changed from 'integer'/'int64' to 'string'/'' for status '200'
+PUT /api/v1/push-token the 'id' response's property type/format changed from 'integer'/'int64' to 'string'/'' for status '200'

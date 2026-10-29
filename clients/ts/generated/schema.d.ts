@@ -29,39 +29,7 @@ export interface paths {
         };
         get: operations["listDevices"];
         put?: never;
-        post: operations["createDevice"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/devices/pair": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["pairDevice"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/devices/pairing": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["startPairing"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -78,7 +46,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Revokes at once, the calling device's own key included; the row stays, marked revoked. */
+        /** Revokes at once, the calling device included; the row stays, marked revoked. */
         delete: operations["revokeDevice"];
         options?: never;
         head?: never;
@@ -245,6 +213,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/handshake/challenge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createChallenge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/handshake/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -261,7 +261,7 @@ export interface components {
         };
         /** @description One audited change. */
         AuditEntry: {
-            /** @description Dotted: `device_key.created`, `setting.set`, …. */
+            /** @description Dotted: `device.revoked`, `setting.set`, …. */
             action: string;
             actor: components["schemas"]["EventActor"];
             at: components["schemas"]["Timestamp"];
@@ -281,15 +281,36 @@ export interface components {
             /** Format: int64 */
             next_before?: number | null;
         };
-        /** @description A device's key, without the key. */
+        Challenge: {
+            /** @description 32 random bytes, base64url; spend it once within `expires_in` seconds. */
+            challenge?: string | null;
+            /** Format: int64 */
+            expires_in?: number | null;
+        };
+        ChallengeRequest: {
+            /** @description The device that will answer it, `d_…`. */
+            device_id: string;
+        };
+        /** @description A device: who it is and what it may do. Never a key's private half: the Core has none. */
         Device: {
             created_at: components["schemas"]["Timestamp"];
-            /** Format: int64 */
-            id: number;
+            /** @description base64url SHA-256 of its routine public key: what pairing shows. */
+            fingerprint?: string | null;
+            /** @description `d_` and 26 characters. */
+            id: string;
+            /** @description Where its key lives, as the device claims it (not verified). */
+            key_storage?: string | null;
+            /** @description `device` (an app or CLI), `runner` or `passkey`. */
+            kind?: string | null;
             /** @description Marked at most once a minute. */
             last_used_at?: components["schemas"]["Timestamp"];
             name: string;
+            platform?: string | null;
             revoked_at?: components["schemas"]["Timestamp"];
+            /** @description What it may do (E1-09 enforces them). */
+            scopes?: string[] | null;
+            /** @description `pending`, `active`, `rejected`, `expired` or `locked`. */
+            status?: string | null;
         };
         /** @description A JSON error: a stable `code` and a message for people. */
         ErrorBody: {
@@ -300,6 +321,11 @@ export interface components {
              */
             error_id: string;
             message: string;
+            /**
+             * Format: int64
+             * @description The server's clock in unix seconds, on a `clock_skew` refusal only (handshake spec §5.3).
+             */
+            server_time?: number | null;
         };
         /**
          * @description One entry of the event stream. `seq` only grows: it is the replay cursor. New kinds may be
@@ -346,7 +372,10 @@ export interface components {
             api_minor?: number | null;
             /** @description The commit it was built from (short sha), when the build knew it. */
             git_sha?: string | null;
-            /** @description The Core identity key's fingerprint; null until the identity key exists (E1-07). */
+            /**
+             * @description `core_fp`: base64url SHA-256 of the Core identity key's SPKI, 43 characters. Signed
+             *     into every request (handshake spec §5.2).
+             */
             identity_fingerprint?: string | null;
             /** @description The server's crate version, `0.1.0`. */
             server_version?: string | null;
@@ -355,11 +384,6 @@ export interface components {
              *     `api_minor`.
              */
             supported_minors?: number[] | null;
-        };
-        /** @description A new device and its key: the only time the key is ever shown. */
-        IssuedDevice: {
-            device: components["schemas"]["Device"];
-            key: string;
         };
         /** @description The newest event's seq a client would be shown: the catch-up target. */
         LatestEvent: {
@@ -382,11 +406,8 @@ export interface components {
         };
         /** @description A device: who, by id and name. */
         Named: {
-            /** Format: int64 */
-            id: number;
-            name: string;
-        };
-        NewDevice: {
+            /** @description `d_` and 26 characters. */
+            id: string;
             name: string;
         };
         /** @description A page of a list. `next_after` is the cursor of the next page, absent on the last. */
@@ -394,17 +415,6 @@ export interface components {
             items: components["schemas"]["Event"][];
             /** Format: int64 */
             next_after?: number | null;
-        };
-        PairBody: {
-            /** @description The code the admin was shown, in any case. */
-            code: string;
-            /** @description What to call the new device. */
-            name: string;
-        };
-        Pairing: {
-            /** @description Six characters, letters and digits; shown to the user once. */
-            code: string;
-            expires_at: components["schemas"]["Timestamp"];
         };
         /** @description The 410 of a replay from below the retention floor (E1-04.4). */
         PastRetention: {
@@ -424,6 +434,19 @@ export interface components {
             sandbox?: boolean;
             /** @description The device token, hex, as the app got it from APNs. */
             token: string;
+        };
+        SessionGrant: {
+            /** @description Until when the session is elevated (E1-09); null when it is not. */
+            elevated_until?: components["schemas"]["Timestamp"];
+            expires_at?: components["schemas"]["Timestamp"];
+            /** @description The device's scopes. */
+            scopes?: string[] | null;
+            /** @description `s_…`: sent as `Ainkrad-Session` on every signed request. Not a secret. */
+            session_id?: string | null;
+        };
+        SessionRequest: {
+            /** @description A live challenge issued for the signing device. */
+            challenge: string;
         };
         /** @description A value to set: an integer in the setting's unit. */
         SetSetting: {
@@ -506,7 +529,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorBody"];
             };
         };
-        /** @description Wrong Host, or an Origin header */
+        /** @description Wrong Host (unknown_host), or an Origin header (origin_refused) */
         Forbidden: {
             headers: {
                 [name: string]: unknown;
@@ -542,7 +565,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorBody"];
             };
         };
-        /** @description Missing, invalid or revoked device key */
+        /** @description auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired */
         Unauthorized: {
             headers: {
                 [name: string]: unknown;
@@ -566,9 +589,9 @@ export interface operations {
                 before?: number;
                 /** @description At most this many (default and most 100). */
                 limit?: number;
-                /** @description Only actions starting with this: `device_key.` or `setting.set`. */
+                /** @description Only actions starting with this: `device.` or `setting.set`. */
                 kind?: string;
-                /** @description Only rows about this entity: its kind (`device_key`), or kind and id (`device_key:3`). */
+                /** @description Only rows about this entity: its kind (`device`), or kind and id (`device:3`). */
                 target?: string;
                 /** @description Only rows done by this kind of actor: `user` or `system`; another value is a 400. */
                 actor?: string;
@@ -606,7 +629,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every device key, revoked ones too; never a key */
+            /** @description Every device, revoked ones too */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -624,108 +647,19 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
-    createDevice: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["NewDevice"];
-            };
-        };
-        responses: {
-            /** @description The new device and its key, shown only now */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IssuedDevice"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            429: components["responses"]["TooManyRequests"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    pairDevice: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PairBody"];
-            };
-        };
-        responses: {
-            /** @description The new device and its key, shown only now; the code is spent (audited as `device.paired`). Needs no device key. 404 for a code that is unknown, used or expired, counted against the client address; 429 once too many are */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IssuedDevice"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            429: components["responses"]["TooManyRequests"];
-            500: components["responses"]["InternalError"];
-        };
-    };
-    startPairing: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description A pairing code, good once for 5 minutes (audited as `device.pairing_started`) */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Pairing"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            429: components["responses"]["TooManyRequests"];
-            500: components["responses"]["InternalError"];
-        };
-    };
     revokeDevice: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Device id */
-                id: number;
+                /** @description Device id, `d_…` */
+                id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The revoked device */
+            /** @description The revoked device. Its sessions end and its open sockets close with 4001 at once (audited as `device.revoked`) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -846,7 +780,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The calling device and the server's and the contract's versions: the key check on connect */
+            /** @description The calling device and the server's and the contract's versions: the signature check on connect */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1120,13 +1054,86 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The server's version and build, the contract minor and the minors it serves. Needs no device key */
+            /** @description The server's version and build, the contract minor and the minors it serves, and the Core identity fingerprint. Needs no signature */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["Handshake"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createChallenge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChallengeRequest"];
+            };
+        };
+        responses: {
+            /** @description A single-use challenge for the device, live 60 s. Always answered, for any well-formed device id; 429 past 30 a minute from one address */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Challenge"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createSession: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The device, `d_…` */
+                "Ainkrad-Device": string;
+                /** @description `ES256` */
+                "Ainkrad-Alg": string;
+                /** @description Unix seconds */
+                "Ainkrad-Timestamp": number;
+                /** @description 16 random bytes, base64url */
+                "Ainkrad-Nonce": string;
+                /** @description Raw r||s over the canonical string with session `-`, base64url */
+                "Ainkrad-Signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionRequest"];
+            };
+        };
+        responses: {
+            /** @description A 15-minute session. Signed with session `-`; a challenge that is unknown, used, expired or another device's is `auth_failed` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionGrant"];
                 };
             };
             400: components["responses"]["BadRequest"];

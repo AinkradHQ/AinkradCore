@@ -47,7 +47,7 @@ import io.ktor.http.ParametersBuilder
             @Suppress("UNCHECKED_CAST")
         open suspend fun getSetting(scope: kotlin.String, key: kotlin.String): HttpResponse<Setting> {
 
-            val localVariableAuthNames = listOf<String>("device_key")
+            val localVariableAuthNames = listOf<String>("device_signature")
 
             val localVariableBody = 
                     io.ktor.client.utils.EmptyContent
@@ -80,7 +80,7 @@ import io.ktor.http.ParametersBuilder
             @Suppress("UNCHECKED_CAST")
         open suspend fun listServerSettings(): HttpResponse<kotlin.collections.List<Setting>> {
 
-            val localVariableAuthNames = listOf<String>("device_key")
+            val localVariableAuthNames = listOf<String>("device_signature")
 
             val localVariableBody = 
                     io.ktor.client.utils.EmptyContent
@@ -114,7 +114,7 @@ import io.ktor.http.ParametersBuilder
             @Suppress("UNCHECKED_CAST")
         open suspend fun listSettings(scope: kotlin.String): HttpResponse<kotlin.collections.List<Setting>> {
 
-            val localVariableAuthNames = listOf<String>("device_key")
+            val localVariableAuthNames = listOf<String>("device_signature")
 
             val localVariableBody = 
                     io.ktor.client.utils.EmptyContent
@@ -149,7 +149,7 @@ import io.ktor.http.ParametersBuilder
             @Suppress("UNCHECKED_CAST")
         open suspend fun resetSetting(scope: kotlin.String, key: kotlin.String): HttpResponse<Setting> {
 
-            val localVariableAuthNames = listOf<String>("device_key")
+            val localVariableAuthNames = listOf<String>("device_signature")
 
             val localVariableBody = 
                     io.ktor.client.utils.EmptyContent
@@ -185,7 +185,7 @@ import io.ktor.http.ParametersBuilder
             @Suppress("UNCHECKED_CAST")
         open suspend fun setSetting(scope: kotlin.String, key: kotlin.String, setSetting: SetSetting): HttpResponse<Setting> {
 
-            val localVariableAuthNames = listOf<String>("device_key")
+            val localVariableAuthNames = listOf<String>("device_signature")
 
             val localVariableBody = setSetting
 
@@ -219,7 +219,7 @@ import io.ktor.http.ParametersBuilder
             @Suppress("UNCHECKED_CAST")
         open suspend fun settingHistory(scope: kotlin.String, key: kotlin.String): HttpResponse<kotlin.collections.List<SettingChange>> {
 
-            val localVariableAuthNames = listOf<String>("device_key")
+            val localVariableAuthNames = listOf<String>("device_signature")
 
             val localVariableBody = 
                     io.ktor.client.utils.EmptyContent

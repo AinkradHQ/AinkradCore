@@ -46,7 +46,7 @@ import io.ktor.http.ParametersBuilder
             @Suppress("UNCHECKED_CAST")
         open suspend fun latestEvent(): HttpResponse<LatestEvent> {
 
-            val localVariableAuthNames = listOf<String>("device_key")
+            val localVariableAuthNames = listOf<String>("device_signature")
 
             val localVariableBody = 
                     io.ktor.client.utils.EmptyContent
@@ -76,15 +76,15 @@ import io.ktor.http.ParametersBuilder
         * 
          * @param before Only rows with a &#x60;seq&#x60; below this (the previous page&#39;s &#x60;next_before&#x60;). (optional)
          * @param limit At most this many (default and most 100). (optional)
-         * @param kind Only actions starting with this: &#x60;device_key.&#x60; or &#x60;setting.set&#x60;. (optional)
-         * @param target Only rows about this entity: its kind (&#x60;device_key&#x60;), or kind and id (&#x60;device_key:3&#x60;). (optional)
+         * @param kind Only actions starting with this: &#x60;device.&#x60; or &#x60;setting.set&#x60;. (optional)
+         * @param target Only rows about this entity: its kind (&#x60;device&#x60;), or kind and id (&#x60;device:3&#x60;). (optional)
          * @param actor Only rows done by this kind of actor: &#x60;user&#x60; or &#x60;system&#x60;; another value is a 400. (optional)
          * @return AuditPage
         */
             @Suppress("UNCHECKED_CAST")
         open suspend fun listAudit(before: kotlin.Long?, limit: kotlin.Int?, kind: kotlin.String?, target: kotlin.String?, actor: kotlin.String?): HttpResponse<AuditPage> {
 
-            val localVariableAuthNames = listOf<String>("device_key")
+            val localVariableAuthNames = listOf<String>("device_signature")
 
             val localVariableBody = 
                     io.ktor.client.utils.EmptyContent
@@ -124,7 +124,7 @@ import io.ktor.http.ParametersBuilder
             @Suppress("UNCHECKED_CAST")
         open suspend fun listEvents(after: kotlin.Long?, limit: kotlin.Int?): HttpResponse<PageEvent> {
 
-            val localVariableAuthNames = listOf<String>("device_key")
+            val localVariableAuthNames = listOf<String>("device_signature")
 
             val localVariableBody = 
                     io.ktor.client.utils.EmptyContent
@@ -159,7 +159,7 @@ import io.ktor.http.ParametersBuilder
         */
         open suspend fun streamEvents(lastEventID: kotlin.Long?): HttpResponse<Unit> {
 
-            val localVariableAuthNames = listOf<String>("device_key")
+            val localVariableAuthNames = listOf<String>("device_signature")
 
             val localVariableBody = 
                     io.ktor.client.utils.EmptyContent

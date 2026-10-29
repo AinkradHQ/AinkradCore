@@ -31,6 +31,8 @@ src/Ainkrad.Client/Model/AbstractOpenAPISchema.cs
 src/Ainkrad.Client/Model/ApiVersion.cs
 src/Ainkrad.Client/Model/AuditEntry.cs
 src/Ainkrad.Client/Model/AuditPage.cs
+src/Ainkrad.Client/Model/Challenge.cs
+src/Ainkrad.Client/Model/ChallengeRequest.cs
 src/Ainkrad.Client/Model/Device.cs
 src/Ainkrad.Client/Model/ErrorBody.cs
 src/Ainkrad.Client/Model/Event.cs
@@ -38,16 +40,14 @@ src/Ainkrad.Client/Model/EventActor.cs
 src/Ainkrad.Client/Model/EventActorSystem.cs
 src/Ainkrad.Client/Model/EventActorUser.cs
 src/Ainkrad.Client/Model/Handshake.cs
-src/Ainkrad.Client/Model/IssuedDevice.cs
 src/Ainkrad.Client/Model/LatestEvent.cs
 src/Ainkrad.Client/Model/Me.cs
 src/Ainkrad.Client/Model/Named.cs
-src/Ainkrad.Client/Model/NewDevice.cs
 src/Ainkrad.Client/Model/PageEvent.cs
-src/Ainkrad.Client/Model/PairBody.cs
-src/Ainkrad.Client/Model/Pairing.cs
 src/Ainkrad.Client/Model/PastRetention.cs
 src/Ainkrad.Client/Model/PushToken.cs
+src/Ainkrad.Client/Model/SessionGrant.cs
+src/Ainkrad.Client/Model/SessionRequest.cs
 src/Ainkrad.Client/Model/SetSetting.cs
 src/Ainkrad.Client/Model/Setting.cs
 src/Ainkrad.Client/Model/SettingChange.cs

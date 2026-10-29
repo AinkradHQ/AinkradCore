@@ -23,6 +23,8 @@ src/main/kotlin/ainkrad/client/infrastructure/RequestMethod.kt
 src/main/kotlin/ainkrad/client/models/ApiVersion.kt
 src/main/kotlin/ainkrad/client/models/AuditEntry.kt
 src/main/kotlin/ainkrad/client/models/AuditPage.kt
+src/main/kotlin/ainkrad/client/models/Challenge.kt
+src/main/kotlin/ainkrad/client/models/ChallengeRequest.kt
 src/main/kotlin/ainkrad/client/models/Device.kt
 src/main/kotlin/ainkrad/client/models/ErrorBody.kt
 src/main/kotlin/ainkrad/client/models/Event.kt
@@ -30,16 +32,14 @@ src/main/kotlin/ainkrad/client/models/EventActor.kt
 src/main/kotlin/ainkrad/client/models/EventActorSystem.kt
 src/main/kotlin/ainkrad/client/models/EventActorUser.kt
 src/main/kotlin/ainkrad/client/models/Handshake.kt
-src/main/kotlin/ainkrad/client/models/IssuedDevice.kt
 src/main/kotlin/ainkrad/client/models/LatestEvent.kt
 src/main/kotlin/ainkrad/client/models/Me.kt
 src/main/kotlin/ainkrad/client/models/Named.kt
-src/main/kotlin/ainkrad/client/models/NewDevice.kt
 src/main/kotlin/ainkrad/client/models/PageEvent.kt
-src/main/kotlin/ainkrad/client/models/PairBody.kt
-src/main/kotlin/ainkrad/client/models/Pairing.kt
 src/main/kotlin/ainkrad/client/models/PastRetention.kt
 src/main/kotlin/ainkrad/client/models/PushToken.kt
+src/main/kotlin/ainkrad/client/models/SessionGrant.kt
+src/main/kotlin/ainkrad/client/models/SessionRequest.kt
 src/main/kotlin/ainkrad/client/models/SetSetting.kt
 src/main/kotlin/ainkrad/client/models/Setting.kt
 src/main/kotlin/ainkrad/client/models/SettingChange.kt
