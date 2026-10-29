@@ -164,6 +164,7 @@
           "auth.lockout_cleared",
           "auth.step_up",
           "device.enrolled",
+          "device.last_admin_refused",
           "device.renamed",
           "device.revoked",
           "device.scopes_changed",

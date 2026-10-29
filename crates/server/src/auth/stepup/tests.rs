@@ -35,3 +35,39 @@ fn the_device_budget_counts_attempts_and_gives_back_successes() {
     f.clear("d_a");
     assert!(f.take("d_a", STEP_UP.window));
 }
+
+/// Drop-safety: the attempt is counted before anything awaits, so a request dropped after
+/// `prove_stepup` (before its persisted failure is written) has still spent its budget.
+#[test]
+fn an_attempt_counts_before_anything_awaits() {
+    let auth = Auth::new(std::sync::Arc::new(crate::auth::Identity::ephemeral()));
+    let s = auth.issue_session("d_a", 0);
+    let device = Device {
+        seq: 1,
+        id: "d_a".to_owned(),
+        kind: "device".to_owned(),
+        name: "a".to_owned(),
+        routine_spki: vec![],
+        fingerprint: String::new(),
+        stepup_spki: None,
+        platform: None,
+        key_storage: None,
+        scopes: vec![],
+        status: "active".to_owned(),
+        created_at: String::new(),
+        last_used_at: None,
+        revoked_at: None,
+    };
+    for _ in 0..STEP_UP.threshold {
+        let c = auth.stepup_challenge(&s.id, "d_a", 0).unwrap();
+        assert_eq!(
+            auth.prove_stepup("ip:x", &device, &s.id, &c, None, 0),
+            Proof::Failed
+        );
+    }
+    let c = auth.stepup_challenge(&s.id, "d_a", 0).unwrap();
+    assert_eq!(
+        auth.prove_stepup("ip:x", &device, &s.id, &c, None, 0),
+        Proof::Throttled
+    );
+}

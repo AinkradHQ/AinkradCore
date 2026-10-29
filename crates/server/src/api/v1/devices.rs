@@ -16,6 +16,8 @@ use super::{ApiError, ApiResult, BY, Caller};
 use crate::api::App;
 use crate::auth::crypto::is_id;
 use crate::store::gov::{self, Refused, list_devices, set_push_token};
+use ainkrad_core::audit::NewAuditEvent;
+use serde_json::json;
 
 /// A device: who it is and what it may do. Never a key's private half: the Core has none.
 #[derive(Debug, Serialize, ToSchema)]
@@ -82,9 +84,33 @@ pub async fn revoke(
         return Err(ApiError::not_found("no such device"));
     }
     let now = app.clock.now();
-    refused(gov::revoke_from_device(&app.pool, &id, BY, &me.device.id, &now).await?)?;
+    let r = gov::revoke_from_device(&app.pool, &id, BY, &me.device.id, &now).await?;
+    last_admin(&app, &me, &id, "revoke", &r).await;
+    refused(r)?;
     app.auth.revoked(&id);
     current(&app, &id).await
+}
+
+/// Audits a last-admin refusal of `op` on `id` as `device.last_admin_refused`, once per device
+/// per window (`auth::refusals`): repeats are only counted, so they never grow the audit log.
+async fn last_admin<T>(app: &App, me: &Caller, id: &str, op: &str, r: &Result<T, Refused>) {
+    if !matches!(r, Err(Refused::LastAdmin))
+        || !app
+            .auth
+            .refusals
+            .note(&format!("last_admin:{id}"), app.clock.unix())
+    {
+        return;
+    }
+    let event = NewAuditEvent {
+        actor: BY,
+        action: "device.last_admin_refused".to_owned(),
+        entity: None,
+        details: json!({"device": id, "by_device": me.device.id, "op": op}).to_string(),
+    };
+    if let Err(e) = crate::store::audit::append_one(&app.pool, &event).await {
+        tracing::error!(error = %e, "auditing a last-admin refusal failed");
+    }
 }
 
 /// A refusal from `store::gov::manage` as its answer.
@@ -166,7 +192,9 @@ pub async fn set_scopes(
         return Err(ApiError::not_found("no such device"));
     }
     let mine = &me.device.scopes;
-    refused(gov::set_device_scopes(&app.pool, &id, &b.scopes, mine, BY, &me.device.id).await?)?;
+    let r = gov::set_device_scopes(&app.pool, &id, &b.scopes, mine, BY, &me.device.id).await?;
+    last_admin(&app, &me, &id, "set_scopes", &r).await;
+    refused(r)?;
     app.auth.rescoped(&id);
     current(&app, &id).await
 }

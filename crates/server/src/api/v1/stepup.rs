@@ -5,7 +5,9 @@
 //! elevation it had; it is audited as `auth.step_up`. Nothing else ever extends it. Elevation
 //! lives with the session in memory, so revocation and a restart end it.
 //!
-//! Every failed proof is the same 403 `step_up_failed`; a spent budget is 429.
+//! Every failed proof is the same 403 `step_up_failed`, no sooner than `gate::FAIL_FLOOR`; a
+//! spent budget is a 429 that writes nothing. Neither is audited per request
+//! (`trace::AGGREGATED`): a lock is audited once (`auth.lockout`), a grant once (`auth.step_up`).
 
 use ainkrad_core::audit::{AuditEntity, NewAuditEvent};
 use ainkrad_core::settings::{Key, Scope};
@@ -96,6 +98,7 @@ async fn elevate(
     b: &StepUpRequest,
 ) -> Result<Response, ApiError> {
     let now = app.clock.unix();
+    let started = tokio::time::Instant::now();
     let key = format!("stepup:{}", me.device.id);
     if let Some(until) = gov::locked_until(&app.pool, &[&key], now).await? {
         return Ok(throttled(until - now));
@@ -118,6 +121,7 @@ async fn elevate(
         Proof::Failed => {
             tracing::warn!(device = me.device.id, "step-up refused: proof failed");
             gov::record_failure(&app.pool, &key, STEP_UP, now).await?;
+            tokio::time::sleep_until(started + super::gate::FAIL_FLOOR).await;
             return Err(failed());
         }
     }

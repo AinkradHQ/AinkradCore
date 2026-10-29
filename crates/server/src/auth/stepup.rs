@@ -17,7 +17,10 @@
 //!   address through `AddressFailures`. A step-up failure is authenticated (the routine
 //!   signature verified), so a per-device key is safe: only the device can spend it.
 //! - **Uniform:** no step-up key, an unknown, used, expired or other session's challenge, and a
-//!   bad signature are one answer (`step_up_failed`).
+//!   bad signature are one answer (`step_up_failed`), each after one signature verify (a dummy
+//!   one when there is nothing to check) and no sooner than the gate's `FAIL_FLOOR`.
+//! - **The host's socket** (`ip:local`) is never refused by the address budget
+//!   (`AddressFailures`), so outside traffic cannot stop the operator stepping up.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -42,9 +45,12 @@ pub enum Proof {
     Throttled,
 }
 
-/// Failed proofs per device in this process: (failures, window start).
-// ponytail: one entry per device that ever failed; devices are authenticated, so the map is
-// bounded by the device table.
+/// Devices tracked before windows that are over are swept.
+pub const FAILURES_MAX: usize = 4096;
+
+/// Failed proofs per device in this process: (failures, window start). Only an authenticated
+/// device makes an entry, so it is bounded by the device table; past [`FAILURES_MAX`] the
+/// entries whose window is over are dropped.
 #[derive(Default)]
 pub struct StepUpFailures(Mutex<HashMap<String, (i64, i64)>>);
 
@@ -52,6 +58,9 @@ impl StepUpFailures {
     /// Counts an attempt as a failure up front; `false` when the budget is spent.
     fn take(&self, device: &str, now: i64) -> bool {
         let mut all = self.0.lock().unwrap();
+        if all.len() >= FAILURES_MAX {
+            all.retain(|_, (_, start)| now - *start < STEP_UP.window);
+        }
         let slot = all.entry(device.to_owned()).or_insert((0, now));
         if now - slot.1 >= STEP_UP.window {
             *slot = (0, now);
@@ -109,14 +118,15 @@ impl Auth {
                 .and_then(|s| s.stepup_challenge.take())
                 .is_some_and(|(c, exp)| exp > now && c.as_bytes() == challenge.as_bytes())
         };
-        let core_fp = &self.identity.fp;
-        let ok = live
-            && match (&device.stepup_spki, sig) {
-                (Some(key), Some(sig)) => {
-                    crypto::verify(key, &message(core_fp, &device.id, session, challenge), sig)
-                }
-                _ => false,
-            };
+        let m = message(&self.identity.fp, &device.id, session, challenge);
+        // One verify whatever failed first, so every refusal costs the same.
+        let ok = match (live, &device.stepup_spki, sig) {
+            (true, Some(key), Some(sig)) => crypto::verify(key, &m, sig),
+            _ => {
+                crypto::dummy_verify(&m, sig.unwrap_or(&[0; 64]));
+                false
+            }
+        };
         if ok {
             self.stepup_failures.give_back(&device.id);
             return Proof::Verified;

@@ -70,7 +70,7 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
 ];
 
 /// Whether `path` fits `template` segment by segment.
-fn fits(template: &str, path: &str) -> bool {
+pub(super) fn fits(template: &str, path: &str) -> bool {
     let (t, p): (Vec<&str>, Vec<&str>) = (template.split('/').collect(), path.split('/').collect());
     t.len() == p.len()
         && t.iter()

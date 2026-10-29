@@ -27,6 +27,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "device.renamed",
     "device.scopes_changed",
     "device.enrolled",
+    "device.last_admin_refused",
     "device.revoked",
     "pairing.approved",
     "pairing.burned",

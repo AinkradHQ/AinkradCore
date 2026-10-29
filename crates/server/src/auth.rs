@@ -26,6 +26,7 @@ pub mod budget;
 pub mod crypto;
 pub mod identity;
 pub mod pairing;
+pub mod refusals;
 pub mod signed;
 pub mod stepup;
 #[cfg(any(test, feature = "test-support"))]
@@ -103,6 +104,8 @@ pub struct Auth {
     pub pair_budget: PairBudget,
     /// Failed step-up proofs per device (`stepup`).
     pub stepup_failures: StepUpFailures,
+    /// Refusals counted instead of audited one row each (`refusals`).
+    pub refusals: refusals::Refusals,
     /// Devices whose scopes changed: their sockets close with 4003 (§10).
     rescoped: broadcast::Sender<String>,
 }
@@ -120,6 +123,7 @@ impl Auth {
             failures: AddressFailures::default(),
             pair_budget: PairBudget::default(),
             stepup_failures: StepUpFailures::default(),
+            refusals: refusals::Refusals::default(),
             rescoped: broadcast::channel(64).0,
         }
     }
