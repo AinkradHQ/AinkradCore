@@ -1,0 +1,32 @@
+[package]
+name = "ainkrad-ctl"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# The reference client (E1-14): an independent implementation of the handshake spec
+# (`Docs/Specs/2026-10-29-core-handshake-spec.md`), written from the spec and never from the
+# server's code, so a server that drifts from the spec fails here.
+[dependencies]
+base64 = "0.22.1"
+futures-util = "0.3.34"
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", features = ["client", "http1"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
+ring = "0.17.14"
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tokio = { version = "1.54.0", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
+# Over the stream we open ourselves (Unix, TCP or TLS): no TLS feature of its own.
+tokio-tungstenite = "0.29.0"
+webpki-roots = "1.0.10"
+zeroize = "1.9.1"
+
+[dev-dependencies]
+# A test CA for the public (TLS) listener's certificate.
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
