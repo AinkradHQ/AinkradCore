@@ -21,7 +21,7 @@
 use serde_json::{Map, Value, json};
 use utoipa::OpenApi;
 
-use super::{audit, devices, events, me, pairing, settings, types};
+use super::{audit, devices, events, handshake, me, pairing, settings, types};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -35,6 +35,7 @@ use super::{audit, devices, events, me, pairing, settings, types};
         events::replay,
         events::ws,
         events::latest,
+        handshake::handshake,
         me::me,
         audit::list,
         pairing::start,

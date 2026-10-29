@@ -25,6 +25,7 @@ mod events;
 mod me;
 mod modules;
 mod pairing;
+mod preauth;
 mod settings;
 
 pub(super) const NOW: &str = "2026-10-22T10:00:00.000Z";

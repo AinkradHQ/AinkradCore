@@ -8,6 +8,7 @@ git_push.sh
 src/Ainkrad.Client/Ainkrad.Client.csproj
 src/Ainkrad.Client/Api/DevicesApi.cs
 src/Ainkrad.Client/Api/EventsApi.cs
+src/Ainkrad.Client/Api/HandshakeApi.cs
 src/Ainkrad.Client/Api/SettingsApi.cs
 src/Ainkrad.Client/Client/ApiClient.cs
 src/Ainkrad.Client/Client/ApiException.cs
@@ -36,6 +37,7 @@ src/Ainkrad.Client/Model/Event.cs
 src/Ainkrad.Client/Model/EventActor.cs
 src/Ainkrad.Client/Model/EventActorSystem.cs
 src/Ainkrad.Client/Model/EventActorUser.cs
+src/Ainkrad.Client/Model/Handshake.cs
 src/Ainkrad.Client/Model/IssuedDevice.cs
 src/Ainkrad.Client/Model/LatestEvent.cs
 src/Ainkrad.Client/Model/Me.cs

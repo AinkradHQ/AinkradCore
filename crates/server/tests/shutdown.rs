@@ -1,5 +1,6 @@
-//! A clean stop: on SIGTERM `serve` closes a connected client's event socket with 1012 (so it
-//! reconnects to the next server), checkpoints the database and exits 0.
+//! A clean stop: on SIGTERM `serve` stops accepting, closes a connected client's event socket
+//! with 1012 (so it reconnects to the next server), checkpoints the database and exits 0
+//! within its grace. Requests in flight finishing is `tests/gateway/drain.rs`.
 
 use std::process::Command;
 use std::time::Duration;
@@ -28,8 +29,9 @@ async fn sigterm_closes_event_sockets_checkpoints_and_exits_zero() {
         .unwrap()
         .port();
     let bind = format!("127.0.0.1:{port}");
+    let listen = format!("loopback:{port}");
     let mut server = tokio::process::Command::new(env!("CARGO_BIN_EXE_ainkrad-core-server"))
-        .args(["serve", db_arg, "--bind", &bind])
+        .args(["serve", db_arg, "--listen", &listen])
         .stderr(std::fs::File::create(dir.join("server.log")).unwrap())
         .kill_on_drop(true)
         .spawn()
@@ -65,6 +67,10 @@ async fn sigterm_closes_event_sockets_checkpoints_and_exits_zero() {
         None
     });
     assert_eq!(close.await.unwrap(), Some(1012), "a clean close: reconnect");
+    assert!(
+        tokio::net::TcpStream::connect(&bind).await.is_err(),
+        "no longer accepting"
+    );
     let status = tokio::time::timeout(Duration::from_secs(15), server.wait())
         .await
         .expect("serve stops within its grace")

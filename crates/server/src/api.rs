@@ -9,15 +9,18 @@
 //!   through: keys travel in `Authorization: Bearer`, never in a URL that proxies and logs
 //!   keep.
 //!
-//! Then a live device key (`v1`); nothing answers without one, loopback included, except
-//! trading a pairing code for a key.
+//! Then a live device key (`v1`), checked before routing; nothing answers without one,
+//! loopback included, except the pre-auth routes (`gateway::preauth`): `/handshake`,
+//! trading a pairing code for a key, and `/healthz`.
 //!
 //! The runner endpoint is not here: runners reconnect through the rebuilt hub (E1-11).
 
 use std::sync::Arc;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, Uri, header};
+use axum::routing::get;
 use sqlx::SqlitePool;
 
 use crate::scheduler::Clock;
@@ -68,10 +71,19 @@ impl App {
     }
 }
 
+/// The whole surface: the pre-auth routes and the client API, behind the pre-auth gate
+/// (`gateway::preauth`), which runs before routing.
 pub fn router(app: App) -> Router {
-    Router::new()
+    use crate::gateway::preauth;
+    let preauth_routes = Router::new()
+        .route("/handshake", get(v1::handshake::handshake))
+        .route("/healthz", get(preauth::healthz))
         .merge(v1::pairing_router(app.clone()))
-        .merge(v1::router(app))
+        .layer(DefaultBodyLimit::max(preauth::PREAUTH_BODY));
+    Router::new()
+        .merge(preauth_routes)
+        .merge(v1::router(app.clone()))
+        .layer(axum::middleware::from_fn_with_state(app, preauth::gate))
 }
 
 /// The bearer token of an `Authorization: Bearer <token>` header.
@@ -84,13 +96,17 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
 
 /// The shared checks as a status and reason: the `Host`, no `Origin`, and a query string
 /// only when `query_ok` accepts it.
-fn refusal(
+pub(crate) fn refusal(
     app: &App,
     uri: &Uri,
     headers: &HeaderMap,
     query_ok: fn(&str) -> bool,
 ) -> Option<(StatusCode, &'static str)> {
-    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
+    // HTTP/2 carries the host as the `:authority`, which hyper puts in the URI.
+    let host = match headers.get(header::HOST) {
+        Some(h) => h.to_str().ok(),
+        None => uri.authority().map(|a| a.as_str()),
+    };
     if !host.is_some_and(|h| h.eq_ignore_ascii_case(&app.host)) {
         return Some((StatusCode::FORBIDDEN, "unknown host"));
     }
