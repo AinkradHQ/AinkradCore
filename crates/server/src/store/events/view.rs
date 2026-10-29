@@ -133,23 +133,35 @@ pub async fn resume(
     Ok(Ok(lo))
 }
 
+/// A page of a view.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Page {
+    /// The view's events, each with the global seq it stands at.
+    pub events: Vec<(i64, StoredEvent)>,
+    /// How far the log was examined: on a short page, the snapshot's newest global seq (hidden
+    /// events up to it need not be scanned again); on a full page, its last event's.
+    pub scanned_to: i64,
+}
+
 /// Up to `limit` (at most [`MAX_EVENTS`]) of the view's events after the global seq `after`,
-/// oldest first, each numbered in the view, with the global seq it stands at; or
-/// [`PastRetention`] (in the view's numbers) when some were trimmed.
+/// oldest first, each numbered in the view; or [`PastRetention`] (in the view's numbers) when
+/// some were trimmed. Read it in one snapshot (a transaction).
 pub async fn read(
     conn: &mut SqliteConnection,
     view: View,
     after: i64,
     limit: u32,
-) -> Result<Result<Vec<(i64, StoredEvent)>, PastRetention>, sqlx::Error> {
+) -> Result<Result<Page, PastRetention>, sqlx::Error> {
     let (global, floor) = floor_of(conn, view).await?;
     if after < global {
         return Ok(Err(PastRetention { floor }));
     }
     let q = format!(
-        "SELECT e.seq, e.at, e.kind, e.payload, {} AS vseq FROM events e \
-         JOIN event_views v ON v.seq = e.seq \
-         WHERE e.seq > ? AND v.scope IN {} ORDER BY e.seq LIMIT ?",
+        // Walks `event_views` by seq and stops at the limit (`+` keeps SQLite from sorting
+        // every visible row first).
+        "SELECT e.seq, e.at, e.kind, e.payload, {} AS vseq FROM event_views v \
+         JOIN events e ON e.seq = v.seq \
+         WHERE v.seq > ? AND +v.scope IN {} ORDER BY v.seq LIMIT ?",
         view.seq_expr(),
         view.scopes_sql()
     );
@@ -162,9 +174,18 @@ pub async fn read(
     )> = sqlx::query_as(AssertSqlSafe(q))
         .bind(after)
         .bind(limit.min(MAX_EVENTS))
-        .fetch_all(conn)
+        .fetch_all(&mut *conn)
         .await?;
-    Ok(Ok(rows
+    let scanned_to = match rows.len() < limit.min(MAX_EVENTS) as usize {
+        true => {
+            sqlx::query_scalar("SELECT max(?, coalesce(max(seq), 0)) FROM events")
+                .bind(after)
+                .fetch_one(&mut *conn)
+                .await?
+        }
+        false => rows.last().map_or(after, |r| r.0),
+    };
+    let events = rows
         .into_iter()
         .map(|(global, at, kind, payload, seq)| {
             (
@@ -177,7 +198,8 @@ pub async fn read(
                 },
             )
         })
-        .collect()))
+        .collect();
+    Ok(Ok(Page { events, scanned_to }))
 }
 
 /// A client's HTTP replay: the view's events after its view cursor `after`, in one snapshot.
@@ -191,7 +213,7 @@ pub async fn replay(
     let got = match resume(&mut tx, view, after).await? {
         Ok(global) => read(&mut tx, view, global, limit)
             .await?
-            .map(|page| page.into_iter().map(|(_, e)| e).collect()),
+            .map(|page| page.events.into_iter().map(|(_, e)| e).collect()),
         Err(past) => Err(past),
     };
     tx.commit().await?;

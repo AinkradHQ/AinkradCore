@@ -301,8 +301,8 @@ async fn stream(
                     break 'live End::Failed;
                 }
             };
-            let full = page.len() == cfg.page as usize;
-            for (g, e) in page {
+            let full = page.events.len() == cfg.page as usize;
+            for (g, e) in page.events {
                 let seq = e.seq;
                 let text = serde_json::to_string(&Event::from(e)).unwrap_or_default();
                 match tokio::time::timeout(
@@ -321,6 +321,8 @@ async fn stream(
                 }
             }
             if !full {
+                // Every hidden event up to the snapshot's head was passed over: never again.
+                global = global.max(page.scanned_to);
                 break;
             }
         }
@@ -393,7 +395,7 @@ async fn read(
     v: View,
     global: i64,
     limit: u32,
-) -> Result<Result<Vec<(i64, StoredEvent)>, crate::store::events::PastRetention>, sqlx::Error> {
+) -> Result<Result<view::Page, crate::store::events::PastRetention>, sqlx::Error> {
     let mut tx = app.pool.begin().await?;
     let got = view::read(&mut tx, v, global, limit).await?;
     tx.commit().await?;

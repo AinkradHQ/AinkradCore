@@ -147,3 +147,41 @@ async fn a_kind_may_not_be_visible_to_runner_and_audit_is_admin_only() {
         .unwrap();
     assert_eq!(scope, "admin");
 }
+
+#[tokio::test]
+async fn a_short_page_says_how_far_hidden_events_were_passed_over() {
+    let db = db().await;
+    let pool = &db.pool;
+    emit(pool, &["ops.line"]).await;
+    emit(pool, &["term.out"; 50]).await;
+    let mut tx = pool.begin().await.unwrap();
+    let page = read(&mut tx, reader(), 0, 10).await.unwrap().unwrap();
+    assert_eq!(page.events.len(), 1);
+    assert_eq!(page.scanned_to, 51, "the snapshot's head");
+    let page = read(&mut tx, reader(), 51, 10).await.unwrap().unwrap();
+    assert_eq!((page.events.len(), page.scanned_to), (0, 51));
+    let full = read(&mut tx, View::all(), 0, 10).await.unwrap().unwrap();
+    assert_eq!(full.scanned_to, 10, "a full page: its last event");
+}
+
+/// Migration 0004 reverts cleanly and applies again, rebuilding the totals from the log.
+#[tokio::test]
+async fn the_visibility_migration_reverts_and_reapplies() {
+    use crate::store::migrate::{CORE, CORE_MIGRATIONS, migrate_core, undo};
+    let db = db().await;
+    let pool = &db.pool;
+    emit(pool, &["ops.line", "term.out", "ops.line"]).await;
+    undo(pool, CORE, CORE_MIGRATIONS, 3).await.unwrap();
+    let col: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pragma_table_info('event_kinds') WHERE name = 'scope'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(col, 0);
+    migrate_core(pool).await.unwrap();
+    // Kinds come back `read` (re-registration sets their scope again at start).
+    assert_eq!(head(pool, reader()).await.unwrap(), (3, 0));
+    emit(pool, &["ops.line"]).await;
+    assert_eq!(head(pool, View::all()).await.unwrap().0, 4);
+}

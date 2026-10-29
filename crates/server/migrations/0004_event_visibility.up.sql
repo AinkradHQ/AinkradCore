@@ -35,7 +35,6 @@ CREATE TABLE event_views (
     n_agent    INTEGER NOT NULL,
     n_admin    INTEGER NOT NULL
 );
-CREATE INDEX event_views_scope ON event_views (scope, seq);
 
 -- The events already there, counted from the oldest kept one (trimmed ones are not counted, so
 -- a full view's seq restarts at the count kept: no client has shipped yet).
