@@ -4,8 +4,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use ainkrad_core::ids::UserId;
 
 use super::*;
+use crate::store::connect;
 use crate::store::gov::issue_device_key;
-use crate::store::{MIGRATOR, connect};
+use crate::store::migrate::{CORE, CORE_MIGRATIONS, migrate_core, undo};
 
 /// A migrated database in its own temp dir, removed on drop.
 struct Db {
@@ -266,14 +267,14 @@ async fn migrates_up_down_up_with_events() {
     let db = db().await;
     append(&db.pool, &new_event("thing.created")).await.unwrap();
     // Undo the baseline: dropping the table must not trip the delete trigger.
-    MIGRATOR.undo(&db.pool, 0).await.unwrap();
+    undo(&db.pool, CORE, CORE_MIGRATIONS, 0).await.unwrap();
     let present: i64 =
         sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name = 'audit_events'")
             .fetch_one(&db.pool)
             .await
             .unwrap();
     assert_eq!(present, 0);
-    MIGRATOR.run(&db.pool).await.unwrap();
+    migrate_core(&db.pool).await.unwrap();
     assert_eq!(count(&db.pool).await, 0);
     append(&db.pool, &new_event("thing.created")).await.unwrap();
     let err = sqlx::query("DELETE FROM audit_events")

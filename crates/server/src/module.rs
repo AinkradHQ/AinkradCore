@@ -7,8 +7,11 @@
 //! origin, rate limits and the device key have been checked, and `Device` and `Client` are in
 //! the request extensions.
 //!
-//! Deliberately not here yet: migrations (E1-03.2 gives them a namespaced runner), event kinds
-//! (E1-04.2), scopes (E1-09.1) and scheduler jobs (E2-11). Each lands on this trait with its own
+//! A module's migrations run in their own namespace, after the platform's, and may touch only
+//! its own `<id>_` tables (`crate::store::migrate`).
+//!
+//! Deliberately not here yet: event kinds (E1-04.2), scopes (E1-09.1) and scheduler jobs
+//! (E2-11). Each lands on this trait with its own
 //! consumer; guessing their shape now would be speculation.
 
 use std::collections::HashSet;
@@ -17,19 +20,25 @@ use std::sync::Arc;
 use axum::Router;
 
 use crate::api::App;
+use crate::store::Migration;
 
 /// A backend module mounted on the Core.
 pub trait Module: Send + Sync + 'static {
-    /// Stable lowercase id: the route prefix `/modules/<id>/v1` and, from E1-03, the table
-    /// prefix `<id>_`. Letters, digits and `_`, starting with a letter.
+    /// Stable lowercase id: the route prefix `/modules/<id>/v1`, the migration namespace and
+    /// the table prefix `<id>_`. Letters, digits and `_`, starting with a letter.
     fn id(&self) -> &'static str;
 
     /// The module's routes, relative to its prefix.
     fn routes(&self) -> Router<App>;
+
+    /// The module's migrations, oldest first (`crate::store::migrate::migrate_modules`).
+    fn migrations(&self) -> &'static [Migration] {
+        &[]
+    }
 }
 
 /// Whether `id` is a legal module id.
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     let mut chars = id.chars();
     chars.next().is_some_and(|c| c.is_ascii_lowercase())
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')

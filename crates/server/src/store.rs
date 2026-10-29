@@ -1,4 +1,4 @@
-//! SQLite storage: one pool, WAL journal, reversible migrations from `migrations/`.
+//! SQLite storage: one pool, WAL journal, namespaced reversible migrations (`migrate`).
 
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
@@ -7,7 +7,6 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use sqlx::Transaction;
-use sqlx::migrate::Migrator;
 use sqlx::sqlite::{
     Sqlite, SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePool,
     SqlitePoolOptions,
@@ -18,11 +17,11 @@ pub mod audit;
 mod backup;
 pub mod events;
 pub mod gov;
+pub mod migrate;
 pub mod settings;
 
 pub use backup::{BackupError, backup, restore};
-
-pub static MIGRATOR: Migrator = sqlx::migrate!();
+pub use migrate::{MigrateError, Migration};
 
 /// What the store keeps of a device key or pairing code: its SHA-256, never the key. Keys are
 /// random, so an unsalted digest is enough.
@@ -98,7 +97,9 @@ pub async fn begin_write(pool: &SqlitePool) -> Result<WriteTx, sqlx::Error> {
     Ok(WriteTx { tx, _turn: turn })
 }
 
-/// Opens (creating if missing) the database at `path` and applies pending migrations.
+/// Opens (creating if missing) the database at `path` and applies the platform's pending
+/// migrations. Modules' migrations come after, with `migrate::migrate_modules`. A migration refusal is a `sqlx::Error::Configuration` holding
+/// the `MigrateError`.
 pub async fn connect(path: &Path) -> Result<SqlitePool, sqlx::Error> {
     let options = SqliteConnectOptions::new()
         .filename(path)
@@ -107,7 +108,10 @@ pub async fn connect(path: &Path) -> Result<SqlitePool, sqlx::Error> {
         .foreign_keys(true)
         .busy_timeout(Duration::from_secs(5));
     let pool = SqlitePoolOptions::new().connect_with(options).await?;
-    MIGRATOR.run(&pool).await?;
+    migrate::migrate_core(&pool).await.map_err(|e| match e {
+        MigrateError::Database(e) => e,
+        e => sqlx::Error::Configuration(Box::new(e)),
+    })?;
     Ok(pool)
 }
 
@@ -162,9 +166,11 @@ mod tests {
         assert_eq!(busy, 5000);
 
         assert_eq!(tables_present(&pool).await, TABLES.len());
-        MIGRATOR.undo(&pool, 0).await.unwrap();
+        migrate::undo(&pool, migrate::CORE, migrate::CORE_MIGRATIONS, 0)
+            .await
+            .unwrap();
         assert_eq!(tables_present(&pool).await, 0);
-        MIGRATOR.run(&pool).await.unwrap();
+        migrate::migrate_core(&pool).await.unwrap();
         assert_eq!(tables_present(&pool).await, TABLES.len());
 
         pool.close().await;

@@ -18,7 +18,7 @@ use std::time::Duration;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqlitePool};
 use sqlx::{Connection, Executor};
 
-use super::MIGRATOR;
+use super::migrate::CORE_MIGRATIONS;
 
 #[derive(Debug)]
 pub enum BackupError {
@@ -107,12 +107,12 @@ async fn validate(copy: &Path) -> Result<(), BackupError> {
         Ok(rows) => return Err(BackupError::Invalid(rows.join("; "))),
         Err(e) => return Err(BackupError::Invalid(e.to_string())),
     }
-    let found: Option<i64> = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+    let found: Option<i64> = sqlx::query_scalar("SELECT max(version) FROM _migrations_core")
         .fetch_one(&mut conn)
         .await
         .map_err(|_| BackupError::Invalid("not a Core database".to_owned()))?;
     let found = found.ok_or_else(|| BackupError::Invalid("no migrations applied".to_owned()))?;
-    let supported = MIGRATOR.iter().map(|m| m.version).max().unwrap_or(0);
+    let supported = CORE_MIGRATIONS.last().map_or(0, |m| m.version);
     if found > supported {
         return Err(BackupError::NewerSchema { found, supported });
     }
