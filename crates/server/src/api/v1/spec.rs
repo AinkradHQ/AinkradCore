@@ -32,7 +32,8 @@ use crate::module::Module;
 use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{
-    audit, devices, events, handshake, me, pair, pairing, runners, session, settings, types,
+    audit, devices, events, handshake, lockouts, me, pair, pairing, runners, session, settings,
+    stepup, types,
 };
 
 #[derive(OpenApi)]
@@ -41,6 +42,9 @@ use super::{
     paths(
         devices::list,
         devices::revoke,
+        devices::get,
+        devices::rename,
+        devices::set_scopes,
         devices::set_push,
         devices::clear_push,
         events::replay,
@@ -66,6 +70,10 @@ use super::{
         settings::set,
         settings::reset,
         settings::history,
+        stepup::challenge,
+        stepup::step_up,
+        lockouts::list,
+        lockouts::clear,
     ),
     components(schemas(types::ErrorBody, events::Event))
 )]
@@ -103,12 +111,26 @@ pub fn registered(modules: &[Arc<dyn Module>]) -> [Vec<&'static str>; 2] {
     [kinds, actions]
 }
 
+/// Each registered event kind and the scope a device needs to see it (E1-04.3).
+pub fn event_scopes(
+    modules: &[Arc<dyn Module>],
+) -> std::collections::BTreeMap<&'static str, &'static str> {
+    let platform = PLATFORM_EVENT_KINDS
+        .iter()
+        .map(|k| (*k, crate::store::kinds::platform_scope(k)));
+    let theirs = modules
+        .iter()
+        .flat_map(|m| m.event_kinds().iter().map(|k| (*k, m.event_scope(k))));
+    platform.chain(theirs).collect()
+}
+
 /// [`json`] with `modules`' event kinds and audit actions listed too.
 pub fn json_for(modules: &[Arc<dyn Module>]) -> String {
     let mut spec = serde_json::to_value(ApiDoc::openapi()).expect("spec serialises");
     normalise(&mut spec);
     let [kinds, actions] = registered(modules);
     spec["components"]["schemas"]["Event"]["x-event-kinds"] = json!(kinds);
+    spec["components"]["schemas"]["Event"]["x-event-scopes"] = json!(event_scopes(modules));
     spec["components"]["schemas"]["AuditEntry"]["x-audit-actions"] = json!(actions);
     spec["info"]["description"] = json!(DESCRIPTION);
     spec["info"]["version"] = json!(format!("1.{}.0", types::API_MINOR));
@@ -268,8 +290,9 @@ const ERRORS: [(&str, &str, &str); 7] = [
     (
         "403",
         "Forbidden",
-        "Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device \
-         lacks (forbidden_scope; see each operation's x-ainkrad-scope)",
+        "Wrong Host (unknown_host), an Origin header (origin_refused), a scope the device \
+         lacks (forbidden_scope; see each operation's x-ainkrad-scope), or an operation marked \
+         x-ainkrad-destructive without a live step-up elevation (step_up_required)",
     ),
     ("404", "NotFound", "No such resource"),
     ("409", "Conflict", "Conflicts with the current state"),
@@ -290,6 +313,9 @@ fn security_and_errors(spec: &mut Value) {
         for (method, op) in item.as_object_mut().into_iter().flatten() {
             if let Some(scope) = super::scopes::declared(method, path) {
                 op["x-ainkrad-scope"] = json!(scope);
+            }
+            if super::scopes::declared_destructive(method, path) {
+                op["x-ainkrad-destructive"] = json!(true);
             }
         }
     }
@@ -353,6 +379,12 @@ mod tests {
                 "runner.disconnected",
                 "toy.line"
             ])
+        );
+        // A module's kinds default to its route scope (`admin`); runner presence is `read`.
+        assert_eq!(
+            s["Event"]["x-event-scopes"],
+            json!({"audit": "admin", "runner.connected": "read", "runner.degraded": "read",
+                "runner.disconnected": "read", "toy.line": "admin"})
         );
         let actions = s["AuditEntry"]["x-audit-actions"].as_array().unwrap();
         assert!(actions.contains(&json!("toy.made")) && actions.contains(&json!("setting.set")));

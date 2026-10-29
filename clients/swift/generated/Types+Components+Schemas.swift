@@ -384,6 +384,48 @@ extension Components {
                 case sas
             }
         }
+        /// - Remark: Generated from `#/components/schemas/ClearLockout`.
+        public struct ClearLockout: Codable, Hashable, Sendable {
+            /// The key, exactly as listed.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ClearLockout/key`.
+            public var key: Swift.String
+            /// Creates a new `ClearLockout`.
+            ///
+            /// - Parameters:
+            ///   - key: The key, exactly as listed.
+            public init(key: Swift.String) {
+                self.key = key
+            }
+            public enum CodingKeys: String, CodingKey {
+                case key
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.key = try container.decode(
+                    Swift.String.self,
+                    forKey: .key
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "key"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/Cleared`.
+        public struct Cleared: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/Cleared/key`.
+            public var key: Swift.String
+            /// Creates a new `Cleared`.
+            ///
+            /// - Parameters:
+            ///   - key:
+            public init(key: Swift.String) {
+                self.key = key
+            }
+            public enum CodingKeys: String, CodingKey {
+                case key
+            }
+        }
         /// A device: who it is and what it may do. Never a key's private half: the Core has none.
         ///
         /// - Remark: Generated from `#/components/schemas/Device`.
@@ -424,6 +466,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Device/status`.
             public var status: Swift.String?
+            /// Whether it enrolled a step-up key, so it can elevate (E1-09.3).
+            ///
+            /// - Remark: Generated from `#/components/schemas/Device/stepup`.
+            public var stepup: Swift.Bool?
             /// Creates a new `Device`.
             ///
             /// - Parameters:
@@ -438,6 +484,7 @@ extension Components {
             ///   - revokedAt:
             ///   - scopes: What it may do (E1-09 enforces them).
             ///   - status: `pending`, `active`, `rejected`, `expired` or `locked`.
+            ///   - stepup: Whether it enrolled a step-up key, so it can elevate (E1-09.3).
             public init(
                 createdAt: Components.Schemas.Timestamp,
                 fingerprint: Swift.String? = nil,
@@ -449,7 +496,8 @@ extension Components {
                 platform: Swift.String? = nil,
                 revokedAt: Components.Schemas.Timestamp? = nil,
                 scopes: [Swift.String]? = nil,
-                status: Swift.String? = nil
+                status: Swift.String? = nil,
+                stepup: Swift.Bool? = nil
             ) {
                 self.createdAt = createdAt
                 self.fingerprint = fingerprint
@@ -462,6 +510,7 @@ extension Components {
                 self.revokedAt = revokedAt
                 self.scopes = scopes
                 self.status = status
+                self.stepup = stepup
             }
             public enum CodingKeys: String, CodingKey {
                 case createdAt = "created_at"
@@ -475,6 +524,24 @@ extension Components {
                 case revokedAt = "revoked_at"
                 case scopes
                 case status
+                case stepup
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/Elevation`.
+        public struct Elevation: Codable, Hashable, Sendable {
+            /// Until when this session may call routes marked `x-ainkrad-destructive`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Elevation/elevated_until`.
+            public var elevatedUntil: Components.Schemas.Timestamp?
+            /// Creates a new `Elevation`.
+            ///
+            /// - Parameters:
+            ///   - elevatedUntil: Until when this session may call routes marked `x-ainkrad-destructive`.
+            public init(elevatedUntil: Components.Schemas.Timestamp? = nil) {
+                self.elevatedUntil = elevatedUntil
+            }
+            public enum CodingKeys: String, CodingKey {
+                case elevatedUntil = "elevated_until"
             }
         }
         /// A JSON error: a stable `code` and a message for people.
@@ -519,8 +586,10 @@ extension Components {
                 case serverTime = "server_time"
             }
         }
-        /// One entry of the event stream. `seq` only grows: it is the replay cursor. New kinds may be
-        /// added: a client skips an event whose kind it does not know.
+        /// One entry of the event stream. `seq` only grows: it is the replay cursor, counted gap-free over
+        /// the events this device's scopes may see (`x-event-scopes`), so it differs between devices
+        /// with different scopes. New kinds may be added: a client skips an event whose kind it does not
+        /// know.
         ///
         /// - Remark: Generated from `#/components/schemas/Event`.
         public struct Event: Codable, Hashable, Sendable {
@@ -739,6 +808,41 @@ extension Components {
                 case seq
             }
         }
+        /// A key that is locked now.
+        ///
+        /// - Remark: Generated from `#/components/schemas/Lockout`.
+        public struct Lockout: Codable, Hashable, Sendable {
+            /// `ip:<address>`, `ipdev:<address>:<device>` or `stepup:<device>`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Lockout/key`.
+            public var key: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Lockout/locked_until`.
+            public var lockedUntil: Components.Schemas.Timestamp
+            /// Locks in a row; each doubles the next.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Lockout/strikes`.
+            public var strikes: Swift.Int64
+            /// Creates a new `Lockout`.
+            ///
+            /// - Parameters:
+            ///   - key: `ip:<address>`, `ipdev:<address>:<device>` or `stepup:<device>`.
+            ///   - lockedUntil:
+            ///   - strikes: Locks in a row; each doubles the next.
+            public init(
+                key: Swift.String,
+                lockedUntil: Components.Schemas.Timestamp,
+                strikes: Swift.Int64
+            ) {
+                self.key = key
+                self.lockedUntil = lockedUntil
+                self.strikes = strikes
+            }
+            public enum CodingKeys: String, CodingKey {
+                case key
+                case lockedUntil = "locked_until"
+                case strikes
+            }
+        }
         /// The calling device and what the server speaks.
         ///
         /// - Remark: Generated from `#/components/schemas/Me`.
@@ -844,35 +948,6 @@ extension Components {
                     "name",
                     "scopes"
                 ])
-            }
-        }
-        /// The no-op's answer.
-        ///
-        /// - Remark: Generated from `#/components/schemas/NoopResult`.
-        public struct NoopResult: Codable, Hashable, Sendable {
-            /// From dispatch to answer.
-            ///
-            /// - Remark: Generated from `#/components/schemas/NoopResult/duration_ms`.
-            public var durationMs: Swift.Int64?
-            /// The runner answered.
-            ///
-            /// - Remark: Generated from `#/components/schemas/NoopResult/ok`.
-            public var ok: Swift.Bool?
-            /// Creates a new `NoopResult`.
-            ///
-            /// - Parameters:
-            ///   - durationMs: From dispatch to answer.
-            ///   - ok: The runner answered.
-            public init(
-                durationMs: Swift.Int64? = nil,
-                ok: Swift.Bool? = nil
-            ) {
-                self.durationMs = durationMs
-                self.ok = ok
-            }
-            public enum CodingKeys: String, CodingKey {
-                case durationMs = "duration_ms"
-                case ok
             }
         }
         /// A page of a list. `next_after` is the cursor of the next page, absent on the last.
@@ -1118,124 +1193,33 @@ extension Components {
                 case token
             }
         }
-        /// A paired runner and its live state.
+        /// A device's new name.
         ///
-        /// - Remark: Generated from `#/components/schemas/Runner`.
-        public struct Runner: Codable, Hashable, Sendable {
-            /// Commands it takes at once.
+        /// - Remark: Generated from `#/components/schemas/Rename`.
+        public struct Rename: Codable, Hashable, Sendable {
+            /// 1 to 64 characters, no control characters; trimmed.
             ///
-            /// - Remark: Generated from `#/components/schemas/Runner/capacity`.
-            public var capacity: Swift.Int32?
-            /// Connected but silent past two heartbeats.
-            ///
-            /// - Remark: Generated from `#/components/schemas/Runner/degraded`.
-            public var degraded: Swift.Bool?
-            /// What it last advertised (empty until it first connected since the Core started).
-            ///
-            /// - Remark: Generated from `#/components/schemas/Runner/drivers`.
-            public var drivers: [Components.Schemas.RunnerDriver]?
-            /// The runner's device id, `d_…`.
-            ///
-            /// - Remark: Generated from `#/components/schemas/Runner/id`.
-            public var id: Swift.String
-            /// Its last frame or request; null if never seen.
-            ///
-            /// - Remark: Generated from `#/components/schemas/Runner/last_seen`.
-            public var lastSeen: Components.Schemas.Timestamp?
-            /// Commands in flight.
-            ///
-            /// - Remark: Generated from `#/components/schemas/Runner/load`.
-            public var load: Swift.Int32?
-            /// - Remark: Generated from `#/components/schemas/Runner/name`.
+            /// - Remark: Generated from `#/components/schemas/Rename/name`.
             public var name: Swift.String
-            /// Connected to this Core now.
-            ///
-            /// - Remark: Generated from `#/components/schemas/Runner/online`.
-            public var online: Swift.Bool?
-            /// Its `ainkrad-runner` version, once connected.
-            ///
-            /// - Remark: Generated from `#/components/schemas/Runner/version`.
-            public var version: Swift.String?
-            /// Creates a new `Runner`.
+            /// Creates a new `Rename`.
             ///
             /// - Parameters:
-            ///   - capacity: Commands it takes at once.
-            ///   - degraded: Connected but silent past two heartbeats.
-            ///   - drivers: What it last advertised (empty until it first connected since the Core started).
-            ///   - id: The runner's device id, `d_…`.
-            ///   - lastSeen: Its last frame or request; null if never seen.
-            ///   - load: Commands in flight.
-            ///   - name:
-            ///   - online: Connected to this Core now.
-            ///   - version: Its `ainkrad-runner` version, once connected.
-            public init(
-                capacity: Swift.Int32? = nil,
-                degraded: Swift.Bool? = nil,
-                drivers: [Components.Schemas.RunnerDriver]? = nil,
-                id: Swift.String,
-                lastSeen: Components.Schemas.Timestamp? = nil,
-                load: Swift.Int32? = nil,
-                name: Swift.String,
-                online: Swift.Bool? = nil,
-                version: Swift.String? = nil
-            ) {
-                self.capacity = capacity
-                self.degraded = degraded
-                self.drivers = drivers
-                self.id = id
-                self.lastSeen = lastSeen
-                self.load = load
-                self.name = name
-                self.online = online
-                self.version = version
-            }
-            public enum CodingKeys: String, CodingKey {
-                case capacity
-                case degraded
-                case drivers
-                case id
-                case lastSeen = "last_seen"
-                case load
-                case name
-                case online
-                case version
-            }
-        }
-        /// A driver a runner offers, as it advertised it.
-        ///
-        /// - Remark: Generated from `#/components/schemas/RunnerDriver`.
-        public struct RunnerDriver: Codable, Hashable, Sendable {
-            /// How many of its commands run at once.
-            ///
-            /// - Remark: Generated from `#/components/schemas/RunnerDriver/capacity`.
-            public var capacity: Swift.Int32?
-            /// The command ops it takes: `noop`, `exec.run`.
-            ///
-            /// - Remark: Generated from `#/components/schemas/RunnerDriver/commands`.
-            public var commands: [Swift.String]?
-            /// `exec` now; `pty`, `harness` later.
-            ///
-            /// - Remark: Generated from `#/components/schemas/RunnerDriver/name`.
-            public var name: Swift.String?
-            /// Creates a new `RunnerDriver`.
-            ///
-            /// - Parameters:
-            ///   - capacity: How many of its commands run at once.
-            ///   - commands: The command ops it takes: `noop`, `exec.run`.
-            ///   - name: `exec` now; `pty`, `harness` later.
-            public init(
-                capacity: Swift.Int32? = nil,
-                commands: [Swift.String]? = nil,
-                name: Swift.String? = nil
-            ) {
-                self.capacity = capacity
-                self.commands = commands
+            ///   - name: 1 to 64 characters, no control characters; trimmed.
+            public init(name: Swift.String) {
                 self.name = name
             }
             public enum CodingKeys: String, CodingKey {
-                case capacity
-                case commands
                 case name
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.name = try container.decode(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "name"
+                ])
             }
         }
         /// - Remark: Generated from `#/components/schemas/SessionGrant`.
@@ -1303,6 +1287,35 @@ extension Components {
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "challenge"
+                ])
+            }
+        }
+        /// A device's new scopes.
+        ///
+        /// - Remark: Generated from `#/components/schemas/SetScopes`.
+        public struct SetScopes: Codable, Hashable, Sendable {
+            /// From the catalogue, each held by the calling device; a runner holds exactly `runner`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SetScopes/scopes`.
+            public var scopes: [Swift.String]
+            /// Creates a new `SetScopes`.
+            ///
+            /// - Parameters:
+            ///   - scopes: From the catalogue, each held by the calling device; a runner holds exactly `runner`.
+            public init(scopes: [Swift.String]) {
+                self.scopes = scopes
+            }
+            public enum CodingKeys: String, CodingKey {
+                case scopes
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.scopes = try container.decode(
+                    [Swift.String].self,
+                    forKey: .scopes
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "scopes"
                 ])
             }
         }
@@ -1555,6 +1568,50 @@ extension Components {
                 try encoder.encodeFirstNonNilValueToSingleValueContainer([
                     self.value1,
                     self.value2
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/StepUpRequest`.
+        public struct StepUpRequest: Codable, Hashable, Sendable {
+            /// The challenge from `POST /api/v1/auth/step-up/challenge` for this session.
+            ///
+            /// - Remark: Generated from `#/components/schemas/StepUpRequest/challenge`.
+            public var challenge: Swift.String
+            /// The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string
+            /// `AINKRAD-STEPUP-V1` LF `<core_fp>` LF `<device_id>` LF `<session_id>` LF `<challenge>`,
+            /// no trailing newline. The device's OS releases that key only after user verification.
+            ///
+            /// - Remark: Generated from `#/components/schemas/StepUpRequest/stepup_sig`.
+            public var stepupSig: Swift.String
+            /// Creates a new `StepUpRequest`.
+            ///
+            /// - Parameters:
+            ///   - challenge: The challenge from `POST /api/v1/auth/step-up/challenge` for this session.
+            ///   - stepupSig: The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string
+            public init(
+                challenge: Swift.String,
+                stepupSig: Swift.String
+            ) {
+                self.challenge = challenge
+                self.stepupSig = stepupSig
+            }
+            public enum CodingKeys: String, CodingKey {
+                case challenge
+                case stepupSig = "stepup_sig"
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.challenge = try container.decode(
+                    Swift.String.self,
+                    forKey: .challenge
+                )
+                self.stepupSig = try container.decode(
+                    Swift.String.self,
+                    forKey: .stepupSig
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "challenge",
+                    "stepup_sig"
                 ])
             }
         }

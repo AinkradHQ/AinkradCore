@@ -14,8 +14,8 @@
 //!    cannot burn another device's nonces.
 //! 8. The session: live and the device's, else 401 `session_expired` (only reached with a valid
 //!    signature, so it leaks nothing).
-//! 9. The route's declared scope (`scopes`, deny by default) → 403 `forbidden_scope`; step-up
-//!    comes with E1-09.3.
+//! 9. The route's declared scope (`scopes`, deny by default) → 403 `forbidden_scope`; then a
+//!    destructive route without a live elevation (`auth::stepup`) → 403 `step_up_required`.
 //! 10. The device's request bucket (429).
 //!
 //! Steps 5 to 7 fail with the identical 401 `auth_failed`, take at least `FAIL_FLOOR`, and
@@ -314,7 +314,17 @@ pub(crate) async fn client_gate(State(app): State<App>, req: Request, next: Next
         )
         .into_response();
     }
-    let session = v.session.expect("Mode::Session has one").id;
+    let session = v.session.expect("Mode::Session has one");
+    if super::scopes::destructive(&parts.method, parts.uri.path(), &app.modules)
+        && !session.elevated(app.clock.unix())
+    {
+        tracing::warn!(
+            device = v.device.id,
+            "destructive route refused: not elevated"
+        );
+        return super::stepup::required().into_response();
+    }
+    let session = session.id;
     parts.extensions.insert(Caller {
         device: v.device,
         session,

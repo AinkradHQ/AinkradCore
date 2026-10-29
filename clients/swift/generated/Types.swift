@@ -8,14 +8,35 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/audit`.
     /// - Remark: Generated from `#/paths//api/v1/audit/get(listAudit)`.
     func listAudit(_ input: Operations.ListAudit.Input) async throws -> Operations.ListAudit.Output
+    /// - Remark: HTTP `GET /api/v1/auth/lockouts`.
+    /// - Remark: Generated from `#/paths//api/v1/auth/lockouts/get(listLockouts)`.
+    func listLockouts(_ input: Operations.ListLockouts.Input) async throws -> Operations.ListLockouts.Output
+    /// - Remark: HTTP `POST /api/v1/auth/lockouts/clear`.
+    /// - Remark: Generated from `#/paths//api/v1/auth/lockouts/clear/post(clearLockout)`.
+    func clearLockout(_ input: Operations.ClearLockout.Input) async throws -> Operations.ClearLockout.Output
+    /// - Remark: HTTP `POST /api/v1/auth/step-up`.
+    /// - Remark: Generated from `#/paths//api/v1/auth/step-up/post(stepUp)`.
+    func stepUp(_ input: Operations.StepUp.Input) async throws -> Operations.StepUp.Output
+    /// - Remark: HTTP `POST /api/v1/auth/step-up/challenge`.
+    /// - Remark: Generated from `#/paths//api/v1/auth/step-up/challenge/post(createStepUpChallenge)`.
+    func createStepUpChallenge(_ input: Operations.CreateStepUpChallenge.Input) async throws -> Operations.CreateStepUpChallenge.Output
     /// - Remark: HTTP `GET /api/v1/devices`.
     /// - Remark: Generated from `#/paths//api/v1/devices/get(listDevices)`.
     func listDevices(_ input: Operations.ListDevices.Input) async throws -> Operations.ListDevices.Output
+    /// - Remark: HTTP `GET /api/v1/devices/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/devices/{id}/get(getDevice)`.
+    func getDevice(_ input: Operations.GetDevice.Input) async throws -> Operations.GetDevice.Output
+    /// - Remark: HTTP `PATCH /api/v1/devices/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/devices/{id}/patch(renameDevice)`.
+    func renameDevice(_ input: Operations.RenameDevice.Input) async throws -> Operations.RenameDevice.Output
     /// Revokes at once, the calling device included; the row stays, marked revoked.
     ///
     /// - Remark: HTTP `DELETE /api/v1/devices/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/devices/{id}/delete(revokeDevice)`.
     func revokeDevice(_ input: Operations.RevokeDevice.Input) async throws -> Operations.RevokeDevice.Output
+    /// - Remark: HTTP `PUT /api/v1/devices/{id}/scopes`.
+    /// - Remark: Generated from `#/paths//api/v1/devices/{id}/scopes/put(setDeviceScopes)`.
+    func setDeviceScopes(_ input: Operations.SetDeviceScopes.Input) async throws -> Operations.SetDeviceScopes.Output
     /// - Remark: HTTP `GET /api/v1/events`.
     /// - Remark: Generated from `#/paths//api/v1/events/get(listEvents)`.
     func listEvents(_ input: Operations.ListEvents.Input) async throws -> Operations.ListEvents.Output
@@ -103,10 +124,66 @@ extension APIProtocol {
             headers: headers
         ))
     }
+    /// - Remark: HTTP `GET /api/v1/auth/lockouts`.
+    /// - Remark: Generated from `#/paths//api/v1/auth/lockouts/get(listLockouts)`.
+    public func listLockouts(headers: Operations.ListLockouts.Input.Headers = .init()) async throws -> Operations.ListLockouts.Output {
+        try await listLockouts(Operations.ListLockouts.Input(headers: headers))
+    }
+    /// - Remark: HTTP `POST /api/v1/auth/lockouts/clear`.
+    /// - Remark: Generated from `#/paths//api/v1/auth/lockouts/clear/post(clearLockout)`.
+    public func clearLockout(
+        headers: Operations.ClearLockout.Input.Headers = .init(),
+        body: Operations.ClearLockout.Input.Body
+    ) async throws -> Operations.ClearLockout.Output {
+        try await clearLockout(Operations.ClearLockout.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/auth/step-up`.
+    /// - Remark: Generated from `#/paths//api/v1/auth/step-up/post(stepUp)`.
+    public func stepUp(
+        headers: Operations.StepUp.Input.Headers = .init(),
+        body: Operations.StepUp.Input.Body
+    ) async throws -> Operations.StepUp.Output {
+        try await stepUp(Operations.StepUp.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/auth/step-up/challenge`.
+    /// - Remark: Generated from `#/paths//api/v1/auth/step-up/challenge/post(createStepUpChallenge)`.
+    public func createStepUpChallenge(headers: Operations.CreateStepUpChallenge.Input.Headers = .init()) async throws -> Operations.CreateStepUpChallenge.Output {
+        try await createStepUpChallenge(Operations.CreateStepUpChallenge.Input(headers: headers))
+    }
     /// - Remark: HTTP `GET /api/v1/devices`.
     /// - Remark: Generated from `#/paths//api/v1/devices/get(listDevices)`.
     public func listDevices(headers: Operations.ListDevices.Input.Headers = .init()) async throws -> Operations.ListDevices.Output {
         try await listDevices(Operations.ListDevices.Input(headers: headers))
+    }
+    /// - Remark: HTTP `GET /api/v1/devices/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/devices/{id}/get(getDevice)`.
+    public func getDevice(
+        path: Operations.GetDevice.Input.Path,
+        headers: Operations.GetDevice.Input.Headers = .init()
+    ) async throws -> Operations.GetDevice.Output {
+        try await getDevice(Operations.GetDevice.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `PATCH /api/v1/devices/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/devices/{id}/patch(renameDevice)`.
+    public func renameDevice(
+        path: Operations.RenameDevice.Input.Path,
+        headers: Operations.RenameDevice.Input.Headers = .init(),
+        body: Operations.RenameDevice.Input.Body
+    ) async throws -> Operations.RenameDevice.Output {
+        try await renameDevice(Operations.RenameDevice.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
     }
     /// Revokes at once, the calling device included; the row stays, marked revoked.
     ///
@@ -119,6 +196,19 @@ extension APIProtocol {
         try await revokeDevice(Operations.RevokeDevice.Input(
             path: path,
             headers: headers
+        ))
+    }
+    /// - Remark: HTTP `PUT /api/v1/devices/{id}/scopes`.
+    /// - Remark: Generated from `#/paths//api/v1/devices/{id}/scopes/put(setDeviceScopes)`.
+    public func setDeviceScopes(
+        path: Operations.SetDeviceScopes.Input.Path,
+        headers: Operations.SetDeviceScopes.Input.Headers = .init(),
+        body: Operations.SetDeviceScopes.Input.Body
+    ) async throws -> Operations.SetDeviceScopes.Output {
+        try await setDeviceScopes(Operations.SetDeviceScopes.Input(
+            path: path,
+            headers: headers,
+            body: body
         ))
     }
     /// - Remark: HTTP `GET /api/v1/events`.

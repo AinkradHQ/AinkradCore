@@ -3,6 +3,13 @@
 //! then 80 random bits), logged with its code and status. A refused write (any method but
 //! `GET`, from an authenticated device) is also audited as `api.refused` with its id, method,
 //! path and code, so the id finds its trace in the audit log as well as in the server log.
+//!
+//! Except what an abuser can repeat at will (review M4: the audit log is permanent): a 429, and
+//! any refusal of the routes in [`AGGREGATED`] (step-up, lockouts, device management) is counted
+//! in memory (`auth::refusals`, bounded, keyed by code, method and route) and logged once per
+//! window, never written. Those routes audit their transitions themselves: a lock
+//! (`auth.lockout`), a grant (`auth.step_up`), a change (`device.*`, `auth.lockout_cleared`),
+//! and a last-admin refusal once per device per window (`device.last_admin_refused`).
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -135,7 +142,17 @@ pub struct Refused {
     pub code: &'static str,
 }
 
-/// Audits each refused write as `api.refused`.
+/// Routes whose refusals are counted, not audited: `(method, path template)`.
+pub const AGGREGATED: &[(&str, &str)] = &[
+    ("POST", "/api/v1/auth/step-up/challenge"),
+    ("POST", "/api/v1/auth/step-up"),
+    ("POST", "/api/v1/auth/lockouts/clear"),
+    ("PATCH", "/api/v1/devices/{id}"),
+    ("PUT", "/api/v1/devices/{id}/scopes"),
+    ("DELETE", "/api/v1/devices/{id}"),
+];
+
+/// Audits each refused write as `api.refused`, but counts a 429 and the [`AGGREGATED`] routes'.
 pub(super) async fn audit_refusals(State(app): State<App>, req: Request, next: Next) -> Response {
     let (method, path) = (req.method().clone(), req.uri().path().to_owned());
     let client = req.extensions().get::<super::Client>().map(|c| c.0.clone());
@@ -148,6 +165,21 @@ pub(super) async fn audit_refusals(State(app): State<App>, req: Request, next: N
         return response;
     };
     if method == Method::GET {
+        return response;
+    }
+    let route = AGGREGATED
+        .iter()
+        .find(|(m, t)| *m == method.as_str() && super::scopes::fits(t, &path))
+        .map(|r| r.1);
+    if route.is_some() || response.status() == StatusCode::TOO_MANY_REQUESTS {
+        let key = format!(
+            "{} {method} {}",
+            refused.code,
+            route.unwrap_or("(rate limited)")
+        );
+        if app.auth.refusals.note(&key, app.clock.unix()) {
+            tracing::warn!(key, "refusals counted, not audited, for this window");
+        }
         return response;
     }
     let event = NewAuditEvent {

@@ -46,7 +46,7 @@ pub struct NewDevice<'a> {
 
 /// Inserts `d` with `status` inside the caller's transaction; returns its row number. Refuses
 /// (`InvalidArgument`) a key that is not a P-256 SPKI on the curve, an unknown kind or scope,
-/// and a runner with any scope but `runner`.
+/// a runner with any scope but `runner`, and a step-up key equal to the routine key.
 pub(crate) async fn insert_device(
     conn: &mut SqliteConnection,
     d: &NewDevice<'_>,
@@ -57,6 +57,11 @@ pub(crate) async fn insert_device(
         || d.stepup_spki.is_some_and(|k| spki_point(k).is_none())
     {
         return bad("a device key is a P-256 SubjectPublicKeyInfo");
+    }
+    // The step-up key must be a second key: the routine key enrolled twice would make a plain
+    // signature count as user verification (§8).
+    if d.stepup_spki == Some(d.routine_spki) {
+        return bad("the step-up key is not the routine key");
     }
     if !KINDS.contains(&d.kind) || d.name.trim().is_empty() {
         return bad("a device has a known kind and a name");
@@ -133,19 +138,33 @@ pub async fn revoke_device(
     now: &str,
 ) -> Result<bool, Error> {
     let mut tx = crate::store::begin_write(pool).await?;
+    let done = revoke_in(&mut tx, id, by, by_device, now).await?;
+    if done {
+        tx.commit().await?;
+    }
+    Ok(done)
+}
+
+/// `revoke_device` inside the caller's transaction.
+pub(crate) async fn revoke_in(
+    conn: &mut SqliteConnection,
+    id: &str,
+    by: AuditActor,
+    by_device: Option<&str>,
+    now: &str,
+) -> Result<bool, Error> {
     let seq: Option<i64> = sqlx::query_scalar(
         "UPDATE core_devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL RETURNING seq",
     )
     .bind(now)
     .bind(id)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut *conn)
     .await?;
     let Some(seq) = seq else {
         return Ok(false);
     };
     let details = json!({"device": id, "by_device": by_device});
-    audit_device(&mut tx, seq, "device.revoked", by, details).await?;
-    tx.commit().await?;
+    audit_device(conn, seq, "device.revoked", by, details).await?;
     Ok(true)
 }
 

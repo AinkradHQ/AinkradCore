@@ -10,8 +10,9 @@
 //! 4. A WebSocket upgrade, else 400.
 //! 5. In the socket, within `HubConfig::handshake`: `hello` naming the signed device with a
 //!    32-byte nonce, the Core's `auth`, the runner's `proof`. Any failure is the one `error`
-//!    `auth_failed`, a 1008 close, a log line with the real reason and one audit row
-//!    (`runner.refused`); an unsupported protocol major is `unsupported_version`.
+//!    `auth_failed`, a 1008 close, a log line with the real reason, and an audit row
+//!    (`runner.refused`) for the first of each device and reason per window, the rest only
+//!    counted; an unsupported protocol major is `unsupported_version`.
 //!
 //! Neither nonce, signature nor exporter is ever logged.
 
@@ -210,9 +211,14 @@ async fn refuse(app: &App, mut socket: WebSocket, device: &Device, code: ErrorCo
     let _ = socket.send(close).await;
 }
 
-/// One audit row per refused connection of an authenticated device (never per stranger:
-/// those are counted by the gate's limits, review M4).
+/// One audit row per authenticated device and reason per window (`auth::refusals`): the first
+/// refusal is audited, the repeats only counted, so a runner that retries cannot grow the
+/// audit log (review M4). Strangers are never audited; the gate's limits count them.
 async fn audit_refusal(app: &App, device: &Device, why: &str) {
+    let key = format!("{REFUSED}:{}:{why}", device.id);
+    if !app.auth.refusals.note(&key, app.clock.unix()) {
+        return;
+    }
     let event = NewAuditEvent {
         actor: AuditActor::System,
         action: REFUSED.to_owned(),

@@ -66,7 +66,7 @@ async fn home_with_state(home: &Path) -> String {
     }
     ok(&["device", "revoke", s(&db), &ids[1]], &[]);
     let mut tx = store::begin_write(&pool).await.unwrap();
-    kinds::register(&mut tx, "probe", &["probe.line"], &[])
+    kinds::register(&mut tx, "probe", &[("probe.line", "read")], &[])
         .await
         .unwrap();
     for i in 0..3 {

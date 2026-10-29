@@ -21,7 +21,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual
 
 /**
- * One entry of the event stream. `seq` only grows: it is the replay cursor. New kinds may be added: a client skips an event whose kind it does not know.
+ * One entry of the event stream. `seq` only grows: it is the replay cursor, counted gap-free over the events this device's scopes may see (`x-event-scopes`), so it differs between devices with different scopes. New kinds may be added: a client skips an event whose kind it does not know.
  *
  * @param at RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param kind What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`, `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `details`), or a kind a module writes. The registered kinds are listed in `x-event-kinds`.

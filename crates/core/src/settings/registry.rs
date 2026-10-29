@@ -15,4 +15,7 @@ registry! {
     EventsRetentionSecs "events.retention_secs" Seconds 2_592_000, 3_600, 315_360_000, SO,
         "How long events stay replayable; older ones are trimmed and a client resuming from \
          before them re-syncs. Read every scheduler tick.";
+    AuthStepUpSecs "auth.step_up_secs" Seconds 300, 60, 900, SO,
+        "How long a step-up (user verification on the device) keeps its session elevated for \
+         destructive routes; read at each step-up.";
 }

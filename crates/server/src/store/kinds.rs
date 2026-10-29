@@ -7,6 +7,11 @@
 //! dotted lowercase (`[a-z][a-z0-9_]*` segments joined by `.`); an audit action has at least two
 //! segments; a module's names start with its id and a dot (`ops.line`), and a module may not take
 //! a first segment the platform uses. The contract lists the registered names (`api/v1/spec`).
+//!
+//! Each event kind is visible to one scope (E1-04.3, [`VISIBLE`]): a device's event stream
+//! carries only the kinds its scopes allow (`store::events::view`). The platform's `audit` is
+//! `admin`, as the audit log is; a module's kinds take `Module::event_scope` (its own route
+//! scope unless it says otherwise).
 
 use sqlx::SqliteConnection;
 use sqlx::sqlite::SqlitePool;
@@ -24,11 +29,30 @@ pub const PLATFORM_EVENT_KINDS: &[&str] = &[
     "runner.disconnected",
 ];
 
+/// The scopes an event kind may be visible to (a runner reads no event stream).
+pub const VISIBLE: [&str; 5] = ["read", "approve", "terminal", "agent", "admin"];
+
+/// The scope each platform event kind is visible to: `audit` is the audit log, `admin` as
+/// `GET /api/v1/audit` is; runner presence (`runner.*`) is `read`, as `GET /api/v1/runners`
+/// is. A `runner` device sees neither: it reads no event stream at all.
+pub fn platform_scope(kind: &str) -> &'static str {
+    if kind.starts_with("runner.") {
+        "read"
+    } else {
+        "admin"
+    }
+}
+
 /// The platform's audit actions.
 pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "api.refused",
     "auth.lockout",
+    "auth.lockout_cleared",
+    "auth.step_up",
+    "device.renamed",
+    "device.scopes_changed",
     "device.enrolled",
+    "device.last_admin_refused",
     "device.revoked",
     "pairing.approved",
     "pairing.burned",
@@ -77,18 +101,41 @@ pub fn refusal(owner: &str, name: &str, action: bool) -> Option<String> {
     None
 }
 
-/// Registers `owner`'s event kinds and audit actions. Idempotent; refuses a malformed name
-/// (`refusal`) or one another owner registered first (`InvalidArgument`).
+/// Registers `owner`'s event kinds, each with the scope it is visible to, and audit actions.
+/// Idempotent (a kind's scope is updated to the one given); refuses a malformed name
+/// (`refusal`), a scope outside [`VISIBLE`], or a name another owner registered first
+/// (`InvalidArgument`).
 pub async fn register(
     conn: &mut SqliteConnection,
     owner: &str,
-    event_kinds: &[&str],
+    event_kinds: &[(&str, &str)],
     audit_actions: &[&str],
 ) -> Result<(), sqlx::Error> {
-    let tables = [
-        (event_kinds, "event_kinds", "kind", false),
-        (audit_actions, "audit_actions", "action", true),
-    ];
+    for (kind, scope) in event_kinds {
+        if !VISIBLE.contains(scope) {
+            return Err(sqlx::Error::InvalidArgument(format!(
+                "{kind:?} is visible to {scope:?}, not a scope events are read with"
+            )));
+        }
+        if let Some(why) = refusal(owner, kind, false) {
+            return Err(sqlx::Error::InvalidArgument(why));
+        }
+        let held: String = sqlx::query_scalar(
+            "INSERT INTO event_kinds (kind, owner, scope) VALUES (?1, ?2, ?3) \
+             ON CONFLICT DO UPDATE SET scope = iif(owner = ?2, ?3, scope) RETURNING owner",
+        )
+        .bind(kind)
+        .bind(owner)
+        .bind(scope)
+        .fetch_one(&mut *conn)
+        .await?;
+        if held != owner {
+            return Err(sqlx::Error::InvalidArgument(format!(
+                "{kind:?} is registered by {held}"
+            )));
+        }
+    }
+    let tables = [(audit_actions, "audit_actions", "action", true)];
     for (names, table, column, action) in tables {
         for name in names {
             if let Some(why) = refusal(owner, name, action) {
@@ -115,23 +162,24 @@ pub async fn register(
 /// Registers the platform's names, in one write.
 pub async fn register_platform(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let mut tx = super::begin_write(pool).await?;
-    register(
-        &mut tx,
-        PLATFORM,
-        PLATFORM_EVENT_KINDS,
-        PLATFORM_AUDIT_ACTIONS,
-    )
-    .await?;
+    let kinds: Vec<(&str, &str)> = PLATFORM_EVENT_KINDS
+        .iter()
+        .map(|k| (*k, platform_scope(k)))
+        .collect();
+    register(&mut tx, PLATFORM, &kinds, PLATFORM_AUDIT_ACTIONS).await?;
     tx.commit().await
 }
 
-/// For tests: registers each name for the module its first segment names.
+/// For tests: registers each name for the module its first segment names; event kinds are
+/// visible to `read`.
 #[cfg(test)]
 pub(crate) async fn allow(pool: &SqlitePool, event_kinds: &[&str], audit_actions: &[&str]) {
     let mut tx = super::begin_write(pool).await.unwrap();
     let owner = |name: &str| name.split('.').next().unwrap().to_owned();
     for k in event_kinds {
-        register(&mut tx, &owner(k), &[*k], &[]).await.unwrap();
+        register(&mut tx, &owner(k), &[(*k, "read")], &[])
+            .await
+            .unwrap();
     }
     for a in audit_actions {
         register(&mut tx, &owner(a), &[], &[*a]).await.unwrap();
