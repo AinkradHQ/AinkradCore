@@ -196,9 +196,8 @@ async fn trimming_raises_the_floor_and_a_resume_below_it_is_past_retention() {
         Err(PastRetention { floor: 2 })
     );
     let rest = replay(pool, 2, 10).await.unwrap().unwrap();
-    assert_eq!(rest[0].seq, 3, "nothing above the floor is gone");
-    assert_eq!(rest.last().unwrap().kind, "audit", "the trim is audited");
-    assert_eq!(rest.last().unwrap().payload.0["action"], "events.trimmed");
+    let seqs: Vec<i64> = rest.iter().map(|e| e.seq).collect();
+    assert_eq!(seqs, [3, 4], "nothing above the floor is gone");
 
     // A batch limit trims the oldest first.
     let trimmed = trim(pool, &at("30"), day, 1).await.unwrap().unwrap();
@@ -216,13 +215,15 @@ async fn trimming_raises_the_floor_and_a_resume_below_it_is_past_retention() {
         .unwrap_err();
     assert!(err.to_string().contains("only rises"), "{err}");
 
-    // Everything trimmed: the head is still the floor, never back to 0.
+    // Everything trimmed: the head is the floor, never back to 0.
     let head = last_event_seq(pool).await.unwrap();
     trim(pool, "2030-01-01T00:00:00.000Z", 3600, 100)
         .await
         .unwrap();
-    trim(pool, "2030-01-01T00:00:00.000Z", 3600, 100)
-        .await
-        .unwrap();
-    assert!(last_event_seq(pool).await.unwrap() >= head);
+    assert_eq!(list_events(pool, 0, 10).await.unwrap(), []);
+    let (head_now, floor_now) = (
+        last_event_seq(pool).await.unwrap(),
+        floor(pool).await.unwrap(),
+    );
+    assert_eq!((head_now, floor_now), (head, head));
 }

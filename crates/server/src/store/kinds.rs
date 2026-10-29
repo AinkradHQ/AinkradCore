@@ -25,7 +25,6 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "device.pairing_started",
     "device_key.created",
     "device_key.revoked",
-    "events.trimmed",
     "setting.reset",
     "setting.set",
 ];

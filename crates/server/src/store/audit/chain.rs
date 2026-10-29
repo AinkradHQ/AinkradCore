@@ -17,7 +17,7 @@ use std::io::{BufRead, Write};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use sqlx::sqlite::SqlitePool;
+use sqlx::sqlite::{SqliteConnection, SqlitePool};
 
 /// One audit row as chained and exported: one JSON object per line.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, sqlx::FromRow)]
@@ -143,9 +143,10 @@ impl Verifier {
     }
 }
 
-/// Every audit row, oldest first, `PAGE` at a time.
+/// Every audit row, oldest first, `PAGE` at a time. Pass a transaction's connection, so every
+/// page comes from one snapshot while the server keeps appending.
 async fn each_row(
-    pool: &SqlitePool,
+    conn: &mut SqliteConnection,
     mut f: impl FnMut(ChainRow) -> Result<(), Box<dyn std::error::Error>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     const PAGE: i64 = 1000;
@@ -159,7 +160,7 @@ async fn each_row(
         )
         .bind(after)
         .bind(PAGE)
-        .fetch_all(pool)
+        .fetch_all(&mut *conn)
         .await?;
         let last = rows.len() < PAGE as usize;
         for row in rows {
@@ -172,12 +173,13 @@ async fn each_row(
     }
 }
 
-/// Verifies the database's chain. The outer error is a database failure, the inner the first
-/// bad row.
+/// Verifies the database's chain, in one read snapshot (a live server may be appending). The
+/// outer error is a database failure, the inner the first bad row.
 pub async fn verify_db(pool: &SqlitePool) -> Result<Result<Verified, Broken>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
     let mut v = Verifier::default();
     let mut broken = None;
-    let walked = each_row(pool, |row| {
+    let walked = each_row(&mut tx, |row| {
         if broken.is_none()
             && let Err(b) = v.push(&row)
         {
@@ -196,8 +198,9 @@ pub async fn verify_db(pool: &SqlitePool) -> Result<Result<Verified, Broken>, sq
     let handed_out: i64 = sqlx::query_scalar(
         "SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name = 'audit_events'), 0)",
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
     let head = done.head.as_ref().map_or(0, |h| h.0);
     if handed_out > head {
         return Ok(Err(Broken {
@@ -208,13 +211,14 @@ pub async fn verify_db(pool: &SqlitePool) -> Result<Result<Verified, Broken>, sq
     Ok(Ok(done))
 }
 
-/// Writes every audit row as one JSON line; returns how many.
+/// Writes every audit row as one JSON line, from one read snapshot; returns how many.
 pub async fn export(
     pool: &SqlitePool,
     out: &mut impl Write,
 ) -> Result<u64, Box<dyn std::error::Error>> {
+    let mut tx = pool.begin().await?;
     let mut n = 0;
-    each_row(pool, |row| {
+    each_row(&mut tx, |row| {
         serde_json::to_writer(&mut *out, &row)?;
         out.write_all(b"\n")?;
         n += 1;

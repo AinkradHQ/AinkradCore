@@ -23,8 +23,6 @@ use serde_json::Value;
 use sqlx::sqlite::{SqliteConnection, SqlitePool};
 use sqlx::types::Json;
 
-use ainkrad_core::audit::{AuditActor, NewAuditEvent};
-
 /// One event as stored.
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct StoredEvent {
@@ -132,12 +130,14 @@ pub struct Trimmed {
     pub removed: u64,
 }
 
-/// Trims events older than `keep_secs` before `now`, at most `batch` of them, oldest first, and
-/// audits it (`events.trimmed`). Only the unbroken run of old events from the floor up is
+/// Trims events older than `keep_secs` before `now`, at most `batch` of them, oldest first. Only the unbroken run of old events from the floor up is
 /// trimmed, so the floor is a seq below which everything is gone and above which nothing is.
 /// `None` when there is nothing to trim.
 ///
-/// The floor is raised first; the delete trigger lets only rows at or below it go.
+/// The floor is raised first; the delete trigger lets only rows at or below it go. Not audited:
+/// under steady traffic a trim runs every scheduler tick, and an audit row each time would grow
+/// the never-trimmed audit log forever; the floor row is the record (the scheduler logs each
+/// trim).
 pub async fn trim(
     pool: &SqlitePool,
     now: &str,
@@ -168,14 +168,6 @@ pub async fn trim(
         .execute(&mut *tx)
         .await?
         .rows_affected();
-    let audit = NewAuditEvent {
-        actor: AuditActor::System,
-        action: "events.trimmed".to_owned(),
-        entity: None,
-        details: serde_json::json!({"floor": new, "removed": removed, "retention_secs": keep_secs})
-            .to_string(),
-    };
-    crate::store::audit::append(&mut tx, &audit).await?;
     tx.commit().await?;
     Ok(Some(Trimmed {
         floor: new,
