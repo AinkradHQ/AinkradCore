@@ -74,6 +74,9 @@ async fn two_devices_pair_end_to_end_by_code_and_by_qr() {
     );
     phone.id = got["device_id"].as_str().unwrap().to_owned();
     let phone_sas = got["sas"].as_str().unwrap().to_owned();
+    let own =
+        crate::auth::pairing::sas(&core_spki, &phone.spki, got["pairing_id"].as_str().unwrap());
+    assert_eq!(own, phone_sas, "the device computes the same SAS itself");
 
     // Pending: only /pair/status answers it.
     assert_eq!(status(&fx, &phone).await.1["status"], "pending");

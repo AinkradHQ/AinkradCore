@@ -117,6 +117,33 @@ pub fn ct_eq(a: &str, b: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// The committed pairing vectors (`tests/vectors/pairing-v1.json`), the ones client SDKs
+    /// test against, are what this code makes and accepts.
+    #[test]
+    fn the_pairing_vectors_are_reproduced() {
+        use crate::auth::crypto::{fingerprint, unb64, verify};
+        let v: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/vectors/pairing-v1.json")).unwrap();
+        let s = |k: &str| v[k].as_str().unwrap().to_owned();
+        let bytes = |k: &str| unb64(&s(k), s(k).len()).unwrap();
+        let canonical = normal_code(&s("typed_code")).unwrap();
+        assert_eq!(canonical, s("canonical_code"));
+        assert_eq!(b64(&code_hash(&canonical)), s("code_hash"));
+        assert_eq!(b64(&secret_hash(&bytes("secret"))), s("secret_hash"));
+        let (core, device) = (bytes("core_spki"), bytes("device_spki"));
+        assert_eq!(fingerprint(&core), s("core_fp"));
+        assert_eq!(fingerprint(&device), s("device_fp"));
+        for (hash, message, sig) in [
+            ("code_hash", "pop_message_code", "pop_code"),
+            ("secret_hash", "pop_message_secret", "pop_secret"),
+        ] {
+            let m = pop_message(&s("core_fp"), &bytes(hash), &s("device_fp"), None);
+            assert_eq!(String::from_utf8(m.clone()).unwrap(), s(message));
+            assert!(verify(&device, &m, &bytes(sig)), "{sig}");
+        }
+        assert_eq!(sas(&core, &device, &s("pairing_id")), s("sas"));
+    }
+
     #[test]
     fn codes_are_ten_crockford_characters_and_fold_as_typed() {
         let code = new_code();

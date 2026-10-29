@@ -25,6 +25,10 @@ use crate::store::gov::{self, ADDRESS, Claim};
 
 const KEY_STORAGE: [&str; 5] = ["secure_enclave", "strongbox", "tee", "tpm", "software"];
 
+/// A claim. The credential hash is SHA-256 of the canonical typed code (upper-cased, dashes
+/// and spaces dropped, `I`/`L` read as `1` and `O` as `0`: 10 ASCII Crockford characters), or
+/// of the QR secret's 16 decoded bytes (not its base64 text). Vectors:
+/// `crates/server/tests/vectors/pairing-v1.json`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimBody {
@@ -44,8 +48,10 @@ pub struct ClaimBody {
     /// `secure_enclave`, `strongbox`, `tee`, `tpm` or `software`: a claim.
     #[serde(default)]
     pub key_storage: Option<String>,
-    /// The routine key over `AINKRAD-PAIR-V1\n<core_fp>\n<b64(SHA-256(credential))>\n
-    /// <fp(routine)>\n<fp(stepup) or ->`, raw r||s, base64url.
+    /// The routine key's ES256 signature (raw r||s, base64url) over the UTF-8 string
+    /// `AINKRAD-PAIR-V1` LF `<core_fp>` LF `<base64url of the credential hash>` LF
+    /// `<fp(routine)>` LF `<fp(stepup) or ->`, no trailing newline; fp is base64url SHA-256 of
+    /// the SPKI.
     pub pop: String,
     /// The step-up key over the same string, with `stepup_spki`.
     #[serde(default)]
@@ -58,7 +64,12 @@ pub struct Claimed {
     pub device_id: Option<String>,
     /// The Core identity SPKI, base64url: its fingerprint must equal the QR's `c`.
     pub core_spki: Option<String>,
-    /// Show this; the approver compares it with theirs.
+    /// The pairing, `p_…`: with `core_spki` and its own key the device computes the SAS
+    /// itself and shows that, rather than trusting `sas` from whoever answered.
+    pub pairing_id: Option<String>,
+    /// Show this; the approver compares it with theirs. The first 16 upper-case Crockford
+    /// characters of SHA-256(`AINKRAD-SAS-V1` ‖ core_spki ‖ routine_spki ‖ pairing id as
+    /// UTF-8), as `XXXX-XXXX-XXXX-XXXX`.
     pub sas: Option<String>,
 }
 
@@ -232,6 +243,7 @@ async fn evaluate(
     let body = Claimed {
         device_id: Some(device_id),
         core_spki: Some(b64(&app.auth.identity.spki)),
+        pairing_id: Some(pairing.id.clone()),
         sas: Some(sas),
     };
     Ok((StatusCode::ACCEPTED, Json(body)).into_response())

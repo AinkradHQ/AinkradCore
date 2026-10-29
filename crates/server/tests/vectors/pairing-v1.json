@@ -1,0 +1,20 @@
+{
+  "canonical_code": "4DTTJF9NW0",
+  "code_hash": "KADFi2rvVrHxdsROBVeLa9OdLtROVYSsJfGO5e5_me8",
+  "comment": "Pairing golden vectors (handshake spec §3, §7.1, §7.2; v1). code_hash = SHA-256 of the canonical code (typed text upper-cased, dashes and spaces dropped, I and L read as 1, O as 0: 10 Crockford characters, ASCII). secret_hash = SHA-256 of the QR secret's 16 decoded bytes (not its base64 text). The proof of possession is ES256 (raw r||s, base64url) by the routine key over pop_message: \"AINKRAD-PAIR-V1\\n\" + core_fp + \"\\n\" + base64url(credential hash) + \"\\n\" + fp(routine key) + \"\\n\" + (fp(step-up key) or \"-\"), with no trailing newline. sas = the first 16 upper-case Crockford characters (5-bit groups, most significant first) of SHA-256(\"AINKRAD-SAS-V1\" || core_spki || device_spki || pairing_id as UTF-8), grouped XXXX-XXXX-XXXX-XXXX. Signatures are randomised: verify them, never expect to reproduce them. core_pkcs8 and device_pkcs8 are throwaway TEST keys made for this file: never use them for anything else.",
+  "core_fp": "PDOmx45LxkvLz2wKudVnqJKGS5lvgtRgUjrDnYVbiOU",
+  "core_pkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgMYPXjpXpbeklZTK0XTMr8QrPoGIuml7g0CLAGBe48iGhRANCAAQoLwgdb5WqecwsQgDkkt9IHQCljEMNxWFO9f4T7mCIoBLEWtRsWbNsTH-qDq1c6w-lLPj1EvGN4AowutFZ_g5I",
+  "core_spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEKC8IHW-VqnnMLEIA5JLfSB0ApYxDDcVhTvX-E-5giKASxFrUbFmzbEx_qg6tXOsPpSz49RLxjeAKMLrRWf4OSA",
+  "device_fp": "Yaf0mDJiXssTg3Wtv06mddaSMATBwgNIHwMmbASF36s",
+  "device_pkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgoR2dFeaKvR_ywxKnTCXqokNIIjoHoqxJ20FvXCwmpv2hRANCAARPQ-fVG9AQfjELFjcWBj2vhzKR5s8jQUSFzqzG_DBGxLkIwx58YzEZ7v483C_jyAdl6zpmnP_3orHwj0oVF5og",
+  "device_spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAET0Pn1RvQEH4xCxY3FgY9r4cykebPI0FEhc6sxvwwRsS5CMMefGMxGe7-PNwv48gHZes6Zpz_96Kx8I9KFReaIA",
+  "pairing_id": "p_77c1yk4qy56c33bq48xwnq7h5h",
+  "pop_code": "hBiwDF710MLJ7jbZHZF51ll0ulMiqtMzpKc_E6Kst79f7jIvKTwiplMoc1aX-garZoNz6PGUxRKbAkyBalwROA",
+  "pop_message_code": "AINKRAD-PAIR-V1\nPDOmx45LxkvLz2wKudVnqJKGS5lvgtRgUjrDnYVbiOU\nKADFi2rvVrHxdsROBVeLa9OdLtROVYSsJfGO5e5_me8\nYaf0mDJiXssTg3Wtv06mddaSMATBwgNIHwMmbASF36s\n-",
+  "pop_message_secret": "AINKRAD-PAIR-V1\nPDOmx45LxkvLz2wKudVnqJKGS5lvgtRgUjrDnYVbiOU\nGPKWgH5vdsurtziFUHrO9wTYqY5J23rfcT2UtOMByuE\nYaf0mDJiXssTg3Wtv06mddaSMATBwgNIHwMmbASF36s\n-",
+  "pop_secret": "7U4mKOtOajYcVNyu-6mdqUtEuTq0r1h5WbmHQ2J0iP1qE78odTmZeEWzQJ1ZPnGAb4q_cpAvAnMOeY9N_FqQ_A",
+  "sas": "D78W-D3NY-2CBM-5MEH",
+  "secret": "OJhPQxc3HP086REi8GuOlQ",
+  "secret_hash": "GPKWgH5vdsurtziFUHrO9wTYqY5J23rfcT2UtOMByuE",
+  "typed_code": "4dttj-f9nwo"
+}
