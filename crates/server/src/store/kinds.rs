@@ -24,6 +24,13 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "auth.lockout",
     "device.enrolled",
     "device.revoked",
+    "pairing.approved",
+    "pairing.burned",
+    "pairing.claimed",
+    "pairing.created",
+    "pairing.expired",
+    "pairing.refused",
+    "pairing.rejected",
     "setting.reset",
     "setting.set",
 ];

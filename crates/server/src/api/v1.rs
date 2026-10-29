@@ -17,7 +17,7 @@ use axum::Router;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, put};
+use axum::routing::{delete, get, post, put};
 use serde::Deserialize;
 use utoipa::IntoParams;
 
@@ -31,6 +31,8 @@ pub mod gate;
 pub mod handshake;
 mod me;
 pub mod scopes;
+pub mod pair;
+mod pairing;
 pub mod session;
 mod settings;
 pub mod spec;
@@ -125,6 +127,10 @@ pub fn router(app: App) -> Router {
     Router::new()
         .route("/api/v1/devices", get(devices::list))
         .route("/api/v1/devices/{id}", delete(devices::revoke))
+        .route("/api/v1/pairings", post(pairing::create))
+        .route("/api/v1/pairings/{id}", get(pairing::get))
+        .route("/api/v1/pairings/{id}/approve", post(pairing::approve))
+        .route("/api/v1/pairings/{id}/reject", post(pairing::reject))
         .route(
             "/api/v1/push-token",
             put(devices::set_push).delete(devices::clear_push),

@@ -99,6 +99,31 @@ impl TestDevice {
         d
     }
 
+    /// The `/pair/claim` body for the typed `code` or the QR `secret` (one of them), with this
+    /// device's routine key and its proof of possession, as a client builds it (§7.2 step 3).
+    pub fn claim_body(&self, code: Option<&str>, secret: Option<&str>) -> serde_json::Value {
+        use super::pairing::{code_hash, normal_code, pop_message, secret_hash};
+        let hash = match (code, secret) {
+            (Some(c), None) => code_hash(&normal_code(c).unwrap_or_default()),
+            (None, Some(s)) => secret_hash(&super::crypto::unb64(s, 22).unwrap_or_default()),
+            _ => panic!("one of code and secret"),
+        };
+        let message = pop_message(
+            &self.core_fp,
+            &hash,
+            &super::crypto::fingerprint(&self.spki),
+            None,
+        );
+        serde_json::json!({
+            "code": code,
+            "secret": secret,
+            "routine_spki": b64(&self.spki),
+            "platform": "test",
+            "key_storage": "software",
+            "pop": b64(&self.sign(&message)),
+        })
+    }
+
     pub fn set_session(&self, session: Option<String>) {
         *self.session.lock().unwrap() = session;
     }

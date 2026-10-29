@@ -27,6 +27,7 @@ mod abuse;
 mod events;
 mod me;
 mod modules;
+mod pairing;
 mod preauth;
 mod revocation;
 mod scopes;

@@ -7,9 +7,7 @@ use serde_json::{Value, json};
 use sqlx::sqlite::SqlitePool;
 use sqlx::{Error, SqliteConnection};
 
-#[cfg(any(test, feature = "test-support"))]
 use super::{KINDS, SCOPES};
-#[cfg(any(test, feature = "test-support"))]
 use crate::auth::crypto::{fingerprint, spki_point};
 use crate::store::audit;
 
@@ -49,8 +47,6 @@ pub struct NewDevice<'a> {
 /// Inserts `d` with `status` inside the caller's transaction; returns its row number. Refuses
 /// (`InvalidArgument`) a key that is not a P-256 SPKI on the curve, an unknown kind or scope,
 /// and a runner with any scope but `runner`.
-// ponytail: only fixtures enroll until pairing lands (E1-07.4); then this cfg goes.
-#[cfg(any(test, feature = "test-support"))]
 pub(crate) async fn insert_device(
     conn: &mut SqliteConnection,
     d: &NewDevice<'_>,

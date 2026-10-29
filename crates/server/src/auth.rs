@@ -25,6 +25,7 @@ use crate::api::limit::Limiter;
 pub mod budget;
 pub mod crypto;
 pub mod identity;
+pub mod pairing;
 pub mod signed;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;

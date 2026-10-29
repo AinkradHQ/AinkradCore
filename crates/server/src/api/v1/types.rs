@@ -24,7 +24,9 @@
 ///    scopes and fingerprint, `ErrorBody.server_time`. Bearer device keys, `createDevice` and
 ///    the six-character pairing are gone (a deliberate break before any client shipped; see
 ///    `api/compat-allow.txt`).
-pub const API_MINOR: u32 = 3;
+/// 4: pairing (E1-07.4, .7): `createPairing`, `getPairing`, `approvePairing`, `rejectPairing`,
+///    and the pre-auth `claimPairing` and `pairStatus`.
+pub const API_MINOR: u32 = 4;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
