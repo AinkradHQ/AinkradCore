@@ -28,5 +28,7 @@ build-linux-x86_64: ; $(call DOCKER_RUN,amd64) --platform linux/amd64 $(RUST_IMA
 CITADEL = --manifest-path modules/citadel/Cargo.toml --workspace
 build-citadel: ; $(CARGO) build $(CITADEL)
 test-citadel: ; $(CARGO) test $(CITADEL)
-# Local run (E1-01.5): loopback only, state in ./state (gitignored); `Run/run.sh run` comes here.
-run: ; mkdir -p state && $(CARGO) run -p ainkrad-core-server -- serve state/core.db
+# Local run (E1-01.5): state in ./state (gitignored); `Run/run.sh run` comes here. The default listener is a
+# Unix socket (state/core.sock); for HTTP on loopback use `make run LISTEN=loopback:7700`.
+LISTEN ?= unix:state/core.sock
+run: ; mkdir -p state && $(CARGO) run -p ainkrad-core-server -- serve state/core.db --listen $(LISTEN)
