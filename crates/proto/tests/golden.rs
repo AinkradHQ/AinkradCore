@@ -147,8 +147,7 @@ fn v2_frames_are_pinned() {
             }],
             os: Some("linux".to_owned()),
             arch: Some("aarch64".to_owned()),
-            device_id: None,
-            nonce: None,
+            ..Default::default()
         })),
     );
     v2(
@@ -163,6 +162,7 @@ fn v2_frames_are_pinned() {
             arch: None,
             device_id: Some("d_5v0v4qa7a8h2tb3219mtz5znvv".to_owned()),
             nonce: Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8".to_owned()),
+            ..Default::default()
         })),
     );
     v2(
@@ -201,6 +201,36 @@ fn v2_frames_are_pinned() {
         0,
         Body::Control(Control::Welcome(CoreWelcome {
             protocol: PROTOCOL_VERSION.to_owned(),
+            ..Default::default()
+        })),
+    );
+    v2(
+        "hello_resume",
+        CONTROL_STREAM,
+        0,
+        Body::Control(Control::Hello(RunnerHello {
+            protocol: PROTOCOL_VERSION.to_owned(),
+            runner_version: "0.1.0".to_owned(),
+            boot: Some("b_runner".to_owned()),
+            streams: vec![StreamState {
+                stream_id: 3,
+                received: 1,
+            }],
+            ..Default::default()
+        })),
+    );
+    v2(
+        "welcome_resume",
+        CONTROL_STREAM,
+        1,
+        Body::Control(Control::Welcome(CoreWelcome {
+            protocol: PROTOCOL_VERSION.to_owned(),
+            boot: Some("b_core".to_owned()),
+            heartbeat_ms: Some(15000),
+            streams: vec![StreamState {
+                stream_id: 3,
+                received: 0,
+            }],
         })),
     );
     v2("heartbeat", CONTROL_STREAM, 1, Body::Heartbeat);

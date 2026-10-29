@@ -1,0 +1,1 @@
+{"stream_id":0,"kind":"control","seq":0,"payload":{"boot":"b_runner","drivers":[],"protocol":"2.0","runner_version":"0.1.0","streams":[{"received":1,"stream_id":3}],"type":"hello"}}
