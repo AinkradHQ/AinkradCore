@@ -120,6 +120,7 @@ pub async fn create(
         scopes: &scopes,
         created_by: Some(&me.device.id),
         bootstrap: false,
+        recovery: false,
     };
     let created = gov::create_pairing(&app.pool, &new, BY, app.clock.unix())
         .await

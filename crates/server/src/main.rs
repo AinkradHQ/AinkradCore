@@ -122,8 +122,26 @@ async fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         ["device", "list", db] => list_devices(Path::new(db)).await,
-        ["bootstrap", db] => admin::bootstrap::run(Path::new(db), "first device").await,
-        ["bootstrap", db, name] => admin::bootstrap::run(Path::new(db), name).await,
+        ["bootstrap", db] => admin::bootstrap::bootstrap(Path::new(db), "first device").await,
+        ["bootstrap", db, name] => admin::bootstrap::bootstrap(Path::new(db), name).await,
+        ["recover", db, rest @ ..] => {
+            let flag = |f: &str| rest.contains(&f);
+            let names: Vec<&&str> = rest.iter().filter(|a| !a.starts_with("--")).collect();
+            let known = rest
+                .iter()
+                .all(|a| !a.starts_with("--") || ["--revoke-all", "--revoke-runners"].contains(a));
+            match (known, names.as_slice()) {
+                (true, [] | [_]) => {
+                    let name = names.first().map_or("recovered admin", |n| **n);
+                    let (all, runners) = (flag("--revoke-all"), flag("--revoke-runners"));
+                    admin::bootstrap::recover(Path::new(db), name, all, runners).await
+                }
+                _ => {
+                    eprintln!("{}", usage());
+                    return ExitCode::from(2);
+                }
+            }
+        }
         ["device", "revoke", db, id] => revoke_device(Path::new(db), id).await,
         _ => {
             eprintln!("{}", usage());

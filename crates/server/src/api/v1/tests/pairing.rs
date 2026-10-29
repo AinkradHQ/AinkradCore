@@ -398,6 +398,7 @@ async fn a_bootstrap_pairing_is_claimable_only_from_the_hosts_socket() {
         scopes: &scopes,
         created_by: None,
         bootstrap: true,
+        recovery: false,
     };
     let refused = create_pairing(
         &fx.app.pool,

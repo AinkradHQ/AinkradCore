@@ -27,9 +27,12 @@ pub struct Pairing {
     pub kind: String,
     pub name: String,
     pub scopes: Vec<String>,
-    /// The approver device that created it; `None` for the host's bootstrap.
+    /// The approver device that created it; `None` for the host's bootstrap and recover.
     pub created_by: Option<String>,
+    /// The host's first-device `bootstrap`.
     pub bootstrap: bool,
+    /// The host's `recover` (§12): like a bootstrap, but whatever devices exist.
+    pub recovery: bool,
     pub created_at: String,
     pub expires_at: String,
     /// `live`, `claimed`, `approved`, `rejected`, `expired` or `burned`.
@@ -46,7 +49,8 @@ fn pairing(row: SqliteRow) -> Result<Pairing, Error> {
         name: row.try_get("name")?,
         scopes: serde_json::from_str(&scopes).map_err(|e| Error::Decode(Box::new(e)))?,
         created_by: row.try_get("created_by")?,
-        bootstrap: row.try_get("bootstrap")?,
+        bootstrap: row.try_get::<i64, _>("bootstrap")? == 1,
+        recovery: row.try_get::<i64, _>("bootstrap")? == 2,
         created_at: row.try_get("created_at")?,
         expires_at: row.try_get("expires_at")?,
         status: row.try_get("status")?,
@@ -87,11 +91,16 @@ async fn append(
     audit::append(conn, &event).await.map(drop)
 }
 
-/// Whether any device row exists, revoked ones included (bootstrap's guard, §7.3).
+/// Whether a device stands in the way of a bootstrap (§7.3): one that is pending, active or
+/// locked, or was ever revoked. A claimant the host declined (`rejected`) or let lapse
+/// (`expired`) never was a device, so a failed bootstrap can simply be run again (review H2).
 pub async fn any_device(conn: &mut SqliteConnection) -> Result<bool, Error> {
-    sqlx::query_scalar("SELECT count(*) > 0 FROM core_devices")
-        .fetch_one(conn)
-        .await
+    sqlx::query_scalar(
+        "SELECT count(*) > 0 FROM core_devices \
+         WHERE status IN ('pending', 'active', 'locked') OR revoked_at IS NOT NULL",
+    )
+    .fetch_one(conn)
+    .await
 }
 
 pub async fn get_pairing(pool: &SqlitePool, id: &str) -> Result<Option<Pairing>, Error> {
@@ -113,6 +122,8 @@ pub struct NewPairing<'a> {
     pub scopes: &'a [String],
     pub created_by: Option<&'a str>,
     pub bootstrap: bool,
+    /// A `recover` pairing (§12): host-socket only, whatever devices exist.
+    pub recovery: bool,
 }
 
 /// A created pairing: its credentials, shown once and kept only as hashes.
@@ -161,13 +172,18 @@ pub async fn create_pairing(
     .bind(p.name.trim())
     .bind(serde_json::to_string(p.scopes).expect("strings serialise"))
     .bind(p.created_by)
-    .bind(p.bootstrap)
+    .bind(match (p.bootstrap, p.recovery) {
+        (_, true) => 2,
+        (true, false) => 1,
+        (false, false) => 0,
+    })
     .bind(&now_at)
     .bind(iso_of_unix(expires))
     .execute(&mut *tx)
     .await?;
     let details = json!({"pairing": id, "kind": p.kind, "name": p.name.trim(),
-        "scopes": p.scopes, "by_device": p.created_by, "bootstrap": p.bootstrap});
+        "scopes": p.scopes, "by_device": p.created_by, "bootstrap": p.bootstrap,
+        "recovery": p.recovery});
     append(&mut tx, actor, "pairing.created", None, details).await?;
     tx.commit().await?;
     Ok(Created {
@@ -329,7 +345,13 @@ pub async fn approve_pairing(
     decide(&mut tx, &p.id, "approved", by.device, now).await?;
     let details = json!({"pairing": p.id, "device": device, "scopes": scopes,
         "by_device": by.device, "bootstrap": p.bootstrap});
-    append(&mut tx, by.actor, "pairing.approved", device, details).await?;
+    // A recovery's approval is the enrolment `recover` promised to audit (§12).
+    let action = if p.recovery {
+        "device.enrolled"
+    } else {
+        "pairing.approved"
+    };
+    append(&mut tx, by.actor, action, device, details).await?;
     tx.commit().await?;
     Ok(Decision::Done)
 }

@@ -107,6 +107,7 @@ fn help_documents_every_verb() {
         "device list",
         "device revoke",
         "bootstrap",
+        "recover",
         "audit verify",
         "audit export",
         "setting list",

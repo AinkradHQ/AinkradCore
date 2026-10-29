@@ -163,7 +163,7 @@ async fn evaluate(
         Err(e) => return Ok(ApiError::from(e).into_response()),
     };
     let local = parts.extensions.get::<Local>().is_some_and(|l| l.same_user);
-    if pairing.bootstrap && !local {
+    if (pairing.bootstrap || pairing.recovery) && !local {
         return Err("bootstrap claimed from outside the host's socket");
     }
     // The keys and their proofs; a failure here does not spend the pairing.
