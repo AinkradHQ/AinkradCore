@@ -87,14 +87,15 @@ fn of(d: gov::Device, live: Option<&RunnerState>) -> Runner {
     }
 }
 
-/// A runner device that is not revoked.
+/// A runner device that may connect: approved and not revoked (a pending, rejected or expired
+/// claimant is not a runner yet).
 fn listed(d: &gov::Device) -> bool {
-    d.kind == "runner" && d.revoked_at.is_none()
+    d.kind == "runner" && d.usable()
 }
 
 #[utoipa::path(get, path = "/api/v1/runners", operation_id = "listRunners", tag = "runners",
-    responses((status = 200, description = "Every paired runner that is not revoked, with its \
-        live state", body = Vec<Runner>)))]
+    responses((status = 200, description = "Every paired runner that is active (approved, not \
+        revoked), with its live state", body = Vec<Runner>)))]
 pub async fn list(State(app): State<App>) -> ApiResult<Vec<Runner>> {
     let live = app.hub.runners();
     let devices = gov::list_devices(&app.pool).await?;

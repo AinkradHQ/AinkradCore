@@ -1912,7 +1912,7 @@
                 }
               }
             },
-            "description": "Every paired runner that is not revoked, with its live state"
+            "description": "Every paired runner that is active (approved, not revoked), with its live state"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

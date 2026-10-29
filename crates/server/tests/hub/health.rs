@@ -31,14 +31,29 @@ async fn kinds(core: &Core) -> Vec<String> {
 
 #[tokio::test]
 async fn the_api_shows_live_runners_and_runs_the_noop() {
-    let core = Core::start("health", quick()).await;
+    // A slow heartbeat: the fake sends none, and must not turn degraded mid-test.
+    let hub = ainkrad_core_server::hub::HubConfig {
+        heartbeat: Duration::from_secs(10),
+        ..quick()
+    };
+    let core = Core::start("health", hub).await;
     let admin = core.device("device", &["read", "agent"]).await;
     let reader = core.device("device", &["read"]).await;
     let dev = core.runner().await;
     let path = format!("/api/v1/runners/{}", dev.id);
 
+    // A claimant that was never approved is not a runner.
+    let rejected = core.runner().await;
+    sqlx::query("UPDATE core_devices SET status = 'rejected' WHERE id = ?")
+        .bind(&rejected.id)
+        .execute(&core.app.pool)
+        .await
+        .unwrap();
+    let rejected_path = format!("/api/v1/runners/{}", rejected.id);
+    assert_eq!(call(&core, &admin, "GET", &rejected_path).await.0, 404);
     let (status, list) = call(&core, &admin, "GET", "/api/v1/runners").await;
     assert_eq!(status, 200);
+    assert_eq!(list.as_array().unwrap().len(), 1, "{list}");
     assert_eq!(list[0]["id"], dev.id.as_str());
     assert_eq!(
         (&list[0]["online"], &list[0]["load"]),

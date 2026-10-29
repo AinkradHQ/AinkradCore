@@ -3788,7 +3788,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Every paired runner that is not revoked, with its live state
+            /// Every paired runner that is active (approved, not revoked), with its live state
             ///
             /// - Remark: Generated from `#/paths//api/v1/runners/get(listRunners)/responses/200`.
             ///

@@ -1276,7 +1276,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every paired runner that is not revoked, with its live state */
+            /** @description Every paired runner that is active (approved, not revoked), with its live state */
             200: {
                 headers: {
                     [name: string]: unknown;
