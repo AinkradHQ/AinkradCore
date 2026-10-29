@@ -21,9 +21,9 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual
 
 /**
- * 
+ * A claim. The credential hash is SHA-256 of the canonical typed code (upper-cased, dashes and spaces dropped, `I`/`L` read as `1` and `O` as `0`: 10 ASCII Crockford characters), or of the QR secret's 16 decoded bytes (not its base64 text). Vectors: `crates/server/tests/vectors/pairing-v1.json`.
  *
- * @param pop The routine key over `AINKRAD-PAIR-V1\\n<core_fp>\\n<b64(SHA-256(credential))>\\n <fp(routine)>\\n<fp(stepup) or ->`, raw r||s, base64url.
+ * @param pop The routine key's ES256 signature (raw r||s, base64url) over the UTF-8 string `AINKRAD-PAIR-V1` LF `<core_fp>` LF `<base64url of the credential hash>` LF `<fp(routine)>` LF `<fp(stepup) or ->`, no trailing newline; fp is base64url SHA-256 of the SPKI.
  * @param routineSpki The routine key: a P-256 SubjectPublicKeyInfo, base64url.
  * @param code The typed code (`ABCDE-FGHJK`, any case); or `secret`.
  * @param keyStorage `secure_enclave`, `strongbox`, `tee`, `tpm` or `software`: a claim.
@@ -36,7 +36,7 @@ import kotlinx.serialization.Contextual
 
 data class ClaimBody (
 
-    /* The routine key over `AINKRAD-PAIR-V1\\n<core_fp>\\n<b64(SHA-256(credential))>\\n <fp(routine)>\\n<fp(stepup) or ->`, raw r||s, base64url. */
+    /* The routine key's ES256 signature (raw r||s, base64url) over the UTF-8 string `AINKRAD-PAIR-V1` LF `<core_fp>` LF `<base64url of the credential hash>` LF `<fp(routine)>` LF `<fp(stepup) or ->`, no trailing newline; fp is base64url SHA-256 of the SPKI. */
     @SerialName(value = "pop")
     val pop: kotlin.String,
 

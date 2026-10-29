@@ -2163,7 +2163,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/pairings/post(createPairing)/responses/403`.
             ///
@@ -2452,7 +2452,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/pairings/{id}/get(getPairing)/responses/403`.
             ///
@@ -2750,7 +2750,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/pairings/{id}/approve/post(approvePairing)/responses/403`.
             ///
@@ -3039,7 +3039,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/pairings/{id}/reject/post(rejectPairing)/responses/403`.
             ///
@@ -6493,7 +6493,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//pair/claim/post(claimPairing)/responses/403`.
             ///
@@ -6799,7 +6799,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//pair/status/post(pairStatus)/responses/403`.
             ///

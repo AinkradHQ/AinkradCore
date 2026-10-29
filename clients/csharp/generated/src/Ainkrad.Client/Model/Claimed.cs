@@ -37,11 +37,13 @@ namespace Ainkrad.Client.Model
         /// </summary>
         /// <param name="coreSpki">The Core identity SPKI, base64url: its fingerprint must equal the QR&#39;s &#x60;c&#x60;..</param>
         /// <param name="deviceId">The new device, &#x60;d_…&#x60;, pending until approved..</param>
-        /// <param name="sas">Show this; the approver compares it with theirs..</param>
-        public Claimed(string coreSpki = default, string deviceId = default, string sas = default)
+        /// <param name="pairingId">The pairing, &#x60;p_…&#x60;: with &#x60;core_spki&#x60; and its own key the device computes the SAS itself and shows that, rather than trusting &#x60;sas&#x60; from whoever answered..</param>
+        /// <param name="sas">Show this; the approver compares it with theirs. The first 16 upper-case Crockford characters of SHA-256(&#x60;AINKRAD-SAS-V1&#x60; ‖ core_spki ‖ routine_spki ‖ pairing id as UTF-8), as &#x60;XXXX-XXXX-XXXX-XXXX&#x60;..</param>
+        public Claimed(string coreSpki = default, string deviceId = default, string pairingId = default, string sas = default)
         {
             this.CoreSpki = coreSpki;
             this.DeviceId = deviceId;
+            this.PairingId = pairingId;
             this.Sas = sas;
         }
 
@@ -60,9 +62,16 @@ namespace Ainkrad.Client.Model
         public string DeviceId { get; set; }
 
         /// <summary>
-        /// Show this; the approver compares it with theirs.
+        /// The pairing, &#x60;p_…&#x60;: with &#x60;core_spki&#x60; and its own key the device computes the SAS itself and shows that, rather than trusting &#x60;sas&#x60; from whoever answered.
         /// </summary>
-        /// <value>Show this; the approver compares it with theirs.</value>
+        /// <value>The pairing, &#x60;p_…&#x60;: with &#x60;core_spki&#x60; and its own key the device computes the SAS itself and shows that, rather than trusting &#x60;sas&#x60; from whoever answered.</value>
+        [DataMember(Name = "pairing_id", EmitDefaultValue = true)]
+        public string PairingId { get; set; }
+
+        /// <summary>
+        /// Show this; the approver compares it with theirs. The first 16 upper-case Crockford characters of SHA-256(&#x60;AINKRAD-SAS-V1&#x60; ‖ core_spki ‖ routine_spki ‖ pairing id as UTF-8), as &#x60;XXXX-XXXX-XXXX-XXXX&#x60;.
+        /// </summary>
+        /// <value>Show this; the approver compares it with theirs. The first 16 upper-case Crockford characters of SHA-256(&#x60;AINKRAD-SAS-V1&#x60; ‖ core_spki ‖ routine_spki ‖ pairing id as UTF-8), as &#x60;XXXX-XXXX-XXXX-XXXX&#x60;.</value>
         [DataMember(Name = "sas", EmitDefaultValue = true)]
         public string Sas { get; set; }
 
@@ -76,6 +85,7 @@ namespace Ainkrad.Client.Model
             sb.Append("class Claimed {\n");
             sb.Append("  CoreSpki: ").Append(CoreSpki).Append("\n");
             sb.Append("  DeviceId: ").Append(DeviceId).Append("\n");
+            sb.Append("  PairingId: ").Append(PairingId).Append("\n");
             sb.Append("  Sas: ").Append(Sas).Append("\n");
             sb.Append("}\n");
             return sb.ToString();

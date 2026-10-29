@@ -170,6 +170,7 @@
           "pairing.expired",
           "pairing.refused",
           "pairing.rejected",
+          "recover.started",
           "setting.reset",
           "setting.set"
         ]
@@ -230,6 +231,7 @@
       },
       "ClaimBody": {
         "additionalProperties": false,
+        "description": "A claim. The credential hash is SHA-256 of the canonical typed code (upper-cased, dashes\nand spaces dropped, `I`/`L` read as `1` and `O` as `0`: 10 ASCII Crockford characters), or\nof the QR secret's 16 decoded bytes (not its base64 text). Vectors:\n`crates/server/tests/vectors/pairing-v1.json`.",
         "properties": {
           "code": {
             "description": "The typed code (`ABCDE-FGHJK`, any case); or `secret`.",
@@ -252,7 +254,7 @@
             ]
           },
           "pop": {
-            "description": "The routine key over `AINKRAD-PAIR-V1\\n<core_fp>\\n<b64(SHA-256(credential))>\\n\n<fp(routine)>\\n<fp(stepup) or ->`, raw r||s, base64url.",
+            "description": "The routine key's ES256 signature (raw r||s, base64url) over the UTF-8 string\n`AINKRAD-PAIR-V1` LF `<core_fp>` LF `<base64url of the credential hash>` LF\n`<fp(routine)>` LF `<fp(stepup) or ->`, no trailing newline; fp is base64url SHA-256 of\nthe SPKI.",
             "type": "string"
           },
           "pop_stepup": {
@@ -303,8 +305,15 @@
               "null"
             ]
           },
+          "pairing_id": {
+            "description": "The pairing, `p_…`: with `core_spki` and its own key the device computes the SAS\nitself and shows that, rather than trusting `sas` from whoever answered.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "sas": {
-            "description": "Show this; the approver compares it with theirs.",
+            "description": "Show this; the approver compares it with theirs. The first 16 upper-case Crockford\ncharacters of SHA-256(`AINKRAD-SAS-V1` ‖ core_spki ‖ routine_spki ‖ pairing id as\nUTF-8), as `XXXX-XXXX-XXXX-XXXX`.",
             "type": [
               "string",
               "null"
@@ -1494,7 +1503,8 @@
         },
         "tags": [
           "pairing"
-        ]
+        ],
+        "x-ainkrad-scope": "admin"
       }
     },
     "/api/v1/pairings/{id}": {
@@ -1546,7 +1556,8 @@
         },
         "tags": [
           "pairing"
-        ]
+        ],
+        "x-ainkrad-scope": "admin"
       }
     },
     "/api/v1/pairings/{id}/approve": {
@@ -1608,7 +1619,8 @@
         },
         "tags": [
           "pairing"
-        ]
+        ],
+        "x-ainkrad-scope": "admin"
       }
     },
     "/api/v1/pairings/{id}/reject": {
@@ -1660,7 +1672,8 @@
         },
         "tags": [
           "pairing"
-        ]
+        ],
+        "x-ainkrad-scope": "admin"
       }
     },
     "/api/v1/push-token": {

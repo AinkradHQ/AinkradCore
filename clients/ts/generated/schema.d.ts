@@ -393,6 +393,12 @@ export interface components {
             /** @description The device that will answer it, `d_…`. */
             device_id: string;
         };
+        /**
+         * @description A claim. The credential hash is SHA-256 of the canonical typed code (upper-cased, dashes
+         *     and spaces dropped, `I`/`L` read as `1` and `O` as `0`: 10 ASCII Crockford characters), or
+         *     of the QR secret's 16 decoded bytes (not its base64 text). Vectors:
+         *     `crates/server/tests/vectors/pairing-v1.json`.
+         */
         ClaimBody: {
             /** @description The typed code (`ABCDE-FGHJK`, any case); or `secret`. */
             code?: string | null;
@@ -400,8 +406,10 @@ export interface components {
             key_storage?: string | null;
             platform?: string | null;
             /**
-             * @description The routine key over `AINKRAD-PAIR-V1\n<core_fp>\n<b64(SHA-256(credential))>\n
-             *     <fp(routine)>\n<fp(stepup) or ->`, raw r||s, base64url.
+             * @description The routine key's ES256 signature (raw r||s, base64url) over the UTF-8 string
+             *     `AINKRAD-PAIR-V1` LF `<core_fp>` LF `<base64url of the credential hash>` LF
+             *     `<fp(routine)>` LF `<fp(stepup) or ->`, no trailing newline; fp is base64url SHA-256 of
+             *     the SPKI.
              */
             pop: string;
             /** @description The step-up key over the same string, with `stepup_spki`. */
@@ -418,7 +426,16 @@ export interface components {
             core_spki?: string | null;
             /** @description The new device, `d_…`, pending until approved. */
             device_id?: string | null;
-            /** @description Show this; the approver compares it with theirs. */
+            /**
+             * @description The pairing, `p_…`: with `core_spki` and its own key the device computes the SAS
+             *     itself and shows that, rather than trusting `sas` from whoever answered.
+             */
+            pairing_id?: string | null;
+            /**
+             * @description Show this; the approver compares it with theirs. The first 16 upper-case Crockford
+             *     characters of SHA-256(`AINKRAD-SAS-V1` ‖ core_spki ‖ routine_spki ‖ pairing id as
+             *     UTF-8), as `XXXX-XXXX-XXXX-XXXX`.
+             */
             sas?: string | null;
         };
         /** @description A device: who it is and what it may do. Never a key's private half: the Core has none. */

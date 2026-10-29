@@ -25,7 +25,8 @@ import kotlinx.serialization.Contextual
  *
  * @param coreSpki The Core identity SPKI, base64url: its fingerprint must equal the QR's `c`.
  * @param deviceId The new device, `d_…`, pending until approved.
- * @param sas Show this; the approver compares it with theirs.
+ * @param pairingId The pairing, `p_…`: with `core_spki` and its own key the device computes the SAS itself and shows that, rather than trusting `sas` from whoever answered.
+ * @param sas Show this; the approver compares it with theirs. The first 16 upper-case Crockford characters of SHA-256(`AINKRAD-SAS-V1` ‖ core_spki ‖ routine_spki ‖ pairing id as UTF-8), as `XXXX-XXXX-XXXX-XXXX`.
  */
 @Serializable
 
@@ -39,7 +40,11 @@ data class Claimed (
     @SerialName(value = "device_id")
     val deviceId: kotlin.String? = null,
 
-    /* Show this; the approver compares it with theirs. */
+    /* The pairing, `p_…`: with `core_spki` and its own key the device computes the SAS itself and shows that, rather than trusting `sas` from whoever answered. */
+    @SerialName(value = "pairing_id")
+    val pairingId: kotlin.String? = null,
+
+    /* Show this; the approver compares it with theirs. The first 16 upper-case Crockford characters of SHA-256(`AINKRAD-SAS-V1` ‖ core_spki ‖ routine_spki ‖ pairing id as UTF-8), as `XXXX-XXXX-XXXX-XXXX`. */
     @SerialName(value = "sas")
     val sas: kotlin.String? = null
 

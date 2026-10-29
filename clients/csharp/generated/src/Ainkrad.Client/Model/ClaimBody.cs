@@ -27,7 +27,7 @@ using OpenAPIDateConverter = Ainkrad.Client.Client.OpenAPIDateConverter;
 namespace Ainkrad.Client.Model
 {
     /// <summary>
-    /// ClaimBody
+    /// A claim. The credential hash is SHA-256 of the canonical typed code (upper-cased, dashes and spaces dropped, &#x60;I&#x60;/&#x60;L&#x60; read as &#x60;1&#x60; and &#x60;O&#x60; as &#x60;0&#x60;: 10 ASCII Crockford characters), or of the QR secret&#39;s 16 decoded bytes (not its base64 text). Vectors: &#x60;crates/server/tests/vectors/pairing-v1.json&#x60;.
     /// </summary>
     [DataContract(Name = "ClaimBody")]
     public partial class ClaimBody : IValidatableObject
@@ -43,7 +43,7 @@ namespace Ainkrad.Client.Model
         /// <param name="code">The typed code (&#x60;ABCDE-FGHJK&#x60;, any case); or &#x60;secret&#x60;..</param>
         /// <param name="keyStorage">&#x60;secure_enclave&#x60;, &#x60;strongbox&#x60;, &#x60;tee&#x60;, &#x60;tpm&#x60; or &#x60;software&#x60;: a claim..</param>
         /// <param name="platform">platform.</param>
-        /// <param name="pop">The routine key over &#x60;AINKRAD-PAIR-V1\\n&lt;core_fp&gt;\\n&lt;b64(SHA-256(credential))&gt;\\n &lt;fp(routine)&gt;\\n&lt;fp(stepup) or -&gt;&#x60;, raw r||s, base64url. (required).</param>
+        /// <param name="pop">The routine key&#39;s ES256 signature (raw r||s, base64url) over the UTF-8 string &#x60;AINKRAD-PAIR-V1&#x60; LF &#x60;&lt;core_fp&gt;&#x60; LF &#x60;&lt;base64url of the credential hash&gt;&#x60; LF &#x60;&lt;fp(routine)&gt;&#x60; LF &#x60;&lt;fp(stepup) or -&gt;&#x60;, no trailing newline; fp is base64url SHA-256 of the SPKI. (required).</param>
         /// <param name="popStepup">The step-up key over the same string, with &#x60;stepup_spki&#x60;..</param>
         /// <param name="routineSpki">The routine key: a P-256 SubjectPublicKeyInfo, base64url. (required).</param>
         /// <param name="secret">The QR secret; or &#x60;code&#x60;..</param>
@@ -91,9 +91,9 @@ namespace Ainkrad.Client.Model
         public string Platform { get; set; }
 
         /// <summary>
-        /// The routine key over &#x60;AINKRAD-PAIR-V1\\n&lt;core_fp&gt;\\n&lt;b64(SHA-256(credential))&gt;\\n &lt;fp(routine)&gt;\\n&lt;fp(stepup) or -&gt;&#x60;, raw r||s, base64url.
+        /// The routine key&#39;s ES256 signature (raw r||s, base64url) over the UTF-8 string &#x60;AINKRAD-PAIR-V1&#x60; LF &#x60;&lt;core_fp&gt;&#x60; LF &#x60;&lt;base64url of the credential hash&gt;&#x60; LF &#x60;&lt;fp(routine)&gt;&#x60; LF &#x60;&lt;fp(stepup) or -&gt;&#x60;, no trailing newline; fp is base64url SHA-256 of the SPKI.
         /// </summary>
-        /// <value>The routine key over &#x60;AINKRAD-PAIR-V1\\n&lt;core_fp&gt;\\n&lt;b64(SHA-256(credential))&gt;\\n &lt;fp(routine)&gt;\\n&lt;fp(stepup) or -&gt;&#x60;, raw r||s, base64url.</value>
+        /// <value>The routine key&#39;s ES256 signature (raw r||s, base64url) over the UTF-8 string &#x60;AINKRAD-PAIR-V1&#x60; LF &#x60;&lt;core_fp&gt;&#x60; LF &#x60;&lt;base64url of the credential hash&gt;&#x60; LF &#x60;&lt;fp(routine)&gt;&#x60; LF &#x60;&lt;fp(stepup) or -&gt;&#x60;, no trailing newline; fp is base64url SHA-256 of the SPKI.</value>
         [DataMember(Name = "pop", IsRequired = true, EmitDefaultValue = true)]
         public string Pop { get; set; }
 

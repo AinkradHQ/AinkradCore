@@ -212,6 +212,11 @@ extension Components {
                 ])
             }
         }
+        /// A claim. The credential hash is SHA-256 of the canonical typed code (upper-cased, dashes
+        /// and spaces dropped, `I`/`L` read as `1` and `O` as `0`: 10 ASCII Crockford characters), or
+        /// of the QR secret's 16 decoded bytes (not its base64 text). Vectors:
+        /// `crates/server/tests/vectors/pairing-v1.json`.
+        ///
         /// - Remark: Generated from `#/components/schemas/ClaimBody`.
         public struct ClaimBody: Codable, Hashable, Sendable {
             /// The typed code (`ABCDE-FGHJK`, any case); or `secret`.
@@ -224,8 +229,10 @@ extension Components {
             public var keyStorage: Swift.String?
             /// - Remark: Generated from `#/components/schemas/ClaimBody/platform`.
             public var platform: Swift.String?
-            /// The routine key over `AINKRAD-PAIR-V1\n<core_fp>\n<b64(SHA-256(credential))>\n
-            /// <fp(routine)>\n<fp(stepup) or ->`, raw r||s, base64url.
+            /// The routine key's ES256 signature (raw r||s, base64url) over the UTF-8 string
+            /// `AINKRAD-PAIR-V1` LF `<core_fp>` LF `<base64url of the credential hash>` LF
+            /// `<fp(routine)>` LF `<fp(stepup) or ->`, no trailing newline; fp is base64url SHA-256 of
+            /// the SPKI.
             ///
             /// - Remark: Generated from `#/components/schemas/ClaimBody/pop`.
             public var pop: Swift.String
@@ -251,7 +258,7 @@ extension Components {
             ///   - code: The typed code (`ABCDE-FGHJK`, any case); or `secret`.
             ///   - keyStorage: `secure_enclave`, `strongbox`, `tee`, `tpm` or `software`: a claim.
             ///   - platform:
-            ///   - pop: The routine key over `AINKRAD-PAIR-V1\n<core_fp>\n<b64(SHA-256(credential))>\n
+            ///   - pop: The routine key's ES256 signature (raw r||s, base64url) over the UTF-8 string
             ///   - popStepup: The step-up key over the same string, with `stepup_spki`.
             ///   - routineSpki: The routine key: a P-256 SubjectPublicKeyInfo, base64url.
             ///   - secret: The QR secret; or `code`.
@@ -341,7 +348,14 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Claimed/device_id`.
             public var deviceId: Swift.String?
-            /// Show this; the approver compares it with theirs.
+            /// The pairing, `p_…`: with `core_spki` and its own key the device computes the SAS
+            /// itself and shows that, rather than trusting `sas` from whoever answered.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Claimed/pairing_id`.
+            public var pairingId: Swift.String?
+            /// Show this; the approver compares it with theirs. The first 16 upper-case Crockford
+            /// characters of SHA-256(`AINKRAD-SAS-V1` ‖ core_spki ‖ routine_spki ‖ pairing id as
+            /// UTF-8), as `XXXX-XXXX-XXXX-XXXX`.
             ///
             /// - Remark: Generated from `#/components/schemas/Claimed/sas`.
             public var sas: Swift.String?
@@ -350,19 +364,23 @@ extension Components {
             /// - Parameters:
             ///   - coreSpki: The Core identity SPKI, base64url: its fingerprint must equal the QR's `c`.
             ///   - deviceId: The new device, `d_…`, pending until approved.
-            ///   - sas: Show this; the approver compares it with theirs.
+            ///   - pairingId: The pairing, `p_…`: with `core_spki` and its own key the device computes the SAS
+            ///   - sas: Show this; the approver compares it with theirs. The first 16 upper-case Crockford
             public init(
                 coreSpki: Swift.String? = nil,
                 deviceId: Swift.String? = nil,
+                pairingId: Swift.String? = nil,
                 sas: Swift.String? = nil
             ) {
                 self.coreSpki = coreSpki
                 self.deviceId = deviceId
+                self.pairingId = pairingId
                 self.sas = sas
             }
             public enum CodingKeys: String, CodingKey {
                 case coreSpki = "core_spki"
                 case deviceId = "device_id"
+                case pairingId = "pairing_id"
                 case sas
             }
         }
