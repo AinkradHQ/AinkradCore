@@ -1,6 +1,6 @@
 CARGO ?= cargo
 
-.PHONY: clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 run build-citadel test-citadel
+.PHONY: clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel
 build: lint ; $(CARGO) build --workspace
 test: lint ; $(CARGO) test --workspace
 lint: format-check ; $(CARGO) clippy --workspace --all-targets -- -D warnings
@@ -21,9 +21,15 @@ schema-compat-selftest: ; scripts/schema-compat-selftest.sh
 audit: ; $(CARGO) deny check
 # Linux runs in Docker with the pinned toolchain (E1-01.4). Colima/Docker on Apple silicon runs arm64 natively.
 RUST_IMAGE ?= rust:1.99.1
-DOCKER_RUN = docker run --rm -v $(CURDIR):/src -w /src -e CARGO_TARGET_DIR=/cache/target -v ainkrad-core-cargo:/usr/local/cargo/registry -v ainkrad-core-target-$(1):/cache
+# One build-cache volume PER CHECKOUT (named from the checkout's path). A volume shared between checkouts let cargo
+# reuse another checkout's newer build of the same crate (git archive stamps files with the commit time, so the
+# sources look older than the artifacts), which gave false passes and false failures. The registry cache is safe to share.
+LINUX_VOL ?= ainkrad-core-target-$(shell printf %s '$(CURDIR)' | shasum | cut -c1-12)
+DOCKER_RUN = docker run --rm -v $(CURDIR):/src -w /src -e CARGO_TARGET_DIR=/cache/target -v ainkrad-core-cargo:/usr/local/cargo/registry -v $(LINUX_VOL)-$(1):/cache
 test-linux-arm64: ; $(call DOCKER_RUN,arm64) --platform linux/arm64 $(RUST_IMAGE) sh -c 'rustup show >/dev/null && cargo test --workspace'
 build-linux-x86_64: ; $(call DOCKER_RUN,amd64) --platform linux/amd64 $(RUST_IMAGE) sh -c 'rustup show >/dev/null && cargo build --workspace'
+# Frees this checkout's Linux build caches (they are several GB); run it when you are done with a checkout.
+clean-linux: ; docker volume rm -f $(LINUX_VOL)-arm64 $(LINUX_VOL)-amd64
 # The parked Citadel monolith (P1.11), its own workspace; not part of `build`/`test`.
 CITADEL = --manifest-path modules/citadel/Cargo.toml --workspace
 build-citadel: ; $(CARGO) build $(CITADEL)
