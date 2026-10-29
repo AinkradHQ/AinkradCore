@@ -173,3 +173,91 @@ async fn a_bootstrap_claim_rechecks_that_no_device_exists() {
     let devices = count(&fx, "SELECT count(*) FROM core_devices").await;
     assert_eq!(devices, 1, "only the one enrolled meanwhile");
 }
+
+/// A claim whose body never ends, from `peer`.
+fn hanging_claim(peer: &str) -> Request<Body> {
+    let never = futures_util::stream::pending::<Result<axum::body::Bytes, std::io::Error>>();
+    let r = Request::builder()
+        .method(Method::POST)
+        .uri("/pair/claim")
+        .header(header::HOST, HOST)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from_stream(never))
+        .unwrap();
+    from(peer, r)
+}
+
+/// N1: 25 claims dropped half-sent (a client gone, a deadline) give their slots back; the
+/// right code then still pairs.
+#[tokio::test]
+async fn dropped_claims_give_their_slots_back() {
+    let fx = fx().await;
+    for i in 0..25 {
+        let pending = send(&fx.app, hanging_claim(&format!("10.12.0.{i}")));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), pending)
+                .await
+                .is_err()
+        );
+    }
+    let body = json!({"name": "Phone", "kind": "device", "scopes": ["read"]});
+    let (_, created) = send(
+        &fx.app,
+        req(Method::POST, "/api/v1/pairings", Some(&fx.dev), Some(body)),
+    )
+    .await;
+    let dev = TestDevice::new(&fx.app.auth.identity.fp, fx.clock.clone());
+    let claim = from(
+        "10.12.1.1",
+        req(
+            Method::POST,
+            "/pair/claim",
+            None,
+            Some(dev.claim_body(created["code"].as_str(), None)),
+        ),
+    );
+    assert_eq!(send(&fx.app, claim).await.0, StatusCode::ACCEPTED);
+}
+
+/// N1: with the global budget held by 20 claims in flight from outside, a claim from the
+/// host's own socket (how `bootstrap` and `recover` are claimed) still goes through.
+#[tokio::test]
+async fn the_hosts_socket_claims_while_the_budget_is_held_from_outside() {
+    let fx = fx().await;
+    let held: Vec<_> = (0..20)
+        .map(|i| {
+            let (app, r) = (fx.app.clone(), hanging_claim(&format!("10.13.0.{i}")));
+            tokio::spawn(async move { send(&app, r).await })
+        })
+        .collect();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let body = json!({"name": "Phone", "kind": "device", "scopes": ["read"]});
+    let (_, created) = send(
+        &fx.app,
+        req(Method::POST, "/api/v1/pairings", Some(&fx.dev), Some(body)),
+    )
+    .await;
+    let dev = TestDevice::new(&fx.app.auth.identity.fp, fx.clock.clone());
+    let body = dev.claim_body(created["code"].as_str(), None);
+    let outside = from(
+        "10.13.1.1",
+        req(Method::POST, "/pair/claim", None, Some(body.clone())),
+    );
+    assert_eq!(
+        send(&fx.app, outside).await.0,
+        StatusCode::TOO_MANY_REQUESTS,
+        "held from outside"
+    );
+    let mut local = req(Method::POST, "/pair/claim", None, Some(body));
+    local
+        .extensions_mut()
+        .insert(crate::gateway::Local { same_user: true });
+    assert_eq!(
+        send(&fx.app, local).await.0,
+        StatusCode::ACCEPTED,
+        "the host's socket"
+    );
+    for h in held {
+        h.abort();
+    }
+}

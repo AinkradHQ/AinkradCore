@@ -17,6 +17,7 @@ use utoipa::ToSchema;
 use super::gate::{self, Mode};
 use super::{ApiError, too_many};
 use crate::api::App;
+use crate::auth::budget::LOCAL;
 use crate::auth::crypto::{b64, fingerprint, random_id, spki_point, unb64, verify};
 use crate::auth::pairing::{code_hash, normal_code, pop_message, sas, secret_hash};
 use crate::gateway::Local;
@@ -130,17 +131,64 @@ pub async fn claim(State(app): State<App>, req: Request) -> Response {
     if !app.auth.failures.reserve(&addr, now) {
         return busy();
     }
-    if !app.auth.pair_budget.reserve(now) {
-        app.auth.failures.release(&addr, false, now);
+    // The host's own socket never takes part in the global budget: no amount of traffic from
+    // outside can shut out the operator's `bootstrap`/`recover` (review N1).
+    let global = addr != LOCAL;
+    let slots = Slots {
+        app: &app,
+        addr: &addr,
+        global,
+        now,
+        done: false,
+    };
+    if global && !app.auth.pair_budget.reserve(now) {
+        drop(slots_without_global(slots));
         return busy();
     }
     let out = evaluate(&app, &parts, raw, now).await;
-    app.auth.failures.release(&addr, out.is_err(), now);
-    let spent = app.auth.pair_budget.release(out.is_err(), now);
+    let spent = slots.finish(out.is_err());
     match out {
         Ok(r) => r,
         Err(why) => wrong(&app, &addr, why, spent, now).await,
     }
+}
+
+/// A claim's slots in the address's and the global budget. Given back by `finish`, or, when
+/// the claim never finishes (the client went, the deadline cut it, the server stopped), by
+/// `Drop`, as not failed: a dropped claim never keeps a slot (review N1).
+struct Slots<'a> {
+    app: &'a App,
+    addr: &'a str,
+    global: bool,
+    now: i64,
+    done: bool,
+}
+
+impl Slots<'_> {
+    /// Gives both slots back, counting a `failed` claim; `true` when that spent the global
+    /// budget.
+    fn finish(mut self, failed: bool) -> bool {
+        self.done = true;
+        self.app.auth.failures.release(self.addr, failed, self.now);
+        self.global && self.app.auth.pair_budget.release(failed, self.now)
+    }
+}
+
+impl Drop for Slots<'_> {
+    fn drop(&mut self) {
+        if !self.done {
+            self.app.auth.failures.release(self.addr, false, self.now);
+            if self.global {
+                self.app.auth.pair_budget.release(false, self.now);
+            }
+        }
+    }
+}
+
+/// `slots` holding the address's slot only (the global one was not taken).
+fn slots_without_global(mut slots: Slots<'_>) -> Slots<'_> {
+    slots.global = false;
+    slots
 }
 
 /// A claim's evaluation: its answer, or why it is a wrong claim.
