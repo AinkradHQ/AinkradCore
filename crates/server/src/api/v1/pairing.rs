@@ -4,6 +4,7 @@
 //! Every route needs `admin` (`scopes`) and a live elevation (`scopes::DESTRUCTIVE`). The new
 //! device's side is `pair` (`passkey` for a browser's passkey).
 
+use ainkrad_core::settings::{Key, Scope};
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
@@ -72,6 +73,27 @@ pub struct ApproveBody {
     pub scopes: Option<Vec<String>>,
 }
 
+/// T-PK-3: a passkey never gets `admin` unless `auth.passkey_admin` is 1. Checked wherever a
+/// passkey device would newly hold it: at pairing, at approval and at a scope change.
+pub(super) async fn passkey_admin(
+    app: &App,
+    kind: &str,
+    scopes: &[String],
+) -> Result<(), ApiError> {
+    if kind != "passkey" || !scopes.iter().any(|s| s == "admin") {
+        return Ok(());
+    }
+    let on = crate::store::settings::value(&app.pool, Key::AuthPasskeyAdmin, Scope::Server).await?;
+    match on {
+        0 => Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden_scope",
+            "a passkey does not get the admin scope (setting auth.passkey_admin)",
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn forbidden_scope() -> ApiError {
     ApiError::new(
         StatusCode::FORBIDDEN,
@@ -127,6 +149,7 @@ pub async fn create(
     if scopes.iter().any(|s| !me.device.scopes.contains(s)) {
         return Err(forbidden_scope());
     }
+    passkey_admin(&app, &b.kind, &scopes).await?;
     let new = NewPairing {
         kind: &b.kind,
         name: &b.name,
@@ -220,6 +243,11 @@ pub async fn approve(
         device: Some(&me.device.id),
         scopes: Some(&me.device.scopes),
     };
+    // The setting may have been turned off since the pairing was created. Kind and bound
+    // scopes never change after creation, so this read cannot race the decision below.
+    if let Some(p) = gov::get_pairing(&app.pool, &id).await? {
+        passkey_admin(&app, &p.kind, b.scopes.as_deref().unwrap_or(&p.scopes)).await?;
+    }
     let now = app.clock.unix();
     decision(gov::approve_pairing(&app.pool, &id, &b.sas, b.scopes.as_deref(), by, now).await?)?;
     view(&app, &id).await

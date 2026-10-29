@@ -191,6 +191,12 @@ pub async fn set_scopes(
     if !is_id(&id, "d_") {
         return Err(ApiError::not_found("no such device"));
     }
+    // A passkey that holds `admin` already keeps it (T-PK-3 applies to granting it anew).
+    if let Some(d) = gov::get_device(&app.pool, &id).await?
+        && !d.scopes.iter().any(|s| s == "admin")
+    {
+        super::pairing::passkey_admin(&app, &d.kind, &b.scopes).await?;
+    }
     let mine = &me.device.scopes;
     let r = gov::set_device_scopes(&app.pool, &id, &b.scopes, mine, BY, &me.device.id).await?;
     last_admin(&app, &me, &id, "set_scopes", &r).await;

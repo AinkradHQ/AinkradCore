@@ -227,6 +227,7 @@ async fn reset(fx: &Fx, id: &str) {
 #[tokio::test]
 async fn a_passkey_step_up_needs_a_verified_assertion_over_its_own_live_challenge() {
     let fx = fx_pk().await;
+    super::passkeys::passkey_admin(&fx, true).await;
     let (mut a, id) = pair_passkey(&fx, &["read", "admin"]).await;
     let web = browser(&fx, &id);
     assert_eq!(sign_in(&fx, &mut a, &web).await.0, StatusCode::OK);

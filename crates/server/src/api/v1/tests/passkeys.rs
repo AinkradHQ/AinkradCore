@@ -20,6 +20,20 @@ pub(super) async fn fx_pk() -> Fx {
     fx
 }
 
+/// Sets `auth.passkey_admin` (T-PK-3): 1 lets a passkey hold `admin`.
+pub(super) async fn passkey_admin(fx: &Fx, on: bool) {
+    crate::store::settings::set(
+        &fx.app.pool,
+        ainkrad_core::settings::Key::AuthPasskeyAdmin,
+        ainkrad_core::settings::Scope::Server,
+        if on { "1" } else { "0" },
+        ainkrad_core::audit::AuditActor::System,
+        &fx.app.clock.now(),
+    )
+    .await
+    .unwrap();
+}
+
 /// An unsigned POST to a pre-auth route.
 pub(super) async fn pre(fx: &Fx, path: &str, body: Value) -> (StatusCode, Value) {
     send(&fx.app, req(Method::POST, path, None, Some(body))).await
@@ -115,6 +129,7 @@ pub(super) fn code_of(v: &Value) -> &str {
 #[tokio::test]
 async fn a_passkey_pairs_signs_in_steps_up_and_is_revoked_like_any_device() {
     let fx = fx_pk().await;
+    passkey_admin(&fx, true).await;
     let (mut a, id) = pair_passkey(&fx, &["read", "admin"]).await;
     let row = gov::get_device(&fx.app.pool, &id).await.unwrap().unwrap();
     assert_eq!(
@@ -177,6 +192,79 @@ async fn a_passkey_pairs_signs_in_steps_up_and_is_revoked_like_any_device() {
         (status, code_of(&v)),
         (StatusCode::UNAUTHORIZED, "auth_failed")
     );
+}
+
+#[tokio::test]
+async fn a_passkey_gets_admin_only_when_the_setting_allows_it() {
+    let fx = fx_pk().await;
+    let refused = |(s, v): (StatusCode, Value)| {
+        assert_eq!(
+            (s, code_of(&v)),
+            (StatusCode::FORBIDDEN, "forbidden_scope"),
+            "{v}"
+        );
+    };
+    // Off by default: no admin passkey pairing; a native device still gets one.
+    refused(pairing(&fx, &fx.dev, &["read", "admin"]).await);
+    let body = json!({"name": "Mac", "kind": "device", "scopes": ["read", "admin"]});
+    let (s, v) = send(
+        &fx.app,
+        req(Method::POST, "/api/v1/pairings", Some(&fx.dev), Some(body)),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+
+    // Allowed at creation, then turned off before the approval: refused there too, but a
+    // narrower approval without admin goes through.
+    passkey_admin(&fx, true).await;
+    let (s, p) = pairing(&fx, &fx.dev, &["read", "admin"]).await;
+    assert_eq!(s, StatusCode::OK, "{p}");
+    let code = p["code"].as_str().unwrap();
+    let (_, o) = pre(&fx, "/pair/passkey/options", json!({"code": code})).await;
+    let mut a = SoftAuthenticator::new(HOST, ORIGIN);
+    let body = json!({"code": code, "credential": a.register(&o["options"])});
+    let (s, c) = pre(&fx, "/pair/passkey/claim", body).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{c}");
+    passkey_admin(&fx, false).await;
+    let uri = format!(
+        "/api/v1/pairings/{}/approve",
+        p["pairing_id"].as_str().unwrap()
+    );
+    let approve = |scopes: Value| {
+        let body = json!({"sas": c["sas"], "scopes": scopes});
+        send(&fx.app, req(Method::POST, &uri, Some(&fx.dev), Some(body)))
+    };
+    refused(approve(Value::Null).await);
+    let (s, v) = approve(json!(["read"])).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let reader = c["device_id"].as_str().unwrap().to_owned();
+    // Nor is admin added to it later.
+    let uri = format!("/api/v1/devices/{reader}/scopes");
+    let body = json!({"scopes": ["read", "admin"]});
+    refused(send(&fx.app, req(Method::PUT, &uri, Some(&fx.dev), Some(body))).await);
+
+    // With the setting on it pairs with admin; turned off again, that device keeps admin.
+    passkey_admin(&fx, true).await;
+    let (mut a, id) = pair_passkey(&fx, &["read", "admin"]).await;
+    passkey_admin(&fx, false).await;
+    let (s, g) = sign_in(&fx, &mut a, &browser(&fx, &id)).await;
+    assert_eq!(s, StatusCode::OK, "{g}");
+    assert!(
+        g["scopes"].as_array().unwrap().contains(&json!("admin")),
+        "{g}"
+    );
+    let uri = format!("/api/v1/devices/{id}/scopes");
+    let (s, v) = send(
+        &fx.app,
+        req(
+            Method::PUT,
+            &uri,
+            Some(&fx.dev),
+            Some(json!({"scopes": ["read", "admin"]})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "an admin passkey keeps admin: {v}");
 }
 
 #[tokio::test]
