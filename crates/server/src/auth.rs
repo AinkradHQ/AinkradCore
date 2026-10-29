@@ -2,9 +2,11 @@
 //! process, so a restart forgets it: the Core identity key's public half aside, nothing here
 //! survives. That is what closes replay across a restart (§6.4).
 //!
-//! - **Challenges** (`POST /handshake/challenge`): 32 random bytes, 60 s, single use, bound to
-//!   the device id they were asked for; stored only for a usable device, at most 3 per
-//!   (device, address) and 256 per device, and no address evicts another's (review M1, N3).
+//! - **Challenges** (`POST /handshake/challenge`): 32 bytes, 60 s, single use, bound to the
+//!   device id they were asked for. Stateless (handshake-hardening review M1): expiry, 12 random
+//!   bytes and an HMAC under a per-process key over both and the device id, so issuing one stores
+//!   nothing and no flood of requests can crowd out a device's own. Only a spent challenge is
+//!   kept, until it expires, and only after its session signature verified.
 //! - **Sessions** (`POST /handshake/session`): a non-secret `s_…` handle for 15 minutes. Useless
 //!   without a valid signature; there is no bearer secret and no refresh token.
 //! - **Replay cache**: `(device, nonce)` for 125 s, at most 4,096 per device; when full, the
@@ -44,20 +46,8 @@ pub const REPLAY_TTL: i64 = 125;
 pub const REPLAY_MAX: usize = 4096;
 pub const SESSION_SECS: i64 = 15 * 60;
 pub const CHALLENGE_SECS: i64 = 60;
-/// A safety net only: unknown ids allocate nothing, so this holds a few per real device.
-pub const CHALLENGES_MAX: usize = 10_000;
-/// Live challenges per (device, requesting address); a new one replaces that pair's oldest.
-pub const CHALLENGES_PER_PAIR: usize = 3;
-/// Live challenges per device, all addresses together.
-pub const CHALLENGES_PER_DEVICE: usize = 256;
-
-/// A stored challenge: the device it was issued for and the address that asked.
-struct Challenge {
-    device: String,
-    addr: String,
-    expires: i64,
-    order: u64,
-}
+/// Domain of a challenge's HMAC (nothing else uses the per-process challenge key).
+const CHALLENGE_DOMAIN: &[u8] = b"AINKRAD-CHALLENGE-V1\n";
 /// Live sessions kept per device; the oldest goes first.
 pub const SESSIONS_PER_DEVICE: usize = 32;
 /// How often a socket re-checks its device in the database (§10 backstop).
@@ -96,8 +86,11 @@ pub enum Replay {
 pub struct Auth {
     pub identity: Arc<Identity>,
     sessions: Mutex<HashMap<String, Session>>,
-    /// challenge → who asked and until when.
-    challenges: Mutex<HashMap<String, Challenge>>,
+    /// The per-process key challenges are MACed under: a restart invalidates every challenge.
+    challenge_key: ring::hmac::Key,
+    /// Spent challenges → their expiry (single use); pruned as they expire.
+    spent: Mutex<HashMap<String, i64>>,
+    /// Issue order of WebSocket tickets (`ticket`).
     issued: std::sync::atomic::AtomicU64,
     /// device → nonce → expiry.
     nonces: Mutex<HashMap<String, HashMap<String, i64>>>,
@@ -125,7 +118,8 @@ impl Auth {
         Self {
             identity,
             sessions: Mutex::default(),
-            challenges: Mutex::default(),
+            challenge_key: ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &crypto::random::<32>()),
+            spent: Mutex::default(),
             issued: std::sync::atomic::AtomicU64::new(0),
             nonces: Mutex::default(),
             revoked: broadcast::channel(64).0,
@@ -140,67 +134,43 @@ impl Auth {
         }
     }
 
-    /// A new challenge for `device`, asked from `addr`. Only a `known` (usable) device gets one
-    /// stored: at most `CHALLENGES_PER_PAIR` per (device, address), a new one replacing that
-    /// pair's oldest, and `CHALLENGES_PER_DEVICE` in all. At the device's total the address
-    /// holding the most gives up its oldest (`evict_from_top_holder`, review R2); when none holds
-    /// more than the newcomer, the newcomer's challenge is not stored, so only its own session
-    /// attempt fails and no address loses its last challenge (review N3). An unknown id gets an equally random challenge that
-    /// is never stored. `None` only when the global safety cap is full of live challenges.
-    pub fn challenge(&self, device: &str, addr: &str, known: bool, now: i64) -> Option<String> {
-        let c = crypto::b64(&crypto::random::<32>());
-        if !known {
-            return Some(c);
-        }
-        let mut live = self.challenges.lock().unwrap();
-        live.retain(|_, ch| ch.expires > now);
-        let mut pair: Vec<(u64, String)> = live
-            .iter()
-            .filter(|(_, ch)| ch.device == device && ch.addr == addr)
-            .map(|(k, ch)| (ch.order, k.clone()))
-            .collect();
-        if pair.len() >= CHALLENGES_PER_PAIR {
-            pair.sort();
-            for (_, k) in &pair[..=pair.len() - CHALLENGES_PER_PAIR] {
-                live.remove(k);
-            }
-        }
-        let device_total = live.values().filter(|ch| ch.device == device).count();
-        if device_total >= CHALLENGES_PER_DEVICE && !evict_from_top_holder(&mut live, device, addr)
-        {
-            return Some(c);
-        }
-        if live.len() >= CHALLENGES_MAX {
-            return None;
-        }
-        let order = self
-            .issued
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let ch = Challenge {
-            device: device.to_owned(),
-            addr: addr.to_owned(),
-            expires: now + CHALLENGE_SECS,
-            order,
-        };
-        live.insert(c.clone(), ch);
-        Some(c)
+    /// A challenge for `device`: `expiry (u32 BE) ‖ 12 random bytes ‖ HMAC[..16]` over
+    /// `CHALLENGE_DOMAIN ‖ expiry ‖ random ‖ device`, base64url (43 characters). Nothing is stored,
+    /// so every id, known or not, gets one the same way and no requester can starve another.
+    pub fn challenge(&self, device: &str, now: i64) -> String {
+        let mut c = [0u8; 32];
+        // ponytail: u32 unix seconds, good until 2106.
+        c[..4].copy_from_slice(&((now + CHALLENGE_SECS) as u32).to_be_bytes());
+        c[4..16].copy_from_slice(&crypto::random::<12>());
+        let tag = self.challenge_tag(&c[..16], device);
+        c[16..].copy_from_slice(&tag.as_ref()[..16]);
+        crypto::b64(&c)
     }
 
-    /// Spends `challenge` if it is live and was issued for `device`. A challenge issued for
-    /// another device is left alone (only its own device may spend it).
+    fn challenge_tag(&self, head: &[u8], device: &str) -> ring::hmac::Tag {
+        let mut m = CHALLENGE_DOMAIN.to_vec();
+        m.extend_from_slice(head);
+        m.extend_from_slice(device.as_bytes());
+        ring::hmac::sign(&self.challenge_key, &m)
+    }
+
+    /// Spends `challenge` if this process issued it for `device`, it is live and not spent
+    /// before. Call it only after the request's signature verified: a spend is the one thing
+    /// stored, so only the device itself can add to it.
     pub fn take_challenge(&self, challenge: &str, device: &str, now: i64) -> bool {
-        let mut live = self.challenges.lock().unwrap();
-        match live.get(challenge) {
-            Some(ch) if ch.expires <= now => {
-                live.remove(challenge);
-                false
-            }
-            Some(ch) if ch.device == device => {
-                live.remove(challenge);
-                true
-            }
-            _ => false,
+        let Some(c) = crypto::unb64(challenge, 43) else {
+            return false;
+        };
+        let expires = i64::from(u32::from_be_bytes([c[0], c[1], c[2], c[3]]));
+        let tag = self.challenge_tag(&c[..16], device);
+        if !pairing::ct_eq(&crypto::b64(&c[16..]), &crypto::b64(&tag.as_ref()[..16]))
+            || expires <= now
+        {
+            return false;
         }
+        let mut spent = self.spent.lock().unwrap();
+        spent.retain(|_, exp| *exp > now);
+        spent.insert(challenge.to_owned(), expires).is_none()
     }
 
     /// A new 15-minute session for `device`. It carries over the elevation of the device's
@@ -303,35 +273,6 @@ impl Auth {
     }
 }
 
-/// At `device`'s challenge cap: removes the oldest challenge of the address holding the most of
-/// the device's challenges, when it holds at least 2 and more than `addr` does (review R2). So
-/// addresses each asking 3 cannot starve the device's own address, and no address ever loses its
-/// last challenge to another. `false` when nothing was removed (the newcomer's is not stored).
-/// ponytail: about 256 addresses holding one challenge each (one IPv6 /48) still fill the cap;
-/// aggregate per /48 if that is ever seen.
-fn evict_from_top_holder(live: &mut HashMap<String, Challenge>, device: &str, addr: &str) -> bool {
-    let mut per_addr: HashMap<&str, (usize, u64, &str)> = HashMap::new();
-    for (k, ch) in live.iter().filter(|(_, ch)| ch.device == device) {
-        let e = per_addr.entry(&ch.addr).or_insert((0, u64::MAX, ""));
-        e.0 += 1;
-        if ch.order < e.1 {
-            (e.1, e.2) = (ch.order, k);
-        }
-    }
-    let mine = per_addr.get(addr).map_or(0, |e| e.0);
-    let top = per_addr
-        .values()
-        .max_by_key(|(n, oldest, _)| (*n, std::cmp::Reverse(*oldest)));
-    match top {
-        Some(&(n, _, key)) if n >= 2 && n > mine => {
-            let key = key.to_owned();
-            live.remove(&key);
-            true
-        }
-        _ => false,
-    }
-}
-
 /// Resolves once `device`'s scopes are no longer `scopes`: at once on the broadcast, or within
 /// `every` by polling the database (a change by another process, or a lagged broadcast).
 pub async fn until_rescoped(
@@ -400,57 +341,48 @@ mod tests {
     #[test]
     fn challenges_are_single_use_bound_and_expire() {
         let a = auth();
-        let c = a.challenge("d_a", "ip:a", true, 100).unwrap();
+        let c = a.challenge("d_a", 100);
+        assert_eq!(c.len(), 43, "32 bytes");
         assert!(!a.take_challenge(&c, "d_b", 100), "another device's");
         assert!(a.take_challenge(&c, "d_a", 100));
         assert!(!a.take_challenge(&c, "d_a", 100), "single use");
-        let c = a.challenge("d_a", "ip:a", true, 100).unwrap();
+        let c = a.challenge("d_a", 100);
         assert!(!a.take_challenge(&c, "d_a", 160), "expired at 60 s");
-        let unknown = a.challenge("d_x", "ip:a", false, 100).unwrap();
-        assert!(!a.take_challenge(&unknown, "d_x", 100), "never stored");
-        let first = a.challenge("d_a", "ip:a", true, 200).unwrap();
-        for _ in 0..CHALLENGES_PER_PAIR {
-            a.challenge("d_a", "ip:a", true, 200).unwrap();
-        }
+        assert!(a.take_challenge(&c, "d_a", 159));
+        let c = auth().challenge("d_a", 100);
         assert!(
-            !a.take_challenge(&first, "d_a", 200),
-            "the pair's oldest was replaced"
+            !a.take_challenge(&c, "d_a", 100),
+            "another process's (a restart)"
         );
-        assert_eq!(a.challenges.lock().unwrap().len(), CHALLENGES_PER_PAIR);
-        // Other addresses never push out ip:a's challenge, however many ask.
-        let mine = a.challenge("d_a", "ip:a", true, 300).unwrap();
-        for i in 0..CHALLENGES_PER_DEVICE * 2 {
-            a.challenge("d_a", &format!("ip:x{i}"), true, 300).unwrap();
-        }
-        assert!(a.take_challenge(&mine, "d_a", 300), "still live");
+        let mut raw = crypto::unb64(&a.challenge("d_a", 100), 43).unwrap();
+        raw[0] ^= 1;
+        assert!(
+            !a.take_challenge(&crypto::b64(&raw), "d_a", 100),
+            "a tampered expiry"
+        );
+        raw[0] ^= 1;
+        raw[31] ^= 1;
+        assert!(
+            !a.take_challenge(&crypto::b64(&raw), "d_a", 100),
+            "a tampered tag"
+        );
+        assert!(!a.take_challenge("x", "d_a", 100), "not a challenge");
+        assert!(a.spent.lock().unwrap().len() <= 2, "only spends are kept");
+        assert!(a.take_challenge(&a.challenge("d_a", 300), "d_a", 300));
+        assert_eq!(a.spent.lock().unwrap().len(), 1, "expired spends pruned");
     }
 
-    /// R2: 100 addresses asking 3 challenges each for a device fill its 256; the device's own
-    /// address still gets one that it can spend.
+    /// Review M1 (handshake hardening): any number of challenges asked for a device, from any
+    /// number of addresses, store nothing; the device's own still spends.
     #[test]
-    fn addresses_filling_a_devices_challenges_do_not_starve_it() {
+    fn a_challenge_flood_stores_nothing_and_cannot_starve_the_device() {
         let a = auth();
-        for round in 0..2 {
-            for i in 0..100 {
-                for _ in 0..CHALLENGES_PER_PAIR {
-                    a.challenge("d_v", &format!("ip:10.0.{round}.{i}"), true, 100)
-                        .unwrap();
-                }
-            }
+        let own = a.challenge("d_v", 100);
+        for _ in 0..100_000 {
+            a.challenge("d_v", 100);
         }
-        let count = |a: &Auth| {
-            let live = a.challenges.lock().unwrap();
-            live.values().filter(|c| c.device == "d_v").count()
-        };
-        assert_eq!(count(&a), CHALLENGES_PER_DEVICE, "full");
-        let own = a.challenge("d_v", "ip:victim", true, 100).unwrap();
-        assert_eq!(count(&a), CHALLENGES_PER_DEVICE, "still capped");
-        // The attackers keep asking; the victim's stays (it holds 1, they hold up to 3).
-        for i in 0..100 {
-            a.challenge("d_v", &format!("ip:10.0.0.{i}"), true, 101)
-                .unwrap();
-        }
-        assert!(a.take_challenge(&own, "d_v", 101), "spendable");
+        assert!(a.spent.lock().unwrap().is_empty());
+        assert!(a.take_challenge(&own, "d_v", 100), "spendable");
     }
 
     #[test]

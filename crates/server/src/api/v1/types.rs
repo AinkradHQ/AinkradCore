@@ -43,7 +43,10 @@
 /// 10: handshake hardening (KAN-251/252): `proveHandshake` (`POST /handshake {nonce}` with
 ///    `core_spki` and `core_sig`), `AuditEntry.entity_ref` (a device's `d_…` id; its
 ///    `entity_id` is now absent), `target=device:d_…`, and `entity_ref` in `audit` events.
-pub const API_MINOR: u32 = 10;
+/// 11: handshake review (L3, L4, M1): `proveHandshake` answers its own `HandshakeProof`, with
+///    `core_spki` and `core_sig` required, and is under the challenge rate (429); a challenge is
+///    stateless (still 32 bytes, 43 characters).
+pub const API_MINOR: u32 = 11;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

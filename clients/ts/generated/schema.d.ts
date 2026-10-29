@@ -597,7 +597,10 @@ export interface components {
             next_before?: number | null;
         };
         Challenge: {
-            /** @description 32 random bytes, base64url; spend it once within `expires_in` seconds. */
+            /**
+             * @description 32 bytes, base64url (43 characters), opaque to the client; spend it once within
+             *     `expires_in` seconds.
+             */
             challenge?: string | null;
             /** Format: int64 */
             expires_in?: number | null;
@@ -751,17 +754,6 @@ export interface components {
              * @description The contract minor this server speaks (`GET /api/v1/me` has it too).
              */
             api_minor?: number | null;
-            /**
-             * @description `POST` only: the Core identity key's ES256 signature (raw r||s, base64url) over the UTF-8
-             *     string `AINKRAD-CORE-V1` LF `<host>` LF `<nonce>`, no trailing newline; `host` is the
-             *     Core's configured Host (`localhost` on a Unix socket), `nonce` the text the client sent.
-             */
-            core_sig?: string | null;
-            /**
-             * @description `POST` only: the Core identity key, a P-256 SubjectPublicKeyInfo, base64url. Its
-             *     fingerprint is `identity_fingerprint`.
-             */
-            core_spki?: string | null;
             /** @description The commit it was built from (short sha), when the build knew it. */
             git_sha?: string | null;
             /**
@@ -781,6 +773,32 @@ export interface components {
         HandshakeBody: {
             /** @description 16 random bytes, base64url without padding (22 characters). */
             nonce: string;
+        };
+        /**
+         * @description `POST /handshake`'s answer: `GET`'s fields plus the proof, which is always present (review
+         *     L4). A client that pinned `core_fp` aborts with `core_identity_mismatch` when either is
+         *     missing or fails, and never falls back to `GET /handshake` (spec §13).
+         */
+        HandshakeProof: {
+            api_major?: string | null;
+            /** Format: int32 */
+            api_minor?: number | null;
+            /**
+             * @description The Core identity key's ES256 signature (raw r||s, base64url) over the UTF-8 string
+             *     `AINKRAD-CORE-V1` LF `<host>` LF `<nonce>`, no trailing newline; `host` is the Core's
+             *     configured Host (the `Host` it requires), `nonce` the text the client sent.
+             */
+            core_sig: string;
+            /**
+             * @description The Core identity key, a P-256 SubjectPublicKeyInfo, base64url. Its fingerprint is
+             *     `identity_fingerprint`.
+             */
+            core_spki: string;
+            git_sha?: string | null;
+            /** @description `core_fp`, as in `GET /handshake`; a client checks `fp(core_spki)`, not this claim. */
+            identity_fingerprint?: string | null;
+            server_version?: string | null;
+            supported_minors?: number[] | null;
         };
         /** @description The newest event's seq a client would be shown: the catch-up target. */
         LatestEvent: {
@@ -2139,13 +2157,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description As `GET /handshake`, plus `core_spki` and `core_sig`, the Core identity key's signature over the client's nonce: check `fp(core_spki)` is the pinned `core_fp` and that `core_sig` verifies before trusting this Core. 400 for a nonce that is not 16 bytes of base64url. Needs no signature */
+            /** @description As `GET /handshake`, plus `core_spki` and `core_sig`, the Core identity key's signature over the client's nonce: check `fp(core_spki)` is the pinned `core_fp` and that `core_sig` verifies before trusting this Core; anything else, a missing proof or a status other than 200 included, is `core_identity_mismatch`, with no fallback to `GET`. 400 for a nonce that is not 16 bytes of base64url; 429 past 30 a minute from one address, shared with `POST /handshake/challenge`. Needs no signature */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Handshake"];
+                    "application/json": components["schemas"]["HandshakeProof"];
                 };
             };
             400: components["responses"]["BadRequest"];

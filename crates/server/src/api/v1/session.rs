@@ -1,5 +1,5 @@
 //! Sessions by challenge-response (handshake spec §6): `POST /handshake/challenge` hands out a
-//! single-use challenge for a device id (always 200, unknown ids included), and
+//! stateless single-use challenge for a device id (always 200, unknown ids included), and
 //! `POST /handshake/session`, signed with session `-`, spends it for a 15-minute session. A
 //! session is a non-secret handle, useless without a valid signature; refreshing is running
 //! both again. Sessions live in memory: a restart ends every one.
@@ -28,7 +28,8 @@ pub struct ChallengeRequest {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Challenge {
-    /// 32 random bytes, base64url; spend it once within `expires_in` seconds.
+    /// 32 bytes, base64url (43 characters), opaque to the client; spend it once within
+    /// `expires_in` seconds.
     pub challenge: Option<String>,
     pub expires_in: Option<i64>,
     /// A passkey device's step-up only: `{"publicKey": PublicKeyCredentialRequestOptions}`
@@ -60,6 +61,27 @@ fn json<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, ApiError> {
     serde_json::from_slice(bytes).map_err(|_| ApiError::bad_request("malformed body"))
 }
 
+/// The pre-auth issuance gate of `POST /handshake/challenge` and `POST /handshake` (§11): a
+/// locked address is 429, then the per-address challenge rate (30 a minute, shared by both).
+pub(super) async fn throttle(
+    app: &App,
+    parts: &axum::http::request::Parts,
+) -> Result<(), Box<Response>> {
+    let addr = gate::address(app, parts);
+    let now = app.clock.unix();
+    match gov::locked_until(&app.pool, &[&addr], now).await {
+        Ok(Some(until)) => Err(Box::new(too_many(std::time::Duration::from_secs(
+            (until - now).max(1) as u64,
+        )))),
+        Ok(None) => app
+            .auth
+            .challenge_limit
+            .take(&addr, std::time::Instant::now())
+            .map_err(|wait| Box::new(too_many(wait))),
+        Err(e) => Err(Box::new(ApiError::from(e).into_response())),
+    }
+}
+
 #[utoipa::path(post, path = "/handshake/challenge", operation_id = "createChallenge",
     tag = "handshake", request_body = ChallengeRequest, security(()),
     responses((status = 200, description = "A single-use challenge for the device, live 60 s. \
@@ -67,22 +89,10 @@ fn json<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, ApiError> {
         body = Challenge)))]
 pub async fn challenge(State(app): State<App>, req: Request) -> Response {
     let (parts, raw) = req.into_parts();
-    let addr = gate::address(&app, &parts);
+    if let Err(r) = throttle(&app, &parts).await {
+        return *r;
+    }
     let now = app.clock.unix();
-    match gov::locked_until(&app.pool, &[&addr], now).await {
-        Ok(Some(until)) => {
-            return too_many(std::time::Duration::from_secs((until - now).max(1) as u64));
-        }
-        Ok(None) => {}
-        Err(e) => return ApiError::from(e).into_response(),
-    }
-    if let Err(wait) = app
-        .auth
-        .challenge_limit
-        .take(&addr, std::time::Instant::now())
-    {
-        return too_many(wait);
-    }
     let bytes = match gate::body(raw, PREAUTH_BODY).await {
         Ok(b) => b,
         Err(r) => return *r,
@@ -94,20 +104,13 @@ pub async fn challenge(State(app): State<App>, req: Request) -> Response {
     if !crypto::is_id(&body.device_id, "d_") {
         return ApiError::bad_request("device_id is not a device id").into_response();
     }
-    // Only a usable device's challenge is kept; any other id gets one that is never stored.
-    let known = match gov::device_usable(&app.pool, &body.device_id).await {
-        Ok(k) => k,
-        Err(e) => return ApiError::from(e).into_response(),
-    };
-    match app.auth.challenge(&body.device_id, &addr, known, now) {
-        Some(c) => Json(Challenge {
-            challenge: Some(c),
-            expires_in: Some(CHALLENGE_SECS),
-            options: None,
-        })
-        .into_response(),
-        None => too_many(std::time::Duration::from_secs(CHALLENGE_SECS as u64)),
-    }
+    // Stateless: every well-formed id gets one the same way, and nothing is stored (auth.rs).
+    Json(Challenge {
+        challenge: Some(app.auth.challenge(&body.device_id, now)),
+        expires_in: Some(CHALLENGE_SECS),
+        options: None,
+    })
+    .into_response()
 }
 
 #[utoipa::path(post, path = "/handshake/session", operation_id = "createSession",

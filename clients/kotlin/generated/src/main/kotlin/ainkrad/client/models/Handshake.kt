@@ -25,8 +25,6 @@ import kotlinx.serialization.Contextual
  *
  * @param apiMajor `v1`.
  * @param apiMinor The contract minor this server speaks (`GET /api/v1/me` has it too).
- * @param coreSig `POST` only: the Core identity key's ES256 signature (raw r||s, base64url) over the UTF-8 string `AINKRAD-CORE-V1` LF `<host>` LF `<nonce>`, no trailing newline; `host` is the Core's configured Host (`localhost` on a Unix socket), `nonce` the text the client sent.
- * @param coreSpki `POST` only: the Core identity key, a P-256 SubjectPublicKeyInfo, base64url. Its fingerprint is `identity_fingerprint`.
  * @param gitSha The commit it was built from (short sha), when the build knew it.
  * @param identityFingerprint `core_fp`: base64url SHA-256 of the Core identity key's SPKI, 43 characters. Signed into every request (handshake spec §5.2).
  * @param serverVersion The server's crate version, `0.1.0`.
@@ -43,14 +41,6 @@ data class Handshake (
     /* The contract minor this server speaks (`GET /api/v1/me` has it too). */
     @SerialName(value = "api_minor")
     val apiMinor: kotlin.Int? = null,
-
-    /* `POST` only: the Core identity key's ES256 signature (raw r||s, base64url) over the UTF-8 string `AINKRAD-CORE-V1` LF `<host>` LF `<nonce>`, no trailing newline; `host` is the Core's configured Host (`localhost` on a Unix socket), `nonce` the text the client sent. */
-    @SerialName(value = "core_sig")
-    val coreSig: kotlin.String? = null,
-
-    /* `POST` only: the Core identity key, a P-256 SubjectPublicKeyInfo, base64url. Its fingerprint is `identity_fingerprint`. */
-    @SerialName(value = "core_spki")
-    val coreSpki: kotlin.String? = null,
 
     /* The commit it was built from (short sha), when the build knew it. */
     @SerialName(value = "git_sha")

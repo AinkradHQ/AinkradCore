@@ -114,7 +114,8 @@ pub(crate) fn too_many(wait: std::time::Duration) -> Response {
         "too many requests; retry later",
     )
     .into_response();
-    let secs = wait.as_secs().max(1).to_string();
+    // Rounded up: a Retry-After shorter than the wait only earns another 429.
+    let secs = (wait.as_secs_f64().ceil() as u64).max(1).to_string();
     if let Ok(v) = HeaderValue::from_str(&secs) {
         response.headers_mut().insert(header::RETRY_AFTER, v);
     }

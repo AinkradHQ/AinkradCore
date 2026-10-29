@@ -21,7 +21,7 @@ const VERSION: u32 = 1;
 struct File {
     version: u32,
     device_id: String,
-    /// `core_fp`, pinned at pairing: from the QR, or from `/handshake` confirmed by the SAS.
+    /// `core_fp`, pinned at pairing: from the QR, or the key `POST /handshake` proved, confirmed by the SAS.
     core_fp: String,
     /// `unix:<path>` or a URL; what `--socket`/`--url` default to.
     endpoint: String,

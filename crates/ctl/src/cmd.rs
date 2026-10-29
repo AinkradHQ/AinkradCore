@@ -63,7 +63,7 @@ this device's routine key (mode 0600) and the Core fingerprint pinned at pairing
 step-up key is beside it (<keystore>.stepup.json, 0600), sealed with its passphrase
 (PBKDF2-HMAC-SHA256, 600k rounds, AES-256-GCM). The passphrase comes from
 --stepup-passphrase-file, else $AINKRAD_STEPUP_PASSPHRASE_FILE, else the terminal. Nothing is
-signed or sent before the Core's /handshake shows that fingerprint. The Host header is
+signed or sent before the Core signs a fresh nonce with that key (POST /handshake). The Host header is
 `localhost` on a socket and the URL's host:port otherwise (--host overrides; a TCP Core's
 admin socket answers to the Core's own host name).
 ";
