@@ -40,6 +40,7 @@ use crate::store::gov::authorize_device_key;
 mod audit;
 mod devices;
 pub mod events;
+pub mod handshake;
 mod me;
 mod pairing;
 mod settings;

@@ -76,6 +76,7 @@ impl App {
 pub fn router(app: App) -> Router {
     use crate::gateway::preauth;
     let preauth_routes = Router::new()
+        .route("/handshake", get(v1::handshake::handshake))
         .route("/healthz", get(preauth::healthz))
         .merge(v1::pairing_router(app.clone()))
         .layer(DefaultBodyLimit::max(preauth::PREAUTH_BODY));

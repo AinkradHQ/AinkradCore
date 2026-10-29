@@ -15,7 +15,8 @@
 /// 0: the platform contract (E1-02): devices and pairing, push tokens, the event stream, the
 /// audit log and settings. Citadel's contract, which reached minor 20, is parked with it in
 /// `modules/citadel/api/openapi.json`.
-pub const API_MINOR: u32 = 0;
+/// 1: `GET /handshake` (E1-05.5).
+pub const API_MINOR: u32 = 1;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

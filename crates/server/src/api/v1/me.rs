@@ -58,13 +58,20 @@ pub async fn me(State(app): State<App>, Extension(device): Extension<Device>) ->
             id: key.id.0,
             name: key.name,
         },
-        versions: Versions {
+        versions: Versions::current(),
+    }))
+}
+
+impl Versions {
+    /// This server's.
+    pub fn current() -> Self {
+        Self {
             server: env!("CARGO_PKG_VERSION").to_owned(),
             git_sha: option_env!("CITADEL_GIT_SHA").map(str::to_owned),
             api: ApiVersion {
                 major: "v1".to_owned(),
                 minor: API_MINOR,
             },
-        },
-    }))
+        }
+    }
 }

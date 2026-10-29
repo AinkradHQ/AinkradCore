@@ -284,6 +284,61 @@
         ],
         "type": "object"
       },
+      "Handshake": {
+        "description": "What the server is and speaks, for anyone.",
+        "properties": {
+          "api_major": {
+            "description": "`v1`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "api_minor": {
+            "description": "The contract minor this server speaks (`GET /api/v1/me` has it too).",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "git_sha": {
+            "description": "The commit it was built from (short sha), when the build knew it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "identity_fingerprint": {
+            "description": "The Core identity key's fingerprint; null until the identity key exists (E1-07).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "server_version": {
+            "description": "The server's crate version, `0.1.0`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "supported_minors": {
+            "description": "Every minor a client may have been built against and still be served: 0 up to\n`api_minor`.",
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "IssuedDevice": {
         "description": "A new device and its key: the only time the key is ever shown.",
         "properties": {
@@ -615,7 +670,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -1585,6 +1640,50 @@
         },
         "tags": [
           "settings"
+        ]
+      }
+    },
+    "/handshake": {
+      "get": {
+        "operationId": "getHandshake",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Handshake"
+                }
+              }
+            },
+            "description": "The server's version and build, the contract minor and the minors it serves. Needs no device key"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "tags": [
+          "handshake"
         ]
       }
     }
