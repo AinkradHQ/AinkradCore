@@ -6,5 +6,6 @@ mod contract;
 mod fake;
 mod flow;
 mod negative;
+mod runner;
 mod stepup;
 mod tls;

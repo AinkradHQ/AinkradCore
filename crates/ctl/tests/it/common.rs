@@ -10,35 +10,36 @@ use std::time::{Duration, Instant};
 /// The server binary, built once per test binary by the same cargo into the same target dir.
 pub fn server_bin() -> PathBuf {
     static BIN: OnceLock<PathBuf> = OnceLock::new();
-    BIN.get_or_init(|| {
-        // target/<profile>/deps/<test> → target/<profile>
-        let profile_dir = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_owned();
-        let target = profile_dir.parent().unwrap().to_owned();
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml");
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let status = Command::new(cargo)
-            .args([
-                "build",
-                "-p",
-                "ainkrad-core-server",
-                "--bin",
-                "ainkrad-core-server",
-                "--manifest-path",
-            ])
-            .arg(&manifest)
-            .env("CARGO_TARGET_DIR", &target)
-            .status()
-            .expect("running cargo");
-        assert!(status.success(), "building ainkrad-core-server");
-        profile_dir.join("ainkrad-core-server")
-    })
-    .clone()
+    BIN.get_or_init(|| built("ainkrad-core-server")).clone()
+}
+
+/// The real runner binary (`ainkrad-runner`), built the same way.
+pub fn runner_bin() -> PathBuf {
+    static BIN: OnceLock<PathBuf> = OnceLock::new();
+    BIN.get_or_init(|| built("ainkrad-runner")).clone()
+}
+
+/// Builds the package's binary of the same name; its path.
+fn built(name: &str) -> PathBuf {
+    // target/<profile>/deps/<test> → target/<profile>
+    let profile_dir = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_owned();
+    let target = profile_dir.parent().unwrap().to_owned();
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml");
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let status = Command::new(cargo)
+        .args(["build", "-p", name, "--bin", name, "--manifest-path"])
+        .arg(&manifest)
+        .env("CARGO_TARGET_DIR", &target)
+        .status()
+        .expect("running cargo");
+    assert!(status.success(), "building {name}");
+    profile_dir.join(name)
 }
 
 pub const CTL: &str = env!("CARGO_BIN_EXE_ainkradctl");
