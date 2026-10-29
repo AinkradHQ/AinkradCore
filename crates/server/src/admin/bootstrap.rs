@@ -76,11 +76,13 @@ fn owner_only(db: &Path) -> Result_ {
         ".uid-probe-{}",
         ainkrad_core_server::auth::crypto::random_id("p_").trim_start_matches("p_")
     ));
-    std::fs::OpenOptions::new()
+    let file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&probe)?;
-    let me = std::fs::metadata(&probe).map(|m| m.uid());
+    // fstat on the handle, not the path: a swap after the create cannot change the answer
+    // (review L2).
+    let me = file.metadata().map(|m| m.uid());
     let _ = std::fs::remove_file(&probe);
     if me? != owner {
         return Err(format!("{} belongs to another user: run as its owner", db.display()).into());
