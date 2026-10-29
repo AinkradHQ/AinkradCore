@@ -164,8 +164,8 @@ async fn restore_rejects_a_newer_schema() {
     backup(&pool, &snapshot).await.unwrap();
     let newer = connect(&snapshot).await.unwrap();
     sqlx::query(
-        "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
-         VALUES (99991231000000, 'from the future', 1, x'00', 0)",
+        "INSERT INTO _migrations_core (version, name, checksum) \
+         VALUES (99991231000000, 'from the future', x'00')",
     )
     .execute(&newer)
     .await
