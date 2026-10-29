@@ -1,0 +1,1 @@
+{"stream_id": 0, "kind": "control", "seq": 0, "payload": {"type": "hello", "protocol": "2.0", "runner_version": "0.1.0", "os": "linux", "arch": "aarch64", "drivers": [{"name": "exec", "commands": ["noop", "exec.run"], "capacity": 2}]}}

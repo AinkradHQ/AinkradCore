@@ -1,0 +1,47 @@
+# E1-17.2: the fuzz targets, in their OWN workspace (needs nightly; `make build` never touches it).
+# Run with `make fuzz-smoke` or `scripts/fuzz/run.sh <secs>`.
+[package]
+name = "ainkrad-core-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ainkrad-core-server = { path = "../crates/server" }
+ainkrad-proto = { path = "../crates/proto" }
+axum = "0.8.9"
+serde_json = "1.0.154"
+
+[workspace]
+
+[[bin]]
+name = "signed_request"
+path = "fuzz_targets/signed_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "v2_frame"
+path = "fuzz_targets/v2_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pairing_payload"
+path = "fuzz_targets/pairing_payload.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "spki_key"
+path = "fuzz_targets/spki_key.rs"
+test = false
+doc = false
+bench = false

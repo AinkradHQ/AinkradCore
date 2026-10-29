@@ -1,6 +1,6 @@
 CARGO ?= cargo
 
-.PHONY: soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel release-dry release-repro release-test
+.PHONY: soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel release-dry release-repro release-test fuzz-smoke audit-fuzz
 build: lint ; $(CARGO) build --workspace
 test: lint ; $(CARGO) test --workspace
 lint: format-check ; $(CARGO) clippy --workspace --all-targets -- -D warnings
@@ -47,3 +47,6 @@ run: ; mkdir -p state && $(CARGO) run -p ainkrad-core-server -- serve state/core
 release-dry: ; scripts/release/dry.sh
 release-repro: ; scripts/release/repro.sh
 release-test: ; scripts/release/test-install.sh
+# Fuzzing (E1-17.2): its own workspace in fuzz/, nightly only, so `make build` never needs it.
+fuzz-smoke: ; scripts/fuzz/run.sh $${FUZZ_SECS:-30}
+audit-fuzz: ; $(CARGO) deny --manifest-path fuzz/Cargo.toml --config fuzz/deny.toml check
