@@ -5840,7 +5840,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope), or an operation marked x-ainkrad-destructive without a live step-up elevation (step_up_required)
             ///
             /// - Remark: Generated from `#/paths//api/v1/runners/get(listRunners)/responses/403`.
             ///
@@ -6129,7 +6129,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope), or an operation marked x-ainkrad-destructive without a live step-up elevation (step_up_required)
             ///
             /// - Remark: Generated from `#/paths//api/v1/runners/{id}/get(getRunner)/responses/403`.
             ///
@@ -6418,7 +6418,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope), or an operation marked x-ainkrad-destructive without a live step-up elevation (step_up_required)
             ///
             /// - Remark: Generated from `#/paths//api/v1/runners/{id}/noop/post(runNoop)/responses/403`.
             ///
