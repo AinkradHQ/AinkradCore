@@ -43,6 +43,7 @@ mod gov;
 mod issues;
 mod library;
 mod me;
+mod modules;
 mod money;
 mod ops;
 mod org;
