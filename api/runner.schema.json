@@ -150,6 +150,48 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/CoreAuth",
+          "description": "Core to runner: the Core's half of the connection proof (`auth`).",
+          "properties": {
+            "type": {
+              "const": "auth",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/RunnerProof",
+          "description": "Runner to Core: the runner's half of the connection proof (`auth`).",
+          "properties": {
+            "type": {
+              "const": "proof",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/Rotation",
+          "description": "Core to runner: a planned identity key rotation (`auth`).",
+          "properties": {
+            "type": {
+              "const": "rotation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
           "description": "A type from a newer peer: ignored. Never sent.",
           "properties": {
             "type": {
@@ -163,6 +205,29 @@
           "type": "object"
         }
       ]
+    },
+    "CoreAuth": {
+      "description": "Core to runner, the answer to `hello`.",
+      "properties": {
+        "core_spki": {
+          "description": "The Core identity SPKI (91 bytes), base64url.",
+          "type": "string"
+        },
+        "nonce": {
+          "description": "`nonce_c`, 32 bytes, base64url.",
+          "type": "string"
+        },
+        "sig": {
+          "description": "ES256, raw r‖s, base64url: the Core key over `core_auth_message`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "core_spki",
+        "nonce",
+        "sig"
+      ],
+      "type": "object"
     },
     "CoreWelcome": {
       "properties": {
@@ -315,6 +380,26 @@
         {
           "const": "internal",
           "description": "Anything else on the runner's side.",
+          "type": "string"
+        },
+        {
+          "const": "auth_failed",
+          "description": "The connection proof failed (`auth`); the same answer whatever the reason.",
+          "type": "string"
+        },
+        {
+          "const": "core_identity_mismatch",
+          "description": "The Core's identity is not the one the runner pinned. Logged by the runner; never sent.",
+          "type": "string"
+        },
+        {
+          "const": "offline",
+          "description": "The runner is not connected (Core side, to whoever dispatched).",
+          "type": "string"
+        },
+        {
+          "const": "lost",
+          "description": "The connection went while the command was in flight and its outcome is unknown: it may\nor may not have run. Reported once per command, never followed by a result.",
           "type": "string"
         },
         {
@@ -733,6 +818,40 @@
       ],
       "type": "object"
     },
+    "Rotation": {
+      "description": "Core to runner: move the pin from `old_fp` to `new_fp`.",
+      "properties": {
+        "new_fp": {
+          "type": "string"
+        },
+        "not_before": {
+          "description": "Unix seconds from which the Core may present the new key.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "old_fp": {
+          "type": "string"
+        },
+        "seq": {
+          "description": "Increases with every rotation; a runner applies only a higher one.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sig": {
+          "description": "ES256 by the old key over `rotation_message`, base64url.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "old_fp",
+        "new_fp",
+        "not_before",
+        "seq",
+        "sig"
+      ],
+      "type": "object"
+    },
     "Route": {
       "description": "One entry of an agent's fallback chain (E15.3), with the account picked for it.",
       "properties": {
@@ -845,12 +964,26 @@
             "null"
           ]
         },
+        "device_id": {
+          "description": "The runner device, `d_…`: the one that signed the upgrade (E1-11.3). The Core refuses a\nhello without it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "drivers": {
           "description": "What it can run. The Core sends only commands listed here.",
           "items": {
             "$ref": "#/$defs/DriverInfo"
           },
           "type": "array"
+        },
+        "nonce": {
+          "description": "`nonce_r`, 32 random bytes, base64url (`auth`). The Core refuses a hello without it.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "os": {
           "description": "`macos`/`linux` and `aarch64`/`x86_64`, as Rust names them.",
@@ -955,6 +1088,19 @@
         "disk_evict_percent",
         "workspace_idle_secs",
         "warm_idle_secs"
+      ],
+      "type": "object"
+    },
+    "RunnerProof": {
+      "description": "Runner to Core, once it has checked `CoreAuth`.",
+      "properties": {
+        "sig": {
+          "description": "ES256, raw r‖s, base64url: the runner's routine key over `runner_auth_message`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sig"
       ],
       "type": "object"
     },

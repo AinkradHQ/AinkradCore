@@ -26,7 +26,8 @@
 ///    `api/compat-allow.txt`).
 /// 4: pairing (E1-07.4, .7): `createPairing`, `getPairing`, `approvePairing`, `rejectPairing`,
 ///    and the pre-auth `claimPairing` and `pairStatus`.
-pub const API_MINOR: u32 = 4;
+/// 5: the runner hub (E1-11.2/.3): the `runner.refused` audit action.
+pub const API_MINOR: u32 = 5;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
