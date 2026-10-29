@@ -51,9 +51,11 @@ CREATE TABLE core_pairings (
     kind        TEXT    NOT NULL CHECK (kind IN ('device', 'runner', 'passkey')),
     name        TEXT    NOT NULL CHECK (name <> ''),
     scopes      TEXT    NOT NULL CHECK (json_valid(scopes) AND json_type(scopes) = 'array'),
-    -- The device that created it, or NULL for the host's `bootstrap`.
+    -- The device that created it, or NULL for the host's `bootstrap` and `recover`.
     created_by  TEXT    REFERENCES core_devices(id),
-    bootstrap   INTEGER NOT NULL DEFAULT 0 CHECK (bootstrap IN (0, 1)),
+    -- 0: a pairing from a device; 1: the host's first-device `bootstrap`; 2: the host's
+    -- `recover` (§12). 1 and 2 are claimable only over the host's own socket.
+    bootstrap   INTEGER NOT NULL DEFAULT 0 CHECK (bootstrap IN (0, 1, 2)),
     created_at  TEXT    NOT NULL,
     expires_at  TEXT    NOT NULL,
     status      TEXT    NOT NULL DEFAULT 'live' CHECK (status IN
