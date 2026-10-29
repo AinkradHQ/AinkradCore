@@ -175,6 +175,7 @@
           "pairing.expired",
           "pairing.refused",
           "pairing.rejected",
+          "passkey.locked",
           "recover.started",
           "runner.command",
           "runner.refused",
@@ -217,6 +218,13 @@
             "format": "int64",
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "options": {
+            "description": "A passkey device's step-up only: `{\"publicKey\": PublicKeyCredentialRequestOptions}`\nover `challenge`, for `navigator.credentials.get`.",
+            "type": [
+              "object",
               "null"
             ]
           }
@@ -696,7 +704,7 @@
         "additionalProperties": false,
         "properties": {
           "kind": {
-            "description": "`device` or `runner` (`passkey` comes with E1-08).",
+            "description": "`device`, `runner`, or `passkey` (a browser, E1-08; only when the Core has passkeys).",
             "type": "string"
           },
           "name": {
@@ -878,6 +886,74 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "PasskeyClaimBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "The same code as for the options; or `secret`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "credential": {
+            "description": "The created credential as a WebAuthn `RegisterPublicKeyCredential` (`id`, `rawId`,\n`type`, `response.attestationObject`, `response.clientDataJSON`, optional\n`response.transports`), binary fields base64url.",
+            "type": "object"
+          },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "credential"
+        ],
+        "type": "object"
+      },
+      "PasskeyOptionsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "The typed code (`ABCDE-FGHJK`, any case); or `secret`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "secret": {
+            "description": "The QR secret; or `code`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "PasskeyRegistrationOptions": {
+        "properties": {
+          "expires_at": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "The pairing's expiry: the credential must be claimed before it."
+          },
+          "options": {
+            "description": "`{\"publicKey\": PublicKeyCredentialCreationOptions}` (WebAuthn, binary fields base64url):\nES256 only, attestation `none`, user verification required, a resident key preferred.\nDecode it and pass it to `navigator.credentials.create`.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "options"
+        ],
         "type": "object"
       },
       "PastRetention": {
@@ -1244,18 +1320,24 @@
       "StepUpRequest": {
         "additionalProperties": false,
         "properties": {
+          "assertion": {
+            "description": "A passkey device's proof: the WebAuthn `PublicKeyCredential` answering the challenge's\n`options`, with user verification.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "challenge": {
             "description": "The challenge from `POST /api/v1/auth/step-up/challenge` for this session.",
             "type": "string"
           },
           "stepup_sig": {
-            "description": "The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string\n`AINKRAD-STEPUP-V1` LF `<core_fp>` LF `<device_id>` LF `<session_id>` LF `<challenge>`,\nno trailing newline. The device's OS releases that key only after user verification.",
+            "description": "The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string\n`AINKRAD-STEPUP-V1` LF `<core_fp>` LF `<device_id>` LF `<session_id>` LF `<challenge>`,\nno trailing newline. The device's OS releases that key only after user verification.\nRequired for a native device; a passkey device sends `assertion` instead.",
             "type": "string"
           }
         },
         "required": [
-          "challenge",
-          "stepup_sig"
+          "challenge"
         ],
         "type": "object"
       },
@@ -1287,6 +1369,104 @@
           "api"
         ],
         "type": "object"
+      },
+      "WebOptions": {
+        "properties": {
+          "expires_in": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "options": {
+            "description": "`{\"publicKey\": PublicKeyCredentialRequestOptions}` (WebAuthn, binary fields base64url),\nuser verification required, no credential list (the passkey is discoverable): decode\nit and pass it to `navigator.credentials.get`.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "options"
+        ],
+        "type": "object"
+      },
+      "WebOptionsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "session_spki": {
+            "description": "The browser's session key: a non-extractable WebCrypto ECDSA P-256 key's SPKI\n(`exportKey(\"spki\")` of its public half), base64url.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_spki"
+        ],
+        "type": "object"
+      },
+      "WebSessionGrant": {
+        "properties": {
+          "device_id": {
+            "description": "The passkey device, `d_…`: sent as `Ainkrad-Device`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "elevated_until": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "session_id": {
+            "description": "`s_…`: sent as `Ainkrad-Session`; every request is signed with the session key.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "WebSessionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "credential": {
+            "description": "The assertion as a WebAuthn `PublicKeyCredential` (`id`, `rawId`, `type`,\n`response.authenticatorData`, `response.clientDataJSON`, `response.signature`,\n`response.userHandle`), binary fields base64url.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "credential"
+        ],
+        "type": "object"
+      },
+      "WsTicket": {
+        "properties": {
+          "expires_in": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ticket": {
+            "description": "16 random bytes, base64url: offer `ainkrad.v1, ainkrad-ticket.<ticket>` as the\nWebSocket subprotocols of `GET /api/v1/events/ws`. Good once.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -1299,12 +1479,12 @@
     }
   },
   "info": {
-    "description": "The Ainkrad Core client API, for the Ainkrad app. Every request is signed by the device's own P-256 key (ES256, raw r||s): the headers Ainkrad-Device, Ainkrad-Session, Ainkrad-Alg (ES256), Ainkrad-Timestamp, Ainkrad-Nonce and Ainkrad-Signature cover an exact canonical string of the Core identity fingerprint, the method, path, query, time, nonce and the body's SHA-256 (handshake spec §5). A session comes from POST /handshake/challenge then POST /handshake/session and lasts 15 minutes; there is no bearer secret, and an Authorization header is refused. Requests carry the server's own Host and no Origin. Times are RFC 3339 UTC with milliseconds. Versioning: within /api/v1, enum values, union variants, optional fields and operations may be added; a client must keep an unknown enum value (every enum is open) and skip an event or union variant it cannot decode. Anything removed or renamed is a new /api/v2. `info.version` is `1.<minor>.0`; the minor (`GET /api/v1/me`, `versions.api.minor`) is bumped on every addition.",
+    "description": "The Ainkrad Core client API, for the Ainkrad app. Every request is signed by the device's own P-256 key (ES256, raw r||s): the headers Ainkrad-Device, Ainkrad-Session, Ainkrad-Alg (ES256), Ainkrad-Timestamp, Ainkrad-Nonce and Ainkrad-Signature cover an exact canonical string of the Core identity fingerprint, the method, path, query, time, nonce and the body's SHA-256 (handshake spec §5). A session comes from POST /handshake/challenge then POST /handshake/session and lasts 15 minutes; there is no bearer secret, and an Authorization header is refused. Requests carry the server's own Host and no Origin, or the Core's own origin from its web client. A web client signs in with a passkey (POST /handshake/passkey/options, then POST /handshake/passkey/session) and signs every request with a non-extractable WebCrypto P-256 session key in the same way; its event socket takes a one-time ticket (POST /api/v1/ws-ticket) in Sec-WebSocket-Protocol. Times are RFC 3339 UTC with milliseconds. Versioning: within /api/v1, enum values, union variants, optional fields and operations may be added; a client must keep an unknown enum value (every enum is open) and skip an event or union variant it cannot decode. Anything removed or renamed is a new /api/v2. `info.version` is `1.<minor>.0`; the minor (`GET /api/v1/me`, `versions.api.minor`) is bumped on every addition.",
     "license": {
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.8.0"
+    "version": "1.9.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -1997,6 +2177,18 @@
               "format": "int64",
               "type": [
                 "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "A browser, which cannot sign an upgrade: `ainkrad.v1, ainkrad-ticket.<ticket>` with a ticket from `POST /api/v1/ws-ticket`, sent unsigned (the server answers `ainkrad.v1`)",
+            "in": "header",
+            "name": "Sec-WebSocket-Protocol",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
                 "null"
               ]
             }
@@ -2904,6 +3096,48 @@
         "x-ainkrad-scope": "read"
       }
     },
+    "/api/v1/ws-ticket": {
+      "post": {
+        "operationId": "createWsTicket",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WsTicket"
+                }
+              }
+            },
+            "description": "A one-time ticket for this session's event socket, live 30 s, for browsers, which cannot sign an upgrade. At most four live per session (a new one replaces the oldest); 429 past ten at once, then one every 6 s"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "events"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
     "/handshake": {
       "get": {
         "operationId": "getHandshake",
@@ -2971,6 +3205,114 @@
               }
             },
             "description": "A single-use challenge for the device, live 60 s. Always answered, for any well-formed device id; 429 past 30 a minute from one address"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "tags": [
+          "handshake"
+        ]
+      }
+    },
+    "/handshake/passkey/options": {
+      "post": {
+        "operationId": "webSignInOptions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebOptionsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebOptions"
+                }
+              }
+            },
+            "description": "Sign-in options bound to the session key, live 60 s, single use. 429 past 30 a minute from one address; three live per address (a new one replaces the oldest); 400 `passkeys_disabled` when the Core has no passkeys"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "tags": [
+          "handshake"
+        ]
+      }
+    },
+    "/handshake/passkey/session": {
+      "post": {
+        "operationId": "webSignIn",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebSessionGrant"
+                }
+              }
+            },
+            "description": "A web session for the passkey device, signed with the session key from the options, live `auth.web_session_secs` (absolute). Every failure is 401 `auth_failed`; a sign count that did not grow locks the passkey"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -3127,6 +3469,114 @@
               }
             },
             "description": "Claimed: the device is pending until the approver matches the SAS. 401 `pairing_failed` for a wrong, used, expired or burned credential; 400 for keys or proofs that do not hold (the pairing is not spent)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "tags": [
+          "pairing"
+        ]
+      }
+    },
+    "/pair/passkey/claim": {
+      "post": {
+        "operationId": "claimPasskeyPairing",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyClaimBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Claimed"
+                }
+              }
+            },
+            "description": "Claimed: a pending device of kind `passkey`, whose key is the credential's public key (the SAS is computed over it); the approver compares the SAS and approves as for any device. 401 `pairing_failed` as for `/pair/claim`; 400 for a credential that does not verify, is not ES256 or comes without options first (the pairing is not spent); 409 for a credential enrolled already"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "tags": [
+          "pairing"
+        ]
+      }
+    },
+    "/pair/passkey/options": {
+      "post": {
+        "operationId": "passkeyRegistrationOptions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyOptionsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyRegistrationOptions"
+                }
+              }
+            },
+            "description": "Registration options for a live pairing of kind `passkey`; nothing is spent, and a new ask replaces the previous ceremony. A wrong, used, expired or burned credential, or a pairing of another kind, is 401 `pairing_failed` and counts as a wrong claim; 400 `passkeys_disabled` when the Core has no passkeys"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

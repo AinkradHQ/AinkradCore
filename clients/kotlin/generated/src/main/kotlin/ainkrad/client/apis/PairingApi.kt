@@ -23,6 +23,9 @@ import ainkrad.client.models.NewPairingBody
 import ainkrad.client.models.PairStatus
 import ainkrad.client.models.PairingCreated
 import ainkrad.client.models.PairingView
+import ainkrad.client.models.PasskeyClaimBody
+import ainkrad.client.models.PasskeyOptionsBody
+import ainkrad.client.models.PasskeyRegistrationOptions
 
 import ainkrad.client.infrastructure.*
 import io.ktor.client.HttpClientConfig
@@ -95,6 +98,39 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.POST,
             "/pair/claim",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /pair/passkey/claim
+        * 
+        * 
+         * @param passkeyClaimBody  
+         * @return Claimed
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun claimPasskeyPairing(passkeyClaimBody: PasskeyClaimBody): HttpResponse<Claimed> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = passkeyClaimBody
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/pair/passkey/claim",
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,
@@ -211,6 +247,39 @@ import io.ktor.http.ParametersBuilder
             )
 
             return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /pair/passkey/options
+        * 
+        * 
+         * @param passkeyOptionsBody  
+         * @return PasskeyRegistrationOptions
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun passkeyRegistrationOptions(passkeyOptionsBody: PasskeyOptionsBody): HttpResponse<PasskeyRegistrationOptions> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = passkeyOptionsBody
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/pair/passkey/options",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames

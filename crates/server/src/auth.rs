@@ -31,10 +31,12 @@ pub mod signed;
 pub mod stepup;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
+pub mod ticket;
+pub mod web;
 
 pub use budget::{AddressFailures, PairBudget};
 pub use identity::Identity;
-pub use stepup::{Proof, StepUpFailures};
+pub use stepup::{Assertion, AssertionProof, Proof, StepUpFailures};
 
 /// `|now − timestamp|` allowed, seconds.
 pub const SKEW: i64 = 60;
@@ -71,6 +73,10 @@ pub struct Session {
     pub elevated_until: Option<i64>,
     /// The session's one live step-up challenge and its expiry; a new one replaces it.
     pub stepup_challenge: Option<(String, i64)>,
+    /// A web session's request key (spec §9): the browser's WebCrypto P-256 key as an SPKI,
+    /// bound by the passkey sign-in. Every request of the session is signed with it; `None` for
+    /// a native device, which signs with its routine key.
+    pub key: Option<Vec<u8>>,
 }
 
 impl Session {
@@ -108,6 +114,10 @@ pub struct Auth {
     pub refusals: refusals::Refusals,
     /// Devices whose scopes changed: their sockets close with 4003 (§10).
     rescoped: broadcast::Sender<String>,
+    /// One-time WebSocket tickets (`ticket`).
+    tickets: Mutex<HashMap<String, ticket::Ticket>>,
+    /// Ticket issuance per session (`ticket`).
+    pub ticket_limit: Limiter,
 }
 
 impl Auth {
@@ -125,6 +135,8 @@ impl Auth {
             stepup_failures: StepUpFailures::default(),
             refusals: refusals::Refusals::default(),
             rescoped: broadcast::channel(64).0,
+            tickets: Mutex::default(),
+            ticket_limit: Limiter::new(ticket::PER_SESSION_BURST, ticket::PER_SESSION_PER_SEC),
         }
     }
 
@@ -192,6 +204,16 @@ impl Auth {
     /// A new 15-minute session for `device`. It carries over the elevation of the device's
     /// newest live session (§6.2), never extended.
     pub fn issue_session(&self, device: &str, now: i64) -> Session {
+        self.issue(device, None, now, now + SESSION_SECS)
+    }
+
+    /// A web session for passkey device `device` (spec §9): signed with the browser's `key`,
+    /// live until `expires` (absolute, never extended). Otherwise as `issue_session`.
+    pub fn issue_web_session(&self, device: &str, key: Vec<u8>, now: i64, expires: i64) -> Session {
+        self.issue(device, Some(key), now, expires)
+    }
+
+    fn issue(&self, device: &str, key: Option<Vec<u8>>, now: i64, expires: i64) -> Session {
         let mut all = self.sessions.lock().unwrap();
         all.retain(|_, s| s.expires > now);
         let elevated_until = all
@@ -204,9 +226,10 @@ impl Auth {
             id: crypto::random_id("s_"),
             device: device.to_owned(),
             created: now,
-            expires: now + SESSION_SECS,
+            expires,
             elevated_until,
             stepup_challenge: None,
+            key,
         };
         let mut mine: Vec<(i64, String)> = all
             .values()
@@ -255,6 +278,10 @@ impl Auth {
             .lock()
             .unwrap()
             .retain(|_, s| s.device != device);
+        self.tickets
+            .lock()
+            .unwrap()
+            .retain(|_, t| t.device != device);
         // No receiver is fine: no socket is open.
         let _ = self.revoked.send(device.to_owned());
     }

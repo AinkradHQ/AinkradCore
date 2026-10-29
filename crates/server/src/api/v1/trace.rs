@@ -146,6 +146,7 @@ pub struct Refused {
 pub const AGGREGATED: &[(&str, &str)] = &[
     ("POST", "/api/v1/auth/step-up/challenge"),
     ("POST", "/api/v1/auth/step-up"),
+    ("POST", "/api/v1/ws-ticket"),
     ("POST", "/api/v1/auth/lockouts/clear"),
     ("PATCH", "/api/v1/devices/{id}"),
     ("PUT", "/api/v1/devices/{id}/scopes"),

@@ -168,21 +168,30 @@ extension Components {
             public var challenge: Swift.String?
             /// - Remark: Generated from `#/components/schemas/Challenge/expires_in`.
             public var expiresIn: Swift.Int64?
+            /// A passkey device's step-up only: `{"publicKey": PublicKeyCredentialRequestOptions}`
+            /// over `challenge`, for `navigator.credentials.get`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Challenge/options`.
+            public var options: OpenAPIRuntime.OpenAPIObjectContainer?
             /// Creates a new `Challenge`.
             ///
             /// - Parameters:
             ///   - challenge: 32 random bytes, base64url; spend it once within `expires_in` seconds.
             ///   - expiresIn:
+            ///   - options: A passkey device's step-up only: `{"publicKey": PublicKeyCredentialRequestOptions}`
             public init(
                 challenge: Swift.String? = nil,
-                expiresIn: Swift.Int64? = nil
+                expiresIn: Swift.Int64? = nil,
+                options: OpenAPIRuntime.OpenAPIObjectContainer? = nil
             ) {
                 self.challenge = challenge
                 self.expiresIn = expiresIn
+                self.options = options
             }
             public enum CodingKeys: String, CodingKey {
                 case challenge
                 case expiresIn = "expires_in"
+                case options
             }
         }
         /// - Remark: Generated from `#/components/schemas/ChallengeRequest`.
@@ -897,7 +906,7 @@ extension Components {
         }
         /// - Remark: Generated from `#/components/schemas/NewPairingBody`.
         public struct NewPairingBody: Codable, Hashable, Sendable {
-            /// `device` or `runner` (`passkey` comes with E1-08).
+            /// `device`, `runner`, or `passkey` (a browser, E1-08; only when the Core has passkeys).
             ///
             /// - Remark: Generated from `#/components/schemas/NewPairingBody/kind`.
             public var kind: Swift.String
@@ -912,7 +921,7 @@ extension Components {
             /// Creates a new `NewPairingBody`.
             ///
             /// - Parameters:
-            ///   - kind: `device` or `runner` (`passkey` comes with E1-08).
+            ///   - kind: `device`, `runner`, or `passkey` (a browser, E1-08; only when the Core has passkeys).
             ///   - name: What to call the new device.
             ///   - scopes: What it may do: within the approver's own scopes; a runner gets exactly `runner`.
             public init(
@@ -1150,6 +1159,143 @@ extension Components {
                 case sas
                 case scopes
                 case status
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/PasskeyClaimBody`.
+        public struct PasskeyClaimBody: Codable, Hashable, Sendable {
+            /// The same code as for the options; or `secret`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PasskeyClaimBody/code`.
+            public var code: Swift.String?
+            /// The created credential as a WebAuthn `RegisterPublicKeyCredential` (`id`, `rawId`,
+            /// `type`, `response.attestationObject`, `response.clientDataJSON`, optional
+            /// `response.transports`), binary fields base64url.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PasskeyClaimBody/credential`.
+            public var credential: OpenAPIRuntime.OpenAPIObjectContainer
+            /// - Remark: Generated from `#/components/schemas/PasskeyClaimBody/platform`.
+            public var platform: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/PasskeyClaimBody/secret`.
+            public var secret: Swift.String?
+            /// Creates a new `PasskeyClaimBody`.
+            ///
+            /// - Parameters:
+            ///   - code: The same code as for the options; or `secret`.
+            ///   - credential: The created credential as a WebAuthn `RegisterPublicKeyCredential` (`id`, `rawId`,
+            ///   - platform:
+            ///   - secret:
+            public init(
+                code: Swift.String? = nil,
+                credential: OpenAPIRuntime.OpenAPIObjectContainer,
+                platform: Swift.String? = nil,
+                secret: Swift.String? = nil
+            ) {
+                self.code = code
+                self.credential = credential
+                self.platform = platform
+                self.secret = secret
+            }
+            public enum CodingKeys: String, CodingKey {
+                case code
+                case credential
+                case platform
+                case secret
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.code = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .code
+                )
+                self.credential = try container.decode(
+                    OpenAPIRuntime.OpenAPIObjectContainer.self,
+                    forKey: .credential
+                )
+                self.platform = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .platform
+                )
+                self.secret = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .secret
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "code",
+                    "credential",
+                    "platform",
+                    "secret"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/PasskeyOptionsBody`.
+        public struct PasskeyOptionsBody: Codable, Hashable, Sendable {
+            /// The typed code (`ABCDE-FGHJK`, any case); or `secret`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PasskeyOptionsBody/code`.
+            public var code: Swift.String?
+            /// The QR secret; or `code`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PasskeyOptionsBody/secret`.
+            public var secret: Swift.String?
+            /// Creates a new `PasskeyOptionsBody`.
+            ///
+            /// - Parameters:
+            ///   - code: The typed code (`ABCDE-FGHJK`, any case); or `secret`.
+            ///   - secret: The QR secret; or `code`.
+            public init(
+                code: Swift.String? = nil,
+                secret: Swift.String? = nil
+            ) {
+                self.code = code
+                self.secret = secret
+            }
+            public enum CodingKeys: String, CodingKey {
+                case code
+                case secret
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.code = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .code
+                )
+                self.secret = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .secret
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "code",
+                    "secret"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/PasskeyRegistrationOptions`.
+        public struct PasskeyRegistrationOptions: Codable, Hashable, Sendable {
+            /// The pairing's expiry: the credential must be claimed before it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PasskeyRegistrationOptions/expires_at`.
+            public var expiresAt: Components.Schemas.Timestamp?
+            /// `{"publicKey": PublicKeyCredentialCreationOptions}` (WebAuthn, binary fields base64url):
+            /// ES256 only, attestation `none`, user verification required, a resident key preferred.
+            /// Decode it and pass it to `navigator.credentials.create`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PasskeyRegistrationOptions/options`.
+            public var options: OpenAPIRuntime.OpenAPIObjectContainer
+            /// Creates a new `PasskeyRegistrationOptions`.
+            ///
+            /// - Parameters:
+            ///   - expiresAt: The pairing's expiry: the credential must be claimed before it.
+            ///   - options: `{"publicKey": PublicKeyCredentialCreationOptions}` (WebAuthn, binary fields base64url):
+            public init(
+                expiresAt: Components.Schemas.Timestamp? = nil,
+                options: OpenAPIRuntime.OpenAPIObjectContainer
+            ) {
+                self.expiresAt = expiresAt
+                self.options = options
+            }
+            public enum CodingKeys: String, CodingKey {
+                case expiresAt = "expires_at"
+                case options
             }
         }
         /// The 410 of a replay from below the retention floor (E1-04.4).
@@ -1722,6 +1868,11 @@ extension Components {
         }
         /// - Remark: Generated from `#/components/schemas/StepUpRequest`.
         public struct StepUpRequest: Codable, Hashable, Sendable {
+            /// A passkey device's proof: the WebAuthn `PublicKeyCredential` answering the challenge's
+            /// `options`, with user verification.
+            ///
+            /// - Remark: Generated from `#/components/schemas/StepUpRequest/assertion`.
+            public var assertion: OpenAPIRuntime.OpenAPIObjectContainer?
             /// The challenge from `POST /api/v1/auth/step-up/challenge` for this session.
             ///
             /// - Remark: Generated from `#/components/schemas/StepUpRequest/challenge`.
@@ -1729,36 +1880,46 @@ extension Components {
             /// The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string
             /// `AINKRAD-STEPUP-V1` LF `<core_fp>` LF `<device_id>` LF `<session_id>` LF `<challenge>`,
             /// no trailing newline. The device's OS releases that key only after user verification.
+            /// Required for a native device; a passkey device sends `assertion` instead.
             ///
             /// - Remark: Generated from `#/components/schemas/StepUpRequest/stepup_sig`.
-            public var stepupSig: Swift.String
+            public var stepupSig: Swift.String?
             /// Creates a new `StepUpRequest`.
             ///
             /// - Parameters:
+            ///   - assertion: A passkey device's proof: the WebAuthn `PublicKeyCredential` answering the challenge's
             ///   - challenge: The challenge from `POST /api/v1/auth/step-up/challenge` for this session.
             ///   - stepupSig: The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string
             public init(
+                assertion: OpenAPIRuntime.OpenAPIObjectContainer? = nil,
                 challenge: Swift.String,
-                stepupSig: Swift.String
+                stepupSig: Swift.String? = nil
             ) {
+                self.assertion = assertion
                 self.challenge = challenge
                 self.stepupSig = stepupSig
             }
             public enum CodingKeys: String, CodingKey {
+                case assertion
                 case challenge
                 case stepupSig = "stepup_sig"
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.assertion = try container.decodeIfPresent(
+                    OpenAPIRuntime.OpenAPIObjectContainer.self,
+                    forKey: .assertion
+                )
                 self.challenge = try container.decode(
                     Swift.String.self,
                     forKey: .challenge
                 )
-                self.stepupSig = try container.decode(
+                self.stepupSig = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .stepupSig
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "assertion",
                     "challenge",
                     "stepup_sig"
                 ])
@@ -1802,6 +1963,161 @@ extension Components {
                 case api
                 case gitSha = "git_sha"
                 case server
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/WebOptions`.
+        public struct WebOptions: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/WebOptions/expires_in`.
+            public var expiresIn: Swift.Int64?
+            /// `{"publicKey": PublicKeyCredentialRequestOptions}` (WebAuthn, binary fields base64url),
+            /// user verification required, no credential list (the passkey is discoverable): decode
+            /// it and pass it to `navigator.credentials.get`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/WebOptions/options`.
+            public var options: OpenAPIRuntime.OpenAPIObjectContainer
+            /// Creates a new `WebOptions`.
+            ///
+            /// - Parameters:
+            ///   - expiresIn:
+            ///   - options: `{"publicKey": PublicKeyCredentialRequestOptions}` (WebAuthn, binary fields base64url),
+            public init(
+                expiresIn: Swift.Int64? = nil,
+                options: OpenAPIRuntime.OpenAPIObjectContainer
+            ) {
+                self.expiresIn = expiresIn
+                self.options = options
+            }
+            public enum CodingKeys: String, CodingKey {
+                case expiresIn = "expires_in"
+                case options
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/WebOptionsRequest`.
+        public struct WebOptionsRequest: Codable, Hashable, Sendable {
+            /// The browser's session key: a non-extractable WebCrypto ECDSA P-256 key's SPKI
+            /// (`exportKey("spki")` of its public half), base64url.
+            ///
+            /// - Remark: Generated from `#/components/schemas/WebOptionsRequest/session_spki`.
+            public var sessionSpki: Swift.String
+            /// Creates a new `WebOptionsRequest`.
+            ///
+            /// - Parameters:
+            ///   - sessionSpki: The browser's session key: a non-extractable WebCrypto ECDSA P-256 key's SPKI
+            public init(sessionSpki: Swift.String) {
+                self.sessionSpki = sessionSpki
+            }
+            public enum CodingKeys: String, CodingKey {
+                case sessionSpki = "session_spki"
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.sessionSpki = try container.decode(
+                    Swift.String.self,
+                    forKey: .sessionSpki
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "session_spki"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/WebSessionGrant`.
+        public struct WebSessionGrant: Codable, Hashable, Sendable {
+            /// The passkey device, `d_…`: sent as `Ainkrad-Device`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/WebSessionGrant/device_id`.
+            public var deviceId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/WebSessionGrant/elevated_until`.
+            public var elevatedUntil: Components.Schemas.Timestamp?
+            /// - Remark: Generated from `#/components/schemas/WebSessionGrant/expires_at`.
+            public var expiresAt: Components.Schemas.Timestamp?
+            /// - Remark: Generated from `#/components/schemas/WebSessionGrant/scopes`.
+            public var scopes: [Swift.String]?
+            /// `s_…`: sent as `Ainkrad-Session`; every request is signed with the session key.
+            ///
+            /// - Remark: Generated from `#/components/schemas/WebSessionGrant/session_id`.
+            public var sessionId: Swift.String?
+            /// Creates a new `WebSessionGrant`.
+            ///
+            /// - Parameters:
+            ///   - deviceId: The passkey device, `d_…`: sent as `Ainkrad-Device`.
+            ///   - elevatedUntil:
+            ///   - expiresAt:
+            ///   - scopes:
+            ///   - sessionId: `s_…`: sent as `Ainkrad-Session`; every request is signed with the session key.
+            public init(
+                deviceId: Swift.String? = nil,
+                elevatedUntil: Components.Schemas.Timestamp? = nil,
+                expiresAt: Components.Schemas.Timestamp? = nil,
+                scopes: [Swift.String]? = nil,
+                sessionId: Swift.String? = nil
+            ) {
+                self.deviceId = deviceId
+                self.elevatedUntil = elevatedUntil
+                self.expiresAt = expiresAt
+                self.scopes = scopes
+                self.sessionId = sessionId
+            }
+            public enum CodingKeys: String, CodingKey {
+                case deviceId = "device_id"
+                case elevatedUntil = "elevated_until"
+                case expiresAt = "expires_at"
+                case scopes
+                case sessionId = "session_id"
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/WebSessionRequest`.
+        public struct WebSessionRequest: Codable, Hashable, Sendable {
+            /// The assertion as a WebAuthn `PublicKeyCredential` (`id`, `rawId`, `type`,
+            /// `response.authenticatorData`, `response.clientDataJSON`, `response.signature`,
+            /// `response.userHandle`), binary fields base64url.
+            ///
+            /// - Remark: Generated from `#/components/schemas/WebSessionRequest/credential`.
+            public var credential: OpenAPIRuntime.OpenAPIObjectContainer
+            /// Creates a new `WebSessionRequest`.
+            ///
+            /// - Parameters:
+            ///   - credential: The assertion as a WebAuthn `PublicKeyCredential` (`id`, `rawId`, `type`,
+            public init(credential: OpenAPIRuntime.OpenAPIObjectContainer) {
+                self.credential = credential
+            }
+            public enum CodingKeys: String, CodingKey {
+                case credential
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.credential = try container.decode(
+                    OpenAPIRuntime.OpenAPIObjectContainer.self,
+                    forKey: .credential
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "credential"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/WsTicket`.
+        public struct WsTicket: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/WsTicket/expires_in`.
+            public var expiresIn: Swift.Int64?
+            /// 16 random bytes, base64url: offer `ainkrad.v1, ainkrad-ticket.<ticket>` as the
+            /// WebSocket subprotocols of `GET /api/v1/events/ws`. Good once.
+            ///
+            /// - Remark: Generated from `#/components/schemas/WsTicket/ticket`.
+            public var ticket: Swift.String?
+            /// Creates a new `WsTicket`.
+            ///
+            /// - Parameters:
+            ///   - expiresIn:
+            ///   - ticket: 16 random bytes, base64url: offer `ainkrad.v1, ainkrad-ticket.<ticket>` as the
+            public init(
+                expiresIn: Swift.Int64? = nil,
+                ticket: Swift.String? = nil
+            ) {
+                self.expiresIn = expiresIn
+                self.ticket = ticket
+            }
+            public enum CodingKeys: String, CodingKey {
+                case expiresIn = "expires_in"
+                case ticket
             }
         }
     }

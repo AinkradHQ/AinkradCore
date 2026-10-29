@@ -197,7 +197,11 @@ fn last_event_id(headers: &HeaderMap) -> Result<Option<i64>, ApiError> {
 
 #[utoipa::path(get, path = "/api/v1/events/ws", operation_id = "streamEvents", tag = "events",
     params(("Last-Event-ID" = Option<i64>, Header,
-        description = "Replay events after this seq first; absent: only new events")),
+        description = "Replay events after this seq first; absent: only new events"),
+        ("Sec-WebSocket-Protocol" = Option<String>, Header,
+            description = "A browser, which cannot sign an upgrade: `ainkrad.v1, \
+            ainkrad-ticket.<ticket>` with a ticket from `POST /api/v1/ws-ticket`, sent unsigned \
+            (the server answers `ainkrad.v1`)")),
     responses((status = 101, description = "Switching to a WebSocket. Each text frame is one \
         `Event` (schema `Event`). Closed with 1013 when the client falls behind (a send blocked too long), \
         with the reason `too slow; resume from the last seq read, at most <seq>`: `<seq>` is \
@@ -242,7 +246,10 @@ pub async fn ws(
             () = rescoped => End::Rescoped,
         }
     };
-    ws.on_upgrade(move |socket| stream(app, socket, v, after, changed))
+    // A browser offers `ainkrad.v1` with its ticket (`ticket`) and drops a socket that does not
+    // answer one it offered.
+    ws.protocols([super::ticket::PROTOCOL])
+        .on_upgrade(move |socket| stream(app, socket, v, after, changed))
 }
 
 /// Why a socket ended, for the log.
