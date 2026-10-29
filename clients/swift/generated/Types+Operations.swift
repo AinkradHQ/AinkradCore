@@ -6349,7 +6349,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The runner ran the no-op command (audited as `runner.command`). 409 `runner_offline` or `unsupported_command`, 503 `runner_busy`, 504 `runner_lost` or `runner_timeout`, 502 `runner_failed`
+            /// The runner ran the no-op command (audited as `runner.command`, once per caller, runner and outcome in a window). 409 `runner_offline` or `unsupported_command`, 503 `runner_busy`, 504 `runner_lost` or `runner_timeout`, 502 `runner_failed`
             ///
             /// - Remark: Generated from `#/paths//api/v1/runners/{id}/noop/post(runNoop)/responses/200`.
             ///

@@ -155,7 +155,7 @@ fn failed(e: &StreamError) -> ApiError {
     tag = "runners",
     params(("id" = String, Path, description = "The runner's device id, `d_…`")),
     responses((status = 200, description = "The runner ran the no-op command (audited as \
-        `runner.command`). 409 `runner_offline` or `unsupported_command`, 503 `runner_busy`, \
+        `runner.command`, once per caller, runner and outcome in a window). 409 `runner_offline` or `unsupported_command`, 503 `runner_busy`, \
         504 `runner_lost` or `runner_timeout`, 502 `runner_failed`", body = NoopResult)))]
 pub async fn noop(
     State(app): State<App>,
@@ -174,6 +174,17 @@ pub async fn noop(
         )),
     };
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    // The first call per caller, runner and outcome in a window is audited; the repeats are
+    // counted in memory (`auth::refusals`, bounded), so a device that can call this at its
+    // request rate cannot grow the permanent audit log (security review RH4).
+    let key = format!("{COMMAND}:noop:{}:{id}:{}", me.device.id, outcome.is_ok());
+    if !app.auth.refusals.note(&key, app.clock.unix()) {
+        outcome?;
+        return Ok(Json(NoopResult {
+            ok: Some(true),
+            duration_ms: Some(duration_ms),
+        }));
+    }
     let event = NewAuditEvent {
         actor: BY,
         action: COMMAND.to_owned(),
