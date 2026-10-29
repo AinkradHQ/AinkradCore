@@ -27,7 +27,7 @@ use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
 use tower::ServiceExt;
 
-use super::{Gateway, Listener, preauth, tls};
+use super::{Gateway, Listener, Local, preauth, tls};
 use crate::api::v1::ApiError;
 
 /// Request and connection limits.
@@ -99,6 +99,7 @@ impl Gateway {
                 super::acme::renew(held, now, Duration::from_secs(60), order, stop).await;
             })
         });
+        let app_admin = app.clone();
         let main = accept(self.main, tls, app, &limits, &graceful, closing.subscribe());
         let http01 = async {
             if let (Some(l80), Some((certs, _))) = (self.http01, &self.tls) {
@@ -107,8 +108,14 @@ impl Gateway {
                 accept(l80, None, router, &limits, &graceful, closing.subscribe()).await;
             }
         };
-        // Both loops end once `closing` is set and drop their listeners: nothing new comes.
-        tokio::join!(main, http01);
+        let admin = async {
+            if let Some(admin) = self.admin {
+                let app = app_admin.clone();
+                accept(admin, None, app, &limits, &graceful, closing.subscribe()).await;
+            }
+        };
+        // Every loop ends once `closing` is set and drops its listener: nothing new comes.
+        tokio::join!(main, http01, admin);
         if let Some(renewing) = renewing {
             renewing.abort();
         }
@@ -157,18 +164,19 @@ async fn accept(
                         return;
                     }
                     let h2 = stream.get_ref().1.alpn_protocol() == Some(b"h2");
-                    serve_conn(stream, h2, peer, app, &limits, watcher).await;
+                    serve_conn(stream, h2, Peer::Tcp(peer), app, &limits, watcher).await;
                 });
             }
             (Stream::Tcp(tcp), None) => {
-                tokio::spawn(
-                    async move { serve_conn(tcp, false, peer, app, &limits, watcher).await },
-                );
+                tokio::spawn(async move {
+                    serve_conn(tcp, false, Peer::Tcp(peer), app, &limits, watcher).await
+                });
             }
-            (Stream::Unix(unix), _) => {
-                tokio::spawn(
-                    async move { serve_conn(unix, false, peer, app, &limits, watcher).await },
-                );
+            (Stream::Unix(unix, local), _) => {
+                tokio::spawn(async move {
+                    let peer = Peer::Local(local);
+                    serve_conn(unix, false, peer, app, &limits, watcher).await
+                });
             }
         }
     }
@@ -176,32 +184,37 @@ async fn accept(
 
 enum Stream {
     Tcp(tokio::net::TcpStream),
-    Unix(tokio::net::UnixStream),
+    Unix(tokio::net::UnixStream, Local),
 }
 
 async fn next(listener: &Listener) -> std::io::Result<(Stream, Option<SocketAddr>)> {
     match listener {
         Listener::Tcp(l) => l.accept().await.map(|(s, a)| (Stream::Tcp(s), Some(a))),
-        Listener::Unix(l) => l.accept().await.map(|(s, _)| (Stream::Unix(s), None)),
+        Listener::Unix(l, owner) => l.accept().await.map(|(s, _)| {
+            let same_user = s.peer_cred().is_ok_and(|c| c.uid() == *owner);
+            (Stream::Unix(s, Local { same_user }), None)
+        }),
     }
 }
 
 /// HTTP/1.1 or HTTP/2 on one connection, upgrades (WebSockets) included. The peer address
 /// reaches handlers as `ConnectInfo` (a socket peer has none: the client gate calls it
 /// `local`).
-async fn serve_conn<I>(
-    io: I,
-    h2: bool,
-    peer: Option<SocketAddr>,
-    app: Router,
-    limits: &Limits,
-    w: Watcher,
-) where
+/// Who is on the other end: a TCP address, or a local socket peer.
+enum Peer {
+    Tcp(Option<SocketAddr>),
+    Local(Local),
+}
+
+async fn serve_conn<I>(io: I, h2: bool, peer: Peer, app: Router, limits: &Limits, w: Watcher)
+where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let service = hyper::service::service_fn(move |mut req: hyper::Request<Incoming>| {
-        if let Some(peer) = peer {
-            req.extensions_mut().insert(ConnectInfo(peer));
+        match peer {
+            Peer::Tcp(Some(addr)) => drop(req.extensions_mut().insert(ConnectInfo(addr))),
+            Peer::Local(local) => drop(req.extensions_mut().insert(local)),
+            Peer::Tcp(None) => {}
         }
         app.clone().oneshot(req.map(axum::body::Body::new))
     });

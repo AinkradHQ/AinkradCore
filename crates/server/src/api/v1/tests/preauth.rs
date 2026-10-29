@@ -101,7 +101,7 @@ async fn only_the_allowed_prefixes_answer_unsigned() {
         open.contains(&"POST /handshake/session 401".to_owned()),
         "{open:#?}"
     );
-    assert_eq!(open.len(), 3 * METHODS.len(), "{open:#?}");
+    assert_eq!(open.len(), 5 * METHODS.len(), "{open:#?}");
     // Unrouted methods under them are a bare 405, which names nothing.
     assert!(open.iter().all(|o| !o.ends_with(" 404")), "{open:#?}");
     assert_eq!(crooked, 2 * METHODS.len(), "the traversal and slash probes");

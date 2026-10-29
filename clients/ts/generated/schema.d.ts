@@ -117,6 +117,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/pairings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createPairing"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pairings/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getPairing"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pairings/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["approvePairing"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pairings/{id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["rejectPairing"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/push-token": {
         parameters: {
             query?: never;
@@ -245,6 +309,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pair/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["claimPairing"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pair/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["pairStatus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -258,6 +354,12 @@ export interface components {
              * @description Bumped on every additive change within the major.
              */
             minor: number;
+        };
+        ApproveBody: {
+            /** @description The SAS shown on both screens. */
+            sas: string;
+            /** @description Narrower scopes than the pairing bound; never wider. */
+            scopes?: string[] | null;
         };
         /** @description One audited change. */
         AuditEntry: {
@@ -290,6 +392,51 @@ export interface components {
         ChallengeRequest: {
             /** @description The device that will answer it, `d_…`. */
             device_id: string;
+        };
+        /**
+         * @description A claim. The credential hash is SHA-256 of the canonical typed code (upper-cased, dashes
+         *     and spaces dropped, `I`/`L` read as `1` and `O` as `0`: 10 ASCII Crockford characters), or
+         *     of the QR secret's 16 decoded bytes (not its base64 text). Vectors:
+         *     `crates/server/tests/vectors/pairing-v1.json`.
+         */
+        ClaimBody: {
+            /** @description The typed code (`ABCDE-FGHJK`, any case); or `secret`. */
+            code?: string | null;
+            /** @description `secure_enclave`, `strongbox`, `tee`, `tpm` or `software`: a claim. */
+            key_storage?: string | null;
+            platform?: string | null;
+            /**
+             * @description The routine key's ES256 signature (raw r||s, base64url) over the UTF-8 string
+             *     `AINKRAD-PAIR-V1` LF `<core_fp>` LF `<base64url of the credential hash>` LF
+             *     `<fp(routine)>` LF `<fp(stepup) or ->`, no trailing newline; fp is base64url SHA-256 of
+             *     the SPKI.
+             */
+            pop: string;
+            /** @description The step-up key over the same string, with `stepup_spki`. */
+            pop_stepup?: string | null;
+            /** @description The routine key: a P-256 SubjectPublicKeyInfo, base64url. */
+            routine_spki: string;
+            /** @description The QR secret; or `code`. */
+            secret?: string | null;
+            /** @description The step-up key, where the device has one. */
+            stepup_spki?: string | null;
+        };
+        Claimed: {
+            /** @description The Core identity SPKI, base64url: its fingerprint must equal the QR's `c`. */
+            core_spki?: string | null;
+            /** @description The new device, `d_…`, pending until approved. */
+            device_id?: string | null;
+            /**
+             * @description The pairing, `p_…`: with `core_spki` and its own key the device computes the SAS
+             *     itself and shows that, rather than trusting `sas` from whoever answered.
+             */
+            pairing_id?: string | null;
+            /**
+             * @description Show this; the approver compares it with theirs. The first 16 upper-case Crockford
+             *     characters of SHA-256(`AINKRAD-SAS-V1` ‖ core_spki ‖ routine_spki ‖ pairing id as
+             *     UTF-8), as `XXXX-XXXX-XXXX-XXXX`.
+             */
+            sas?: string | null;
         };
         /** @description A device: who it is and what it may do. Never a key's private half: the Core has none. */
         Device: {
@@ -410,11 +557,54 @@ export interface components {
             id: string;
             name: string;
         };
+        NewPairingBody: {
+            /** @description `device` or `runner` (`passkey` comes with E1-08). */
+            kind: string;
+            /** @description What to call the new device. */
+            name: string;
+            /** @description What it may do: within the approver's own scopes; a runner gets exactly `runner`. */
+            scopes: string[];
+        };
         /** @description A page of a list. `next_after` is the cursor of the next page, absent on the last. */
         Page_Event: {
             items: components["schemas"]["Event"][];
             /** Format: int64 */
             next_after?: number | null;
+        };
+        PairStatus: {
+            /** @description `pending`, `active`, `rejected` or `expired`. */
+            status?: string | null;
+        };
+        PairingCreated: {
+            /** @description The typed code, `ABCDE-FGHJK`: shown once, good once, for 5 minutes. */
+            code?: string | null;
+            expires_at?: components["schemas"]["Timestamp"];
+            /** @description `p_…`. */
+            pairing_id?: string | null;
+            /** @description `ainkrad-pair:v1?h=…&p=…&c=<core_fp>&s=<secret>&e=…`, for a QR code: shown once. */
+            qr?: string | null;
+        };
+        /** @description A pairing as the approver sees it. */
+        PairingView: {
+            /** @description The claimant, once claimed. */
+            device_id?: string | null;
+            expires_at?: components["schemas"]["Timestamp"];
+            /** @description The claimant's routine key fingerprint. */
+            fingerprint?: string | null;
+            /** @description Where the claimant says its key lives: a claim, not verified. */
+            key_storage?: string | null;
+            kind?: string | null;
+            name?: string | null;
+            pairing_id?: string | null;
+            platform?: string | null;
+            /**
+             * @description The SAS the Core computed from its key and the claimant's: compare it with the new
+             *     device's screen, then send it back to approve.
+             */
+            sas?: string | null;
+            scopes?: string[] | null;
+            /** @description `live`, `claimed`, `approved`, `rejected`, `expired` or `burned`. */
+            status?: string | null;
         };
         /** @description The 410 of a replay from below the retention floor (E1-04.4). */
         PastRetention: {
@@ -798,6 +988,131 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    createPairing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewPairingBody"];
+            };
+        };
+        responses: {
+            /** @description A pairing, live 5 minutes, with its typed code and QR payload, shown only now (audited as `pairing.created`). Needs `admin`; the scopes are within the caller's (403 otherwise); 409 with three live already */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairingCreated"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getPairing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Pairing id, `p_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pairing, and once claimed the claimant and the SAS to compare. Needs `admin` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairingView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    approvePairing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Pairing id, `p_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveBody"];
+            };
+        };
+        responses: {
+            /** @description Approved: the claimant is active with the bound (or narrower) scopes (audited as `pairing.approved`). 409 `sas_mismatch` leaves it pending; 409 `pairing_expired` past its 5 minutes; 403 for scopes wider than bound. Needs `admin` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairingView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    rejectPairing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Pairing id, `p_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rejected, claimed or not: a claimant is never usable (audited as `pairing.rejected`). Needs `admin` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairingView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     setPushToken: {
         parameters: {
             query?: never;
@@ -1134,6 +1449,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionGrant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    claimPairing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaimBody"];
+            };
+        };
+        responses: {
+            /** @description Claimed: the device is pending until the approver matches the SAS. 401 `pairing_failed` for a wrong, used, expired or burned credential; 400 for keys or proofs that do not hold (the pairing is not spent) */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Claimed"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    pairStatus: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The claimed device, `d_…` */
+                "Ainkrad-Device": string;
+                /** @description `ES256` */
+                "Ainkrad-Alg": string;
+                /** @description Unix seconds */
+                "Ainkrad-Timestamp": number;
+                /** @description 16 random bytes, base64url */
+                "Ainkrad-Nonce": string;
+                /** @description Raw r||s over the canonical string with session `-`, base64url */
+                "Ainkrad-Signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Where the claimed device stands. Signed with session `-`; the one call a pending device may make. Once `active`, it takes a session (`/handshake/challenge`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairStatus"];
                 };
             };
             400: components["responses"]["BadRequest"];

@@ -92,6 +92,8 @@ pub fn router(app: App) -> Router {
         .route("/handshake", get(v1::handshake::handshake))
         .route("/handshake/challenge", post(v1::session::challenge))
         .route("/handshake/session", post(v1::session::session))
+        .route("/pair/claim", post(v1::pair::claim))
+        .route("/pair/status", post(v1::pair::status))
         .route("/healthz", get(preauth::healthz))
         .layer(DefaultBodyLimit::max(preauth::PREAUTH_BODY))
         .with_state(app.clone());

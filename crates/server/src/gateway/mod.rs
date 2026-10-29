@@ -55,13 +55,44 @@ impl Listen {
 }
 
 enum Listener {
-    Unix(UnixListener),
+    /// A socket, and the uid that owns its file (this process's): a peer is the same user when
+    /// its credentials say so.
+    Unix(UnixListener, u32),
     Tcp(TcpListener),
+}
+
+/// A request that came over a Unix socket of this server, and whether its peer runs as the
+/// server's own user (`SO_PEERCRED` / `getpeereid` through tokio). Only such a request may
+/// claim a bootstrap pairing (handshake spec §7.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Local {
+    pub same_user: bool,
+}
+
+/// Binds a Unix socket at `path`, `0600`, replacing a socket a killed server left there.
+fn bind_unix(path: &std::path::Path) -> std::io::Result<Listener> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    // A socket left by a killed server; anything else at the path is an error.
+    if std::fs::symlink_metadata(path).is_ok_and(|m| {
+        use std::os::unix::fs::FileTypeExt;
+        m.file_type().is_socket()
+    }) {
+        std::fs::remove_file(path)?;
+    }
+    let listener = UnixListener::bind(path)?;
+    // ponytail: the socket has the umask's mode for a moment before this; in a 0700
+    // directory nobody else can reach it meanwhile (`make run`'s `state/` is 0755).
+    // A bind under a 0077 umask closes the gap, which needs libc (`crates/sys`).
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    let owner = std::fs::metadata(path)?.uid();
+    Ok(Listener::Unix(listener, owner))
 }
 
 /// Bound listeners, ready to serve.
 pub struct Gateway {
     main: Listener,
+    /// The admin socket beside a TCP listener (`with_admin_socket`), for the host's bootstrap.
+    admin: Option<Listener>,
     http01: Option<TcpListener>,
     /// The public listener's certificates and how to renew them.
     tls: Option<(Arc<tls::Certs>, acme::Acme)>,
@@ -74,22 +105,7 @@ impl Gateway {
     /// (TLS-ALPN-01 needs the listener up).
     pub async fn bind(listen: Listen, limits: Limits) -> std::io::Result<Self> {
         let (main, http01, tls) = match listen {
-            Listen::Unix(path) => {
-                use std::os::unix::fs::PermissionsExt;
-                // A socket left by a killed server; anything else at the path is an error.
-                if std::fs::symlink_metadata(&path).is_ok_and(|m| {
-                    use std::os::unix::fs::FileTypeExt;
-                    m.file_type().is_socket()
-                }) {
-                    std::fs::remove_file(&path)?;
-                }
-                let listener = UnixListener::bind(&path)?;
-                // ponytail: the socket has the umask's mode for a moment before this; in a 0700
-                // directory nobody else can reach it meanwhile (`make run`'s `state/` is 0755).
-                // A bind under a 0077 umask closes the gap, which needs libc (`crates/sys`).
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-                (Listener::Unix(listener), None, None)
-            }
+            Listen::Unix(path) => (bind_unix(&path)?, None, None),
             Listen::Tcp(addr) => (Listener::Tcp(TcpListener::bind(addr).await?), None, None),
             Listen::Public { port, http01, acme } => {
                 let certs = Arc::new(tls::Certs::default());
@@ -107,17 +123,25 @@ impl Gateway {
         };
         Ok(Self {
             main,
+            admin: None,
             http01,
             tls,
             limits,
         })
     }
 
+    /// Also serves the same routes on a Unix socket at `path` (`0600`), so a TCP Core can be
+    /// bootstrapped from the host (handshake spec §7.3). A Unix main listener needs none.
+    pub fn with_admin_socket(mut self, path: &std::path::Path) -> std::io::Result<Self> {
+        self.admin = Some(bind_unix(path)?);
+        Ok(self)
+    }
+
     /// The main listener's TCP address (`None` on a socket).
     pub fn local_addr(&self) -> Option<SocketAddr> {
         match &self.main {
             Listener::Tcp(l) => l.local_addr().ok(),
-            Listener::Unix(_) => None,
+            Listener::Unix(..) => None,
         }
     }
 

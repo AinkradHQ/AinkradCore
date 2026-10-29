@@ -1,5 +1,5 @@
-//! Signatures, nonces, challenges and public keys never reach the server log, whatever
-//! succeeds or fails. Its own test binary, so the global log subscriber sees every line.
+//! Signatures, nonces, challenges, public keys, pairing codes, QR secrets and SAS strings never
+//! reach the server log, whatever succeeds or fails. Its own test binary, so the global log subscriber sees every line.
 
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -75,7 +75,7 @@ async fn no_signature_nonce_challenge_or_key_is_logged() {
         &pool,
         "mac",
         "device",
-        &["read"],
+        &ainkrad_core_server::store::gov::SCOPES,
         &identity.fp,
         clock.clone(),
     )
@@ -120,7 +120,42 @@ async fn no_signature_nonce_challenge_or_key_is_logged() {
     planted.push(h[4].1.clone());
     send(&app, "GET", "/api/v1/me", &h, "").await;
 
+    // A pairing: its code and QR secret, a wrong claim, a right one and its SAS.
+    let body = r#"{"name":"Phone","kind":"device","scopes":["read"]}"#;
+    let h = mac.headers("POST", "/api/v1/pairings", body.as_bytes());
+    let created: serde_json::Value =
+        serde_json::from_str(&send(&app, "POST", "/api/v1/pairings", &h, body).await).unwrap();
+    let code = created["code"].as_str().unwrap().to_owned();
+    let qr = created["qr"].as_str().unwrap().to_owned();
+    let secret = qr
+        .split("&s=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap()
+        .to_owned();
+    let phone = TestDevice::new(&identity.fp, clock.clone());
+    let wrong = phone.claim_body(Some("ZZZZZ-ZZZZZ"), None).to_string();
+    send(&app, "POST", "/pair/claim", &[], &wrong).await;
+    let right = phone.claim_body(Some(&code), None);
+    let claimed: serde_json::Value =
+        serde_json::from_str(&send(&app, "POST", "/pair/claim", &[], &right.to_string()).await)
+            .unwrap();
+    let sas = claimed["sas"].as_str().unwrap().to_owned();
+    planted.extend([
+        code.clone(),
+        code.replace('-', ""),
+        secret,
+        sas,
+        right["pop"].as_str().unwrap().to_owned(),
+    ]);
+
     let log = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        log.contains("pairing claimed") && log.contains("pairing claim refused"),
+        "{log}"
+    );
     assert!(
         log.contains("signed request refused"),
         "the log was captured: {log}"

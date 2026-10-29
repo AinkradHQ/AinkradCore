@@ -50,11 +50,15 @@ pub const FAIL_FLOOR: std::time::Duration = std::time::Duration::from_millis(50)
 /// A refusal, ready to send (boxed: a `Response` is large).
 pub type Refusal = Box<Response>;
 
-/// What the call carries: a session (every `/api/v1` route) or none (`/handshake/session`).
+/// What the call carries: a session (every `/api/v1` route) or none (`/handshake/session`,
+/// `/pair/status`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Session,
     NoSession,
+    /// `POST /pair/status`: session-less, and the only call a device that is not active yet
+    /// (pending, rejected, expired) may make. A revoked or locked device still may not.
+    Pairing,
 }
 
 /// The one answer for steps 5 to 7, whatever the reason.
@@ -142,7 +146,12 @@ pub async fn verify(
         .map_err(|e| ApiError::from(e).into_response())?;
     // Only a usable device's request may carry the full body; anything else is held to the
     // pre-auth 16 KiB before it is hashed (review L1).
-    let usable = device.as_ref().is_some_and(Device::usable);
+    // `/pair/status` also answers a device that is not active yet (pending, rejected, expired).
+    let may = |d: &Device| match mode {
+        Mode::Pairing => d.revoked_at.is_none() && d.status != "locked",
+        _ => d.usable(),
+    };
+    let usable = device.as_ref().is_some_and(may);
     // Every device's body is held to the same `limit`, and one past it is the same refusal
     // whoever claims to send it (review N5). Only a usable device's body is kept; any other is
     // read and dropped as it arrives, so it costs no memory and answers no sooner (review L1).
