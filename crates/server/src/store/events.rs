@@ -168,12 +168,19 @@ pub async fn trim(
         .execute(&mut *tx)
         .await?
         .rows_affected();
+    // The floor's own totals stay: they are each view's floor (`view`).
+    sqlx::query("DELETE FROM event_views WHERE seq < ?")
+        .bind(new)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(Some(Trimmed {
         floor: new,
         removed,
     }))
 }
+
+pub mod view;
 
 #[cfg(test)]
 mod tests;

@@ -7,9 +7,11 @@ use sqlx::{Error, Row};
 
 mod devices;
 mod limits;
+mod manage;
 mod pairing;
 pub use devices::*;
 pub use limits::*;
+pub use manage::*;
 pub use pairing::*;
 
 /// The scope catalogue (spec §8, E1-09 enforces it).

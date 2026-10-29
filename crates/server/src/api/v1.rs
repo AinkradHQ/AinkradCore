@@ -17,7 +17,7 @@ use axum::Router;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post, put};
+use axum::routing::{get, post, put};
 use serde::Deserialize;
 use utoipa::IntoParams;
 
@@ -29,6 +29,7 @@ mod devices;
 pub mod events;
 pub mod gate;
 pub mod handshake;
+mod lockouts;
 mod me;
 pub mod pair;
 mod pairing;
@@ -36,6 +37,7 @@ pub mod scopes;
 pub mod session;
 mod settings;
 pub mod spec;
+mod stepup;
 mod trace;
 pub use trace::{ApiError, ApiResult};
 pub mod types;
@@ -126,7 +128,13 @@ fn query_ok(query: &str) -> bool {
 pub fn router(app: App) -> Router {
     Router::new()
         .route("/api/v1/devices", get(devices::list))
-        .route("/api/v1/devices/{id}", delete(devices::revoke))
+        .route(
+            "/api/v1/devices/{id}",
+            get(devices::get)
+                .patch(devices::rename)
+                .delete(devices::revoke),
+        )
+        .route("/api/v1/devices/{id}/scopes", put(devices::set_scopes))
         .route("/api/v1/pairings", post(pairing::create))
         .route("/api/v1/pairings/{id}", get(pairing::get))
         .route("/api/v1/pairings/{id}/approve", post(pairing::approve))
@@ -140,6 +148,10 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/events/latest", get(events::latest))
         .route("/api/v1/audit", get(audit::list))
         .route("/api/v1/me", get(me::me))
+        .route("/api/v1/auth/step-up/challenge", post(stepup::challenge))
+        .route("/api/v1/auth/step-up", post(stepup::step_up))
+        .route("/api/v1/auth/lockouts", get(lockouts::list))
+        .route("/api/v1/auth/lockouts/clear", post(lockouts::clear))
         .route("/api/v1/settings", get(settings::list_server))
         .route("/api/v1/settings/{scope}", get(settings::list))
         .route(

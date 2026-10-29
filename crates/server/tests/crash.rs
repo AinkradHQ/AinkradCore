@@ -42,7 +42,7 @@ async fn write_one(pool: &SqlitePool, i: i64) -> Result<(), sqlx::Error> {
 async fn register(pool: &SqlitePool) {
     let mut tx = begin_write(pool).await.unwrap();
     let actions = ["crash.first", "crash.second"];
-    kinds::register(&mut tx, "crash", &["crash.test"], &actions)
+    kinds::register(&mut tx, "crash", &[("crash.test", "read")], &actions)
         .await
         .unwrap();
     tx.commit().await.unwrap();

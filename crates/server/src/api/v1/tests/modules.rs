@@ -51,3 +51,56 @@ async fn an_unmounted_module_has_no_routes_and_no_scope() {
         "no module, no declared scope"
     );
 }
+
+/// A terminal module: opening a terminal is destructive (E1-09.3's "done when", spec §8).
+struct Term;
+
+impl Module for Term {
+    fn id(&self) -> &'static str {
+        "term"
+    }
+
+    fn routes(&self) -> Router<App> {
+        let open = axum::routing::post(|| async { "opened" });
+        Router::new()
+            .route("/terminals/{id}/open", open)
+            .route("/terminals", get(|| async { "[]" }))
+    }
+
+    fn scope(&self) -> &'static str {
+        "terminal"
+    }
+
+    fn destructive(&self) -> &'static [(&'static str, &'static str)] {
+        &[("POST", "/terminals/{id}/open")]
+    }
+}
+
+#[tokio::test]
+async fn an_unelevated_terminal_open_is_refused_and_an_elevated_one_passes() {
+    let mut fx = fx().await;
+    fx.app.modules = Arc::from([Arc::new(Term) as Arc<dyn Module>]);
+    let mac = super::stepup::plain(&fx, "mac", &super::ALL, true).await;
+    let open = "/modules/term/v1/terminals/t1/open";
+    let (status, body) = send(&fx.app, req(Method::POST, open, Some(&mac), None)).await;
+    assert_eq!(
+        (status, &body["code"]),
+        (
+            StatusCode::FORBIDDEN,
+            &serde_json::json!("step_up_required")
+        )
+    );
+    let list = "/modules/term/v1/terminals";
+    let (status, _) = send(&fx.app, req(Method::GET, list, Some(&mac), None)).await;
+    assert_eq!(status, StatusCode::OK, "a read needs no step-up");
+    assert_eq!(super::stepup::step_up(&fx, &mac).await.0, StatusCode::OK);
+    let (status, _) = send(&fx.app, req(Method::POST, open, Some(&mac), None)).await;
+    assert_eq!(status, StatusCode::OK);
+    // A device without the module's scope is refused before elevation is even asked.
+    let phone = fx.enroll("phone", &["read"]).await;
+    let (status, body) = send(&fx.app, req(Method::POST, open, Some(&phone), None)).await;
+    assert_eq!(
+        (status, &body["code"]),
+        (StatusCode::FORBIDDEN, &serde_json::json!("forbidden_scope"))
+    );
+}

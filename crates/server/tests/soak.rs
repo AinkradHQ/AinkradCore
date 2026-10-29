@@ -117,7 +117,7 @@ async fn ten_thousand_a_minute_to_twenty_clients_one_stalled() {
     std::fs::create_dir_all(&dir).unwrap();
     let pool = connect(&dir.join("core.db")).await.unwrap();
     let mut tx = begin_write(&pool).await.unwrap();
-    kinds::register(&mut tx, "soak", &["soak.tick"], &[])
+    kinds::register(&mut tx, "soak", &[("soak.tick", "read")], &[])
         .await
         .unwrap();
     tx.commit().await.unwrap();
