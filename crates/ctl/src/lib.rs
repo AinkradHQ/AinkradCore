@@ -7,11 +7,13 @@
 
 pub mod client;
 pub mod cmd;
+pub mod devices;
 pub mod events;
 pub mod keystore;
 pub mod net;
 pub mod pair;
 pub mod proto;
+pub mod stepup;
 
 /// Why a command failed; each kind has its own exit code (`code`).
 #[derive(Debug)]
@@ -38,6 +40,8 @@ pub enum Error {
     Revoked,
     /// The pairing ended without approval: rejected or expired (7).
     NotApproved(String),
+    /// This device cannot elevate: no step-up key, or a wrong passphrase (9).
+    StepUp(String),
 }
 
 impl Error {
@@ -51,6 +55,7 @@ impl Error {
             Self::PastRetention { .. } => 5,
             Self::Revoked => 6,
             Self::NotApproved(_) => 7,
+            Self::StepUp(_) => 9,
         }
     }
 }
@@ -90,6 +95,7 @@ impl std::fmt::Display for Error {
             ),
             Self::Revoked => f.write_str("revoked: the Core closed the stream (4001)"),
             Self::NotApproved(status) => write!(f, "the pairing ended {status}: not approved"),
+            Self::StepUp(m) => write!(f, "step-up: {m}"),
         }
     }
 }
@@ -102,8 +108,12 @@ pub const EXIT_CODES: &str = "Exit codes:
   1  the Core is unreachable, or answered off-protocol
   2  usage: bad arguments or input
   3  core_identity_mismatch: the Core is not the pinned one (nothing was signed or sent)
-  4  refused by the Core (auth_failed, forbidden_scope, step_up_required, not_found, ...)
+  4  refused by the Core (auth_failed, forbidden_scope, step_up_failed, not_found,
+     conflict: the last admin device, ...); step_up_required only if it persists after
+     the one automatic elevation
   5  past_retention: the resume point was trimmed (the floor is printed)
   6  revoked: the Core closed this device's stream with 4001
   7  the pairing was rejected or expired
-  8  clock_skew: this machine's clock is over 60 s off (server_time is printed)";
+  8  clock_skew: this machine's clock is over 60 s off (server_time is printed)
+  9  cannot elevate: this device has no step-up key, the passphrase is wrong, or there is
+     no passphrase source (no terminal and no passphrase file); no proof was sent";

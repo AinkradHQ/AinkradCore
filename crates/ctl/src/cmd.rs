@@ -7,44 +7,61 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use crate::client::{Client, parse};
+use crate::client::Client;
+use crate::devices::s;
 use crate::keystore::{self, Keystore};
 use crate::net::{Endpoint, Net};
 use crate::pair::{Credential, Pairing};
-use crate::{EXIT_CODES, Error, events, pair};
+use crate::stepup::{self, Passphrase};
+use crate::{EXIT_CODES, Error, devices, events, pair};
 
 pub const USAGE: &str =
     "usage: ainkradctl [--socket <path> | --url <http(s)://host:port>] [--host <name>]
-                  [--keystore <file>] [--ca <roots.pem>] [--json] <command>
+                  [--keystore <file>] [--ca <roots.pem>] [--json]
+                  [--stepup-passphrase-file <file>] <command>
 
-  pair <code | ainkrad-pair:v1?...> [--core-fp <fp>] [--wait <secs>]
-      Pair this machine as a new device: makes its key, claims the pairing, prints the
-      device id and the check code (SAS) to compare on the approving device, and waits for
-      the approval. The first device claims the code `ainkrad-core-server bootstrap` prints,
+  pair <code | ainkrad-pair:v1?...> [--core-fp <fp>] [--wait <secs>] [--no-stepup]
+      Pair this machine as a new device: makes its two keys (routine and step-up), claims
+      the pairing, prints the device id and the check code (SAS) to compare on the
+      approving device, and waits for the approval. It asks for a passphrase (twice) that
+      seals the step-up key; --no-stepup enrols none, and the device can then never
+      elevate. The first device claims the code `ainkrad-core-server bootstrap` prints,
       over the server's Unix socket (--core-fp: the fingerprint it printed). A QR payload
       names its Core; a typed code needs --socket or --url.
   health
       The Core's identity (against the pinned one), versions, and this device's session.
-  device ls | show <id> | revoke <id>
-  device add <name> [--kind device|runner] [--scopes read,approve,...]
+  elevate
+      Step up (asks for the step-up passphrase): elevates this device's session for the
+      Core's window (default 5 minutes) and prints elevated_until. Sessions this device
+      opens in that window carry the elevation over. Commands that need it (marked *)
+      elevate by themselves once when the Core asks, then retry once.
+  device ls | show <id>
+  device revoke <id>*  |  rename <id> <name>*  |  scopes <id> <scope>...*
+      Revoking or demoting the last admin device that can elevate is refused (409).
+  device add <name>* [--kind device|runner] [--scopes read,approve,...]
       Start pairing another device: prints the one-time code and QR payload (5 minutes).
   device pairing <pairing-id>
-  device approve <pairing-id> <SAS> [--scopes ...]
+  device approve <pairing-id> <SAS>* [--scopes ...]
       Approve with the SAS the NEW device shows (typed from its screen, never copied from
       this one: the Core checks it matches the one it computed).
-  device reject <pairing-id>
+  device reject <pairing-id>*
+  lockouts ls | clear <key>*
+      The auth lockouts (ip:..., ipdev:..., stepup:<device>) and clearing one.
   events tail [--after <seq>] [--no-follow]
       Events after <seq> (default: from now), one JSON object per line; follows the live
       stream and resumes after drops and Core restarts, without gaps or repeats.
 
 The keystore (default $AINKRADCTL_KEYSTORE, else ~/.config/ainkradctl/keystore.json) holds
-this device's private key (mode 0600) and the Core fingerprint pinned at pairing. Nothing is
+this device's routine key (mode 0600) and the Core fingerprint pinned at pairing; the
+step-up key is beside it (<keystore>.stepup.json, 0600), sealed with its passphrase
+(PBKDF2-HMAC-SHA256, 600k rounds, AES-256-GCM). The passphrase comes from
+--stepup-passphrase-file, else $AINKRAD_STEPUP_PASSPHRASE_FILE, else the terminal. Nothing is
 signed or sent before the Core's /handshake shows that fingerprint. The Host header is
 `localhost` on a socket and the URL's host:port otherwise (--host overrides; a TCP Core's
 admin socket answers to the Core's own host name).
 ";
 
-const VALUED: [&str; 10] = [
+const VALUED: [&str; 11] = [
     "--socket",
     "--url",
     "--host",
@@ -55,8 +72,9 @@ const VALUED: [&str; 10] = [
     "--kind",
     "--core-fp",
     "--wait",
+    "--stepup-passphrase-file",
 ];
-const SWITCHES: [&str; 3] = ["--json", "--no-follow", "--help"];
+const SWITCHES: [&str; 4] = ["--json", "--no-follow", "--help", "--no-stepup"];
 
 /// The arguments: flags (anywhere) and the words.
 struct Args {
@@ -144,71 +162,19 @@ impl Args {
             .map(str::to_owned)
             .or_else(|| store.host.clone());
         let net = Net::new(endpoint, host, self.value("--ca").map(Path::new))?;
-        Ok(Client::new(net, store))
+        let mut c = Client::new(net, store);
+        c.stepup_file = Some(stepup::path_for(&self.keystore()?));
+        c.passphrase = self.passphrase();
+        Ok(c)
+    }
+
+    fn passphrase(&self) -> Passphrase {
+        Passphrase::new(self.value("--stepup-passphrase-file"))
     }
 }
 
 fn line(out: &mut impl Write, text: impl std::fmt::Display) -> Result<(), Error> {
     writeln!(out, "{text}").map_err(|e| Error::Unreachable(format!("stdout: {e}")))
-}
-
-fn pid(id: &str) -> Result<&str, Error> {
-    let ok = id
-        .strip_prefix("p_")
-        .is_some_and(|b| b.len() == 26 && b.bytes().all(|c| c.is_ascii_alphanumeric()));
-    ok.then_some(id)
-        .ok_or_else(|| Error::Usage(format!("{id:?} is not a pairing id (p_…)")))
-}
-
-fn did(id: &str) -> Result<&str, Error> {
-    let ok = id
-        .strip_prefix("d_")
-        .is_some_and(|b| b.len() == 26 && b.bytes().all(|c| c.is_ascii_alphanumeric()));
-    ok.then_some(id)
-        .ok_or_else(|| Error::Usage(format!("{id:?} is not a device id (d_…)")))
-}
-
-fn s(v: &Value) -> &str {
-    v.as_str().unwrap_or("-")
-}
-
-fn device_row(d: &Value) -> String {
-    let scopes: Vec<&str> = d["scopes"]
-        .as_array()
-        .map(|a| a.iter().map(s).collect())
-        .unwrap_or_default();
-    let revoked = d["revoked_at"]
-        .as_str()
-        .map(|r| format!("\trevoked {r}"))
-        .unwrap_or_default();
-    format!(
-        "{}\t{}\t{}\t{}\t{}\t{}{revoked}",
-        s(&d["id"]),
-        s(&d["kind"]),
-        s(&d["name"]),
-        s(&d["status"]),
-        scopes.join(","),
-        s(&d["fingerprint"])
-    )
-}
-
-fn pairing_rows(p: &Value) -> Vec<String> {
-    [
-        "pairing_id",
-        "name",
-        "kind",
-        "status",
-        "device_id",
-        "sas",
-        "fingerprint",
-        "platform",
-        "key_storage",
-        "expires_at",
-    ]
-    .iter()
-    .filter(|k| !p[**k].is_null())
-    .map(|k| format!("{k} {}", s(&p[*k])))
-    .collect()
 }
 
 /// The program: parses `args` and runs the command, printing to `out`.
@@ -231,11 +197,25 @@ pub async fn run(args: &[String], out: &mut impl Write) -> Result<(), Error> {
                 core_fp: a.value("--core-fp").map(str::to_owned),
                 json,
                 wait: Duration::from_secs(wait),
+                stepup: (!a.on("--no-stepup")).then(|| a.passphrase()),
             };
             pair::pair(Credential::parse(credential)?, p, out).await
         }
         ["health"] => health(&mut a.client()?, json, out).await,
-        ["device", rest @ ..] => device(&a, rest, json, out).await,
+        ["elevate"] => {
+            let mut c = a.client()?;
+            let until = c.elevate().await?;
+            let v = json!({"elevated_until": until});
+            match json {
+                true => line(out, v),
+                false => line(out, format_args!("elevated_until {until}")),
+            }
+        }
+        ["device", rest @ ..] => {
+            let mut c = a.client()?;
+            devices::device(&mut c, rest, a.value("--kind"), a.scopes(), json, out).await
+        }
+        ["lockouts", rest @ ..] => devices::lockouts(&mut a.client()?, rest, json, out).await,
         ["events", "tail"] => {
             let mut c = a.client()?;
             events::tail(&mut c, a.number("--after")?, !a.on("--no-follow"), out).await
@@ -266,6 +246,7 @@ async fn health(c: &mut Client, json: bool, out: &mut impl Write) -> Result<(), 
         "device_name": me["device"]["name"],
         "scopes": session.scopes,
         "session_expires": session.expires,
+        "elevated_until": session.elevated_until,
     });
     if json {
         return line(out, summary);
@@ -291,80 +272,9 @@ async fn health(c: &mut Client, json: bool, out: &mut impl Write) -> Result<(), 
             s(&me["device"]["name"])
         ),
     )?;
-    line(out, format_args!("scopes {}", session.scopes.join(",")))
-}
-
-async fn device(a: &Args, words: &[&str], json: bool, out: &mut impl Write) -> Result<(), Error> {
-    let mut c = a.client()?;
-    let print = |out: &mut dyn Write, v: &Value, rows: Vec<String>| -> Result<(), Error> {
-        let text = if json { v.to_string() } else { rows.join("\n") };
-        writeln!(out, "{text}").map_err(|e| Error::Unreachable(format!("stdout: {e}")))
-    };
-    match words {
-        ["ls" | "list"] => {
-            let v: Value = c.get("/api/v1/devices", "").await?;
-            let rows = v.as_array().map(|a| a.iter().map(device_row).collect()).unwrap_or_default();
-            print(out, &v, rows)
-        }
-        ["show", id] => {
-            // The contract has no single-device route: the list, filtered.
-            let id = did(id)?;
-            let v: Value = c.get("/api/v1/devices", "").await?;
-            let d = v
-                .as_array()
-                .and_then(|a| a.iter().find(|d| d["id"] == id))
-                .cloned()
-                .ok_or_else(|| Error::Refused {
-                    status: 404,
-                    code: "not_found".into(),
-                    message: format!("no device {id}"),
-                    server_time: None,
-                    local_time: c.now(),
-                })?;
-            print(out, &d, vec![device_row(&d)])
-        }
-        ["revoke", id] => {
-            let res = c.call("DELETE", &format!("/api/v1/devices/{}", did(id)?), "", None).await?;
-            let d: Value = parse(&res)?;
-            print(out, &d, vec![format!("revoked {}", s(&d["id"]))])
-        }
-        ["add", name] => {
-            let kind = a.value("--kind").unwrap_or("device");
-            let scopes = match (a.scopes(), kind) {
-                (Some(s), _) => s,
-                (None, "runner") => vec!["runner".to_owned()],
-                (None, _) => return Err(Error::Usage("device add needs --scopes (e.g. read,approve)".into())),
-            };
-            let body = json!({"name": name, "kind": kind, "scopes": scopes});
-            let res = c.call("POST", "/api/v1/pairings", "", Some(&body)).await?;
-            let p: Value = parse(&res)?;
-            // Showing the code and QR payload is this command's job; nothing else prints them.
-            let rows = ["pairing_id", "code", "qr", "expires_at"].iter().map(|k| format!("{k} {}", s(&p[*k]))).collect();
-            print(out, &p, rows)
-        }
-        ["pairing", id] => {
-            let p: Value = c.get(&format!("/api/v1/pairings/{}", pid(id)?), "").await?;
-            print(out, &p, pairing_rows(&p))
-        }
-        ["approve", id, sas] => {
-            let sas = sas.trim().to_ascii_uppercase();
-            let shaped = sas.len() == 19 && sas.split('-').all(|g| g.len() == 4 && g.bytes().all(|b| b.is_ascii_alphanumeric()));
-            if !shaped {
-                return Err(Error::Usage("the SAS is XXXX-XXXX-XXXX-XXXX, as the new device shows it".into()));
-            }
-            let mut body = json!({"sas": sas});
-            if let Some(scopes) = a.scopes() {
-                body["scopes"] = json!(scopes);
-            }
-            let path = format!("/api/v1/pairings/{}/approve", pid(id)?);
-            let p: Value = parse(&c.call("POST", &path, "", Some(&body)).await?)?;
-            print(out, &p, vec![format!("approved {}", s(&p["device_id"]))])
-        }
-        ["reject", id] => {
-            let path = format!("/api/v1/pairings/{}/reject", pid(id)?);
-            let p: Value = parse(&c.call("POST", &path, "", None).await?)?;
-            print(out, &p, vec![format!("rejected {}", s(&p["pairing_id"]))])
-        }
-        _ => Err(Error::Usage("device ls | show <id> | revoke <id> | add <name> | pairing <id> | approve <id> <SAS> | reject <id>".into())),
+    line(out, format_args!("scopes {}", session.scopes.join(",")))?;
+    match session.elevated_until {
+        Some(t) => line(out, format_args!("elevated_until {t}")),
+        None => line(out, "elevated_until -"),
     }
 }
