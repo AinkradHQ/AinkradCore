@@ -1,4 +1,4 @@
-//! Shared by the gateway tests: a database with a device key, a test CA for the public
+//! Shared by the gateway tests: a database with an enrolled device, a test CA for the public
 //! listener's certificates, a TLS client that trusts it, and HTTP/1.1 by hand over any stream
 //! (reqwest cannot speak to a Unix socket).
 
@@ -7,17 +7,21 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ainkrad_core_server::api::App;
-use ainkrad_core_server::scheduler::SystemClock;
+use ainkrad_core_server::auth::Identity;
+use ainkrad_core_server::auth::testing::TestDevice;
+use ainkrad_core_server::scheduler::{Clock, SystemClock};
 use ainkrad_core_server::store;
 use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, SerialNumber};
 use rustls::pki_types::{CertificateDer, ServerName};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 
-/// A scratch dir with a migrated database and a device key; removed on drop.
+/// A scratch dir with a migrated database, a Core identity and an enrolled device; removed on
+/// drop.
 pub struct Fx {
     pub dir: PathBuf,
     pub pool: sqlx::SqlitePool,
-    pub key: String,
+    pub identity: Arc<Identity>,
+    pub dev: TestDevice,
 }
 
 impl Drop for Fx {
@@ -32,15 +36,35 @@ impl Fx {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let pool = store::connect(&dir.join("core.db")).await.unwrap();
-        let by = ainkrad_core_server::api::v1::BY;
-        let (_, key) = store::gov::issue_device_key(&pool, "mac", by)
-            .await
-            .unwrap();
-        Self { dir, pool, key }
+        let identity = Arc::new(Identity::load_or_create(&dir).unwrap());
+        let dev = TestDevice::enroll(
+            &pool,
+            "mac",
+            "device",
+            &["read"],
+            &identity.fp,
+            Arc::new(SystemClock),
+        )
+        .await;
+        Self {
+            dir,
+            pool,
+            identity,
+            dev,
+        }
     }
 
+    /// The app on `host`, with a session issued to the device.
     pub fn app(&self, host: &str) -> App {
-        App::new(self.pool.clone(), Arc::new(SystemClock), host.to_owned())
+        let app = App::new(
+            self.pool.clone(),
+            Arc::new(SystemClock),
+            host.to_owned(),
+            Arc::clone(&self.identity),
+        );
+        let s = app.auth.issue_session(&self.dev.id, SystemClock.unix());
+        self.dev.set_session(Some(s.id));
+        app
     }
 }
 
@@ -141,9 +165,14 @@ pub async fn get(
     io: &mut (impl Io + ?Sized),
     path: &str,
     host: &str,
-    key: Option<&str>,
+    signer: Option<&TestDevice>,
 ) -> (u16, String) {
-    let auth = key.map_or(String::new(), |k| format!("authorization: Bearer {k}\r\n"));
+    let auth: String = signer
+        .map(|d| d.headers("GET", path, b""))
+        .unwrap_or_default()
+        .iter()
+        .map(|(n, v)| format!("{n}: {v}\r\n"))
+        .collect();
     let head = format!("GET {path} HTTP/1.1\r\nhost: {host}\r\n{auth}\r\n");
     io.write_all(head.as_bytes()).await.unwrap();
     let mut reader = BufReader::new(io);
