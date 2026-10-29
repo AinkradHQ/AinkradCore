@@ -10,24 +10,33 @@ use serde_json::Value;
 
 use crate::common::*;
 
-/// A Core on `loopback:<port>`; ctl talks to it over its admin socket (`--host 127.0.0.1:<port>`).
-pub fn loopback_core(name: &str) -> (Core, String) {
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
+pub fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
         .unwrap()
-        .port();
+        .port()
+}
+
+/// A Core on `loopback:<port>`; ctl talks to it over its admin socket (`--host 127.0.0.1:<port>`).
+pub fn loopback_core(name: &str) -> (Core, String) {
+    let port = free_port();
+    let core = loopback_core_at(name, port, port);
+    (core, format!("http://127.0.0.1:{port}"))
+}
+
+/// A Core on `loopback:<port>` that answers to `127.0.0.1:<public>` (a proxy's port).
+pub fn loopback_core_at(name: &str, port: u16, public: u16) -> Core {
     let dir = std::env::temp_dir().join(format!("ctl-{name}-{}", std::process::id()));
-    let host = format!("127.0.0.1:{port}");
-    let listen = s(&["--listen", &format!("loopback:{port}")]);
-    let core = Core::start_with(
+    let host = format!("127.0.0.1:{public}");
+    let listen = s(&["--listen", &format!("loopback:{port}"), "--host", &host]);
+    Core::start_with(
         dir.clone(),
         dir.join("admin.sock"),
         listen,
-        Some(host.clone()),
+        Some(host),
         |_| {},
-    );
-    (core, format!("http://{host}"))
+    )
 }
 
 /// Pairs a real runner as `name` through ctl (`base`: an admin device); its device id.

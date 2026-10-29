@@ -4,8 +4,11 @@
 mod common;
 mod contract;
 mod fake;
+mod faults;
+mod faults_edge;
 mod flow;
 mod negative;
+mod proxy;
 mod runner;
 mod stepup;
 mod tls;
