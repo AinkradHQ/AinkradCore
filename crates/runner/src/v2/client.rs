@@ -151,7 +151,11 @@ impl Client {
                 "the Core URL has no path or query".to_owned(),
             ));
         }
-        let builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30));
+        // No redirects: the Core answers itself, and a redirect would carry the signed headers
+        // to another host (security review RH6). A 3xx is a refusal like any error.
+        let builder = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none());
         let builder = match tls {
             Some(config) => builder.use_preconfigured_tls((*config).clone()),
             None => builder,
@@ -205,7 +209,7 @@ impl Client {
     }
 
     /// One call: a JSON body, signed when `signed` names the signer and its session. A status
-    /// of 400 and above is `Refused` with the error's code.
+    /// of 300 and above (no redirect is followed) is `Refused` with the error's code.
     pub async fn call(
         &self,
         method: &str,
@@ -229,10 +233,45 @@ impl Client {
         let res = req.send().await.map_err(transport)?;
         let status = res.status().as_u16();
         let v: Value = res.json().await.unwrap_or(Value::Null);
-        if status >= 400 {
+        if status >= 300 {
             let code = v["code"].as_str().unwrap_or("unknown").to_owned();
             return Err(LinkError::Refused(status, code));
         }
         Ok((status, v))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use super::*;
+
+    /// Security review RH6: a 302 to another host is not followed.
+    #[tokio::test]
+    async fn a_redirect_is_refused_not_followed() {
+        let elsewhere = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target = elsewhere.local_addr().unwrap();
+        let core = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", core.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut s, _) = core.accept().await.unwrap();
+            let mut buf = [0; 4096];
+            let _ = s.read(&mut buf).await;
+            let head = format!(
+                "HTTP/1.1 302 Found\r\nlocation: http://{target}/handshake\r\ncontent-length: 0\r\n\r\n"
+            );
+            s.write_all(head.as_bytes()).await.unwrap();
+        });
+        let err = Client::new(&base, None)
+            .unwrap()
+            .core_fp()
+            .await
+            .unwrap_err();
+        assert!(matches!(err, LinkError::Refused(302, _)), "{err}");
+        let followed =
+            tokio::time::timeout(std::time::Duration::from_millis(300), elsewhere.accept()).await;
+        assert!(followed.is_err(), "the other host was contacted");
     }
 }
