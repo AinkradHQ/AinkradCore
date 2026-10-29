@@ -17,7 +17,7 @@ getrandom = "0.4.3"
 # APNs (E10.4): the .p8 key's PEM, and HTTP/2 to Apple; ES256 signing with ring, which
 # rustls already brings in.
 base64 = "0.22.1"
-reqwest = { version = "0.12.28", default-features = false, features = ["http2", "json", "rustls-tls"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["http2", "json", "rustls-tls", "stream"] }
 ring = "0.17.14"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
@@ -35,10 +35,12 @@ rustls = { version = "0.23.46", default-features = false, features = ["ring", "s
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
 tower = { version = "0.5.3", features = ["util"] }
 x509-parser = "0.18"
-tracing-subscriber = "0.3.23"
+tracing-subscriber = { version = "0.3.23", features = ["json"] }
 # The client API's OpenAPI 3.1 contract (E10.1); see `api/v1/spec.rs`.
 utoipa = "6.0.0"
 schemars = "1"
+age = { version = "0.11", default-features = false }
+toml = "1"
 
 [dev-dependencies]
 # The gateway tests (`tests/gateway`): HTTP/1.1 by hand, HTTP/2 through hyper's client, test

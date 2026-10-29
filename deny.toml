@@ -6,7 +6,13 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+ignore = [
+  # Both "unmaintained", both reached only through `age`'s localisation proc-macros (`i18n-embed-fl`,
+  # `i18n-embed-impl` -> `i18n-config`), which read the crate's own i18n.toml at compile time: no runtime code,
+  # no untrusted input. Every `age` release carries them (checked 0.11.5 and 0.12.1, E1-13.2). Drop when age does.
+  { id = "RUSTSEC-2026-0374", reason = "basic-toml: build-time only, via age's i18n proc-macros" },
+  { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2: build-time only, via age's i18n proc-macros" },
+]
 
 [licenses]
 version = 2
