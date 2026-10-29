@@ -568,8 +568,10 @@ export interface components {
             server_time?: number | null;
         };
         /**
-         * @description One entry of the event stream. `seq` only grows: it is the replay cursor. New kinds may be
-         *     added: a client skips an event whose kind it does not know.
+         * @description One entry of the event stream. `seq` only grows: it is the replay cursor, counted gap-free over
+         *     the events this device's scopes may see (`x-event-scopes`), so it differs between devices
+         *     with different scopes. New kinds may be added: a client skips an event whose kind it does not
+         *     know.
          */
         Event: {
             at: components["schemas"]["Timestamp"];
