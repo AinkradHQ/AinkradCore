@@ -365,3 +365,42 @@ async fn user_owned_tables_carry_user_id() {
         );
     }
 }
+
+/// `CORE_MIGRATIONS` is written by hand, so a file added to `migrations/` and not to the list
+/// would never run: every `NNNN_<name>.{up,down}.sql` there must be listed, with its text.
+#[test]
+fn every_migration_file_is_listed() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations");
+    let mut files: Vec<(i64, String, String, String)> = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let file = entry.unwrap().file_name().into_string().unwrap();
+        if file.ends_with(".down.sql") {
+            continue;
+        }
+        let stem = file
+            .strip_suffix(".up.sql")
+            .unwrap_or_else(|| panic!("{file}: only NNNN_name.{{up,down}}.sql belongs here"));
+        let (version, name) = stem.split_once('_').unwrap();
+        let read =
+            |kind: &str| std::fs::read_to_string(format!("{dir}/{stem}.{kind}.sql")).unwrap();
+        files.push((
+            version.parse().unwrap(),
+            name.to_owned(),
+            read("up"),
+            read("down"),
+        ));
+    }
+    files.sort();
+    let listed: Vec<_> = CORE_MIGRATIONS
+        .iter()
+        .map(|m| {
+            (
+                m.version,
+                m.name.to_owned(),
+                m.up.to_owned(),
+                m.down.to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(files, listed);
+}

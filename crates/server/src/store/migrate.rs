@@ -200,14 +200,16 @@ fn foreign_changes(prefix: &str, before: &[SchemaObject], after: &[SchemaObject]
         .collect()
 }
 
-/// Applies `namespace`'s pending `migrations`. With `prefix` (a module's), each migration's
-/// text is checked by `guard` first and its schema changes after.
+/// Applies `namespace`'s pending `migrations`. With `guard` (a module's prefix and the
+/// platform's object names), each migration's text is checked by `guard` first and its schema
+/// changes after.
 async fn apply(
     pool: &SqlitePool,
     namespace: &str,
     migrations: &[Migration],
-    prefix: Option<&str>,
+    guard: Option<(&str, &[String])>,
 ) -> Result<(), MigrateError> {
+    let prefix = guard.map(|g| g.0);
     if migrations.first().is_some_and(|m| m.version < 1)
         || migrations.windows(2).any(|w| w[0].version >= w[1].version)
     {
@@ -216,10 +218,10 @@ async fn apply(
             "migration versions must be positive and increasing",
         ));
     }
-    if let Some(prefix) = prefix {
+    if let Some((prefix, platform)) = guard {
         for m in migrations {
             for sql in [m.up, m.down] {
-                guard::check(prefix, sql)
+                guard::check(prefix, platform, sql)
                     .map_err(|why| refused(namespace, format!("migration {}: {why}", m.version)))?;
             }
         }
@@ -315,7 +317,8 @@ pub async fn migrate_modules(
     }
     for module in modules {
         let id = module.id();
-        apply(pool, id, module.migrations(), Some(&format!("{id}_"))).await?;
+        let prefix = format!("{id}_");
+        apply(pool, id, module.migrations(), Some((&prefix, &platform))).await?;
     }
     Ok(())
 }
@@ -333,8 +336,9 @@ pub async fn undo(
             return Err(refused(namespace, "illegal module id"));
         }
         let prefix = format!("{namespace}_");
+        let platform = platform_objects().await?;
         for m in migrations {
-            guard::check(&prefix, m.down)
+            guard::check(&prefix, &platform, m.down)
                 .map_err(|why| refused(namespace, format!("migration {}: {why}", m.version)))?;
         }
     }

@@ -32,6 +32,8 @@ pub trait Module: Send + Sync + 'static {
     fn routes(&self) -> Router<App>;
 
     /// The module's migrations, oldest first (`crate::store::migrate::migrate_modules`).
+    /// `serve` mounts no module yet; whoever mounts the first must run `migrate_modules`
+    /// before `mount`, so a refused migration or id stops the start.
     fn migrations(&self) -> &'static [Migration] {
         &[]
     }

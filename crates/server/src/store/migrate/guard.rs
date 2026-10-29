@@ -4,8 +4,10 @@
 //! server at start. A false refusal costs the module author a rename; a false accept would let
 //! a module write the platform's tables.
 //!
-//! The one name outside the prefix a module may use is `REFERENCES users`, so its user-owned
-//! rows can follow the `user_id` convention of the baseline migration.
+//! It also refuses any word equal to a platform object's name, wherever it stands (a comma
+//! join, a column, an expression), so a module column cannot be called `events`, `settings`
+//! or `users`. The one exception is `REFERENCES users`, so a module's user-owned rows can
+//! follow the `user_id` convention of the baseline migration.
 //!
 //! The runner backs this with a schema diff after each migration (`super::schema_changes`), so
 //! an object this check missed still cannot be created, altered or dropped outside the prefix.
@@ -131,9 +133,19 @@ fn bare(tok: Option<&Tok>) -> Option<&str> {
     }
 }
 
-/// Checks `sql`, a module's up or down text, against the module's `prefix` (`<id>_`).
-pub(super) fn check(prefix: &str, sql: &str) -> Result<(), String> {
+/// Checks `sql`, a module's up or down text, against the module's `prefix` (`<id>_`) and the
+/// names of the `platform`'s objects.
+pub(super) fn check(prefix: &str, platform: &[String], sql: &str) -> Result<(), String> {
     let toks = tokens(sql)?;
+    for (i, tok) in toks.iter().enumerate() {
+        let Tok::Word { text, .. } = tok else {
+            continue;
+        };
+        let users_fk = text == "users" && i > 0 && bare(toks.get(i - 1)) == Some("references");
+        if platform.contains(text) && !users_fk {
+            return Err(format!("`{text}` names a platform object"));
+        }
+    }
     // After `INDEX <name>` or `TRIGGER <name>`, the next `ON` names the table it is on.
     let mut header_on = false;
     let mut i = 0;
@@ -213,7 +225,12 @@ pub(super) fn check(prefix: &str, sql: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::check;
+    /// A stand-in for the platform's object names.
+    fn check(prefix: &str, sql: &str) -> Result<(), String> {
+        let platform =
+            ["users", "settings", "events", "device_keys", "push_cursor"].map(str::to_owned);
+        super::check(prefix, &platform, sql)
+    }
 
     #[test]
     fn a_module_may_shape_its_own_tables() {
@@ -258,6 +275,8 @@ mod tests {
             "CREATE TRIGGER toy_t AFTER INSERT ON toy_x BEGIN UPDATE OR REPLACE users SET name = 'x'; END",
             "INSERT INTO settings VALUES (1)",
             "INSERT INTO toy_x SELECT * FROM device_keys",
+            "INSERT INTO toy_x SELECT key_hash FROM toy_a, device_keys",
+            "CREATE TABLE toy_x (events TEXT)",
             "INSERT INTO main.toy_x VALUES (1)",
             "CREATE TABLE toy_x AS SELECT * FROM (SELECT 1) JOIN push_cursor",
             "ALTER TABLE toy_x RENAME TO users",
