@@ -234,7 +234,7 @@ async fn recover_enrols_a_new_admin_after_every_device_is_revoked() {
 }
 
 #[tokio::test]
-async fn recover_keeps_the_others_unless_told_to_revoke_them() {
+async fn recover_revokes_the_app_devices_unless_told_to_keep_them() {
     let h = host("recover-keep").await;
     let db = h.db.to_str().unwrap();
     let clock = Arc::new(SystemClock);
@@ -257,19 +257,40 @@ async fn recover_keeps_the_others_unless_told_to_revoke_them() {
     )
     .await;
     let confirm = format!("{}\n", hostname());
-    let (first, ok) = run(&h, &["recover", db], &confirm, "y\n").await;
+    let (first, ok) = run(&h, &["recover", db, "--keep-devices"], &confirm, "y\n").await;
     assert!(ok);
-    assert!(!status(&h, &phone.id).await.2, "kept without --revoke-all");
-    let (second, ok) = run(
-        &h,
-        &["recover", db, "--revoke-all", "--revoke-runners"],
-        &confirm,
-        "y\n",
-    )
-    .await;
+    assert!(!status(&h, &phone.id).await.2, "kept with --keep-devices");
+    // The spec's default (§12): every app device is revoked, runners kept.
+    let (second, ok) = run(&h, &["recover", db], &confirm, "y\n").await;
     assert!(ok);
-    for revoked in [&phone.id, &runner.id, &first.id] {
+    for revoked in [&phone.id, &first.id] {
         assert!(status(&h, revoked).await.2, "{revoked} revoked");
     }
-    assert_eq!(status(&h, &second.id).await.0, "active");
+    assert!(
+        !status(&h, &runner.id).await.2,
+        "the runner is kept by default"
+    );
+    let (third, ok) = run(&h, &["recover", db, "--revoke-runners"], &confirm, "y\n").await;
+    assert!(ok);
+    for revoked in [&second.id, &runner.id] {
+        assert!(status(&h, revoked).await.2, "{revoked} revoked");
+    }
+    assert_eq!(status(&h, &third.id).await.0, "active");
+}
+
+/// N4: the user is checked before the database is opened: a missing database is refused and
+/// not created.
+#[tokio::test]
+async fn the_host_verbs_never_create_a_database() {
+    let h = host("no-db").await;
+    let missing = h.dir.join("missing.db");
+    for verb in ["bootstrap", "recover"] {
+        let (child, _) = spawn(&[verb, missing.to_str().unwrap()]);
+        let out = child.wait_with_output().await.unwrap();
+        assert!(!out.status.success());
+        let err = String::from_utf8(out.stderr).unwrap();
+        assert!(err.contains("no database at"), "{verb}: {err}");
+        assert!(!missing.exists(), "{verb} created the database");
+        assert!(!h.dir.join("missing.db-wal").exists());
+    }
 }

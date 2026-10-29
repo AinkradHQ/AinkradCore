@@ -4,8 +4,9 @@
 //!   was ever revoked; a claimant the host declined or let lapse does not count, so a failed
 //!   bootstrap can be run again.
 //! - `recover`: a new `admin` device whatever devices exist, when the admins are lost. It asks
-//!   for the host name, audits `recover.started`, revokes every app device (and runner) only
-//!   when told to, and enrols the new one as `device.enrolled`.
+//!   for the host name, audits `recover.started`, revokes every app device (as spec §12 says:
+//!   they may be lost or stolen) unless told to keep them, keeps runners unless told to revoke
+//!   them, and enrols the new one as `device.enrolled`.
 //!
 //! Both create a pairing for every scope, print its code and the Core fingerprint, wait for the
 //! claim (which the server accepts only over its own Unix socket, from this user), print the
@@ -29,13 +30,14 @@ use crate::Result_;
 
 pub const USAGE: &str = "Devices (E1-07):
   ainkrad-core-server bootstrap <db> [<name>]
-  ainkrad-core-server recover <db> [--revoke-all] [--revoke-runners] [<name>]
+  ainkrad-core-server recover <db> [--keep-devices] [--revoke-runners] [<name>]
 bootstrap pairs the first device, and only the first: it prints a one-time code, good for 5
 minutes and only over the server's Unix socket (core.sock, or admin.sock beside a TCP or public
 listener) from this user, then the claimant's SAS, and approves it when you type y. A declined
 or lapsed attempt can be run again. recover does the same for a new admin device whatever
-devices exist, after you type the host name; --revoke-all revokes every app device first,
---revoke-runners the runners too. Both run only as the database's owner (the service user).
+devices exist, after you type the host name; it first revokes every app device (they may be
+lost or stolen) unless --keep-devices, and the runners too with --revoke-runners. Both run only
+as the owner of an existing database (the service user), checked before it is opened.
 For a remote Core, forward the socket over SSH as that user, e.g.
   ssh -L /tmp/core.sock:/var/lib/ainkrad/admin.sock ainkrad@host
 and point the new device at the local end.";
@@ -55,10 +57,17 @@ fn state_dir(db: &Path) -> &Path {
 
 /// Refuses unless this process runs as the database file's owner: the host's verbs are for the
 /// service user only, the same user the server's socket accepts claims from.
+/// Checked before the database is opened, so a wrong user (root, say) never creates or
+/// migrates it, or leaves its own `-wal`/`-shm` files beside it (review N4).
 fn owner_only(db: &Path) -> Result_ {
     use std::os::unix::fs::MetadataExt;
     let owner = std::fs::metadata(db)
-        .map_err(|e| format!("{}: {e}", db.display()))?
+        .map_err(|e| {
+            format!(
+                "no database at {} ({e}): start serve or init first",
+                db.display()
+            )
+        })?
         .uid();
     // This process's uid, without libc: the owner of a file it creates.
     let probe = state_dir(db).join(format!(".uid-probe-{}", std::process::id()));
@@ -72,14 +81,14 @@ fn owner_only(db: &Path) -> Result_ {
 }
 
 pub async fn bootstrap(db: &Path, name: &str) -> Result_ {
-    let pool = store::connect(db).await?;
     owner_only(db)?;
+    let pool = store::connect(db).await?;
     enrol(&pool, db, name, false).await
 }
 
-pub async fn recover(db: &Path, name: &str, revoke_all: bool, revoke_runners: bool) -> Result_ {
-    let pool = store::connect(db).await?;
+pub async fn recover(db: &Path, name: &str, keep_devices: bool, revoke_runners: bool) -> Result_ {
     owner_only(db)?;
+    let pool = store::connect(db).await?;
     let host = std::process::Command::new("hostname")
         .output()
         .ok()
@@ -94,7 +103,7 @@ pub async fn recover(db: &Path, name: &str, revoke_all: bool, revoke_runners: bo
         return Err("not confirmed: nothing changed".into());
     }
     let mut tx = store::begin_write(&pool).await?;
-    let details = serde_json::json!({"by": "local-admin", "revoke_all": revoke_all,
+    let details = serde_json::json!({"by": "local-admin", "keep_devices": keep_devices,
         "revoke_runners": revoke_runners});
     let event = NewAuditEvent {
         actor: AuditActor::System,
@@ -108,7 +117,7 @@ pub async fn recover(db: &Path, name: &str, revoke_all: bool, revoke_runners: bo
     for d in gov::list_devices(&pool).await? {
         let revoke = match d.kind.as_str() {
             "runner" => revoke_runners,
-            _ => revoke_all,
+            _ => !keep_devices,
         };
         if revoke && d.revoked_at.is_none() {
             gov::revoke_device(&pool, &d.id, AuditActor::System, None, &now).await?;

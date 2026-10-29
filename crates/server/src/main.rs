@@ -127,14 +127,14 @@ async fn main() -> ExitCode {
         ["recover", db, rest @ ..] => {
             let flag = |f: &str| rest.contains(&f);
             let names: Vec<&&str> = rest.iter().filter(|a| !a.starts_with("--")).collect();
-            let known = rest
-                .iter()
-                .all(|a| !a.starts_with("--") || ["--revoke-all", "--revoke-runners"].contains(a));
+            let known = rest.iter().all(|a| {
+                !a.starts_with("--") || ["--keep-devices", "--revoke-runners"].contains(a)
+            });
             match (known, names.as_slice()) {
                 (true, [] | [_]) => {
                     let name = names.first().map_or("recovered admin", |n| **n);
-                    let (all, runners) = (flag("--revoke-all"), flag("--revoke-runners"));
-                    admin::bootstrap::recover(Path::new(db), name, all, runners).await
+                    let (keep, runners) = (flag("--keep-devices"), flag("--revoke-runners"));
+                    admin::bootstrap::recover(Path::new(db), name, keep, runners).await
                 }
                 _ => {
                     eprintln!("{}", usage());
