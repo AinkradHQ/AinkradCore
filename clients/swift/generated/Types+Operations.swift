@@ -8910,12 +8910,12 @@ public enum Operations {
                 /// - Remark: Generated from `#/paths/handshake/POST/responses/200/content`.
                 @frozen public enum Body: Sendable, Hashable {
                     /// - Remark: Generated from `#/paths/handshake/POST/responses/200/content/application\/json`.
-                    case json(Components.Schemas.Handshake)
+                    case json(Components.Schemas.HandshakeProof)
                     /// The associated value of the enum case if `self` is `.json`.
                     ///
                     /// - Throws: An error if `self` is not `.json`.
                     /// - SeeAlso: `.json`.
-                    public var json: Components.Schemas.Handshake {
+                    public var json: Components.Schemas.HandshakeProof {
                         get throws {
                             switch self {
                             case let .json(body):
@@ -8934,7 +8934,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// As `GET /handshake`, plus `core_spki` and `core_sig`, the Core identity key's signature over the client's nonce: check `fp(core_spki)` is the pinned `core_fp` and that `core_sig` verifies before trusting this Core. 400 for a nonce that is not 16 bytes of base64url. Needs no signature
+            /// As `GET /handshake`, plus `core_spki` and `core_sig`, the Core identity key's signature over the client's nonce: check `fp(core_spki)` is the pinned `core_fp` and that `core_sig` verifies before trusting this Core; anything else, a missing proof or a status other than 200 included, is `core_identity_mismatch`, with no fallback to `GET`. 400 for a nonce that is not 16 bytes of base64url; 429 past 30 a minute from one address, shared with `POST /handshake/challenge`. Needs no signature
             ///
             /// - Remark: Generated from `#/paths//handshake/post(proveHandshake)/responses/200`.
             ///

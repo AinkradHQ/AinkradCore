@@ -216,7 +216,7 @@
       "Challenge": {
         "properties": {
           "challenge": {
-            "description": "32 random bytes, base64url; spend it once within `expires_in` seconds.",
+            "description": "32 bytes, base64url (43 characters), opaque to the client; spend it once within\n`expires_in` seconds.",
             "type": [
               "string",
               "null"
@@ -594,20 +594,6 @@
               "null"
             ]
           },
-          "core_sig": {
-            "description": "`POST` only: the Core identity key's ES256 signature (raw r||s, base64url) over the UTF-8\nstring `AINKRAD-CORE-V1` LF `<host>` LF `<nonce>`, no trailing newline; `host` is the\nCore's configured Host (`localhost` on a Unix socket), `nonce` the text the client sent.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "core_spki": {
-            "description": "`POST` only: the Core identity key, a P-256 SubjectPublicKeyInfo, base64url. Its\nfingerprint is `identity_fingerprint`.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "git_sha": {
             "description": "The commit it was built from (short sha), when the build knew it.",
             "type": [
@@ -655,6 +641,68 @@
         },
         "required": [
           "nonce"
+        ],
+        "type": "object"
+      },
+      "HandshakeProof": {
+        "description": "`POST /handshake`'s answer: `GET`'s fields plus the proof, which is always present (review\nL4). A client that pinned `core_fp` aborts with `core_identity_mismatch` when either is\nmissing or fails, and never falls back to `GET /handshake` (spec §13).",
+        "properties": {
+          "api_major": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "api_minor": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "core_sig": {
+            "description": "The Core identity key's ES256 signature (raw r||s, base64url) over the UTF-8 string\n`AINKRAD-CORE-V1` LF `<host>` LF `<nonce>`, no trailing newline; `host` is the Core's\nconfigured Host (the `Host` it requires), `nonce` the text the client sent.",
+            "type": "string"
+          },
+          "core_spki": {
+            "description": "The Core identity key, a P-256 SubjectPublicKeyInfo, base64url. Its fingerprint is\n`identity_fingerprint`.",
+            "type": "string"
+          },
+          "git_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "identity_fingerprint": {
+            "description": "`core_fp`, as in `GET /handshake`; a client checks `fp(core_spki)`, not this claim.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "server_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "supported_minors": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "core_spki",
+          "core_sig"
         ],
         "type": "object"
       },
@@ -1520,7 +1568,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.10.0"
+    "version": "1.11.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -3234,11 +3282,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Handshake"
+                  "$ref": "#/components/schemas/HandshakeProof"
                 }
               }
             },
-            "description": "As `GET /handshake`, plus `core_spki` and `core_sig`, the Core identity key's signature over the client's nonce: check `fp(core_spki)` is the pinned `core_fp` and that `core_sig` verifies before trusting this Core. 400 for a nonce that is not 16 bytes of base64url. Needs no signature"
+            "description": "As `GET /handshake`, plus `core_spki` and `core_sig`, the Core identity key's signature over the client's nonce: check `fp(core_spki)` is the pinned `core_fp` and that `core_sig` verifies before trusting this Core; anything else, a missing proof or a status other than 200 included, is `core_identity_mismatch`, with no fallback to `GET`. 400 for a nonce that is not 16 bytes of base64url; 429 past 30 a minute from one address, shared with `POST /handshake/challenge`. Needs no signature"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

@@ -12,7 +12,9 @@
 //! Core identity key's signature over `AINKRAD-CORE-V1` LF `<host>` LF `<nonce>`: a client that
 //! pinned `core_fp` checks the key is the pinned one and that it signed the client's fresh
 //! nonce, which a server merely echoing the fingerprint cannot do. `host` is the Host the
-//! Core is configured for (`serve --host`, `localhost` on a socket). Vector:
+//! Core is configured for (the `Host` it requires). It proves the Core's identity at that
+//! moment, not the channel or later answers: a relaying man in the middle with a misissued
+//! certificate can pass it on (threat model T-GW-3). Vector:
 //! `crates/server/tests/vectors/core-sig-v1.json`.
 
 use axum::Json;
@@ -46,15 +48,27 @@ pub struct Handshake {
     /// `core_fp`: base64url SHA-256 of the Core identity key's SPKI, 43 characters. Signed
     /// into every request (handshake spec §5.2).
     pub identity_fingerprint: Option<String>,
-    /// `POST` only: the Core identity key, a P-256 SubjectPublicKeyInfo, base64url. Its
-    /// fingerprint is `identity_fingerprint`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub core_spki: Option<String>,
-    /// `POST` only: the Core identity key's ES256 signature (raw r||s, base64url) over the UTF-8
-    /// string `AINKRAD-CORE-V1` LF `<host>` LF `<nonce>`, no trailing newline; `host` is the
-    /// Core's configured Host (`localhost` on a Unix socket), `nonce` the text the client sent.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub core_sig: Option<String>,
+}
+
+/// `POST /handshake`'s answer: `GET`'s fields plus the proof, which is always present (review
+/// L4). A client that pinned `core_fp` aborts with `core_identity_mismatch` when either is
+/// missing or fails, and never falls back to `GET /handshake` (spec §13).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HandshakeProof {
+    pub server_version: Option<String>,
+    pub git_sha: Option<String>,
+    pub api_major: Option<String>,
+    pub api_minor: Option<u32>,
+    pub supported_minors: Option<Vec<u32>>,
+    /// `core_fp`, as in `GET /handshake`; a client checks `fp(core_spki)`, not this claim.
+    pub identity_fingerprint: Option<String>,
+    /// The Core identity key, a P-256 SubjectPublicKeyInfo, base64url. Its fingerprint is
+    /// `identity_fingerprint`.
+    pub core_spki: String,
+    /// The Core identity key's ES256 signature (raw r||s, base64url) over the UTF-8 string
+    /// `AINKRAD-CORE-V1` LF `<host>` LF `<nonce>`, no trailing newline; `host` is the Core's
+    /// configured Host (the `Host` it requires), `nonce` the text the client sent.
+    pub core_sig: String,
 }
 
 /// A liveness proof request: a fresh nonce from the client.
@@ -79,8 +93,6 @@ fn current(app: &App) -> Handshake {
         api_minor: Some(v.api.minor),
         supported_minors: Some((0..=API_MINOR).collect()),
         identity_fingerprint: Some(app.auth.identity.fp.clone()),
-        core_spki: None,
-        core_sig: None,
     }
 }
 
@@ -96,10 +108,18 @@ pub async fn handshake(State(app): State<App>) -> Json<Handshake> {
     request_body = HandshakeBody, security(()),
     responses((status = 200, description = "As `GET /handshake`, plus `core_spki` and `core_sig`, \
         the Core identity key's signature over the client's nonce: check `fp(core_spki)` is the \
-        pinned `core_fp` and that `core_sig` verifies before trusting this Core. 400 for a nonce \
-        that is not 16 bytes of base64url. Needs no signature", body = Handshake)))]
+        pinned `core_fp` and that `core_sig` verifies before trusting this Core; anything else, \
+        a missing proof or a status other than 200 included, is `core_identity_mismatch`, with \
+        no fallback to `GET`. 400 for a nonce that is not 16 bytes of base64url; 429 past 30 a \
+        minute from one address, shared with `POST /handshake/challenge`. Needs no signature",
+        body = HandshakeProof)))]
 pub async fn prove(State(app): State<App>, req: Request) -> Response {
-    let bytes = match gate::body(req.into_body(), PREAUTH_BODY).await {
+    let (parts, raw) = req.into_parts();
+    // One P-256 signature per call: under the pre-auth challenge rate (review L3).
+    if let Err(r) = super::session::throttle(&app, &parts).await {
+        return *r;
+    }
+    let bytes = match gate::body(raw, PREAUTH_BODY).await {
         Ok(b) => b,
         Err(r) => return *r,
     };
@@ -110,10 +130,18 @@ pub async fn prove(State(app): State<App>, req: Request) -> Response {
         return bad("nonce is 16 bytes, base64url without padding");
     }
     let id = &app.auth.identity;
-    let mut h = current(&app);
-    h.core_spki = Some(b64(&id.spki));
-    h.core_sig = Some(b64(&id.sign(&core_sig_message(&app.host, &b.nonce))));
-    Json(h).into_response()
+    let h = current(&app);
+    Json(HandshakeProof {
+        server_version: h.server_version,
+        git_sha: h.git_sha,
+        api_major: h.api_major,
+        api_minor: h.api_minor,
+        supported_minors: h.supported_minors,
+        identity_fingerprint: h.identity_fingerprint,
+        core_spki: b64(&id.spki),
+        core_sig: b64(&id.sign(&core_sig_message(&app.host, &b.nonce))),
+    })
+    .into_response()
 }
 
 #[cfg(test)]

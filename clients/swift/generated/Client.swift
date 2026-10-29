@@ -6816,7 +6816,7 @@ public struct Client: APIProtocol {
                     switch chosenContentType {
                     case "application/json":
                         body = try await converter.getResponseBodyAsJSON(
-                            Components.Schemas.Handshake.self,
+                            Components.Schemas.HandshakeProof.self,
                             from: responseBody,
                             transforming: { value in
                                 .json(value)

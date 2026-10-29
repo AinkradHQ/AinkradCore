@@ -10,7 +10,7 @@ use axum::http::{Method, Request, StatusCode, header};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use super::{HOST, fx, req, send};
+use super::{HOST, from, fx, req, send};
 use crate::api::limit::Limiter;
 use crate::api::router;
 use crate::api::v1::Limits;
@@ -248,4 +248,33 @@ async fn the_handshake_proves_the_core_key_over_a_nonce() {
     // GET is unchanged: no key, no signature.
     let (_, body) = send(&fx.app, req(Method::GET, "/handshake", None, None)).await;
     assert!(body.get("core_sig").is_none() && body.get("core_spki").is_none());
+}
+
+/// Review L3: `POST /handshake` signs pre-auth, so it is under the per-address challenge rate,
+/// shared with `POST /handshake/challenge`; another address is not affected.
+#[tokio::test]
+async fn the_handshake_proof_is_under_the_challenge_rate() {
+    let fx = fx().await;
+    let prove = |peer: &str| {
+        let body = json!({"nonce": "BQUFBQUFBQUFBQUFBQUFBQ"});
+        from(peer, req(Method::POST, "/handshake", None, Some(body)))
+    };
+    let mut statuses = Vec::new();
+    for _ in 0..40 {
+        statuses.push(send(&fx.app, prove("10.60.0.1")).await.0);
+    }
+    assert!(
+        statuses[..30].iter().all(|s| *s == StatusCode::OK),
+        "{statuses:?}"
+    );
+    assert_eq!(statuses[39], StatusCode::TOO_MANY_REQUESTS);
+    let ask = req(
+        Method::POST,
+        "/handshake/challenge",
+        None,
+        Some(json!({"device_id": fx.dev.id})),
+    );
+    let (status, _) = send(&fx.app, from("10.60.0.1", ask)).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "one shared rate");
+    assert_eq!(send(&fx.app, prove("10.60.0.2")).await.0, StatusCode::OK);
 }

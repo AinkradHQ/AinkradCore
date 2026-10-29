@@ -172,7 +172,8 @@ extension Components {
         }
         /// - Remark: Generated from `#/components/schemas/Challenge`.
         public struct Challenge: Codable, Hashable, Sendable {
-            /// 32 random bytes, base64url; spend it once within `expires_in` seconds.
+            /// 32 bytes, base64url (43 characters), opaque to the client; spend it once within
+            /// `expires_in` seconds.
             ///
             /// - Remark: Generated from `#/components/schemas/Challenge/challenge`.
             public var challenge: Swift.String?
@@ -186,7 +187,7 @@ extension Components {
             /// Creates a new `Challenge`.
             ///
             /// - Parameters:
-            ///   - challenge: 32 random bytes, base64url; spend it once within `expires_in` seconds.
+            ///   - challenge: 32 bytes, base64url (43 characters), opaque to the client; spend it once within
             ///   - expiresIn:
             ///   - options: A passkey device's step-up only: `{"publicKey": PublicKeyCredentialRequestOptions}`
             public init(
@@ -747,17 +748,6 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Handshake/api_minor`.
             public var apiMinor: Swift.Int32?
-            /// `POST` only: the Core identity key's ES256 signature (raw r||s, base64url) over the UTF-8
-            /// string `AINKRAD-CORE-V1` LF `<host>` LF `<nonce>`, no trailing newline; `host` is the
-            /// Core's configured Host (`localhost` on a Unix socket), `nonce` the text the client sent.
-            ///
-            /// - Remark: Generated from `#/components/schemas/Handshake/core_sig`.
-            public var coreSig: Swift.String?
-            /// `POST` only: the Core identity key, a P-256 SubjectPublicKeyInfo, base64url. Its
-            /// fingerprint is `identity_fingerprint`.
-            ///
-            /// - Remark: Generated from `#/components/schemas/Handshake/core_spki`.
-            public var coreSpki: Swift.String?
             /// The commit it was built from (short sha), when the build knew it.
             ///
             /// - Remark: Generated from `#/components/schemas/Handshake/git_sha`.
@@ -781,8 +771,6 @@ extension Components {
             /// - Parameters:
             ///   - apiMajor: `v1`.
             ///   - apiMinor: The contract minor this server speaks (`GET /api/v1/me` has it too).
-            ///   - coreSig: `POST` only: the Core identity key's ES256 signature (raw r||s, base64url) over the UTF-8
-            ///   - coreSpki: `POST` only: the Core identity key, a P-256 SubjectPublicKeyInfo, base64url. Its
             ///   - gitSha: The commit it was built from (short sha), when the build knew it.
             ///   - identityFingerprint: `core_fp`: base64url SHA-256 of the Core identity key's SPKI, 43 characters. Signed
             ///   - serverVersion: The server's crate version, `0.1.0`.
@@ -790,8 +778,6 @@ extension Components {
             public init(
                 apiMajor: Swift.String? = nil,
                 apiMinor: Swift.Int32? = nil,
-                coreSig: Swift.String? = nil,
-                coreSpki: Swift.String? = nil,
                 gitSha: Swift.String? = nil,
                 identityFingerprint: Swift.String? = nil,
                 serverVersion: Swift.String? = nil,
@@ -799,8 +785,6 @@ extension Components {
             ) {
                 self.apiMajor = apiMajor
                 self.apiMinor = apiMinor
-                self.coreSig = coreSig
-                self.coreSpki = coreSpki
                 self.gitSha = gitSha
                 self.identityFingerprint = identityFingerprint
                 self.serverVersion = serverVersion
@@ -809,8 +793,6 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case apiMajor = "api_major"
                 case apiMinor = "api_minor"
-                case coreSig = "core_sig"
-                case coreSpki = "core_spki"
                 case gitSha = "git_sha"
                 case identityFingerprint = "identity_fingerprint"
                 case serverVersion = "server_version"
@@ -844,6 +826,78 @@ extension Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "nonce"
                 ])
+            }
+        }
+        /// `POST /handshake`'s answer: `GET`'s fields plus the proof, which is always present (review
+        /// L4). A client that pinned `core_fp` aborts with `core_identity_mismatch` when either is
+        /// missing or fails, and never falls back to `GET /handshake` (spec §13).
+        ///
+        /// - Remark: Generated from `#/components/schemas/HandshakeProof`.
+        public struct HandshakeProof: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/HandshakeProof/api_major`.
+            public var apiMajor: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/HandshakeProof/api_minor`.
+            public var apiMinor: Swift.Int32?
+            /// The Core identity key's ES256 signature (raw r||s, base64url) over the UTF-8 string
+            /// `AINKRAD-CORE-V1` LF `<host>` LF `<nonce>`, no trailing newline; `host` is the Core's
+            /// configured Host (the `Host` it requires), `nonce` the text the client sent.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HandshakeProof/core_sig`.
+            public var coreSig: Swift.String
+            /// The Core identity key, a P-256 SubjectPublicKeyInfo, base64url. Its fingerprint is
+            /// `identity_fingerprint`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HandshakeProof/core_spki`.
+            public var coreSpki: Swift.String
+            /// - Remark: Generated from `#/components/schemas/HandshakeProof/git_sha`.
+            public var gitSha: Swift.String?
+            /// `core_fp`, as in `GET /handshake`; a client checks `fp(core_spki)`, not this claim.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HandshakeProof/identity_fingerprint`.
+            public var identityFingerprint: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/HandshakeProof/server_version`.
+            public var serverVersion: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/HandshakeProof/supported_minors`.
+            public var supportedMinors: [Swift.Int32]?
+            /// Creates a new `HandshakeProof`.
+            ///
+            /// - Parameters:
+            ///   - apiMajor:
+            ///   - apiMinor:
+            ///   - coreSig: The Core identity key's ES256 signature (raw r||s, base64url) over the UTF-8 string
+            ///   - coreSpki: The Core identity key, a P-256 SubjectPublicKeyInfo, base64url. Its fingerprint is
+            ///   - gitSha:
+            ///   - identityFingerprint: `core_fp`, as in `GET /handshake`; a client checks `fp(core_spki)`, not this claim.
+            ///   - serverVersion:
+            ///   - supportedMinors:
+            public init(
+                apiMajor: Swift.String? = nil,
+                apiMinor: Swift.Int32? = nil,
+                coreSig: Swift.String,
+                coreSpki: Swift.String,
+                gitSha: Swift.String? = nil,
+                identityFingerprint: Swift.String? = nil,
+                serverVersion: Swift.String? = nil,
+                supportedMinors: [Swift.Int32]? = nil
+            ) {
+                self.apiMajor = apiMajor
+                self.apiMinor = apiMinor
+                self.coreSig = coreSig
+                self.coreSpki = coreSpki
+                self.gitSha = gitSha
+                self.identityFingerprint = identityFingerprint
+                self.serverVersion = serverVersion
+                self.supportedMinors = supportedMinors
+            }
+            public enum CodingKeys: String, CodingKey {
+                case apiMajor = "api_major"
+                case apiMinor = "api_minor"
+                case coreSig = "core_sig"
+                case coreSpki = "core_spki"
+                case gitSha = "git_sha"
+                case identityFingerprint = "identity_fingerprint"
+                case serverVersion = "server_version"
+                case supportedMinors = "supported_minors"
             }
         }
         /// The newest event's seq a client would be shown: the catch-up target.
