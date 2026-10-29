@@ -529,7 +529,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorBody"];
             };
         };
-        /** @description Wrong Host (unknown_host), or an Origin header (origin_refused) */
+        /** @description Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope) */
         Forbidden: {
             headers: {
                 [name: string]: unknown;

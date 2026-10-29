@@ -178,7 +178,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/audit/get(listAudit)/responses/403`.
             ///
@@ -447,7 +447,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/devices/get(listDevices)/responses/403`.
             ///
@@ -738,7 +738,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/devices/{id}/delete(revokeDevice)/responses/403`.
             ///
@@ -1032,7 +1032,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/events/get(listEvents)/responses/403`.
             ///
@@ -1352,7 +1352,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/events/latest/get(latestEvent)/responses/403`.
             ///
@@ -1614,7 +1614,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/events/ws/get(streamEvents)/responses/403`.
             ///
@@ -1883,7 +1883,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/me/get(getMe)/responses/403`.
             ///
@@ -2163,7 +2163,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/push-token/put(setPushToken)/responses/403`.
             ///
@@ -2432,7 +2432,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/push-token/delete(clearPushToken)/responses/403`.
             ///
@@ -2701,7 +2701,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/get(listServerSettings)/responses/403`.
             ///
@@ -2990,7 +2990,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/get(listSettings)/responses/403`.
             ///
@@ -3288,7 +3288,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/{key}/get(getSetting)/responses/403`.
             ///
@@ -3595,7 +3595,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/{key}/put(setSetting)/responses/403`.
             ///
@@ -3893,7 +3893,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/{key}/delete(resetSetting)/responses/403`.
             ///
@@ -4191,7 +4191,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/{key}/history/get(settingHistory)/responses/403`.
             ///
@@ -4460,7 +4460,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//handshake/get(getHandshake)/responses/403`.
             ///
@@ -4740,7 +4740,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//handshake/challenge/post(createChallenge)/responses/403`.
             ///
@@ -5057,7 +5057,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host (unknown_host), or an Origin header (origin_refused)
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//handshake/session/post(createSession)/responses/403`.
             ///
