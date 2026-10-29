@@ -147,15 +147,24 @@ async fn the_last_admin_can_be_neither_demoted_nor_revoked() {
     )
     .await;
     assert_eq!(s, StatusCode::CONFLICT);
-    // With a second admin, both demotions race: exactly one wins.
+    // With a second admin, two demotions race in the store (each holds every scope): exactly one
+    // wins, whichever commits first. Over the API the loser could also be refused its scope.
     let phone = fx.enroll("phone", &ALL).await;
+    let all: Vec<String> = ALL.iter().map(|s| (*s).to_owned()).collect();
+    let read = ["read".to_owned()];
+    let pool = &fx.app.pool;
+    let by = super::super::BY;
     let (a, b) = tokio::join!(
-        scopes(&fx, &fx.dev, &phone, &["read"]),
-        scopes(&fx, &phone, &fx.dev, &["read"])
+        crate::store::gov::set_device_scopes(pool, &phone.id, &read, &all, by, &mac),
+        crate::store::gov::set_device_scopes(pool, &mac, &read, &all, by, &phone.id)
     );
-    let mut got = [a.0, b.0];
-    got.sort();
-    assert_eq!(got, [StatusCode::OK, StatusCode::CONFLICT], "{a:?} {b:?}");
+    let (a, b) = (a.unwrap(), b.unwrap());
+    assert!(a.is_ok() != b.is_ok(), "{a:?} {b:?}");
+    assert!(
+        [&a, &b]
+            .iter()
+            .any(|r| **r == Err(crate::store::gov::Refused::LastAdmin))
+    );
     let admins: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM core_devices WHERE revoked_at IS NULL \
          AND EXISTS (SELECT 1 FROM json_each(scopes) WHERE value = 'admin')",
