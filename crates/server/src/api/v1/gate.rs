@@ -147,9 +147,11 @@ pub async fn verify(
     // Only a usable device's request may carry the full body; anything else is held to the
     // pre-auth 16 KiB before it is hashed (review L1).
     // `/pair/status` also answers a device that is not active yet (pending, rejected, expired).
+    // A passkey device has no routine key to sign a session-less call with (§5.3 step 6).
     let may = |d: &Device| match mode {
-        Mode::Pairing => d.revoked_at.is_none() && d.status != "locked",
-        _ => d.usable(),
+        Mode::Pairing => d.kind != "passkey" && d.revoked_at.is_none() && d.status != "locked",
+        Mode::NoSession => d.kind != "passkey" && d.usable(),
+        Mode::Session => d.usable(),
     };
     let usable = device.as_ref().is_some_and(may);
     // Every device's body is held to the same `limit`, and one past it is the same refusal
@@ -163,6 +165,18 @@ pub async fn verify(
     } else {
         drain(raw, limit).await;
         (Bytes::new(), false)
+    };
+    // The key the request must be signed with: the routine key, or for a passkey device its
+    // web session's key (§9), never the credential's own key. A passkey request naming no live
+    // session of its device is the same refusal as a bad signature: nothing is proven yet.
+    let key = match &device {
+        Some(d) if usable && d.kind == "passkey" => h
+            .session
+            .as_deref()
+            .and_then(|s| app.auth.session(s, &d.id, now))
+            .and_then(|s| s.key),
+        Some(d) if usable => Some(d.routine_spki.clone()),
+        _ => None,
     };
     let body: &[u8] = &bytes;
     let message = Canonical {
@@ -182,8 +196,12 @@ pub async fn verify(
             crypto::dummy_verify(&message, &h.signature);
             Some("body too large")
         }
+        Some(_) if key.is_none() && usable => {
+            crypto::dummy_verify(&message, &h.signature);
+            Some("no live web session")
+        }
         Some(d) if usable => {
-            if !crypto::verify(&d.routine_spki, &message, &h.signature) {
+            if !crypto::verify(key.as_deref().unwrap_or_default(), &message, &h.signature) {
                 Some("bad signature")
             } else {
                 match app.auth.take_nonce(&d.id, &h.nonce, now) {
@@ -299,7 +317,12 @@ pub(crate) async fn client_gate(State(app): State<App>, req: Request, next: Next
     }
     let (mut parts, raw) = req.into_parts();
     let addr = address(&app, &parts);
-    let v = match verify(&app, &parts, raw, SIGNED_BODY, &addr, Mode::Session).await {
+    // A browser's event socket brings a one-time ticket instead of a signature (§10).
+    let v = match super::ticket::offered(&parts) {
+        Some(t) => super::ticket::redeem(&app, &t, &addr).await,
+        None => verify(&app, &parts, raw, SIGNED_BODY, &addr, Mode::Session).await,
+    };
+    let v = match v {
         Ok(v) => v,
         Err(r) => return *r,
     };
