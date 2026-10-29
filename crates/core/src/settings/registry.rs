@@ -16,4 +16,7 @@ registry! {
         "Failed authentications one address may make before it is refused; read at start.";
     ApiAuthFailuresPerMin "api.auth_failures_per_min" PerMinute 10, 1, 60, SO,
         "Failed authentications one address regains per minute; read at start.";
+    EventsRetentionSecs "events.retention_secs" Seconds 2_592_000, 3_600, 315_360_000, SO,
+        "How long events stay replayable; older ones are trimmed and a client resuming from \
+         before them re-syncs. Read every scheduler tick.";
 }
