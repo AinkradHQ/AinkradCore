@@ -1,0 +1,1 @@
+{"stream_id":3,"kind":"command","seq":0,"payload":{"args":["hi"],"cwd":"/tmp","env":{"LANG":"C"},"env_pass":["PATH"],"limits":{"max_output_bytes":65536,"timeout_ms":5000},"op":"exec.run","program":"/bin/echo"}}

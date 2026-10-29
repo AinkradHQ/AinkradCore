@@ -1,0 +1,1 @@
+{"stream_id":3,"kind":"result","seq":0,"payload":{"duration_ms":12,"exit_code":0,"op":"exec.run","stderr":{"bytes":0,"text":"","truncated":false},"stdout":{"bytes":3,"text":"hi\n","truncated":false},"timed_out":false}}

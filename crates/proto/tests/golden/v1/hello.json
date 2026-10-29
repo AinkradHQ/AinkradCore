@@ -1,0 +1,1 @@
+{"type":"hello","protocol":"1.28","runner_version":"0.1.0","tags":["linux"],"harnesses":{"claude":"2.1.306"},"runs":[7],"disk":null,"info":null,"os":"linux","arch":"aarch64"}
