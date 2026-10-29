@@ -25,23 +25,6 @@ pub mod settings;
 pub use backup::{BackupError, backup, restore};
 pub use migrate::{MigrateError, Migration};
 
-/// What the store keeps of a device key or pairing code: its SHA-256, never the key. Keys are
-/// random, so an unsalted digest is enough.
-fn key_hash(key: &str) -> Vec<u8> {
-    use sha2::{Digest, Sha256};
-    Sha256::digest(key.as_bytes()).to_vec()
-}
-
-/// A new secret: `prefix` and 32 bytes (256 bits) from the OS RNG, hex-encoded. The prefix
-/// lets secret scanners spot it.
-fn random_key(prefix: &str) -> Result<String, sqlx::Error> {
-    let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes)
-        .map_err(|e| sqlx::Error::Io(std::io::Error::other(e.to_string())))?;
-    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    Ok(format!("{prefix}{hex}"))
-}
-
 /// A write transaction from `begin_write`; derefs to its connection. Dropped without
 /// `commit`, it rolls back.
 pub struct WriteTx {
@@ -179,10 +162,11 @@ pub async fn connect(path: &Path) -> Result<SqlitePool, sqlx::Error> {
 mod tests {
     use super::*;
 
-    const TABLES: [&str; 7] = [
+    const TABLES: [&str; 8] = [
         "users",
-        "device_keys",
-        "device_pairings",
+        "core_devices",
+        "core_pairings",
+        "core_auth_limits",
         "audit_events",
         "events",
         "push_cursor",

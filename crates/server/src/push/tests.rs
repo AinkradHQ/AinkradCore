@@ -14,7 +14,8 @@ use serde_json::json;
 
 use super::apns::ApnsNotifier;
 use super::*;
-use crate::store::gov::{PushTarget, issue_device_key, revoke_device_key, set_push_token};
+use crate::auth::testing::TestDevice;
+use crate::store::gov::{PushTarget, get_device, revoke_device, set_push_token};
 use crate::store::{audit, connect};
 
 #[derive(Default)]
@@ -81,16 +82,20 @@ async fn pushes_what_the_classifier_picks_to_live_devices_once() {
     let by = AuditActor::User(UserId(1));
     let token = |n: u8| format!("{n:02x}").repeat(32);
     let mut devices = vec![];
+    let mut ids = vec![];
     for (n, name) in ["mac", "phone", "old", "silent"].iter().enumerate() {
-        let (d, _) = issue_device_key(&pool, name, by).await.unwrap();
+        let clock = Arc::new(crate::scheduler::SystemClock);
+        let d = TestDevice::enroll(&pool, name, "device", &["read"], "fp", clock).await;
         if *name != "silent" {
-            set_push_token(&pool, d.id, Some((&token(n as u8), false)))
+            set_push_token(&pool, &d.id, Some((&token(n as u8), false)))
                 .await
                 .unwrap();
         }
-        devices.push(d.id);
+        let seq = get_device(&pool, &d.id).await.unwrap().unwrap().seq;
+        devices.push(DeviceKeyId(seq));
+        ids.push(d.id);
     }
-    revoke_device_key(&pool, devices[2], by, "2026-10-22T10:00:00.000Z")
+    revoke_device(&pool, &ids[2], by, None, "2026-10-22T10:00:00.000Z")
         .await
         .unwrap();
 

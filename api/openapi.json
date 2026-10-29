@@ -29,7 +29,7 @@
             }
           }
         },
-        "description": "Wrong Host, or an Origin header"
+        "description": "Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)"
       },
       "InternalError": {
         "content": {
@@ -69,7 +69,7 @@
             }
           }
         },
-        "description": "Missing, invalid or revoked device key"
+        "description": "auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired"
       }
     },
     "schemas": {
@@ -97,7 +97,7 @@
         "description": "One audited change.",
         "properties": {
           "action": {
-            "description": "Dotted: `device_key.created`, `setting.set`, ….",
+            "description": "Dotted: `device.revoked`, `setting.set`, ….",
             "type": "string"
           },
           "actor": {
@@ -137,10 +137,9 @@
         "type": "object",
         "x-audit-actions": [
           "api.refused",
-          "device.paired",
-          "device.pairing_started",
-          "device_key.created",
-          "device_key.revoked",
+          "auth.lockout",
+          "device.enrolled",
+          "device.revoked",
           "setting.reset",
           "setting.set"
         ]
@@ -167,15 +166,68 @@
         ],
         "type": "object"
       },
+      "Challenge": {
+        "properties": {
+          "challenge": {
+            "description": "32 random bytes, base64url; spend it once within `expires_in` seconds.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_in": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ChallengeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "device_id": {
+            "description": "The device that will answer it, `d_…`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id"
+        ],
+        "type": "object"
+      },
       "Device": {
-        "description": "A device's key, without the key.",
+        "description": "A device: who it is and what it may do. Never a key's private half: the Core has none.",
         "properties": {
           "created_at": {
             "$ref": "#/components/schemas/Timestamp"
           },
+          "fingerprint": {
+            "description": "base64url SHA-256 of its routine public key: what pairing shows.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
-            "format": "int64",
-            "type": "integer"
+            "description": "`d_` and 26 characters.",
+            "type": "string"
+          },
+          "key_storage": {
+            "description": "Where its key lives, as the device claims it (not verified).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "`device` (an app or CLI), `runner` or `passkey`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "last_used_at": {
             "$ref": "#/components/schemas/Timestamp",
@@ -184,8 +236,31 @@
           "name": {
             "type": "string"
           },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "revoked_at": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "scopes": {
+            "description": "What it may do (E1-09 enforces them).",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "`pending`, `active`, `rejected`, `expired` or `locked`.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -207,6 +282,14 @@
           },
           "message": {
             "type": "string"
+          },
+          "server_time": {
+            "description": "The server's clock in unix seconds, on a `clock_skew` refusal only (handshake spec §5.3).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -323,7 +406,7 @@
             ]
           },
           "identity_fingerprint": {
-            "description": "The Core identity key's fingerprint; null until the identity key exists (E1-07).",
+            "description": "`core_fp`: base64url SHA-256 of the Core identity key's SPKI, 43 characters. Signed\ninto every request (handshake spec §5.2).",
             "type": [
               "string",
               "null"
@@ -349,22 +432,6 @@
             ]
           }
         },
-        "type": "object"
-      },
-      "IssuedDevice": {
-        "description": "A new device and its key: the only time the key is ever shown.",
-        "properties": {
-          "device": {
-            "$ref": "#/components/schemas/Device"
-          },
-          "key": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "device",
-          "key"
-        ],
         "type": "object"
       },
       "LatestEvent": {
@@ -409,8 +476,8 @@
         "description": "A device: who, by id and name.",
         "properties": {
           "id": {
-            "format": "int64",
-            "type": "integer"
+            "description": "`d_` and 26 characters.",
+            "type": "string"
           },
           "name": {
             "type": "string"
@@ -418,17 +485,6 @@
         },
         "required": [
           "id",
-          "name"
-        ],
-        "type": "object"
-      },
-      "NewDevice": {
-        "properties": {
-          "name": {
-            "type": "string"
-          }
-        },
-        "required": [
           "name"
         ],
         "type": "object"
@@ -452,39 +508,6 @@
         },
         "required": [
           "items"
-        ],
-        "type": "object"
-      },
-      "PairBody": {
-        "properties": {
-          "code": {
-            "description": "The code the admin was shown, in any case.",
-            "type": "string"
-          },
-          "name": {
-            "description": "What to call the new device.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "code",
-          "name"
-        ],
-        "type": "object"
-      },
-      "Pairing": {
-        "properties": {
-          "code": {
-            "description": "Six characters, letters and digits; shown to the user once.",
-            "type": "string"
-          },
-          "expires_at": {
-            "$ref": "#/components/schemas/Timestamp"
-          }
-        },
-        "required": [
-          "code",
-          "expires_at"
         ],
         "type": "object"
       },
@@ -529,6 +552,48 @@
         },
         "required": [
           "token"
+        ],
+        "type": "object"
+      },
+      "SessionGrant": {
+        "properties": {
+          "elevated_until": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "Until when the session is elevated (E1-09); null when it is not."
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "scopes": {
+            "description": "The device's scopes.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "session_id": {
+            "description": "`s_…`: sent as `Ainkrad-Session` on every signed request. Not a secret.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SessionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "challenge": {
+            "description": "A live challenge issued for the signing device.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "challenge"
         ],
         "type": "object"
       },
@@ -705,19 +770,21 @@
       }
     },
     "securitySchemes": {
-      "device_key": {
-        "scheme": "bearer",
-        "type": "http"
+      "device_signature": {
+        "description": "ES256 over the canonical request string, with Ainkrad-Device, Ainkrad-Session, Ainkrad-Alg, Ainkrad-Timestamp and Ainkrad-Nonce alongside (handshake spec §5)",
+        "in": "header",
+        "name": "Ainkrad-Signature",
+        "type": "apiKey"
       }
     }
   },
   "info": {
-    "description": "The Ainkrad Core client API, for the Ainkrad app. Every request carries a device key as `Authorization: Bearer` (never in the URL) and the server's own `Host`, and no `Origin`. Times are RFC 3339 UTC with milliseconds. Versioning: within /api/v1, enum values, union variants, optional fields and operations may be added; a client must keep an unknown enum value (every enum is open) and skip an event or union variant it cannot decode. Anything removed or renamed is a new /api/v2. `info.version` is `1.<minor>.0`; the minor (`GET /api/v1/me`, `versions.api.minor`) is bumped on every addition.",
+    "description": "The Ainkrad Core client API, for the Ainkrad app. Every request is signed by the device's own P-256 key (ES256, raw r||s): the headers Ainkrad-Device, Ainkrad-Session, Ainkrad-Alg (ES256), Ainkrad-Timestamp, Ainkrad-Nonce and Ainkrad-Signature cover an exact canonical string of the Core identity fingerprint, the method, path, query, time, nonce and the body's SHA-256 (handshake spec §5). A session comes from POST /handshake/challenge then POST /handshake/session and lasts 15 minutes; there is no bearer secret, and an Authorization header is refused. Requests carry the server's own Host and no Origin. Times are RFC 3339 UTC with milliseconds. Versioning: within /api/v1, enum values, union variants, optional fields and operations may be added; a client must keep an unknown enum value (every enum is open) and skip an event or union variant it cannot decode. Anything removed or renamed is a new /api/v2. `info.version` is `1.<minor>.0`; the minor (`GET /api/v1/me`, `versions.api.minor`) is bumped on every addition.",
     "license": {
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.2.0"
+    "version": "1.3.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -747,7 +814,7 @@
             }
           },
           {
-            "description": "Only actions starting with this: `device_key.` or `setting.set`.",
+            "description": "Only actions starting with this: `device.` or `setting.set`.",
             "in": "query",
             "name": "kind",
             "required": false,
@@ -756,7 +823,7 @@
             }
           },
           {
-            "description": "Only rows about this entity: its kind (`device_key`), or kind and id (`device_key:3`).",
+            "description": "Only rows about this entity: its kind (`device`), or kind and id (`device:3`).",
             "in": "query",
             "name": "target",
             "required": false,
@@ -809,7 +876,8 @@
         },
         "tags": [
           "events"
-        ]
+        ],
+        "x-ainkrad-scope": "admin"
       }
     },
     "/api/v1/devices": {
@@ -827,7 +895,7 @@
                 }
               }
             },
-            "description": "Every device key, revoked ones too; never a key"
+            "description": "Every device, revoked ones too"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -853,151 +921,8 @@
         },
         "tags": [
           "devices"
-        ]
-      },
-      "post": {
-        "operationId": "createDevice",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/NewDevice"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IssuedDevice"
-                }
-              }
-            },
-            "description": "The new device and its key, shown only now"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "devices"
-        ]
-      }
-    },
-    "/api/v1/devices/pair": {
-      "post": {
-        "operationId": "pairDevice",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PairBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IssuedDevice"
-                }
-              }
-            },
-            "description": "The new device and its key, shown only now; the code is spent (audited as `device.paired`). Needs no device key. 404 for a code that is unknown, used or expired, counted against the client address; 429 once too many are"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "security": [
-          {}
         ],
-        "tags": [
-          "devices"
-        ]
-      }
-    },
-    "/api/v1/devices/pairing": {
-      "post": {
-        "operationId": "startPairing",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Pairing"
-                }
-              }
-            },
-            "description": "A pairing code, good once for 5 minutes (audited as `device.pairing_started`)"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "devices"
-        ]
+        "x-ainkrad-scope": "admin"
       }
     },
     "/api/v1/devices/{id}": {
@@ -1005,13 +930,12 @@
         "operationId": "revokeDevice",
         "parameters": [
           {
-            "description": "Device id",
+            "description": "Device id, `d_…`",
             "in": "path",
             "name": "id",
             "required": true,
             "schema": {
-              "format": "int64",
-              "type": "integer"
+              "type": "string"
             }
           }
         ],
@@ -1024,7 +948,7 @@
                 }
               }
             },
-            "description": "The revoked device"
+            "description": "The revoked device. Its sessions end and its open sockets close with 4001 at once (audited as `device.revoked`)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -1048,10 +972,11 @@
             "$ref": "#/components/responses/InternalError"
           }
         },
-        "summary": "Revokes at once, the calling device's own key included; the row stays, marked revoked.",
+        "summary": "Revokes at once, the calling device included; the row stays, marked revoked.",
         "tags": [
           "devices"
-        ]
+        ],
+        "x-ainkrad-scope": "admin"
       }
     },
     "/api/v1/events": {
@@ -1123,7 +1048,8 @@
         },
         "tags": [
           "events"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/api/v1/events/latest": {
@@ -1164,7 +1090,8 @@
         },
         "tags": [
           "events"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/api/v1/events/ws": {
@@ -1214,6 +1141,7 @@
         "tags": [
           "events"
         ],
+        "x-ainkrad-scope": "read",
         "x-citadel-frame": "#/components/schemas/Event"
       }
     },
@@ -1229,7 +1157,7 @@
                 }
               }
             },
-            "description": "The calling device and the server's and the contract's versions: the key check on connect"
+            "description": "The calling device and the server's and the contract's versions: the signature check on connect"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -1255,7 +1183,8 @@
         },
         "tags": [
           "devices"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/api/v1/push-token": {
@@ -1296,7 +1225,8 @@
         },
         "tags": [
           "devices"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       },
       "put": {
         "operationId": "setPushToken",
@@ -1345,7 +1275,8 @@
         },
         "tags": [
           "devices"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/api/v1/settings": {
@@ -1389,7 +1320,8 @@
         },
         "tags": [
           "settings"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/api/v1/settings/{scope}": {
@@ -1444,7 +1376,8 @@
         },
         "tags": [
           "settings"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/api/v1/settings/{scope}/{key}": {
@@ -1505,7 +1438,8 @@
         },
         "tags": [
           "settings"
-        ]
+        ],
+        "x-ainkrad-scope": "admin"
       },
       "get": {
         "operationId": "getSetting",
@@ -1564,7 +1498,8 @@
         },
         "tags": [
           "settings"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       },
       "put": {
         "operationId": "setSetting",
@@ -1633,7 +1568,8 @@
         },
         "tags": [
           "settings"
-        ]
+        ],
+        "x-ainkrad-scope": "admin"
       }
     },
     "/api/v1/settings/{scope}/{key}/history": {
@@ -1697,7 +1633,8 @@
         },
         "tags": [
           "settings"
-        ]
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/handshake": {
@@ -1712,7 +1649,163 @@
                 }
               }
             },
-            "description": "The server's version and build, the contract minor and the minors it serves. Needs no device key"
+            "description": "The server's version and build, the contract minor and the minors it serves, and the Core identity fingerprint. Needs no signature"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "tags": [
+          "handshake"
+        ]
+      }
+    },
+    "/handshake/challenge": {
+      "post": {
+        "operationId": "createChallenge",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChallengeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Challenge"
+                }
+              }
+            },
+            "description": "A single-use challenge for the device, live 60 s. Always answered, for any well-formed device id; 429 past 30 a minute from one address"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "tags": [
+          "handshake"
+        ]
+      }
+    },
+    "/handshake/session": {
+      "post": {
+        "operationId": "createSession",
+        "parameters": [
+          {
+            "description": "The device, `d_…`",
+            "in": "header",
+            "name": "Ainkrad-Device",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`ES256`",
+            "in": "header",
+            "name": "Ainkrad-Alg",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix seconds",
+            "in": "header",
+            "name": "Ainkrad-Timestamp",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "16 random bytes, base64url",
+            "in": "header",
+            "name": "Ainkrad-Nonce",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Raw r||s over the canonical string with session `-`, base64url",
+            "in": "header",
+            "name": "Ainkrad-Signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionGrant"
+                }
+              }
+            },
+            "description": "A 15-minute session. Signed with session `-`; a challenge that is unknown, used, expired or another device's is `auth_failed`"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -1747,7 +1840,7 @@
   },
   "security": [
     {
-      "device_key": []
+      "device_signature": []
     }
   ]
 }

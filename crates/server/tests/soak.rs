@@ -16,10 +16,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
-use ainkrad_core::audit::AuditActor;
 use ainkrad_core_server::api::{App, router};
-use ainkrad_core_server::scheduler::SystemClock;
-use ainkrad_core_server::store::{begin_write, connect, events, gov, kinds};
+use ainkrad_core_server::auth::Identity;
+use ainkrad_core_server::auth::testing::TestDevice;
+use ainkrad_core_server::scheduler::{Clock, SystemClock};
+use ainkrad_core_server::store::{begin_write, connect, events, kinds};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -58,22 +59,30 @@ fn rss_kb() -> u64 {
         .unwrap_or(0)
 }
 
-async fn ws(host: &str, key: &str, after: i64) -> Ws {
+async fn ws(host: &str, dev: &TestDevice, after: i64) -> Ws {
     let mut req = format!("ws://{host}/api/v1/events/ws")
         .into_client_request()
         .unwrap();
     let h = req.headers_mut();
-    h.insert("authorization", format!("Bearer {key}").parse().unwrap());
+    for (name, value) in dev.headers("GET", "/api/v1/events/ws", b"") {
+        h.insert(name, value.parse().unwrap());
+    }
     h.insert("last-event-id", after.to_string().parse().unwrap());
     connect_async(req).await.unwrap().0
 }
 
-/// `GET path` over HTTP/1.1, the JSON body.
-async fn get(host: &str, key: &str, path: &str) -> Value {
+/// `GET path` over HTTP/1.1, signed, the JSON body. Each call takes a fresh session, so an
+/// hour outlives none.
+async fn get(host: &str, app: &App, dev: &TestDevice, path: &str) -> Value {
+    let session = app.auth.issue_session(&dev.id, SystemClock.unix());
+    dev.set_session(Some(session.id));
+    let signed: String = dev
+        .headers("GET", path, b"")
+        .iter()
+        .map(|(n, v)| format!("{n}: {v}\r\n"))
+        .collect();
     let mut s = tokio::net::TcpStream::connect(host).await.unwrap();
-    let req = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {key}\r\nConnection: close\r\n\r\n"
-    );
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\n{signed}Connection: close\r\n\r\n");
     s.write_all(req.as_bytes()).await.unwrap();
     let mut buf = Vec::new();
     s.read_to_end(&mut buf).await.unwrap();
@@ -112,21 +121,32 @@ async fn ten_thousand_a_minute_to_twenty_clients_one_stalled() {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    let mut keys = Vec::new();
-    for n in 0..20 {
-        let by = AuditActor::System;
-        keys.push(
-            gov::issue_device_key(&pool, &format!("c{n}"), by)
-                .await
-                .unwrap()
-                .1,
-        );
-    }
-
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let host = listener.local_addr().unwrap().to_string();
-    let app = App::new(pool.clone(), Arc::new(SystemClock), host.clone());
-    let service = router(app).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let identity = Arc::new(Identity::load_or_create(&dir).unwrap());
+    let app = App::new(
+        pool.clone(),
+        Arc::new(SystemClock),
+        host.clone(),
+        identity.clone(),
+    );
+    let mut devs = Vec::new();
+    for n in 0..20 {
+        let clock = Arc::new(SystemClock);
+        let dev = TestDevice::enroll(
+            &pool,
+            &format!("c{n}"),
+            "device",
+            &["read"],
+            &identity.fp,
+            clock,
+        )
+        .await;
+        let session = app.auth.issue_session(&dev.id, SystemClock.unix());
+        dev.set_session(Some(session.id));
+        devs.push(Arc::new(dev));
+    }
+    let service = router(app.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();
     tokio::spawn(async move { axum::serve(listener, service).await });
 
     let start = events::last_event_seq(&pool).await.unwrap();
@@ -135,13 +155,13 @@ async fn ten_thousand_a_minute_to_twenty_clients_one_stalled() {
 
     // Readers: 10 sockets, 9 pollers. Each returns how many events it read.
     let mut readers = Vec::new();
-    for (n, key) in keys.iter().take(19).cloned().enumerate() {
-        let (host, done, head) = (host.clone(), done.clone(), head.clone());
+    for (n, dev) in devs.iter().take(19).cloned().enumerate() {
+        let (host, done, head, app) = (host.clone(), done.clone(), head.clone(), app.clone());
         readers.push(tokio::spawn(async move {
             let who = format!("client {n}");
             let mut last = start;
             if n < 10 {
-                let mut socket = ws(&host, &key, start).await;
+                let mut socket = ws(&host, &dev, start).await;
                 while !(done.load(Ordering::Relaxed) && last >= head.load(Ordering::Relaxed)) {
                     let msg = tokio::time::timeout(Duration::from_secs(30), socket.next()).await;
                     match msg.expect("an event or a ping within 30 s") {
@@ -156,7 +176,8 @@ async fn ten_thousand_a_minute_to_twenty_clients_one_stalled() {
                 }
             } else {
                 while !(done.load(Ordering::Relaxed) && last >= head.load(Ordering::Relaxed)) {
-                    let page = get(&host, &key, &format!("/api/v1/events?after={last}")).await;
+                    let page =
+                        get(&host, &app, &dev, &format!("/api/v1/events?after={last}")).await;
                     for e in page["items"].as_array().unwrap() {
                         take(&who, &mut last, e["seq"].as_i64().unwrap());
                     }
@@ -168,7 +189,7 @@ async fn ten_thousand_a_minute_to_twenty_clients_one_stalled() {
             last - start
         }));
     }
-    let mut stalled = ws(&host, &keys[19], start).await;
+    let mut stalled = ws(&host, &devs[19], start).await;
 
     // The producer: a batch every 100 ms, ~1 KB a payload.
     let producer = {

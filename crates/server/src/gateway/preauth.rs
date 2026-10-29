@@ -1,17 +1,18 @@
 //! The pre-auth gate (E1-06.4, handshake spec §4): before routing, only four route prefixes
-//! answer without a key, on segment boundaries (`/handshake` and `/handshake/…`, never
-//! `/handshakes`):
+//! answer without a signed request, on segment boundaries (`/handshake` and `/handshake/…`,
+//! never `/handshakes`):
 //!
-//! - `/handshake`: what the server is (`api::v1::handshake`);
-//! - pairing: `/pair` (the spec's, from E1-07) and today's `POST /api/v1/devices/pair`;
+//! - `/handshake`: what the server is, and the session challenge-response
+//!   (`api::v1::handshake`, `api::v1::session`);
+//! - `/pair`: pairing a new device (E1-07.4);
 //! - `/.well-known/acme-challenge/` on the :80 listener only, when HTTP-01 is on
 //!   (`http01_router`);
 //! - `/healthz`: `ok`, nothing else.
 //!
-//! They still pass the shared checks (Host, no Origin, no query string) and take at most a
-//! 16 KiB body (413). Every other request runs the client gate (`api::v1::client_gate`) here,
-//! before routing, so without a live key every path, unknown ones included, gets the same
-//! 401 and the routes cannot be enumerated.
+//! They still pass the shared checks (Host, no Origin, no Authorization, a canonical path, no
+//! query string) and take at most a 16 KiB body (413). Every other request runs the client
+//! gate (`api::v1::gate`) here, before routing, so without a valid signature every path,
+//! unknown ones included, gets the same 401 and the routes cannot be enumerated.
 
 use std::sync::Arc;
 
@@ -29,8 +30,8 @@ use crate::api::{App, refusal};
 /// The largest body a pre-auth route takes.
 pub const PREAUTH_BODY: usize = 16 * 1024;
 
-/// The route prefixes reachable without a key on the main listener.
-pub const ALLOWED: [&str; 4] = ["/handshake", "/pair", "/api/v1/devices/pair", "/healthz"];
+/// The route prefixes reachable without a signed request on the main listener.
+pub const ALLOWED: [&str; 3] = ["/handshake", "/pair", "/healthz"];
 
 /// The HTTP-01 challenge prefix, served on :80 only.
 pub const ACME_CHALLENGE: &str = "/.well-known/acme-challenge";
@@ -49,10 +50,10 @@ pub fn allowed(path: &str) -> bool {
 /// The gate, as an outer layer on the whole router (fallback included).
 pub async fn gate(State(app): State<App>, req: Request, next: Next) -> Response {
     if !allowed(req.uri().path()) {
-        return crate::api::v1::client_gate(State(app), req, next).await;
+        return crate::api::v1::gate::client_gate(State(app), req, next).await;
     }
-    if let Some((status, why)) = refusal(&app, req.uri(), req.headers(), str::is_empty) {
-        return ApiError::new(status, "refused", why).into_response();
+    if let Some((status, code, why)) = refusal(&app, req.uri(), req.headers(), str::is_empty) {
+        return ApiError::new(status, code, why).into_response();
     }
     let length = req
         .headers()
@@ -100,12 +101,7 @@ async fn http01(State(certs): State<Arc<Certs>>, Path(token): Path<String>) -> R
 
 /// What an unauthenticated request outside the allowlist gets, the same everywhere.
 pub async fn refused() -> Response {
-    ApiError::new(
-        StatusCode::UNAUTHORIZED,
-        "unauthorized",
-        "missing device key",
-    )
-    .into_response()
+    crate::api::v1::gate::auth_failed().into_response()
 }
 
 #[cfg(test)]
@@ -119,7 +115,6 @@ mod tests {
             "/handshake/session",
             "/pair",
             "/pair/claim",
-            "/api/v1/devices/pair",
             "/healthz",
         ] {
             assert!(allowed(ok), "{ok}");
@@ -127,7 +122,7 @@ mod tests {
         for no in [
             "/handshakes",
             "/pairing",
-            "/api/v1/devices/pairing",
+            "/api/v1/devices/pair",
             "/api/v1/devices",
             "/healthzz",
             "/",

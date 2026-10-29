@@ -17,11 +17,7 @@ package ainkrad.client.apis
 
 import ainkrad.client.models.Device
 import ainkrad.client.models.ErrorBody
-import ainkrad.client.models.IssuedDevice
 import ainkrad.client.models.Me
-import ainkrad.client.models.NewDevice
-import ainkrad.client.models.PairBody
-import ainkrad.client.models.Pairing
 import ainkrad.client.models.PushToken
 
 import ainkrad.client.infrastructure.*
@@ -49,7 +45,7 @@ import io.ktor.http.ParametersBuilder
             @Suppress("UNCHECKED_CAST")
         open suspend fun clearPushToken(): HttpResponse<Device> {
 
-            val localVariableAuthNames = listOf<String>("device_key")
+            val localVariableAuthNames = listOf<String>("device_signature")
 
             val localVariableBody = 
                     io.ktor.client.utils.EmptyContent
@@ -74,39 +70,6 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
-        * POST /api/v1/devices
-        * 
-        * 
-         * @param newDevice  
-         * @return IssuedDevice
-        */
-            @Suppress("UNCHECKED_CAST")
-        open suspend fun createDevice(newDevice: NewDevice): HttpResponse<IssuedDevice> {
-
-            val localVariableAuthNames = listOf<String>("device_key")
-
-            val localVariableBody = newDevice
-
-            val localVariableQuery = mutableMapOf<String, List<String>>()
-
-            val localVariableHeaders = mutableMapOf<String, String>()
-
-            val localVariableConfig = RequestConfig<kotlin.Any?>(
-            RequestMethod.POST,
-            "/api/v1/devices",
-            query = localVariableQuery,
-            headers = localVariableHeaders,
-            requiresAuthentication = true,
-            )
-
-            return jsonRequest(
-            localVariableConfig,
-            localVariableBody,
-            localVariableAuthNames
-            ).wrap()
-            }
-
-        /**
         * GET /api/v1/me
         * 
         * 
@@ -115,7 +78,7 @@ import io.ktor.http.ParametersBuilder
             @Suppress("UNCHECKED_CAST")
         open suspend fun getMe(): HttpResponse<Me> {
 
-            val localVariableAuthNames = listOf<String>("device_key")
+            val localVariableAuthNames = listOf<String>("device_signature")
 
             val localVariableBody = 
                     io.ktor.client.utils.EmptyContent
@@ -148,7 +111,7 @@ import io.ktor.http.ParametersBuilder
             @Suppress("UNCHECKED_CAST")
         open suspend fun listDevices(): HttpResponse<kotlin.collections.List<Device>> {
 
-            val localVariableAuthNames = listOf<String>("device_key")
+            val localVariableAuthNames = listOf<String>("device_signature")
 
             val localVariableBody = 
                     io.ktor.client.utils.EmptyContent
@@ -173,49 +136,16 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
-        * POST /api/v1/devices/pair
-        * 
-        * 
-         * @param pairBody  
-         * @return IssuedDevice
-        */
-            @Suppress("UNCHECKED_CAST")
-        open suspend fun pairDevice(pairBody: PairBody): HttpResponse<IssuedDevice> {
-
-            val localVariableAuthNames = listOf<String>("device_key")
-
-            val localVariableBody = pairBody
-
-            val localVariableQuery = mutableMapOf<String, List<String>>()
-
-            val localVariableHeaders = mutableMapOf<String, String>()
-
-            val localVariableConfig = RequestConfig<kotlin.Any?>(
-            RequestMethod.POST,
-            "/api/v1/devices/pair",
-            query = localVariableQuery,
-            headers = localVariableHeaders,
-            requiresAuthentication = true,
-            )
-
-            return jsonRequest(
-            localVariableConfig,
-            localVariableBody,
-            localVariableAuthNames
-            ).wrap()
-            }
-
-        /**
         * DELETE /api/v1/devices/{id}
-        * Revokes at once, the calling device&#39;s own key included; the row stays, marked revoked.
+        * Revokes at once, the calling device included; the row stays, marked revoked.
         * 
-         * @param id Device id 
+         * @param id Device id, &#x60;d_…&#x60; 
          * @return Device
         */
             @Suppress("UNCHECKED_CAST")
-        open suspend fun revokeDevice(id: kotlin.Long): HttpResponse<Device> {
+        open suspend fun revokeDevice(id: kotlin.String): HttpResponse<Device> {
 
-            val localVariableAuthNames = listOf<String>("device_key")
+            val localVariableAuthNames = listOf<String>("device_signature")
 
             val localVariableBody = 
                     io.ktor.client.utils.EmptyContent
@@ -249,7 +179,7 @@ import io.ktor.http.ParametersBuilder
             @Suppress("UNCHECKED_CAST")
         open suspend fun setPushToken(pushToken: PushToken): HttpResponse<Device> {
 
-            val localVariableAuthNames = listOf<String>("device_key")
+            val localVariableAuthNames = listOf<String>("device_signature")
 
             val localVariableBody = pushToken
 
@@ -266,39 +196,6 @@ import io.ktor.http.ParametersBuilder
             )
 
             return jsonRequest(
-            localVariableConfig,
-            localVariableBody,
-            localVariableAuthNames
-            ).wrap()
-            }
-
-        /**
-        * POST /api/v1/devices/pairing
-        * 
-        * 
-         * @return Pairing
-        */
-            @Suppress("UNCHECKED_CAST")
-        open suspend fun startPairing(): HttpResponse<Pairing> {
-
-            val localVariableAuthNames = listOf<String>("device_key")
-
-            val localVariableBody = 
-                    io.ktor.client.utils.EmptyContent
-
-            val localVariableQuery = mutableMapOf<String, List<String>>()
-
-            val localVariableHeaders = mutableMapOf<String, String>()
-
-            val localVariableConfig = RequestConfig<kotlin.Any?>(
-            RequestMethod.POST,
-            "/api/v1/devices/pairing",
-            query = localVariableQuery,
-            headers = localVariableHeaders,
-            requiresAuthentication = true,
-            )
-
-            return request(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames

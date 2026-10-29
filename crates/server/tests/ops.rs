@@ -49,11 +49,22 @@ fn s(p: &Path) -> &str {
 async fn home_with_state(home: &Path) -> String {
     let fp = ok(&["init", s(home)], &[]);
     let db = home.join("core.db");
-    for name in ["mac", "phone"] {
-        ok(&["device", "add", s(&db), name], &[]);
-    }
-    ok(&["device", "revoke", s(&db), "2"], &[]);
     let pool = store::connect(&db).await.unwrap();
+    let mut ids = Vec::new();
+    for name in ["mac", "phone"] {
+        let clock = std::sync::Arc::new(ainkrad_core_server::scheduler::SystemClock);
+        let d = ainkrad_core_server::auth::testing::TestDevice::enroll(
+            &pool,
+            name,
+            "device",
+            &["read"],
+            "fp",
+            clock,
+        )
+        .await;
+        ids.push(d.id);
+    }
+    ok(&["device", "revoke", s(&db), &ids[1]], &[]);
     let mut tx = store::begin_write(&pool).await.unwrap();
     kinds::register(&mut tx, "probe", &["probe.line"], &[])
         .await
@@ -93,7 +104,6 @@ fn help_documents_every_verb() {
         "restore",
         "export",
         "import",
-        "device add",
         "device list",
         "device revoke",
         "audit verify",

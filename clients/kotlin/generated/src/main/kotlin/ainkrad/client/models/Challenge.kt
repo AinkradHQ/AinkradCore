@@ -23,14 +23,19 @@ import kotlinx.serialization.Contextual
 /**
  * 
  *
- * @param name 
+ * @param challenge 32 random bytes, base64url; spend it once within `expires_in` seconds.
+ * @param expiresIn 
  */
 @Serializable
 
-data class NewDevice (
+data class Challenge (
 
-    @SerialName(value = "name")
-    val name: kotlin.String
+    /* 32 random bytes, base64url; spend it once within `expires_in` seconds. */
+    @SerialName(value = "challenge")
+    val challenge: kotlin.String? = null,
+
+    @SerialName(value = "expires_in")
+    val expiresIn: kotlin.Long? = null
 
 ) {
 

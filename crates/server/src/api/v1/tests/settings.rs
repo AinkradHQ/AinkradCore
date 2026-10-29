@@ -10,13 +10,13 @@ impl Fx {
     async fn put(&self, uri: &str, body: Value) -> (StatusCode, Value) {
         send(
             &self.app,
-            req(Method::PUT, uri, Some(&self.key), Some(body)),
+            req(Method::PUT, uri, Some(&self.dev), Some(body)),
         )
         .await
     }
 
     async fn delete(&self, uri: &str) -> (StatusCode, Value) {
-        send(&self.app, req(Method::DELETE, uri, Some(&self.key), None)).await
+        send(&self.app, req(Method::DELETE, uri, Some(&self.dev), None)).await
     }
 }
 
@@ -107,16 +107,8 @@ async fn the_rate_limits_are_read_from_settings() {
     crate::store::settings::set(pool, Key::ApiRequestBurst, Scope::Server, "10", by, NOW)
         .await
         .unwrap();
-    crate::store::settings::set(pool, Key::ApiAuthFailureBurst, Scope::Server, "3", by, NOW)
-        .await
-        .unwrap();
     let limits = Limits::from_settings(pool).await.unwrap();
-    assert_eq!((limits.requests.burst, limits.failures.burst), (10.0, 3.0));
+    assert_eq!(limits.requests.burst, 10.0);
     assert_eq!(limits.requests.per_sec, 20.0, "the default 1200 a minute");
-    let defaults = Limits::default();
-    assert_eq!(
-        (defaults.requests.burst, defaults.failures.burst),
-        (120.0, 10.0)
-    );
-    assert!((defaults.failures.per_sec - 1.0 / 6.0).abs() < 1e-9);
+    assert_eq!(Limits::default().requests.burst, 120.0);
 }

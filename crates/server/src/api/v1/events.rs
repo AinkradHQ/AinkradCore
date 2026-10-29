@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 
 use axum::Json;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Query, State};
+use axum::extract::{Extension, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
@@ -188,7 +188,12 @@ fn last_event_id(headers: &HeaderMap) -> Result<Option<i64>, ApiError> {
         with 1001 (no pong) and 1011 (server error), with the same hint; with 4410 and \
         `past retention, floor <seq>` when the resume point is below the retention floor \
         (re-sync from `/api/v1/events/latest`)")))]
-pub async fn ws(State(app): State<App>, headers: HeaderMap, ws: WebSocketUpgrade) -> Response {
+pub async fn ws(
+    State(app): State<App>,
+    Extension(me): Extension<super::Caller>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Response {
     let after = match last_event_id(&headers) {
         Ok(Some(after)) => after,
         Ok(None) => match events::last_event_seq(&app.pool).await {
@@ -197,7 +202,14 @@ pub async fn ws(State(app): State<App>, headers: HeaderMap, ws: WebSocketUpgrade
         },
         Err(e) => return e.into_response(),
     };
-    ws.on_upgrade(move |socket| stream(app, socket, after))
+    // Subscribed before the upgrade, so a revocation in between is not missed.
+    let revoked = crate::auth::until_revoked(
+        app.pool.clone(),
+        app.auth.subscribe(),
+        me.device.id,
+        crate::auth::BACKSTOP,
+    );
+    ws.on_upgrade(move |socket| stream(app, socket, after, revoked))
 }
 
 /// Why a socket ended, for the log.
@@ -210,11 +222,19 @@ enum End {
     Restart,
     /// The resume point is below the retention floor.
     Past(i64),
+    /// The device was revoked (handshake spec §10).
+    Revoked,
 }
 
 /// Sends every event after `after`, then new ones as they land, until the client goes, falls
 /// behind or goes silent.
-async fn stream(app: App, mut socket: WebSocket, mut after: i64) {
+async fn stream(
+    app: App,
+    mut socket: WebSocket,
+    mut after: i64,
+    revoked: impl std::future::Future<Output = ()>,
+) {
+    tokio::pin!(revoked);
     let cfg = app.stream;
     let mut poll = tokio::time::interval(cfg.poll);
     let mut ping = tokio::time::interval(cfg.heartbeat);
@@ -257,6 +277,7 @@ async fn stream(app: App, mut socket: WebSocket, mut after: i64) {
         }
         tokio::select! {
             () = crate::api::stopping(&mut closing) => break End::Restart,
+            () = &mut revoked => break End::Revoked,
             _ = poll.tick() => {}
             _ = ping.tick() => {
                 if heard.elapsed() > cfg.heartbeat * 3 {
@@ -286,6 +307,7 @@ async fn stream(app: App, mut socket: WebSocket, mut after: i64) {
             4410,
             format!("past retention, floor {floor}; re-sync from /api/v1/events/latest"),
         ),
+        End::Revoked => (4001, format!("revoked; {hint}")),
     };
     tracing::info!(code, why, "event stream closed");
     let close = Message::Close(Some(CloseFrame {

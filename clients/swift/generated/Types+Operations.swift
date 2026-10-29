@@ -20,11 +20,11 @@ public enum Operations {
                 ///
                 /// - Remark: Generated from `#/paths/api/v1/audit/GET/query/limit`.
                 public var limit: Swift.Int32?
-                /// Only actions starting with this: `device_key.` or `setting.set`.
+                /// Only actions starting with this: `device.` or `setting.set`.
                 ///
                 /// - Remark: Generated from `#/paths/api/v1/audit/GET/query/kind`.
                 public var kind: Swift.String?
-                /// Only rows about this entity: its kind (`device_key`), or kind and id (`device_key:3`).
+                /// Only rows about this entity: its kind (`device`), or kind and id (`device:3`).
                 ///
                 /// - Remark: Generated from `#/paths/api/v1/audit/GET/query/target`.
                 public var target: Swift.String?
@@ -37,8 +37,8 @@ public enum Operations {
                 /// - Parameters:
                 ///   - before: Only rows with a `seq` below this (the previous page's `next_before`).
                 ///   - limit: At most this many (default and most 100).
-                ///   - kind: Only actions starting with this: `device_key.` or `setting.set`.
-                ///   - target: Only rows about this entity: its kind (`device_key`), or kind and id (`device_key:3`).
+                ///   - kind: Only actions starting with this: `device.` or `setting.set`.
+                ///   - target: Only rows about this entity: its kind (`device`), or kind and id (`device:3`).
                 ///   - actor: Only rows done by this kind of actor: `user` or `system`; another value is a 400.
                 public init(
                     before: Swift.Int64? = nil,
@@ -155,7 +155,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Missing, invalid or revoked device key
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
             ///
             /// - Remark: Generated from `#/paths//api/v1/audit/get(listAudit)/responses/401`.
             ///
@@ -178,7 +178,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host, or an Origin header
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/audit/get(listAudit)/responses/403`.
             ///
@@ -378,7 +378,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Every device key, revoked ones too; never a key
+            /// Every device, revoked ones too
             ///
             /// - Remark: Generated from `#/paths//api/v1/devices/get(listDevices)/responses/200`.
             ///
@@ -424,7 +424,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Missing, invalid or revoked device key
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
             ///
             /// - Remark: Generated from `#/paths//api/v1/devices/get(listDevices)/responses/401`.
             ///
@@ -447,7 +447,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host, or an Origin header
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/devices/get(listDevices)/responses/403`.
             ///
@@ -593,836 +593,7 @@ public enum Operations {
             }
         }
     }
-    /// - Remark: HTTP `POST /api/v1/devices`.
-    /// - Remark: Generated from `#/paths//api/v1/devices/post(createDevice)`.
-    public enum CreateDevice {
-        public static let id: Swift.String = "createDevice"
-        public struct Input: Sendable, Hashable {
-            /// - Remark: Generated from `#/paths/api/v1/devices/POST/header`.
-            public struct Headers: Sendable, Hashable {
-                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CreateDevice.AcceptableContentType>]
-                /// Creates a new `Headers`.
-                ///
-                /// - Parameters:
-                ///   - accept:
-                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CreateDevice.AcceptableContentType>] = .defaultValues()) {
-                    self.accept = accept
-                }
-            }
-            public var headers: Operations.CreateDevice.Input.Headers
-            /// - Remark: Generated from `#/paths/api/v1/devices/POST/requestBody`.
-            @frozen public enum Body: Sendable, Hashable {
-                /// - Remark: Generated from `#/paths/api/v1/devices/POST/requestBody/content/application\/json`.
-                case json(Components.Schemas.NewDevice)
-            }
-            public var body: Operations.CreateDevice.Input.Body
-            /// Creates a new `Input`.
-            ///
-            /// - Parameters:
-            ///   - headers:
-            ///   - body:
-            public init(
-                headers: Operations.CreateDevice.Input.Headers = .init(),
-                body: Operations.CreateDevice.Input.Body
-            ) {
-                self.headers = headers
-                self.body = body
-            }
-        }
-        @frozen public enum Output: Sendable, Hashable {
-            public struct Ok: Sendable, Hashable {
-                /// - Remark: Generated from `#/paths/api/v1/devices/POST/responses/200/content`.
-                @frozen public enum Body: Sendable, Hashable {
-                    /// - Remark: Generated from `#/paths/api/v1/devices/POST/responses/200/content/application\/json`.
-                    case json(Components.Schemas.IssuedDevice)
-                    /// The associated value of the enum case if `self` is `.json`.
-                    ///
-                    /// - Throws: An error if `self` is not `.json`.
-                    /// - SeeAlso: `.json`.
-                    public var json: Components.Schemas.IssuedDevice {
-                        get throws {
-                            switch self {
-                            case let .json(body):
-                                return body
-                            }
-                        }
-                    }
-                }
-                /// Received HTTP response body
-                public var body: Operations.CreateDevice.Output.Ok.Body
-                /// Creates a new `Ok`.
-                ///
-                /// - Parameters:
-                ///   - body: Received HTTP response body
-                public init(body: Operations.CreateDevice.Output.Ok.Body) {
-                    self.body = body
-                }
-            }
-            /// The new device and its key, shown only now
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/post(createDevice)/responses/200`.
-            ///
-            /// HTTP response code: `200 ok`.
-            case ok(Operations.CreateDevice.Output.Ok)
-            /// The associated value of the enum case if `self` is `.ok`.
-            ///
-            /// - Throws: An error if `self` is not `.ok`.
-            /// - SeeAlso: `.ok`.
-            public var ok: Operations.CreateDevice.Output.Ok {
-                get throws {
-                    switch self {
-                    case let .ok(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "ok",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Bad request, or a query parameter that is not allowed
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/post(createDevice)/responses/400`.
-            ///
-            /// HTTP response code: `400 badRequest`.
-            case badRequest(Components.Responses.BadRequest)
-            /// The associated value of the enum case if `self` is `.badRequest`.
-            ///
-            /// - Throws: An error if `self` is not `.badRequest`.
-            /// - SeeAlso: `.badRequest`.
-            public var badRequest: Components.Responses.BadRequest {
-                get throws {
-                    switch self {
-                    case let .badRequest(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "badRequest",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Missing, invalid or revoked device key
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/post(createDevice)/responses/401`.
-            ///
-            /// HTTP response code: `401 unauthorized`.
-            case unauthorized(Components.Responses.Unauthorized)
-            /// The associated value of the enum case if `self` is `.unauthorized`.
-            ///
-            /// - Throws: An error if `self` is not `.unauthorized`.
-            /// - SeeAlso: `.unauthorized`.
-            public var unauthorized: Components.Responses.Unauthorized {
-                get throws {
-                    switch self {
-                    case let .unauthorized(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "unauthorized",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Wrong Host, or an Origin header
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/post(createDevice)/responses/403`.
-            ///
-            /// HTTP response code: `403 forbidden`.
-            case forbidden(Components.Responses.Forbidden)
-            /// The associated value of the enum case if `self` is `.forbidden`.
-            ///
-            /// - Throws: An error if `self` is not `.forbidden`.
-            /// - SeeAlso: `.forbidden`.
-            public var forbidden: Components.Responses.Forbidden {
-                get throws {
-                    switch self {
-                    case let .forbidden(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "forbidden",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// No such resource
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/post(createDevice)/responses/404`.
-            ///
-            /// HTTP response code: `404 notFound`.
-            case notFound(Components.Responses.NotFound)
-            /// The associated value of the enum case if `self` is `.notFound`.
-            ///
-            /// - Throws: An error if `self` is not `.notFound`.
-            /// - SeeAlso: `.notFound`.
-            public var notFound: Components.Responses.NotFound {
-                get throws {
-                    switch self {
-                    case let .notFound(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "notFound",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Conflicts with the current state
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/post(createDevice)/responses/409`.
-            ///
-            /// HTTP response code: `409 conflict`.
-            case conflict(Components.Responses.Conflict)
-            /// The associated value of the enum case if `self` is `.conflict`.
-            ///
-            /// - Throws: An error if `self` is not `.conflict`.
-            /// - SeeAlso: `.conflict`.
-            public var conflict: Components.Responses.Conflict {
-                get throws {
-                    switch self {
-                    case let .conflict(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "conflict",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Rate limited; see Retry-After
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/post(createDevice)/responses/429`.
-            ///
-            /// HTTP response code: `429 tooManyRequests`.
-            case tooManyRequests(Components.Responses.TooManyRequests)
-            /// The associated value of the enum case if `self` is `.tooManyRequests`.
-            ///
-            /// - Throws: An error if `self` is not `.tooManyRequests`.
-            /// - SeeAlso: `.tooManyRequests`.
-            public var tooManyRequests: Components.Responses.TooManyRequests {
-                get throws {
-                    switch self {
-                    case let .tooManyRequests(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "tooManyRequests",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Internal error
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/post(createDevice)/responses/500`.
-            ///
-            /// HTTP response code: `500 internalServerError`.
-            case internalServerError(Components.Responses.InternalError)
-            /// The associated value of the enum case if `self` is `.internalServerError`.
-            ///
-            /// - Throws: An error if `self` is not `.internalServerError`.
-            /// - SeeAlso: `.internalServerError`.
-            public var internalServerError: Components.Responses.InternalError {
-                get throws {
-                    switch self {
-                    case let .internalServerError(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "internalServerError",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Undocumented response.
-            ///
-            /// A response with a code that is not documented in the OpenAPI document.
-            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
-        }
-        @frozen public enum AcceptableContentType: AcceptableProtocol {
-            case json
-            case other(Swift.String)
-            public init?(rawValue: Swift.String) {
-                switch rawValue.lowercased() {
-                case "application/json":
-                    self = .json
-                default:
-                    self = .other(rawValue)
-                }
-            }
-            public var rawValue: Swift.String {
-                switch self {
-                case let .other(string):
-                    return string
-                case .json:
-                    return "application/json"
-                }
-            }
-            public static var allCases: [Self] {
-                [
-                    .json
-                ]
-            }
-        }
-    }
-    /// - Remark: HTTP `POST /api/v1/devices/pair`.
-    /// - Remark: Generated from `#/paths//api/v1/devices/pair/post(pairDevice)`.
-    public enum PairDevice {
-        public static let id: Swift.String = "pairDevice"
-        public struct Input: Sendable, Hashable {
-            /// - Remark: Generated from `#/paths/api/v1/devices/pair/POST/header`.
-            public struct Headers: Sendable, Hashable {
-                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.PairDevice.AcceptableContentType>]
-                /// Creates a new `Headers`.
-                ///
-                /// - Parameters:
-                ///   - accept:
-                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.PairDevice.AcceptableContentType>] = .defaultValues()) {
-                    self.accept = accept
-                }
-            }
-            public var headers: Operations.PairDevice.Input.Headers
-            /// - Remark: Generated from `#/paths/api/v1/devices/pair/POST/requestBody`.
-            @frozen public enum Body: Sendable, Hashable {
-                /// - Remark: Generated from `#/paths/api/v1/devices/pair/POST/requestBody/content/application\/json`.
-                case json(Components.Schemas.PairBody)
-            }
-            public var body: Operations.PairDevice.Input.Body
-            /// Creates a new `Input`.
-            ///
-            /// - Parameters:
-            ///   - headers:
-            ///   - body:
-            public init(
-                headers: Operations.PairDevice.Input.Headers = .init(),
-                body: Operations.PairDevice.Input.Body
-            ) {
-                self.headers = headers
-                self.body = body
-            }
-        }
-        @frozen public enum Output: Sendable, Hashable {
-            public struct Ok: Sendable, Hashable {
-                /// - Remark: Generated from `#/paths/api/v1/devices/pair/POST/responses/200/content`.
-                @frozen public enum Body: Sendable, Hashable {
-                    /// - Remark: Generated from `#/paths/api/v1/devices/pair/POST/responses/200/content/application\/json`.
-                    case json(Components.Schemas.IssuedDevice)
-                    /// The associated value of the enum case if `self` is `.json`.
-                    ///
-                    /// - Throws: An error if `self` is not `.json`.
-                    /// - SeeAlso: `.json`.
-                    public var json: Components.Schemas.IssuedDevice {
-                        get throws {
-                            switch self {
-                            case let .json(body):
-                                return body
-                            }
-                        }
-                    }
-                }
-                /// Received HTTP response body
-                public var body: Operations.PairDevice.Output.Ok.Body
-                /// Creates a new `Ok`.
-                ///
-                /// - Parameters:
-                ///   - body: Received HTTP response body
-                public init(body: Operations.PairDevice.Output.Ok.Body) {
-                    self.body = body
-                }
-            }
-            /// The new device and its key, shown only now; the code is spent (audited as `device.paired`). Needs no device key. 404 for a code that is unknown, used or expired, counted against the client address; 429 once too many are
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/pair/post(pairDevice)/responses/200`.
-            ///
-            /// HTTP response code: `200 ok`.
-            case ok(Operations.PairDevice.Output.Ok)
-            /// The associated value of the enum case if `self` is `.ok`.
-            ///
-            /// - Throws: An error if `self` is not `.ok`.
-            /// - SeeAlso: `.ok`.
-            public var ok: Operations.PairDevice.Output.Ok {
-                get throws {
-                    switch self {
-                    case let .ok(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "ok",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Bad request, or a query parameter that is not allowed
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/pair/post(pairDevice)/responses/400`.
-            ///
-            /// HTTP response code: `400 badRequest`.
-            case badRequest(Components.Responses.BadRequest)
-            /// The associated value of the enum case if `self` is `.badRequest`.
-            ///
-            /// - Throws: An error if `self` is not `.badRequest`.
-            /// - SeeAlso: `.badRequest`.
-            public var badRequest: Components.Responses.BadRequest {
-                get throws {
-                    switch self {
-                    case let .badRequest(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "badRequest",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Missing, invalid or revoked device key
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/pair/post(pairDevice)/responses/401`.
-            ///
-            /// HTTP response code: `401 unauthorized`.
-            case unauthorized(Components.Responses.Unauthorized)
-            /// The associated value of the enum case if `self` is `.unauthorized`.
-            ///
-            /// - Throws: An error if `self` is not `.unauthorized`.
-            /// - SeeAlso: `.unauthorized`.
-            public var unauthorized: Components.Responses.Unauthorized {
-                get throws {
-                    switch self {
-                    case let .unauthorized(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "unauthorized",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Wrong Host, or an Origin header
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/pair/post(pairDevice)/responses/403`.
-            ///
-            /// HTTP response code: `403 forbidden`.
-            case forbidden(Components.Responses.Forbidden)
-            /// The associated value of the enum case if `self` is `.forbidden`.
-            ///
-            /// - Throws: An error if `self` is not `.forbidden`.
-            /// - SeeAlso: `.forbidden`.
-            public var forbidden: Components.Responses.Forbidden {
-                get throws {
-                    switch self {
-                    case let .forbidden(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "forbidden",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// No such resource
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/pair/post(pairDevice)/responses/404`.
-            ///
-            /// HTTP response code: `404 notFound`.
-            case notFound(Components.Responses.NotFound)
-            /// The associated value of the enum case if `self` is `.notFound`.
-            ///
-            /// - Throws: An error if `self` is not `.notFound`.
-            /// - SeeAlso: `.notFound`.
-            public var notFound: Components.Responses.NotFound {
-                get throws {
-                    switch self {
-                    case let .notFound(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "notFound",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Conflicts with the current state
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/pair/post(pairDevice)/responses/409`.
-            ///
-            /// HTTP response code: `409 conflict`.
-            case conflict(Components.Responses.Conflict)
-            /// The associated value of the enum case if `self` is `.conflict`.
-            ///
-            /// - Throws: An error if `self` is not `.conflict`.
-            /// - SeeAlso: `.conflict`.
-            public var conflict: Components.Responses.Conflict {
-                get throws {
-                    switch self {
-                    case let .conflict(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "conflict",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Rate limited; see Retry-After
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/pair/post(pairDevice)/responses/429`.
-            ///
-            /// HTTP response code: `429 tooManyRequests`.
-            case tooManyRequests(Components.Responses.TooManyRequests)
-            /// The associated value of the enum case if `self` is `.tooManyRequests`.
-            ///
-            /// - Throws: An error if `self` is not `.tooManyRequests`.
-            /// - SeeAlso: `.tooManyRequests`.
-            public var tooManyRequests: Components.Responses.TooManyRequests {
-                get throws {
-                    switch self {
-                    case let .tooManyRequests(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "tooManyRequests",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Internal error
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/pair/post(pairDevice)/responses/500`.
-            ///
-            /// HTTP response code: `500 internalServerError`.
-            case internalServerError(Components.Responses.InternalError)
-            /// The associated value of the enum case if `self` is `.internalServerError`.
-            ///
-            /// - Throws: An error if `self` is not `.internalServerError`.
-            /// - SeeAlso: `.internalServerError`.
-            public var internalServerError: Components.Responses.InternalError {
-                get throws {
-                    switch self {
-                    case let .internalServerError(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "internalServerError",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Undocumented response.
-            ///
-            /// A response with a code that is not documented in the OpenAPI document.
-            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
-        }
-        @frozen public enum AcceptableContentType: AcceptableProtocol {
-            case json
-            case other(Swift.String)
-            public init?(rawValue: Swift.String) {
-                switch rawValue.lowercased() {
-                case "application/json":
-                    self = .json
-                default:
-                    self = .other(rawValue)
-                }
-            }
-            public var rawValue: Swift.String {
-                switch self {
-                case let .other(string):
-                    return string
-                case .json:
-                    return "application/json"
-                }
-            }
-            public static var allCases: [Self] {
-                [
-                    .json
-                ]
-            }
-        }
-    }
-    /// - Remark: HTTP `POST /api/v1/devices/pairing`.
-    /// - Remark: Generated from `#/paths//api/v1/devices/pairing/post(startPairing)`.
-    public enum StartPairing {
-        public static let id: Swift.String = "startPairing"
-        public struct Input: Sendable, Hashable {
-            /// - Remark: Generated from `#/paths/api/v1/devices/pairing/POST/header`.
-            public struct Headers: Sendable, Hashable {
-                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.StartPairing.AcceptableContentType>]
-                /// Creates a new `Headers`.
-                ///
-                /// - Parameters:
-                ///   - accept:
-                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.StartPairing.AcceptableContentType>] = .defaultValues()) {
-                    self.accept = accept
-                }
-            }
-            public var headers: Operations.StartPairing.Input.Headers
-            /// Creates a new `Input`.
-            ///
-            /// - Parameters:
-            ///   - headers:
-            public init(headers: Operations.StartPairing.Input.Headers = .init()) {
-                self.headers = headers
-            }
-        }
-        @frozen public enum Output: Sendable, Hashable {
-            public struct Ok: Sendable, Hashable {
-                /// - Remark: Generated from `#/paths/api/v1/devices/pairing/POST/responses/200/content`.
-                @frozen public enum Body: Sendable, Hashable {
-                    /// - Remark: Generated from `#/paths/api/v1/devices/pairing/POST/responses/200/content/application\/json`.
-                    case json(Components.Schemas.Pairing)
-                    /// The associated value of the enum case if `self` is `.json`.
-                    ///
-                    /// - Throws: An error if `self` is not `.json`.
-                    /// - SeeAlso: `.json`.
-                    public var json: Components.Schemas.Pairing {
-                        get throws {
-                            switch self {
-                            case let .json(body):
-                                return body
-                            }
-                        }
-                    }
-                }
-                /// Received HTTP response body
-                public var body: Operations.StartPairing.Output.Ok.Body
-                /// Creates a new `Ok`.
-                ///
-                /// - Parameters:
-                ///   - body: Received HTTP response body
-                public init(body: Operations.StartPairing.Output.Ok.Body) {
-                    self.body = body
-                }
-            }
-            /// A pairing code, good once for 5 minutes (audited as `device.pairing_started`)
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/pairing/post(startPairing)/responses/200`.
-            ///
-            /// HTTP response code: `200 ok`.
-            case ok(Operations.StartPairing.Output.Ok)
-            /// The associated value of the enum case if `self` is `.ok`.
-            ///
-            /// - Throws: An error if `self` is not `.ok`.
-            /// - SeeAlso: `.ok`.
-            public var ok: Operations.StartPairing.Output.Ok {
-                get throws {
-                    switch self {
-                    case let .ok(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "ok",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Bad request, or a query parameter that is not allowed
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/pairing/post(startPairing)/responses/400`.
-            ///
-            /// HTTP response code: `400 badRequest`.
-            case badRequest(Components.Responses.BadRequest)
-            /// The associated value of the enum case if `self` is `.badRequest`.
-            ///
-            /// - Throws: An error if `self` is not `.badRequest`.
-            /// - SeeAlso: `.badRequest`.
-            public var badRequest: Components.Responses.BadRequest {
-                get throws {
-                    switch self {
-                    case let .badRequest(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "badRequest",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Missing, invalid or revoked device key
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/pairing/post(startPairing)/responses/401`.
-            ///
-            /// HTTP response code: `401 unauthorized`.
-            case unauthorized(Components.Responses.Unauthorized)
-            /// The associated value of the enum case if `self` is `.unauthorized`.
-            ///
-            /// - Throws: An error if `self` is not `.unauthorized`.
-            /// - SeeAlso: `.unauthorized`.
-            public var unauthorized: Components.Responses.Unauthorized {
-                get throws {
-                    switch self {
-                    case let .unauthorized(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "unauthorized",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Wrong Host, or an Origin header
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/pairing/post(startPairing)/responses/403`.
-            ///
-            /// HTTP response code: `403 forbidden`.
-            case forbidden(Components.Responses.Forbidden)
-            /// The associated value of the enum case if `self` is `.forbidden`.
-            ///
-            /// - Throws: An error if `self` is not `.forbidden`.
-            /// - SeeAlso: `.forbidden`.
-            public var forbidden: Components.Responses.Forbidden {
-                get throws {
-                    switch self {
-                    case let .forbidden(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "forbidden",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// No such resource
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/pairing/post(startPairing)/responses/404`.
-            ///
-            /// HTTP response code: `404 notFound`.
-            case notFound(Components.Responses.NotFound)
-            /// The associated value of the enum case if `self` is `.notFound`.
-            ///
-            /// - Throws: An error if `self` is not `.notFound`.
-            /// - SeeAlso: `.notFound`.
-            public var notFound: Components.Responses.NotFound {
-                get throws {
-                    switch self {
-                    case let .notFound(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "notFound",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Conflicts with the current state
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/pairing/post(startPairing)/responses/409`.
-            ///
-            /// HTTP response code: `409 conflict`.
-            case conflict(Components.Responses.Conflict)
-            /// The associated value of the enum case if `self` is `.conflict`.
-            ///
-            /// - Throws: An error if `self` is not `.conflict`.
-            /// - SeeAlso: `.conflict`.
-            public var conflict: Components.Responses.Conflict {
-                get throws {
-                    switch self {
-                    case let .conflict(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "conflict",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Rate limited; see Retry-After
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/pairing/post(startPairing)/responses/429`.
-            ///
-            /// HTTP response code: `429 tooManyRequests`.
-            case tooManyRequests(Components.Responses.TooManyRequests)
-            /// The associated value of the enum case if `self` is `.tooManyRequests`.
-            ///
-            /// - Throws: An error if `self` is not `.tooManyRequests`.
-            /// - SeeAlso: `.tooManyRequests`.
-            public var tooManyRequests: Components.Responses.TooManyRequests {
-                get throws {
-                    switch self {
-                    case let .tooManyRequests(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "tooManyRequests",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Internal error
-            ///
-            /// - Remark: Generated from `#/paths//api/v1/devices/pairing/post(startPairing)/responses/500`.
-            ///
-            /// HTTP response code: `500 internalServerError`.
-            case internalServerError(Components.Responses.InternalError)
-            /// The associated value of the enum case if `self` is `.internalServerError`.
-            ///
-            /// - Throws: An error if `self` is not `.internalServerError`.
-            /// - SeeAlso: `.internalServerError`.
-            public var internalServerError: Components.Responses.InternalError {
-                get throws {
-                    switch self {
-                    case let .internalServerError(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "internalServerError",
-                            response: self
-                        )
-                    }
-                }
-            }
-            /// Undocumented response.
-            ///
-            /// A response with a code that is not documented in the OpenAPI document.
-            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
-        }
-        @frozen public enum AcceptableContentType: AcceptableProtocol {
-            case json
-            case other(Swift.String)
-            public init?(rawValue: Swift.String) {
-                switch rawValue.lowercased() {
-                case "application/json":
-                    self = .json
-                default:
-                    self = .other(rawValue)
-                }
-            }
-            public var rawValue: Swift.String {
-                switch self {
-                case let .other(string):
-                    return string
-                case .json:
-                    return "application/json"
-                }
-            }
-            public static var allCases: [Self] {
-                [
-                    .json
-                ]
-            }
-        }
-    }
-    /// Revokes at once, the calling device's own key included; the row stays, marked revoked.
+    /// Revokes at once, the calling device included; the row stays, marked revoked.
     ///
     /// - Remark: HTTP `DELETE /api/v1/devices/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/devices/{id}/delete(revokeDevice)`.
@@ -1431,15 +602,15 @@ public enum Operations {
         public struct Input: Sendable, Hashable {
             /// - Remark: Generated from `#/paths/api/v1/devices/{id}/DELETE/path`.
             public struct Path: Sendable, Hashable {
-                /// Device id
+                /// Device id, `d_…`
                 ///
                 /// - Remark: Generated from `#/paths/api/v1/devices/{id}/DELETE/path/id`.
-                public var id: Swift.Int64
+                public var id: Swift.String
                 /// Creates a new `Path`.
                 ///
                 /// - Parameters:
-                ///   - id: Device id
-                public init(id: Swift.Int64) {
+                ///   - id: Device id, `d_…`
+                public init(id: Swift.String) {
                     self.id = id
                 }
             }
@@ -1498,7 +669,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The revoked device
+            /// The revoked device. Its sessions end and its open sockets close with 4001 at once (audited as `device.revoked`)
             ///
             /// - Remark: Generated from `#/paths//api/v1/devices/{id}/delete(revokeDevice)/responses/200`.
             ///
@@ -1544,7 +715,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Missing, invalid or revoked device key
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
             ///
             /// - Remark: Generated from `#/paths//api/v1/devices/{id}/delete(revokeDevice)/responses/401`.
             ///
@@ -1567,7 +738,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host, or an Origin header
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/devices/{id}/delete(revokeDevice)/responses/403`.
             ///
@@ -1838,7 +1009,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Missing, invalid or revoked device key
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
             ///
             /// - Remark: Generated from `#/paths//api/v1/events/get(listEvents)/responses/401`.
             ///
@@ -1861,7 +1032,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host, or an Origin header
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/events/get(listEvents)/responses/403`.
             ///
@@ -2158,7 +1329,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Missing, invalid or revoked device key
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
             ///
             /// - Remark: Generated from `#/paths//api/v1/events/latest/get(latestEvent)/responses/401`.
             ///
@@ -2181,7 +1352,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host, or an Origin header
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/events/latest/get(latestEvent)/responses/403`.
             ///
@@ -2420,7 +1591,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Missing, invalid or revoked device key
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
             ///
             /// - Remark: Generated from `#/paths//api/v1/events/ws/get(streamEvents)/responses/401`.
             ///
@@ -2443,7 +1614,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host, or an Origin header
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/events/ws/get(streamEvents)/responses/403`.
             ///
@@ -2643,7 +1814,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The calling device and the server's and the contract's versions: the key check on connect
+            /// The calling device and the server's and the contract's versions: the signature check on connect
             ///
             /// - Remark: Generated from `#/paths//api/v1/me/get(getMe)/responses/200`.
             ///
@@ -2689,7 +1860,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Missing, invalid or revoked device key
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
             ///
             /// - Remark: Generated from `#/paths//api/v1/me/get(getMe)/responses/401`.
             ///
@@ -2712,7 +1883,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host, or an Origin header
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/me/get(getMe)/responses/403`.
             ///
@@ -2969,7 +2140,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Missing, invalid or revoked device key
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
             ///
             /// - Remark: Generated from `#/paths//api/v1/push-token/put(setPushToken)/responses/401`.
             ///
@@ -2992,7 +2163,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host, or an Origin header
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/push-token/put(setPushToken)/responses/403`.
             ///
@@ -3238,7 +2409,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Missing, invalid or revoked device key
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
             ///
             /// - Remark: Generated from `#/paths//api/v1/push-token/delete(clearPushToken)/responses/401`.
             ///
@@ -3261,7 +2432,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host, or an Origin header
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/push-token/delete(clearPushToken)/responses/403`.
             ///
@@ -3507,7 +2678,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Missing, invalid or revoked device key
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/get(listServerSettings)/responses/401`.
             ///
@@ -3530,7 +2701,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host, or an Origin header
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/get(listServerSettings)/responses/403`.
             ///
@@ -3796,7 +2967,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Missing, invalid or revoked device key
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/get(listSettings)/responses/401`.
             ///
@@ -3819,7 +2990,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host, or an Origin header
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/get(listSettings)/responses/403`.
             ///
@@ -4094,7 +3265,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Missing, invalid or revoked device key
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/{key}/get(getSetting)/responses/401`.
             ///
@@ -4117,7 +3288,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host, or an Origin header
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/{key}/get(getSetting)/responses/403`.
             ///
@@ -4401,7 +3572,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Missing, invalid or revoked device key
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/{key}/put(setSetting)/responses/401`.
             ///
@@ -4424,7 +3595,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host, or an Origin header
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/{key}/put(setSetting)/responses/403`.
             ///
@@ -4699,7 +3870,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Missing, invalid or revoked device key
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/{key}/delete(resetSetting)/responses/401`.
             ///
@@ -4722,7 +3893,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host, or an Origin header
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/{key}/delete(resetSetting)/responses/403`.
             ///
@@ -4997,7 +4168,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Missing, invalid or revoked device key
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/{key}/history/get(settingHistory)/responses/401`.
             ///
@@ -5020,7 +4191,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host, or an Origin header
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/{key}/history/get(settingHistory)/responses/403`.
             ///
@@ -5220,7 +4391,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The server's version and build, the contract minor and the minors it serves. Needs no device key
+            /// The server's version and build, the contract minor and the minors it serves, and the Core identity fingerprint. Needs no signature
             ///
             /// - Remark: Generated from `#/paths//handshake/get(getHandshake)/responses/200`.
             ///
@@ -5266,7 +4437,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Missing, invalid or revoked device key
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
             ///
             /// - Remark: Generated from `#/paths//handshake/get(getHandshake)/responses/401`.
             ///
@@ -5289,7 +4460,7 @@ public enum Operations {
                     }
                 }
             }
-            /// Wrong Host, or an Origin header
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
             ///
             /// - Remark: Generated from `#/paths//handshake/get(getHandshake)/responses/403`.
             ///
@@ -5384,6 +4555,603 @@ public enum Operations {
             /// Internal error
             ///
             /// - Remark: Generated from `#/paths//handshake/get(getHandshake)/responses/500`.
+            ///
+            /// HTTP response code: `500 internalServerError`.
+            case internalServerError(Components.Responses.InternalError)
+            /// The associated value of the enum case if `self` is `.internalServerError`.
+            ///
+            /// - Throws: An error if `self` is not `.internalServerError`.
+            /// - SeeAlso: `.internalServerError`.
+            public var internalServerError: Components.Responses.InternalError {
+                get throws {
+                    switch self {
+                    case let .internalServerError(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "internalServerError",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// - Remark: HTTP `POST /handshake/challenge`.
+    /// - Remark: Generated from `#/paths//handshake/challenge/post(createChallenge)`.
+    public enum CreateChallenge {
+        public static let id: Swift.String = "createChallenge"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/handshake/challenge/POST/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CreateChallenge.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CreateChallenge.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.CreateChallenge.Input.Headers
+            /// - Remark: Generated from `#/paths/handshake/challenge/POST/requestBody`.
+            @frozen public enum Body: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/handshake/challenge/POST/requestBody/content/application\/json`.
+                case json(Components.Schemas.ChallengeRequest)
+            }
+            public var body: Operations.CreateChallenge.Input.Body
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            ///   - body:
+            public init(
+                headers: Operations.CreateChallenge.Input.Headers = .init(),
+                body: Operations.CreateChallenge.Input.Body
+            ) {
+                self.headers = headers
+                self.body = body
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/handshake/challenge/POST/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/handshake/challenge/POST/responses/200/content/application\/json`.
+                    case json(Components.Schemas.Challenge)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.Challenge {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.CreateChallenge.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.CreateChallenge.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// A single-use challenge for the device, live 60 s. Always answered, for any well-formed device id; 429 past 30 a minute from one address
+            ///
+            /// - Remark: Generated from `#/paths//handshake/challenge/post(createChallenge)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.CreateChallenge.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.CreateChallenge.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Bad request, or a query parameter that is not allowed
+            ///
+            /// - Remark: Generated from `#/paths//handshake/challenge/post(createChallenge)/responses/400`.
+            ///
+            /// HTTP response code: `400 badRequest`.
+            case badRequest(Components.Responses.BadRequest)
+            /// The associated value of the enum case if `self` is `.badRequest`.
+            ///
+            /// - Throws: An error if `self` is not `.badRequest`.
+            /// - SeeAlso: `.badRequest`.
+            public var badRequest: Components.Responses.BadRequest {
+                get throws {
+                    switch self {
+                    case let .badRequest(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "badRequest",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
+            ///
+            /// - Remark: Generated from `#/paths//handshake/challenge/post(createChallenge)/responses/401`.
+            ///
+            /// HTTP response code: `401 unauthorized`.
+            case unauthorized(Components.Responses.Unauthorized)
+            /// The associated value of the enum case if `self` is `.unauthorized`.
+            ///
+            /// - Throws: An error if `self` is not `.unauthorized`.
+            /// - SeeAlso: `.unauthorized`.
+            public var unauthorized: Components.Responses.Unauthorized {
+                get throws {
+                    switch self {
+                    case let .unauthorized(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unauthorized",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
+            ///
+            /// - Remark: Generated from `#/paths//handshake/challenge/post(createChallenge)/responses/403`.
+            ///
+            /// HTTP response code: `403 forbidden`.
+            case forbidden(Components.Responses.Forbidden)
+            /// The associated value of the enum case if `self` is `.forbidden`.
+            ///
+            /// - Throws: An error if `self` is not `.forbidden`.
+            /// - SeeAlso: `.forbidden`.
+            public var forbidden: Components.Responses.Forbidden {
+                get throws {
+                    switch self {
+                    case let .forbidden(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "forbidden",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// No such resource
+            ///
+            /// - Remark: Generated from `#/paths//handshake/challenge/post(createChallenge)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Components.Responses.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Components.Responses.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Conflicts with the current state
+            ///
+            /// - Remark: Generated from `#/paths//handshake/challenge/post(createChallenge)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Components.Responses.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            public var conflict: Components.Responses.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Rate limited; see Retry-After
+            ///
+            /// - Remark: Generated from `#/paths//handshake/challenge/post(createChallenge)/responses/429`.
+            ///
+            /// HTTP response code: `429 tooManyRequests`.
+            case tooManyRequests(Components.Responses.TooManyRequests)
+            /// The associated value of the enum case if `self` is `.tooManyRequests`.
+            ///
+            /// - Throws: An error if `self` is not `.tooManyRequests`.
+            /// - SeeAlso: `.tooManyRequests`.
+            public var tooManyRequests: Components.Responses.TooManyRequests {
+                get throws {
+                    switch self {
+                    case let .tooManyRequests(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "tooManyRequests",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Internal error
+            ///
+            /// - Remark: Generated from `#/paths//handshake/challenge/post(createChallenge)/responses/500`.
+            ///
+            /// HTTP response code: `500 internalServerError`.
+            case internalServerError(Components.Responses.InternalError)
+            /// The associated value of the enum case if `self` is `.internalServerError`.
+            ///
+            /// - Throws: An error if `self` is not `.internalServerError`.
+            /// - SeeAlso: `.internalServerError`.
+            public var internalServerError: Components.Responses.InternalError {
+                get throws {
+                    switch self {
+                    case let .internalServerError(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "internalServerError",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// - Remark: HTTP `POST /handshake/session`.
+    /// - Remark: Generated from `#/paths//handshake/session/post(createSession)`.
+    public enum CreateSession {
+        public static let id: Swift.String = "createSession"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/handshake/session/POST/header`.
+            public struct Headers: Sendable, Hashable {
+                /// The device, `d_…`
+                ///
+                /// - Remark: Generated from `#/paths/handshake/session/POST/header/Ainkrad-Device`.
+                public var ainkradDevice: Swift.String
+                /// `ES256`
+                ///
+                /// - Remark: Generated from `#/paths/handshake/session/POST/header/Ainkrad-Alg`.
+                public var ainkradAlg: Swift.String
+                /// Unix seconds
+                ///
+                /// - Remark: Generated from `#/paths/handshake/session/POST/header/Ainkrad-Timestamp`.
+                public var ainkradTimestamp: Swift.Int64
+                /// 16 random bytes, base64url
+                ///
+                /// - Remark: Generated from `#/paths/handshake/session/POST/header/Ainkrad-Nonce`.
+                public var ainkradNonce: Swift.String
+                /// Raw r||s over the canonical string with session `-`, base64url
+                ///
+                /// - Remark: Generated from `#/paths/handshake/session/POST/header/Ainkrad-Signature`.
+                public var ainkradSignature: Swift.String
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CreateSession.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - ainkradDevice: The device, `d_…`
+                ///   - ainkradAlg: `ES256`
+                ///   - ainkradTimestamp: Unix seconds
+                ///   - ainkradNonce: 16 random bytes, base64url
+                ///   - ainkradSignature: Raw r||s over the canonical string with session `-`, base64url
+                ///   - accept:
+                public init(
+                    ainkradDevice: Swift.String,
+                    ainkradAlg: Swift.String,
+                    ainkradTimestamp: Swift.Int64,
+                    ainkradNonce: Swift.String,
+                    ainkradSignature: Swift.String,
+                    accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CreateSession.AcceptableContentType>] = .defaultValues()
+                ) {
+                    self.ainkradDevice = ainkradDevice
+                    self.ainkradAlg = ainkradAlg
+                    self.ainkradTimestamp = ainkradTimestamp
+                    self.ainkradNonce = ainkradNonce
+                    self.ainkradSignature = ainkradSignature
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.CreateSession.Input.Headers
+            /// - Remark: Generated from `#/paths/handshake/session/POST/requestBody`.
+            @frozen public enum Body: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/handshake/session/POST/requestBody/content/application\/json`.
+                case json(Components.Schemas.SessionRequest)
+            }
+            public var body: Operations.CreateSession.Input.Body
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            ///   - body:
+            public init(
+                headers: Operations.CreateSession.Input.Headers,
+                body: Operations.CreateSession.Input.Body
+            ) {
+                self.headers = headers
+                self.body = body
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/handshake/session/POST/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/handshake/session/POST/responses/200/content/application\/json`.
+                    case json(Components.Schemas.SessionGrant)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.SessionGrant {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.CreateSession.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.CreateSession.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// A 15-minute session. Signed with session `-`; a challenge that is unknown, used, expired or another device's is `auth_failed`
+            ///
+            /// - Remark: Generated from `#/paths//handshake/session/post(createSession)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.CreateSession.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.CreateSession.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Bad request, or a query parameter that is not allowed
+            ///
+            /// - Remark: Generated from `#/paths//handshake/session/post(createSession)/responses/400`.
+            ///
+            /// HTTP response code: `400 badRequest`.
+            case badRequest(Components.Responses.BadRequest)
+            /// The associated value of the enum case if `self` is `.badRequest`.
+            ///
+            /// - Throws: An error if `self` is not `.badRequest`.
+            /// - SeeAlso: `.badRequest`.
+            public var badRequest: Components.Responses.BadRequest {
+                get throws {
+                    switch self {
+                    case let .badRequest(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "badRequest",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
+            ///
+            /// - Remark: Generated from `#/paths//handshake/session/post(createSession)/responses/401`.
+            ///
+            /// HTTP response code: `401 unauthorized`.
+            case unauthorized(Components.Responses.Unauthorized)
+            /// The associated value of the enum case if `self` is `.unauthorized`.
+            ///
+            /// - Throws: An error if `self` is not `.unauthorized`.
+            /// - SeeAlso: `.unauthorized`.
+            public var unauthorized: Components.Responses.Unauthorized {
+                get throws {
+                    switch self {
+                    case let .unauthorized(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unauthorized",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope)
+            ///
+            /// - Remark: Generated from `#/paths//handshake/session/post(createSession)/responses/403`.
+            ///
+            /// HTTP response code: `403 forbidden`.
+            case forbidden(Components.Responses.Forbidden)
+            /// The associated value of the enum case if `self` is `.forbidden`.
+            ///
+            /// - Throws: An error if `self` is not `.forbidden`.
+            /// - SeeAlso: `.forbidden`.
+            public var forbidden: Components.Responses.Forbidden {
+                get throws {
+                    switch self {
+                    case let .forbidden(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "forbidden",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// No such resource
+            ///
+            /// - Remark: Generated from `#/paths//handshake/session/post(createSession)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Components.Responses.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Components.Responses.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Conflicts with the current state
+            ///
+            /// - Remark: Generated from `#/paths//handshake/session/post(createSession)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Components.Responses.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            public var conflict: Components.Responses.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Rate limited; see Retry-After
+            ///
+            /// - Remark: Generated from `#/paths//handshake/session/post(createSession)/responses/429`.
+            ///
+            /// HTTP response code: `429 tooManyRequests`.
+            case tooManyRequests(Components.Responses.TooManyRequests)
+            /// The associated value of the enum case if `self` is `.tooManyRequests`.
+            ///
+            /// - Throws: An error if `self` is not `.tooManyRequests`.
+            /// - SeeAlso: `.tooManyRequests`.
+            public var tooManyRequests: Components.Responses.TooManyRequests {
+                get throws {
+                    switch self {
+                    case let .tooManyRequests(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "tooManyRequests",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Internal error
+            ///
+            /// - Remark: Generated from `#/paths//handshake/session/post(createSession)/responses/500`.
             ///
             /// HTTP response code: `500 internalServerError`.
             case internalServerError(Components.Responses.InternalError)

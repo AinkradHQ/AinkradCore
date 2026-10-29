@@ -11,16 +11,7 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/devices`.
     /// - Remark: Generated from `#/paths//api/v1/devices/get(listDevices)`.
     func listDevices(_ input: Operations.ListDevices.Input) async throws -> Operations.ListDevices.Output
-    /// - Remark: HTTP `POST /api/v1/devices`.
-    /// - Remark: Generated from `#/paths//api/v1/devices/post(createDevice)`.
-    func createDevice(_ input: Operations.CreateDevice.Input) async throws -> Operations.CreateDevice.Output
-    /// - Remark: HTTP `POST /api/v1/devices/pair`.
-    /// - Remark: Generated from `#/paths//api/v1/devices/pair/post(pairDevice)`.
-    func pairDevice(_ input: Operations.PairDevice.Input) async throws -> Operations.PairDevice.Output
-    /// - Remark: HTTP `POST /api/v1/devices/pairing`.
-    /// - Remark: Generated from `#/paths//api/v1/devices/pairing/post(startPairing)`.
-    func startPairing(_ input: Operations.StartPairing.Input) async throws -> Operations.StartPairing.Output
-    /// Revokes at once, the calling device's own key included; the row stays, marked revoked.
+    /// Revokes at once, the calling device included; the row stays, marked revoked.
     ///
     /// - Remark: HTTP `DELETE /api/v1/devices/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/devices/{id}/delete(revokeDevice)`.
@@ -64,6 +55,12 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /handshake`.
     /// - Remark: Generated from `#/paths//handshake/get(getHandshake)`.
     func getHandshake(_ input: Operations.GetHandshake.Input) async throws -> Operations.GetHandshake.Output
+    /// - Remark: HTTP `POST /handshake/challenge`.
+    /// - Remark: Generated from `#/paths//handshake/challenge/post(createChallenge)`.
+    func createChallenge(_ input: Operations.CreateChallenge.Input) async throws -> Operations.CreateChallenge.Output
+    /// - Remark: HTTP `POST /handshake/session`.
+    /// - Remark: Generated from `#/paths//handshake/session/post(createSession)`.
+    func createSession(_ input: Operations.CreateSession.Input) async throws -> Operations.CreateSession.Output
 }
 
 /// Convenience overloads for operation inputs.
@@ -84,34 +81,7 @@ extension APIProtocol {
     public func listDevices(headers: Operations.ListDevices.Input.Headers = .init()) async throws -> Operations.ListDevices.Output {
         try await listDevices(Operations.ListDevices.Input(headers: headers))
     }
-    /// - Remark: HTTP `POST /api/v1/devices`.
-    /// - Remark: Generated from `#/paths//api/v1/devices/post(createDevice)`.
-    public func createDevice(
-        headers: Operations.CreateDevice.Input.Headers = .init(),
-        body: Operations.CreateDevice.Input.Body
-    ) async throws -> Operations.CreateDevice.Output {
-        try await createDevice(Operations.CreateDevice.Input(
-            headers: headers,
-            body: body
-        ))
-    }
-    /// - Remark: HTTP `POST /api/v1/devices/pair`.
-    /// - Remark: Generated from `#/paths//api/v1/devices/pair/post(pairDevice)`.
-    public func pairDevice(
-        headers: Operations.PairDevice.Input.Headers = .init(),
-        body: Operations.PairDevice.Input.Body
-    ) async throws -> Operations.PairDevice.Output {
-        try await pairDevice(Operations.PairDevice.Input(
-            headers: headers,
-            body: body
-        ))
-    }
-    /// - Remark: HTTP `POST /api/v1/devices/pairing`.
-    /// - Remark: Generated from `#/paths//api/v1/devices/pairing/post(startPairing)`.
-    public func startPairing(headers: Operations.StartPairing.Input.Headers = .init()) async throws -> Operations.StartPairing.Output {
-        try await startPairing(Operations.StartPairing.Input(headers: headers))
-    }
-    /// Revokes at once, the calling device's own key included; the row stays, marked revoked.
+    /// Revokes at once, the calling device included; the row stays, marked revoked.
     ///
     /// - Remark: HTTP `DELETE /api/v1/devices/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/devices/{id}/delete(revokeDevice)`.
@@ -232,6 +202,28 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//handshake/get(getHandshake)`.
     public func getHandshake(headers: Operations.GetHandshake.Input.Headers = .init()) async throws -> Operations.GetHandshake.Output {
         try await getHandshake(Operations.GetHandshake.Input(headers: headers))
+    }
+    /// - Remark: HTTP `POST /handshake/challenge`.
+    /// - Remark: Generated from `#/paths//handshake/challenge/post(createChallenge)`.
+    public func createChallenge(
+        headers: Operations.CreateChallenge.Input.Headers = .init(),
+        body: Operations.CreateChallenge.Input.Body
+    ) async throws -> Operations.CreateChallenge.Output {
+        try await createChallenge(Operations.CreateChallenge.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /handshake/session`.
+    /// - Remark: Generated from `#/paths//handshake/session/post(createSession)`.
+    public func createSession(
+        headers: Operations.CreateSession.Input.Headers,
+        body: Operations.CreateSession.Input.Body
+    ) async throws -> Operations.CreateSession.Output {
+        try await createSession(Operations.CreateSession.Input(
+            headers: headers,
+            body: body
+        ))
     }
 }
 

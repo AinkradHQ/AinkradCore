@@ -1,4 +1,4 @@
-//! The admin verbs of `ainkrad-core-server` on a scratch database: device keys and settings.
+//! The admin verbs of `ainkrad-core-server` on a scratch database: devices and settings.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -36,18 +36,40 @@ fn ok(db: &Db, args: &[&str]) -> String {
     cli(db, args).unwrap_or_else(|e| panic!("{args:?}: {e}"))
 }
 
-#[test]
-fn devices_are_added_listed_and_revoked() {
+#[tokio::test]
+async fn devices_are_listed_and_revoked_and_none_is_added_here() {
+    use std::sync::Arc;
+
+    use ainkrad_core_server::auth::testing::TestDevice;
+    use ainkrad_core_server::scheduler::SystemClock;
     let db = db("devices");
-    let key = ok(&db, &["device", "add", "mac"]);
-    assert!(key.starts_with("cit_device_"), "{key}");
+    let pool = ainkrad_core_server::store::connect(&db.0).await.unwrap();
+    let mac = TestDevice::enroll(
+        &pool,
+        "mac",
+        "device",
+        &["read"],
+        "fp",
+        Arc::new(SystemClock),
+    )
+    .await;
+    pool.close().await;
+
     let list = ok(&db, &["device", "list"]);
-    assert!(list.starts_with("1\tmac\tcreated "), "{list}");
-    assert!(!list.contains(&key), "never a key");
-    ok(&db, &["device", "revoke", "1"]);
+    assert!(
+        list.starts_with(&format!("{}\tdevice\tmac\tactive\t", mac.id)),
+        "{list}"
+    );
+    ok(&db, &["device", "revoke", &mac.id]);
     assert!(ok(&db, &["device", "list"]).contains("\trevoked "));
-    let again = cli(&db, &["device", "revoke", "1"]).unwrap_err();
-    assert!(again.contains("no live device key 1"), "{again}");
+    let again = cli(&db, &["device", "revoke", &mac.id]).unwrap_err();
+    assert!(
+        again.contains(&format!("no live device {}", mac.id)),
+        "{again}"
+    );
+    // There is no key to hand out: a device enrolls only by pairing.
+    let add = cli(&db, &["device", "add", "phone"]).unwrap_err();
+    assert!(add.contains("usage"), "{add}");
 }
 
 #[test]
@@ -113,13 +135,26 @@ fn public_serve_refuses_to_start_without_a_hostname_and_an_acme_contact() {
 
 /// E1-10.1, E1-10.3: `audit verify` passes on a whole chain and names the first edited row;
 /// `audit export` writes JSONL that `audit verify --export` re-verifies on its own.
-#[test]
-fn the_audit_chain_is_verified_and_exported() {
+#[tokio::test]
+async fn the_audit_chain_is_verified_and_exported() {
     let db = db("audit");
+    let pool = ainkrad_core_server::store::connect(&db.0).await.unwrap();
+    let mut ids = Vec::new();
     for name in ["mac", "phone", "pad"] {
-        ok(&db, &["device", "add", name]);
+        let clock = std::sync::Arc::new(ainkrad_core_server::scheduler::SystemClock);
+        let d = ainkrad_core_server::auth::testing::TestDevice::enroll(
+            &pool,
+            name,
+            "device",
+            &["read"],
+            "fp",
+            clock,
+        )
+        .await;
+        ids.push(d.id);
     }
-    ok(&db, &["device", "revoke", "2"]);
+    pool.close().await;
+    ok(&db, &["device", "revoke", &ids[1]]);
     let verified = ok(&db, &["audit", "verify"]);
     assert!(
         verified.starts_with("audit chain ok: 4 rows (0 from before the chain), head seq 4 "),

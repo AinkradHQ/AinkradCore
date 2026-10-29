@@ -12,10 +12,6 @@ registry! {
         "Client API requests one device may send at once; read at start.";
     ApiRequestsPerMin "api.requests_per_min" PerMinute 1200, 60, 60_000, SO,
         "Client API requests one device may send per minute, sustained; read at start.";
-    ApiAuthFailureBurst "api.auth_failure_burst" Count 10, 3, 100, SO,
-        "Failed authentications one address may make before it is refused; read at start.";
-    ApiAuthFailuresPerMin "api.auth_failures_per_min" PerMinute 10, 1, 60, SO,
-        "Failed authentications one address regains per minute; read at start.";
     EventsRetentionSecs "events.retention_secs" Seconds 2_592_000, 3_600, 315_360_000, SO,
         "How long events stay replayable; older ones are trimmed and a client resuming from \
          before them re-syncs. Read every scheduler tick.";

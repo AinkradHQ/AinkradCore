@@ -26,7 +26,7 @@ import kotlinx.serialization.Contextual
  * @param apiMajor `v1`.
  * @param apiMinor The contract minor this server speaks (`GET /api/v1/me` has it too).
  * @param gitSha The commit it was built from (short sha), when the build knew it.
- * @param identityFingerprint The Core identity key's fingerprint; null until the identity key exists (E1-07).
+ * @param identityFingerprint `core_fp`: base64url SHA-256 of the Core identity key's SPKI, 43 characters. Signed into every request (handshake spec §5.2).
  * @param serverVersion The server's crate version, `0.1.0`.
  * @param supportedMinors Every minor a client may have been built against and still be served: 0 up to `api_minor`.
  */
@@ -46,7 +46,7 @@ data class Handshake (
     @SerialName(value = "git_sha")
     val gitSha: kotlin.String? = null,
 
-    /* The Core identity key's fingerprint; null until the identity key exists (E1-07). */
+    /* `core_fp`: base64url SHA-256 of the Core identity key's SPKI, 43 characters. Signed into every request (handshake spec §5.2). */
     @SerialName(value = "identity_fingerprint")
     val identityFingerprint: kotlin.String? = null,
 

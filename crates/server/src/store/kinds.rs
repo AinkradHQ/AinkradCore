@@ -21,10 +21,9 @@ pub const PLATFORM_EVENT_KINDS: &[&str] = &["audit"];
 /// The platform's audit actions.
 pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "api.refused",
-    "device.paired",
-    "device.pairing_started",
-    "device_key.created",
-    "device_key.revoked",
+    "auth.lockout",
+    "device.enrolled",
+    "device.revoked",
     "setting.reset",
     "setting.set",
 ];

@@ -130,7 +130,7 @@ async fn every_mode_serves_the_same_surface() {
             let (status, body) = get(&mut io, path, &host, None).await;
             assert_eq!(status, 401, "{mode} {path}: {body}");
         }
-        let (status, body) = get(&mut io, "/api/v1/me", &host, Some(&fx.key)).await;
+        let (status, body) = get(&mut io, "/api/v1/me", &host, Some(&fx.dev)).await;
         assert_eq!(status, 200, "{mode}: {body}");
         assert!(body.contains("\"mac\""), "{mode}: {body}");
         let (status, _) = get(&mut io, "/handshake", "rebound.example", None).await;

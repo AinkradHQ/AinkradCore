@@ -25,27 +25,29 @@ impl Module for Ops {
 const PING: &str = "/modules/ops/v1/ping";
 
 #[tokio::test]
-async fn a_mounted_module_answers_behind_the_device_key() {
+async fn a_mounted_module_answers_behind_the_signature() {
     let mut fx = fx().await;
     fx.app.modules = Arc::from([Arc::new(Ops) as Arc<dyn Module>]);
 
-    let res = send(&fx.app, req(Method::GET, PING, Some(&fx.key), None)).await;
+    let res = send(&fx.app, req(Method::GET, PING, Some(&fx.dev), None)).await;
     assert_eq!(res.0, StatusCode::OK);
 
-    let (status, _) = send(&fx.app, req(Method::GET, PING, None, None)).await;
+    let stranger = fx.stranger();
+    let (status, _) = send(&fx.app, req(Method::GET, PING, Some(&stranger), None)).await;
     assert_eq!(
         status,
         StatusCode::UNAUTHORIZED,
         "the gate covers module routes"
     );
-
-    let (status, _) = send(&fx.app, req(Method::GET, PING, Some("not-a-key"), None)).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
-async fn an_unmounted_module_has_no_routes() {
+async fn an_unmounted_module_has_no_routes_and_no_scope() {
     let fx = fx().await;
-    let (status, _) = send(&fx.app, req(Method::GET, PING, Some(&fx.key), None)).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(&fx.app, req(Method::GET, PING, Some(&fx.dev), None)).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "no module, no declared scope"
+    );
 }

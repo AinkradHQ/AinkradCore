@@ -3,7 +3,12 @@
 //! within its grace. Requests in flight finishing is `tests/gateway/drain.rs`.
 
 use std::process::Command;
+use std::sync::Arc;
 use std::time::Duration;
+
+use ainkrad_core_server::auth::Identity;
+use ainkrad_core_server::auth::testing::TestDevice;
+use ainkrad_core_server::scheduler::SystemClock;
 
 use futures_util::StreamExt;
 use tokio_tungstenite::tungstenite::Message;
@@ -16,12 +21,12 @@ async fn sigterm_closes_event_sockets_checkpoints_and_exits_zero() {
     std::fs::create_dir_all(&dir).unwrap();
     let db = dir.join("core.db");
     let db_arg = db.to_str().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_ainkrad-core-server"))
-        .args(["device", "add", db_arg, "mac"])
-        .output()
-        .unwrap();
-    assert!(out.status.success());
-    let key = String::from_utf8(out.stdout).unwrap().trim().to_owned();
+    // A device enrolled before the server starts, signing for the identity it will load.
+    let identity = Identity::load_or_create(&dir).unwrap();
+    let pool = ainkrad_core_server::store::connect(&db).await.unwrap();
+    let clock = Arc::new(SystemClock);
+    let mac = TestDevice::enroll(&pool, "mac", "device", &["read"], &identity.fp, clock).await;
+    pool.close().await;
 
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -42,11 +47,44 @@ async fn sigterm_closes_event_sockets_checkpoints_and_exits_zero() {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    // The handshake as a client does it: the fingerprint, a challenge, a session.
+    let http = reqwest::Client::new();
+    let handshake: serde_json::Value = http
+        .get(format!("http://{bind}/handshake"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(handshake["identity_fingerprint"], identity.fp.as_str());
+    let challenge: serde_json::Value = http
+        .post(format!("http://{bind}/handshake/challenge"))
+        .json(&serde_json::json!({"device_id": mac.id}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let body = serde_json::json!({"challenge": challenge["challenge"]}).to_string();
+    let mut login = http
+        .post(format!("http://{bind}/handshake/session"))
+        .header("content-type", "application/json")
+        .body(body.clone());
+    for (name, value) in mac.headers_session("POST", "/handshake/session", body.as_bytes(), None) {
+        login = login.header(name, value);
+    }
+    let session: serde_json::Value = login.send().await.unwrap().json().await.unwrap();
+    mac.set_session(session["session_id"].as_str().map(str::to_owned));
+    assert!(mac.session.lock().unwrap().is_some(), "{session}");
+
     let mut req = format!("ws://{bind}/api/v1/events/ws")
         .into_client_request()
         .unwrap();
-    let bearer = format!("Bearer {key}").parse().unwrap();
-    req.headers_mut().insert("authorization", bearer);
+    for (name, value) in mac.headers("GET", "/api/v1/events/ws", b"") {
+        req.headers_mut().insert(name, value.parse().unwrap());
+    }
     let (mut ws, _) = tokio_tungstenite::connect_async(req).await.unwrap();
 
     let pid = server.id().unwrap().to_string();

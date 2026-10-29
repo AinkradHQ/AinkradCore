@@ -23,15 +23,16 @@ import kotlinx.serialization.Contextual
 /**
  * A device: who, by id and name.
  *
- * @param id 
+ * @param id `d_` and 26 characters.
  * @param name 
  */
 @Serializable
 
 data class Named (
 
+    /* `d_` and 26 characters. */
     @SerialName(value = "id")
-    val id: kotlin.Long,
+    val id: kotlin.String,
 
     @SerialName(value = "name")
     val name: kotlin.String

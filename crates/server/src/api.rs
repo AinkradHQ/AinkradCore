@@ -3,15 +3,17 @@
 //!
 //! - `Host` must be the configured server name, so a page on a rebound DNS name cannot
 //!   reach a loopback server (403). Paperclip had exactly that hole.
-//! - Any `Origin` header is refused (403): clients are not browsers, and a browser always
-//!   sends one on a WebSocket, so no web page can open a socket here.
+//! - Any `Origin` header is refused (403): clients are not browsers until passkeys (E1-08), and
+//!   a browser always sends one on a WebSocket, so no web page can open a socket here.
+//! - An `Authorization` header is refused (400): there are no bearer secrets, and this catches
+//!   a leftover bearer client (handshake spec §5.1).
+//! - A request-target path that is not canonical (`..`, `//`, NUL, a lowercase escape) is
+//!   refused (400), so the router and the signer always see the same bytes (§5.2).
 //! - A query string is refused (400) unless every name in it is one the route group lets
-//!   through: keys travel in `Authorization: Bearer`, never in a URL that proxies and logs
-//!   keep.
+//!   through.
 //!
-//! Then a live device key (`v1`), checked before routing; nothing answers without one,
-//! loopback included, except the pre-auth routes (`gateway::preauth`): `/handshake`,
-//! trading a pairing code for a key, and `/healthz`.
+//! Then a signed request from a live device (`v1::gate`), checked before routing; nothing
+//! answers without one, loopback included, except the pre-auth routes (`gateway::preauth`).
 //!
 //! The runner endpoint is not here: runners reconnect through the rebuilt hub (E1-11).
 
@@ -20,9 +22,10 @@ use std::sync::Arc;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode, Uri, header};
-use axum::routing::get;
+use axum::routing::{get, post};
 use sqlx::SqlitePool;
 
+use crate::auth::{Auth, Identity};
 use crate::scheduler::Clock;
 
 pub mod limit;
@@ -38,8 +41,12 @@ pub struct App {
     pub host: String,
     /// The client API's rate limits (E10.3).
     pub limits: Arc<v1::Limits>,
-    /// Proxies whose `X-Forwarded-For` names the client (`serve --trusted-proxy`).
+    /// Proxies whose `X-Forwarded-For` names the client (`serve --trusted-proxy`); none by
+    /// default, since the Core terminates TLS itself (handshake spec §11).
     pub trusted_proxies: Arc<[limit::Cidr]>,
+    /// Device authentication: the Core identity key, sessions, challenges, the replay cache
+    /// and revocation fan-out, all per process (`crate::auth`).
+    pub auth: Arc<Auth>,
     /// How the client event stream paces itself (E10.2).
     pub stream: v1::events::StreamConfig,
     /// Modules mounted on the client API under `/modules/<id>/v1` (`crate::module`).
@@ -57,13 +64,19 @@ pub(crate) async fn stopping(closing: &mut tokio::sync::watch::Receiver<bool>) {
 }
 
 impl App {
-    pub fn new(pool: SqlitePool, clock: Arc<dyn Clock + Send + Sync>, host: String) -> Self {
+    pub fn new(
+        pool: SqlitePool,
+        clock: Arc<dyn Clock + Send + Sync>,
+        host: String,
+        identity: Arc<Identity>,
+    ) -> Self {
         Self {
             pool,
             clock,
             host,
             limits: Arc::default(),
-            trusted_proxies: Arc::new(limit::Cidr::LOOPBACK),
+            trusted_proxies: Arc::from([]),
+            auth: Arc::new(Auth::new(identity)),
             stream: v1::events::StreamConfig::default(),
             modules: Arc::from([]),
             closing: Arc::new(tokio::sync::watch::Sender::new(false)),
@@ -77,66 +90,54 @@ pub fn router(app: App) -> Router {
     use crate::gateway::preauth;
     let preauth_routes = Router::new()
         .route("/handshake", get(v1::handshake::handshake))
+        .route("/handshake/challenge", post(v1::session::challenge))
+        .route("/handshake/session", post(v1::session::session))
         .route("/healthz", get(preauth::healthz))
-        .merge(v1::pairing_router(app.clone()))
-        .layer(DefaultBodyLimit::max(preauth::PREAUTH_BODY));
+        .layer(DefaultBodyLimit::max(preauth::PREAUTH_BODY))
+        .with_state(app.clone());
     Router::new()
         .merge(preauth_routes)
         .merge(v1::router(app.clone()))
         .layer(axum::middleware::from_fn_with_state(app, preauth::gate))
 }
 
-/// The bearer token of an `Authorization: Bearer <token>` header.
-fn bearer(headers: &HeaderMap) -> Option<&str> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let (scheme, token) = value.split_once(' ')?;
-    let token = token.trim();
-    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then_some(token)
-}
-
-/// The shared checks as a status and reason: the `Host`, no `Origin`, and a query string
-/// only when `query_ok` accepts it.
+/// The shared checks as a status, code and reason: the `Host`, no `Origin`, no `Authorization`, a
+/// canonical path, and a query string only when `query_ok` accepts it.
 pub(crate) fn refusal(
     app: &App,
     uri: &Uri,
     headers: &HeaderMap,
     query_ok: fn(&str) -> bool,
-) -> Option<(StatusCode, &'static str)> {
+) -> Option<(StatusCode, &'static str, &'static str)> {
     // HTTP/2 carries the host as the `:authority`, which hyper puts in the URI.
     let host = match headers.get(header::HOST) {
         Some(h) => h.to_str().ok(),
         None => uri.authority().map(|a| a.as_str()),
     };
     if !host.is_some_and(|h| h.eq_ignore_ascii_case(&app.host)) {
-        return Some((StatusCode::FORBIDDEN, "unknown host"));
+        return Some((StatusCode::FORBIDDEN, "unknown_host", "unknown host"));
     }
     if headers.contains_key(header::ORIGIN) {
-        return Some((StatusCode::FORBIDDEN, "browsers may not connect"));
-    }
-    if uri.query().is_some_and(|q| !query_ok(q)) {
         return Some((
-            StatusCode::BAD_REQUEST,
-            "no query string: the key goes in the Authorization header",
+            StatusCode::FORBIDDEN,
+            "origin_refused",
+            "browsers may not connect",
         ));
     }
-    None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reads_only_a_bearer_authorization() {
-        let with = |value: &str| {
-            let mut h = HeaderMap::new();
-            h.insert(header::AUTHORIZATION, value.parse().unwrap());
-            h
-        };
-        assert_eq!(bearer(&with("Bearer k1")), Some("k1"));
-        assert_eq!(bearer(&with("bearer  k1 ")), Some("k1"));
-        assert_eq!(bearer(&with("Basic k1")), None);
-        assert_eq!(bearer(&with("Bearer ")), None);
-        assert_eq!(bearer(&HeaderMap::new()), None);
+    if headers.contains_key(header::AUTHORIZATION) {
+        let why = "no Authorization header: requests are signed";
+        return Some((StatusCode::BAD_REQUEST, "bad_request", why));
     }
+    if !crate::auth::signed::canonical_path(uri.path()) {
+        return Some((
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "the path is not canonical",
+        ));
+    }
+    if uri.query().is_some_and(|q| !query_ok(q)) {
+        let why = "a query parameter that is not allowed";
+        return Some((StatusCode::BAD_REQUEST, "bad_request", why));
+    }
+    None
 }

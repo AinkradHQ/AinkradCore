@@ -24,7 +24,7 @@ import kotlinx.serialization.Contextual
 /**
  * One audited change.
  *
- * @param action Dotted: `device_key.created`, `setting.set`, ….
+ * @param action Dotted: `device.revoked`, `setting.set`, ….
  * @param actor 
  * @param at RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param details 
@@ -36,7 +36,7 @@ import kotlinx.serialization.Contextual
 
 data class AuditEntry (
 
-    /* Dotted: `device_key.created`, `setting.set`, …. */
+    /* Dotted: `device.revoked`, `setting.set`, …. */
     @SerialName(value = "action")
     val action: kotlin.String,
 

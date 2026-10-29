@@ -21,13 +21,19 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual
 
 /**
- * A device's key, without the key.
+ * A device: who it is and what it may do. Never a key's private half: the Core has none.
  *
  * @param createdAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
- * @param id 
+ * @param id `d_` and 26 characters.
  * @param name 
+ * @param fingerprint base64url SHA-256 of its routine public key: what pairing shows.
+ * @param keyStorage Where its key lives, as the device claims it (not verified).
+ * @param kind `device` (an app or CLI), `runner` or `passkey`.
  * @param lastUsedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param platform 
  * @param revokedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param scopes What it may do (E1-09 enforces them).
+ * @param status `pending`, `active`, `rejected`, `expired` or `locked`.
  */
 @Serializable
 
@@ -37,19 +43,43 @@ data class Device (
     @Contextual @SerialName(value = "created_at")
     val createdAt: java.time.OffsetDateTime,
 
+    /* `d_` and 26 characters. */
     @SerialName(value = "id")
-    val id: kotlin.Long,
+    val id: kotlin.String,
 
     @SerialName(value = "name")
     val name: kotlin.String,
+
+    /* base64url SHA-256 of its routine public key: what pairing shows. */
+    @SerialName(value = "fingerprint")
+    val fingerprint: kotlin.String? = null,
+
+    /* Where its key lives, as the device claims it (not verified). */
+    @SerialName(value = "key_storage")
+    val keyStorage: kotlin.String? = null,
+
+    /* `device` (an app or CLI), `runner` or `passkey`. */
+    @SerialName(value = "kind")
+    val kind: kotlin.String? = null,
 
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "last_used_at")
     val lastUsedAt: java.time.OffsetDateTime? = null,
 
+    @SerialName(value = "platform")
+    val platform: kotlin.String? = null,
+
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "revoked_at")
-    val revokedAt: java.time.OffsetDateTime? = null
+    val revokedAt: java.time.OffsetDateTime? = null,
+
+    /* What it may do (E1-09 enforces them). */
+    @SerialName(value = "scopes")
+    val scopes: kotlin.collections.List<kotlin.String>? = null,
+
+    /* `pending`, `active`, `rejected`, `expired` or `locked`. */
+    @SerialName(value = "status")
+    val status: kotlin.String? = null
 
 ) {
 

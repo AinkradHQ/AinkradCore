@@ -22,7 +22,7 @@ case_ "field made required (openapi)"      fail $O '.components.schemas.Device.r
 case_ "new required field (openapi)"       fail $O '.components.schemas.Device.properties.nickname={"type":"string"}|.components.schemas.Device.required+=["nickname"]'
 case_ "path removed (openapi)"             fail $O 'del(.paths["/api/v1/me"])'
 case_ "operation removed (openapi)"        fail $O 'del(.paths["/api/v1/devices"].get)'
-case_ "type narrowed (openapi)"            fail $O '.components.schemas.Device.properties.id.type="string"'
+case_ "type narrowed (openapi)"            fail $O '.components.schemas.Named.properties.name.type="integer"'
 case_ "field removed (events)"             fail $E 'del(.oneOf[0].properties.kind)'
 case_ "new required field (events)"       fail $E '.oneOf[0].properties.source={"type":"string"}|.oneOf[0].required+=["source"]'
 case_ "type narrowed (events)"             fail $E '.oneOf[0].properties.seq.type="string"'

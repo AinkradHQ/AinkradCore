@@ -39,7 +39,7 @@ extension Components {
         ///
         /// - Remark: Generated from `#/components/schemas/AuditEntry`.
         public struct AuditEntry: Codable, Hashable, Sendable {
-            /// Dotted: `device_key.created`, `setting.set`, ….
+            /// Dotted: `device.revoked`, `setting.set`, ….
             ///
             /// - Remark: Generated from `#/components/schemas/AuditEntry/action`.
             public var action: Swift.String
@@ -58,7 +58,7 @@ extension Components {
             /// Creates a new `AuditEntry`.
             ///
             /// - Parameters:
-            ///   - action: Dotted: `device_key.created`, `setting.set`, ….
+            ///   - action: Dotted: `device.revoked`, `setting.set`, ….
             ///   - actor:
             ///   - at:
             ///   - details:
@@ -118,49 +118,149 @@ extension Components {
                 case nextBefore = "next_before"
             }
         }
-        /// A device's key, without the key.
+        /// - Remark: Generated from `#/components/schemas/Challenge`.
+        public struct Challenge: Codable, Hashable, Sendable {
+            /// 32 random bytes, base64url; spend it once within `expires_in` seconds.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Challenge/challenge`.
+            public var challenge: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/Challenge/expires_in`.
+            public var expiresIn: Swift.Int64?
+            /// Creates a new `Challenge`.
+            ///
+            /// - Parameters:
+            ///   - challenge: 32 random bytes, base64url; spend it once within `expires_in` seconds.
+            ///   - expiresIn:
+            public init(
+                challenge: Swift.String? = nil,
+                expiresIn: Swift.Int64? = nil
+            ) {
+                self.challenge = challenge
+                self.expiresIn = expiresIn
+            }
+            public enum CodingKeys: String, CodingKey {
+                case challenge
+                case expiresIn = "expires_in"
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/ChallengeRequest`.
+        public struct ChallengeRequest: Codable, Hashable, Sendable {
+            /// The device that will answer it, `d_…`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ChallengeRequest/device_id`.
+            public var deviceId: Swift.String
+            /// Creates a new `ChallengeRequest`.
+            ///
+            /// - Parameters:
+            ///   - deviceId: The device that will answer it, `d_…`.
+            public init(deviceId: Swift.String) {
+                self.deviceId = deviceId
+            }
+            public enum CodingKeys: String, CodingKey {
+                case deviceId = "device_id"
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.deviceId = try container.decode(
+                    Swift.String.self,
+                    forKey: .deviceId
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "device_id"
+                ])
+            }
+        }
+        /// A device: who it is and what it may do. Never a key's private half: the Core has none.
         ///
         /// - Remark: Generated from `#/components/schemas/Device`.
         public struct Device: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/Device/created_at`.
             public var createdAt: Components.Schemas.Timestamp
+            /// base64url SHA-256 of its routine public key: what pairing shows.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Device/fingerprint`.
+            public var fingerprint: Swift.String?
+            /// `d_` and 26 characters.
+            ///
             /// - Remark: Generated from `#/components/schemas/Device/id`.
-            public var id: Swift.Int64
+            public var id: Swift.String
+            /// Where its key lives, as the device claims it (not verified).
+            ///
+            /// - Remark: Generated from `#/components/schemas/Device/key_storage`.
+            public var keyStorage: Swift.String?
+            /// `device` (an app or CLI), `runner` or `passkey`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Device/kind`.
+            public var kind: Swift.String?
             /// Marked at most once a minute.
             ///
             /// - Remark: Generated from `#/components/schemas/Device/last_used_at`.
             public var lastUsedAt: Components.Schemas.Timestamp?
             /// - Remark: Generated from `#/components/schemas/Device/name`.
             public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Device/platform`.
+            public var platform: Swift.String?
             /// - Remark: Generated from `#/components/schemas/Device/revoked_at`.
             public var revokedAt: Components.Schemas.Timestamp?
+            /// What it may do (E1-09 enforces them).
+            ///
+            /// - Remark: Generated from `#/components/schemas/Device/scopes`.
+            public var scopes: [Swift.String]?
+            /// `pending`, `active`, `rejected`, `expired` or `locked`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Device/status`.
+            public var status: Swift.String?
             /// Creates a new `Device`.
             ///
             /// - Parameters:
             ///   - createdAt:
-            ///   - id:
+            ///   - fingerprint: base64url SHA-256 of its routine public key: what pairing shows.
+            ///   - id: `d_` and 26 characters.
+            ///   - keyStorage: Where its key lives, as the device claims it (not verified).
+            ///   - kind: `device` (an app or CLI), `runner` or `passkey`.
             ///   - lastUsedAt: Marked at most once a minute.
             ///   - name:
+            ///   - platform:
             ///   - revokedAt:
+            ///   - scopes: What it may do (E1-09 enforces them).
+            ///   - status: `pending`, `active`, `rejected`, `expired` or `locked`.
             public init(
                 createdAt: Components.Schemas.Timestamp,
-                id: Swift.Int64,
+                fingerprint: Swift.String? = nil,
+                id: Swift.String,
+                keyStorage: Swift.String? = nil,
+                kind: Swift.String? = nil,
                 lastUsedAt: Components.Schemas.Timestamp? = nil,
                 name: Swift.String,
-                revokedAt: Components.Schemas.Timestamp? = nil
+                platform: Swift.String? = nil,
+                revokedAt: Components.Schemas.Timestamp? = nil,
+                scopes: [Swift.String]? = nil,
+                status: Swift.String? = nil
             ) {
                 self.createdAt = createdAt
+                self.fingerprint = fingerprint
                 self.id = id
+                self.keyStorage = keyStorage
+                self.kind = kind
                 self.lastUsedAt = lastUsedAt
                 self.name = name
+                self.platform = platform
                 self.revokedAt = revokedAt
+                self.scopes = scopes
+                self.status = status
             }
             public enum CodingKeys: String, CodingKey {
                 case createdAt = "created_at"
+                case fingerprint
                 case id
+                case keyStorage = "key_storage"
+                case kind
                 case lastUsedAt = "last_used_at"
                 case name
+                case platform
                 case revokedAt = "revoked_at"
+                case scopes
+                case status
             }
         }
         /// A JSON error: a stable `code` and a message for people.
@@ -176,25 +276,33 @@ extension Components {
             public var errorId: Swift.String
             /// - Remark: Generated from `#/components/schemas/ErrorBody/message`.
             public var message: Swift.String
+            /// The server's clock in unix seconds, on a `clock_skew` refusal only (handshake spec §5.3).
+            ///
+            /// - Remark: Generated from `#/components/schemas/ErrorBody/server_time`.
+            public var serverTime: Swift.Int64?
             /// Creates a new `ErrorBody`.
             ///
             /// - Parameters:
             ///   - code:
             ///   - errorId: `err_` and a ULID, unique to this answer: logged with it (and, for a refused write,
             ///   - message:
+            ///   - serverTime: The server's clock in unix seconds, on a `clock_skew` refusal only (handshake spec §5.3).
             public init(
                 code: Swift.String,
                 errorId: Swift.String,
-                message: Swift.String
+                message: Swift.String,
+                serverTime: Swift.Int64? = nil
             ) {
                 self.code = code
                 self.errorId = errorId
                 self.message = message
+                self.serverTime = serverTime
             }
             public enum CodingKeys: String, CodingKey {
                 case code
                 case errorId = "error_id"
                 case message
+                case serverTime = "server_time"
             }
         }
         /// One entry of the event stream. `seq` only grows: it is the replay cursor. New kinds may be
@@ -340,7 +448,8 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Handshake/git_sha`.
             public var gitSha: Swift.String?
-            /// The Core identity key's fingerprint; null until the identity key exists (E1-07).
+            /// `core_fp`: base64url SHA-256 of the Core identity key's SPKI, 43 characters. Signed
+            /// into every request (handshake spec §5.2).
             ///
             /// - Remark: Generated from `#/components/schemas/Handshake/identity_fingerprint`.
             public var identityFingerprint: Swift.String?
@@ -359,7 +468,7 @@ extension Components {
             ///   - apiMajor: `v1`.
             ///   - apiMinor: The contract minor this server speaks (`GET /api/v1/me` has it too).
             ///   - gitSha: The commit it was built from (short sha), when the build knew it.
-            ///   - identityFingerprint: The Core identity key's fingerprint; null until the identity key exists (E1-07).
+            ///   - identityFingerprint: `core_fp`: base64url SHA-256 of the Core identity key's SPKI, 43 characters. Signed
             ///   - serverVersion: The server's crate version, `0.1.0`.
             ///   - supportedMinors: Every minor a client may have been built against and still be served: 0 up to
             public init(
@@ -384,31 +493,6 @@ extension Components {
                 case identityFingerprint = "identity_fingerprint"
                 case serverVersion = "server_version"
                 case supportedMinors = "supported_minors"
-            }
-        }
-        /// A new device and its key: the only time the key is ever shown.
-        ///
-        /// - Remark: Generated from `#/components/schemas/IssuedDevice`.
-        public struct IssuedDevice: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/IssuedDevice/device`.
-            public var device: Components.Schemas.Device
-            /// - Remark: Generated from `#/components/schemas/IssuedDevice/key`.
-            public var key: Swift.String
-            /// Creates a new `IssuedDevice`.
-            ///
-            /// - Parameters:
-            ///   - device:
-            ///   - key:
-            public init(
-                device: Components.Schemas.Device,
-                key: Swift.String
-            ) {
-                self.device = device
-                self.key = key
-            }
-            public enum CodingKeys: String, CodingKey {
-                case device
-                case key
             }
         }
         /// The newest event's seq a client would be shown: the catch-up target.
@@ -470,17 +554,19 @@ extension Components {
         ///
         /// - Remark: Generated from `#/components/schemas/Named`.
         public struct Named: Codable, Hashable, Sendable {
+            /// `d_` and 26 characters.
+            ///
             /// - Remark: Generated from `#/components/schemas/Named/id`.
-            public var id: Swift.Int64
+            public var id: Swift.String
             /// - Remark: Generated from `#/components/schemas/Named/name`.
             public var name: Swift.String
             /// Creates a new `Named`.
             ///
             /// - Parameters:
-            ///   - id:
+            ///   - id: `d_` and 26 characters.
             ///   - name:
             public init(
-                id: Swift.Int64,
+                id: Swift.String,
                 name: Swift.String
             ) {
                 self.id = id
@@ -488,21 +574,6 @@ extension Components {
             }
             public enum CodingKeys: String, CodingKey {
                 case id
-                case name
-            }
-        }
-        /// - Remark: Generated from `#/components/schemas/NewDevice`.
-        public struct NewDevice: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/NewDevice/name`.
-            public var name: Swift.String
-            /// Creates a new `NewDevice`.
-            ///
-            /// - Parameters:
-            ///   - name:
-            public init(name: Swift.String) {
-                self.name = name
-            }
-            public enum CodingKeys: String, CodingKey {
                 case name
             }
         }
@@ -529,58 +600,6 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case items
                 case nextAfter = "next_after"
-            }
-        }
-        /// - Remark: Generated from `#/components/schemas/PairBody`.
-        public struct PairBody: Codable, Hashable, Sendable {
-            /// The code the admin was shown, in any case.
-            ///
-            /// - Remark: Generated from `#/components/schemas/PairBody/code`.
-            public var code: Swift.String
-            /// What to call the new device.
-            ///
-            /// - Remark: Generated from `#/components/schemas/PairBody/name`.
-            public var name: Swift.String
-            /// Creates a new `PairBody`.
-            ///
-            /// - Parameters:
-            ///   - code: The code the admin was shown, in any case.
-            ///   - name: What to call the new device.
-            public init(
-                code: Swift.String,
-                name: Swift.String
-            ) {
-                self.code = code
-                self.name = name
-            }
-            public enum CodingKeys: String, CodingKey {
-                case code
-                case name
-            }
-        }
-        /// - Remark: Generated from `#/components/schemas/Pairing`.
-        public struct Pairing: Codable, Hashable, Sendable {
-            /// Six characters, letters and digits; shown to the user once.
-            ///
-            /// - Remark: Generated from `#/components/schemas/Pairing/code`.
-            public var code: Swift.String
-            /// - Remark: Generated from `#/components/schemas/Pairing/expires_at`.
-            public var expiresAt: Components.Schemas.Timestamp
-            /// Creates a new `Pairing`.
-            ///
-            /// - Parameters:
-            ///   - code: Six characters, letters and digits; shown to the user once.
-            ///   - expiresAt:
-            public init(
-                code: Swift.String,
-                expiresAt: Components.Schemas.Timestamp
-            ) {
-                self.code = code
-                self.expiresAt = expiresAt
-            }
-            public enum CodingKeys: String, CodingKey {
-                case code
-                case expiresAt = "expires_at"
             }
         }
         /// The 410 of a replay from below the retention floor (E1-04.4).
@@ -651,6 +670,74 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case sandbox
                 case token
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/SessionGrant`.
+        public struct SessionGrant: Codable, Hashable, Sendable {
+            /// Until when the session is elevated (E1-09); null when it is not.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SessionGrant/elevated_until`.
+            public var elevatedUntil: Components.Schemas.Timestamp?
+            /// - Remark: Generated from `#/components/schemas/SessionGrant/expires_at`.
+            public var expiresAt: Components.Schemas.Timestamp?
+            /// The device's scopes.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SessionGrant/scopes`.
+            public var scopes: [Swift.String]?
+            /// `s_…`: sent as `Ainkrad-Session` on every signed request. Not a secret.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SessionGrant/session_id`.
+            public var sessionId: Swift.String?
+            /// Creates a new `SessionGrant`.
+            ///
+            /// - Parameters:
+            ///   - elevatedUntil: Until when the session is elevated (E1-09); null when it is not.
+            ///   - expiresAt:
+            ///   - scopes: The device's scopes.
+            ///   - sessionId: `s_…`: sent as `Ainkrad-Session` on every signed request. Not a secret.
+            public init(
+                elevatedUntil: Components.Schemas.Timestamp? = nil,
+                expiresAt: Components.Schemas.Timestamp? = nil,
+                scopes: [Swift.String]? = nil,
+                sessionId: Swift.String? = nil
+            ) {
+                self.elevatedUntil = elevatedUntil
+                self.expiresAt = expiresAt
+                self.scopes = scopes
+                self.sessionId = sessionId
+            }
+            public enum CodingKeys: String, CodingKey {
+                case elevatedUntil = "elevated_until"
+                case expiresAt = "expires_at"
+                case scopes
+                case sessionId = "session_id"
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/SessionRequest`.
+        public struct SessionRequest: Codable, Hashable, Sendable {
+            /// A live challenge issued for the signing device.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SessionRequest/challenge`.
+            public var challenge: Swift.String
+            /// Creates a new `SessionRequest`.
+            ///
+            /// - Parameters:
+            ///   - challenge: A live challenge issued for the signing device.
+            public init(challenge: Swift.String) {
+                self.challenge = challenge
+            }
+            public enum CodingKeys: String, CodingKey {
+                case challenge
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.challenge = try container.decode(
+                    Swift.String.self,
+                    forKey: .challenge
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "challenge"
+                ])
             }
         }
         /// A value to set: an integer in the setting's unit.

@@ -6,6 +6,8 @@
 #   - scripts/schema_compat.py on all three files: the same classes plus "a field made required"
 #     and "a new field is required" (every new field is required = false), which oasdiff allows on
 #     responses.
+#   Allowed breaks: exact messages listed in api/compat-allow.txt (ours) and
+#   api/compat-allow-oasdiff.txt (oasdiff's --err-ignore), one deliberate change at a time.
 #   scripts/schema-compat.sh [--base <baseline dir> [<new dir>]]   (the selftest's way in)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -22,7 +24,9 @@ else
 fi
 [ -f "$base/openapi.json" ] || { echo "schema-compat: no baseline openapi.json in $label" >&2; exit 1; }
 echo "schema-compat: comparing api/ with $label"
+# A one-change allow-list (see api/compat-allow.txt): oasdiff's own exact-message ignore file.
+ignore=(); [ -f "$new/compat-allow-oasdiff.txt" ] && ignore=(--err-ignore /new/compat-allow-oasdiff.txt)
 docker run --rm -v "$base:/base:ro" -v "$new:/new:ro" "$OASDIFF" \
-  breaking /base/openapi.json /new/openapi.json --fail-on ERR
+  breaking /base/openapi.json /new/openapi.json --fail-on ERR ${ignore[@]+"${ignore[@]}"}
 python3 scripts/schema_compat.py "$base" "$new"
 echo "schema-compat: no breaking change"

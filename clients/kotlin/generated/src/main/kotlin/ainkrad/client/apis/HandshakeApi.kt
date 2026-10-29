@@ -15,8 +15,12 @@
 
 package ainkrad.client.apis
 
+import ainkrad.client.models.Challenge
+import ainkrad.client.models.ChallengeRequest
 import ainkrad.client.models.ErrorBody
 import ainkrad.client.models.Handshake
+import ainkrad.client.models.SessionGrant
+import ainkrad.client.models.SessionRequest
 
 import ainkrad.client.infrastructure.*
 import io.ktor.client.HttpClientConfig
@@ -35,6 +39,82 @@ import io.ktor.http.ParametersBuilder
     ) {
 
         /**
+        * POST /handshake/challenge
+        * 
+        * 
+         * @param challengeRequest  
+         * @return Challenge
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun createChallenge(challengeRequest: ChallengeRequest): HttpResponse<Challenge> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = challengeRequest
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/handshake/challenge",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /handshake/session
+        * 
+        * 
+         * @param ainkradDevice The device, &#x60;d_…&#x60; 
+         * @param ainkradAlg &#x60;ES256&#x60; 
+         * @param ainkradTimestamp Unix seconds 
+         * @param ainkradNonce 16 random bytes, base64url 
+         * @param ainkradSignature Raw r||s over the canonical string with session &#x60;-&#x60;, base64url 
+         * @param sessionRequest  
+         * @return SessionGrant
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun createSession(ainkradDevice: kotlin.String, ainkradAlg: kotlin.String, ainkradTimestamp: kotlin.Long, ainkradNonce: kotlin.String, ainkradSignature: kotlin.String, sessionRequest: SessionRequest): HttpResponse<SessionGrant> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = sessionRequest
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+            ainkradDevice?.apply { localVariableHeaders["Ainkrad-Device"] = this.toString() }
+            ainkradAlg?.apply { localVariableHeaders["Ainkrad-Alg"] = this.toString() }
+            ainkradTimestamp?.apply { localVariableHeaders["Ainkrad-Timestamp"] = this.toString() }
+            ainkradNonce?.apply { localVariableHeaders["Ainkrad-Nonce"] = this.toString() }
+            ainkradSignature?.apply { localVariableHeaders["Ainkrad-Signature"] = this.toString() }
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/handshake/session",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * GET /handshake
         * 
         * 
@@ -43,7 +123,7 @@ import io.ktor.http.ParametersBuilder
             @Suppress("UNCHECKED_CAST")
         open suspend fun getHandshake(): HttpResponse<Handshake> {
 
-            val localVariableAuthNames = listOf<String>("device_key")
+            val localVariableAuthNames = listOf<String>("device_signature")
 
             val localVariableBody = 
                     io.ktor.client.utils.EmptyContent

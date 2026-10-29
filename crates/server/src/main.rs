@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ainkrad_core::audit::AuditActor;
-use ainkrad_core::ids::{DeviceKeyId, UserId};
+use ainkrad_core::ids::UserId;
 use ainkrad_core_server::api::{App, router};
 use ainkrad_core_server::scheduler::{Clock, Scheduler, SystemClock};
 use ainkrad_core_server::store::{self, gov};
@@ -33,33 +33,34 @@ const USAGE: &str = "usage:
   ainkrad-core-server backup <db> <dest>
   ainkrad-core-server restore [--force] <src> <db>
   ainkrad-core-server --help
-  ainkrad-core-server device add <db> <name>
   ainkrad-core-server device list <db>
   ainkrad-core-server device revoke <db> <device-id>
 
 serve listens on a Unix socket next to the database (<db dir>/core.sock, 0600) by default and
-serves the app at /api/v1 (a device key) and the modules mounted inside it. --listen
-loopback:<port> serves 127.0.0.1, --bind any address (plain HTTP, as before). --listen public
+serves the app at /api/v1 (signed requests from a paired device) and the modules mounted
+inside it. --listen loopback:<port> serves 127.0.0.1, --bind any address (plain HTTP, as before). --listen public
 serves TLS 1.3 on :443 with a certificate from ACME (Let's Encrypt production unless
 --acme-directory says otherwise, kept in <db dir>/tls) and needs --hostname and --acme-contact;
-the challenge is TLS-ALPN-01 on :443, or HTTP-01 on :80 with --acme-http01. Without a key only
-/handshake, pairing and /healthz answer. --host is the Host header clients must send (default:
-localhost on a socket, the address on loopback, the hostname in public); --trusted-proxy the
-proxies whose X-Forwarded-For names the client for the API's
-failure limit and logs (default: loopback, 127.0.0.0/8 and ::1). SIGTERM or Ctrl-C shuts serve
+the challenge is TLS-ALPN-01 on :443, or HTTP-01 on :80 with --acme-http01. Unsigned, only
+/handshake, pairing and /healthz answer. The Core identity key is <db dir>/core-identity.p8
+(0600), made on first start; its fingerprint is what /handshake shows and every request signs.
+--host is the Host header clients must send (default: localhost on a socket, the address on loopback, the hostname in public); --trusted-proxy the
+proxies whose X-Forwarded-For names the client for the lockouts and logs (default: none; the
+Core terminates TLS itself). SIGTERM or Ctrl-C shuts serve
 down: it stops accepting, gives requests in flight up to 10 s, closes event sockets so they
 reconnect, and checkpoints the database. Limits and intervals are settings (`setting list`),
 read when serve starts. With the four --apns-* flags, what a module's push rules pick is pushed
 to the app's devices through APNs; without them it is only logged. The platform alone pushes
 nothing. --log-format json writes JSON lines; both formats are redacted (E1-13.4).
 openapi prints the client API's contract (api/openapi.json; `make contract`).
-device add prints a new device key for the app (E10.3) once; only its hash is kept. It goes
-in `Authorization: Bearer` on /api/v1. device revoke stops it at once; the row stays listed.
+device list shows every device (id, kind, name, status, fingerprint); device revoke stops one at
+once (its open sockets close within 2 s); the row stays listed. A device enrolls only by
+pairing: there are no keys to hand out.
 backup <db> <dest> is a raw, unencrypted local snapshot (VACUUM INTO); restore [--force] <src>
 <db> swaps such a snapshot over a stopped database in place. The encrypted, signed backups and
 the fresh-home restore are under Operations.";
 
-/// Device keys are issued and revoked as the one admin user (#18).
+/// Devices are revoked as the one admin user (#18).
 pub(crate) const ADMIN: AuditActor = AuditActor::User(UserId(1));
 
 #[tokio::main]
@@ -119,12 +120,8 @@ async fn main() -> ExitCode {
             print!("{}", ainkrad_core_server::api::v1::spec::json());
             return ExitCode::SUCCESS;
         }
-        ["device", "add", db, name] => add_device(Path::new(db), name).await,
         ["device", "list", db] => list_devices(Path::new(db)).await,
-        ["device", "revoke", db, id] => match id.parse() {
-            Ok(id) => revoke_device(Path::new(db), id).await,
-            Err(_) => Err(format!("{id:?} is not a device id").into()),
-        },
+        ["device", "revoke", db, id] => revoke_device(Path::new(db), id).await,
         _ => {
             eprintln!("{}", usage());
             return ExitCode::from(2);
@@ -149,26 +146,17 @@ fn comma_list(list: &str) -> Vec<String> {
 
 type Result_ = Result<(), Box<dyn std::error::Error>>;
 
-/// Issues a device key and prints it, the only time it is ever shown.
-async fn add_device(db: &Path, name: &str) -> Result_ {
-    let pool = store::connect(db).await?;
-    let (device, key) = gov::issue_device_key(&pool, name, ADMIN).await?;
-    eprintln!(
-        "device {} (id {}) added. Its key, shown only now; give it to the app:",
-        device.name, device.id.0
-    );
-    println!("{key}");
-    Ok(())
-}
-
-/// One line per device key: id, name, created, last used, revoked. Never a key.
+/// One line per device: id, kind, name, status, fingerprint, created, last used, revoked.
 async fn list_devices(db: &Path) -> Result_ {
     let pool = store::connect(db).await?;
-    for d in gov::list_device_keys(&pool).await? {
+    for d in gov::list_devices(&pool).await? {
         println!(
-            "{}\t{}\tcreated {}\tlast used {}{}",
-            d.id.0,
+            "{}\t{}\t{}\t{}\t{}\tcreated {}\tlast used {}{}",
+            d.id,
+            d.kind,
             d.name,
+            d.status,
+            d.fingerprint,
             d.created_at,
             d.last_used_at.as_deref().unwrap_or("never"),
             d.revoked_at
@@ -179,14 +167,14 @@ async fn list_devices(db: &Path) -> Result_ {
     Ok(())
 }
 
-async fn revoke_device(db: &Path, id: i64) -> Result_ {
+async fn revoke_device(db: &Path, id: &str) -> Result_ {
     let pool = store::connect(db).await?;
     let now = SystemClock.now();
-    if gov::revoke_device_key(&pool, DeviceKeyId(id), ADMIN, &now).await? {
-        eprintln!("device {id} revoked; its key no longer authenticates");
+    if gov::revoke_device(&pool, id, ADMIN, None, &now).await? {
+        eprintln!("device {id} revoked; it no longer authenticates");
         Ok(())
     } else {
-        Err(format!("no live device key {id}").into())
+        Err(format!("no live device {id}").into())
     }
 }
 
@@ -276,14 +264,18 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
     Some(s)
 }
 
+/// The directory the database is in: where the socket, the TLS state and the identity key go.
+fn state_dir(db: &Path) -> &Path {
+    db.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+}
+
 /// Where to listen, from the flags: `unix:<path>`, `loopback:<port>`, `public[:<port>]`
 /// (443), or `--bind`'s address; a socket next to the database by default. Public needs a
 /// hostname and an ACME contact.
 fn listen(db: &Path, flags: &Serve) -> Result<gateway::Listen, String> {
-    let state = db
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
+    let state = state_dir(db);
     let spec = flags.listen.as_deref().unwrap_or("unix:");
     let port = |p: &str| p.parse::<u16>().map_err(|_| format!("{p:?} is not a port"));
     let public = matches!(spec.split(':').next(), Some("public"));
@@ -400,7 +392,11 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
     });
     let ticking =
         tokio::spawn(async move { scheduler.run(async { drop(stopped.changed().await) }).await });
-    let mut app = App::new(pool, Arc::new(SystemClock), host);
+    let identity = Arc::new(ainkrad_core_server::auth::Identity::load_or_create(
+        state_dir(db),
+    )?);
+    tracing::info!(core_fp = identity.fp, "Core identity");
+    let mut app = App::new(pool, Arc::new(SystemClock), host, identity);
     app.limits = limits;
     if let Some(list) = flags.trusted_proxies {
         app.trusted_proxies = list.into();

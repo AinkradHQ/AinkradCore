@@ -23,20 +23,15 @@ import kotlinx.serialization.Contextual
 /**
  * 
  *
- * @param code The code the admin was shown, in any case.
- * @param name What to call the new device.
+ * @param deviceId The device that will answer it, `d_…`.
  */
 @Serializable
 
-data class PairBody (
+data class ChallengeRequest (
 
-    /* The code the admin was shown, in any case. */
-    @SerialName(value = "code")
-    val code: kotlin.String,
-
-    /* What to call the new device. */
-    @SerialName(value = "name")
-    val name: kotlin.String
+    /* The device that will answer it, `d_…`. */
+    @SerialName(value = "device_id")
+    val deviceId: kotlin.String
 
 ) {
 

@@ -1,5 +1,6 @@
-//! The client API's gate (E10.3): host, origin, query names, device keys, rate limits. The
-//! route groups (E10.1) are tested on the same fixture in their own files.
+//! The client API's gate (handshake spec §5.3): host, origin, Authorization, query names,
+//! signatures, lockouts and request limits. The route groups (E10.1) and the signed-request
+//! cases of spec §17 are tested on the same fixture in their own files.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -17,19 +18,26 @@ use sqlx::SqlitePool;
 use super::Limits;
 use crate::api::limit::Limiter;
 use crate::api::{App, router};
+use crate::auth::Identity;
+use crate::auth::testing::TestDevice;
 use crate::scheduler::Clock;
 use crate::store::connect;
-use crate::store::gov::issue_device_key;
 
+mod abuse;
 mod events;
 mod me;
 mod modules;
-mod pairing;
 mod preauth;
+mod revocation;
+mod scopes;
+mod sessions;
 mod settings;
+mod signed;
 
 pub(super) const NOW: &str = "2026-10-22T10:00:00.000Z";
 pub(super) const HOST: &str = "core.test";
+/// Every scope: the fixture device is the admin's Mac.
+pub(super) const ALL: [&str; 6] = crate::store::gov::SCOPES;
 
 pub(super) struct FixedClock(pub Mutex<String>);
 
@@ -39,11 +47,24 @@ impl Clock for FixedClock {
     }
 }
 
-/// A migrated database in its own temp dir (removed on drop), an app on it, and a device key.
+impl FixedClock {
+    pub fn set(&self, at: &str) {
+        *self.0.lock().unwrap() = at.to_owned();
+    }
+
+    /// Moves the clock by `secs`.
+    pub fn advance(&self, secs: i64) {
+        let at = crate::scheduler::iso_of_unix(self.unix() + secs);
+        self.set(&at);
+    }
+}
+
+/// A migrated database in its own temp dir (removed on drop), an app on it, and an enrolled
+/// device with a session.
 pub(super) struct Fx {
     pub app: App,
     pub clock: Arc<FixedClock>,
-    pub key: String,
+    pub dev: TestDevice,
     dir: PathBuf,
 }
 
@@ -57,6 +78,7 @@ pub(super) async fn fx() -> Fx {
     static N: AtomicUsize = AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("core-v1-{}-{n}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let pool = connect(&dir.join("core.db")).await.unwrap();
     // The kinds and actions the route tests write, as a module would declare them.
@@ -68,39 +90,74 @@ pub(super) async fn fx() -> Fx {
     ];
     crate::store::kinds::allow(&pool, &["ops.line", "ops.blob"], &actions).await;
     let clock = Arc::new(FixedClock(Mutex::new(NOW.to_owned())));
-    let app = App::new(pool, clock.clone(), HOST.to_owned());
-    let (_, key) = issue_device_key(&app.pool, "test", super::BY)
-        .await
-        .unwrap();
+    let identity = Arc::new(Identity::load_or_create(&dir).unwrap());
+    let app = App::new(pool, clock.clone(), HOST.to_owned(), identity);
+    let dev = enroll(&app, &clock, "test", &ALL).await;
     Fx {
         app,
         clock,
-        key,
+        dev,
         dir,
     }
 }
 
-/// A request as the app sends it: our host, the bearer, JSON.
+/// A new device enrolled with `scopes` and logged in (a session issued directly).
+async fn enroll(app: &App, clock: &Arc<FixedClock>, name: &str, scopes: &[&str]) -> TestDevice {
+    let dev = TestDevice::enroll(
+        &app.pool,
+        name,
+        "device",
+        scopes,
+        &app.auth.identity.fp,
+        clock.clone(),
+    )
+    .await;
+    let s = app.auth.issue_session(&dev.id, clock.unix());
+    dev.set_session(Some(s.id));
+    dev
+}
+
+impl Fx {
+    pub async fn enroll(&self, name: &str, scopes: &[&str]) -> TestDevice {
+        enroll(&self.app, &self.clock, name, scopes).await
+    }
+
+    /// A device the Core has never seen, signing for this Core.
+    pub fn stranger(&self) -> TestDevice {
+        let dev = TestDevice::new(&self.app.auth.identity.fp, self.clock.clone());
+        dev.set_session(Some(crate::auth::crypto::random_id("s_")));
+        dev
+    }
+
+    /// The Core restarted: the same database and identity key, nothing in memory.
+    pub fn restart(&mut self) {
+        let identity = Arc::clone(&self.app.auth.identity);
+        self.app.auth = Arc::new(crate::auth::Auth::new(identity));
+    }
+}
+
+/// A request as the app sends it: our host, JSON, signed by `dev` (if any) over the exact
+/// body bytes.
 pub(super) fn req(
     method: Method,
     uri: &str,
-    key: Option<&str>,
+    dev: Option<&TestDevice>,
     body: Option<Value>,
 ) -> Request<Body> {
+    let bytes = body.map(|v| v.to_string()).unwrap_or_default();
     let mut b = Request::builder()
-        .method(method)
+        .method(method.clone())
         .uri(uri)
         .header(header::HOST, HOST);
-    if let Some(key) = key {
-        b = b.header(header::AUTHORIZATION, format!("Bearer {key}"));
+    if let Some(dev) = dev {
+        for (name, value) in dev.headers(method.as_str(), uri, bytes.as_bytes()) {
+            b = b.header(name, value);
+        }
     }
-    match body {
-        Some(v) => b
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(v.to_string()))
-            .unwrap(),
-        None => b.body(Body::empty()).unwrap(),
+    if !bytes.is_empty() {
+        b = b.header(header::CONTENT_TYPE, "application/json");
     }
+    b.body(Body::from(bytes)).unwrap()
 }
 
 /// Sends `r` and returns the status and the JSON body (`null` when empty or not JSON).
@@ -116,15 +173,7 @@ pub(super) async fn send(app: &App, r: Request<Body>) -> (StatusCode, Value) {
 
 impl Fx {
     pub async fn get(&self, uri: &str) -> (StatusCode, Value) {
-        send(&self.app, req(Method::GET, uri, Some(&self.key), None)).await
-    }
-
-    pub async fn post(&self, uri: &str, body: Value) -> (StatusCode, Value) {
-        send(
-            &self.app,
-            req(Method::POST, uri, Some(&self.key), Some(body)),
-        )
-        .await
+        send(&self.app, req(Method::GET, uri, Some(&self.dev), None)).await
     }
 
     /// `get` that must answer 200.
@@ -133,30 +182,22 @@ impl Fx {
         assert_eq!(status, StatusCode::OK, "GET {uri}: {body}");
         body
     }
-
-    /// `post` that must answer 200.
-    pub async fn ok_post(&self, uri: &str, body: Value) -> Value {
-        let (status, got) = self.post(uri, body).await;
-        assert_eq!(status, StatusCode::OK, "POST {uri}: {got}");
-        got
-    }
 }
 
-/// Every operation in the contract is routed, and answers 401 without a key.
+/// Every operation in the contract is routed, and answers 401 unsigned.
 #[tokio::test]
-async fn every_operation_in_the_contract_is_routed_and_needs_a_key() {
+async fn every_operation_in_the_contract_is_routed_and_needs_a_signature() {
     let mut fx = fx().await;
     fx.app.limits = Arc::new(Limits {
-        failures: Limiter::new(1000, 1.0),
         requests: Limiter::new(1000, 1.0),
     });
     let spec: Value = serde_json::from_str(&super::spec::json()).unwrap();
     let mut n = 0;
     for (path, item) in spec["paths"].as_object().unwrap() {
-        let uri = path.replace("{id}", "1");
+        let uri = path.replace("{id}", &fx.stranger().id);
         for (method, op) in item.as_object().unwrap() {
             let m: Method = method.to_uppercase().parse().unwrap();
-            // `security: [{}]`: an operation that needs no key (pairing a device).
+            // `security: [{}]`: an operation that needs no session (the handshake).
             if op["security"] == json!([{}]) {
                 n += 1;
                 continue;
@@ -164,7 +205,7 @@ async fn every_operation_in_the_contract_is_routed_and_needs_a_key() {
             let (status, body) = send(&fx.app, req(m.clone(), &uri, None, None)).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{m} {uri}: {body}");
             // Unrouted is a bare 404 or 405; a route's own 404 says what is missing.
-            let (status, body) = send(&fx.app, req(m.clone(), &uri, Some(&fx.key), None)).await;
+            let (status, body) = send(&fx.app, req(m.clone(), &uri, Some(&fx.dev), None)).await;
             let routed = status != StatusCode::METHOD_NOT_ALLOWED
                 && (status != StatusCode::NOT_FOUND || body["code"] == "not_found");
             assert!(routed, "{m} {uri} is not routed: {status}");
@@ -175,19 +216,23 @@ async fn every_operation_in_the_contract_is_routed_and_needs_a_key() {
 }
 
 #[tokio::test]
-async fn a_live_key_lists_adds_and_revokes_devices() {
+async fn a_device_lists_and_revokes_devices_and_sets_its_push_token() {
     let fx = fx().await;
     let list = fx.ok("/api/v1/devices").await;
     assert_eq!(list[0]["name"], "test");
+    assert_eq!(list[0]["id"], fx.dev.id.as_str());
+    assert_eq!(list[0]["kind"], "device");
+    assert_eq!(list[0]["status"], "active");
+    assert_eq!(list[0]["scopes"], json!(ALL));
+    assert_eq!(list[0]["fingerprint"].as_str().unwrap().len(), 43);
     assert_eq!(list[0]["last_used_at"], NOW, "use is recorded");
     let later = "2026-10-22T10:05:00.000Z";
-    *fx.clock.0.lock().unwrap() = later.to_owned();
+    fx.clock.set(later);
     assert_eq!(fx.ok("/api/v1/devices").await[0]["last_used_at"], later);
-    *fx.clock.0.lock().unwrap() = NOW.to_owned();
-    assert!(!list.to_string().contains(&fx.key), "never a key");
+    fx.clock.set(NOW);
 
     // The calling device registers its APNs token, and clears it.
-    let push = |m: Method, body| req(m, "/api/v1/push-token", Some(&fx.key), body);
+    let push = |m: Method, body| req(m, "/api/v1/push-token", Some(&fx.dev), body);
     let hex = "0a".repeat(32);
     let (status, _) = send(&fx.app, push(Method::PUT, Some(json!({"token": hex})))).await;
     assert_eq!(status, StatusCode::OK);
@@ -209,58 +254,32 @@ async fn a_live_key_lists_adds_and_revokes_devices() {
             .is_empty()
     );
 
-    let added = fx
-        .ok_post("/api/v1/devices", json!({"name": "iPhone"}))
-        .await;
-    let key = added["key"].as_str().unwrap().to_owned();
-    assert!(key.starts_with("cit_device_"));
-    let id = added["device"]["id"].as_i64().unwrap();
-    let (status, _) = send(
-        &fx.app,
-        req(Method::GET, "/api/v1/devices", Some(&key), None),
-    )
-    .await;
+    // Another device works until it is revoked; then it is refused like a stranger.
+    let phone = fx.enroll("iPhone", &["read", "approve"]).await;
+    let (status, _) = send(&fx.app, req(Method::GET, "/api/v1/me", Some(&phone), None)).await;
     assert_eq!(status, StatusCode::OK);
-
-    let (status, body) = send(
-        &fx.app,
-        req(
-            Method::DELETE,
-            &format!("/api/v1/devices/{id}"),
-            Some(&fx.key),
-            None,
-        ),
-    )
-    .await;
+    let uri = format!("/api/v1/devices/{}", phone.id);
+    let (status, body) = send(&fx.app, req(Method::DELETE, &uri, Some(&fx.dev), None)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["revoked_at"], NOW);
-    let (status, body) = send(
-        &fx.app,
-        req(Method::GET, "/api/v1/devices", Some(&key), None),
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED, "revoked key: {body}");
-    assert_eq!(body["code"], "unauthorized");
+    let (status, body) = send(&fx.app, req(Method::GET, "/api/v1/me", Some(&phone), None)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "revoked: {body}");
+    assert_eq!(body["code"], "auth_failed");
+    let (status, _) = send(&fx.app, req(Method::DELETE, &uri, Some(&fx.dev), None)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "already revoked");
     let (status, _) = send(
         &fx.app,
-        req(
-            Method::DELETE,
-            &format!("/api/v1/devices/{id}"),
-            Some(&fx.key),
-            None,
-        ),
+        req(Method::DELETE, "/api/v1/devices/42", Some(&fx.dev), None),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "already revoked");
-    let (status, _) = fx.post("/api/v1/devices", json!({"name": "  "})).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::NOT_FOUND, "not a device id");
 }
 
 #[tokio::test]
-async fn the_gate_refuses_hosts_origins_query_keys_and_bad_bearers() {
+async fn the_gate_refuses_hosts_origins_authorization_and_query_names() {
     let fx = fx().await;
     let with = |f: &dyn Fn(&mut Request<Body>)| {
-        let mut r = req(Method::GET, "/api/v1/devices", Some(&fx.key), None);
+        let mut r = req(Method::GET, "/api/v1/devices", Some(&fx.dev), None);
         f(&mut r);
         r
     };
@@ -268,48 +287,65 @@ async fn the_gate_refuses_hosts_origins_query_keys_and_bad_bearers() {
         r.headers_mut()
             .insert(header::HOST, "evil.example".parse().unwrap());
     });
-    assert_eq!(send(&fx.app, foreign).await.0, StatusCode::FORBIDDEN);
+    let (status, body) = send(&fx.app, foreign).await;
+    assert_eq!(
+        (status, &body["code"]),
+        (StatusCode::FORBIDDEN, &json!("unknown_host"))
+    );
     let origin = with(&|r| {
         r.headers_mut()
             .insert(header::ORIGIN, "https://evil.example".parse().unwrap());
     });
-    assert_eq!(send(&fx.app, origin).await.0, StatusCode::FORBIDDEN);
+    let (status, body) = send(&fx.app, origin).await;
+    assert_eq!(
+        (status, &body["code"]),
+        (StatusCode::FORBIDDEN, &json!("origin_refused"))
+    );
+    let bearer = with(&|r| {
+        r.headers_mut().insert(
+            header::AUTHORIZATION,
+            "Bearer cit_device_x".parse().unwrap(),
+        );
+    });
+    let (status, body) = send(&fx.app, bearer).await;
+    assert_eq!(
+        (status, &body["code"]),
+        (StatusCode::BAD_REQUEST, &json!("bad_request"))
+    );
 
-    let in_query = format!("/api/v1/devices?token={}", fx.key);
-    let (status, body) = send(&fx.app, req(Method::GET, &in_query, None, None)).await;
+    let (status, body) = send(
+        &fx.app,
+        req(Method::GET, "/api/v1/devices?token=x", Some(&fx.dev), None),
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     let (status, _) = send(
         &fx.app,
         req(
             Method::GET,
             "/api/v1/devices?limit=5&after=2",
-            Some(&fx.key),
+            Some(&fx.dev),
             None,
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "paging names pass");
+    assert_eq!(status, StatusCode::OK, "paging names pass, signed");
 
     let res = router(fx.app.clone())
         .oneshot(req(Method::GET, "/api/v1/devices", None, None))
         .await
         .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "no signing headers");
+    let stranger = fx.stranger();
+    let res = router(fx.app.clone())
+        .oneshot(req(Method::GET, "/api/v1/devices", Some(&stranger), None))
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(res.headers()[header::WWW_AUTHENTICATE], "Bearer");
-    let (status, _) = send(
-        &fx.app,
-        req(
-            Method::GET,
-            "/api/v1/devices",
-            Some("cit_device_0123"),
-            None,
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(res.headers()[header::WWW_AUTHENTICATE], "Ainkrad-ES256");
 }
 
-fn from(peer: &str, r: Request<Body>) -> Request<Body> {
+pub(super) fn from(peer: &str, r: Request<Body>) -> Request<Body> {
     let mut r = r;
     let addr: SocketAddr = format!("{peer}:50000").parse().unwrap();
     r.extensions_mut().insert(ConnectInfo(addr));
@@ -317,31 +353,26 @@ fn from(peer: &str, r: Request<Body>) -> Request<Body> {
 }
 
 #[tokio::test]
-async fn failed_keys_and_busy_devices_are_rate_limited() {
+async fn failed_signatures_lock_the_address_and_busy_devices_are_rate_limited() {
     let mut fx = fx().await;
-    let bad = || {
-        req(
-            Method::GET,
-            "/api/v1/devices",
-            Some("cit_device_wrong"),
-            None,
-        )
-    };
-    for _ in 0..10 {
-        let (status, _) = send(&fx.app, from("10.0.0.1", bad())).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // A new stranger each time, so the address lock (20) comes before any (address, device)
+    // lock (5).
+    let bad = || req(Method::GET, "/api/v1/devices", Some(&fx.stranger()), None);
+    for _ in 0..20 {
+        let (status, body) = send(&fx.app, from("10.0.0.1", bad())).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
     }
     let res = router(fx.app.clone())
         .oneshot(from("10.0.0.1", bad()))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
-    assert!(res.headers().contains_key(header::RETRY_AFTER));
-    // While the address is limited, even a good key from it waits; other addresses do not.
+    assert_eq!(res.headers()[header::RETRY_AFTER], "60");
+    // While the address is locked, even a good device from it waits; other addresses do not.
     let good = |peer| {
         from(
             peer,
-            req(Method::GET, "/api/v1/devices", Some(&fx.key), None),
+            req(Method::GET, "/api/v1/devices", Some(&fx.dev), None),
         )
     };
     assert_eq!(
@@ -351,7 +382,6 @@ async fn failed_keys_and_busy_devices_are_rate_limited() {
     assert_eq!(send(&fx.app, good("10.0.0.2")).await.0, StatusCode::OK);
 
     fx.app.limits = Arc::new(Limits {
-        failures: Limiter::new(10, 1.0),
         requests: Limiter::new(3, 0.001),
     });
     for _ in 0..3 {
@@ -361,34 +391,36 @@ async fn failed_keys_and_busy_devices_are_rate_limited() {
     assert_eq!(
         status,
         StatusCode::TOO_MANY_REQUESTS,
-        "per key, any address"
+        "per device, any address"
     );
     assert_eq!(body["code"], "rate_limited");
 }
 
 #[tokio::test]
-async fn behind_a_trusted_proxy_each_forwarded_client_has_its_own_failure_bucket() {
-    let fx = fx().await;
-    let bad = |peer, xff: &str| {
-        let mut r = req(Method::GET, "/api/v1/devices", Some("cit_device_x"), None);
+async fn forwarded_for_counts_only_from_a_configured_proxy() {
+    let mut fx = fx().await;
+    let bad = |fx: &Fx, peer, xff: &str| {
+        let mut r = req(Method::GET, "/api/v1/devices", Some(&fx.stranger()), None);
         r.headers_mut()
             .insert("x-forwarded-for", xff.parse().unwrap());
         from(peer, r)
     };
-    for _ in 0..10 {
-        send(&fx.app, bad("127.0.0.1", "198.51.100.1")).await;
+    // By default no proxy is trusted: a spoofed header does not pick another limiter key.
+    for n in 0..20 {
+        send(&fx.app, bad(&fx, "10.0.0.9", &format!("198.51.100.{n}"))).await;
     }
-    let limited = send(&fx.app, bad("127.0.0.1", "198.51.100.1")).await.0;
-    assert_eq!(limited, StatusCode::TOO_MANY_REQUESTS);
-    // Another client through the same proxy is not limited.
-    let other = send(&fx.app, bad("127.0.0.1", "198.51.100.2")).await.0;
-    assert_eq!(other, StatusCode::UNAUTHORIZED);
-    // An untrusted peer's header is ignored: it cannot borrow a fresh bucket.
-    for _ in 0..10 {
-        send(&fx.app, bad("10.0.0.9", "198.51.100.3")).await;
-    }
-    let spoofed = send(&fx.app, bad("10.0.0.9", "198.51.100.4")).await.0;
+    let spoofed = send(&fx.app, bad(&fx, "10.0.0.9", "198.51.100.99")).await.0;
     assert_eq!(spoofed, StatusCode::TOO_MANY_REQUESTS);
+
+    // Behind a configured proxy each forwarded client has its own key.
+    fx.app.trusted_proxies = Arc::new(crate::api::limit::Cidr::LOOPBACK);
+    for _ in 0..20 {
+        send(&fx.app, bad(&fx, "127.0.0.1", "198.51.100.1")).await;
+    }
+    let limited = send(&fx.app, bad(&fx, "127.0.0.1", "198.51.100.1")).await.0;
+    assert_eq!(limited, StatusCode::TOO_MANY_REQUESTS);
+    let other = send(&fx.app, bad(&fx, "127.0.0.1", "198.51.100.2")).await.0;
+    assert_eq!(other, StatusCode::UNAUTHORIZED);
 }
 
 async fn refusals(pool: &SqlitePool) -> Vec<Value> {
@@ -413,14 +445,21 @@ async fn every_error_carries_an_id_and_only_refused_writes_are_audited() {
     assert!(body["error_id"].as_str().unwrap().starts_with("err_"));
     let (_, again) = fx.get("/api/v1/settings/server/no.such").await;
     assert_ne!(body["error_id"], again["error_id"]);
-    let (status, _) = send(&fx.app, req(Method::POST, "/api/v1/devices", None, None)).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let stranger = fx.stranger();
+    let unsigned = req(Method::PUT, "/api/v1/push-token", Some(&stranger), None);
+    assert_eq!(send(&fx.app, unsigned).await.0, StatusCode::UNAUTHORIZED);
     assert!(
         refusals(&fx.app.pool).await.is_empty(),
         "a read and an unauthenticated request are no refused writes"
     );
 
-    let (status, body) = fx.post("/api/v1/devices", json!({"name": "  "})).await;
+    let bad = req(
+        Method::PUT,
+        "/api/v1/push-token",
+        Some(&fx.dev),
+        Some(json!({"token": "zz"})),
+    );
+    let (status, body) = send(&fx.app, bad).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     let refused = refusals(&fx.app.pool).await;
     assert_eq!(refused.len(), 1);
@@ -432,12 +471,14 @@ async fn every_error_carries_an_id_and_only_refused_writes_are_audited() {
         (
             &refused[0]["method"],
             &refused[0]["path"],
-            &refused[0]["code"]
+            &refused[0]["code"],
+            &refused[0]["device"]
         ),
         (
-            &json!("POST"),
-            &json!("/api/v1/devices"),
-            &json!("bad_request")
+            &json!("PUT"),
+            &json!("/api/v1/push-token"),
+            &json!("bad_request"),
+            &json!(fx.dev.id)
         )
     );
 }

@@ -95,7 +95,14 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
     let db = db().await;
     let first = versions(&db.pool, CORE).await;
     let names: Vec<(i64, &str)> = first.iter().map(|v| (v.0, v.1.as_str())).collect();
-    assert_eq!(names, [(1, "core_0001"), (2, "events_audit")]);
+    assert_eq!(
+        names,
+        [
+            (1, "core_0001"),
+            (2, "events_audit"),
+            (3, "device_identity")
+        ]
+    );
     let sum: Vec<u8> =
         sqlx::query_scalar("SELECT checksum FROM _migrations_core WHERE version = 1")
             .fetch_one(&db.pool)
@@ -134,7 +141,7 @@ async fn a_tampered_migration_is_refused() {
 async fn a_newer_database_is_refused() {
     let db = db().await;
     sqlx::query(
-        "INSERT INTO _migrations_core (version, name, checksum) VALUES (3, 'core_0003', x'00')",
+        "INSERT INTO _migrations_core (version, name, checksum) VALUES (99, 'core_0099', x'00')",
     )
     .execute(&db.pool)
     .await
@@ -144,10 +151,10 @@ async fn a_newer_database_is_refused() {
         matches!(
             err,
             MigrateError::Newer {
-                found: 3,
-                known: 2,
+                found: 99,
+                known,
                 ..
-            }
+            } if known == CORE_MIGRATIONS.last().unwrap().version
         ),
         "{err}"
     );
@@ -279,9 +286,9 @@ async fn a_module_cannot_touch_a_platform_table() {
 async fn ids_whose_prefix_reaches_the_platform_or_another_module_are_refused() {
     static NONE: &[Migration] = &[];
     let db = db().await;
-    // `audit_` covers `audit_events`, `events_` the `events_*` triggers, `device_` the device
-    // tables; `core` and `sqlite` are reserved.
-    for id in ["audit", "events", "device", "push", "core", "sqlite", "Toy"] {
+    // `audit_` covers `audit_events`, `events_` the `events_*` triggers, `push_` the push
+    // cursor; `core` (which also covers the device tables) and `sqlite` are reserved.
+    for id in ["audit", "events", "push", "core", "sqlite", "Toy"] {
         let err = migrate_modules(&db.pool, &toy(id, NONE)).await.unwrap_err();
         assert!(matches!(err, MigrateError::Refused { .. }), "{id}: {err}");
     }
@@ -330,8 +337,8 @@ async fn user_owned_tables_carry_user_id() {
         "events_floor",
         // The owners themselves.
         "users",
-        // A code belongs to no one until it is spent; then its device key carries the user.
-        "device_pairings",
+        // Failure counters by address: they belong to whoever is failing, not to a user.
+        "core_auth_limits",
         // Each describes a row that carries its own user.
         "events",
         // One row: the pusher's position, the process's.
