@@ -1,6 +1,6 @@
 CARGO ?= cargo
 
-.PHONY: clients clients-check clients-smoke build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 run build-citadel test-citadel
+.PHONY: clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 run build-citadel test-citadel
 build: lint ; $(CARGO) build --workspace
 test: lint ; $(CARGO) test --workspace
 lint: format-check ; $(CARGO) clippy --workspace --all-targets -- -D warnings
@@ -13,6 +13,10 @@ contract: ; scripts/contract.sh api
 clients: ; scripts/contract-swift.sh clients && scripts/contract-clients.sh gen clients
 clients-check: ; scripts/clients-check.sh
 clients-smoke: ; scripts/contract-clients.sh smoke clients && cd clients/swift && swift test
+# Additive-only gate (E1-05.4): api/ against the newest v* tag, else origin/development. The selftest
+# proves it on mutations of the contract (needs Docker, so it is not part of `make test`).
+schema-compat: ; scripts/schema-compat.sh
+schema-compat-selftest: ; scripts/schema-compat-selftest.sh
 # Supply chain (E1-01.3): advisories, licences, bans, sources; see deny.toml.
 audit: ; $(CARGO) deny check
 # Linux runs in Docker with the pinned toolchain (E1-01.4). Colima/Docker on Apple silicon runs arm64 natively.
