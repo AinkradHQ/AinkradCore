@@ -111,11 +111,11 @@ async fn an_unknown_kind_is_refused_on_every_path() {
 
     // Registration: another owner cannot take a name; a module only its own prefix.
     let mut tx = begin_write(pool).await.unwrap();
-    let taken = crate::store::kinds::register(&mut tx, "ops", &["audit"], &[]).await;
+    let taken = crate::store::kinds::register(&mut tx, "ops", &[("audit", "read")], &[]).await;
     assert!(taken.is_err());
-    let theirs = crate::store::kinds::register(&mut tx, "mail", &["ops.ran"], &[]).await;
+    let theirs = crate::store::kinds::register(&mut tx, "mail", &[("ops.ran", "read")], &[]).await;
     assert!(theirs.is_err());
-    crate::store::kinds::register(&mut tx, "ops", &["ops.ran"], &[])
+    crate::store::kinds::register(&mut tx, "ops", &[("ops.ran", "read")], &[])
         .await
         .expect("idempotent");
 }

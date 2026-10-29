@@ -47,6 +47,13 @@ pub trait Module: Send + Sync + 'static {
         &[]
     }
 
+    /// The scope a device needs to see the module's event `kind` in its stream
+    /// (`store::events::view`): one of `read`, `approve`, `terminal`, `agent`, `admin`. The
+    /// module's route scope unless it says otherwise.
+    fn event_scope(&self, _kind: &str) -> &'static str {
+        self.scope()
+    }
+
     /// The audit actions the module records, each `<id>.<…>`.
     fn audit_actions(&self) -> &'static [&'static str] {
         &[]
