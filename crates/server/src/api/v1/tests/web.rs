@@ -135,6 +135,38 @@ async fn a_sign_count_that_does_not_grow_locks_the_passkey_once() {
 }
 
 #[tokio::test]
+async fn two_sign_ins_finishing_out_of_order_do_not_lock_the_passkey() {
+    let fx = fx_pk().await;
+    let (mut a, id) = pair_passkey(&fx, &["read"]).await;
+    // Two tabs: options for both, the authenticator answers the first (count 2), then the second
+    // (count 3), and the second's request lands first.
+    let (tab1, tab2) = (browser(&fx, &id), browser(&fx, &id));
+    let (o1, o2) = (options(&fx, &tab1).await, options(&fx, &tab2).await);
+    let (first, second) = (a.assert(&o1), a.assert(&o2));
+    let (s, g) = session_with(&fx, second).await;
+    assert_eq!(s, StatusCode::OK, "{g}");
+    tab2.set_session(g["session_id"].as_str().map(str::to_owned));
+    let before = audit_rows(&fx).await;
+    let (s, v) = session_with(&fx, first).await;
+    assert_eq!((s, code_of(&v)), (StatusCode::UNAUTHORIZED, "auth_failed"));
+    let d = gov::get_device(&fx.app.pool, &id).await.unwrap().unwrap();
+    assert_eq!(d.status, "active", "a race is not a clone");
+    assert_eq!(audit_rows(&fx).await, before);
+    let (s, v) = send(&fx.app, req(Method::GET, "/api/v1/me", Some(&tab2), None)).await;
+    assert_eq!(s, StatusCode::OK, "the other tab's session lives: {v}");
+
+    // The same low count once the ceremony window has passed is a clone.
+    fx.clock.advance(61);
+    a.counter = Some(1);
+    assert_eq!(
+        sign_in(&fx, &mut a, &browser(&fx, &id)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let d = gov::get_device(&fx.app.pool, &id).await.unwrap().unwrap();
+    assert_eq!(d.status, "locked");
+}
+
+#[tokio::test]
 async fn a_web_session_is_signed_only_with_its_own_key_and_ends_on_time() {
     let fx = fx_pk().await;
     let (mut a, id) = pair_passkey(&fx, &["read"]).await;
@@ -227,6 +259,7 @@ async fn reset(fx: &Fx, id: &str) {
 #[tokio::test]
 async fn a_passkey_step_up_needs_a_verified_assertion_over_its_own_live_challenge() {
     let fx = fx_pk().await;
+    super::passkeys::passkey_admin(&fx, true).await;
     let (mut a, id) = pair_passkey(&fx, &["read", "admin"]).await;
     let web = browser(&fx, &id);
     assert_eq!(sign_in(&fx, &mut a, &web).await.0, StatusCode::OK);

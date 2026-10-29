@@ -146,6 +146,17 @@ async fn run() {
     let clock = Arc::new(SystemClock);
     let mut app = App::new(pool.clone(), clock.clone(), host.clone(), identity.clone());
     app.passkeys = Some(Arc::new(Passkeys::new(&host, true).unwrap()));
+    // This passkey is paired with `admin`, which T-PK-3 refuses by default.
+    ainkrad_core_server::store::settings::set(
+        &pool,
+        ainkrad_core::settings::Key::AuthPasskeyAdmin,
+        ainkrad_core::settings::Scope::Server,
+        "1",
+        ainkrad_core::audit::AuditActor::System,
+        &clock.now(),
+    )
+    .await
+    .unwrap();
     let service = router(app.clone()).into_make_service_with_connect_info::<SocketAddr>();
     tokio::spawn(async move { axum::serve(listener, service).await });
 

@@ -21,4 +21,9 @@ registry! {
     AuthWebSessionSecs "auth.web_session_secs" Seconds 28_800, 3_600, 86_400, SO,
         "How long a web session from a passkey sign-in lives, absolute (never extended); read at \
          each sign-in.";
+    AuthPasskeyAdmin "auth.passkey_admin" Count 0, 0, 1, SO,
+        "1 lets a passkey (a browser, E1-08) hold the admin scope, 0 (the default) refuses it at \
+         pairing, approval and a scope change: a synced passkey is only as strong as its Apple or \
+         Google account (threat model T-PK-3). Devices that hold it already keep it. Read at \
+         each of those.";
 }

@@ -203,6 +203,9 @@ async fn no_signature_nonce_challenge_or_key_is_logged() {
         "an unattributed auth_failed: {log}"
     );
     assert!(log.contains("web session issued"), "{log}");
+    // The passkey failure paths ran, so the scan below covers their lines too.
+    assert!(log.contains("passkey registration refused"), "{log}");
+    assert!(log.contains("assertion refused"), "{log}");
     assert!(
         log.contains("step-up refused") && log.contains("session elevated"),
         "{log}"
@@ -232,7 +235,8 @@ fn strings(v: &serde_json::Value, out: &mut Vec<String>) {
     }
 }
 
-/// A passkey paired, signed in (once wrongly), stepped up, and given a ticket: what was sent.
+/// A passkey paired (once wrongly), signed in (once wrongly), stepped up (once wrongly), and
+/// given a ticket: what was sent.
 async fn passkey_flow(
     app: &App,
     mac: &TestDevice,
@@ -247,8 +251,17 @@ async fn passkey_flow(
     let code = p["code"].as_str().unwrap().to_owned();
     let pid = p["pairing_id"].as_str().unwrap().to_owned();
     let body = format!(r#"{{"code":"{code}"}}"#);
-    let o = json(&send(app, "POST", "/pair/passkey/options", &[], &body).await);
     let mut a = SoftAuthenticator::new("core.test", "https://core.test");
+    // A registration that does not verify (another origin) first: its failure line logs nothing sent.
+    let o = json(&send(app, "POST", "/pair/passkey/options", &[], &body).await);
+    a.origin = "https://evil.test".into();
+    let bad = a.register(&o["options"]);
+    a.origin = "https://core.test".into();
+    strings(&o, &mut sent);
+    strings(&bad, &mut sent);
+    let claim = serde_json::json!({"code": code, "credential": bad}).to_string();
+    send(app, "POST", "/pair/passkey/claim", &[], &claim).await;
+    let o = json(&send(app, "POST", "/pair/passkey/options", &[], &body).await);
     let cred = a.register(&o["options"]);
     strings(&o, &mut sent);
     strings(&cred, &mut sent);
@@ -276,14 +289,20 @@ async fn passkey_flow(
             web.set_session(g["session_id"].as_str().map(str::to_owned));
         }
     }
-    let h = web.headers("POST", "/api/v1/auth/step-up/challenge", b"");
-    let c = json(&send(app, "POST", "/api/v1/auth/step-up/challenge", &h, "").await);
-    let assertion = a.assert(&c["options"]);
-    strings(&c, &mut sent);
-    strings(&assertion, &mut sent);
-    let body = serde_json::json!({"challenge": c["challenge"], "assertion": assertion}).to_string();
-    let h = web.headers("POST", "/api/v1/auth/step-up", body.as_bytes());
-    let e = json(&send(app, "POST", "/api/v1/auth/step-up", &h, &body).await);
+    // A step-up without user verification, then a good one.
+    let mut e = serde_json::Value::Null;
+    for good in [false, true] {
+        let h = web.headers("POST", "/api/v1/auth/step-up/challenge", b"");
+        let c = json(&send(app, "POST", "/api/v1/auth/step-up/challenge", &h, "").await);
+        a.flags = if good { 0x05 } else { 0x01 };
+        let assertion = a.assert(&c["options"]);
+        strings(&c, &mut sent);
+        strings(&assertion, &mut sent);
+        let body =
+            serde_json::json!({"challenge": c["challenge"], "assertion": assertion}).to_string();
+        let h = web.headers("POST", "/api/v1/auth/step-up", body.as_bytes());
+        e = json(&send(app, "POST", "/api/v1/auth/step-up", &h, &body).await);
+    }
     assert!(e["elevated_until"].is_string(), "{e}");
     let h = web.headers("POST", "/api/v1/ws-ticket", b"");
     let t = json(&send(app, "POST", "/api/v1/ws-ticket", &h, "").await);

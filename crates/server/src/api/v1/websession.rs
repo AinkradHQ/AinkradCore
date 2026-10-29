@@ -197,10 +197,11 @@ async fn sign_in(
         Ok(r) => r,
         Err(WebauthnError::CredentialPossibleCompromise) => {
             let counter = counter_of(cred);
-            if let Err(e) = lock(app, &device, &stored.credential_id, counter).await {
-                return Ok(Err(e.into()));
-            }
-            return Err(("sign count did not grow: locked", named));
+            return match lock(app, &device, &stored.credential_id, counter).await {
+                Ok(gov::Lock::Raced) => Err(("sign count raced a concurrent sign-in", named)),
+                Ok(_) => Err(("sign count did not grow: locked", named)),
+                Err(e) => Ok(Err(e.into())),
+            };
         }
         Err(e) => {
             tracing::debug!(error = %e, "assertion refused");
@@ -251,18 +252,23 @@ pub(super) fn counter_of(cred: &PublicKeyCredential) -> u32 {
 }
 
 /// Locks a cloned credential and its device, then closes the device's sessions and sockets.
+/// A `Raced` count (two ceremonies finishing out of order) locks and closes nothing.
 pub(super) async fn lock(
     app: &App,
     device: &Device,
     credential: &[u8],
     reported: u32,
-) -> Result<(), sqlx::Error> {
-    if gov::lock_credential(&app.pool, credential, reported, &app.clock.now()).await? {
-        tracing::warn!(
+) -> Result<gov::Lock, sqlx::Error> {
+    let now = app.clock.now();
+    let done = gov::lock_credential(&app.pool, credential, reported, &now, CEREMONY_SECS).await?;
+    match done {
+        gov::Lock::Raced => return Ok(done),
+        gov::Lock::Locked => tracing::warn!(
             device = device.id,
             "passkey locked: sign count did not grow"
-        );
+        ),
+        gov::Lock::Already => {}
     }
     app.auth.revoked(&device.id);
-    Ok(())
+    Ok(done)
 }
