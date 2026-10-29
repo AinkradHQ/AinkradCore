@@ -133,6 +133,7 @@
             "type": "object"
           },
           "entity_id": {
+            "description": "A numeric entity id; absent for a device, which is named by `entity_ref` only.",
             "format": "int64",
             "type": [
               "integer",
@@ -140,6 +141,13 @@
             ]
           },
           "entity_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entity_ref": {
+            "description": "The entity's public id: a device's opaque `d_…` id, else `entity_id` as text.",
             "type": [
               "string",
               "null"
@@ -485,7 +493,7 @@
             "$ref": "#/components/schemas/Timestamp"
           },
           "kind": {
-            "description": "What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,\n`action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `details`), or a kind a\nmodule writes. The registered kinds are listed in `x-event-kinds`.",
+            "description": "What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,\n`action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;\na device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a\nmodule writes. The registered kinds are listed in `x-event-kinds`.",
             "type": "string"
           },
           "payload": {
@@ -586,6 +594,20 @@
               "null"
             ]
           },
+          "core_sig": {
+            "description": "`POST` only: the Core identity key's ES256 signature (raw r||s, base64url) over the UTF-8\nstring `AINKRAD-CORE-V1` LF `<host>` LF `<nonce>`, no trailing newline; `host` is the\nCore's configured Host (`localhost` on a Unix socket), `nonce` the text the client sent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "core_spki": {
+            "description": "`POST` only: the Core identity key, a P-256 SubjectPublicKeyInfo, base64url. Its\nfingerprint is `identity_fingerprint`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "git_sha": {
             "description": "The commit it was built from (short sha), when the build knew it.",
             "type": [
@@ -620,6 +642,20 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "HandshakeBody": {
+        "additionalProperties": false,
+        "description": "A liveness proof request: a fresh nonce from the client.",
+        "properties": {
+          "nonce": {
+            "description": "16 random bytes, base64url without padding (22 characters).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "nonce"
+        ],
         "type": "object"
       },
       "LatestEvent": {
@@ -1479,12 +1515,12 @@
     }
   },
   "info": {
-    "description": "The Ainkrad Core client API, for the Ainkrad app. Every request is signed by the device's own P-256 key (ES256, raw r||s): the headers Ainkrad-Device, Ainkrad-Session, Ainkrad-Alg (ES256), Ainkrad-Timestamp, Ainkrad-Nonce and Ainkrad-Signature cover an exact canonical string of the Core identity fingerprint, the method, path, query, time, nonce and the body's SHA-256 (handshake spec §5). A session comes from POST /handshake/challenge then POST /handshake/session and lasts 15 minutes; there is no bearer secret, and an Authorization header is refused. Requests carry the server's own Host and no Origin, or the Core's own origin from its web client. A web client signs in with a passkey (POST /handshake/passkey/options, then POST /handshake/passkey/session) and signs every request with a non-extractable WebCrypto P-256 session key in the same way; its event socket takes a one-time ticket (POST /api/v1/ws-ticket) in Sec-WebSocket-Protocol. Times are RFC 3339 UTC with milliseconds. Versioning: within /api/v1, enum values, union variants, optional fields and operations may be added; a client must keep an unknown enum value (every enum is open) and skip an event or union variant it cannot decode. Anything removed or renamed is a new /api/v2. `info.version` is `1.<minor>.0`; the minor (`GET /api/v1/me`, `versions.api.minor`) is bumped on every addition.",
+    "description": "The Ainkrad Core client API, for the Ainkrad app. Every request is signed by the device's own P-256 key (ES256, raw r||s): the headers Ainkrad-Device, Ainkrad-Session, Ainkrad-Alg (ES256), Ainkrad-Timestamp, Ainkrad-Nonce and Ainkrad-Signature cover an exact canonical string of the Core identity fingerprint, the method, path, query, time, nonce and the body's SHA-256 (handshake spec §5). A session comes from POST /handshake/challenge then POST /handshake/session and lasts 15 minutes; there is no bearer secret, and an Authorization header is refused. A signed body is at most 1 MiB: a larger one is answered 401 auth_failed and counted as a failure against the address, so keep uploads below it. Before trusting a Core, POST /handshake with a fresh nonce and check that core_sig verifies under core_spki and that its fingerprint is the pinned one. Requests carry the server's own Host and no Origin, or the Core's own origin from its web client. A web client signs in with a passkey (POST /handshake/passkey/options, then POST /handshake/passkey/session) and signs every request with a non-extractable WebCrypto P-256 session key in the same way; its event socket takes a one-time ticket (POST /api/v1/ws-ticket) in Sec-WebSocket-Protocol. Times are RFC 3339 UTC with milliseconds. Versioning: within /api/v1, enum values, union variants, optional fields and operations may be added; a client must keep an unknown enum value (every enum is open) and skip an event or union variant it cannot decode. Anything removed or renamed is a new /api/v2. `info.version` is `1.<minor>.0`; the minor (`GET /api/v1/me`, `versions.api.minor`) is bumped on every addition.",
     "license": {
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.9.0"
+    "version": "1.10.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -1523,7 +1559,7 @@
             }
           },
           {
-            "description": "Only rows about this entity: its kind (`device`), or kind and id (`device:3`).",
+            "description": "Only rows about this entity: its kind (`device`), or kind and id (`device:d_…`, or\n`<kind>:<n>` for a kind with numeric ids).",
             "in": "query",
             "name": "target",
             "required": false,
@@ -1550,7 +1586,7 @@
                 }
               }
             },
-            "description": "Audit rows, newest first. A `target` id that is not a number, or an unknown `actor`, is a 400"
+            "description": "Audit rows, newest first. A `target` id that is not a `d_…` device id or a number, or an unknown `actor`, is a 400"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -3151,6 +3187,58 @@
               }
             },
             "description": "The server's version and build, the contract minor and the minors it serves, and the Core identity fingerprint. Needs no signature"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "tags": [
+          "handshake"
+        ]
+      },
+      "post": {
+        "operationId": "proveHandshake",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandshakeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Handshake"
+                }
+              }
+            },
+            "description": "As `GET /handshake`, plus `core_spki` and `core_sig`, the Core identity key's signature over the client's nonce: check `fp(core_spki)` is the pinned `core_fp` and that `core_sig` verifies before trusting this Core. 400 for a nonce that is not 16 bytes of base64url. Needs no signature"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

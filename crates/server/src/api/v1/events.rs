@@ -55,7 +55,8 @@ pub struct Event {
     pub seq: i64,
     pub at: Timestamp,
     /// What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,
-    /// `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `details`), or a kind a
+    /// `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;
+    /// a device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a
     /// module writes. The registered kinds are listed in `x-event-kinds`.
     pub kind: String,
     #[schema(value_type = Object)]

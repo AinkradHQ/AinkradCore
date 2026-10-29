@@ -232,7 +232,6 @@ fn a_resume_point_past_retention_exits_5_with_the_floor() {
 /// `core_sig` the Core key over `"AINKRAD-CORE-V1\n" + host + "\n" + nonce`; §13 has native
 /// clients verify it against the pinned fingerprint on each connect.
 #[tokio::test]
-#[ignore = "server deviation: /handshake is GET-only with identity_fingerprint and no core_spki/core_sig (crates/server/src/api.rs router, api/v1/handshake.rs); the pin check cannot be a proof"]
 async fn handshake_proves_the_core_key() {
     let core = Core::start("hsproof");
     let net = Net::new(Endpoint::Unix(core.sock.clone()), None, None).unwrap();
@@ -248,9 +247,8 @@ async fn handshake_proves_the_core_key() {
 }
 
 /// Spec §3 and §15.4: devices are named by random opaque `d_…` ids, never by an autoincrement
-/// integer that repeats across Cores and invites enumeration.
+/// integer that repeats across Cores and invites enumeration (KAN-252: `entity_ref`).
 #[test]
-#[ignore = "server deviation: audit rows (and so every audit event) name a device by its integer row, entity_id 1, 2, … (crates/server/src/store/gov/devices.rs audit_device, AuditEntity.id is i64); the d_ id is only in details"]
 fn audit_events_name_devices_by_their_opaque_id() {
     let core = Core::start("entity");
     let ks = core.keystore("mac");
@@ -269,5 +267,7 @@ fn audit_events_name_devices_by_their_opaque_id() {
         .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
         .find(|e| e["payload"]["action"] == "pairing.claimed")
         .unwrap();
-    assert_eq!(claimed["payload"]["entity_id"], *dev);
+    // The row number never leaves: `entity_id` is null and `entity_ref` is the opaque id.
+    assert_eq!(claimed["payload"]["entity_id"], serde_json::Value::Null);
+    assert_eq!(claimed["payload"]["entity_ref"], *dev);
 }

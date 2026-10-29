@@ -100,6 +100,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /handshake`.
     /// - Remark: Generated from `#/paths//handshake/get(getHandshake)`.
     func getHandshake(_ input: Operations.GetHandshake.Input) async throws -> Operations.GetHandshake.Output
+    /// - Remark: HTTP `POST /handshake`.
+    /// - Remark: Generated from `#/paths//handshake/post(proveHandshake)`.
+    func proveHandshake(_ input: Operations.ProveHandshake.Input) async throws -> Operations.ProveHandshake.Output
     /// - Remark: HTTP `POST /handshake/challenge`.
     /// - Remark: Generated from `#/paths//handshake/challenge/post(createChallenge)`.
     func createChallenge(_ input: Operations.CreateChallenge.Input) async throws -> Operations.CreateChallenge.Output
@@ -412,6 +415,17 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//handshake/get(getHandshake)`.
     public func getHandshake(headers: Operations.GetHandshake.Input.Headers = .init()) async throws -> Operations.GetHandshake.Output {
         try await getHandshake(Operations.GetHandshake.Input(headers: headers))
+    }
+    /// - Remark: HTTP `POST /handshake`.
+    /// - Remark: Generated from `#/paths//handshake/post(proveHandshake)`.
+    public func proveHandshake(
+        headers: Operations.ProveHandshake.Input.Headers = .init(),
+        body: Operations.ProveHandshake.Input.Body
+    ) async throws -> Operations.ProveHandshake.Output {
+        try await proveHandshake(Operations.ProveHandshake.Input(
+            headers: headers,
+            body: body
+        ))
     }
     /// - Remark: HTTP `POST /handshake/challenge`.
     /// - Remark: Generated from `#/paths//handshake/challenge/post(createChallenge)`.

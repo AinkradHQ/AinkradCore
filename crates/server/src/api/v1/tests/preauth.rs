@@ -204,3 +204,48 @@ async fn the_handshake_answers_unsigned_and_leaks_nothing_else() {
     // Nothing about devices: the only device's name and id are not in it.
     assert!(!body.to_string().contains("test") && !body.to_string().contains(&fx.dev.id));
 }
+
+/// Spec §4, §13 (KAN-251/252): `POST /handshake {nonce}` returns the Core key and its signature
+/// over `AINKRAD-CORE-V1` LF host LF nonce; a malformed nonce is a 400.
+#[tokio::test]
+async fn the_handshake_proves_the_core_key_over_a_nonce() {
+    use crate::auth::crypto::{fingerprint, unb64, verify};
+    let fx = fx().await;
+    let nonce = "BQUFBQUFBQUFBQUFBQUFBQ";
+    let (status, body) = send(
+        &fx.app,
+        req(
+            Method::POST,
+            "/handshake",
+            None,
+            Some(json!({"nonce": nonce})),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let spki = unb64(body["core_spki"].as_str().unwrap(), 122).unwrap();
+    assert_eq!(fingerprint(&spki), fx.app.auth.identity.fp);
+    assert_eq!(
+        body["identity_fingerprint"],
+        fx.app.auth.identity.fp.as_str()
+    );
+    let sig = unb64(body["core_sig"].as_str().unwrap(), 86).unwrap();
+    let message = format!("AINKRAD-CORE-V1\n{HOST}\n{nonce}");
+    assert!(verify(&spki, message.as_bytes(), &sig));
+    assert!(!verify(
+        &spki,
+        b"AINKRAD-CORE-V1\nother\nBQUFBQUFBQUFBQUFBQUFBQ",
+        &sig
+    ));
+    for bad in [
+        json!({}),
+        json!({"nonce": "short"}),
+        json!({"nonce": nonce, "x": 1}),
+    ] {
+        let (status, _) = send(&fx.app, req(Method::POST, "/handshake", None, Some(bad))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+    // GET is unchanged: no key, no signature.
+    let (_, body) = send(&fx.app, req(Method::GET, "/handshake", None, None)).await;
+    assert!(body.get("core_sig").is_none() && body.get("core_spki").is_none());
+}
