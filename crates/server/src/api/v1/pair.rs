@@ -106,7 +106,7 @@ async fn wrong(app: &App, addr: &str, why: &'static str, spent: bool, now: i64) 
     }
 }
 
-fn bad(why: &str) -> Response {
+pub(super) fn bad(why: &str) -> Response {
     ApiError::bad_request(why).into_response()
 }
 
@@ -116,6 +116,24 @@ fn bad(why: &str) -> Response {
         matches the SAS. 401 `pairing_failed` for a wrong, used, expired or burned credential; \
         400 for keys or proofs that do not hold (the pairing is not spent)", body = Claimed)))]
 pub async fn claim(State(app): State<App>, req: Request) -> Response {
+    budgeted(&app, req, What::Claim).await
+}
+
+/// What a budgeted pairing call does with a pairing credential.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum What {
+    /// `/pair/claim`: a device or runner.
+    Claim,
+    /// `/pair/passkey/options`: a passkey's registration options (spends nothing).
+    PasskeyOptions,
+    /// `/pair/passkey/claim`: a passkey's credential.
+    PasskeyClaim,
+}
+
+/// Every call that takes a pairing credential runs here, under the same budgets: a wrong one is
+/// a wrong claim, whichever route it came to, so `/pair/passkey/*` is no oracle for codes.
+pub(super) async fn budgeted(app: &App, req: Request, what: What) -> Response {
+    let app = app.clone();
     let (parts, raw) = req.into_parts();
     let addr = gate::address(&app, &parts);
     let now = app.clock.unix();
@@ -145,7 +163,11 @@ pub async fn claim(State(app): State<App>, req: Request) -> Response {
         drop(slots_without_global(slots));
         return busy();
     }
-    let out = evaluate(&app, &parts, raw, now).await;
+    let out = match what {
+        What::Claim => evaluate(&app, &parts, raw, now).await,
+        What::PasskeyOptions => super::passkey::options(&app, &parts, raw, now).await,
+        What::PasskeyClaim => super::passkey::claim(&app, &parts, raw, now).await,
+    };
     let spent = slots.finish(out.is_err());
     match out {
         Ok(r) => r,
@@ -191,6 +213,44 @@ fn slots_without_global(mut slots: Slots<'_>) -> Slots<'_> {
     slots
 }
 
+/// The live pairing a typed `code` or QR `secret` names, and the credential's hash; of kind
+/// `passkey` when `passkey`, else of any other kind. `Err` is a wrong claim (counted); `Ok(Err)`
+/// an answer that is not one (a malformed body, a store error).
+pub(super) async fn live_pairing(
+    app: &App,
+    parts: &axum::http::request::Parts,
+    code: &Option<String>,
+    secret: &Option<String>,
+    passkey: bool,
+) -> Result<Result<(gov::Pairing, [u8; 32]), Response>, &'static str> {
+    let (hash, by_code) = match (code, secret) {
+        (Some(code), None) => match normal_code(code) {
+            Some(c) => (code_hash(&c), true),
+            None => return Err("malformed code"),
+        },
+        (None, Some(secret)) => match unb64(secret, 22) {
+            Some(s) => (secret_hash(&s), false),
+            None => return Err("malformed secret"),
+        },
+        _ => return Ok(Err(bad("send one of code and secret"))),
+    };
+    let pairing = match gov::find_pairing(&app.pool, &hash, by_code).await {
+        // Not yet swept by the scheduler is not live: `/pair/passkey/options` spends nothing,
+        // so it must see the expiry itself.
+        Ok(Some(p)) if p.status == "live" && p.expires_at > app.clock.now() => p,
+        Ok(_) => return Err("no live pairing"),
+        Err(e) => return Ok(Err(ApiError::from(e).into_response())),
+    };
+    if (pairing.kind == "passkey") != passkey {
+        return Err("a passkey pairing on the device path, or the other way round");
+    }
+    let local = parts.extensions.get::<Local>().is_some_and(|l| l.same_user);
+    if (pairing.bootstrap || pairing.recovery) && !local {
+        return Err("bootstrap claimed from outside the host's socket");
+    }
+    Ok(Ok((pairing, hash)))
+}
+
 /// A claim's evaluation: its answer, or why it is a wrong claim.
 async fn evaluate(
     app: &App,
@@ -205,26 +265,10 @@ async fn evaluate(
     let Ok(b) = serde_json::from_slice::<ClaimBody>(&bytes) else {
         return Ok(bad("malformed body"));
     };
-    let (hash, by_code) = match (&b.code, &b.secret) {
-        (Some(code), None) => match normal_code(code) {
-            Some(c) => (code_hash(&c), true),
-            None => return Err("malformed code"),
-        },
-        (None, Some(secret)) => match unb64(secret, 22) {
-            Some(s) => (secret_hash(&s), false),
-            None => return Err("malformed secret"),
-        },
-        _ => return Ok(bad("send one of code and secret")),
+    let (pairing, hash) = match live_pairing(app, parts, &b.code, &b.secret, false).await? {
+        Ok(found) => found,
+        Err(r) => return Ok(r),
     };
-    let pairing = match gov::find_pairing(&app.pool, &hash, by_code).await {
-        Ok(Some(p)) if p.status == "live" => p,
-        Ok(_) => return Err("no live pairing"),
-        Err(e) => return Ok(ApiError::from(e).into_response()),
-    };
-    let local = parts.extensions.get::<Local>().is_some_and(|l| l.same_user);
-    if (pairing.bootstrap || pairing.recovery) && !local {
-        return Err("bootstrap claimed from outside the host's socket");
-    }
     // The keys and their proofs; a failure here does not spend the pairing.
     let key = |text: &str| unb64(text, 122).filter(|k| spki_point(k).is_some());
     let Some(routine) = key(&b.routine_spki) else {
@@ -281,6 +325,7 @@ async fn evaluate(
         platform: b.platform.as_deref(),
         key_storage: b.key_storage.as_deref(),
         sas: &sas,
+        passkey: None,
     };
     match gov::claim_pairing(&app.pool, &claim, now).await {
         Ok(true) => {}

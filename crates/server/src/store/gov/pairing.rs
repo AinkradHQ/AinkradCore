@@ -222,6 +222,8 @@ pub struct Claim<'a> {
     pub platform: Option<&'a str>,
     pub key_storage: Option<&'a str>,
     pub sas: &'a str,
+    /// A passkey's credential, stored with its device (kind `passkey` only).
+    pub passkey: Option<super::NewCredential<'a>>,
 }
 
 /// Spends the pairing, inserts the device as `pending` with what the pairing bound, and audits
@@ -252,6 +254,12 @@ pub async fn claim_pairing(pool: &SqlitePool, c: &Claim<'_>, now: i64) -> Result
         scopes: &c.pairing.scopes,
     };
     insert_device(&mut tx, &new, "pending").await?;
+    // A passkey pairing is claimed with its credential, anything else without one.
+    match (&c.passkey, c.pairing.kind == "passkey") {
+        (Some(cred), true) => super::insert_credential(&mut tx, c.device_id, cred).await?,
+        (None, false) => {}
+        _ => return Ok(false),
+    }
     sqlx::query("UPDATE core_pairings SET device_id = ?, sas = ? WHERE id = ?")
         .bind(c.device_id)
         .bind(c.sas)
