@@ -104,5 +104,9 @@ fn public_serve_refuses_to_start_without_a_hostname_and_an_acme_contact() {
         let err = String::from_utf8(out.stderr).unwrap();
         assert!(!out.status.success(), "{flags:?} started");
         assert!(err.contains("--hostname"), "{flags:?}: {err}");
+        assert!(
+            !db.0.exists(),
+            "{flags:?}: refused before the database is created"
+        );
     }
 }

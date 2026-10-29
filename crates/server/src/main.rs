@@ -330,6 +330,8 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .init();
+    // Flags first: a refused --listen never creates or migrates the database.
+    let listen = listen(db, &flags)?;
     let pool = store::connect(db).await?;
     // Read once: a change to these takes effect at the next start (E15.17).
     let [tick, push_every] = ainkrad_core_server::scheduler::loop_intervals(&pool).await?;
@@ -348,7 +350,6 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
         classifier: Arc::new(push::Silent),
         every: push_every,
     };
-    let listen = listen(db, &flags)?;
     let host = flags.host.clone().unwrap_or_else(|| listen.default_host());
     let gateway = gateway::Gateway::bind(listen.clone(), gateway::Limits::default()).await?;
     tracing::info!(listen = ?ListenLog(&listen), %host, "serving");
