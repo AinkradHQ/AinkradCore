@@ -310,7 +310,7 @@ export interface components {
             /**
              * @description What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,
              *     `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `details`), or a kind a
-             *     module writes.
+             *     module writes. The registered kinds are listed in `x-event-kinds`.
              */
             kind: string;
             payload: Record<string, never>;
@@ -365,6 +365,12 @@ export interface components {
         LatestEvent: {
             /**
              * Format: int64
+             * @description The retention floor: events up to it were trimmed, so a client whose last read seq is
+             *     below it re-syncs (E1-04.4). Absent from servers before API minor 2.
+             */
+            floor?: number | null;
+            /**
+             * Format: int64
              * @description 0 when there is none yet.
              */
             seq: number;
@@ -399,6 +405,18 @@ export interface components {
             /** @description Six characters, letters and digits; shown to the user once. */
             code: string;
             expires_at: components["schemas"]["Timestamp"];
+        };
+        /** @description The 410 of a replay from below the retention floor (E1-04.4). */
+        PastRetention: {
+            /** @description `past_retention`. */
+            code: string;
+            error_id: string;
+            /**
+             * Format: int64
+             * @description The newest trimmed seq: every event above it is still there.
+             */
+            floor: number;
+            message: string;
         };
         /** @description The calling device's APNs token (E10.4). */
         PushToken: {
@@ -751,6 +769,15 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            /** @description `after` is below the retention floor: some events after it were trimmed. Re-sync from `GET /api/v1/events/latest` */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PastRetention"];
+                };
+            };
             429: components["responses"]["TooManyRequests"];
             500: components["responses"]["InternalError"];
         };
@@ -764,7 +791,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The newest event's seq: how far a catching-up client has to go */
+            /** @description The newest event's seq: how far a catching-up client has to go, and where a client past retention resumes after re-syncing */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -794,7 +821,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Switching to a WebSocket. Each text frame is one `Event` (schema `Event`). Closed with 1013 when the client falls behind (a send blocked too long), with the reason `too slow; resume from the last seq read, at most <seq>`: `<seq>` is the last event the server tried to send. The hint is best effort; the client reconnects with `Last-Event-ID` set to the last seq it actually read. Also closed with 1001 (no pong) and 1011 (server error), with the same hint */
+            /** @description Switching to a WebSocket. Each text frame is one `Event` (schema `Event`). Closed with 1013 when the client falls behind (a send blocked too long), with the reason `too slow; resume from the last seq read, at most <seq>`: `<seq>` is the last event the server tried to send. The hint is best effort; the client reconnects with `Last-Event-ID` set to the last seq it actually read. Also closed with 1001 (no pong) and 1011 (server error), with the same hint; with 4410 and `past retention, floor <seq>` when the resume point is below the retention floor (re-sync from `/api/v1/events/latest`) */
             101: {
                 headers: {
                     [name: string]: unknown;

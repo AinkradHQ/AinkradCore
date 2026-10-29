@@ -14,7 +14,7 @@
           "$ref": "#/$defs/Timestamp"
         },
         "kind": {
-          "description": "What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,\n`action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `details`), or a kind a\nmodule writes.",
+          "description": "What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,\n`action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `details`), or a kind a\nmodule writes. The registered kinds are listed in `x-event-kinds`.",
           "type": "string"
         },
         "payload": true,
@@ -34,6 +34,14 @@
     {
       "description": "The newest event's seq a client would be shown: the catch-up target.",
       "properties": {
+        "floor": {
+          "description": "The retention floor: events up to it were trimmed, so a client whose last read seq is\nbelow it re-syncs (E1-04.4). Absent from servers before API minor 2.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "seq": {
           "description": "0 when there is none yet.",
           "format": "int64",
@@ -46,5 +54,8 @@
       "type": "object"
     }
   ],
-  "title": "Ainkrad event stream"
+  "title": "Ainkrad event stream",
+  "x-event-kinds": [
+    "audit"
+  ]
 }

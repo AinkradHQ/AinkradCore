@@ -26,7 +26,7 @@ async fn me_names_the_device_and_the_versions() {
     let latest = fx.ok("/api/v1/events/latest").await;
     let head = last_event_seq(&fx.app.pool).await.unwrap();
     assert!(head > 0, "issuing the key was audited");
-    assert_eq!(latest, json!({"seq": head}));
+    assert_eq!(latest, json!({"seq": head, "floor": 0}));
 
     let spec: Value = serde_json::from_str(&super::super::spec::json()).unwrap();
     assert_eq!(spec["info"]["version"], format!("1.{API_MINOR}.0"));

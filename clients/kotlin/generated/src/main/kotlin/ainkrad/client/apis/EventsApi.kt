@@ -19,6 +19,7 @@ import ainkrad.client.models.AuditPage
 import ainkrad.client.models.ErrorBody
 import ainkrad.client.models.LatestEvent
 import ainkrad.client.models.PageEvent
+import ainkrad.client.models.PastRetention
 
 import ainkrad.client.infrastructure.*
 import io.ktor.client.HttpClientConfig

@@ -17,9 +17,19 @@
 //!    added later (the versioning rule in `types`).
 //! 5. The bearer scheme, required everywhere, and the shared error answers on every
 //!    operation, each an `ErrorBody`.
+//!
+//! After normalising, the registered names (`store::kinds`, E1-04.2, E1-10.2) are listed as
+//! extensions: `Event` carries `x-event-kinds`, `AuditEntry` `x-audit-actions`, the platform's
+//! and those of the modules given to [`json_for`]. Extensions, not enums: `kind` stays an open
+//! string, so a client keeps decoding an event of a kind it was not built with.
+
+use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 use utoipa::OpenApi;
+
+use crate::module::Module;
+use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{audit, devices, events, handshake, me, pairing, settings, types};
 
@@ -59,10 +69,32 @@ unknown enum value (every enum is open) and skip an event or union variant it ca
 Anything removed or renamed is a new /api/v2. `info.version` is `1.<minor>.0`; the minor \
 (`GET /api/v1/me`, `versions.api.minor`) is bumped on every addition.";
 
-/// The normalised spec, as committed: pretty JSON with sorted keys and a final newline.
+/// The normalised spec, as committed: pretty JSON with sorted keys and a final newline. Lists
+/// the platform's event kinds and audit actions; `serve` mounts no module yet.
 pub fn json() -> String {
+    json_for(&[])
+}
+
+/// The platform's names and `modules`', sorted: event kinds, then audit actions.
+pub fn registered(modules: &[Arc<dyn Module>]) -> [Vec<&'static str>; 2] {
+    let mut kinds = PLATFORM_EVENT_KINDS.to_vec();
+    let mut actions = PLATFORM_AUDIT_ACTIONS.to_vec();
+    for m in modules {
+        kinds.extend(m.event_kinds());
+        actions.extend(m.audit_actions());
+    }
+    kinds.sort_unstable();
+    actions.sort_unstable();
+    [kinds, actions]
+}
+
+/// [`json`] with `modules`' event kinds and audit actions listed too.
+pub fn json_for(modules: &[Arc<dyn Module>]) -> String {
     let mut spec = serde_json::to_value(ApiDoc::openapi()).expect("spec serialises");
     normalise(&mut spec);
+    let [kinds, actions] = registered(modules);
+    spec["components"]["schemas"]["Event"]["x-event-kinds"] = json!(kinds);
+    spec["components"]["schemas"]["AuditEntry"]["x-audit-actions"] = json!(actions);
     spec["info"]["description"] = json!(DESCRIPTION);
     spec["info"]["version"] = json!(format!("1.{}.0", types::API_MINOR));
     let mut text = serde_json::to_string_pretty(&spec).expect("spec serialises");
@@ -258,6 +290,36 @@ fn security_and_errors(spec: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// E1-04.2: a module's kinds and actions are listed next to the platform's.
+    #[test]
+    fn the_contract_lists_registered_kinds_and_actions() {
+        struct Toy;
+        impl Module for Toy {
+            fn id(&self) -> &'static str {
+                "toy"
+            }
+            fn routes(&self) -> axum::Router<crate::api::App> {
+                axum::Router::new()
+            }
+            fn event_kinds(&self) -> &'static [&'static str] {
+                &["toy.line"]
+            }
+            fn audit_actions(&self) -> &'static [&'static str] {
+                &["toy.made"]
+            }
+        }
+        let spec: Value = serde_json::from_str(&json_for(&[Arc::new(Toy)])).unwrap();
+        let s = &spec["components"]["schemas"];
+        assert_eq!(s["Event"]["x-event-kinds"], json!(["audit", "toy.line"]));
+        let actions = s["AuditEntry"]["x-audit-actions"].as_array().unwrap();
+        assert!(actions.contains(&json!("toy.made")) && actions.contains(&json!("setting.set")));
+        let plain: Value = serde_json::from_str(&json()).unwrap();
+        assert_eq!(
+            plain["components"]["schemas"]["Event"]["x-event-kinds"],
+            json!(["audit"])
+        );
+    }
 
     #[test]
     fn rewrites_nullable_ref_tagged_union_inlined_generic_and_enums() {

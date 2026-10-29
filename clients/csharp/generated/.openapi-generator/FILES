@@ -46,6 +46,7 @@ src/Ainkrad.Client/Model/NewDevice.cs
 src/Ainkrad.Client/Model/PageEvent.cs
 src/Ainkrad.Client/Model/PairBody.cs
 src/Ainkrad.Client/Model/Pairing.cs
+src/Ainkrad.Client/Model/PastRetention.cs
 src/Ainkrad.Client/Model/PushToken.cs
 src/Ainkrad.Client/Model/SetSetting.cs
 src/Ainkrad.Client/Model/Setting.cs
