@@ -60,10 +60,13 @@ async fn crash_child() {
         .fetch_one(&pool)
         .await
         .unwrap();
+    // READY only after this process's first commit: a kill before it (a loaded machine can start
+    // the child late) would leave nothing for the consistency checks to prove.
+    write_one(&pool, i).await.unwrap();
     println!("{READY}");
     loop {
-        write_one(&pool, i).await.unwrap();
         i += 1;
+        write_one(&pool, i).await.unwrap();
     }
 }
 

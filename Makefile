@@ -1,6 +1,6 @@
 CARGO ?= cargo
 
-.PHONY: test-web e1-exit e1-exit-faults soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel release-dry release-repro release-test fuzz-smoke audit-fuzz
+.PHONY: perf test-web e1-exit e1-exit-faults soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel release-dry release-repro release-test fuzz-smoke audit-fuzz
 build: lint ; $(CARGO) build --workspace
 test: lint ; $(CARGO) test --workspace
 lint: format-check ; $(CARGO) clippy --workspace --all-targets -- -D warnings
@@ -41,6 +41,9 @@ e1-exit-faults: ; $(CARGO) test -p ainkrad-ctl --test it fault -- --ignored --te
 # Event bus soak (E1-04.5): 10k events/min to 20 clients, one stalled, for an hour; flat memory and
 # only the stalled client closed. Not part of `test`. `CORE_SOAK_SECS=300 make soak` for five minutes.
 soak: ; CORE_SOAK_SECS=$${CORE_SOAK_SECS:-3600} $(CARGO) test -p ainkrad-core-server --test soak -- --ignored --nocapture
+# Performance budgets (E1-19.1): the real release binary on loopback, 200 clients; see crates/server/tests/perf.rs for the
+# budgets. About three minutes of measuring after the build; `CORE_PERF_IDLE_SECS=10 make perf` shortens the idle windows.
+perf: ; ulimit -n 4096 && $(CARGO) test --release -p ainkrad-core-server --test perf -- --ignored --nocapture
 # The parked Citadel monolith (P1.11), its own workspace; not part of `build`/`test`.
 CITADEL = --manifest-path modules/citadel/Cargo.toml --workspace
 build-citadel: ; $(CARGO) build $(CITADEL)
