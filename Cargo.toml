@@ -13,3 +13,10 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# The shipped binaries (E1-15.1, `make release-dry`): one codegen unit and stripped, so the same commit
+# built twice is byte-identical. `--release` is unchanged for everything else.
+[profile.dist]
+inherits = "release"
+codegen-units = 1
+strip = true
