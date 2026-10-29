@@ -55,6 +55,12 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../migrations/0003_device_identity.up.sql"),
         down: include_str!("../../migrations/0003_device_identity.down.sql"),
     },
+    Migration {
+        version: 4,
+        name: "event_visibility",
+        up: include_str!("../../migrations/0004_event_visibility.up.sql"),
+        down: include_str!("../../migrations/0004_event_visibility.down.sql"),
+    },
 ];
 
 #[derive(Debug)]
@@ -338,8 +344,12 @@ pub async fn migrate_modules(
     // Then their event kinds and audit actions (E1-04.2), so a refused name stops the start too.
     let mut tx = begin_write(pool).await?;
     for module in modules {
-        let (kinds, actions) = (module.event_kinds(), module.audit_actions());
-        crate::store::kinds::register(&mut tx, module.id(), kinds, actions)
+        let kinds: Vec<(&str, &str)> = module
+            .event_kinds()
+            .iter()
+            .map(|k| (*k, module.event_scope(k)))
+            .collect();
+        crate::store::kinds::register(&mut tx, module.id(), &kinds, module.audit_actions())
             .await
             .map_err(|e| match e {
                 sqlx::Error::InvalidArgument(why) => refused(module.id(), why),

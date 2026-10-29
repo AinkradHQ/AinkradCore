@@ -8,7 +8,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "oneOf": [
     {
-      "description": "One entry of the event stream. `seq` only grows: it is the replay cursor. New kinds may be\nadded: a client skips an event whose kind it does not know.",
+      "description": "One entry of the event stream. `seq` only grows: it is the replay cursor, counted gap-free over\nthe events this device's scopes may see (`x-event-scopes`), so it differs between devices\nwith different scopes. New kinds may be added: a client skips an event whose kind it does not\nknow.",
       "properties": {
         "at": {
           "$ref": "#/$defs/Timestamp"
