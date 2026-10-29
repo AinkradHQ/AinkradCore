@@ -61,6 +61,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/settings/{scope}/{key}/history`.
     /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/{key}/history/get(settingHistory)`.
     func settingHistory(_ input: Operations.SettingHistory.Input) async throws -> Operations.SettingHistory.Output
+    /// - Remark: HTTP `GET /handshake`.
+    /// - Remark: Generated from `#/paths//handshake/get(getHandshake)`.
+    func getHandshake(_ input: Operations.GetHandshake.Input) async throws -> Operations.GetHandshake.Output
 }
 
 /// Convenience overloads for operation inputs.
@@ -224,6 +227,11 @@ extension APIProtocol {
             path: path,
             headers: headers
         ))
+    }
+    /// - Remark: HTTP `GET /handshake`.
+    /// - Remark: Generated from `#/paths//handshake/get(getHandshake)`.
+    public func getHandshake(headers: Operations.GetHandshake.Input.Headers = .init()) async throws -> Operations.GetHandshake.Output {
+        try await getHandshake(Operations.GetHandshake.Input(headers: headers))
     }
 }
 

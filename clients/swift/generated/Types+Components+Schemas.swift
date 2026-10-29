@@ -324,6 +324,68 @@ extension Components {
                 case userId = "user_id"
             }
         }
+        /// What the server is and speaks, for anyone.
+        ///
+        /// - Remark: Generated from `#/components/schemas/Handshake`.
+        public struct Handshake: Codable, Hashable, Sendable {
+            /// `v1`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Handshake/api_major`.
+            public var apiMajor: Swift.String?
+            /// The contract minor this server speaks (`GET /api/v1/me` has it too).
+            ///
+            /// - Remark: Generated from `#/components/schemas/Handshake/api_minor`.
+            public var apiMinor: Swift.Int32?
+            /// The commit it was built from (short sha), when the build knew it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Handshake/git_sha`.
+            public var gitSha: Swift.String?
+            /// The Core identity key's fingerprint; null until the identity key exists (E1-07).
+            ///
+            /// - Remark: Generated from `#/components/schemas/Handshake/identity_fingerprint`.
+            public var identityFingerprint: Swift.String?
+            /// The server's crate version, `0.1.0`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Handshake/server_version`.
+            public var serverVersion: Swift.String?
+            /// Every minor a client may have been built against and still be served: 0 up to
+            /// `api_minor`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Handshake/supported_minors`.
+            public var supportedMinors: [Swift.Int32]?
+            /// Creates a new `Handshake`.
+            ///
+            /// - Parameters:
+            ///   - apiMajor: `v1`.
+            ///   - apiMinor: The contract minor this server speaks (`GET /api/v1/me` has it too).
+            ///   - gitSha: The commit it was built from (short sha), when the build knew it.
+            ///   - identityFingerprint: The Core identity key's fingerprint; null until the identity key exists (E1-07).
+            ///   - serverVersion: The server's crate version, `0.1.0`.
+            ///   - supportedMinors: Every minor a client may have been built against and still be served: 0 up to
+            public init(
+                apiMajor: Swift.String? = nil,
+                apiMinor: Swift.Int32? = nil,
+                gitSha: Swift.String? = nil,
+                identityFingerprint: Swift.String? = nil,
+                serverVersion: Swift.String? = nil,
+                supportedMinors: [Swift.Int32]? = nil
+            ) {
+                self.apiMajor = apiMajor
+                self.apiMinor = apiMinor
+                self.gitSha = gitSha
+                self.identityFingerprint = identityFingerprint
+                self.serverVersion = serverVersion
+                self.supportedMinors = supportedMinors
+            }
+            public enum CodingKeys: String, CodingKey {
+                case apiMajor = "api_major"
+                case apiMinor = "api_minor"
+                case gitSha = "git_sha"
+                case identityFingerprint = "identity_fingerprint"
+                case serverVersion = "server_version"
+                case supportedMinors = "supported_minors"
+            }
+        }
         /// A new device and its key: the only time the key is ever shown.
         ///
         /// - Remark: Generated from `#/components/schemas/IssuedDevice`.

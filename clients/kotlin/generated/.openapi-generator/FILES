@@ -8,6 +8,7 @@ gradlew.bat
 settings.gradle
 src/main/kotlin/ainkrad/client/apis/DevicesApi.kt
 src/main/kotlin/ainkrad/client/apis/EventsApi.kt
+src/main/kotlin/ainkrad/client/apis/HandshakeApi.kt
 src/main/kotlin/ainkrad/client/apis/SettingsApi.kt
 src/main/kotlin/ainkrad/client/auth/ApiKeyAuth.kt
 src/main/kotlin/ainkrad/client/auth/Authentication.kt
@@ -28,6 +29,7 @@ src/main/kotlin/ainkrad/client/models/Event.kt
 src/main/kotlin/ainkrad/client/models/EventActor.kt
 src/main/kotlin/ainkrad/client/models/EventActorSystem.kt
 src/main/kotlin/ainkrad/client/models/EventActorUser.kt
+src/main/kotlin/ainkrad/client/models/Handshake.kt
 src/main/kotlin/ainkrad/client/models/IssuedDevice.kt
 src/main/kotlin/ainkrad/client/models/LatestEvent.kt
 src/main/kotlin/ainkrad/client/models/Me.kt

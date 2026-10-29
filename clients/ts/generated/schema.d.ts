@@ -229,6 +229,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/handshake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getHandshake"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -318,6 +334,27 @@ export interface components {
             kind: "user";
             /** Format: int64 */
             user_id: number;
+        };
+        /** @description What the server is and speaks, for anyone. */
+        Handshake: {
+            /** @description `v1`. */
+            api_major?: string | null;
+            /**
+             * Format: int32
+             * @description The contract minor this server speaks (`GET /api/v1/me` has it too).
+             */
+            api_minor?: number | null;
+            /** @description The commit it was built from (short sha), when the build knew it. */
+            git_sha?: string | null;
+            /** @description The Core identity key's fingerprint; null until the identity key exists (E1-07). */
+            identity_fingerprint?: string | null;
+            /** @description The server's crate version, `0.1.0`. */
+            server_version?: string | null;
+            /**
+             * @description Every minor a client may have been built against and still be served: 0 up to
+             *     `api_minor`.
+             */
+            supported_minors?: number[] | null;
         };
         /** @description A new device and its key: the only time the key is ever shown. */
         IssuedDevice: {
@@ -1036,6 +1073,33 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SettingChange"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getHandshake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The server's version and build, the contract minor and the minors it serves. Needs no device key */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Handshake"];
                 };
             };
             400: components["responses"]["BadRequest"];
