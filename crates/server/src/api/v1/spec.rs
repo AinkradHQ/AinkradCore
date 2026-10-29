@@ -31,7 +31,10 @@ use utoipa::OpenApi;
 use crate::module::Module;
 use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
-use super::{audit, devices, events, handshake, me, pair, pairing, session, settings, types};
+use super::{
+    audit, devices, events, handshake, lockouts, me, pair, pairing, session, settings, stepup,
+    types,
+};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -39,6 +42,9 @@ use super::{audit, devices, events, handshake, me, pair, pairing, session, setti
     paths(
         devices::list,
         devices::revoke,
+        devices::get,
+        devices::rename,
+        devices::set_scopes,
         devices::set_push,
         devices::clear_push,
         events::replay,
@@ -61,6 +67,10 @@ use super::{audit, devices, events, handshake, me, pair, pairing, session, setti
         settings::set,
         settings::reset,
         settings::history,
+        stepup::challenge,
+        stepup::step_up,
+        lockouts::list,
+        lockouts::clear,
     ),
     components(schemas(types::ErrorBody, events::Event))
 )]
@@ -263,8 +273,9 @@ const ERRORS: [(&str, &str, &str); 7] = [
     (
         "403",
         "Forbidden",
-        "Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device \
-         lacks (forbidden_scope; see each operation's x-ainkrad-scope)",
+        "Wrong Host (unknown_host), an Origin header (origin_refused), a scope the device \
+         lacks (forbidden_scope; see each operation's x-ainkrad-scope), or an operation marked \
+         x-ainkrad-destructive without a live step-up elevation (step_up_required)",
     ),
     ("404", "NotFound", "No such resource"),
     ("409", "Conflict", "Conflicts with the current state"),
@@ -285,6 +296,9 @@ fn security_and_errors(spec: &mut Value) {
         for (method, op) in item.as_object_mut().into_iter().flatten() {
             if let Some(scope) = super::scopes::declared(method, path) {
                 op["x-ainkrad-scope"] = json!(scope);
+            }
+            if super::scopes::declared_destructive(method, path) {
+                op["x-ainkrad-destructive"] = json!(true);
             }
         }
     }

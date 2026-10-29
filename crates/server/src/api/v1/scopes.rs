@@ -10,7 +10,11 @@
 //! - A `runner` device holds only `runner`, which no `/api/v1` route takes: it can call nothing
 //!   here (the runner hub is E1-11).
 //!
-//! Step-up (`approve`/`terminal`/`agent` routes and elevation) is E1-09.3+.
+//! **Destructive routes** (spec §8, E1-09.6) are listed in [`DESTRUCTIVE`] (a module's in
+//! `Module::destructive`): on top of its scope, such a route needs a session elevated by a
+//! step-up (`auth::stepup`), else 403 `step_up_required`. The contract marks each with
+//! `x-ainkrad-destructive: true`. Reads never need it; the host socket's `bootstrap` and
+//! `recover` are not routes and never need it.
 
 use std::sync::Arc;
 
@@ -40,6 +44,29 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/pairings/{id}", "admin"),
     ("POST", "/api/v1/pairings/{id}/approve", "admin"),
     ("POST", "/api/v1/pairings/{id}/reject", "admin"),
+    ("POST", "/api/v1/auth/step-up/challenge", "read"),
+    ("POST", "/api/v1/auth/step-up", "read"),
+    ("GET", "/api/v1/devices/{id}", "admin"),
+    ("PATCH", "/api/v1/devices/{id}", "admin"),
+    ("PUT", "/api/v1/devices/{id}/scopes", "admin"),
+    ("GET", "/api/v1/auth/lockouts", "admin"),
+    ("POST", "/api/v1/auth/lockouts/clear", "admin"),
+];
+
+/// `(method, path template)` of every route that needs a live elevation (spec §8): device
+/// admin (pairing create, approve and reject; revoke, rename, scope change; clearing a lockout)
+/// and every setting write (one flag per route, and some settings weaken security, the step-up
+/// window itself among them). Each must also be in [`ROUTES`] (a test checks).
+pub const DESTRUCTIVE: &[(&str, &str)] = &[
+    ("DELETE", "/api/v1/devices/{id}"),
+    ("PATCH", "/api/v1/devices/{id}"),
+    ("PUT", "/api/v1/devices/{id}/scopes"),
+    ("POST", "/api/v1/pairings"),
+    ("POST", "/api/v1/pairings/{id}/approve"),
+    ("POST", "/api/v1/pairings/{id}/reject"),
+    ("PUT", "/api/v1/settings/{scope}/{key}"),
+    ("DELETE", "/api/v1/settings/{scope}/{key}"),
+    ("POST", "/api/v1/auth/lockouts/clear"),
 ];
 
 /// Whether `path` fits `template` segment by segment.
@@ -57,6 +84,32 @@ pub fn declared(method: &str, template: &str) -> Option<&'static str> {
         .iter()
         .find(|(m, t, _)| m.eq_ignore_ascii_case(method) && *t == template)
         .map(|r| r.2)
+}
+
+/// Whether `method` on `template` is declared destructive, by the contract's own path template.
+pub fn declared_destructive(method: &str, template: &str) -> bool {
+    DESTRUCTIVE
+        .iter()
+        .any(|(m, t)| m.eq_ignore_ascii_case(method) && *t == template)
+}
+
+/// Whether a request needs a live elevation: its route is in [`DESTRUCTIVE`], or in its
+/// module's `Module::destructive` (relative to `/modules/<id>/v1`).
+pub fn destructive(method: &Method, path: &str, modules: &[Arc<dyn Module>]) -> bool {
+    if let Some(rest) = path.strip_prefix("/modules/") {
+        let id = rest.split('/').next().unwrap_or_default();
+        let Some(sub) = rest.strip_prefix(id).and_then(|r| r.strip_prefix("/v1")) else {
+            return false;
+        };
+        return modules.iter().filter(|m| m.id() == id).any(|m| {
+            m.destructive()
+                .iter()
+                .any(|(mm, t)| *mm == method.as_str() && fits(t, sub))
+        });
+    }
+    DESTRUCTIVE
+        .iter()
+        .any(|(m, t)| *m == method.as_str() && fits(t, path))
 }
 
 /// The scope a request needs; `None` when nothing declares one (refused).
@@ -104,6 +157,19 @@ mod tests {
             ("GET", "/modules/x/v1/y"),
         ] {
             assert_eq!(required(&m(method), path, &[]), None, "{method} {path}");
+        }
+        assert!(destructive(&m("DELETE"), "/api/v1/devices/d_x", &[]));
+        assert!(!destructive(&m("GET"), "/api/v1/devices/d_x", &[]));
+        assert!(!destructive(&m("DELETE"), "/api/v1/devices/d_x/y", &[]));
+    }
+
+    #[test]
+    fn every_destructive_route_is_a_declared_route() {
+        for (m, t) in DESTRUCTIVE {
+            assert!(
+                declared(m, t).is_some(),
+                "{m} {t} is destructive but not in ROUTES"
+            );
         }
     }
 }

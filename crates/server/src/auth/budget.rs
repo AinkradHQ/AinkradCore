@@ -157,6 +157,11 @@ impl AddressFailures {
         s.fails += i64::from(failed);
     }
 
+    /// Forgets `addr`'s failures (a lockout cleared by an admin).
+    pub fn forget(&self, addr: &str) {
+        self.table.lock().unwrap().remove(addr);
+    }
+
     /// How many addresses are tracked.
     pub fn len(&self) -> usize {
         self.table.lock().unwrap().slots.len()

@@ -1,4 +1,5 @@
-//! Signatures, nonces, challenges, public keys, pairing codes, QR secrets and SAS strings never
+//! Signatures, nonces, challenges (session and step-up), public keys (the step-up key too),
+//! pairing codes, QR secrets and SAS strings never
 //! reach the server log, whatever succeeds or fails. Its own test binary, so the global log subscriber sees every line.
 
 use std::io::Write;
@@ -120,6 +121,25 @@ async fn no_signature_nonce_challenge_or_key_is_logged() {
     planted.push(h[4].1.clone());
     send(&app, "GET", "/api/v1/me", &h, "").await;
 
+    // A step-up: a failed proof, then a good one; neither the challenges, the step-up key nor
+    // its signatures are logged.
+    planted.push(b64(&mac.stepup_spki));
+    for good in [false, true] {
+        let h = mac.headers("POST", "/api/v1/auth/step-up/challenge", b"{}");
+        let got = send(&app, "POST", "/api/v1/auth/step-up/challenge", &h, "{}").await;
+        let got: serde_json::Value = serde_json::from_str(&got).unwrap();
+        let c = got["challenge"].as_str().unwrap().to_owned();
+        let mut body = mac.stepup_body(&c);
+        if !good {
+            body["stepup_sig"] = serde_json::json!(b64(&[7u8; 64]));
+        }
+        let sig = body["stepup_sig"].as_str().unwrap().to_owned();
+        let body = body.to_string();
+        let h = mac.headers("POST", "/api/v1/auth/step-up", body.as_bytes());
+        send(&app, "POST", "/api/v1/auth/step-up", &h, &body).await;
+        planted.extend([c, sig]);
+    }
+
     // A pairing: its code and QR secret, a wrong claim, a right one and its SAS.
     let body = r#"{"name":"Phone","kind":"device","scopes":["read"]}"#;
     let h = mac.headers("POST", "/api/v1/pairings", body.as_bytes());
@@ -161,6 +181,10 @@ async fn no_signature_nonce_challenge_or_key_is_logged() {
         "the log was captured: {log}"
     );
     assert!(log.contains("session issued"), "{log}");
+    assert!(
+        log.contains("step-up refused") && log.contains("session elevated"),
+        "{log}"
+    );
     for secret in planted {
         assert!(
             !log.contains(&secret),

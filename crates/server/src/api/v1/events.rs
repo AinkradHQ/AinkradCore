@@ -185,7 +185,8 @@ fn last_event_id(headers: &HeaderMap) -> Result<Option<i64>, ApiError> {
         with the reason `too slow; resume from the last seq read, at most <seq>`: `<seq>` is \
         the last event the server tried to send. The hint is best effort; the client \
         reconnects with `Last-Event-ID` set to the last seq it actually read. Also closed \
-        with 1001 (no pong) and 1011 (server error), with the same hint; with 4410 and \
+        with 1001 (no pong), 1011 (server error), 4001 (the device was revoked) and 4003 (its \
+        scopes changed: reconnect), with the same hint; with 4410 and \
         `past retention, floor <seq>` when the resume point is below the retention floor \
         (re-sync from `/api/v1/events/latest`)")))]
 pub async fn ws(
@@ -202,14 +203,27 @@ pub async fn ws(
         },
         Err(e) => return e.into_response(),
     };
-    // Subscribed before the upgrade, so a revocation in between is not missed.
+    // Subscribed before the upgrade, so a revocation or scope change in between is not missed.
     let revoked = crate::auth::until_revoked(
         app.pool.clone(),
         app.auth.subscribe(),
-        me.device.id,
+        me.device.id.clone(),
         crate::auth::BACKSTOP,
     );
-    ws.on_upgrade(move |socket| stream(app, socket, after, revoked))
+    let rescoped = crate::auth::until_rescoped(
+        app.pool.clone(),
+        app.auth.subscribe_rescoped(),
+        me.device.id,
+        me.device.scopes,
+        crate::auth::BACKSTOP,
+    );
+    let changed = async move {
+        tokio::select! {
+            () = revoked => End::Revoked,
+            () = rescoped => End::Rescoped,
+        }
+    };
+    ws.on_upgrade(move |socket| stream(app, socket, after, changed))
 }
 
 /// Why a socket ended, for the log.
@@ -224,6 +238,8 @@ enum End {
     Past(i64),
     /// The device was revoked (handshake spec §10).
     Revoked,
+    /// The device's scopes changed: it reconnects for a re-filtered stream (§10).
+    Rescoped,
 }
 
 /// Sends every event after `after`, then new ones as they land, until the client goes, falls
@@ -232,9 +248,9 @@ async fn stream(
     app: App,
     mut socket: WebSocket,
     mut after: i64,
-    revoked: impl std::future::Future<Output = ()>,
+    changed: impl std::future::Future<Output = End>,
 ) {
-    tokio::pin!(revoked);
+    tokio::pin!(changed);
     let cfg = app.stream;
     let mut poll = tokio::time::interval(cfg.poll);
     let mut ping = tokio::time::interval(cfg.heartbeat);
@@ -277,7 +293,7 @@ async fn stream(
         }
         tokio::select! {
             () = crate::api::stopping(&mut closing) => break End::Restart,
-            () = &mut revoked => break End::Revoked,
+            end = &mut changed => break end,
             _ = poll.tick() => {}
             _ = ping.tick() => {
                 if heard.elapsed() > cfg.heartbeat * 3 {
@@ -308,6 +324,7 @@ async fn stream(
             format!("past retention, floor {floor}; re-sync from /api/v1/events/latest"),
         ),
         End::Revoked => (4001, format!("revoked; {hint}")),
+        End::Rescoped => (4003, format!("scope changed; {hint}")),
     };
     tracing::info!(code, why, "event stream closed");
     let close = Message::Close(Some(CloseFrame {
