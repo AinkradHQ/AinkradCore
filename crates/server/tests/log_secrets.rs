@@ -181,6 +181,15 @@ async fn no_signature_nonce_challenge_or_key_is_logged() {
         "the log was captured: {log}"
     );
     assert!(log.contains("session issued"), "{log}");
+    // Finding 4: the stranger's `auth_failed` names the peer and the device it claimed.
+    assert!(
+        log.lines().any(|l| l.contains("api refusal")
+            && l.contains("auth_failed")
+            && l.contains("peer")
+            && l.contains("\"local\"")
+            && l.contains(&stranger.id)),
+        "an unattributed auth_failed: {log}"
+    );
     assert!(
         log.contains("step-up refused") && log.contains("session elevated"),
         "{log}"
