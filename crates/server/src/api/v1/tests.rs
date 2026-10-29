@@ -381,3 +381,54 @@ async fn behind_a_trusted_proxy_each_forwarded_client_has_its_own_failure_bucket
     let spoofed = send(&fx.app, bad("10.0.0.9", "198.51.100.4")).await.0;
     assert_eq!(spoofed, StatusCode::TOO_MANY_REQUESTS);
 }
+
+async fn refusals(pool: &SqlitePool) -> Vec<Value> {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT details FROM audit_events WHERE action = 'api.refused' ORDER BY seq",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    rows.iter()
+        .map(|d| serde_json::from_str(d).unwrap())
+        .collect()
+}
+
+/// Every error carries an id; a refused write is audited with it, a refused read or an
+/// unauthenticated request is not.
+#[tokio::test]
+async fn every_error_carries_an_id_and_only_refused_writes_are_audited() {
+    let fx = fx().await;
+    let (status, body) = fx.get("/api/v1/settings/server/no.such").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body["error_id"].as_str().unwrap().starts_with("err_"));
+    let (_, again) = fx.get("/api/v1/settings/server/no.such").await;
+    assert_ne!(body["error_id"], again["error_id"]);
+    let (status, _) = send(&fx.app, req(Method::POST, "/api/v1/devices", None, None)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(
+        refusals(&fx.app.pool).await.is_empty(),
+        "a read and an unauthenticated request are no refused writes"
+    );
+
+    let (status, body) = fx.post("/api/v1/devices", json!({"name": "  "})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let refused = refusals(&fx.app.pool).await;
+    assert_eq!(refused.len(), 1);
+    assert_eq!(
+        refused[0]["error_id"], body["error_id"],
+        "the id finds its audit row"
+    );
+    assert_eq!(
+        (
+            &refused[0]["method"],
+            &refused[0]["path"],
+            &refused[0]["code"]
+        ),
+        (
+            &json!("POST"),
+            &json!("/api/v1/devices"),
+            &json!("bad_request")
+        )
+    );
+}

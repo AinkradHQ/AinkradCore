@@ -26,7 +26,7 @@ pub enum BackupError {
     InUse,
     /// The source failed validation; the text says why.
     Invalid(String),
-    /// The source was migrated by a newer Citadel than this one.
+    /// The source was migrated by a newer Core than this one.
     NewerSchema {
         found: i64,
         supported: i64,
@@ -69,7 +69,7 @@ fn utf8(path: &Path) -> Result<&str, BackupError> {
         .ok_or_else(|| BackupError::Invalid(format!("path is not UTF-8: {}", path.display())))
 }
 
-/// `path` with `suffix` appended to its file name, e.g. `citadel.db-wal`.
+/// `path` with `suffix` appended to its file name, e.g. `core.db-wal`.
 fn sibling(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(suffix);
@@ -93,7 +93,7 @@ async fn open(path: &Path) -> Result<SqliteConnection, sqlx::Error> {
     SqliteConnection::connect_with(&options).await
 }
 
-/// Checks `copy` is a whole Citadel database this binary can migrate, and leaves it in
+/// Checks `copy` is a whole Core database this binary can migrate, and leaves it in
 /// rollback-journal mode so it is a single self-contained file.
 async fn validate(copy: &Path) -> Result<(), BackupError> {
     let mut conn = open(copy)
@@ -110,7 +110,7 @@ async fn validate(copy: &Path) -> Result<(), BackupError> {
     let found: Option<i64> = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
         .fetch_one(&mut conn)
         .await
-        .map_err(|_| BackupError::Invalid("not a Citadel database".to_owned()))?;
+        .map_err(|_| BackupError::Invalid("not a Core database".to_owned()))?;
     let found = found.ok_or_else(|| BackupError::Invalid("no migrations applied".to_owned()))?;
     let supported = MIGRATOR.iter().map(|m| m.version).max().unwrap_or(0);
     if found > supported {
