@@ -101,8 +101,15 @@ mod tests {
             a.take_ticket(&theirs, 101).is_some(),
             "never another session's"
         );
+        // A ticket whose session was pushed out by newer ones is dead too.
         let t = a.issue_ticket("d_a", &s, 100).unwrap();
+        for i in 0..crate::auth::SESSIONS_PER_DEVICE as i64 {
+            a.issue_session("d_a", 101 + i);
+        }
+        assert!(a.take_ticket(&t, 200).is_none(), "its session is gone");
+        let s = a.issue_session("d_a", 300).id;
+        let t = a.issue_ticket("d_a", &s, 300).unwrap();
         a.revoked("d_a");
-        assert!(a.take_ticket(&t, 101).is_none(), "revoked");
+        assert!(a.take_ticket(&t, 301).is_none(), "revoked");
     }
 }

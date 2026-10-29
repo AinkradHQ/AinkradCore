@@ -273,8 +273,14 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
             "--hostname" => s.hostname = Some(value),
             "--allow-origin" => {
                 for o in comma_list(&value) {
-                    let ok = (o.starts_with("https://") || o.starts_with("http://localhost"))
-                        && !o[8..].contains('/');
+                    let localhost = o == "http://localhost"
+                        || o.strip_prefix("http://localhost:").is_some_and(|p| {
+                            !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())
+                        });
+                    let https = o
+                        .strip_prefix("https://")
+                        .is_some_and(|h| !h.is_empty() && !h.contains(['/', '?', '#', '@']));
+                    let ok = https || localhost;
                     if !ok {
                         eprintln!("ainkrad-core-server: --allow-origin {o}: an https:// origin");
                         return None;

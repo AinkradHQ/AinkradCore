@@ -88,7 +88,9 @@ pub async fn device_credential(
     Ok(row.map(credential))
 }
 
-/// Records a verified use: the verifier's updated record and the count it reported.
+/// Records a verified use: the verifier's updated record and the count it reported. Never
+/// moves the count back: of two uses verified at once, the one with the lower count does not
+/// overwrite the other's record (the clone check compares against it).
 pub async fn credential_used(
     pool: &SqlitePool,
     id: &[u8],
@@ -97,13 +99,14 @@ pub async fn credential_used(
     now: &str,
 ) -> Result<(), Error> {
     sqlx::query(
-        "UPDATE core_passkeys SET passkey = ?, sign_count = max(sign_count, ?), last_used_at = ? \
-         WHERE credential_id = ? AND revoked_at IS NULL",
+        "UPDATE core_passkeys SET passkey = ?, sign_count = ?, last_used_at = ? \
+         WHERE credential_id = ? AND revoked_at IS NULL AND sign_count <= ?",
     )
     .bind(passkey)
     .bind(i64::from(sign_count))
     .bind(now)
     .bind(id)
+    .bind(i64::from(sign_count))
     .execute(pool)
     .await
     .map(drop)
