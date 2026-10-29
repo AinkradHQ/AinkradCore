@@ -1,0 +1,8 @@
+[package]
+name = "ainkrad-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

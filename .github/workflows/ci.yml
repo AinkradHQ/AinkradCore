@@ -1,0 +1,22 @@
+# Proposed (P1.10), not a merge gate: local `make build` + `make test` stay the definition of done.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [development]
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - run: make test
+  deny:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

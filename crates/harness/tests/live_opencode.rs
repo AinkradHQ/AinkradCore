@@ -1,0 +1,152 @@
+//! A real OpenCode run, opt-in: `CITADEL_LIVE_OPENCODE=1 cargo test -p ainkrad-harness --test
+//! live_opencode -- --nocapture`. The default model is one of OpenCode Zen's free ones, which
+//! need no login, so a fresh isolated config dir works.
+//!
+//! `CITADEL_LIVE_OPENCODE_MODEL` picks another `provider/model` (its login must be in
+//! `CITADEL_LIVE_OPENCODE_CONFIG_DIR`); `CITADEL_OPENCODE_BIN` swaps the executable, e.g. for a
+//! recording wrapper.
+
+use std::path::PathBuf;
+use std::time::Duration;
+
+use ainkrad_harness::opencode::OpenCode;
+use ainkrad_harness::{Decision, Harness, HarnessEvent, Spec, TurnOutcome};
+
+const CREATE: &str = "Create a file named hello.txt in the current directory containing exactly \
+                      the word hi. Use your file-writing tool, then reply with one word: done.";
+const COUNT: &str = "Count from 1 to 500, one number per line, no other text.";
+const RECALL: &str = "What is the name of the file you created earlier in this conversation? \
+                      Reply with only the filename.";
+
+async fn next(h: &mut OpenCode) -> HarnessEvent {
+    let event = tokio::time::timeout(Duration::from_secs(120), h.next())
+        .await
+        .expect("an event within 2 minutes")
+        .expect("the harness is still running");
+    eprintln!("  {event:?}");
+    event
+}
+
+/// Works one turn to its end, allowing every approval; returns the outcome and its text.
+async fn turn(h: &mut OpenCode) -> (TurnOutcome, String, u32) {
+    let (mut text, mut approvals) = (String::new(), 0);
+    loop {
+        match next(h).await {
+            HarnessEvent::ApprovalRequested { id, .. } => {
+                approvals += 1;
+                h.approve(&id, Decision::Allow).await.unwrap();
+            }
+            HarnessEvent::AssistantText { text: t } => text.push_str(&t),
+            HarnessEvent::TurnEnded { outcome } => return (outcome, text, approvals),
+            HarnessEvent::Exited { code } => panic!("opencode exited mid-turn ({code:?})"),
+            _ => {}
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_real_turn_with_an_approval_an_interrupt_and_a_resume() {
+    if std::env::var("CITADEL_LIVE_OPENCODE").as_deref() != Ok("1") {
+        eprintln!("skipped: set CITADEL_LIVE_OPENCODE=1 to run against the real opencode");
+        return;
+    }
+    // Canonical: OpenCode scopes everything by directory, and `/var` is a symlink on macOS.
+    let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+    let root = tmp.join(format!("citadel-live-opencode-{}", std::process::id()));
+    let cwd = root.join("work");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let config_dir = std::env::var_os("CITADEL_LIVE_OPENCODE_CONFIG_DIR")
+        .map_or_else(|| root.join("config"), PathBuf::from);
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let env_allow: Vec<String> = ["PATH", "HOME", "USER", "TMPDIR"].map(str::to_owned).into();
+    let spec = Spec {
+        program: std::env::var_os("CITADEL_OPENCODE_BIN").map(PathBuf::from),
+        cwd: cwd.clone(),
+        model: std::env::var("CITADEL_LIVE_OPENCODE_MODEL")
+            .unwrap_or_else(|_| "opencode/nemotron-3.5-lightning-free".to_owned()),
+        config_dir,
+        env_allow,
+        ..Spec::default()
+    };
+
+    let mut h = OpenCode::start(&spec).await.unwrap();
+    h.send(CREATE).await.unwrap();
+    let session = match next(&mut h).await {
+        HarnessEvent::SessionStarted { id } => id,
+        other => panic!("expected the session first, got {other:?}"),
+    };
+    let (outcome, _, approvals) = turn(&mut h).await;
+    assert_eq!(outcome, TurnOutcome::Success);
+    assert!(approvals >= 1, "the write asked for approval");
+    let file = std::fs::read_to_string(cwd.join("hello.txt")).unwrap();
+    assert_eq!(file.trim(), "hi");
+
+    h.send(COUNT).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    h.interrupt().await.unwrap();
+    assert_eq!(turn(&mut h).await.0, TurnOutcome::Interrupted);
+    let first = h.usage();
+    h.stop().await;
+
+    let mut h = OpenCode::resume(&spec, &session).await.unwrap();
+    h.send(RECALL).await.unwrap();
+    assert_eq!(
+        next(&mut h).await,
+        HarnessEvent::SessionStarted { id: session }
+    );
+    let (outcome, text, _) = turn(&mut h).await;
+    assert_eq!(outcome, TurnOutcome::Success);
+    assert!(text.contains("hello.txt"), "{text}");
+    let total = h.usage();
+    h.stop().await;
+    eprintln!("usage before resume {first:?}; after {total:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// E15.6: a server kept warm opens a new session for the next run, in another directory with
+/// its MCP config rewritten in place, and works a turn there.
+#[tokio::test]
+async fn a_warm_server_opens_a_new_session_for_the_next_run() {
+    if std::env::var("CITADEL_LIVE_OPENCODE").as_deref() != Ok("1") {
+        eprintln!("skipped: set CITADEL_LIVE_OPENCODE=1 to run against the real opencode");
+        return;
+    }
+    let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+    let root = tmp.join(format!("citadel-live-opencode-warm-{}", std::process::id()));
+    let (one, two) = (root.join("one"), root.join("two"));
+    for dir in [&one, &two, &root.join("config")] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let mcp = root.join("mcp.json");
+    std::fs::write(&mcp, r#"{"mcp": {}}"#).unwrap();
+    let env_allow: Vec<String> = ["PATH", "HOME", "USER", "TMPDIR"].map(str::to_owned).into();
+    let spec = Spec {
+        program: std::env::var_os("CITADEL_OPENCODE_BIN").map(PathBuf::from),
+        cwd: one,
+        model: std::env::var("CITADEL_LIVE_OPENCODE_MODEL")
+            .unwrap_or_else(|_| "opencode/nemotron-3.5-lightning-free".to_owned()),
+        config_dir: root.join("config"),
+        env_allow,
+        mcp_config: Some(mcp.clone()),
+        ..Spec::default()
+    };
+    let say = "Reply with exactly one word: ok. Use no tools.";
+    let mut h = OpenCode::start(&spec).await.unwrap();
+    h.send(say).await.unwrap();
+    let HarnessEvent::SessionStarted { id: first } = next(&mut h).await else {
+        panic!("expected the session first");
+    };
+    assert_eq!(turn(&mut h).await.0, TurnOutcome::Success);
+
+    std::fs::write(&mcp, r#"{"mcp": {}, "share": "disabled"}"#).unwrap();
+    let spec = Spec { cwd: two, ..spec };
+    h.renew(&spec).await.unwrap();
+    h.send(say).await.unwrap();
+    let HarnessEvent::SessionStarted { id: second } = next(&mut h).await else {
+        panic!("expected the new session first");
+    };
+    assert_ne!(first, second, "a new session");
+    assert_eq!(turn(&mut h).await.0, TurnOutcome::Success);
+    h.stop().await;
+    let _ = std::fs::remove_dir_all(&root);
+}
