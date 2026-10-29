@@ -1,6 +1,6 @@
 CARGO ?= cargo
 
-.PHONY: build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 run build-citadel test-citadel
+.PHONY: clients clients-check clients-smoke build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 run build-citadel test-citadel
 build: lint ; $(CARGO) build --workspace
 test: lint ; $(CARGO) test --workspace
 lint: format-check ; $(CARGO) clippy --workspace --all-targets -- -D warnings
@@ -8,6 +8,11 @@ format: ; $(CARGO) fmt --all
 format-check: ; $(CARGO) fmt --all --check
 # The contract (E10.1, E1-05.1): api/openapi.json, events.schema.json, runner.schema.json; `make test` fails while openapi.json is stale.
 contract: ; scripts/contract.sh api
+# Generated clients (E1-05): Swift, Kotlin, C#, TS under clients/*/generated; generators are pinned in
+# scripts/contract-swift.sh and scripts/contract-clients.sh. Swift also runs its fixture-decode tests.
+clients: ; scripts/contract-swift.sh clients && scripts/contract-clients.sh gen clients
+clients-check: ; scripts/clients-check.sh
+clients-smoke: ; scripts/contract-clients.sh smoke clients && cd clients/swift && swift test
 # Supply chain (E1-01.3): advisories, licences, bans, sources; see deny.toml.
 audit: ; $(CARGO) deny check
 # Linux runs in Docker with the pinned toolchain (E1-01.4). Colima/Docker on Apple silicon runs arm64 natively.
