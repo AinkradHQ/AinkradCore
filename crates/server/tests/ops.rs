@@ -37,6 +37,21 @@ fn run(args: &[&str], env: &[(&str, &str)]) -> Result<String, String> {
     }
 }
 
+/// Runs the binary, which must succeed: its trimmed stdout and its stderr.
+fn ok_err(args: &[&str]) -> (String, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_ainkrad-core-server"))
+        .args(args)
+        .env_remove("AINKRAD_CONFIG")
+        .output()
+        .unwrap();
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(out.status.success(), "{args:?}: {err}");
+    (
+        String::from_utf8(out.stdout).unwrap().trim().to_owned(),
+        err,
+    )
+}
+
 fn ok(args: &[&str], env: &[(&str, &str)]) -> String {
     run(args, env).unwrap_or_else(|e| panic!("{args:?}: {e}"))
 }
@@ -188,18 +203,22 @@ async fn a_backup_restores_into_a_fresh_home_and_matches() {
 
     let fresh = d.0.join("restored");
     let id = s(&identity);
-    let new_fp = ok(
-        &[
-            "restore",
-            &first,
-            "--identity",
-            id,
-            "--signer",
-            &fp,
-            s(&fresh),
-        ],
-        &[],
+    // This home never served, so it has no Core identity: the old format's shape. It restores,
+    // and says loudly that everything must be paired again.
+    let (new_fp, err) = ok_err(&[
+        "restore",
+        &first,
+        "--identity",
+        id,
+        "--signer",
+        &fp,
+        s(&fresh),
+    ]);
+    assert!(
+        err.contains("WARNING") && err.contains("no Core identity key"),
+        "{err}"
     );
+    assert!(!fresh.join("core-identity.p8").exists());
     assert_ne!(new_fp, fp, "the new home signs with its own key");
     let before = state(&home).await;
     assert!(
@@ -279,6 +298,77 @@ async fn a_backup_restores_into_a_fresh_home_and_matches() {
     .unwrap_err();
     assert!(e.contains("decrypting"), "{e}");
     assert!(!other.exists());
+}
+
+/// Disaster recovery (E1 exit gate finding 1): a backup carries the Core identity, encrypted,
+/// and a restore puts it back, 0600, so the paired devices and runners still accept the Core.
+#[tokio::test]
+async fn a_restored_home_keeps_the_core_identity() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = dir("identity");
+    let home = d.0.join("home");
+    let fp = home_with_state(&home).await;
+    // What serve makes on first start.
+    let core = ainkrad_core_server::auth::Identity::load_or_create(&home).unwrap();
+    let der = std::fs::read(home.join("core-identity.p8")).unwrap();
+    let keygen = ok(&["backup-keygen"], &[]);
+    let identity = d.0.join("identity.txt");
+    std::fs::write(&identity, &keygen).unwrap();
+    let recipient = keygen
+        .lines()
+        .find_map(|l| l.strip_prefix("# public key: "))
+        .unwrap();
+    let config = home.join("config.toml");
+    let file = ok(
+        &["backup", "--config", s(&config), "--local-only"],
+        &[("AINKRAD_BACKUP_RECIPIENT", recipient)],
+    );
+    let sealed = std::fs::read(&file).unwrap();
+    assert!(
+        !sealed.windows(der.len()).any(|w| w == der.as_slice()),
+        "the identity key is only inside the encrypted payload"
+    );
+
+    let fresh = d.0.join("restored");
+    let (_, err) = ok_err(&[
+        "restore",
+        &file,
+        "--identity",
+        s(&identity),
+        "--signer",
+        &fp,
+        s(&fresh),
+    ]);
+    assert!(
+        err.contains("Core identity was restored") && err.contains(&core.fp),
+        "{err}"
+    );
+    assert!(!err.contains("WARNING"), "{err}");
+    let restored = fresh.join("core-identity.p8");
+    let mode = std::fs::metadata(&restored).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    assert_eq!(
+        std::fs::read(&restored).unwrap(),
+        der,
+        "the same key, not a new one"
+    );
+    let again = ainkrad_core_server::auth::Identity::load_or_create(&fresh).unwrap();
+    assert_eq!(again.fp, core.fp);
+    assert_eq!(again.spki, core.spki);
+
+    // An export is plaintext: it never carries the identity, and its import says so.
+    let export = d.0.join("core.export");
+    ok(&["export", "--config", s(&config), s(&export)], &[]);
+    let plain = std::fs::read(&export).unwrap();
+    assert!(!plain.windows(der.len()).any(|w| w == der.as_slice()));
+    let (_, err) = ok_err(&[
+        "import",
+        s(&export),
+        "--signer",
+        &fp,
+        s(&d.0.join("imported")),
+    ]);
+    assert!(err.contains("WARNING"), "{err}");
 }
 
 #[tokio::test]

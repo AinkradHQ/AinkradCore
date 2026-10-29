@@ -16,10 +16,11 @@
 //! gate (`api::v1::gate`) here, before routing, so without a valid signature every path,
 //! unknown ones included, gets the same 401 and the routes cannot be enumerated.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::{Path, Request, State};
+use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -49,8 +50,29 @@ pub fn allowed(path: &str) -> bool {
     ALLOWED.iter().any(|p| under(path, p))
 }
 
-/// The gate, as an outer layer on the whole router (fallback included).
+/// The gate, as an outer layer on the whole router (fallback included). Everything logged while
+/// a request is handled carries its peer address and the device it claims (E1 exit gate
+/// finding 4: an `auth_failed` line said nothing about who was refused). The device is the
+/// `Ainkrad-Device` header, only when it is a well-formed id; never a signature, nonce,
+/// challenge or key.
 pub async fn gate(State(app): State<App>, req: Request, next: Next) -> Response {
+    use tracing::Instrument;
+    let peer = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map_or_else(|| "local".to_owned(), |c| c.0.to_string());
+    let device = req
+        .headers()
+        .get(crate::auth::signed::DEVICE)
+        .and_then(|v| v.to_str().ok())
+        .filter(|d| crate::auth::crypto::is_id(d, "d_"))
+        .unwrap_or("-")
+        .to_owned();
+    let span = tracing::info_span!("request", peer, device);
+    gated(app, req, next).instrument(span).await
+}
+
+async fn gated(app: App, req: Request, next: Next) -> Response {
     if !allowed(req.uri().path()) {
         return crate::api::v1::gate::client_gate(State(app), req, next).await;
     }

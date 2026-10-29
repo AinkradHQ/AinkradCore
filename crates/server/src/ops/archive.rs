@@ -38,7 +38,12 @@ use serde::{Deserialize, Serialize};
 
 pub const MAGIC: &[u8] = b"AINKRAD-ARCHIVE-1\n";
 /// The only names an archive may hold.
-pub const FILES: [&str; 2] = ["core.db", "keys/master.key"];
+/// `core-identity.p8` (the Core identity key, beside the database) goes only into a backup, which
+/// is encrypted; an archive without it (an export, or one written before it was carried) is
+/// still read.
+pub const FILES: [&str; 3] = ["core.db", "keys/master.key", IDENTITY];
+/// The Core identity key's member name, the same as its file name in a home.
+pub const IDENTITY: &str = crate::auth::identity::FILE;
 /// DER prefix of a P-256 `SubjectPublicKeyInfo` with an uncompressed point (spec §3).
 const SPKI_PREFIX: [u8; 26] = [
     0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a,

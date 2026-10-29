@@ -36,6 +36,9 @@ ExecStart=/usr/local/bin/ainkrad-runner connect --state /var/lib/ainkrad-runner/
 # SIGTERM stops it; commands still running are killed.
 TimeoutStopSec=30
 Restart=on-failure
+# Exit 6: the Core rejected this runner (revoked, or unknown to it). Restarting cannot help; it
+# stays stopped until it is paired again.
+RestartPreventExitStatus=6
 RestartSec=5s
 RestartSteps=6
 RestartMaxDelaySec=2min

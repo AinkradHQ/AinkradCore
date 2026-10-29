@@ -215,3 +215,41 @@ fn a_real_runner_is_listed_runs_the_noop_and_its_events_show() {
     assert_eq!(o.status.code(), Some(2), "{o:?}");
     assert_nothing_secret_printed(&[private_key_of(&ks)]);
 }
+
+/// E1 exit gate finding 2: a revoked runner stops (exit 6, said on stderr) instead of redialing
+/// forever: at once on the 4001 close, and, started again while revoked, after a few refusals.
+#[test]
+fn a_revoked_runner_exits_6() {
+    let (core, url) = loopback_core("runner-revoked");
+    let ks = core.keystore("mac");
+    bootstrap(&core, &ks);
+    let a = args(&[&s(&["--keystore", &ks.display().to_string()]), &core.at()]);
+    let id = pair_runner(&core, &a, &url, "vm");
+    let exits_6 = |runner: &mut Child, within: Duration| {
+        let start = Instant::now();
+        let status = loop {
+            if let Some(status) = runner.try_wait().unwrap() {
+                break status;
+            }
+            assert!(start.elapsed() < within, "the runner kept running");
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        let log = std::fs::read_to_string(core.dir.join("vm.log")).unwrap();
+        assert_eq!(status.code(), Some(6), "{log}");
+        assert!(log.contains("rejected by the Core"), "{log}");
+        start.elapsed()
+    };
+
+    let mut runner = connect(&core, "vm");
+    wait_online(&a, &id, true, Duration::from_secs(20));
+    let o = ctl(&args(&[&a, &s(&["device", "revoke", &id])]));
+    assert!(o.status.success(), "{o:?}");
+    let closed = exits_6(&mut runner, Duration::from_secs(10));
+
+    let mut again = connect(&core, "vm");
+    let refused = exits_6(&mut again, Duration::from_secs(20));
+    eprintln!(
+        "revoked runner: exit 6 {closed:?} after the revoke (4001), and {refused:?} after a \
+         restart while revoked (auth_failed x3)"
+    );
+}

@@ -22,12 +22,19 @@ pub enum LinkError {
     Transport(String),
     /// A protocol `error`, or the connection proof failed.
     Protocol(StreamError),
+    /// The Core will not take this device: it was revoked (close 4001), or the Core refuses
+    /// it as it would an unknown or revoked device, again and again. Retrying cannot help.
+    Rejected(String),
 }
 
 impl std::fmt::Display for LinkError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Config(why) | Self::Transport(why) => f.write_str(why),
+            Self::Rejected(why) => write!(
+                f,
+                "rejected by the Core: {why}; this runner stops (pair it again to serve this Core)"
+            ),
             Self::Mismatch { pinned, presented } => write!(
                 f,
                 "core_identity_mismatch: this runner pinned the Core {pinned}, but the server \
@@ -43,6 +50,13 @@ impl std::error::Error for LinkError {}
 
 impl LinkError {
     /// The Core was not who the runner pinned.
+    /// The Core answered as it does an unknown or revoked device (handshake spec §5.3: the one
+    /// `auth_failed`, whatever the reason, so a single one may also be a transient, such as a
+    /// challenge lost to a Core restart).
+    pub fn auth_failed(&self) -> bool {
+        matches!(self, Self::Refused(401, code) if code == "auth_failed")
+    }
+
     pub fn mismatch(&self) -> bool {
         matches!(self, Self::Mismatch { .. })
             || matches!(self, Self::Protocol(e) if e.code == ErrorCode::CoreIdentityMismatch)
