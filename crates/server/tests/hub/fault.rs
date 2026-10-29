@@ -116,6 +116,7 @@ async fn a_cut_mid_stream_loses_nothing_and_answers_once() {
     let e = paired(&core, &base, None, &st).await;
 
     let exec = ExecConfig {
+        run_enabled: true,
         capacity: 8,
         env_allow: vec!["PATH".to_owned()],
         ..ExecConfig::default()
