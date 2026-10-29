@@ -23,7 +23,7 @@ import kotlinx.serialization.Contextual
 /**
  * 
  *
- * @param kind `device` or `runner` (`passkey` comes with E1-08).
+ * @param kind `device`, `runner`, or `passkey` (a browser, E1-08; only when the Core has passkeys).
  * @param name What to call the new device.
  * @param scopes What it may do: within the approver's own scopes; a runner gets exactly `runner`.
  */
@@ -31,7 +31,7 @@ import kotlinx.serialization.Contextual
 
 data class NewPairingBody (
 
-    /* `device` or `runner` (`passkey` comes with E1-08). */
+    /* `device`, `runner`, or `passkey` (a browser, E1-08; only when the Core has passkeys). */
     @SerialName(value = "kind")
     val kind: kotlin.String,
 

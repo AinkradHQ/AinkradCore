@@ -50,6 +50,9 @@ src/main/kotlin/ainkrad/client/models/PageEvent.kt
 src/main/kotlin/ainkrad/client/models/PairStatus.kt
 src/main/kotlin/ainkrad/client/models/PairingCreated.kt
 src/main/kotlin/ainkrad/client/models/PairingView.kt
+src/main/kotlin/ainkrad/client/models/PasskeyClaimBody.kt
+src/main/kotlin/ainkrad/client/models/PasskeyOptionsBody.kt
+src/main/kotlin/ainkrad/client/models/PasskeyRegistrationOptions.kt
 src/main/kotlin/ainkrad/client/models/PastRetention.kt
 src/main/kotlin/ainkrad/client/models/PushToken.kt
 src/main/kotlin/ainkrad/client/models/Rename.kt
@@ -65,3 +68,8 @@ src/main/kotlin/ainkrad/client/models/SettingScope.kt
 src/main/kotlin/ainkrad/client/models/SettingUnit.kt
 src/main/kotlin/ainkrad/client/models/StepUpRequest.kt
 src/main/kotlin/ainkrad/client/models/Versions.kt
+src/main/kotlin/ainkrad/client/models/WebOptions.kt
+src/main/kotlin/ainkrad/client/models/WebOptionsRequest.kt
+src/main/kotlin/ainkrad/client/models/WebSessionGrant.kt
+src/main/kotlin/ainkrad/client/models/WebSessionRequest.kt
+src/main/kotlin/ainkrad/client/models/WsTicket.kt

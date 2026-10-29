@@ -389,6 +389,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ws-ticket": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createWsTicket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/handshake": {
         parameters: {
             query?: never;
@@ -421,6 +437,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/handshake/passkey/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["webSignInOptions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/handshake/passkey/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["webSignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/handshake/session": {
         parameters: {
             query?: never;
@@ -447,6 +495,38 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["claimPairing"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pair/passkey/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["claimPasskeyPairing"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pair/passkey/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["passkeyRegistrationOptions"];
         delete?: never;
         options?: never;
         head?: never;
@@ -516,6 +596,11 @@ export interface components {
             challenge?: string | null;
             /** Format: int64 */
             expires_in?: number | null;
+            /**
+             * @description A passkey device's step-up only: `{"publicKey": PublicKeyCredentialRequestOptions}`
+             *     over `challenge`, for `navigator.credentials.get`.
+             */
+            options?: Record<string, never> | null;
         };
         ChallengeRequest: {
             /** @description The device that will answer it, `d_…`. */
@@ -712,7 +797,7 @@ export interface components {
             name: string;
         };
         NewPairingBody: {
-            /** @description `device` or `runner` (`passkey` comes with E1-08). */
+            /** @description `device`, `runner`, or `passkey` (a browser, E1-08; only when the Core has passkeys). */
             kind: string;
             /** @description What to call the new device. */
             name: string;
@@ -769,6 +854,34 @@ export interface components {
             scopes?: string[] | null;
             /** @description `live`, `claimed`, `approved`, `rejected`, `expired` or `burned`. */
             status?: string | null;
+        };
+        PasskeyClaimBody: {
+            /** @description The same code as for the options; or `secret`. */
+            code?: string | null;
+            /**
+             * @description The created credential as a WebAuthn `RegisterPublicKeyCredential` (`id`, `rawId`,
+             *     `type`, `response.attestationObject`, `response.clientDataJSON`, optional
+             *     `response.transports`), binary fields base64url.
+             */
+            credential: Record<string, never>;
+            platform?: string | null;
+            secret?: string | null;
+        };
+        PasskeyOptionsBody: {
+            /** @description The typed code (`ABCDE-FGHJK`, any case); or `secret`. */
+            code?: string | null;
+            /** @description The QR secret; or `code`. */
+            secret?: string | null;
+        };
+        PasskeyRegistrationOptions: {
+            /** @description The pairing's expiry: the credential must be claimed before it. */
+            expires_at?: components["schemas"]["Timestamp"];
+            /**
+             * @description `{"publicKey": PublicKeyCredentialCreationOptions}` (WebAuthn, binary fields base64url):
+             *     ES256 only, attestation `none`, user verification required, a resident key preferred.
+             *     Decode it and pass it to `navigator.credentials.create`.
+             */
+            options: Record<string, never>;
         };
         /** @description The 410 of a replay from below the retention floor (E1-04.4). */
         PastRetention: {
@@ -898,14 +1011,20 @@ export interface components {
         SettingScope: "server" | string;
         SettingUnit: ("seconds" | "milliseconds" | "percent" | "count" | "bytes" | "per_minute") | string;
         StepUpRequest: {
+            /**
+             * @description A passkey device's proof: the WebAuthn `PublicKeyCredential` answering the challenge's
+             *     `options`, with user verification.
+             */
+            assertion?: Record<string, never> | null;
             /** @description The challenge from `POST /api/v1/auth/step-up/challenge` for this session. */
             challenge: string;
             /**
              * @description The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string
              *     `AINKRAD-STEPUP-V1` LF `<core_fp>` LF `<device_id>` LF `<session_id>` LF `<challenge>`,
              *     no trailing newline. The device's OS releases that key only after user verification.
+             *     Required for a native device; a passkey device sends `assertion` instead.
              */
-            stepup_sig: string;
+            stepup_sig?: string;
         };
         /**
          * Format: date-time
@@ -920,6 +1039,49 @@ export interface components {
             git_sha?: string | null;
             /** @description The server's crate version, `0.1.0`. */
             server: string;
+        };
+        WebOptions: {
+            /** Format: int64 */
+            expires_in?: number | null;
+            /**
+             * @description `{"publicKey": PublicKeyCredentialRequestOptions}` (WebAuthn, binary fields base64url),
+             *     user verification required, no credential list (the passkey is discoverable): decode
+             *     it and pass it to `navigator.credentials.get`.
+             */
+            options: Record<string, never>;
+        };
+        WebOptionsRequest: {
+            /**
+             * @description The browser's session key: a non-extractable WebCrypto ECDSA P-256 key's SPKI
+             *     (`exportKey("spki")` of its public half), base64url.
+             */
+            session_spki: string;
+        };
+        WebSessionGrant: {
+            /** @description The passkey device, `d_…`: sent as `Ainkrad-Device`. */
+            device_id?: string | null;
+            elevated_until?: components["schemas"]["Timestamp"];
+            expires_at?: components["schemas"]["Timestamp"];
+            scopes?: string[] | null;
+            /** @description `s_…`: sent as `Ainkrad-Session`; every request is signed with the session key. */
+            session_id?: string | null;
+        };
+        WebSessionRequest: {
+            /**
+             * @description The assertion as a WebAuthn `PublicKeyCredential` (`id`, `rawId`, `type`,
+             *     `response.authenticatorData`, `response.clientDataJSON`, `response.signature`,
+             *     `response.userHandle`), binary fields base64url.
+             */
+            credential: Record<string, never>;
+        };
+        WsTicket: {
+            /** Format: int64 */
+            expires_in?: number | null;
+            /**
+             * @description 16 random bytes, base64url: offer `ainkrad.v1, ainkrad-ticket.<ticket>` as the
+             *     WebSocket subprotocols of `GET /api/v1/events/ws`. Good once.
+             */
+            ticket?: string | null;
         };
     };
     responses: {
@@ -1375,6 +1537,8 @@ export interface operations {
             header?: {
                 /** @description Replay events after this seq first; absent: only new events */
                 "Last-Event-ID"?: number | null;
+                /** @description A browser, which cannot sign an upgrade: `ainkrad.v1, ainkrad-ticket.<ticket>` with a ticket from `POST /api/v1/ws-ticket`, sent unsigned (the server answers `ainkrad.v1`) */
+                "Sec-WebSocket-Protocol"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -1883,6 +2047,33 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    createWsTicket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A one-time ticket for this session's event socket, live 30 s, for browsers, which cannot sign an upgrade. At most four live per session (a new one replaces the oldest); 429 past ten at once, then one every 6 s */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WsTicket"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     getHandshake: {
         parameters: {
             query?: never;
@@ -1930,6 +2121,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Challenge"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    webSignInOptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebOptionsRequest"];
+            };
+        };
+        responses: {
+            /** @description Sign-in options bound to the session key, live 60 s, single use. 429 past 30 a minute from one address; three live per address (a new one replaces the oldest); 400 `passkeys_disabled` when the Core has no passkeys */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebOptions"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    webSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description A web session for the passkey device, signed with the session key from the options, live `auth.web_session_secs` (absolute). Every failure is 401 `auth_failed`; a sign count that did not grow locks the passkey */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebSessionGrant"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -2003,6 +2256,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Claimed"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    claimPasskeyPairing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasskeyClaimBody"];
+            };
+        };
+        responses: {
+            /** @description Claimed: a pending device of kind `passkey`, whose key is the credential's public key (the SAS is computed over it); the approver compares the SAS and approves as for any device. 401 `pairing_failed` as for `/pair/claim`; 400 for a credential that does not verify, is not ES256 or comes without options first (the pairing is not spent); 409 for a credential enrolled already */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Claimed"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    passkeyRegistrationOptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasskeyOptionsBody"];
+            };
+        };
+        responses: {
+            /** @description Registration options for a live pairing of kind `passkey`; nothing is spent, and a new ask replaces the previous ceremony. A wrong, used, expired or burned credential, or a pairing of another kind, is 401 `pairing_failed` and counts as a wrong claim; 400 `passkeys_disabled` when the Core has no passkeys */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasskeyRegistrationOptions"];
                 };
             };
             400: components["responses"]["BadRequest"];

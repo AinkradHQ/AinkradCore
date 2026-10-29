@@ -20,6 +20,7 @@ import ainkrad.client.models.ErrorBody
 import ainkrad.client.models.LatestEvent
 import ainkrad.client.models.PageEvent
 import ainkrad.client.models.PastRetention
+import ainkrad.client.models.WsTicket
 
 import ainkrad.client.infrastructure.*
 import io.ktor.client.HttpClientConfig
@@ -36,6 +37,39 @@ import io.ktor.http.ParametersBuilder
         httpClientEngine,
         httpClientConfig,
     ) {
+
+        /**
+        * POST /api/v1/ws-ticket
+        * 
+        * 
+         * @return WsTicket
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun createWsTicket(): HttpResponse<WsTicket> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/ws-ticket",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
 
         /**
         * GET /api/v1/events/latest
@@ -155,9 +189,10 @@ import io.ktor.http.ParametersBuilder
         * 
         * 
          * @param lastEventID Replay events after this seq first; absent: only new events (optional)
+         * @param secWebSocketProtocol A browser, which cannot sign an upgrade: &#x60;ainkrad.v1, ainkrad-ticket.&lt;ticket&gt;&#x60; with a ticket from &#x60;POST /api/v1/ws-ticket&#x60;, sent unsigned (the server answers &#x60;ainkrad.v1&#x60;) (optional)
          * @return void
         */
-        open suspend fun streamEvents(lastEventID: kotlin.Long?): HttpResponse<Unit> {
+        open suspend fun streamEvents(lastEventID: kotlin.Long?, secWebSocketProtocol: kotlin.String?): HttpResponse<Unit> {
 
             val localVariableAuthNames = listOf<String>("device_signature")
 
@@ -168,6 +203,7 @@ import io.ktor.http.ParametersBuilder
 
             val localVariableHeaders = mutableMapOf<String, String>()
             lastEventID?.apply { localVariableHeaders["Last-Event-ID"] = this.toString() }
+            secWebSocketProtocol?.apply { localVariableHeaders["Sec-WebSocket-Protocol"] = this.toString() }
 
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.GET,

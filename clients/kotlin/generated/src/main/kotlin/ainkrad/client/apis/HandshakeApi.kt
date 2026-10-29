@@ -21,6 +21,10 @@ import ainkrad.client.models.ErrorBody
 import ainkrad.client.models.Handshake
 import ainkrad.client.models.SessionGrant
 import ainkrad.client.models.SessionRequest
+import ainkrad.client.models.WebOptions
+import ainkrad.client.models.WebOptionsRequest
+import ainkrad.client.models.WebSessionGrant
+import ainkrad.client.models.WebSessionRequest
 
 import ainkrad.client.infrastructure.*
 import io.ktor.client.HttpClientConfig
@@ -141,6 +145,72 @@ import io.ktor.http.ParametersBuilder
             )
 
             return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /handshake/passkey/session
+        * 
+        * 
+         * @param webSessionRequest  
+         * @return WebSessionGrant
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun webSignIn(webSessionRequest: WebSessionRequest): HttpResponse<WebSessionGrant> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = webSessionRequest
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/handshake/passkey/session",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /handshake/passkey/options
+        * 
+        * 
+         * @param webOptionsRequest  
+         * @return WebOptions
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun webSignInOptions(webOptionsRequest: WebOptionsRequest): HttpResponse<WebOptions> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = webOptionsRequest
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/handshake/passkey/options",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames
