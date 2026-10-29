@@ -14,6 +14,7 @@ use std::time::Duration;
 use ainkrad_core::audit::{AuditActor, NewAuditEvent};
 use ainkrad_core_server::store::{audit, begin_write, connect, events, kinds};
 use sqlx::SqlitePool;
+use sqlx::sqlite::SqliteConnectOptions;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
@@ -238,7 +239,10 @@ async fn replay_after_a_kill_resumes_with_no_gap_and_no_duplicate() {
     };
     for iteration in 0..iterations {
         let mut child = spawn_child(&db, iteration).await;
-        let pool = connect(&db).await.unwrap();
+        // A reader only: `connect` would migrate and register, writes that can starve behind a
+        // writer this busy (SQLite's busy wait is not a queue).
+        let reader = SqliteConnectOptions::new().filename(&db).read_only(true);
+        let pool = SqlitePool::connect_with(reader).await.unwrap();
         // Read while the child writes, then kill it mid-way.
         let reading = async {
             for _ in 0..(1 + random_below(5)) {
