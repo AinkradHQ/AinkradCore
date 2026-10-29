@@ -384,6 +384,48 @@ extension Components {
                 case sas
             }
         }
+        /// - Remark: Generated from `#/components/schemas/ClearLockout`.
+        public struct ClearLockout: Codable, Hashable, Sendable {
+            /// The key, exactly as listed.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ClearLockout/key`.
+            public var key: Swift.String
+            /// Creates a new `ClearLockout`.
+            ///
+            /// - Parameters:
+            ///   - key: The key, exactly as listed.
+            public init(key: Swift.String) {
+                self.key = key
+            }
+            public enum CodingKeys: String, CodingKey {
+                case key
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.key = try container.decode(
+                    Swift.String.self,
+                    forKey: .key
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "key"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/Cleared`.
+        public struct Cleared: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/Cleared/key`.
+            public var key: Swift.String
+            /// Creates a new `Cleared`.
+            ///
+            /// - Parameters:
+            ///   - key:
+            public init(key: Swift.String) {
+                self.key = key
+            }
+            public enum CodingKeys: String, CodingKey {
+                case key
+            }
+        }
         /// A device: who it is and what it may do. Never a key's private half: the Core has none.
         ///
         /// - Remark: Generated from `#/components/schemas/Device`.
@@ -424,6 +466,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Device/status`.
             public var status: Swift.String?
+            /// Whether it enrolled a step-up key, so it can elevate (E1-09.3).
+            ///
+            /// - Remark: Generated from `#/components/schemas/Device/stepup`.
+            public var stepup: Swift.Bool?
             /// Creates a new `Device`.
             ///
             /// - Parameters:
@@ -438,6 +484,7 @@ extension Components {
             ///   - revokedAt:
             ///   - scopes: What it may do (E1-09 enforces them).
             ///   - status: `pending`, `active`, `rejected`, `expired` or `locked`.
+            ///   - stepup: Whether it enrolled a step-up key, so it can elevate (E1-09.3).
             public init(
                 createdAt: Components.Schemas.Timestamp,
                 fingerprint: Swift.String? = nil,
@@ -449,7 +496,8 @@ extension Components {
                 platform: Swift.String? = nil,
                 revokedAt: Components.Schemas.Timestamp? = nil,
                 scopes: [Swift.String]? = nil,
-                status: Swift.String? = nil
+                status: Swift.String? = nil,
+                stepup: Swift.Bool? = nil
             ) {
                 self.createdAt = createdAt
                 self.fingerprint = fingerprint
@@ -462,6 +510,7 @@ extension Components {
                 self.revokedAt = revokedAt
                 self.scopes = scopes
                 self.status = status
+                self.stepup = stepup
             }
             public enum CodingKeys: String, CodingKey {
                 case createdAt = "created_at"
@@ -475,6 +524,24 @@ extension Components {
                 case revokedAt = "revoked_at"
                 case scopes
                 case status
+                case stepup
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/Elevation`.
+        public struct Elevation: Codable, Hashable, Sendable {
+            /// Until when this session may call routes marked `x-ainkrad-destructive`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Elevation/elevated_until`.
+            public var elevatedUntil: Components.Schemas.Timestamp?
+            /// Creates a new `Elevation`.
+            ///
+            /// - Parameters:
+            ///   - elevatedUntil: Until when this session may call routes marked `x-ainkrad-destructive`.
+            public init(elevatedUntil: Components.Schemas.Timestamp? = nil) {
+                self.elevatedUntil = elevatedUntil
+            }
+            public enum CodingKeys: String, CodingKey {
+                case elevatedUntil = "elevated_until"
             }
         }
         /// A JSON error: a stable `code` and a message for people.
@@ -737,6 +804,41 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case floor
                 case seq
+            }
+        }
+        /// A key that is locked now.
+        ///
+        /// - Remark: Generated from `#/components/schemas/Lockout`.
+        public struct Lockout: Codable, Hashable, Sendable {
+            /// `ip:<address>`, `ipdev:<address>:<device>` or `stepup:<device>`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Lockout/key`.
+            public var key: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Lockout/locked_until`.
+            public var lockedUntil: Components.Schemas.Timestamp
+            /// Locks in a row; each doubles the next.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Lockout/strikes`.
+            public var strikes: Swift.Int64
+            /// Creates a new `Lockout`.
+            ///
+            /// - Parameters:
+            ///   - key: `ip:<address>`, `ipdev:<address>:<device>` or `stepup:<device>`.
+            ///   - lockedUntil:
+            ///   - strikes: Locks in a row; each doubles the next.
+            public init(
+                key: Swift.String,
+                lockedUntil: Components.Schemas.Timestamp,
+                strikes: Swift.Int64
+            ) {
+                self.key = key
+                self.lockedUntil = lockedUntil
+                self.strikes = strikes
+            }
+            public enum CodingKeys: String, CodingKey {
+                case key
+                case lockedUntil = "locked_until"
+                case strikes
             }
         }
         /// The calling device and what the server speaks.
@@ -1089,6 +1191,35 @@ extension Components {
                 case token
             }
         }
+        /// A device's new name.
+        ///
+        /// - Remark: Generated from `#/components/schemas/Rename`.
+        public struct Rename: Codable, Hashable, Sendable {
+            /// 1 to 64 characters, no control characters; trimmed.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Rename/name`.
+            public var name: Swift.String
+            /// Creates a new `Rename`.
+            ///
+            /// - Parameters:
+            ///   - name: 1 to 64 characters, no control characters; trimmed.
+            public init(name: Swift.String) {
+                self.name = name
+            }
+            public enum CodingKeys: String, CodingKey {
+                case name
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.name = try container.decode(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "name"
+                ])
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/SessionGrant`.
         public struct SessionGrant: Codable, Hashable, Sendable {
             /// Until when the session is elevated (E1-09); null when it is not.
@@ -1154,6 +1285,35 @@ extension Components {
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "challenge"
+                ])
+            }
+        }
+        /// A device's new scopes.
+        ///
+        /// - Remark: Generated from `#/components/schemas/SetScopes`.
+        public struct SetScopes: Codable, Hashable, Sendable {
+            /// From the catalogue, each held by the calling device; a runner holds exactly `runner`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SetScopes/scopes`.
+            public var scopes: [Swift.String]
+            /// Creates a new `SetScopes`.
+            ///
+            /// - Parameters:
+            ///   - scopes: From the catalogue, each held by the calling device; a runner holds exactly `runner`.
+            public init(scopes: [Swift.String]) {
+                self.scopes = scopes
+            }
+            public enum CodingKeys: String, CodingKey {
+                case scopes
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.scopes = try container.decode(
+                    [Swift.String].self,
+                    forKey: .scopes
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "scopes"
                 ])
             }
         }
@@ -1406,6 +1566,50 @@ extension Components {
                 try encoder.encodeFirstNonNilValueToSingleValueContainer([
                     self.value1,
                     self.value2
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/StepUpRequest`.
+        public struct StepUpRequest: Codable, Hashable, Sendable {
+            /// The challenge from `POST /api/v1/auth/step-up/challenge` for this session.
+            ///
+            /// - Remark: Generated from `#/components/schemas/StepUpRequest/challenge`.
+            public var challenge: Swift.String
+            /// The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string
+            /// `AINKRAD-STEPUP-V1` LF `<core_fp>` LF `<device_id>` LF `<session_id>` LF `<challenge>`,
+            /// no trailing newline. The device's OS releases that key only after user verification.
+            ///
+            /// - Remark: Generated from `#/components/schemas/StepUpRequest/stepup_sig`.
+            public var stepupSig: Swift.String
+            /// Creates a new `StepUpRequest`.
+            ///
+            /// - Parameters:
+            ///   - challenge: The challenge from `POST /api/v1/auth/step-up/challenge` for this session.
+            ///   - stepupSig: The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string
+            public init(
+                challenge: Swift.String,
+                stepupSig: Swift.String
+            ) {
+                self.challenge = challenge
+                self.stepupSig = stepupSig
+            }
+            public enum CodingKeys: String, CodingKey {
+                case challenge
+                case stepupSig = "stepup_sig"
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.challenge = try container.decode(
+                    Swift.String.self,
+                    forKey: .challenge
+                )
+                self.stepupSig = try container.decode(
+                    Swift.String.self,
+                    forKey: .stepupSig
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "challenge",
+                    "stepup_sig"
                 ])
             }
         }

@@ -1,7 +1,10 @@
-//! Devices (handshake spec §3, §10): list and revoke. A device enrolls only through pairing
-//! (or, for the first, the host's `bootstrap`); there is no key to hand out. Revocation is
-//! immediate: the row is marked and audited in one transaction, then the device's sessions are
-//! dropped and its sockets closed with 4001.
+//! Devices (handshake spec §3, §8, §10, E1-09.5): list, get, rename, change scopes and revoke.
+//! A device enrolls only through pairing (or, for the first, the host's `bootstrap`); there is
+//! no key to hand out. Rename, scope change and revoke need `admin` and a step-up
+//! (`scopes::DESTRUCTIVE`); the rules (subset, kinds, the last admin) are in
+//! `store::gov::manage`. Revocation is immediate: the row is marked and audited in one
+//! transaction, then the device's sessions are dropped and its sockets closed with 4001; a
+//! scope change closes its sockets with 4003 so they reconnect to a re-filtered stream.
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
@@ -12,7 +15,9 @@ use super::types::{Timestamp, opt_ts, ts};
 use super::{ApiError, ApiResult, BY, Caller};
 use crate::api::App;
 use crate::auth::crypto::is_id;
-use crate::store::gov::{self, list_devices, revoke_device, set_push_token};
+use crate::store::gov::{self, Refused, list_devices, set_push_token};
+use ainkrad_core::audit::NewAuditEvent;
+use serde_json::json;
 
 /// A device: who it is and what it may do. Never a key's private half: the Core has none.
 #[derive(Debug, Serialize, ToSchema)]
@@ -35,6 +40,8 @@ pub struct Device {
     /// Marked at most once a minute.
     pub last_used_at: Option<Timestamp>,
     pub revoked_at: Option<Timestamp>,
+    /// Whether it enrolled a step-up key, so it can elevate (E1-09.3).
+    pub stepup: Option<bool>,
 }
 
 impl From<gov::Device> for Device {
@@ -51,6 +58,7 @@ impl From<gov::Device> for Device {
             created_at: ts(&d.created_at),
             last_used_at: opt_ts(d.last_used_at.as_deref()),
             revoked_at: opt_ts(d.revoked_at.as_deref()),
+            stepup: Some(d.stepup_spki.is_some()),
         }
     }
 }
@@ -75,14 +83,120 @@ pub async fn revoke(
     if !is_id(&id, "d_") {
         return Err(ApiError::not_found("no such device"));
     }
-    if !revoke_device(&app.pool, &id, BY, Some(&me.device.id), &app.clock.now()).await? {
-        return Err(ApiError::not_found(format!("no live device {id}")));
-    }
+    let now = app.clock.now();
+    let r = gov::revoke_from_device(&app.pool, &id, BY, &me.device.id, &now).await?;
+    last_admin(&app, &me, &id, "revoke", &r).await;
+    refused(r)?;
     app.auth.revoked(&id);
-    let device = gov::get_device(&app.pool, &id)
+    current(&app, &id).await
+}
+
+/// Audits a last-admin refusal of `op` on `id` as `device.last_admin_refused`, once per device
+/// per window (`auth::refusals`): repeats are only counted, so they never grow the audit log.
+async fn last_admin<T>(app: &App, me: &Caller, id: &str, op: &str, r: &Result<T, Refused>) {
+    if !matches!(r, Err(Refused::LastAdmin))
+        || !app
+            .auth
+            .refusals
+            .note(&format!("last_admin:{id}"), app.clock.unix())
+    {
+        return;
+    }
+    let event = NewAuditEvent {
+        actor: BY,
+        action: "device.last_admin_refused".to_owned(),
+        entity: None,
+        details: json!({"device": id, "by_device": me.device.id, "op": op}).to_string(),
+    };
+    if let Err(e) = crate::store::audit::append_one(&app.pool, &event).await {
+        tracing::error!(error = %e, "auditing a last-admin refusal failed");
+    }
+}
+
+/// A refusal from `store::gov::manage` as its answer.
+fn refused<T>(r: Result<T, Refused>) -> Result<T, ApiError> {
+    r.map_err(|why| match why {
+        Refused::NotFound => ApiError::not_found("no live device"),
+        Refused::Bad(why) => ApiError::bad_request(why),
+        Refused::LastAdmin => {
+            ApiError::conflict("that would leave no active admin device; pair another first")
+        }
+    })
+}
+
+async fn current(app: &App, id: &str) -> ApiResult<Device> {
+    let device = gov::get_device(&app.pool, id)
         .await?
-        .ok_or_else(|| ApiError::not_found("gone"))?;
+        .ok_or_else(|| ApiError::not_found("no such device"))?;
     Ok(Json(device.into()))
+}
+
+#[utoipa::path(get, path = "/api/v1/devices/{id}", operation_id = "getDevice", tag = "devices",
+    params(("id" = String, Path, description = "Device id, `d_…`")),
+    responses((status = 200, description = "The device, in any state", body = Device)))]
+pub async fn get(State(app): State<App>, Path(id): Path<String>) -> ApiResult<Device> {
+    if !is_id(&id, "d_") {
+        return Err(ApiError::not_found("no such device"));
+    }
+    current(&app, &id).await
+}
+
+/// A device's new name.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Rename {
+    /// 1 to 64 characters, no control characters; trimmed.
+    pub name: String,
+}
+
+#[utoipa::path(patch, path = "/api/v1/devices/{id}", operation_id = "renameDevice",
+    tag = "devices", request_body = Rename,
+    params(("id" = String, Path, description = "Device id, `d_…`")),
+    responses((status = 200, description = "The renamed device (audited as `device.renamed`)",
+        body = Device)))]
+pub async fn rename(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    Json(b): Json<Rename>,
+) -> ApiResult<Device> {
+    if !is_id(&id, "d_") {
+        return Err(ApiError::not_found("no such device"));
+    }
+    refused(gov::rename_device(&app.pool, &id, &b.name, BY, &me.device.id).await?)?;
+    current(&app, &id).await
+}
+
+/// A device's new scopes.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetScopes {
+    /// From the catalogue, each held by the calling device; a runner holds exactly `runner`.
+    pub scopes: Vec<String>,
+}
+
+#[utoipa::path(put, path = "/api/v1/devices/{id}/scopes", operation_id = "setDeviceScopes",
+    tag = "devices", request_body = SetScopes,
+    params(("id" = String, Path, description = "Device id, `d_…`")),
+    responses((status = 200, description = "The device with its new scopes (audited as \
+        `device.scopes_changed`); its open sockets close with 4003. A scope the caller does not \
+        hold, or a runner rule broken, is a 400; leaving no active admin device is a 409",
+        body = Device)))]
+pub async fn set_scopes(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    Json(b): Json<SetScopes>,
+) -> ApiResult<Device> {
+    if !is_id(&id, "d_") {
+        return Err(ApiError::not_found("no such device"));
+    }
+    let mine = &me.device.scopes;
+    let r = gov::set_device_scopes(&app.pool, &id, &b.scopes, mine, BY, &me.device.id).await?;
+    last_admin(&app, &me, &id, "set_scopes", &r).await;
+    refused(r)?;
+    app.auth.rescoped(&id);
+    current(&app, &id).await
 }
 
 /// The calling device's APNs token (E10.4).

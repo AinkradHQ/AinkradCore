@@ -20,6 +20,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/lockouts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listLockouts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/lockouts/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["clearLockout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/step-up": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["stepUp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/step-up/challenge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createStepUpChallenge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices": {
         parameters: {
             query?: never;
@@ -43,11 +107,27 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["getDevice"];
         put?: never;
         post?: never;
         /** Revokes at once, the calling device included; the row stays, marked revoked. */
         delete: operations["revokeDevice"];
+        options?: never;
+        head?: never;
+        patch: operations["renameDevice"];
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/scopes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setDeviceScopes"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -438,6 +518,13 @@ export interface components {
              */
             sas?: string | null;
         };
+        ClearLockout: {
+            /** @description The key, exactly as listed. */
+            key: string;
+        };
+        Cleared: {
+            key: string;
+        };
         /** @description A device: who it is and what it may do. Never a key's private half: the Core has none. */
         Device: {
             created_at: components["schemas"]["Timestamp"];
@@ -458,6 +545,12 @@ export interface components {
             scopes?: string[] | null;
             /** @description `pending`, `active`, `rejected`, `expired` or `locked`. */
             status?: string | null;
+            /** @description Whether it enrolled a step-up key, so it can elevate (E1-09.3). */
+            stepup?: boolean | null;
+        };
+        Elevation: {
+            /** @description Until when this session may call routes marked `x-ainkrad-destructive`. */
+            elevated_until?: components["schemas"]["Timestamp"];
         };
         /** @description A JSON error: a stable `code` and a message for people. */
         ErrorBody: {
@@ -546,6 +639,17 @@ export interface components {
              */
             seq: number;
         };
+        /** @description A key that is locked now. */
+        Lockout: {
+            /** @description `ip:<address>`, `ipdev:<address>:<device>` or `stepup:<device>`. */
+            key: string;
+            locked_until: components["schemas"]["Timestamp"];
+            /**
+             * Format: int64
+             * @description Locks in a row; each doubles the next.
+             */
+            strikes: number;
+        };
         /** @description The calling device and what the server speaks. */
         Me: {
             device: components["schemas"]["Named"];
@@ -625,6 +729,11 @@ export interface components {
             /** @description The device token, hex, as the app got it from APNs. */
             token: string;
         };
+        /** @description A device's new name. */
+        Rename: {
+            /** @description 1 to 64 characters, no control characters; trimmed. */
+            name: string;
+        };
         SessionGrant: {
             /** @description Until when the session is elevated (E1-09); null when it is not. */
             elevated_until?: components["schemas"]["Timestamp"];
@@ -637,6 +746,11 @@ export interface components {
         SessionRequest: {
             /** @description A live challenge issued for the signing device. */
             challenge: string;
+        };
+        /** @description A device's new scopes. */
+        SetScopes: {
+            /** @description From the catalogue, each held by the calling device; a runner holds exactly `runner`. */
+            scopes: string[];
         };
         /** @description A value to set: an integer in the setting's unit. */
         SetSetting: {
@@ -685,6 +799,16 @@ export interface components {
         };
         SettingScope: "server" | string;
         SettingUnit: ("seconds" | "milliseconds" | "percent" | "count" | "bytes" | "per_minute") | string;
+        StepUpRequest: {
+            /** @description The challenge from `POST /api/v1/auth/step-up/challenge` for this session. */
+            challenge: string;
+            /**
+             * @description The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string
+             *     `AINKRAD-STEPUP-V1` LF `<core_fp>` LF `<device_id>` LF `<session_id>` LF `<challenge>`,
+             *     no trailing newline. The device's OS releases that key only after user verification.
+             */
+            stepup_sig: string;
+        };
         /**
          * Format: date-time
          * @description RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a
@@ -719,7 +843,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorBody"];
             };
         };
-        /** @description Wrong Host (unknown_host), an Origin header (origin_refused), or a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope) */
+        /** @description Wrong Host (unknown_host), an Origin header (origin_refused), a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope), or an operation marked x-ainkrad-destructive without a live step-up elevation (step_up_required) */
         Forbidden: {
             headers: {
                 [name: string]: unknown;
@@ -810,6 +934,122 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    listLockouts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every key locked now, the longest lock first (at most 1000) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lockout"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    clearLockout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClearLockout"];
+            };
+        };
+        responses: {
+            /** @description The key's lock, counters and strikes are gone (audited as `auth.lockout_cleared`); 404 when nothing is recorded for it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Cleared"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    stepUp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StepUpRequest"];
+            };
+        };
+        responses: {
+            /** @description The session is elevated (audited as `auth.step_up`). A device without a step-up key, a challenge that is unknown, used, expired or another session's, and a bad signature are all 403 `step_up_failed`; 429 once the device's or the address's failure budget is spent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Elevation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createStepUpChallenge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A single-use step-up challenge bound to the calling session, live 60 s; a new one replaces the session's previous one */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Challenge"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listDevices: {
         parameters: {
             query?: never;
@@ -837,6 +1077,36 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    getDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Device id, `d_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The device, in any state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Device"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     revokeDevice: {
         parameters: {
             query?: never;
@@ -850,6 +1120,74 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description The revoked device. Its sessions end and its open sockets close with 4001 at once (audited as `device.revoked`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Device"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    renameDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Device id, `d_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Rename"];
+            };
+        };
+        responses: {
+            /** @description The renamed device (audited as `device.renamed`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Device"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setDeviceScopes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Device id, `d_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetScopes"];
+            };
+        };
+        responses: {
+            /** @description The device with its new scopes (audited as `device.scopes_changed`); its open sockets close with 4003. A scope the caller does not hold, or a runner rule broken, is a 400; leaving no active admin device is a 409 */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -945,7 +1283,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Switching to a WebSocket. Each text frame is one `Event` (schema `Event`). Closed with 1013 when the client falls behind (a send blocked too long), with the reason `too slow; resume from the last seq read, at most <seq>`: `<seq>` is the last event the server tried to send. The hint is best effort; the client reconnects with `Last-Event-ID` set to the last seq it actually read. Also closed with 1001 (no pong) and 1011 (server error), with the same hint; with 4410 and `past retention, floor <seq>` when the resume point is below the retention floor (re-sync from `/api/v1/events/latest`) */
+            /** @description Switching to a WebSocket. Each text frame is one `Event` (schema `Event`). Closed with 1013 when the client falls behind (a send blocked too long), with the reason `too slow; resume from the last seq read, at most <seq>`: `<seq>` is the last event the server tried to send. The hint is best effort; the client reconnects with `Last-Event-ID` set to the last seq it actually read. Also closed with 1001 (no pong), 1011 (server error), 4001 (the device was revoked) and 4003 (its scopes changed: reconnect), with the same hint; with 4410 and `past retention, floor <seq>` when the resume point is below the retention floor (re-sync from `/api/v1/events/latest`) */
             101: {
                 headers: {
                     [name: string]: unknown;

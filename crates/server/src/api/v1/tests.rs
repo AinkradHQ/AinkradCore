@@ -24,6 +24,8 @@ use crate::scheduler::Clock;
 use crate::store::connect;
 
 mod abuse;
+mod audit_growth;
+mod devices;
 mod events;
 mod me;
 mod modules;
@@ -35,6 +37,7 @@ mod scopes;
 mod sessions;
 mod settings;
 mod signed;
+mod stepup;
 
 pub(super) const NOW: &str = "2026-10-22T10:00:00.000Z";
 pub(super) const HOST: &str = "core.test";
@@ -103,7 +106,8 @@ pub(super) async fn fx() -> Fx {
     }
 }
 
-/// A new device enrolled with `scopes` and logged in (a session issued directly).
+/// A new device enrolled with `scopes` and logged in (a session issued directly), elevated as
+/// if it had stepped up (`stepup` tests the real thing).
 async fn enroll(app: &App, clock: &Arc<FixedClock>, name: &str, scopes: &[&str]) -> TestDevice {
     let dev = TestDevice::enroll(
         &app.pool,
@@ -115,6 +119,8 @@ async fn enroll(app: &App, clock: &Arc<FixedClock>, name: &str, scopes: &[&str])
     )
     .await;
     let s = app.auth.issue_session(&dev.id, clock.unix());
+    app.auth
+        .elevate(&s.id, &dev.id, clock.unix() + 10 * 365 * 86_400);
     dev.set_session(Some(s.id));
     dev
 }

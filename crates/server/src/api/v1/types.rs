@@ -26,7 +26,11 @@
 ///    `api/compat-allow.txt`).
 /// 4: pairing (E1-07.4, .7): `createPairing`, `getPairing`, `approvePairing`, `rejectPairing`,
 ///    and the pre-auth `claimPairing` and `pairStatus`.
-pub const API_MINOR: u32 = 4;
+/// 5: step-up, device management and lockouts (E1-09.3–.6): `createStepUpChallenge`, `stepUp`,
+///    `getDevice`, `renameDevice`, `setDeviceScopes`, `listLockouts`, `clearLockout`,
+///    `Device.stepup`, `x-ainkrad-destructive` and 403 `step_up_required`, and the socket's
+///    4003 close on a scope change.
+pub const API_MINOR: u32 = 5;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

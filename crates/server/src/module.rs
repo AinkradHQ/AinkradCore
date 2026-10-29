@@ -15,7 +15,8 @@
 //! registers them; an event or audit row of an undeclared name is refused at append.
 //!
 //! A module's routes need its one `scope` (`admin` unless it declares another; per-route scopes
-//! come when a module needs them). Scheduler jobs (E2-11) are not here yet.
+//! come when a module needs them); the ones that need a step-up are its `destructive` routes.
+//! Scheduler jobs (E2-11) are not here yet.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -54,6 +55,13 @@ pub trait Module: Send + Sync + 'static {
     /// The scope a device needs for any of the module's routes (`api::v1::scopes`).
     fn scope(&self) -> &'static str {
         "admin"
+    }
+
+    /// `(method, path template)` of the module's routes that need a live step-up elevation
+    /// (`api::v1::scopes::destructive`), relative to `/modules/<id>/v1`, e.g.
+    /// `("POST", "/runs/{id}/kill")`. None by default.
+    fn destructive(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
     }
 }
 
