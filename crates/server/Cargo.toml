@@ -42,7 +42,13 @@ schemars = "1"
 age = { version = "0.11", default-features = false }
 toml = "1"
 
+[features]
+# The reference test client (`auth::testing`) and the store's direct enrolment, for this crate's
+# integration tests and later lanes' fixtures; never in a release build.
+test-support = []
+
 [dev-dependencies]
+ainkrad-core-server = { path = ".", features = ["test-support"] }
 # The gateway tests (`tests/gateway`): HTTP/1.1 by hand, HTTP/2 through hyper's client, test
 # certificates with real validity dates.
 http-body-util = "0.1.5"

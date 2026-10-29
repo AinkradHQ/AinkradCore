@@ -1,6 +1,6 @@
 //! The scheduler loop (E2.9): ticks every `every` until shut down. The platform's jobs are
-//! dropping expired pairing codes and trimming events past retention (E1-04.4); modules' jobs
-//! come with E2-11. The time comes from a
+//! expiring pairings past their 5 minutes and trimming events past retention (E1-04.4);
+//! modules' jobs come with E2-11. The time comes from a
 //! `Clock`, so nothing reads the system clock itself and tests drive it with a fake one.
 
 use std::future::Future;
@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use sqlx::SqlitePool;
 
-use crate::store::gov::prune_pairings;
+use crate::store::gov::expire_pairings;
 
 /// The most events one tick trims: the write stays short, and at the default 10 s tick that is
 /// 30 000 a minute, three times the 10k/min the bus is sized for (E1-04.5).
@@ -31,6 +31,11 @@ async fn trim_events(pool: &SqlitePool, now: &str) -> Result<(), sqlx::Error> {
 /// Where the scheduler gets "now", as ISO-8601 UTC text (`2026-10-21T10:00:00.000Z`).
 pub trait Clock {
     fn now(&self) -> String;
+
+    /// The same instant in whole unix seconds (signed requests, sessions, lockouts).
+    fn unix(&self) -> i64 {
+        unix_secs(&self.now()).expect("a clock gives `YYYY-MM-DDTHH:MM:SS…Z`")
+    }
 }
 
 /// The real clock.
@@ -43,6 +48,38 @@ impl Clock for SystemClock {
             .unwrap_or_default();
         iso8601(since.as_millis() as i64)
     }
+}
+
+/// Whole unix seconds of a stored `YYYY-MM-DDTHH:MM:SS[.fff]Z` time; `None` for anything else.
+pub fn unix_secs(iso: &str) -> Option<i64> {
+    let b = iso.as_bytes();
+    let shape = b.len() >= 20
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b[10] == b'T'
+        && b[13] == b':'
+        && b[16] == b':'
+        && iso.ends_with('Z');
+    let num = |r: std::ops::Range<usize>| iso.get(r)?.parse::<i64>().ok();
+    let (y, mo, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (h, mi, s) = (num(11..13)?, num(14..16)?, num(17..19)?);
+    if !shape || !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || s > 60 {
+        return None;
+    }
+    // Days from civil (Howard Hinnant's algorithm), the inverse of `iso8601`.
+    let y = if mo <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (mo + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + h * 3600 + mi * 60 + s)
+}
+
+/// Unix seconds as the stored format.
+pub fn iso_of_unix(secs: i64) -> String {
+    iso8601(secs * 1000)
 }
 
 /// `ms` since the Unix epoch as ISO-8601 UTC with milliseconds, the stored format.
@@ -100,7 +137,7 @@ impl<C: Clock> Scheduler<C> {
                 () = &mut shutdown => return ticks,
                 _ = every.tick() => {
                     let now = self.clock.now();
-                    if let Err(e) = prune_pairings(&self.pool, &now).await {
+                    if let Err(e) = expire_pairings(&self.pool, &now).await {
                         eprintln!("ainkrad-core-server: scheduler tick failed: {e}");
                     }
                     if let Err(e) = trim_events(&self.pool, &now).await {
@@ -122,7 +159,6 @@ mod tests {
 
     use super::*;
     use crate::store::connect;
-    use crate::store::gov::start_pairing;
 
     #[test]
     fn formats_epoch_millis_as_stored_timestamps() {
@@ -131,6 +167,24 @@ mod tests {
         assert_eq!(iso8601(951_782_400_000), "2000-02-29T00:00:00.000Z");
         assert_eq!(iso8601(-1), "1969-12-31T23:59:59.999Z");
         assert_eq!(SystemClock.now().len(), 24);
+        for ms in [
+            0,
+            1_792_576_800_000,
+            951_782_400_000,
+            -86_400_000,
+            4_102_444_799_000,
+        ] {
+            assert_eq!(unix_secs(&iso8601(ms)), Some(ms / 1000), "{ms}");
+        }
+        assert_eq!(unix_secs("2026-10-21T10:00:00Z"), Some(1_792_576_800));
+        for bad in [
+            "",
+            "2026-10-21 10:00:00.000Z",
+            "2026-13-21T10:00:00.000Z",
+            "x026-10-21T10:00:00.000Z",
+        ] {
+            assert_eq!(unix_secs(bad), None, "{bad}");
+        }
     }
 
     /// Hands out `times` in order, then signals `done` and keeps repeating the last one.
@@ -178,9 +232,23 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let pool = connect(&dir.join("core.db")).await.unwrap();
         // A code started at 10:00 lives five minutes; one started at 10:58 outlives the run.
-        let codes = |at| start_pairing(&pool, AuditActor::System, at);
-        codes("2026-10-21T10:00:00.000Z").await.unwrap();
-        codes("2026-10-21T10:58:00.000Z").await.unwrap();
+        for (n, expires) in ["2026-10-21T10:05:00.000Z", "2026-10-21T11:03:00.000Z"]
+            .into_iter()
+            .enumerate()
+        {
+            sqlx::query(
+                "INSERT INTO core_pairings (id, code_hash, secret_hash, kind, name, scopes, \
+                 created_at, expires_at) VALUES (?, ?, ?, 'device', 'x', '[]', ?, ?)",
+            )
+            .bind(crate::auth::crypto::random_id("p_"))
+            .bind(vec![n as u8; 32])
+            .bind(vec![n as u8 + 10; 32])
+            .bind("2026-10-21T10:00:00.000Z")
+            .bind(expires)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
 
         let (tx, rx) = oneshot::channel();
         let scheduler = Scheduler {
@@ -201,11 +269,15 @@ mod tests {
         };
         let ticks = scheduler.run(shutdown).await;
         assert!(ticks >= 3, "{ticks}");
-        let left: i64 = sqlx::query_scalar("SELECT count(*) FROM device_pairings")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(left, 1, "the expired code is gone, the live one stays");
+        let left: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM core_pairings WHERE status = 'live'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            left, 1,
+            "the expired pairing is expired, the live one stays"
+        );
         pool.close().await;
         std::fs::remove_dir_all(&dir).unwrap();
     }

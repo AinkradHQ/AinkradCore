@@ -19,7 +19,12 @@
 /// 2: the event bus and audit hardening (E1-04, E1-10): `LatestEvent.floor`, the 410
 /// `PastRetention` of `listEvents`, the socket's 4410 close, and the registered event kinds and
 /// audit actions as `x-event-kinds` and `x-audit-actions`.
-pub const API_MINOR: u32 = 2;
+/// 3: signed requests and device identity (E1-07): `POST /handshake/challenge` and
+///    `/handshake/session`, `identity_fingerprint` filled, devices by `d_…` id with kind,
+///    scopes and fingerprint, `ErrorBody.server_time`. Bearer device keys, `createDevice` and
+///    the six-character pairing are gone (a deliberate break before any client shipped; see
+///    `api/compat-allow.txt`).
+pub const API_MINOR: u32 = 3;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -78,6 +83,9 @@ pub struct ErrorBody {
     /// `err_` and a ULID, unique to this answer: logged with it (and, for a refused write,
     /// audited as `api.refused`), for the app's "Copy error".
     pub error_id: String,
+    /// The server's clock in unix seconds, on a `clock_skew` refusal only (handshake spec §5.3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_time: Option<i64>,
 }
 
 macro_rules! api_enum {

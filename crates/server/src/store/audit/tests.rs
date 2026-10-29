@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use ainkrad_core::ids::UserId;
 
 use super::*;
+use crate::auth::testing::TestDevice;
 use crate::store::connect;
-use crate::store::gov::issue_device_key;
 use crate::store::migrate::{CORE, CORE_MIGRATIONS, migrate_core, undo};
 
 /// A migrated database in its own temp dir, removed on drop.
@@ -166,15 +166,19 @@ async fn seq_strictly_increases() {
 #[tokio::test]
 async fn event_survives_deleting_its_entity() {
     let db = db().await;
-    let (d, _) = issue_device_key(&db.pool, "Mac", AuditActor::System)
+    let clock = std::sync::Arc::new(crate::scheduler::SystemClock);
+    let mac = TestDevice::enroll(&db.pool, "Mac", "device", &[], "fp", clock).await;
+    let seq: i64 = sqlx::query_scalar("SELECT seq FROM core_devices WHERE id = ?")
+        .bind(&mac.id)
+        .fetch_one(&db.pool)
         .await
         .unwrap();
     let entity = AuditEntity {
-        kind: "device_key".to_owned(),
-        id: d.id.0,
+        kind: "device".to_owned(),
+        id: seq,
     };
-    sqlx::query("DELETE FROM device_keys WHERE id = ?")
-        .bind(d.id.0)
+    sqlx::query("DELETE FROM core_devices WHERE seq = ?")
+        .bind(seq)
         .execute(&db.pool)
         .await
         .unwrap();
@@ -185,7 +189,7 @@ async fn event_survives_deleting_its_entity() {
     };
     let left = list(&db.pool, &filter, None, 10).await.unwrap();
     assert_eq!(left.len(), 1);
-    assert_eq!(left[0].action, "device_key.created");
+    assert_eq!(left[0].action, "device.enrolled");
 }
 
 #[tokio::test]

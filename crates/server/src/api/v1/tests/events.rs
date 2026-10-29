@@ -7,7 +7,6 @@ use std::time::Duration;
 use ainkrad_core::audit::{AuditActor, NewAuditEvent};
 use futures_util::StreamExt;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
@@ -17,20 +16,24 @@ use super::*;
 use crate::store::audit;
 use crate::store::events::{last_event_seq, list_events};
 
-type Ws = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+pub(super) type Ws = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// The app served on a loopback port (its `Host`), sharing `fx`'s database and clock.
-async fn serve(fx: &Fx, stream: StreamConfig) -> App {
+pub(super) async fn serve(fx: &Fx, stream: StreamConfig) -> App {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let host = listener.local_addr().unwrap().to_string();
-    let mut app = App::new(fx.app.pool.clone(), fx.clock.clone(), host);
-    app.stream = stream;
+    // The same identity and sessions as `fx.app`, on this listener's Host.
+    let app = App {
+        host,
+        stream,
+        ..fx.app.clone()
+    };
     let service = router(app.clone()).into_make_service_with_connect_info::<SocketAddr>();
     tokio::spawn(async move { axum::serve(listener, service).await });
     app
 }
 
-fn quick() -> StreamConfig {
+pub(super) fn quick() -> StreamConfig {
     StreamConfig {
         poll: Duration::from_millis(20),
         heartbeat: Duration::from_secs(30),
@@ -39,11 +42,17 @@ fn quick() -> StreamConfig {
     }
 }
 
-async fn connect(app: &App, key: &str, after: Option<&str>) -> Result<Ws, WsError> {
+pub(super) async fn connect(
+    app: &App,
+    dev: &TestDevice,
+    after: Option<&str>,
+) -> Result<Ws, WsError> {
     let url = format!("ws://{}/api/v1/events/ws", app.host);
     let mut req = url.into_client_request().unwrap();
     let h = req.headers_mut();
-    h.insert(AUTHORIZATION, format!("Bearer {key}").parse().unwrap());
+    for (name, value) in dev.headers("GET", "/api/v1/events/ws", b"") {
+        h.insert(name, value.parse().unwrap());
+    }
     if let Some(after) = after {
         h.insert("last-event-id", after.parse().unwrap());
     }
@@ -109,7 +118,7 @@ async fn a_ten_minute_disconnect_replays_every_missed_event_once_in_order() {
         emitted(pool, n).await;
     }
 
-    let mut ws = connect(&app, &fx.key, Some("0")).await.unwrap();
+    let mut ws = connect(&app, &fx.dev, Some("0")).await.unwrap();
     let head = last_event_seq(pool).await.unwrap();
     let first = until(&mut ws, head).await;
     assert_eq!(first.len(), list_events(pool, 0, 1000).await.unwrap().len());
@@ -128,7 +137,7 @@ async fn a_ten_minute_disconnect_replays_every_missed_event_once_in_order() {
     assert!(missed.len() >= 15, "{} missed", missed.len());
 
     let resume = seen.to_string();
-    let mut ws = connect(&app, &fx.key, Some(&resume)).await.unwrap();
+    let mut ws = connect(&app, &fx.dev, Some(&resume)).await.unwrap();
     let replayed = until(&mut ws, head).await;
     let want: Vec<i64> = missed.iter().map(|e| e.seq).collect();
     assert_eq!(seqs(&replayed), want, "every missed event, once, in order");
@@ -164,26 +173,26 @@ async fn a_ten_minute_disconnect_replays_every_missed_event_once_in_order() {
 async fn without_a_resume_point_the_socket_is_live_only() {
     let fx = fx().await;
     let app = serve(&fx, quick()).await;
-    let mut ws = connect(&app, &fx.key, None).await.unwrap();
+    let mut ws = connect(&app, &fx.dev, None).await.unwrap();
     let head = last_event_seq(&fx.app.pool).await.unwrap();
     // Give the socket a poll to settle, then write.
     tokio::time::sleep(Duration::from_millis(100)).await;
     emitted(&fx.app.pool, 1).await;
     assert_eq!(next(&mut ws).await["seq"], head + 1, "nothing older");
 
-    match connect(&app, &fx.key, Some("soon")).await {
+    match connect(&app, &fx.dev, Some("soon")).await {
         Err(WsError::Http(r)) => assert_eq!(r.status(), StatusCode::BAD_REQUEST),
         other => panic!("a bad Last-Event-ID is refused: {other:?}"),
     }
-    match connect(&app, "cit_device_wrong", Some("0")).await {
+    match connect(&app, &fx.stranger(), Some("0")).await {
         Err(WsError::Http(r)) => assert_eq!(r.status(), StatusCode::UNAUTHORIZED),
-        other => panic!("a bad key is refused: {other:?}"),
+        other => panic!("a stranger is refused: {other:?}"),
     }
 }
 
 /// Reads to the end of the socket: how many events, the last seq, and the close frame if
 /// one came.
-async fn drain(ws: &mut Ws) -> (usize, i64, Option<(CloseCode, String)>) {
+pub(super) async fn drain(ws: &mut Ws) -> (usize, i64, Option<(CloseCode, String)>) {
     let (mut events, mut last) = (0, 0);
     loop {
         match tokio::time::timeout(Duration::from_secs(10), ws.next()).await {
@@ -228,7 +237,7 @@ async fn a_client_that_stops_reading_is_closed_with_a_resume_hint() {
         ..quick()
     };
     let app = serve(&fx, stream).await;
-    let mut ws = connect(&app, &fx.key, Some("0")).await.unwrap();
+    let mut ws = connect(&app, &fx.dev, Some("0")).await.unwrap();
     // Not reading: the server's sends block, then time out.
     tokio::time::sleep(Duration::from_secs(2)).await;
     let (got, last, close) = drain(&mut ws).await;
@@ -247,7 +256,7 @@ async fn a_client_that_stops_reading_is_closed_with_a_resume_hint() {
     }
 
     // Resuming from the last event read carries on with the next one: nothing skipped.
-    let mut ws = connect(&app, &fx.key, Some(&last.to_string()))
+    let mut ws = connect(&app, &fx.dev, Some(&last.to_string()))
         .await
         .unwrap();
     assert_eq!(next(&mut ws).await["seq"], last + 1);
@@ -261,7 +270,7 @@ async fn a_silent_client_is_closed_after_three_heartbeats() {
         ..quick()
     };
     let app = serve(&fx, stream).await;
-    let mut ws = connect(&app, &fx.key, None).await.unwrap();
+    let mut ws = connect(&app, &fx.dev, None).await.unwrap();
     // Not reading means not answering pings.
     tokio::time::sleep(Duration::from_millis(800)).await;
     let (_, _, close) = drain(&mut ws).await;
@@ -298,7 +307,7 @@ async fn a_client_past_retention_gets_410_or_4410_and_recovers_from_latest() {
     assert!(body["error_id"].as_str().unwrap().starts_with("err_"));
 
     let app = serve(&fx, quick()).await;
-    let mut ws = connect(&app, &fx.key, Some("0")).await.unwrap();
+    let mut ws = connect(&app, &fx.dev, Some("0")).await.unwrap();
     let (got, _, close) = drain(&mut ws).await;
     assert_eq!(got, 0, "nothing from below the floor");
     let (code, reason) = close.expect("a close frame");
@@ -313,7 +322,7 @@ async fn a_client_past_retention_gets_410_or_4410_and_recovers_from_latest() {
     emitted(pool, 99).await;
     let page = fx.ok(&format!("/api/v1/events?after={head}")).await;
     assert_eq!(seqs(page["items"].as_array().unwrap()), [head + 1]);
-    let mut ws = connect(&app, &fx.key, Some(&head.to_string()))
+    let mut ws = connect(&app, &fx.dev, Some(&head.to_string()))
         .await
         .unwrap();
     assert_eq!(next(&mut ws).await["payload"], json!({"n": 99}));

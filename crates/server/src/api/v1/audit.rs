@@ -41,9 +41,9 @@ pub struct AuditQuery {
     pub before: Option<i64>,
     /// At most this many (default and most 100).
     pub limit: Option<u32>,
-    /// Only actions starting with this: `device_key.` or `setting.set`.
+    /// Only actions starting with this: `device.` or `setting.set`.
     pub kind: Option<String>,
-    /// Only rows about this entity: its kind (`device_key`), or kind and id (`device_key:3`).
+    /// Only rows about this entity: its kind (`device`), or kind and id (`device:3`).
     pub target: Option<String>,
     /// Only rows done by this kind of actor: `user` or `system`; another value is a 400.
     pub actor: Option<String>,
@@ -54,7 +54,7 @@ pub struct AuditQuery {
 pub struct AuditEntry {
     pub seq: i64,
     pub at: Timestamp,
-    /// Dotted: `device_key.created`, `setting.set`, ….
+    /// Dotted: `device.revoked`, `setting.set`, ….
     pub action: String,
     pub actor: EventActor,
     pub entity_kind: Option<String>,

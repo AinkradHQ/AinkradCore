@@ -1,4 +1,4 @@
-//! `GET /api/v1/me` and `GET /api/v1/events/latest`: the key check, the versions and the
+//! `GET /api/v1/me` and `GET /api/v1/events/latest`: the signature check, the versions and the
 //! newest event seq.
 
 use serde_json::json;
@@ -12,7 +12,7 @@ async fn me_names_the_device_and_the_versions() {
     let fx = fx().await;
     let me = fx.ok("/api/v1/me").await;
     assert_eq!(me["device"]["name"], "test");
-    assert!(me["device"]["id"].as_i64().unwrap() > 0);
+    assert_eq!(me["device"]["id"], fx.dev.id.as_str());
     let v = &me["versions"];
     assert_eq!(v["server"], env!("CARGO_PKG_VERSION"));
     assert!(!v["server"].as_str().unwrap().is_empty());
@@ -25,7 +25,7 @@ async fn me_names_the_device_and_the_versions() {
 
     let latest = fx.ok("/api/v1/events/latest").await;
     let head = last_event_seq(&fx.app.pool).await.unwrap();
-    assert!(head > 0, "issuing the key was audited");
+    assert!(head > 0, "enrolling the device was audited");
     assert_eq!(latest, json!({"seq": head, "floor": 0}));
 
     let spec: Value = serde_json::from_str(&super::super::spec::json()).unwrap();
@@ -33,12 +33,13 @@ async fn me_names_the_device_and_the_versions() {
 }
 
 #[tokio::test]
-async fn me_and_latest_need_a_key() {
+async fn me_and_latest_need_a_signature() {
     let fx = fx().await;
+    let stranger = fx.stranger();
     for uri in ["/api/v1/me", "/api/v1/events/latest"] {
         let (status, body) = send(&fx.app, req(Method::GET, uri, None, None)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri}: {body}");
-        let (status, _) = send(&fx.app, req(Method::GET, uri, Some("wrong"), None)).await;
+        let (status, _) = send(&fx.app, req(Method::GET, uri, Some(&stranger), None)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri}");
     }
 }

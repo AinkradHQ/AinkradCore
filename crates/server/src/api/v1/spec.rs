@@ -15,8 +15,8 @@
 //! 4. Every string enum component becomes open, `anyOf: [the enum, any string]`, which the
 //!    generator turns into a known case or the raw string: an older client survives a value
 //!    added later (the versioning rule in `types`).
-//! 5. The bearer scheme, required everywhere, and the shared error answers on every
-//!    operation, each an `ErrorBody`.
+//! 5. The signed-request scheme (handshake spec §5), required everywhere, and the shared
+//!    error answers on every operation, each an `ErrorBody`.
 //!
 //! After normalising, the registered names (`store::kinds`, E1-04.2, E1-10.2) are listed as
 //! extensions: `Event` carries `x-event-kinds`, `AuditEntry` `x-audit-actions`, the platform's
@@ -31,14 +31,13 @@ use utoipa::OpenApi;
 use crate::module::Module;
 use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
-use super::{audit, devices, events, handshake, me, pairing, settings, types};
+use super::{audit, devices, events, handshake, me, session, settings, types};
 
 #[derive(OpenApi)]
 #[openapi(
     info(title = "Ainkrad Core", version = "1.0.0"),
     paths(
         devices::list,
-        devices::create,
         devices::revoke,
         devices::set_push,
         devices::clear_push,
@@ -46,10 +45,10 @@ use super::{audit, devices, events, handshake, me, pairing, settings, types};
         events::ws,
         events::latest,
         handshake::handshake,
+        session::challenge,
+        session::session,
         me::me,
         audit::list,
-        pairing::start,
-        pairing::pair,
         settings::list_server,
         settings::list,
         settings::get,
@@ -62,11 +61,16 @@ use super::{audit, devices, events, handshake, me, pairing, settings, types};
 struct ApiDoc;
 
 const DESCRIPTION: &str = "The Ainkrad Core client API, for the Ainkrad app. Every request \
-carries a device key as `Authorization: Bearer` (never in the URL) and the server's own `Host`, \
-and no `Origin`. Times are RFC 3339 UTC with milliseconds. Versioning: within /api/v1, enum \
-values, union variants, optional fields and operations may be added; a client must keep an \
-unknown enum value (every enum is open) and skip an event or union variant it cannot decode. \
-Anything removed or renamed is a new /api/v2. `info.version` is `1.<minor>.0`; the minor \
+is signed by the device's own P-256 key (ES256, raw r||s): the headers Ainkrad-Device, \
+Ainkrad-Session, Ainkrad-Alg (ES256), Ainkrad-Timestamp, Ainkrad-Nonce and Ainkrad-Signature \
+cover an exact canonical string of the Core identity fingerprint, the method, path, query, \
+time, nonce and the body's SHA-256 (handshake spec §5). A session comes from \
+POST /handshake/challenge then POST /handshake/session and lasts 15 minutes; there is no bearer \
+secret, and an Authorization header is refused. Requests carry the server's own Host and no \
+Origin. Times are RFC 3339 UTC with milliseconds. Versioning: within /api/v1, enum values, \
+union variants, optional fields and operations may be added; a client must keep an unknown enum \
+value (every enum is open) and skip an event or union variant it cannot decode. Anything \
+removed or renamed is a new /api/v2. `info.version` is `1.<minor>.0`; the minor \
 (`GET /api/v1/me`, `versions.api.minor`) is bumped on every addition.";
 
 /// The normalised spec, as committed: pretty JSON with sorted keys and a final newline. Lists
@@ -247,9 +251,14 @@ const ERRORS: [(&str, &str, &str); 7] = [
     (
         "401",
         "Unauthorized",
-        "Missing, invalid or revoked device key",
+        "auth_failed (any signature or device failure, alike whatever the reason), clock_skew \
+         (with server_time), or session_expired",
     ),
-    ("403", "Forbidden", "Wrong Host, or an Origin header"),
+    (
+        "403",
+        "Forbidden",
+        "Wrong Host (unknown_host), or an Origin header (origin_refused)",
+    ),
     ("404", "NotFound", "No such resource"),
     ("409", "Conflict", "Conflicts with the current state"),
     ("429", "TooManyRequests", "Rate limited; see Retry-After"),
@@ -257,9 +266,12 @@ const ERRORS: [(&str, &str, &str); 7] = [
 ];
 
 fn security_and_errors(spec: &mut Value) {
-    spec["components"]["securitySchemes"] =
-        json!({"device_key": {"type": "http", "scheme": "bearer"}});
-    spec["security"] = json!([{"device_key": []}]);
+    spec["components"]["securitySchemes"] = json!({"device_signature": {
+        "type": "apiKey", "in": "header", "name": "Ainkrad-Signature",
+        "description": "ES256 over the canonical request string, with Ainkrad-Device, \
+            Ainkrad-Session, Ainkrad-Alg, Ainkrad-Timestamp and Ainkrad-Nonce alongside \
+            (handshake spec §5)"}});
+    spec["security"] = json!([{"device_signature": []}]);
     let error = json!({"application/json": {"schema": {"$ref": "#/components/schemas/ErrorBody"}}});
     for (_, name, description) in ERRORS {
         spec["components"]["responses"][name] =

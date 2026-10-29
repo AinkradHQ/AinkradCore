@@ -1,6 +1,7 @@
-//! The pre-auth surface (E1-06.4): without a key, only `/handshake`, pairing and `/healthz`
-//! answer; every other path and method, in the contract or not, gets the same 401 before
-//! routing. `/handshake` (E1-05.5) answers without a key and says nothing else.
+//! The pre-auth surface (E1-06.4, handshake spec §4): unsigned, only `/handshake…`, pairing
+//! and `/healthz` answer; every other path and method, in the contract or not, gets the same
+//! 401 before routing, and a non-canonical path a 400 before anything. `/handshake` (E1-05.5)
+//! answers unsigned and says nothing but the versions and the Core identity fingerprint.
 
 use std::sync::Arc;
 
@@ -13,6 +14,7 @@ use super::{HOST, fx, req, send};
 use crate::api::limit::Limiter;
 use crate::api::router;
 use crate::api::v1::Limits;
+use crate::auth::signed::canonical_path;
 use crate::gateway::preauth::allowed;
 
 const METHODS: [Method; 5] = [
@@ -24,7 +26,7 @@ const METHODS: [Method; 5] = [
 ];
 
 /// Paths that are not in the contract: lookalikes, case and slash games, traversal, the ACME
-/// path on the main listener, and the authenticated `startPairing` next to `pairDevice`.
+/// path on the main listener, and the bearer-era pairing routes.
 const PROBES: [&str; 16] = [
     "/",
     "/nope",
@@ -36,7 +38,7 @@ const PROBES: [&str; 16] = [
     "/api/v1",
     "/api/v2/me",
     "/api/v1/devices/pairing",
-    "/api/v1/devices/pairX",
+    "/api/v1/devices/pair",
     "/pairing",
     "/healthzz",
     "/.well-known/acme-challenge/token",
@@ -57,10 +59,9 @@ fn fill(path: &str) -> String {
 }
 
 #[tokio::test]
-async fn only_the_allowed_prefixes_answer_without_a_key() {
+async fn only_the_allowed_prefixes_answer_unsigned() {
     let mut fx = fx().await;
     fx.app.limits = Arc::new(Limits {
-        failures: Limiter::new(100_000, 1.0),
         requests: Limiter::new(100_000, 1.0),
     });
     let spec: Value = serde_json::from_str(&super::super::spec::json()).unwrap();
@@ -72,32 +73,39 @@ async fn only_the_allowed_prefixes_answer_without_a_key() {
         .collect();
     let in_contract = paths.len();
     paths.extend(PROBES.iter().map(|p| (*p).to_owned()));
-    let (mut refused, mut open) = (0, Vec::new());
+    let (mut refused, mut open, mut crooked) = (0, Vec::new(), 0);
     for path in &paths {
         for m in METHODS {
             let (status, body) = send(&fx.app, req(m.clone(), path, None, None)).await;
+            if !canonical_path(path) {
+                assert_eq!(status, StatusCode::BAD_REQUEST, "{m} {path}: {body}");
+                crooked += 1;
+                continue;
+            }
             if allowed(path) {
-                assert_ne!(status, StatusCode::UNAUTHORIZED, "{m} {path}: {body}");
                 open.push(format!("{m} {path} {}", status.as_u16()));
                 continue;
             }
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{m} {path}: {body}");
-            assert_eq!(body["code"], "unauthorized", "{m} {path}");
-            assert_eq!(body["message"], "missing device key", "{m} {path}");
+            assert_eq!(body["code"], "auth_failed", "{m} {path}");
+            assert_eq!(body["message"], "authentication failed", "{m} {path}");
             refused += 1;
         }
     }
     assert!(in_contract >= 15, "{in_contract} contract paths");
-    // Under the allowed prefixes, only `GET /handshake` succeeds without a key (pairing
-    // wants a body); `/handshake/../api/v1/me` is not normalised into the API: a 404.
+    // Under the allowed prefixes, only `GET /handshake` succeeds unsigned: the challenge wants
+    // a body, the session a signature (and refuses as any route does).
     let ok: Vec<&String> = open.iter().filter(|o| o.ends_with(" 200")).collect();
     assert_eq!(ok, ["GET /handshake 200"], "{open:#?}");
     assert!(
-        open.contains(&"GET /handshake/../api/v1/me 404".to_owned()),
+        open.contains(&"POST /handshake/session 401".to_owned()),
         "{open:#?}"
     );
     assert_eq!(open.len(), 3 * METHODS.len(), "{open:#?}");
-    assert_eq!(refused + open.len(), paths.len() * METHODS.len());
+    // Unrouted methods under them are a bare 405, which names nothing.
+    assert!(open.iter().all(|o| !o.ends_with(" 404")), "{open:#?}");
+    assert_eq!(crooked, 2 * METHODS.len(), "the traversal and slash probes");
+    assert_eq!(refused + open.len() + crooked, paths.len() * METHODS.len());
 
     // `/healthz`: `ok`, and nothing about the server.
     let res = router(fx.app.clone())
@@ -107,15 +115,12 @@ async fn only_the_allowed_prefixes_answer_without_a_key() {
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(&to_bytes(res.into_body(), 64).await.unwrap()[..], b"ok");
 
-    // A bogus key does not open the router either: unknown paths stay 401, not 404.
-    let (status, _) = send(
-        &fx.app,
-        req(Method::GET, "/nope", Some("cit_device_x"), None),
-    )
-    .await;
+    // A stranger's signature does not open the router either: unknown paths stay 401.
+    let stranger = fx.stranger();
+    let (status, _) = send(&fx.app, req(Method::GET, "/nope", Some(&stranger), None)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    // With a live key, the client gate is what it was: an unknown path is a 404.
-    let (status, _) = send(&fx.app, req(Method::GET, "/nope", Some(&fx.key), None)).await;
+    // A live device gets past the gate: an unknown path is a 404.
+    let (status, _) = send(&fx.app, req(Method::GET, "/nope", Some(&fx.dev), None)).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -145,18 +150,20 @@ async fn pre_auth_routes_keep_the_shared_checks_and_a_small_body() {
         .unwrap();
     assert_eq!(send(&fx.app, wrong_host).await.0, StatusCode::FORBIDDEN);
 
-    let big = json!({"code": "ABCDEF", "name": "x".repeat(20 * 1024)});
+    let big = json!({"device_id": "x".repeat(20 * 1024)});
     let (status, body) = send(
         &fx.app,
-        req(Method::POST, "/api/v1/devices/pair", None, Some(big)),
+        req(Method::POST, "/handshake/challenge", None, Some(big)),
     )
     .await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
     assert_eq!(body["code"], "too_large");
+    let bearer = with("/handshake", ("authorization", "Bearer cit_device_x"));
+    assert_eq!(send(&fx.app, bearer).await.0, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
-async fn the_handshake_answers_without_a_key_and_leaks_nothing_else() {
+async fn the_handshake_answers_unsigned_and_leaks_nothing_else() {
     let fx = fx().await;
     let (status, body) = send(&fx.app, req(Method::GET, "/handshake", None, None)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -184,9 +191,10 @@ async fn the_handshake_answers_without_a_key_and_leaks_nothing_else() {
     assert_eq!(body["supported_minors"][0], 0);
     assert_eq!(
         body["identity_fingerprint"],
-        Value::Null,
-        "no identity key before E1-07"
+        fx.app.auth.identity.fp.as_str(),
+        "core_fp, what every request signs"
     );
-    // Nothing about devices: the only device's name and key are not in it.
-    assert!(!body.to_string().contains("test") && !body.to_string().contains(&fx.key));
+    assert_eq!(body["identity_fingerprint"].as_str().unwrap().len(), 43);
+    // Nothing about devices: the only device's name and id are not in it.
+    assert!(!body.to_string().contains("test") && !body.to_string().contains(&fx.dev.id));
 }

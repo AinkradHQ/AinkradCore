@@ -27,6 +27,8 @@ pub struct ApiError {
     pub code: &'static str,
     pub message: String,
     pub error_id: String,
+    /// The server's clock, on a `clock_skew` refusal.
+    pub server_time: Option<i64>,
 }
 
 pub type ApiResult<T> = Result<Json<T>, ApiError>;
@@ -38,6 +40,7 @@ impl ApiError {
             code,
             message: message.into(),
             error_id: error_id(),
+            server_time: None,
         }
     }
 
@@ -89,14 +92,16 @@ impl IntoResponse for ApiError {
             code: self.code.to_owned(),
             message: self.message,
             error_id: self.error_id,
+            server_time: self.server_time,
         };
         let mut response = (self.status, Json(body)).into_response();
         response.extensions_mut().insert(refused);
         if self.status == StatusCode::UNAUTHORIZED {
-            let bearer = HeaderValue::from_static("Bearer");
+            // Requests are signed (handshake spec §5); there is no bearer scheme.
+            let scheme = HeaderValue::from_static("Ainkrad-ES256");
             response
                 .headers_mut()
-                .insert(header::WWW_AUTHENTICATE, bearer);
+                .insert(header::WWW_AUTHENTICATE, scheme);
         }
         response
     }
@@ -134,6 +139,10 @@ pub struct Refused {
 pub(super) async fn audit_refusals(State(app): State<App>, req: Request, next: Next) -> Response {
     let (method, path) = (req.method().clone(), req.uri().path().to_owned());
     let client = req.extensions().get::<super::Client>().map(|c| c.0.clone());
+    let device = req
+        .extensions()
+        .get::<super::Caller>()
+        .map(|c| c.device.id.clone());
     let response = next.run(req).await;
     let Some(refused) = response.extensions().get::<Refused>() else {
         return response;
@@ -147,7 +156,7 @@ pub(super) async fn audit_refusals(State(app): State<App>, req: Request, next: N
         entity: None,
         details: json!({"error_id": refused.error_id, "code": refused.code,
                         "status": response.status().as_u16(), "method": method.as_str(),
-                        "path": path, "client": client})
+                        "path": path, "client": client, "device": device})
         .to_string(),
     };
     let written = async {
