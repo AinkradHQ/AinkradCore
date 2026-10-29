@@ -110,3 +110,59 @@ fn public_serve_refuses_to_start_without_a_hostname_and_an_acme_contact() {
         );
     }
 }
+
+/// E1-10.1, E1-10.3: `audit verify` passes on a whole chain and names the first edited row;
+/// `audit export` writes JSONL that `audit verify --export` re-verifies on its own.
+#[test]
+fn the_audit_chain_is_verified_and_exported() {
+    let db = db("audit");
+    for name in ["mac", "phone", "pad"] {
+        ok(&db, &["device", "add", name]);
+    }
+    ok(&db, &["device", "revoke", "2"]);
+    let verified = ok(&db, &["audit", "verify"]);
+    assert!(
+        verified.starts_with("audit chain ok: 4 rows (0 from before the chain), head seq 4 "),
+        "{verified}"
+    );
+
+    let export = db.0.with_file_name("audit.jsonl");
+    let path = export.to_str().unwrap();
+    ok(&db, &["audit", "export", path]);
+    let text = std::fs::read_to_string(&export).unwrap();
+    assert_eq!(text.lines().count(), 4);
+    assert!(
+        text.lines()
+            .all(|l| l.contains("\"hash\":\"") && l.contains("\"prev_hash\":\""))
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_ainkrad-core-server"))
+        .args(["audit", "verify", "--export", path])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap().trim(),
+        verified,
+        "the export alone agrees"
+    );
+    assert!(
+        cli(&db, &["audit", "export", path])
+            .unwrap_err()
+            .contains("exists"),
+        "never overwritten"
+    );
+
+    // An edit behind the triggers' back.
+    let sql = Command::new("sqlite3")
+        .arg(&db.0)
+        .arg("DROP TRIGGER audit_events_no_update; UPDATE audit_events SET details = '{\"x\":1}' WHERE seq = 3;")
+        .status();
+    match sql {
+        Ok(s) if s.success() => {
+            let err = cli(&db, &["audit", "verify"]).unwrap_err();
+            assert!(err.contains("audit chain broken at seq 3"), "{err}");
+        }
+        // ponytail: no sqlite3 CLI (a slim container); the store tests cover the edit.
+        _ => eprintln!("sqlite3 not found; skipped the tamper half"),
+    }
+}
