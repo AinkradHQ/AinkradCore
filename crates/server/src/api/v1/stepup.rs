@@ -7,7 +7,7 @@
 //!
 //! Every failed proof is the same 403 `step_up_failed`; a spent budget is 429.
 
-use ainkrad_core::audit::{AuditActor, AuditEntity, NewAuditEvent};
+use ainkrad_core::audit::{AuditEntity, NewAuditEvent};
 use ainkrad_core::settings::{Key, Scope};
 use axum::Json;
 use axum::extract::{Extension, State};
@@ -19,7 +19,7 @@ use utoipa::ToSchema;
 
 use super::session::Challenge;
 use super::types::{Timestamp, ts};
-use super::{ApiError, ApiResult, Caller, Client, too_many};
+use super::{ApiError, ApiResult, BY, Caller, Client, too_many};
 use crate::api::App;
 use crate::auth::{CHALLENGE_SECS, Proof, crypto};
 use crate::scheduler::iso_of_unix;
@@ -126,13 +126,14 @@ async fn elevate(
     // Audited first, then elevated: a request dropped in between is never elevated unaudited.
     let mut tx = begin_write(&app.pool).await?;
     let event = NewAuditEvent {
-        actor: AuditActor::System,
+        actor: BY,
         action: "auth.step_up".to_owned(),
         entity: Some(AuditEntity {
             kind: "device".to_owned(),
             id: me.device.seq,
         }),
-        details: json!({"device": me.device.id, "until": until}).to_string(),
+        details: json!({"device": me.device.id, "by_device": me.device.id, "until": until})
+            .to_string(),
     };
     audit::append(&mut tx, &event).await?;
     tx.commit().await?;
