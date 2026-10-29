@@ -37,14 +37,14 @@ const USAGE: &str = "usage:
   ainkrad-core-server device revoke <db> <device-id>
 
 serve listens on a Unix socket next to the database (<db dir>/core.sock, 0600) by default and
-serves the app at /api/v1 (signed requests from a paired device) and the modules mounted inside it. --listen
-loopback:<port> serves 127.0.0.1, --bind any address (plain HTTP, as before). --listen public
+serves the app at /api/v1 (signed requests from a paired device) and the modules mounted
+inside it. --listen loopback:<port> serves 127.0.0.1, --bind any address (plain HTTP, as before). --listen public
 serves TLS 1.3 on :443 with a certificate from ACME (Let's Encrypt production unless
 --acme-directory says otherwise, kept in <db dir>/tls) and needs --hostname and --acme-contact;
 the challenge is TLS-ALPN-01 on :443, or HTTP-01 on :80 with --acme-http01. Unsigned, only
 /handshake, pairing and /healthz answer. The Core identity key is <db dir>/core-identity.p8
-(0600), made on first start; its fingerprint is what /handshake shows and every request signs. --host is the Host header clients must send (default:
-localhost on a socket, the address on loopback, the hostname in public); --trusted-proxy the
+(0600), made on first start; its fingerprint is what /handshake shows and every request signs.
+--host is the Host header clients must send (default: localhost on a socket, the address on loopback, the hostname in public); --trusted-proxy the
 proxies whose X-Forwarded-For names the client for the lockouts and logs (default: none; the
 Core terminates TLS itself). SIGTERM or Ctrl-C shuts serve
 down: it stops accepting, gives requests in flight up to 10 s, closes event sockets so they
