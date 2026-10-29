@@ -35,6 +35,48 @@ extension Components {
                 case minor
             }
         }
+        /// - Remark: Generated from `#/components/schemas/ApproveBody`.
+        public struct ApproveBody: Codable, Hashable, Sendable {
+            /// The SAS shown on both screens.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ApproveBody/sas`.
+            public var sas: Swift.String
+            /// Narrower scopes than the pairing bound; never wider.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ApproveBody/scopes`.
+            public var scopes: [Swift.String]?
+            /// Creates a new `ApproveBody`.
+            ///
+            /// - Parameters:
+            ///   - sas: The SAS shown on both screens.
+            ///   - scopes: Narrower scopes than the pairing bound; never wider.
+            public init(
+                sas: Swift.String,
+                scopes: [Swift.String]? = nil
+            ) {
+                self.sas = sas
+                self.scopes = scopes
+            }
+            public enum CodingKeys: String, CodingKey {
+                case sas
+                case scopes
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.sas = try container.decode(
+                    Swift.String.self,
+                    forKey: .sas
+                )
+                self.scopes = try container.decodeIfPresent(
+                    [Swift.String].self,
+                    forKey: .scopes
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "sas",
+                    "scopes"
+                ])
+            }
+        }
         /// One audited change.
         ///
         /// - Remark: Generated from `#/components/schemas/AuditEntry`.
@@ -168,6 +210,160 @@ extension Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "device_id"
                 ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/ClaimBody`.
+        public struct ClaimBody: Codable, Hashable, Sendable {
+            /// The typed code (`ABCDE-FGHJK`, any case); or `secret`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ClaimBody/code`.
+            public var code: Swift.String?
+            /// `secure_enclave`, `strongbox`, `tee`, `tpm` or `software`: a claim.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ClaimBody/key_storage`.
+            public var keyStorage: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/ClaimBody/platform`.
+            public var platform: Swift.String?
+            /// The routine key over `AINKRAD-PAIR-V1\n<core_fp>\n<b64(SHA-256(credential))>\n
+            /// <fp(routine)>\n<fp(stepup) or ->`, raw r||s, base64url.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ClaimBody/pop`.
+            public var pop: Swift.String
+            /// The step-up key over the same string, with `stepup_spki`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ClaimBody/pop_stepup`.
+            public var popStepup: Swift.String?
+            /// The routine key: a P-256 SubjectPublicKeyInfo, base64url.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ClaimBody/routine_spki`.
+            public var routineSpki: Swift.String
+            /// The QR secret; or `code`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ClaimBody/secret`.
+            public var secret: Swift.String?
+            /// The step-up key, where the device has one.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ClaimBody/stepup_spki`.
+            public var stepupSpki: Swift.String?
+            /// Creates a new `ClaimBody`.
+            ///
+            /// - Parameters:
+            ///   - code: The typed code (`ABCDE-FGHJK`, any case); or `secret`.
+            ///   - keyStorage: `secure_enclave`, `strongbox`, `tee`, `tpm` or `software`: a claim.
+            ///   - platform:
+            ///   - pop: The routine key over `AINKRAD-PAIR-V1\n<core_fp>\n<b64(SHA-256(credential))>\n
+            ///   - popStepup: The step-up key over the same string, with `stepup_spki`.
+            ///   - routineSpki: The routine key: a P-256 SubjectPublicKeyInfo, base64url.
+            ///   - secret: The QR secret; or `code`.
+            ///   - stepupSpki: The step-up key, where the device has one.
+            public init(
+                code: Swift.String? = nil,
+                keyStorage: Swift.String? = nil,
+                platform: Swift.String? = nil,
+                pop: Swift.String,
+                popStepup: Swift.String? = nil,
+                routineSpki: Swift.String,
+                secret: Swift.String? = nil,
+                stepupSpki: Swift.String? = nil
+            ) {
+                self.code = code
+                self.keyStorage = keyStorage
+                self.platform = platform
+                self.pop = pop
+                self.popStepup = popStepup
+                self.routineSpki = routineSpki
+                self.secret = secret
+                self.stepupSpki = stepupSpki
+            }
+            public enum CodingKeys: String, CodingKey {
+                case code
+                case keyStorage = "key_storage"
+                case platform
+                case pop
+                case popStepup = "pop_stepup"
+                case routineSpki = "routine_spki"
+                case secret
+                case stepupSpki = "stepup_spki"
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.code = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .code
+                )
+                self.keyStorage = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .keyStorage
+                )
+                self.platform = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .platform
+                )
+                self.pop = try container.decode(
+                    Swift.String.self,
+                    forKey: .pop
+                )
+                self.popStepup = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .popStepup
+                )
+                self.routineSpki = try container.decode(
+                    Swift.String.self,
+                    forKey: .routineSpki
+                )
+                self.secret = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .secret
+                )
+                self.stepupSpki = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .stepupSpki
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "code",
+                    "key_storage",
+                    "platform",
+                    "pop",
+                    "pop_stepup",
+                    "routine_spki",
+                    "secret",
+                    "stepup_spki"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/Claimed`.
+        public struct Claimed: Codable, Hashable, Sendable {
+            /// The Core identity SPKI, base64url: its fingerprint must equal the QR's `c`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Claimed/core_spki`.
+            public var coreSpki: Swift.String?
+            /// The new device, `d_…`, pending until approved.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Claimed/device_id`.
+            public var deviceId: Swift.String?
+            /// Show this; the approver compares it with theirs.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Claimed/sas`.
+            public var sas: Swift.String?
+            /// Creates a new `Claimed`.
+            ///
+            /// - Parameters:
+            ///   - coreSpki: The Core identity SPKI, base64url: its fingerprint must equal the QR's `c`.
+            ///   - deviceId: The new device, `d_…`, pending until approved.
+            ///   - sas: Show this; the approver compares it with theirs.
+            public init(
+                coreSpki: Swift.String? = nil,
+                deviceId: Swift.String? = nil,
+                sas: Swift.String? = nil
+            ) {
+                self.coreSpki = coreSpki
+                self.deviceId = deviceId
+                self.sas = sas
+            }
+            public enum CodingKeys: String, CodingKey {
+                case coreSpki = "core_spki"
+                case deviceId = "device_id"
+                case sas
             }
         }
         /// A device: who it is and what it may do. Never a key's private half: the Core has none.
@@ -577,6 +773,61 @@ extension Components {
                 case name
             }
         }
+        /// - Remark: Generated from `#/components/schemas/NewPairingBody`.
+        public struct NewPairingBody: Codable, Hashable, Sendable {
+            /// `device` or `runner` (`passkey` comes with E1-08).
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewPairingBody/kind`.
+            public var kind: Swift.String
+            /// What to call the new device.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewPairingBody/name`.
+            public var name: Swift.String
+            /// What it may do: within the approver's own scopes; a runner gets exactly `runner`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewPairingBody/scopes`.
+            public var scopes: [Swift.String]
+            /// Creates a new `NewPairingBody`.
+            ///
+            /// - Parameters:
+            ///   - kind: `device` or `runner` (`passkey` comes with E1-08).
+            ///   - name: What to call the new device.
+            ///   - scopes: What it may do: within the approver's own scopes; a runner gets exactly `runner`.
+            public init(
+                kind: Swift.String,
+                name: Swift.String,
+                scopes: [Swift.String]
+            ) {
+                self.kind = kind
+                self.name = name
+                self.scopes = scopes
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case name
+                case scopes
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Swift.String.self,
+                    forKey: .kind
+                )
+                self.name = try container.decode(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                self.scopes = try container.decode(
+                    [Swift.String].self,
+                    forKey: .scopes
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "name",
+                    "scopes"
+                ])
+            }
+        }
         /// A page of a list. `next_after` is the cursor of the next page, absent on the last.
         ///
         /// - Remark: Generated from `#/components/schemas/Page_Event`.
@@ -600,6 +851,154 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case items
                 case nextAfter = "next_after"
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/PairStatus`.
+        public struct PairStatus: Codable, Hashable, Sendable {
+            /// `pending`, `active`, `rejected` or `expired`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PairStatus/status`.
+            public var status: Swift.String?
+            /// Creates a new `PairStatus`.
+            ///
+            /// - Parameters:
+            ///   - status: `pending`, `active`, `rejected` or `expired`.
+            public init(status: Swift.String? = nil) {
+                self.status = status
+            }
+            public enum CodingKeys: String, CodingKey {
+                case status
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/PairingCreated`.
+        public struct PairingCreated: Codable, Hashable, Sendable {
+            /// The typed code, `ABCDE-FGHJK`: shown once, good once, for 5 minutes.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PairingCreated/code`.
+            public var code: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/PairingCreated/expires_at`.
+            public var expiresAt: Components.Schemas.Timestamp?
+            /// `p_…`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PairingCreated/pairing_id`.
+            public var pairingId: Swift.String?
+            /// `ainkrad-pair:v1?h=…&p=…&c=<core_fp>&s=<secret>&e=…`, for a QR code: shown once.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PairingCreated/qr`.
+            public var qr: Swift.String?
+            /// Creates a new `PairingCreated`.
+            ///
+            /// - Parameters:
+            ///   - code: The typed code, `ABCDE-FGHJK`: shown once, good once, for 5 minutes.
+            ///   - expiresAt:
+            ///   - pairingId: `p_…`.
+            ///   - qr: `ainkrad-pair:v1?h=…&p=…&c=<core_fp>&s=<secret>&e=…`, for a QR code: shown once.
+            public init(
+                code: Swift.String? = nil,
+                expiresAt: Components.Schemas.Timestamp? = nil,
+                pairingId: Swift.String? = nil,
+                qr: Swift.String? = nil
+            ) {
+                self.code = code
+                self.expiresAt = expiresAt
+                self.pairingId = pairingId
+                self.qr = qr
+            }
+            public enum CodingKeys: String, CodingKey {
+                case code
+                case expiresAt = "expires_at"
+                case pairingId = "pairing_id"
+                case qr
+            }
+        }
+        /// A pairing as the approver sees it.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PairingView`.
+        public struct PairingView: Codable, Hashable, Sendable {
+            /// The claimant, once claimed.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PairingView/device_id`.
+            public var deviceId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/PairingView/expires_at`.
+            public var expiresAt: Components.Schemas.Timestamp?
+            /// The claimant's routine key fingerprint.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PairingView/fingerprint`.
+            public var fingerprint: Swift.String?
+            /// Where the claimant says its key lives: a claim, not verified.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PairingView/key_storage`.
+            public var keyStorage: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/PairingView/kind`.
+            public var kind: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/PairingView/name`.
+            public var name: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/PairingView/pairing_id`.
+            public var pairingId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/PairingView/platform`.
+            public var platform: Swift.String?
+            /// The SAS the Core computed from its key and the claimant's: compare it with the new
+            /// device's screen, then send it back to approve.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PairingView/sas`.
+            public var sas: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/PairingView/scopes`.
+            public var scopes: [Swift.String]?
+            /// `live`, `claimed`, `approved`, `rejected`, `expired` or `burned`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PairingView/status`.
+            public var status: Swift.String?
+            /// Creates a new `PairingView`.
+            ///
+            /// - Parameters:
+            ///   - deviceId: The claimant, once claimed.
+            ///   - expiresAt:
+            ///   - fingerprint: The claimant's routine key fingerprint.
+            ///   - keyStorage: Where the claimant says its key lives: a claim, not verified.
+            ///   - kind:
+            ///   - name:
+            ///   - pairingId:
+            ///   - platform:
+            ///   - sas: The SAS the Core computed from its key and the claimant's: compare it with the new
+            ///   - scopes:
+            ///   - status: `live`, `claimed`, `approved`, `rejected`, `expired` or `burned`.
+            public init(
+                deviceId: Swift.String? = nil,
+                expiresAt: Components.Schemas.Timestamp? = nil,
+                fingerprint: Swift.String? = nil,
+                keyStorage: Swift.String? = nil,
+                kind: Swift.String? = nil,
+                name: Swift.String? = nil,
+                pairingId: Swift.String? = nil,
+                platform: Swift.String? = nil,
+                sas: Swift.String? = nil,
+                scopes: [Swift.String]? = nil,
+                status: Swift.String? = nil
+            ) {
+                self.deviceId = deviceId
+                self.expiresAt = expiresAt
+                self.fingerprint = fingerprint
+                self.keyStorage = keyStorage
+                self.kind = kind
+                self.name = name
+                self.pairingId = pairingId
+                self.platform = platform
+                self.sas = sas
+                self.scopes = scopes
+                self.status = status
+            }
+            public enum CodingKeys: String, CodingKey {
+                case deviceId = "device_id"
+                case expiresAt = "expires_at"
+                case fingerprint
+                case keyStorage = "key_storage"
+                case kind
+                case name
+                case pairingId = "pairing_id"
+                case platform
+                case sas
+                case scopes
+                case status
             }
         }
         /// The 410 of a replay from below the retention floor (E1-04.4).

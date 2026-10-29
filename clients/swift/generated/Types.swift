@@ -28,6 +28,18 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/me`.
     /// - Remark: Generated from `#/paths//api/v1/me/get(getMe)`.
     func getMe(_ input: Operations.GetMe.Input) async throws -> Operations.GetMe.Output
+    /// - Remark: HTTP `POST /api/v1/pairings`.
+    /// - Remark: Generated from `#/paths//api/v1/pairings/post(createPairing)`.
+    func createPairing(_ input: Operations.CreatePairing.Input) async throws -> Operations.CreatePairing.Output
+    /// - Remark: HTTP `GET /api/v1/pairings/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/pairings/{id}/get(getPairing)`.
+    func getPairing(_ input: Operations.GetPairing.Input) async throws -> Operations.GetPairing.Output
+    /// - Remark: HTTP `POST /api/v1/pairings/{id}/approve`.
+    /// - Remark: Generated from `#/paths//api/v1/pairings/{id}/approve/post(approvePairing)`.
+    func approvePairing(_ input: Operations.ApprovePairing.Input) async throws -> Operations.ApprovePairing.Output
+    /// - Remark: HTTP `POST /api/v1/pairings/{id}/reject`.
+    /// - Remark: Generated from `#/paths//api/v1/pairings/{id}/reject/post(rejectPairing)`.
+    func rejectPairing(_ input: Operations.RejectPairing.Input) async throws -> Operations.RejectPairing.Output
     /// - Remark: HTTP `PUT /api/v1/push-token`.
     /// - Remark: Generated from `#/paths//api/v1/push-token/put(setPushToken)`.
     func setPushToken(_ input: Operations.SetPushToken.Input) async throws -> Operations.SetPushToken.Output
@@ -61,6 +73,12 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /handshake/session`.
     /// - Remark: Generated from `#/paths//handshake/session/post(createSession)`.
     func createSession(_ input: Operations.CreateSession.Input) async throws -> Operations.CreateSession.Output
+    /// - Remark: HTTP `POST /pair/claim`.
+    /// - Remark: Generated from `#/paths//pair/claim/post(claimPairing)`.
+    func claimPairing(_ input: Operations.ClaimPairing.Input) async throws -> Operations.ClaimPairing.Output
+    /// - Remark: HTTP `POST /pair/status`.
+    /// - Remark: Generated from `#/paths//pair/status/post(pairStatus)`.
+    func pairStatus(_ input: Operations.PairStatus.Input) async throws -> Operations.PairStatus.Output
 }
 
 /// Convenience overloads for operation inputs.
@@ -119,6 +137,52 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//api/v1/me/get(getMe)`.
     public func getMe(headers: Operations.GetMe.Input.Headers = .init()) async throws -> Operations.GetMe.Output {
         try await getMe(Operations.GetMe.Input(headers: headers))
+    }
+    /// - Remark: HTTP `POST /api/v1/pairings`.
+    /// - Remark: Generated from `#/paths//api/v1/pairings/post(createPairing)`.
+    public func createPairing(
+        headers: Operations.CreatePairing.Input.Headers = .init(),
+        body: Operations.CreatePairing.Input.Body
+    ) async throws -> Operations.CreatePairing.Output {
+        try await createPairing(Operations.CreatePairing.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/pairings/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/pairings/{id}/get(getPairing)`.
+    public func getPairing(
+        path: Operations.GetPairing.Input.Path,
+        headers: Operations.GetPairing.Input.Headers = .init()
+    ) async throws -> Operations.GetPairing.Output {
+        try await getPairing(Operations.GetPairing.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/pairings/{id}/approve`.
+    /// - Remark: Generated from `#/paths//api/v1/pairings/{id}/approve/post(approvePairing)`.
+    public func approvePairing(
+        path: Operations.ApprovePairing.Input.Path,
+        headers: Operations.ApprovePairing.Input.Headers = .init(),
+        body: Operations.ApprovePairing.Input.Body
+    ) async throws -> Operations.ApprovePairing.Output {
+        try await approvePairing(Operations.ApprovePairing.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/pairings/{id}/reject`.
+    /// - Remark: Generated from `#/paths//api/v1/pairings/{id}/reject/post(rejectPairing)`.
+    public func rejectPairing(
+        path: Operations.RejectPairing.Input.Path,
+        headers: Operations.RejectPairing.Input.Headers = .init()
+    ) async throws -> Operations.RejectPairing.Output {
+        try await rejectPairing(Operations.RejectPairing.Input(
+            path: path,
+            headers: headers
+        ))
     }
     /// - Remark: HTTP `PUT /api/v1/push-token`.
     /// - Remark: Generated from `#/paths//api/v1/push-token/put(setPushToken)`.
@@ -224,6 +288,22 @@ extension APIProtocol {
             headers: headers,
             body: body
         ))
+    }
+    /// - Remark: HTTP `POST /pair/claim`.
+    /// - Remark: Generated from `#/paths//pair/claim/post(claimPairing)`.
+    public func claimPairing(
+        headers: Operations.ClaimPairing.Input.Headers = .init(),
+        body: Operations.ClaimPairing.Input.Body
+    ) async throws -> Operations.ClaimPairing.Output {
+        try await claimPairing(Operations.ClaimPairing.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /pair/status`.
+    /// - Remark: Generated from `#/paths//pair/status/post(pairStatus)`.
+    public func pairStatus(headers: Operations.PairStatus.Input.Headers) async throws -> Operations.PairStatus.Output {
+        try await pairStatus(Operations.PairStatus.Input(headers: headers))
     }
 }
 

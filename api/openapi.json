@@ -93,6 +93,29 @@
         ],
         "type": "object"
       },
+      "ApproveBody": {
+        "additionalProperties": false,
+        "properties": {
+          "sas": {
+            "description": "The SAS shown on both screens.",
+            "type": "string"
+          },
+          "scopes": {
+            "description": "Narrower scopes than the pairing bound; never wider.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "sas"
+        ],
+        "type": "object"
+      },
       "AuditEntry": {
         "description": "One audited change.",
         "properties": {
@@ -140,6 +163,13 @@
           "auth.lockout",
           "device.enrolled",
           "device.revoked",
+          "pairing.approved",
+          "pairing.burned",
+          "pairing.claimed",
+          "pairing.created",
+          "pairing.expired",
+          "pairing.refused",
+          "pairing.rejected",
           "setting.reset",
           "setting.set"
         ]
@@ -196,6 +226,91 @@
         "required": [
           "device_id"
         ],
+        "type": "object"
+      },
+      "ClaimBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "The typed code (`ABCDE-FGHJK`, any case); or `secret`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key_storage": {
+            "description": "`secure_enclave`, `strongbox`, `tee`, `tpm` or `software`: a claim.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pop": {
+            "description": "The routine key over `AINKRAD-PAIR-V1\\n<core_fp>\\n<b64(SHA-256(credential))>\\n\n<fp(routine)>\\n<fp(stepup) or ->`, raw r||s, base64url.",
+            "type": "string"
+          },
+          "pop_stepup": {
+            "description": "The step-up key over the same string, with `stepup_spki`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "routine_spki": {
+            "description": "The routine key: a P-256 SubjectPublicKeyInfo, base64url.",
+            "type": "string"
+          },
+          "secret": {
+            "description": "The QR secret; or `code`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stepup_spki": {
+            "description": "The step-up key, where the device has one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "routine_spki",
+          "pop"
+        ],
+        "type": "object"
+      },
+      "Claimed": {
+        "properties": {
+          "core_spki": {
+            "description": "The Core identity SPKI, base64url: its fingerprint must equal the QR's `c`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "device_id": {
+            "description": "The new device, `d_…`, pending until approved.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sas": {
+            "description": "Show this; the approver compares it with theirs.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "Device": {
@@ -489,6 +604,32 @@
         ],
         "type": "object"
       },
+      "NewPairingBody": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "description": "`device` or `runner` (`passkey` comes with E1-08).",
+            "type": "string"
+          },
+          "name": {
+            "description": "What to call the new device.",
+            "type": "string"
+          },
+          "scopes": {
+            "description": "What it may do: within the approver's own scopes; a runner gets exactly `runner`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "scopes"
+        ],
+        "type": "object"
+      },
       "Page_Event": {
         "description": "A page of a list. `next_after` is the cursor of the next page, absent on the last.",
         "properties": {
@@ -509,6 +650,124 @@
         "required": [
           "items"
         ],
+        "type": "object"
+      },
+      "PairStatus": {
+        "properties": {
+          "status": {
+            "description": "`pending`, `active`, `rejected` or `expired`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "PairingCreated": {
+        "properties": {
+          "code": {
+            "description": "The typed code, `ABCDE-FGHJK`: shown once, good once, for 5 minutes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "pairing_id": {
+            "description": "`p_…`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "qr": {
+            "description": "`ainkrad-pair:v1?h=…&p=…&c=<core_fp>&s=<secret>&e=…`, for a QR code: shown once.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "PairingView": {
+        "description": "A pairing as the approver sees it.",
+        "properties": {
+          "device_id": {
+            "description": "The claimant, once claimed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "fingerprint": {
+            "description": "The claimant's routine key fingerprint.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key_storage": {
+            "description": "Where the claimant says its key lives: a claim, not verified.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pairing_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sas": {
+            "description": "The SAS the Core computed from its key and the claimant's: compare it with the new\ndevice's screen, then send it back to approve.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "`live`, `claimed`, `approved`, `rejected`, `expired` or `burned`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "PastRetention": {
@@ -784,7 +1043,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.3.0"
+    "version": "1.4.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -1185,6 +1444,223 @@
           "devices"
         ],
         "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/pairings": {
+      "post": {
+        "operationId": "createPairing",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewPairingBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingCreated"
+                }
+              }
+            },
+            "description": "A pairing, live 5 minutes, with its typed code and QR payload, shown only now (audited as `pairing.created`). Needs `admin`; the scopes are within the caller's (403 otherwise); 409 with three live already"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "pairing"
+        ]
+      }
+    },
+    "/api/v1/pairings/{id}": {
+      "get": {
+        "operationId": "getPairing",
+        "parameters": [
+          {
+            "description": "Pairing id, `p_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingView"
+                }
+              }
+            },
+            "description": "The pairing, and once claimed the claimant and the SAS to compare. Needs `admin`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "pairing"
+        ]
+      }
+    },
+    "/api/v1/pairings/{id}/approve": {
+      "post": {
+        "operationId": "approvePairing",
+        "parameters": [
+          {
+            "description": "Pairing id, `p_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingView"
+                }
+              }
+            },
+            "description": "Approved: the claimant is active with the bound (or narrower) scopes (audited as `pairing.approved`). 409 `sas_mismatch` leaves it pending; 409 `pairing_expired` past its 5 minutes; 403 for scopes wider than bound. Needs `admin`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "pairing"
+        ]
+      }
+    },
+    "/api/v1/pairings/{id}/reject": {
+      "post": {
+        "operationId": "rejectPairing",
+        "parameters": [
+          {
+            "description": "Pairing id, `p_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingView"
+                }
+              }
+            },
+            "description": "Rejected, claimed or not: a claimant is never usable (audited as `pairing.rejected`). Needs `admin`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "pairing"
+        ]
       }
     },
     "/api/v1/push-token": {
@@ -1834,6 +2310,152 @@
         ],
         "tags": [
           "handshake"
+        ]
+      }
+    },
+    "/pair/claim": {
+      "post": {
+        "operationId": "claimPairing",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Claimed"
+                }
+              }
+            },
+            "description": "Claimed: the device is pending until the approver matches the SAS. 401 `pairing_failed` for a wrong, used, expired or burned credential; 400 for keys or proofs that do not hold (the pairing is not spent)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "tags": [
+          "pairing"
+        ]
+      }
+    },
+    "/pair/status": {
+      "post": {
+        "operationId": "pairStatus",
+        "parameters": [
+          {
+            "description": "The claimed device, `d_…`",
+            "in": "header",
+            "name": "Ainkrad-Device",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`ES256`",
+            "in": "header",
+            "name": "Ainkrad-Alg",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix seconds",
+            "in": "header",
+            "name": "Ainkrad-Timestamp",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "16 random bytes, base64url",
+            "in": "header",
+            "name": "Ainkrad-Nonce",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Raw r||s over the canonical string with session `-`, base64url",
+            "in": "header",
+            "name": "Ainkrad-Signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairStatus"
+                }
+              }
+            },
+            "description": "Where the claimed device stands. Signed with session `-`; the one call a pending device may make. Once `active`, it takes a session (`/handshake/challenge`)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "tags": [
+          "pairing"
         ]
       }
     }
