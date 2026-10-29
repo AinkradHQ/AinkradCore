@@ -425,11 +425,21 @@ impl Hub {
             );
             return;
         }
-        p.received = frame.seq + 1;
-        let body = match frame.body() {
-            Ok(Some(b)) => b,
-            Ok(None) => return,
-            Err(e) => Body::Error(e),
+        // A `seq` at its maximum has no successor: the stream fails as `bad_frame`, and the
+        // hub carries on for every other stream and runner (security review RH1).
+        let body = match frame.seq.checked_add(1) {
+            Some(next) => {
+                p.received = next;
+                match frame.body() {
+                    Ok(Some(b)) => b,
+                    Ok(None) => return,
+                    Err(e) => Body::Error(e),
+                }
+            }
+            None => {
+                tracing::warn!(device, stream, "a seq with no successor: the stream fails");
+                Body::Error(err(ErrorCode::BadFrame, "the runner's seq overflowed"))
+            }
         };
         let last = match body {
             Body::Output(o) => match b64_len(&o.data) {

@@ -392,3 +392,16 @@ async fn a_core_of_another_major_or_a_refusal_ends_the_session() {
         .await;
     assert_eq!(core.runner.await.unwrap(), Err(refusal));
 }
+
+/// Security review RH1: a Core frame whose `seq` has no successor is refused as `bad_frame`
+/// on its stream, and the session carries on.
+#[tokio::test]
+async fn a_seq_at_its_maximum_is_refused_and_the_session_serves_on() {
+    let (mut core, _) = Core::start(1).await;
+    let hostile = Frame::new(1, u64::MAX, Body::Command(Command::Noop));
+    let text = serde_json::to_string(&hostile).unwrap();
+    core.ws.send(Message::Text(text.into())).await.unwrap();
+    assert_eq!(error(core.answer(1).await), ErrorCode::BadFrame);
+    core.send(3, Body::Command(Command::Noop)).await;
+    assert_eq!(core.answer(3).await, Body::Result(Reply::Noop));
+}

@@ -195,13 +195,20 @@ impl Session {
             }
             return None;
         }
+        let refuse = |code, why: String| Body::Error(StreamError::new(code, why));
+        // A `seq` at its maximum has no successor: the stream is refused as `bad_frame` and
+        // forgotten (its command cancelled), and the session carries on (security review RH1).
+        let Some(next) = frame.seq.checked_add(1) else {
+            self.forget(stream);
+            let why = format!("stream {stream}: the seq overflowed");
+            return Some(Frame::new(stream, 0, refuse(ErrorCode::BadFrame, why)));
+        };
         if let Some(h) = self.streams.get_mut(&stream) {
             if frame.seq < h.received {
                 return None;
             }
-            h.received = frame.seq + 1;
+            h.received = next;
         }
-        let refuse = |code, why: String| Body::Error(StreamError::new(code, why));
         match frame.body() {
             Ok(Some(Body::Command(command))) if stream % 2 == 1 => {
                 if self.streams.contains_key(&stream) {
@@ -209,7 +216,7 @@ impl Session {
                     return Some(Frame::new(stream, 0, refuse(ErrorCode::BadFrame, why)));
                 }
                 let mut h = Held {
-                    received: frame.seq + 1,
+                    received: next,
                     ..Held::default()
                 };
                 let answer = self.start(stream, command, &mut h);

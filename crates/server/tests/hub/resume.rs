@@ -123,3 +123,38 @@ async fn a_command_is_lost_once_past_the_window_or_when_another_process_returns(
         .await;
     noop.await.unwrap().unwrap();
 }
+
+/// Security review RH1: a hostile `seq` with no successor fails its own stream and nothing
+/// else; the hub keeps serving that runner and every other.
+#[tokio::test]
+async fn a_seq_at_its_maximum_fails_only_its_stream() {
+    let core = Core::start("seqmax", quick()).await;
+    let hub = Arc::clone(&core.app.hub);
+    let (dev, other) = (core.runner().await, core.runner().await);
+    let (mut f, _) = as_process(&core, &dev, "b_one", vec![]).await;
+    let (mut g, _) = as_process(&core, &other, "b_two", vec![]).await;
+    let hostile = hub.dispatch(&dev.id, Command::Noop).unwrap();
+    f.next().await;
+    f.send_frame(&Frame::new(
+        hostile.stream,
+        u64::MAX,
+        Body::Result(Reply::Noop),
+    ))
+    .await;
+    assert_eq!(
+        hostile.outcome().await.unwrap_err().code,
+        ErrorCode::BadFrame
+    );
+    for (fake, id) in [(&mut f, &dev.id), (&mut g, &other.id)] {
+        let d = hub.dispatch(id, Command::Noop).unwrap();
+        let cmd = loop {
+            let c = fake.next().await;
+            if c.kind == FrameKind::Command {
+                break c;
+            }
+        };
+        fake.send_frame(&Frame::new(cmd.stream_id, 0, Body::Result(Reply::Noop)))
+            .await;
+        assert_eq!(d.outcome().await.unwrap(), Body::Result(Reply::Noop));
+    }
+}
