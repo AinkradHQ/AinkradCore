@@ -37,6 +37,9 @@ from the Core one, and shares `crates/{proto,harness,providers,runner}` by path.
   `clients/{swift,kotlin,csharp,ts}/generated`, all committed). To add or change an endpoint:
   1. Change the Rust type and `#[utoipa::path]`, register it in `crates/server/src/api/v1.rs` (route) and `api/v1/spec.rs` (paths);
      an event or runner type needs `schemars::JsonSchema` too. Bump `API_MINOR` (`api/v1/types.rs`) for any change.
+     Declare its scope in `api/v1/scopes.rs` `ROUTES` (deny by default); a route that deletes, widens access or weakens
+     security also goes in `DESTRUCTIVE` (a module's in `Module::destructive`): it then needs a step-up and the contract
+     marks it `x-ainkrad-destructive: true`.
   2. `make contract`, then `make clients` (needs Docker; the Swift generator builds once into `~/.cache/ainkrad-core-tools`).
   3. `make schema-compat` (vs the newest `v*` tag, else `origin/development`): fails on a removed/narrowed/newly required
      field. New response fields are `Option` / not in `required`.

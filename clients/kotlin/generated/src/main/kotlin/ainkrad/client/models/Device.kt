@@ -34,6 +34,7 @@ import kotlinx.serialization.Contextual
  * @param revokedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param scopes What it may do (E1-09 enforces them).
  * @param status `pending`, `active`, `rejected`, `expired` or `locked`.
+ * @param stepup Whether it enrolled a step-up key, so it can elevate (E1-09.3).
  */
 @Serializable
 
@@ -79,7 +80,11 @@ data class Device (
 
     /* `pending`, `active`, `rejected`, `expired` or `locked`. */
     @SerialName(value = "status")
-    val status: kotlin.String? = null
+    val status: kotlin.String? = null,
+
+    /* Whether it enrolled a step-up key, so it can elevate (E1-09.3). */
+    @SerialName(value = "stepup")
+    val stepup: kotlin.Boolean? = null
 
 ) {
 

@@ -20,6 +20,9 @@ pub struct TestDevice {
     /// The routine key's PKCS#8, to rebuild the same device (the golden vector).
     pub pkcs8: Vec<u8>,
     pub spki: Vec<u8>,
+    /// The step-up key (§8): a second key, enrolled by `enroll`.
+    stepup: EcdsaKeyPair,
+    pub stepup_spki: Vec<u8>,
     /// The Core this device signs for.
     pub core_fp: String,
     /// The session it signs with, once it has one.
@@ -59,7 +62,19 @@ impl TestDevice {
         )
         .expect("a P-256 PKCS#8 key");
         let spki = spki_of(key.public_key().as_ref());
+        let stepup_pkcs8 =
+            EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &SystemRandom::new())
+                .expect("key generation");
+        let stepup = EcdsaKeyPair::from_pkcs8(
+            &ECDSA_P256_SHA256_FIXED_SIGNING,
+            stepup_pkcs8.as_ref(),
+            &SystemRandom::new(),
+        )
+        .expect("a P-256 PKCS#8 key");
+        let stepup_spki = spki_of(stepup.public_key().as_ref());
         Self {
+            stepup,
+            stepup_spki,
             id: id.to_owned(),
             key,
             pkcs8: pkcs8.to_vec(),
@@ -70,7 +85,8 @@ impl TestDevice {
         }
     }
 
-    /// A new device enrolled straight into the store as active (fixtures only).
+    /// A new device enrolled straight into the store as active, with its step-up key
+    /// (fixtures only).
     pub async fn enroll(
         pool: &SqlitePool,
         name: &str,
@@ -78,6 +94,19 @@ impl TestDevice {
         scopes: &[&str],
         core_fp: &str,
         clock: Arc<dyn Clock + Send + Sync>,
+    ) -> Self {
+        Self::enroll_keys(pool, name, kind, scopes, core_fp, clock, true).await
+    }
+
+    /// `enroll`, with or without a step-up key.
+    pub async fn enroll_keys(
+        pool: &SqlitePool,
+        name: &str,
+        kind: &str,
+        scopes: &[&str],
+        core_fp: &str,
+        clock: Arc<dyn Clock + Send + Sync>,
+        with_stepup: bool,
     ) -> Self {
         let d = Self::new(core_fp, clock);
         let scopes: Vec<String> = scopes.iter().map(|s| (*s).to_owned()).collect();
@@ -88,7 +117,7 @@ impl TestDevice {
                 kind,
                 name,
                 routine_spki: &d.spki,
-                stepup_spki: None,
+                stepup_spki: with_stepup.then_some(d.stepup_spki.as_slice()),
                 platform: Some("test"),
                 key_storage: Some("software"),
                 scopes: &scopes,
@@ -126,6 +155,22 @@ impl TestDevice {
 
     pub fn set_session(&self, session: Option<String>) {
         *self.session.lock().unwrap() = session;
+    }
+
+    /// The step-up key's raw `r‖s` signature over `message`.
+    pub fn sign_stepup(&self, message: &[u8]) -> Vec<u8> {
+        self.stepup
+            .sign(&SystemRandom::new(), message)
+            .expect("signing")
+            .as_ref()
+            .to_vec()
+    }
+
+    /// The `POST /api/v1/auth/step-up` body for `challenge`, under this device's session.
+    pub fn stepup_body(&self, challenge: &str) -> serde_json::Value {
+        let session = self.session.lock().unwrap().clone().unwrap_or_default();
+        let m = super::stepup::message(&self.core_fp, &self.id, &session, challenge);
+        serde_json::json!({"challenge": challenge, "stepup_sig": b64(&self.sign_stepup(&m))})
     }
 
     /// A raw `r‖s` signature over `message`.

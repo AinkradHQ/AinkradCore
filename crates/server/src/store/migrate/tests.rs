@@ -100,7 +100,8 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
         [
             (1, "core_0001"),
             (2, "events_audit"),
-            (3, "device_identity")
+            (3, "device_identity"),
+            (4, "event_visibility")
         ]
     );
     let sum: Vec<u8> =
@@ -329,12 +330,16 @@ fn the_schema_diff_flags_objects_outside_the_prefix() {
 /// the platform's schema and a module's, so a module table is held to it too.
 #[tokio::test]
 async fn user_owned_tables_carry_user_id() {
-    const NOT_USER_OWNED: [&str; 8] = [
+    const NOT_USER_OWNED: [&str; 10] = [
         // A registered name belongs to the platform or a module, not to a user.
         "event_kinds",
         "audit_actions",
         // One row: the event log's retention floor.
         "events_floor",
+        // One row: the event log's running totals per visibility scope.
+        "event_counts",
+        // Each describes an event, which describes a row that carries its own user.
+        "event_views",
         // The owners themselves.
         "users",
         // Failure counters by address: they belong to whoever is failing, not to a user.

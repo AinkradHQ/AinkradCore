@@ -26,12 +26,15 @@ pub mod budget;
 pub mod crypto;
 pub mod identity;
 pub mod pairing;
+pub mod refusals;
 pub mod signed;
+pub mod stepup;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 
 pub use budget::{AddressFailures, PairBudget};
 pub use identity::Identity;
+pub use stepup::{Proof, StepUpFailures};
 
 /// `|now − timestamp|` allowed, seconds.
 pub const SKEW: i64 = 60;
@@ -64,8 +67,17 @@ pub struct Session {
     pub device: String,
     pub created: i64,
     pub expires: i64,
-    /// Step-up (E1-09); always `None` until then.
+    /// Until when (unix seconds) the session is elevated by a step-up (§8, `stepup`).
     pub elevated_until: Option<i64>,
+    /// The session's one live step-up challenge and its expiry; a new one replaces it.
+    pub stepup_challenge: Option<(String, i64)>,
+}
+
+impl Session {
+    /// Whether a step-up still holds at `now`.
+    pub fn elevated(&self, now: i64) -> bool {
+        self.elevated_until.is_some_and(|t| t > now)
+    }
 }
 
 /// Why a nonce was not taken.
@@ -90,6 +102,12 @@ pub struct Auth {
     pub failures: AddressFailures,
     /// The global wrong-claim budget (`PairBudget`).
     pub pair_budget: PairBudget,
+    /// Failed step-up proofs per device (`stepup`).
+    pub stepup_failures: StepUpFailures,
+    /// Refusals counted instead of audited one row each (`refusals`).
+    pub refusals: refusals::Refusals,
+    /// Devices whose scopes changed: their sockets close with 4003 (§10).
+    rescoped: broadcast::Sender<String>,
 }
 
 impl Auth {
@@ -104,6 +122,9 @@ impl Auth {
             challenge_limit: Limiter::new(30, 0.5),
             failures: AddressFailures::default(),
             pair_budget: PairBudget::default(),
+            stepup_failures: StepUpFailures::default(),
+            refusals: refusals::Refusals::default(),
+            rescoped: broadcast::channel(64).0,
         }
     }
 
@@ -168,17 +189,25 @@ impl Auth {
         }
     }
 
-    /// A new 15-minute session for `device`.
+    /// A new 15-minute session for `device`. It carries over the elevation of the device's
+    /// newest live session (§6.2), never extended.
     pub fn issue_session(&self, device: &str, now: i64) -> Session {
+        let mut all = self.sessions.lock().unwrap();
+        all.retain(|_, s| s.expires > now);
+        let elevated_until = all
+            .values()
+            .filter(|s| s.device == device)
+            .max_by_key(|s| s.created)
+            .and_then(|s| s.elevated_until)
+            .filter(|t| *t > now);
         let session = Session {
             id: crypto::random_id("s_"),
             device: device.to_owned(),
             created: now,
             expires: now + SESSION_SECS,
-            elevated_until: None,
+            elevated_until,
+            stepup_challenge: None,
         };
-        let mut all = self.sessions.lock().unwrap();
-        all.retain(|_, s| s.expires > now);
         let mut mine: Vec<(i64, String)> = all
             .values()
             .filter(|s| s.device == device)
@@ -232,6 +261,45 @@ impl Auth {
 
     pub fn subscribe(&self) -> broadcast::Receiver<String> {
         self.revoked.subscribe()
+    }
+
+    /// Tells `device`'s sockets that its scopes changed (after the change commits).
+    pub fn rescoped(&self, device: &str) {
+        // No receiver is fine: no socket is open.
+        let _ = self.rescoped.send(device.to_owned());
+    }
+
+    pub fn subscribe_rescoped(&self) -> broadcast::Receiver<String> {
+        self.rescoped.subscribe()
+    }
+}
+
+/// Resolves once `device`'s scopes are no longer `scopes`: at once on the broadcast, or within
+/// `every` by polling the database (a change by another process, or a lagged broadcast).
+pub async fn until_rescoped(
+    pool: SqlitePool,
+    mut rescoped: broadcast::Receiver<String>,
+    device: String,
+    scopes: Vec<String>,
+    every: Duration,
+) {
+    let mut poll = tokio::time::interval(every);
+    let mut open = true;
+    loop {
+        tokio::select! {
+            got = rescoped.recv(), if open => match got {
+                Ok(d) if d == device => return,
+                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => open = false,
+            },
+            _ = poll.tick() => {
+                if let Ok(Some(d)) = crate::store::gov::get_device(&pool, &device).await
+                    && d.scopes != scopes
+                {
+                    return;
+                }
+            }
+        }
     }
 }
 

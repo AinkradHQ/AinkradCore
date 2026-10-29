@@ -60,7 +60,7 @@ pub(super) async fn connect(
 }
 
 /// The next event frame, as JSON; pings and pongs are skipped.
-async fn next(ws: &mut Ws) -> Value {
+pub(super) async fn next(ws: &mut Ws) -> Value {
     loop {
         let msg = tokio::time::timeout(Duration::from_secs(10), ws.next())
             .await

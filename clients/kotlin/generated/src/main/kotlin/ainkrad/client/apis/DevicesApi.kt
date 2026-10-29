@@ -15,10 +15,18 @@
 
 package ainkrad.client.apis
 
+import ainkrad.client.models.Challenge
+import ainkrad.client.models.ClearLockout
+import ainkrad.client.models.Cleared
 import ainkrad.client.models.Device
+import ainkrad.client.models.Elevation
 import ainkrad.client.models.ErrorBody
+import ainkrad.client.models.Lockout
 import ainkrad.client.models.Me
 import ainkrad.client.models.PushToken
+import ainkrad.client.models.Rename
+import ainkrad.client.models.SetScopes
+import ainkrad.client.models.StepUpRequest
 
 import ainkrad.client.infrastructure.*
 import io.ktor.client.HttpClientConfig
@@ -35,6 +43,39 @@ import io.ktor.http.ParametersBuilder
         httpClientEngine,
         httpClientConfig,
     ) {
+
+        /**
+        * POST /api/v1/auth/lockouts/clear
+        * 
+        * 
+         * @param clearLockout  
+         * @return Cleared
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun clearLockout(clearLockout: ClearLockout): HttpResponse<Cleared> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = clearLockout
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/auth/lockouts/clear",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
 
         /**
         * DELETE /api/v1/push-token
@@ -57,6 +98,73 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.DELETE,
             "/api/v1/push-token",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/auth/step-up/challenge
+        * 
+        * 
+         * @return Challenge
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun createStepUpChallenge(): HttpResponse<Challenge> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/auth/step-up/challenge",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/devices/{id}
+        * 
+        * 
+         * @param id Device id, &#x60;d_…&#x60; 
+         * @return Device
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun getDevice(id: kotlin.String): HttpResponse<Device> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/devices/{id}".replace("{" + "id" + "}", "$id"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,
@@ -136,6 +244,73 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * GET /api/v1/auth/lockouts
+        * 
+        * 
+         * @return kotlin.collections.List<Lockout>
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun listLockouts(): HttpResponse<kotlin.collections.List<Lockout>> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/auth/lockouts",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * PATCH /api/v1/devices/{id}
+        * 
+        * 
+         * @param id Device id, &#x60;d_…&#x60; 
+         * @param rename  
+         * @return Device
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun renameDevice(id: kotlin.String, rename: Rename): HttpResponse<Device> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = rename
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.PATCH,
+            "/api/v1/devices/{id}".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * DELETE /api/v1/devices/{id}
         * Revokes at once, the calling device included; the row stays, marked revoked.
         * 
@@ -170,6 +345,40 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * PUT /api/v1/devices/{id}/scopes
+        * 
+        * 
+         * @param id Device id, &#x60;d_…&#x60; 
+         * @param setScopes  
+         * @return Device
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun setDeviceScopes(id: kotlin.String, setScopes: SetScopes): HttpResponse<Device> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = setScopes
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.PUT,
+            "/api/v1/devices/{id}/scopes".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * PUT /api/v1/push-token
         * 
         * 
@@ -190,6 +399,39 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.PUT,
             "/api/v1/push-token",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/auth/step-up
+        * 
+        * 
+         * @param stepUpRequest  
+         * @return Elevation
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun stepUp(stepUpRequest: StepUpRequest): HttpResponse<Elevation> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = stepUpRequest
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/auth/step-up",
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

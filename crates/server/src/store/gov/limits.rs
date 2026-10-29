@@ -38,6 +38,16 @@ pub const ADDRESS_DEVICE: Rule = Rule {
     max_lock: 3600,
 };
 
+/// Failed step-up proofs of one device (`stepup:<device>`, E1-09.3): 5 per 10 minutes, then 5
+/// minutes doubling to 1 hour. Keyed by device because a step-up failure is authenticated: only
+/// a holder of the device's routine key can spend it.
+pub const STEP_UP: Rule = Rule {
+    threshold: 5,
+    window: 600,
+    lock: 300,
+    max_lock: 3600,
+};
+
 const STRIKE_DECAY: i64 = 86_400;
 
 /// The latest `locked_until` after `now` among `keys`, if any is locked.
@@ -120,6 +130,62 @@ pub async fn record_failure(
     }
     tx.commit().await?;
     Ok(locked)
+}
+
+/// A key locked now (spec §11: locks are visible and can be cleared).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lockout {
+    pub key: String,
+    pub locked_until: i64,
+    pub strikes: i64,
+}
+
+/// Every key locked at `now`, the longest lock first; at most `limit`.
+pub async fn list_lockouts(pool: &SqlitePool, now: i64, limit: u32) -> Result<Vec<Lockout>, Error> {
+    let rows: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT key, locked_until, strikes FROM core_auth_limits WHERE locked_until > ? \
+         ORDER BY locked_until DESC, key LIMIT ?",
+    )
+    .bind(now)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(key, locked_until, strikes)| Lockout {
+            key,
+            locked_until,
+            strikes,
+        })
+        .collect())
+}
+
+/// Clears `key` (its lock, counters and strikes) and audits `auth.lockout_cleared` naming the
+/// clearing device, in one transaction. `false` when there was no such row.
+pub async fn clear_lockout(
+    pool: &SqlitePool,
+    key: &str,
+    by: AuditActor,
+    by_device: &str,
+) -> Result<bool, Error> {
+    let mut tx = crate::store::begin_write(pool).await?;
+    let gone = sqlx::query("DELETE FROM core_auth_limits WHERE key = ?")
+        .bind(key)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if gone == 0 {
+        return Ok(false);
+    }
+    let event = NewAuditEvent {
+        actor: by,
+        action: "auth.lockout_cleared".to_owned(),
+        entity: None,
+        details: json!({"key": key, "by_device": by_device}).to_string(),
+    };
+    audit::append(&mut tx, &event).await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// Rows kept in `core_auth_limits` at most; past it the oldest unlocked ones go first.

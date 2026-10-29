@@ -140,7 +140,8 @@ async fn a_bad_proof_a_foreign_hello_or_an_old_major_is_refused_and_audited() {
         refusal(&mut f.ws).await,
         (ErrorCode::UnsupportedVersion, close_code::POLICY)
     );
-    assert_eq!(refused_count(&core).await, 4);
+    // One row per device and reason per window: the two bad proofs share one.
+    assert_eq!(refused_count(&core).await, 3);
     assert!(!core.app.hub.online(&dev.id));
 
     // Silence after the upgrade: cut at the handshake deadline.

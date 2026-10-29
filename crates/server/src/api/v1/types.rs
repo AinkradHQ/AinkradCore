@@ -26,8 +26,14 @@
 ///    `api/compat-allow.txt`).
 /// 4: pairing (E1-07.4, .7): `createPairing`, `getPairing`, `approvePairing`, `rejectPairing`,
 ///    and the pre-auth `claimPairing` and `pairStatus`.
-/// 5: the runner hub (E1-11.2/.3): the `runner.refused` audit action.
-pub const API_MINOR: u32 = 5;
+/// 5: step-up, device management and lockouts (E1-09.3–.6): `createStepUpChallenge`, `stepUp`,
+///    `getDevice`, `renameDevice`, `setDeviceScopes`, `listLockouts`, `clearLockout`,
+///    `Device.stepup`, `x-ainkrad-destructive` and 403 `step_up_required`, and the socket's
+///    4003 close on a scope change.
+/// 6: scoped event streams (E1-04.3): `Event.seq` counts the device's own view, and
+///    `x-event-scopes` lists each kind's scope.
+/// 7: the runner hub (E1-11.2/.3): the `runner.refused` audit action.
+pub const API_MINOR: u32 = 7;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

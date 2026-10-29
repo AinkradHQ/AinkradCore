@@ -243,6 +243,9 @@ async fn evaluate(
         },
         None => None,
     };
+    if stepup.as_ref() == Some(&routine) {
+        return Ok(bad("stepup_spki is a second key, not the routine key"));
+    }
     if b.key_storage
         .as_deref()
         .is_some_and(|k| !KEY_STORAGE.contains(&k))
