@@ -4,7 +4,7 @@
 //! too), each an event on the stream.
 
 use ainkrad_core::audit::{AuditActor, AuditEntity, NewAuditEvent};
-use ainkrad_core::gov::DeviceKey;
+use ainkrad_core::device::DeviceKey;
 use serde_json::json;
 use sqlx::sqlite::SqlitePool;
 use sqlx::{Error, SqliteConnection};
@@ -48,11 +48,25 @@ async fn append(
             kind: "device_key".to_owned(),
             id,
         }),
-        company_id: None,
-        run_id: None,
         details: details.to_string(),
     };
     audit::append(conn, &event).await.map(drop)
+}
+
+async fn prune_in(conn: &mut SqliteConnection, now: &str) -> Result<u64, Error> {
+    sqlx::query("DELETE FROM device_pairings WHERE expires_at <= ?")
+        .bind(now)
+        .execute(conn)
+        .await
+        .map(|r| r.rows_affected())
+}
+
+/// Drops the codes expired at `now` (the scheduler's tick); returns how many.
+pub async fn prune_pairings(pool: &SqlitePool, now: &str) -> Result<u64, Error> {
+    let mut tx = crate::store::begin_write(pool).await?;
+    let n = prune_in(&mut tx, now).await?;
+    tx.commit().await?;
+    Ok(n)
 }
 
 /// A new code, live for `PAIRING_SECS` from `now`: `(code, expires_at)`. Expired codes are
@@ -64,10 +78,7 @@ pub async fn start_pairing(
 ) -> Result<(String, String), Error> {
     let code = code()?;
     let mut tx = crate::store::begin_write(pool).await?;
-    sqlx::query("DELETE FROM device_pairings WHERE expires_at <= ?")
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
+    prune_in(&mut tx, now).await?;
     let expires: String = sqlx::query_scalar(
         "INSERT INTO device_pairings (code_hash, created_at, expires_at) \
          VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', ?2, '+' || ?3 || ' seconds')) \
@@ -116,7 +127,7 @@ pub async fn pair_device(
     if spent == 0 {
         return Ok(None);
     }
-    let by = AuditActor::User(ainkrad_core::work::UserId(1));
+    let by = AuditActor::User(ainkrad_core::ids::UserId(1));
     let (device, key) = issue_device_key(pool, name, by).await?;
     sqlx::query("UPDATE device_pairings SET device_key_id = ? WHERE code_hash = ?")
         .bind(device.id.0)

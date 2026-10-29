@@ -1,13 +1,13 @@
-//! The scheduler loop (E2.9): calls `store::exec::tick` every `every` until shut down. The
-//! time comes from a `Clock`, so the engine never reads the system clock itself and tests
-//! drive it with a fake one.
+//! The scheduler loop (E2.9): ticks every `every` until shut down. The platform's one job is
+//! dropping expired pairing codes; modules' jobs come with E2-11. The time comes from a
+//! `Clock`, so nothing reads the system clock itself and tests drive it with a fake one.
 
 use std::future::Future;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use sqlx::SqlitePool;
 
-use crate::store::exec::tick;
+use crate::store::gov::prune_pairings;
 
 /// Where the scheduler gets "now", as ISO-8601 UTC text (`2026-10-21T10:00:00.000Z`).
 pub trait Clock {
@@ -46,17 +46,12 @@ fn iso8601(ms: i64) -> String {
     )
 }
 
-/// How often the scheduler ticks, the pusher pushes and the forge poller polls: the
-/// `scheduler.tick_secs`, `push.interval_secs` and `forge.poll_secs` settings (E15.17), read
-/// once when `serve` starts.
-pub async fn loop_intervals(pool: &SqlitePool) -> Result<[Duration; 3], sqlx::Error> {
+/// How often the scheduler ticks and the pusher pushes: the `scheduler.tick_secs` and
+/// `push.interval_secs` settings (E15.17), read once when `serve` starts.
+pub async fn loop_intervals(pool: &SqlitePool) -> Result<[Duration; 2], sqlx::Error> {
     use ainkrad_core::settings::{Key, Scope};
-    let mut out = [Duration::ZERO; 3];
-    let keys = [
-        Key::SchedulerTickSecs,
-        Key::PushIntervalSecs,
-        Key::ForgePollSecs,
-    ];
+    let mut out = [Duration::ZERO; 2];
+    let keys = [Key::SchedulerTickSecs, Key::PushIntervalSecs];
     for (d, key) in out.iter_mut().zip(keys) {
         let secs = crate::store::settings::value(pool, key, Scope::Server).await?;
         *d = Duration::from_secs(secs as u64);
@@ -74,7 +69,7 @@ pub struct Scheduler<C> {
 impl<C: Clock> Scheduler<C> {
     /// Ticks at once, then every `every`, until `shutdown` completes; returns how many
     /// ticks ran. A failed tick is reported on stderr and the loop goes on: the next tick
-    /// retries the same work, since every step of it is idempotent.
+    /// retries the same work, since it is idempotent.
     pub async fn run(&self, shutdown: impl Future<Output = ()>) -> u64 {
         tokio::pin!(shutdown);
         let mut every = tokio::time::interval(self.every);
@@ -85,7 +80,7 @@ impl<C: Clock> Scheduler<C> {
                 biased;
                 () = &mut shutdown => return ticks,
                 _ = every.tick() => {
-                    if let Err(e) = tick(&self.pool, &self.clock.now()).await {
+                    if let Err(e) = prune_pairings(&self.pool, &self.clock.now()).await {
                         eprintln!("ainkrad-core-server: scheduler tick failed: {e}");
                     }
                     ticks += 1;
@@ -99,13 +94,12 @@ impl<C: Clock> Scheduler<C> {
 mod tests {
     use std::sync::Mutex;
 
-    use ainkrad_core::org::{AgentId, AgentStatus, Harness, NewAgent, OrgRole};
+    use ainkrad_core::audit::AuditActor;
     use tokio::sync::oneshot;
 
     use super::*;
     use crate::store::connect;
-    use crate::store::exec::set_agent_timer;
-    use crate::store::org::{create_agent, create_company};
+    use crate::store::gov::start_pairing;
 
     #[test]
     fn formats_epoch_millis_as_stored_timestamps() {
@@ -137,63 +131,33 @@ mod tests {
 
     #[tokio::test]
     async fn the_loop_intervals_are_settings() {
-        use ainkrad_core::audit::AuditActor;
         use ainkrad_core::settings::{Key, Scope};
-        let dir = std::env::temp_dir().join(format!("citadel-loops-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("core-loops-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let pool = connect(&dir.join("citadel.db")).await.unwrap();
+        let pool = connect(&dir.join("core.db")).await.unwrap();
         let secs = |s: u64| Duration::from_secs(s);
-        assert_eq!(
-            loop_intervals(&pool).await.unwrap(),
-            [secs(10), secs(5), secs(60)]
-        );
+        assert_eq!(loop_intervals(&pool).await.unwrap(), [secs(10), secs(5)]);
         let now = "2026-10-22T10:00:00.000Z";
-        for (key, v) in [
-            (Key::SchedulerTickSecs, "2"),
-            (Key::PushIntervalSecs, "3"),
-            (Key::ForgePollSecs, "30"),
-        ] {
+        for (key, v) in [(Key::SchedulerTickSecs, "2"), (Key::PushIntervalSecs, "3")] {
             let by = AuditActor::System;
             crate::store::settings::set(&pool, key, Scope::Server, v, by, now)
                 .await
                 .unwrap();
         }
-        assert_eq!(
-            loop_intervals(&pool).await.unwrap(),
-            [secs(2), secs(3), secs(30)]
-        );
+        assert_eq!(loop_intervals(&pool).await.unwrap(), [secs(2), secs(3)]);
         pool.close().await;
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]
     async fn the_loop_ticks_on_the_clock_until_shut_down() {
-        let dir = std::env::temp_dir().join(format!("citadel-sched-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("core-sched-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let pool = connect(&dir.join("citadel.db")).await.unwrap();
-        let company = create_company(&pool, "A").await.unwrap();
-        let a = NewAgent {
-            company_id: company.id,
-            name: "Dev".to_owned(),
-            role: "Developer".to_owned(),
-            org_role: OrgRole::None,
-            reports_to: None,
-            harness: Harness::Claude,
-            model: "claude-opus".to_owned(),
-            runner_tags: vec![],
-            status: AgentStatus::Active,
-        };
-        let dev: AgentId = create_agent(&pool, &a).await.unwrap().id;
-        set_agent_timer(&pool, dev, Some(3600)).await.unwrap();
-        // Actionable: a pending wake.
-        sqlx::query(
-            "INSERT INTO wake_requests (agent_id, source, reason, idempotency_key) \
-             VALUES (?, 'manual', 'go', 'k')",
-        )
-        .bind(dev.0)
-        .execute(&pool)
-        .await
-        .unwrap();
+        let pool = connect(&dir.join("core.db")).await.unwrap();
+        // A code started at 10:00 lives five minutes; one started at 10:58 outlives the run.
+        let codes = |at| start_pairing(&pool, AuditActor::System, at);
+        codes("2026-10-21T10:00:00.000Z").await.unwrap();
+        codes("2026-10-21T10:58:00.000Z").await.unwrap();
 
         let (tx, rx) = oneshot::channel();
         let scheduler = Scheduler {
@@ -214,12 +178,11 @@ mod tests {
         };
         let ticks = scheduler.run(shutdown).await;
         assert!(ticks >= 3, "{ticks}");
-        let fired: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM wake_requests WHERE source = 'timer'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(fired, 2);
+        let left: i64 = sqlx::query_scalar("SELECT count(*) FROM device_pairings")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(left, 1, "the expired code is gone, the live one stays");
         pool.close().await;
         std::fs::remove_dir_all(&dir).unwrap();
     }

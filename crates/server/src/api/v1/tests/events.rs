@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use ainkrad_core::work::{IssueTransition, ProjectMode, UserId};
+use ainkrad_core::audit::{AuditActor, NewAuditEvent};
 use futures_util::StreamExt;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
@@ -14,9 +14,8 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 use super::super::events::StreamConfig;
 use super::*;
+use crate::store::audit;
 use crate::store::events::{last_event_seq, list_events};
-use crate::store::exec::append_run_event;
-use crate::store::work::{post_comment, transition_issue};
 
 type Ws = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -77,6 +76,26 @@ async fn until(ws: &mut Ws, to: i64) -> Vec<Value> {
     got
 }
 
+/// An audited change, as any write path appends one.
+async fn audited(pool: &SqlitePool, action: &str) {
+    let e = NewAuditEvent {
+        actor: AuditActor::System,
+        action: action.to_owned(),
+        entity: None,
+        details: json!({}).to_string(),
+    };
+    audit::append(pool, &e).await.unwrap();
+}
+
+/// An event of a module's own kind, written as a module writes it.
+async fn emitted(pool: &SqlitePool, n: i64) {
+    sqlx::query("INSERT INTO events (kind, payload) VALUES ('ops.line', json_object('n', ?))")
+        .bind(n)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
 fn seqs(events: &[Value]) -> Vec<i64> {
     events.iter().map(|e| e["seq"].as_i64().unwrap()).collect()
 }
@@ -84,9 +103,11 @@ fn seqs(events: &[Value]) -> Vec<i64> {
 #[tokio::test]
 async fn a_ten_minute_disconnect_replays_every_missed_event_once_in_order() {
     let fx = fx().await;
-    let a = seed(&fx.app.pool, "A", "AAA", ProjectMode::Kanban).await;
     let app = serve(&fx, quick()).await;
     let pool = &fx.app.pool;
+    for n in 0..3 {
+        emitted(pool, n).await;
+    }
 
     let mut ws = connect(&app, &fx.key, Some("0")).await.unwrap();
     let head = last_event_seq(pool).await.unwrap();
@@ -95,23 +116,13 @@ async fn a_ten_minute_disconnect_replays_every_missed_event_once_in_order() {
     let seen = head;
     drop(ws);
 
-    // Away for ten minutes on the fake clock: transcript chunks while the run's lease holds,
-    // then a chat message and its wake, and a state change, all through the engine.
-    let later = "2026-10-22T10:01:00.000Z";
-    for seq in 1..=12u64 {
-        let chunk = json!({"kind": "text", "text": format!("line {seq}")});
-        append_run_event(pool, a.run.id, a.runner, seq, &chunk, later)
-            .await
-            .unwrap();
+    // Away: a module's events, then audited changes.
+    for n in 1..=12 {
+        emitted(pool, n).await;
     }
-    *fx.clock.0.lock().unwrap() = "2026-10-22T10:10:00.000Z".to_owned();
-    post_comment(pool, a.issue, UserId(1), "Status?", Some("c1"), None)
-        .await
-        .unwrap();
-    let block = IssueTransition::Cancel;
-    transition_issue(pool, a.issue, &block, super::super::BY)
-        .await
-        .unwrap();
+    for action in ["thing.started", "thing.done", "thing.archived"] {
+        audited(pool, action).await;
+    }
     let head = last_event_seq(pool).await.unwrap();
     let missed = list_events(pool, seen, 1000).await.unwrap();
     assert!(missed.len() >= 15, "{} missed", missed.len());
@@ -123,17 +134,15 @@ async fn a_ten_minute_disconnect_replays_every_missed_event_once_in_order() {
     assert_eq!(seqs(&replayed), want, "every missed event, once, in order");
     let kinds: Vec<&str> = replayed
         .iter()
-        .map(|e| e["payload"]["type"].as_str().unwrap())
+        .map(|e| e["kind"].as_str().unwrap())
         .collect();
-    for kind in ["transcript", "audit", "wake"] {
+    for kind in ["ops.line", "audit"] {
         assert!(kinds.contains(&kind), "{kind} in {kinds:?}");
     }
-    let chunk = replayed
-        .iter()
-        .find(|e| e["payload"]["type"] == "transcript")
-        .unwrap();
-    assert_eq!(chunk["payload"]["chunk"]["at"], later);
-    assert_eq!(chunk["payload"]["run_id"], a.run.id.0);
+    assert_eq!(replayed[0]["payload"], json!({"n": 1}));
+    let change = replayed.iter().find(|e| e["kind"] == "audit").unwrap();
+    assert_eq!(change["payload"]["action"], "thing.started");
+    assert_eq!(change["payload"]["actor_kind"], "system");
 
     // The HTTP replay is the same events, frame for frame.
     let uri = format!("/api/v1/events?after={seen}&limit=1000");
@@ -145,28 +154,21 @@ async fn a_ten_minute_disconnect_replays_every_missed_event_once_in_order() {
     assert_eq!(small["next_after"], replayed[4]["seq"]);
 
     // Then it is live.
-    let c2 = post_comment(pool, a.issue, UserId(1), "Still there?", Some("c2"), None)
-        .await
-        .unwrap();
-    assert!(c2.is_some());
+    audited(pool, "thing.reopened").await;
     let live = next(&mut ws).await;
     assert_eq!(live["seq"], head + 1);
-    assert_eq!(live["payload"]["action"], "issue.commented");
+    assert_eq!(live["payload"]["action"], "thing.reopened");
 }
 
 #[tokio::test]
 async fn without_a_resume_point_the_socket_is_live_only() {
     let fx = fx().await;
-    let a = seed(&fx.app.pool, "A", "AAA", ProjectMode::Kanban).await;
     let app = serve(&fx, quick()).await;
     let mut ws = connect(&app, &fx.key, None).await.unwrap();
     let head = last_event_seq(&fx.app.pool).await.unwrap();
     // Give the socket a poll to settle, then write.
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let chunk = json!({"kind": "text", "text": "now"});
-    append_run_event(&fx.app.pool, a.run.id, a.runner, 1, &chunk, NOW)
-        .await
-        .unwrap();
+    emitted(&fx.app.pool, 1).await;
     assert_eq!(next(&mut ws).await["seq"], head + 1, "nothing older");
 
     match connect(&app, &fx.key, Some("soon")).await {
@@ -204,15 +206,13 @@ async fn drain(ws: &mut Ws) -> (usize, i64, Option<(CloseCode, String)>) {
 #[tokio::test]
 async fn a_client_that_stops_reading_is_closed_with_a_resume_hint() {
     let fx = fx().await;
-    let a = seed(&fx.app.pool, "A", "AAA", ProjectMode::Kanban).await;
-    // 40 MB of transcript: more than the socket buffers hold.
+    // 40 MB of events: more than the socket buffers hold.
     let text = "x".repeat(8 * 1024);
     sqlx::query(
         "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5000) \
-         INSERT INTO run_events (run_id, seq, at, kind, payload) \
-         SELECT ?, i, ?, 'text', json_object('text', ?) FROM n",
+         INSERT INTO events (at, kind, payload) SELECT ?, 'ops.blob', json_object('text', ?) \
+         FROM n",
     )
-    .bind(a.run.id.0)
     .bind(NOW)
     .bind(&text)
     .execute(&fx.app.pool)
@@ -256,7 +256,6 @@ async fn a_client_that_stops_reading_is_closed_with_a_resume_hint() {
 #[tokio::test]
 async fn a_silent_client_is_closed_after_three_heartbeats() {
     let fx = fx().await;
-    seed(&fx.app.pool, "A", "AAA", ProjectMode::Kanban).await;
     let stream = StreamConfig {
         heartbeat: Duration::from_millis(100),
         ..quick()

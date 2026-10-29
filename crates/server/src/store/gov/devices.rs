@@ -1,9 +1,10 @@
 //! Device keys as a service (E10.3): issue, authorize, revoke. Each device the admin uses
 //! (#18: one admin, a key per device) gets its own random key, shown once; only its hash is
-//! stored (`library`). A revoked key keeps its row, so its last use stays visible.
+//! stored. A revoked key keeps its row, so its last use stays visible.
 
 use ainkrad_core::audit::{AuditActor, AuditEntity, NewAuditEvent};
-use ainkrad_core::gov::{DeviceKey, DeviceKeyId};
+use ainkrad_core::device::DeviceKey;
+use ainkrad_core::ids::DeviceKeyId;
 use serde_json::json;
 use sqlx::sqlite::SqlitePool;
 use sqlx::{Error, SqliteConnection};
@@ -24,8 +25,6 @@ async fn append(
             kind: "device_key".to_owned(),
             id: id.0,
         }),
-        company_id: None,
-        run_id: None,
         details: json!({}).to_string(),
     };
     audit::append(conn, &event).await.map(drop)
@@ -183,7 +182,7 @@ pub async fn set_push_cursor(pool: &SqlitePool, after: i64) -> Result<(), Error>
 #[cfg(test)]
 mod tests {
     use ainkrad_core::audit::AuditFilter;
-    use ainkrad_core::work::UserId;
+    use ainkrad_core::ids::UserId;
 
     use super::*;
     use crate::store::gov::list_device_keys;
@@ -192,11 +191,9 @@ mod tests {
 
     #[tokio::test]
     async fn issue_authorize_and_revoke() {
-        let dir = std::env::temp_dir().join(format!("citadel-devices-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("core-devices-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let pool = crate::store::connect(&dir.join("citadel.db"))
-            .await
-            .unwrap();
+        let pool = crate::store::connect(&dir.join("core.db")).await.unwrap();
 
         let (d, key) = issue_device_key(&pool, " MacBook ", BY).await.unwrap();
         assert!(

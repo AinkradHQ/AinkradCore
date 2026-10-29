@@ -1,4 +1,4 @@
-//! A clean stop: on SIGTERM `serve` closes a connected runner's socket with 1012 (so it
+//! A clean stop: on SIGTERM `serve` closes a connected client's event socket with 1012 (so it
 //! reconnects to the next server), checkpoints the database and exits 0.
 
 use std::process::Command;
@@ -9,14 +9,14 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 #[tokio::test]
-async fn sigterm_closes_runner_sockets_checkpoints_and_exits_zero() {
-    let dir = std::env::temp_dir().join(format!("citadel-shutdown-{}", std::process::id()));
+async fn sigterm_closes_event_sockets_checkpoints_and_exits_zero() {
+    let dir = std::env::temp_dir().join(format!("core-shutdown-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let db = dir.join("citadel.db");
+    let db = dir.join("core.db");
     let db_arg = db.to_str().unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_ainkrad-core-server"))
-        .args(["runner", "add", db_arg, "box"])
+        .args(["device", "add", db_arg, "mac"])
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -40,7 +40,7 @@ async fn sigterm_closes_runner_sockets_checkpoints_and_exits_zero() {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let mut req = format!("ws://{bind}/runner/v1/connect")
+    let mut req = format!("ws://{bind}/api/v1/events/ws")
         .into_client_request()
         .unwrap();
     let bearer = format!("Bearer {key}").parse().unwrap();
@@ -72,7 +72,7 @@ async fn sigterm_closes_runner_sockets_checkpoints_and_exits_zero() {
     let log = std::fs::read_to_string(dir.join("server.log")).unwrap();
     assert!(status.success(), "exit 0; log:\n{log}");
     assert!(log.contains("stopped"), "{log}");
-    let wal = std::fs::metadata(dir.join("citadel.db-wal")).map_or(0, |m| m.len());
+    let wal = std::fs::metadata(dir.join("core.db-wal")).map_or(0, |m| m.len());
     assert_eq!(wal, 0, "the WAL is checkpointed");
     let _ = std::fs::remove_dir_all(&dir);
 }

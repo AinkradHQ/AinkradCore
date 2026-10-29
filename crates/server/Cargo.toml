@@ -7,27 +7,16 @@ publish.workspace = true
 [lints]
 workspace = true
 
-[features]
-# Raw run and wake writers that bypass the engine, for the integration tests only.
-test-support = []
-
 [dependencies]
 axum = { version = "0.8.9", features = ["ws"] }
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros", "json"] }
 ainkrad-core = { path = "../core" }
-# Only the compatibility matrix (E3.6): which harness versions runners may be given work for.
-ainkrad-harness = { path = "../harness" }
-ainkrad-proto = { path = "../proto" }
-# Git hosts and trackers (E9): GitHub, GitLab, Linear.
-ainkrad-providers = { path = "../providers" }
 getrandom = "0.4.3"
 # APNs (E10.4): the .p8 key's PEM, and HTTP/2 to Apple; ES256 signing with ring, which
 # rustls already brings in.
 base64 = "0.22.1"
 reqwest = { version = "0.12.28", default-features = false, features = ["http2", "json", "rustls-tls"] }
 ring = "0.17.14"
-# The MCP server agents call back through (E4.2): the official SDK, Streamable HTTP, stateless.
-rmcp = { version = "3.6.0", default-features = false, features = ["server", "transport-streamable-http-server"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.10.9"
@@ -38,12 +27,7 @@ tracing-subscriber = "0.3.23"
 utoipa = "6.0.0"
 
 [dev-dependencies]
-ainkrad-providers = { path = "../providers", features = ["fake"] }
-ainkrad-runner = { path = "../runner" }
-ainkrad-core-server = { path = ".", features = ["test-support"] }
 futures-util = "0.3.34"
-# The suite's cuttable TCP proxy copies with `copy_bidirectional`.
-tokio = { version = "1.54.0", features = ["io-util", "process"] }
 tokio-tungstenite = "0.29.0"
-# In-process HTTP requests to the router (`oneshot`), for the MCP gate tests.
+# In-process HTTP requests to the router (`oneshot`), for the gate tests.
 tower = { version = "0.5.3", features = ["util"] }

@@ -1,9 +1,0 @@
-DROP TRIGGER issues_agents_same_company_update;
-DROP TRIGGER issues_agents_same_company_insert;
-DROP TRIGGER team_memberships_same_company_update;
-DROP TRIGGER team_memberships_same_company_insert;
-DROP TRIGGER teams_company_fixed;
-DROP TRIGGER departments_company_fixed;
-DROP TRIGGER agents_company_fixed;
-DROP TRIGGER agents_manager_update;
-DROP TRIGGER agents_manager_insert;

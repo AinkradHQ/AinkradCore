@@ -145,8 +145,6 @@ pub(super) async fn audit_refusals(State(app): State<App>, req: Request, next: N
         actor: BY,
         action: "api.refused".to_owned(),
         entity: None,
-        company_id: None,
-        run_id: None,
         details: json!({"error_id": refused.error_id, "code": refused.code,
                         "status": response.status().as_u16(), "method": method.as_str(),
                         "path": path, "client": client})

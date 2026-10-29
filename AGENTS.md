@@ -14,15 +14,18 @@ not here.
 
 ## Layout
 
-`crates/core` (primitives) · `crates/server` (`ainkrad-core-server`: gateway, store, events, scheduler, push)
-· `crates/runner` (`ainkrad-runner`) · `crates/harness` · `crates/proto` · `crates/providers` · `api/` (generated
-OpenAPI, committed) · `scripts/`.
+`crates/core` (platform primitives: ids, audit, device keys, settings registry) · `crates/server`
+(`ainkrad-core-server`, the platform: client API gate, device keys and pairing, rate limits, events, audit, settings,
+store and backup, push transport, scheduler, `Module` mounting; one fresh migration baseline `core_0001`) ·
+`crates/runner` (`ainkrad-runner`) · `crates/harness` · `crates/proto` · `crates/providers` · `api/` (generated
+OpenAPI, committed) · `scripts/`. The run engine, MCP server and runner hub are not in the Core yet: runners
+reconnect through the hub rebuilt in E1-11.
 
 `modules/citadel/{core,server}` (`citadel-core`, `citadel-server`) is a **parked, complete copy** of the Citadel
 monolith (P1.11), kept as the reference for the Citadel port (E2-13). It is its own cargo workspace, excluded
 from the Core one, and shares `crates/{proto,harness,providers,runner}` by path. Build and test it with
 `make build-citadel` / `make test-citadel`; neither is part of `make build`/`make test`. Its contract is
-`modules/citadel/api/openapi.json`. No Core crate may depend on anything under `modules/`.
+`modules/citadel/api/openapi.json`. No Core crate may depend on anything under `modules/` (`crates/server/tests/dependency_direction.rs`).
 
 ## Rules
 

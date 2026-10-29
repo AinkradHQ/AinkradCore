@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use ainkrad_core::audit::{AuditActor, AuditEntity, AuditFilter, NewAuditEvent};
-use ainkrad_core::org::CompanyId;
 
 use super::*;
 use crate::store::{audit, connect};
@@ -19,36 +18,35 @@ impl Drop for Dir {
 fn dir() -> Dir {
     static N: AtomicUsize = AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("citadel-backup-{}-{n}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("core-backup-{}-{n}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     Dir(dir)
 }
 
-/// One company plus its audit event, in one transaction.
+/// One user plus its audit event, in one transaction.
 async fn write(pool: &SqlitePool, i: usize) {
     let mut tx = pool.begin().await.unwrap();
-    let id: i64 = sqlx::query_scalar("INSERT INTO companies (name) VALUES (?) RETURNING id")
+    let id: i64 = sqlx::query_scalar("INSERT INTO users (name) VALUES (?) RETURNING id")
         .bind(format!("c{i}"))
         .fetch_one(&mut *tx)
         .await
         .unwrap();
     let e = NewAuditEvent {
         actor: AuditActor::System,
-        action: "company.created".to_owned(),
+        action: "user.created".to_owned(),
         entity: Some(AuditEntity {
-            kind: "company".to_owned(),
+            kind: "user".to_owned(),
             id,
         }),
-        company_id: Some(CompanyId(id)),
-        run_id: None,
         details: "{}".to_owned(),
     };
     audit::append(&mut *tx, &e).await.unwrap();
     tx.commit().await.unwrap();
 }
 
+/// The written users' names (not the seeded admin), oldest first.
 async fn names(pool: &SqlitePool) -> Vec<String> {
-    sqlx::query_scalar("SELECT name FROM companies ORDER BY id")
+    sqlx::query_scalar("SELECT name FROM users WHERE id <> 1 ORDER BY id")
         .fetch_all(pool)
         .await
         .unwrap()
@@ -100,11 +98,11 @@ async fn backup_during_writes_restores_a_consistent_prefix() {
     let k = got.len();
     assert!(k >= 50 && k < total, "k = {k}, total = {total}");
     assert_eq!(got, (0..k).map(|i| format!("c{i}")).collect::<Vec<_>>());
-    // ...with every company's audit event and no other: no torn transaction.
+    // ...with every user's audit event and no other: no torn transaction.
     let events = audit::list(&pool, &AuditFilter::default(), None, u32::MAX)
         .await
         .unwrap();
-    let ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM companies ORDER BY id")
+    let ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM users WHERE id <> 1 ORDER BY id")
         .fetch_all(&pool)
         .await
         .unwrap();

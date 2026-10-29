@@ -1,1 +1,0 @@
-DROP TRIGGER agents_hired_through_approval;

@@ -6,7 +6,7 @@
 //! address in `X-Forwarded-For` that is not a trusted proxy, so a client cannot pick its
 //! bucket by sending its own header.
 //!
-//! ponytail: single node only. Move the buckets to the database if Citadel ever runs more
+//! ponytail: single node only. Move the buckets to the database if the Core ever runs more
 //! than one process.
 
 use std::collections::HashMap;
