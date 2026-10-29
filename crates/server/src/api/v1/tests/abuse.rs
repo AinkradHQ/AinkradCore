@@ -150,3 +150,49 @@ async fn unusable_devices_of_every_status_look_alike() {
         "not 413"
     );
 }
+
+/// N3: while the device holds a challenge, other addresses asking for its challenges cannot
+/// push that one out; its session still opens.
+#[tokio::test]
+async fn other_addresses_cannot_evict_a_devices_challenge() {
+    let fx = fx().await;
+    let (_, got) = ask(&fx, "10.50.0.1", &fx.dev.id).await;
+    for i in 0..300 {
+        let (s, _) = ask(&fx, &format!("10.51.{}.{}", i / 10, i % 10), &fx.dev.id).await;
+        assert_eq!(s, StatusCode::OK);
+    }
+    let body = json!({"challenge": got["challenge"]}).to_string();
+    let h = fx
+        .dev
+        .headers_session("POST", "/handshake/session", body.as_bytes(), None);
+    let r = from(
+        "10.50.0.1",
+        raw(Method::POST, "/handshake/session", &h, body.as_bytes()),
+    );
+    let (status, grant) = send(&fx.app, r).await;
+    assert_eq!(status, StatusCode::OK, "{grant}");
+}
+
+/// N5: a body over the limit is the same `auth_failed` from a usable device as from an
+/// unknown one, not a 413 that tells them apart.
+#[tokio::test]
+async fn an_oversized_body_looks_the_same_for_known_and_unknown_devices() {
+    let fx = fx().await;
+    let big = json!({"token": "x".repeat(2 * 1024 * 1024)});
+    let mut answers = Vec::new();
+    for (n, dev) in [&fx.dev, &fx.stranger()].into_iter().enumerate() {
+        let r = req(
+            Method::PUT,
+            "/api/v1/push-token",
+            Some(dev),
+            Some(big.clone()),
+        );
+        let started = Instant::now();
+        let (status, mut body) = send(&fx.app, from(&format!("10.52.0.{n}"), r)).await;
+        assert!(started.elapsed() >= FAIL_FLOOR);
+        body.as_object_mut().unwrap().remove("error_id");
+        answers.push((status, body));
+    }
+    assert_eq!(answers[0], answers[1]);
+    assert_eq!(answers[0].0, StatusCode::UNAUTHORIZED);
+}

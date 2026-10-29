@@ -94,7 +94,7 @@ pub async fn challenge(State(app): State<App>, req: Request) -> Response {
         Ok(k) => k,
         Err(e) => return ApiError::from(e).into_response(),
     };
-    match app.auth.challenge(&body.device_id, known, now) {
+    match app.auth.challenge(&body.device_id, &addr, known, now) {
         Some(c) => Json(Challenge {
             challenge: Some(c),
             expires_in: Some(CHALLENGE_SECS),
@@ -130,8 +130,10 @@ pub async fn session(State(app): State<App>, req: Request) -> Response {
     };
     let now = app.clock.unix();
     if !app.auth.take_challenge(&body.challenge, &device.id, now) {
-        let ipdev = format!("ipdev:{addr}:{}", device.id);
-        return gate::fail(&app, &addr, &ipdev, &device.id, "bad challenge", now).await;
+        // The signature verified: this is the device itself with a stale or unknown challenge,
+        // not a guess, so it does not count against its address (review N3).
+        tracing::warn!(device = device.id, "session refused: bad challenge");
+        return gate::auth_failed().into_response();
     }
     let s = app.auth.issue_session(&device.id, now);
     tracing::info!(device = device.id, "session issued");

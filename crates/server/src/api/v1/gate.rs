@@ -37,7 +37,6 @@ use super::{ApiError, Caller, Client, query_ok, too_many};
 use crate::api::{App, limit, refusal};
 use crate::auth::signed::{self, Canonical};
 use crate::auth::{Replay, SKEW, Session, crypto};
-use crate::gateway::preauth::PREAUTH_BODY;
 use crate::store::gov::{self, ADDRESS, ADDRESS_DEVICE, Device};
 
 /// The largest body a signed request may carry (the gateway's own cap is the same).
@@ -144,16 +143,17 @@ pub async fn verify(
     // Only a usable device's request may carry the full body; anything else is held to the
     // pre-auth 16 KiB before it is hashed (review L1).
     let usable = device.as_ref().is_some_and(Device::usable);
-    let cap = if usable {
-        limit
+    // Every device's body is held to the same `limit`, and one past it is the same refusal
+    // whoever claims to send it (review N5). Only a usable device's body is kept; any other is
+    // read and dropped as it arrives, so it costs no memory and answers no sooner (review L1).
+    let (bytes, oversize) = if usable {
+        match body(raw, limit).await {
+            Ok(b) => (b, false),
+            Err(_) => (Bytes::new(), true),
+        }
     } else {
-        limit.min(PREAUTH_BODY)
-    };
-    let bytes = match body(raw, cap).await {
-        Ok(b) => b,
-        Err(too_large) if usable => return Err(too_large),
-        // Not usable: it fails below whatever the body; a 413 here would tell it apart.
-        Err(_) => Bytes::new(),
+        drain(raw, limit).await;
+        (Bytes::new(), false)
     };
     let body: &[u8] = &bytes;
     let message = Canonical {
@@ -169,6 +169,10 @@ pub async fn verify(
     }
     .bytes();
     let refused = match &device {
+        Some(_) if oversize => {
+            crypto::dummy_verify(&message, &h.signature);
+            Some("body too large")
+        }
         Some(d) if usable => {
             if !crypto::verify(&d.routine_spki, &message, &h.signature) {
                 Some("bad signature")
@@ -254,6 +258,19 @@ pub async fn fail(
         }
     }
     auth_failed().into_response()
+}
+
+/// Reads and drops a body up to `limit` bytes without keeping it.
+async fn drain(mut raw: Body, limit: usize) {
+    use axum::body::HttpBody;
+    let mut seen = 0;
+    while seen <= limit {
+        let frame = std::future::poll_fn(|cx| std::pin::Pin::new(&mut raw).poll_frame(cx)).await;
+        match frame {
+            Some(Ok(f)) => seen += f.data_ref().map_or(0, |d| d.len()),
+            _ => break,
+        }
+    }
 }
 
 /// Reads the whole body, up to `limit`; a larger one is a 413.
