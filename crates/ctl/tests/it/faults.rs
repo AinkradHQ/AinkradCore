@@ -187,11 +187,13 @@ fn runner_killed_then_revoked() {
     assert!(!ls.contains(&r.id), "{ls}");
     let o = r.noop();
     assert_eq!(o.status.code(), Some(4), "{o:?}");
-    let alive = r.runner.try_wait().unwrap().is_none();
+    // It stopped by itself (exit 6) instead of redialing forever.
+    let exit = r.runner.try_wait().unwrap().and_then(|s| s.code());
     let redials = since(&r.log(), from).matches("redialing").count();
+    assert_eq!(exit, Some(6), "{}", since(&r.log(), from));
     eprintln!(
         "FAULT runner-kill: offline after kill -9 in {off:?}, new process online in {on:?}; \
-         revoke closed the socket in {closed:?}, no reconnect in 10 s; runner process alive={alive}, \
+         revoke closed the socket in {closed:?}, no reconnect in 10 s; runner exit {exit:?}, \
          {redials} redial log lines in 10 s after revocation"
     );
 }

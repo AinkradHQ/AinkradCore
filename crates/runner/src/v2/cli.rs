@@ -115,7 +115,14 @@ Serves the Core it paired with (`ainkrad-runner pair`) over protocol v2, reconne
 jittered backoff and resuming commands in flight. Stops on SIGTERM or Ctrl-C; commands still
 running are killed. It offers only `noop` unless --enable-exec is given: `exec.run` lets the
 Core run any program as this runner's user (bounded in time and output, with an empty
-environment), so turn it on only where that is wanted.";
+environment), so turn it on only where that is wanted.
+Exit status: 0 stopped (SIGTERM, Ctrl-C); 1 an error that retrying cannot fix (state, URL, TLS);
+2 usage; 6 rejected by the Core: this runner was revoked (close 4001), or the Core refused it
+as an unknown or revoked device (auth_failed) 3 dials in a row; pair it again. Network errors,
+5xx and 429 are retried, never an exit.";
+
+/// `connect`'s exit status when the Core rejects this runner (as ctl's for a revoked device).
+pub const EXIT_REJECTED: u8 = 6;
 
 pub async fn connect_main(args: &[&str]) -> ExitCode {
     let run_enabled = args.contains(&"--enable-exec");
@@ -162,6 +169,10 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     });
     match super::daemon::from_state(&state, exec, tls, stopping).await {
         Ok(()) => ExitCode::SUCCESS,
+        Err(e @ super::client::LinkError::Rejected(_)) => {
+            eprintln!("ainkrad-runner: {e}");
+            ExitCode::from(EXIT_REJECTED)
+        }
         Err(e) => {
             eprintln!("ainkrad-runner: {e}");
             ExitCode::FAILURE
