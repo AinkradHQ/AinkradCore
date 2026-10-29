@@ -31,7 +31,7 @@ multiple-versions = "warn"
 wildcards = "deny"
 # `path` dependencies between our private crates are not wildcards.
 allow-wildcard-paths = true
-# Platform crates must never depend on a module (E1-02.6 adds the module-direction ban).
+# Platform crates must never depend on a module: `crates/server/tests/dependency_direction.rs` (E1-02.6).
 deny = []
 
 [sources]
