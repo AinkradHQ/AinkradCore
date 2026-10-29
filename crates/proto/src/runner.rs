@@ -167,7 +167,7 @@ pub const DEFAULT_TOKEN_CAP: u64 = 2_000_000;
 /// A run's caps, split (1.27): what the runner counts its tokens against. A run stops when
 /// either applies. Its tokens are counted from its events, and the caps stay exact for the
 /// budgets and the issue; only `run` is weighted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TokenCaps {
     /// The least left in the budgets and the issue's cap that apply, counted in full (0 is
     /// stop at once); absent when none applies.
@@ -203,7 +203,7 @@ pub const TOOL_OUTPUT_BYTES: u64 = 2048;
 
 /// The host's load when a heartbeat was sent (1.26): its one-minute load average and its CPU
 /// count. The server stretches a loaded runner's lease by `avg1 / cores`, up to a cap.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct HostLoad {
     pub avg1: f64,
     pub cores: u32,
@@ -217,7 +217,7 @@ pub fn protocol_major(version: &str) -> Option<u32> {
 }
 
 /// Runner → server.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RunnerMessage {
     /// The first message of every connection.
@@ -365,7 +365,9 @@ pub enum RunnerMessage {
 }
 
 /// Token counts. A cap counts their `sum`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct Tokens {
     pub input: u64,
     pub output: u64,
@@ -385,7 +387,7 @@ impl Tokens {
 }
 
 /// How a run ended, as its runner saw it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Outcome {
     Succeeded,
@@ -404,7 +406,7 @@ pub enum Outcome {
 }
 
 /// Server → runner.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
     Welcome {
@@ -508,7 +510,7 @@ pub enum ServerMessage {
 }
 
 /// A provider account, by reference only (E15.1): never its secret.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Account {
     pub id: i64,
     pub label: String,
@@ -523,7 +525,7 @@ pub struct Account {
 }
 
 /// One entry of an agent's fallback chain (E15.3), with the account picked for it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Route {
     pub harness: String,
     pub model: String,
@@ -547,7 +549,7 @@ pub fn relative_path_ok(path: &str) -> bool {
 
 /// A run token on the wire. Its `Debug` is redacted, so logging a message never logs it;
 /// `expose` is the one way to read it.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct RunToken(String);
 

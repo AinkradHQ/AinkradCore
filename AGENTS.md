@@ -32,7 +32,16 @@ from the Core one, and shares `crates/{proto,harness,providers,runner}` by path.
 - **No documentation in this repo** — docs go to `Docs/<bucket>/` of the Ainkrad project. Only this file
   and `CLAUDE.md` live here.
 - Gates before any report: `make build` (fmt check + clippy `-D warnings` + build) and `make test`; `make contract`
-  after any API change. Linux arm64: `make test-linux-arm64`.
+  after any API change (then the schema workflow below). Linux arm64: `make test-linux-arm64`.
+- **Schema workflow** (E1-05; the contract is `api/openapi.json` + `events.schema.json` + `runner.schema.json`, and
+  `clients/{swift,kotlin,csharp,ts}/generated`, all committed). To add or change an endpoint:
+  1. Change the Rust type and `#[utoipa::path]`, register it in `crates/server/src/api/v1.rs` (route) and `api/v1/spec.rs` (paths);
+     an event or runner type needs `schemars::JsonSchema` too. Bump `API_MINOR` (`api/v1/types.rs`) for any change.
+  2. `make contract`, then `make clients` (needs Docker; the Swift generator builds once into `~/.cache/ainkrad-core-tools`).
+  3. `make schema-compat` (vs the newest `v*` tag, else `origin/development`): fails on a removed/narrowed/newly required
+     field. New response fields are `Option` / not in `required`.
+  4. `make test`, `make clients-check`, `make clients-smoke`; commit the Rust change and all generated output together.
+  Generator versions are pinned in `scripts/contract-swift.sh` and `scripts/contract-clients.sh`; `make schema-compat-selftest` proves the gate.
 - Workspace is edition 2024 with `unsafe_code = forbid`. The one future exception is `crates/sys` (E2-09.1).
 - PRs target `development`; never commit to `main`/`staging`/`development` directly (the first commit is the
   only exception). Merge commits, never squash or rebase; delete the branch after merge. **Merging needs an

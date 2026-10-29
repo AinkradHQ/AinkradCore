@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::{STALL_AFTER_SECS, TOOL_OUTPUT_BYTES};
 
 /// What the runner is told of the server's settings for one run (1.11, E15.17).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RunLimits {
     /// How long an escalated tool call waits for a reviewer before it is denied.
     pub approval_timeout_secs: u64,
@@ -66,7 +66,7 @@ fn tool_output_bytes() -> u64 {
 
 /// What the runner is told of the server's settings for it (1.15, E15.9, decision #57: server-wide
 /// per runner, not per company).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RunnerLimits {
     /// The most its work root may hold: worktrees, shared build caches and repo mirrors.
     pub disk_cap_bytes: u64,
@@ -92,7 +92,7 @@ impl Default for RunnerLimits {
 }
 
 /// A runner's disk use (1.15, E15.9), as measured after its last clean-up pass.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiskReport {
     /// Everything under its work root.
     pub used_bytes: u64,
@@ -111,7 +111,7 @@ pub struct DiskReport {
 }
 
 /// One issue's worktree in a `DiskReport`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WorktreeDisk {
     pub issue: i64,
     pub bytes: u64,
@@ -122,7 +122,7 @@ pub struct WorktreeDisk {
 }
 
 /// What a runner says of itself (1.20).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RunnerInfo {
     /// Runs it works at once.
     pub slots: u32,
@@ -142,7 +142,7 @@ pub struct RunnerInfo {
 
 /// A login place on a runner host (1.20): `dir` is relative to its config root
 /// (`claude`, `accounts/claude-a`), or `credentials/<file>` for an account's token file.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Login {
     pub dir: String,
     /// The harness, when the dir is a harness's own.

@@ -34,7 +34,7 @@ use crate::store::events::{self, MAX_EVENTS, StoredEvent};
 
 /// One entry of the event stream. `seq` only grows: it is the replay cursor. New kinds may be
 /// added: a client skips an event whose kind it does not know.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, ToSchema, schemars::JsonSchema)]
 pub struct Event {
     pub seq: i64,
     pub at: Timestamp,
@@ -69,7 +69,7 @@ pub async fn replay(State(app): State<App>, Query(page): Query<Paging>) -> ApiRe
 }
 
 /// The newest event's seq a client would be shown: the catch-up target.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, ToSchema, schemars::JsonSchema)]
 pub struct LatestEvent {
     /// 0 when there is none yet.
     pub seq: i64,
