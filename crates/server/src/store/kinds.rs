@@ -32,6 +32,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "pairing.refused",
     "pairing.rejected",
     "recover.started",
+    "runner.refused",
     "setting.reset",
     "setting.set",
 ];

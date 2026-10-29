@@ -15,7 +15,8 @@
 //! Then a signed request from a live device (`v1::gate`), checked before routing; nothing
 //! answers without one, loopback included, except the pre-auth routes (`gateway::preauth`).
 //!
-//! The runner endpoint is not here: runners reconnect through the rebuilt hub (E1-11).
+//! The runner hub's endpoint (`crate::hub::connect`) is pre-auth here: it verifies the
+//! runner's signed request and its channel-bound proof itself.
 
 use std::sync::Arc;
 
@@ -54,6 +55,8 @@ pub struct App {
     /// Set when serve is stopping: event sockets close so their clients reconnect to the next
     /// server.
     pub closing: Arc<tokio::sync::watch::Sender<bool>>,
+    /// The runner hub: runner connections and command routing (`crate::hub`).
+    pub hub: Arc<crate::hub::Hub>,
 }
 
 /// Resolves once serve is stopping (`App::closing`).
@@ -80,6 +83,7 @@ impl App {
             stream: v1::events::StreamConfig::default(),
             modules: Arc::from([]),
             closing: Arc::new(tokio::sync::watch::Sender::new(false)),
+            hub: Arc::new(crate::hub::Hub::new(crate::hub::HubConfig::default())),
         }
     }
 }
@@ -95,6 +99,7 @@ pub fn router(app: App) -> Router {
         .route("/pair/claim", post(v1::pair::claim))
         .route("/pair/status", post(v1::pair::status))
         .route("/healthz", get(preauth::healthz))
+        .route(crate::hub::connect::PATH, get(crate::hub::connect::connect))
         .layer(DefaultBodyLimit::max(preauth::PREAUTH_BODY))
         .with_state(app.clone());
     Router::new()

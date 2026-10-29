@@ -1,4 +1,4 @@
-//! The pre-auth gate (E1-06.4, handshake spec §4): before routing, only four route prefixes
+//! The pre-auth gate (E1-06.4, handshake spec §4): before routing, only these route prefixes
 //! answer without a signed request, on segment boundaries (`/handshake` and `/handshake/…`,
 //! never `/handshakes`):
 //!
@@ -7,7 +7,9 @@
 //! - `/pair`: pairing a new device (E1-07.4);
 //! - `/.well-known/acme-challenge/` on the :80 listener only, when HTTP-01 is on
 //!   (`http01_router`);
-//! - `/healthz`: `ok`, nothing else.
+//! - `/healthz`: `ok`, nothing else;
+//! - `/runner/v2/connect`: the runner hub, which verifies the signed request and the runner's
+//!   channel-bound proof itself (`hub::connect`).
 //!
 //! They still pass the shared checks (Host, no Origin, no Authorization, a canonical path, no
 //! query string) and take at most a 16 KiB body (413). Every other request runs the client
@@ -31,7 +33,7 @@ use crate::api::{App, refusal};
 pub const PREAUTH_BODY: usize = 16 * 1024;
 
 /// The route prefixes reachable without a signed request on the main listener.
-pub const ALLOWED: [&str; 3] = ["/handshake", "/pair", "/healthz"];
+pub const ALLOWED: [&str; 4] = ["/handshake", "/pair", "/healthz", crate::hub::connect::PATH];
 
 /// The HTTP-01 challenge prefix, served on :80 only.
 pub const ACME_CHALLENGE: &str = "/.well-known/acme-challenge";
@@ -116,6 +118,7 @@ mod tests {
             "/pair",
             "/pair/claim",
             "/healthz",
+            "/runner/v2/connect",
         ] {
             assert!(allowed(ok), "{ok}");
         }
@@ -129,6 +132,9 @@ mod tests {
             "",
             "/.well-known/acme-challenge/x",
             "/API/V1/DEVICES/PAIR",
+            "/runner",
+            "/runner/v2",
+            "/runner/v1/connect",
         ] {
             assert!(!allowed(no), "{no}");
         }
