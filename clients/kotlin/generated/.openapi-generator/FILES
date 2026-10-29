@@ -38,6 +38,7 @@ src/main/kotlin/ainkrad/client/models/NewDevice.kt
 src/main/kotlin/ainkrad/client/models/PageEvent.kt
 src/main/kotlin/ainkrad/client/models/PairBody.kt
 src/main/kotlin/ainkrad/client/models/Pairing.kt
+src/main/kotlin/ainkrad/client/models/PastRetention.kt
 src/main/kotlin/ainkrad/client/models/PushToken.kt
 src/main/kotlin/ainkrad/client/models/SetSetting.kt
 src/main/kotlin/ainkrad/client/models/Setting.kt

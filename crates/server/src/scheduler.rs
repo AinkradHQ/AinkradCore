@@ -1,5 +1,6 @@
-//! The scheduler loop (E2.9): ticks every `every` until shut down. The platform's one job is
-//! dropping expired pairing codes; modules' jobs come with E2-11. The time comes from a
+//! The scheduler loop (E2.9): ticks every `every` until shut down. The platform's jobs are
+//! dropping expired pairing codes and trimming events past retention (E1-04.4); modules' jobs
+//! come with E2-11. The time comes from a
 //! `Clock`, so nothing reads the system clock itself and tests drive it with a fake one.
 
 use std::future::Future;
@@ -8,6 +9,24 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sqlx::SqlitePool;
 
 use crate::store::gov::prune_pairings;
+
+/// The most events one tick trims: the write stays short, and at the default 10 s tick that is
+/// 30 000 a minute, three times the 10k/min the bus is sized for (E1-04.5).
+const TRIM_BATCH: u32 = 5_000;
+
+/// Trims events older than the `events.retention_secs` setting (E1-04.4).
+///
+/// Time-based, not count-based: what a client can rely on is "offline for less than the
+/// retention, I resume; longer, I re-sync", which a count cannot promise (a busy hour would
+/// shorten it). Disk stays bounded by the write rate times the retention.
+async fn trim_events(pool: &SqlitePool, now: &str) -> Result<(), sqlx::Error> {
+    use ainkrad_core::settings::{Key, Scope};
+    let keep = crate::store::settings::value(pool, Key::EventsRetentionSecs, Scope::Server).await?;
+    if let Some(t) = crate::store::events::trim(pool, now, keep, TRIM_BATCH).await? {
+        tracing::info!(floor = t.floor, removed = t.removed, "events trimmed");
+    }
+    Ok(())
+}
 
 /// Where the scheduler gets "now", as ISO-8601 UTC text (`2026-10-21T10:00:00.000Z`).
 pub trait Clock {
@@ -80,8 +99,12 @@ impl<C: Clock> Scheduler<C> {
                 biased;
                 () = &mut shutdown => return ticks,
                 _ = every.tick() => {
-                    if let Err(e) = prune_pairings(&self.pool, &self.clock.now()).await {
+                    let now = self.clock.now();
+                    if let Err(e) = prune_pairings(&self.pool, &now).await {
                         eprintln!("ainkrad-core-server: scheduler tick failed: {e}");
+                    }
+                    if let Err(e) = trim_events(&self.pool, &now).await {
+                        eprintln!("ainkrad-core-server: trimming events failed: {e}");
                     }
                     ticks += 1;
                 }
@@ -183,6 +206,39 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(left, 1, "the expired code is gone, the live one stays");
+        pool.close().await;
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_loop_trims_events_past_retention() {
+        let dir = std::env::temp_dir().join(format!("core-sched-trim-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = connect(&dir.join("core.db")).await.unwrap();
+        crate::store::kinds::allow(&pool, &["ops.line"], &[]).await;
+        for at in ["2026-09-01T00:00:00.000Z", "2026-10-21T09:00:00.000Z"] {
+            sqlx::query("INSERT INTO events (at, kind, payload) VALUES (?, 'ops.line', '{}')")
+                .bind(at)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let (tx, rx) = oneshot::channel();
+        let scheduler = Scheduler {
+            pool: pool.clone(),
+            clock: Fake {
+                times: Mutex::new(vec!["2026-10-21T10:00:00.000Z"]),
+                done: Mutex::new(Some(tx)),
+            },
+            every: Duration::from_millis(5),
+        };
+        let shutdown = async {
+            let _ = tokio::time::timeout(Duration::from_secs(5), rx).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        scheduler.run(shutdown).await;
+        // The default retention is 30 days: the September event goes, this morning's stays.
+        assert_eq!(crate::store::events::floor(&pool).await.unwrap(), 1);
         pool.close().await;
         std::fs::remove_dir_all(&dir).unwrap();
     }

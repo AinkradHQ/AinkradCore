@@ -134,7 +134,8 @@ pub async fn pair_device(
         .bind(&hash)
         .execute(pool)
         .await?;
-    let mut conn = pool.acquire().await?;
+    // Under the write gate: an audit append reads the chain's head (`audit::append`).
+    let mut conn = crate::store::begin_write(pool).await?;
     let d = json!({"name": device.name});
     append(
         &mut conn,
@@ -144,5 +145,6 @@ pub async fn pair_device(
         d,
     )
     .await?;
+    conn.commit().await?;
     Ok(Some((device, key)))
 }

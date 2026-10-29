@@ -24,6 +24,7 @@ import kotlinx.serialization.Contextual
  * The newest event's seq a client would be shown: the catch-up target.
  *
  * @param seq 0 when there is none yet.
+ * @param floor The retention floor: events up to it were trimmed, so a client whose last read seq is below it re-syncs (E1-04.4). Absent from servers before API minor 2.
  */
 @Serializable
 
@@ -31,7 +32,11 @@ data class LatestEvent (
 
     /* 0 when there is none yet. */
     @SerialName(value = "seq")
-    val seq: kotlin.Long
+    val seq: kotlin.Long,
+
+    /* The retention floor: events up to it were trimmed, so a client whose last read seq is below it re-syncs (E1-04.4). Absent from servers before API minor 2. */
+    @SerialName(value = "floor")
+    val floor: kotlin.Long? = null
 
 ) {
 

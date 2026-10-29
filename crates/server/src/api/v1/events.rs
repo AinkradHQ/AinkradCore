@@ -13,6 +13,13 @@
 //!   stuck socket may never deliver it); a client always resumes from the last seq it read.
 //!   The server holds at most one page per socket, never a growing buffer.
 //!
+//! Retention (E1-04.4): events older than `events.retention_secs` are trimmed, and the newest
+//! trimmed seq is the floor. A resume point below it gets a defined answer instead of a silent
+//! gap: the HTTP replay a 410 `PastRetention` (code `past_retention`, the `floor`); the socket
+//! closes with 4410 and `past retention, floor <seq>`. The client then re-syncs: it reads
+//! `GET /api/v1/events/latest`, reloads the state it shows from the resource routes, and
+//! resumes from that `seq`.
+//!
 //! Paperclip's UI polled and its socket only invalidated caches, with no replay; here the
 //! app polls nothing and misses nothing across a disconnect.
 
@@ -21,14 +28,14 @@ use std::time::{Duration, Instant};
 use axum::Json;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use serde_json::Value;
 use utoipa::ToSchema;
 
 use super::types::{Page, Timestamp, ts};
-use super::{ApiError, ApiResult, Paging};
+use super::{ApiError, ApiResult, Paging, trace};
 use crate::api::App;
 use crate::store::events::{self, MAX_EVENTS, StoredEvent};
 
@@ -40,7 +47,7 @@ pub struct Event {
     pub at: Timestamp,
     /// What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,
     /// `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `details`), or a kind a
-    /// module writes.
+    /// module writes. The registered kinds are listed in `x-event-kinds`.
     pub kind: String,
     #[schema(value_type = Object)]
     pub payload: Value,
@@ -60,12 +67,54 @@ impl From<StoredEvent> for Event {
 #[utoipa::path(get, path = "/api/v1/events", operation_id = "listEvents", tag = "events",
     params(Paging),
     responses((status = 200, description = "Events after `after` (default 0), oldest first, \
-        at most `limit` (default and most 1000); the same events the WebSocket carries", body = Page<Event>)))]
-pub async fn replay(State(app): State<App>, Query(page): Query<Paging>) -> ApiResult<Page<Event>> {
+        at most `limit` (default and most 1000); the same events the WebSocket carries", body = Page<Event>),
+        (status = 410, description = "`after` is below the retention floor: some events after it \
+        were trimmed. Re-sync from `GET /api/v1/events/latest`", body = PastRetention)))]
+pub async fn replay(State(app): State<App>, Query(page): Query<Paging>) -> Response {
     let limit = page.limit.unwrap_or(MAX_EVENTS).clamp(1, MAX_EVENTS - 1);
-    let got = events::list_events(&app.pool, page.after.unwrap_or(0), limit + 1).await?;
-    let got = got.into_iter().map(Event::from).collect();
-    Ok(Json(Page::of(got, limit, |e| e.seq)))
+    match events::replay(&app.pool, page.after.unwrap_or(0), limit + 1).await {
+        Ok(Ok(got)) => {
+            let got = got.into_iter().map(Event::from).collect();
+            Json(Page::of(got, limit, |e| e.seq)).into_response()
+        }
+        Ok(Err(past)) => PastRetention::new(past.floor).into_response(),
+        Err(e) => ApiError::from(e).into_response(),
+    }
+}
+
+/// The 410 of a replay from below the retention floor (E1-04.4).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PastRetention {
+    /// `past_retention`.
+    pub code: String,
+    pub message: String,
+    pub error_id: String,
+    /// The newest trimmed seq: every event above it is still there.
+    pub floor: i64,
+}
+
+impl PastRetention {
+    fn new(floor: i64) -> Self {
+        Self {
+            code: "past_retention".to_owned(),
+            message: format!(
+                "events up to {floor} were trimmed; re-sync from /api/v1/events/latest"
+            ),
+            error_id: trace::error_id(),
+            floor,
+        }
+    }
+}
+
+impl IntoResponse for PastRetention {
+    fn into_response(self) -> Response {
+        tracing::info!(
+            floor = self.floor,
+            error_id = self.error_id,
+            "replay past retention"
+        );
+        (StatusCode::GONE, Json(self)).into_response()
+    }
 }
 
 /// The newest event's seq a client would be shown: the catch-up target.
@@ -73,15 +122,19 @@ pub async fn replay(State(app): State<App>, Query(page): Query<Paging>) -> ApiRe
 pub struct LatestEvent {
     /// 0 when there is none yet.
     pub seq: i64,
+    /// The retention floor: events up to it were trimmed, so a client whose last read seq is
+    /// below it re-syncs (E1-04.4). Absent from servers before API minor 2.
+    pub floor: Option<i64>,
 }
 
 #[utoipa::path(get, path = "/api/v1/events/latest", operation_id = "latestEvent",
     tag = "events",
     responses((status = 200, description = "The newest event's seq: how far a catching-up \
-        client has to go", body = LatestEvent)))]
+        client has to go, and where a client past retention resumes after re-syncing", body = LatestEvent)))]
 pub async fn latest(State(app): State<App>) -> ApiResult<LatestEvent> {
     Ok(Json(LatestEvent {
         seq: events::last_event_seq(&app.pool).await?,
+        floor: Some(events::floor(&app.pool).await?),
     }))
 }
 
@@ -132,7 +185,9 @@ fn last_event_id(headers: &HeaderMap) -> Result<Option<i64>, ApiError> {
         with the reason `too slow; resume from the last seq read, at most <seq>`: `<seq>` is \
         the last event the server tried to send. The hint is best effort; the client \
         reconnects with `Last-Event-ID` set to the last seq it actually read. Also closed \
-        with 1001 (no pong) and 1011 (server error), with the same hint")))]
+        with 1001 (no pong) and 1011 (server error), with the same hint; with 4410 and \
+        `past retention, floor <seq>` when the resume point is below the retention floor \
+        (re-sync from `/api/v1/events/latest`)")))]
 pub async fn ws(State(app): State<App>, headers: HeaderMap, ws: WebSocketUpgrade) -> Response {
     let after = match last_event_id(&headers) {
         Ok(Some(after)) => after,
@@ -153,6 +208,8 @@ enum End {
     Failed,
     /// The server is stopping.
     Restart,
+    /// The resume point is below the retention floor.
+    Past(i64),
 }
 
 /// Sends every event after `after`, then new ones as they land, until the client goes, falls
@@ -167,8 +224,9 @@ async fn stream(app: App, mut socket: WebSocket, mut after: i64) {
     let end = 'live: loop {
         // Catch up page by page; only one page is ever held.
         loop {
-            let page = match events::list_events(&app.pool, after, cfg.page).await {
-                Ok(page) => page,
+            let page = match events::replay(&app.pool, after, cfg.page).await {
+                Ok(Ok(page)) => page,
+                Ok(Err(past)) => break 'live End::Past(past.floor),
                 Err(e) => {
                     tracing::error!(error = %e, "event stream read failed");
                     break 'live End::Failed;
@@ -217,14 +275,18 @@ async fn stream(app: App, mut socket: WebSocket, mut after: i64) {
             },
         }
     };
+    let hint = format!("resume from the last seq read, at most {after}");
     let (code, why) = match end {
         End::Gone => return,
-        End::Slow => (1013, "too slow"),
-        End::Silent => (1001, "no pong"),
-        End::Failed => (1011, "server error"),
-        End::Restart => (1012, "server restarting"),
+        End::Slow => (1013, format!("too slow; {hint}")),
+        End::Silent => (1001, format!("no pong; {hint}")),
+        End::Failed => (1011, format!("server error; {hint}")),
+        End::Restart => (1012, format!("server restarting; {hint}")),
+        End::Past(floor) => (
+            4410,
+            format!("past retention, floor {floor}; re-sync from /api/v1/events/latest"),
+        ),
     };
-    let why = format!("{why}; resume from the last seq read, at most {after}");
     tracing::info!(code, why, "event stream closed");
     let close = Message::Close(Some(CloseFrame {
         code,

@@ -10,6 +10,8 @@ use ainkrad_core_server::store::{self, settings};
 
 use crate::{ADMIN, Result_};
 
+mod audit;
+
 pub const USAGE: &str = "  ainkrad-core-server setting list <db> [--scope <scope>]
   ainkrad-core-server setting get <db> <key> [--scope <scope>]
   ainkrad-core-server setting set <db> <key> <value> [--scope <scope>]
@@ -20,7 +22,14 @@ that may be set at the scope: key, effective value, unit, where it comes from, b
 scopes it may be set at.
 A value out of bounds or at a scope the setting does not allow is refused, never clamped.
 reset removes the scope's own value, so it inherits again. history lists the sets and resets
-(all scopes unless --scope), newest first. Every set and reset is audited.";
+(all scopes unless --scope), newest first. Every set and reset is audited.
+Audit (E1-10):
+  ainkrad-core-server audit verify <db>
+  ainkrad-core-server audit verify --export <file.jsonl>
+  ainkrad-core-server audit export <db> [<file.jsonl>]
+verify checks the audit hash chain and names the first changed or missing row; with --export it
+checks an export on its own. export writes every audit row as one JSON line, with its hash and
+prev_hash, to the file (refusing an existing one) or stdout. Both open the database read-only.";
 
 /// `--name value` pairs, each name among `known`; `None` on anything else.
 fn flags<'a>(rest: &[&'a str], known: &[&str]) -> Option<HashMap<&'a str, &'a str>> {
@@ -34,8 +43,11 @@ fn flags<'a>(rest: &[&'a str], known: &[&str]) -> Option<HashMap<&'a str, &'a st
     Some(found)
 }
 
-/// Runs a settings command; `None` when `args` is not one.
+/// Runs a settings or audit command; `None` when `args` is not one.
 pub async fn run(args: &[&str]) -> Option<Result_> {
+    if args.first() == Some(&"audit") {
+        return audit::run(args).await;
+    }
     let (verb, db, key, value, rest) = match args {
         ["setting", "list", db, rest @ ..] => ("list", *db, None, None, rest),
         ["setting", "set", db, key, value, rest @ ..] => {

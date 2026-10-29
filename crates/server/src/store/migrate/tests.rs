@@ -94,12 +94,13 @@ async fn has_table(pool: &SqlitePool, name: &str) -> bool {
 async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
     let db = db().await;
     let first = versions(&db.pool, CORE).await;
-    assert_eq!(first.len(), 1);
-    assert_eq!((first[0].0, first[0].1.as_str()), (1, "core_0001"));
-    let sum: Vec<u8> = sqlx::query_scalar("SELECT checksum FROM _migrations_core")
-        .fetch_one(&db.pool)
-        .await
-        .unwrap();
+    let names: Vec<(i64, &str)> = first.iter().map(|v| (v.0, v.1.as_str())).collect();
+    assert_eq!(names, [(1, "core_0001"), (2, "events_audit")]);
+    let sum: Vec<u8> =
+        sqlx::query_scalar("SELECT checksum FROM _migrations_core WHERE version = 1")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
     assert_eq!(sum, checksum(&CORE_MIGRATIONS[0]));
     assert!(!has_table(&db.pool, "_sqlx_migrations").await);
 
@@ -133,7 +134,7 @@ async fn a_tampered_migration_is_refused() {
 async fn a_newer_database_is_refused() {
     let db = db().await;
     sqlx::query(
-        "INSERT INTO _migrations_core (version, name, checksum) VALUES (2, 'core_0002', x'00')",
+        "INSERT INTO _migrations_core (version, name, checksum) VALUES (3, 'core_0003', x'00')",
     )
     .execute(&db.pool)
     .await
@@ -143,8 +144,8 @@ async fn a_newer_database_is_refused() {
         matches!(
             err,
             MigrateError::Newer {
-                found: 2,
-                known: 1,
+                found: 3,
+                known: 2,
                 ..
             }
         ),
@@ -173,7 +174,7 @@ async fn a_module_migrates_its_own_tables_in_its_own_namespace() {
     assert_eq!(versions(&db.pool, "toy").await.len(), 1);
     assert_eq!(
         versions(&db.pool, CORE).await.len(),
-        1,
+        CORE_MIGRATIONS.len(),
         "the platform's is untouched"
     );
 
@@ -321,7 +322,12 @@ fn the_schema_diff_flags_objects_outside_the_prefix() {
 /// the platform's schema and a module's, so a module table is held to it too.
 #[tokio::test]
 async fn user_owned_tables_carry_user_id() {
-    const NOT_USER_OWNED: [&str; 5] = [
+    const NOT_USER_OWNED: [&str; 8] = [
+        // A registered name belongs to the platform or a module, not to a user.
+        "event_kinds",
+        "audit_actions",
+        // One row: the event log's retention floor.
+        "events_floor",
         // The owners themselves.
         "users",
         // A code belongs to no one until it is spent; then its device key carries the user.
@@ -403,4 +409,41 @@ fn every_migration_file_is_listed() {
         })
         .collect();
     assert_eq!(files, listed);
+}
+
+/// A module declaring kinds (E1-04.2): `migrate_modules` registers them, so its events append;
+/// a name outside its prefix stops the start.
+#[tokio::test]
+async fn a_module_registers_its_event_kinds_and_audit_actions() {
+    struct Kinds(&'static str, &'static [&'static str]);
+    impl Module for Kinds {
+        fn id(&self) -> &'static str {
+            self.0
+        }
+        fn routes(&self) -> Router<App> {
+            Router::new()
+        }
+        fn event_kinds(&self) -> &'static [&'static str] {
+            self.1
+        }
+        fn audit_actions(&self) -> &'static [&'static str] {
+            &["toy.made"]
+        }
+    }
+    let db = db().await;
+    let good: Vec<Arc<dyn Module>> = vec![Arc::new(Kinds("toy", &["toy.line", "toy.run.done"]))];
+    migrate_modules(&db.pool, &good).await.unwrap();
+    let mut tx = begin_write(&db.pool).await.unwrap();
+    crate::store::events::append(&mut tx, "toy.run.done", &serde_json::json!({}))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    for bad in [&["other.line"][..], &["toy"], &["toy.Line"]] {
+        let modules: Vec<Arc<dyn Module>> = vec![Arc::new(Kinds("toy", bad))];
+        let err = migrate_modules(&db.pool, &modules).await.unwrap_err();
+        assert!(
+            matches!(err, MigrateError::Refused { .. }),
+            "{bad:?}: {err}"
+        );
+    }
 }

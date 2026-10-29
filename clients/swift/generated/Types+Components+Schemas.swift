@@ -206,7 +206,7 @@ extension Components {
             public var at: Components.Schemas.Timestamp
             /// What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,
             /// `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `details`), or a kind a
-            /// module writes.
+            /// module writes. The registered kinds are listed in `x-event-kinds`.
             ///
             /// - Remark: Generated from `#/components/schemas/Event/kind`.
             public var kind: Swift.String
@@ -415,6 +415,11 @@ extension Components {
         ///
         /// - Remark: Generated from `#/components/schemas/LatestEvent`.
         public struct LatestEvent: Codable, Hashable, Sendable {
+            /// The retention floor: events up to it were trimmed, so a client whose last read seq is
+            /// below it re-syncs (E1-04.4). Absent from servers before API minor 2.
+            ///
+            /// - Remark: Generated from `#/components/schemas/LatestEvent/floor`.
+            public var floor: Swift.Int64?
             /// 0 when there is none yet.
             ///
             /// - Remark: Generated from `#/components/schemas/LatestEvent/seq`.
@@ -422,11 +427,17 @@ extension Components {
             /// Creates a new `LatestEvent`.
             ///
             /// - Parameters:
+            ///   - floor: The retention floor: events up to it were trimmed, so a client whose last read seq is
             ///   - seq: 0 when there is none yet.
-            public init(seq: Swift.Int64) {
+            public init(
+                floor: Swift.Int64? = nil,
+                seq: Swift.Int64
+            ) {
+                self.floor = floor
                 self.seq = seq
             }
             public enum CodingKeys: String, CodingKey {
+                case floor
                 case seq
             }
         }
@@ -570,6 +581,47 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case code
                 case expiresAt = "expires_at"
+            }
+        }
+        /// The 410 of a replay from below the retention floor (E1-04.4).
+        ///
+        /// - Remark: Generated from `#/components/schemas/PastRetention`.
+        public struct PastRetention: Codable, Hashable, Sendable {
+            /// `past_retention`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PastRetention/code`.
+            public var code: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PastRetention/error_id`.
+            public var errorId: Swift.String
+            /// The newest trimmed seq: every event above it is still there.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PastRetention/floor`.
+            public var floor: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/PastRetention/message`.
+            public var message: Swift.String
+            /// Creates a new `PastRetention`.
+            ///
+            /// - Parameters:
+            ///   - code: `past_retention`.
+            ///   - errorId:
+            ///   - floor: The newest trimmed seq: every event above it is still there.
+            ///   - message:
+            public init(
+                code: Swift.String,
+                errorId: Swift.String,
+                floor: Swift.Int64,
+                message: Swift.String
+            ) {
+                self.code = code
+                self.errorId = errorId
+                self.floor = floor
+                self.message = message
+            }
+            public enum CodingKeys: String, CodingKey {
+                case code
+                case errorId = "error_id"
+                case floor
+                case message
             }
         }
         /// The calling device's APNs token (E10.4).

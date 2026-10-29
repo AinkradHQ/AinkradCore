@@ -134,7 +134,16 @@
           "actor",
           "details"
         ],
-        "type": "object"
+        "type": "object",
+        "x-audit-actions": [
+          "api.refused",
+          "device.paired",
+          "device.pairing_started",
+          "device_key.created",
+          "device_key.revoked",
+          "setting.reset",
+          "setting.set"
+        ]
       },
       "AuditPage": {
         "description": "A page of the audit log, newest first. `next_before` continues with older rows, absent on\nthe last page.",
@@ -214,7 +223,7 @@
             "$ref": "#/components/schemas/Timestamp"
           },
           "kind": {
-            "description": "What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,\n`action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `details`), or a kind a\nmodule writes.",
+            "description": "What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,\n`action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `details`), or a kind a\nmodule writes. The registered kinds are listed in `x-event-kinds`.",
             "type": "string"
           },
           "payload": {
@@ -231,7 +240,10 @@
           "kind",
           "payload"
         ],
-        "type": "object"
+        "type": "object",
+        "x-event-kinds": [
+          "audit"
+        ]
       },
       "EventActor": {
         "description": "Who acted, on an audited change.",
@@ -358,6 +370,14 @@
       "LatestEvent": {
         "description": "The newest event's seq a client would be shown: the catch-up target.",
         "properties": {
+          "floor": {
+            "description": "The retention floor: events up to it were trimmed, so a client whose last read seq is\nbelow it re-syncs (E1-04.4). Absent from servers before API minor 2.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "seq": {
             "description": "0 when there is none yet.",
             "format": "int64",
@@ -465,6 +485,33 @@
         "required": [
           "code",
           "expires_at"
+        ],
+        "type": "object"
+      },
+      "PastRetention": {
+        "description": "The 410 of a replay from below the retention floor (E1-04.4).",
+        "properties": {
+          "code": {
+            "description": "`past_retention`.",
+            "type": "string"
+          },
+          "error_id": {
+            "type": "string"
+          },
+          "floor": {
+            "description": "The newest trimmed seq: every event above it is still there.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "error_id",
+          "floor"
         ],
         "type": "object"
       },
@@ -670,7 +717,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.1.0"
+    "version": "1.2.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -1057,6 +1104,16 @@
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PastRetention"
+                }
+              }
+            },
+            "description": "`after` is below the retention floor: some events after it were trimmed. Re-sync from `GET /api/v1/events/latest`"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
           },
@@ -1081,7 +1138,7 @@
                 }
               }
             },
-            "description": "The newest event's seq: how far a catching-up client has to go"
+            "description": "The newest event's seq: how far a catching-up client has to go, and where a client past retention resumes after re-syncing"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -1130,7 +1187,7 @@
         ],
         "responses": {
           "101": {
-            "description": "Switching to a WebSocket. Each text frame is one `Event` (schema `Event`). Closed with 1013 when the client falls behind (a send blocked too long), with the reason `too slow; resume from the last seq read, at most <seq>`: `<seq>` is the last event the server tried to send. The hint is best effort; the client reconnects with `Last-Event-ID` set to the last seq it actually read. Also closed with 1001 (no pong) and 1011 (server error), with the same hint"
+            "description": "Switching to a WebSocket. Each text frame is one `Event` (schema `Event`). Closed with 1013 when the client falls behind (a send blocked too long), with the reason `too slow; resume from the last seq read, at most <seq>`: `<seq>` is the last event the server tried to send. The hint is best effort; the client reconnects with `Last-Event-ID` set to the last seq it actually read. Also closed with 1001 (no pong) and 1011 (server error), with the same hint; with 4410 and `past retention, floor <seq>` when the resume point is below the retention floor (re-sync from `/api/v1/events/latest`)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

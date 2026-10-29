@@ -1930,6 +1930,57 @@ public enum Operations {
                     }
                 }
             }
+            public struct Gone: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/events/GET/responses/410/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/events/GET/responses/410/content/application\/json`.
+                    case json(Components.Schemas.PastRetention)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.PastRetention {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.ListEvents.Output.Gone.Body
+                /// Creates a new `Gone`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.ListEvents.Output.Gone.Body) {
+                    self.body = body
+                }
+            }
+            /// `after` is below the retention floor: some events after it were trimmed. Re-sync from `GET /api/v1/events/latest`
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/events/get(listEvents)/responses/410`.
+            ///
+            /// HTTP response code: `410 gone`.
+            case gone(Operations.ListEvents.Output.Gone)
+            /// The associated value of the enum case if `self` is `.gone`.
+            ///
+            /// - Throws: An error if `self` is not `.gone`.
+            /// - SeeAlso: `.gone`.
+            public var gone: Operations.ListEvents.Output.Gone {
+                get throws {
+                    switch self {
+                    case let .gone(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "gone",
+                            response: self
+                        )
+                    }
+                }
+            }
             /// Rate limited; see Retry-After
             ///
             /// - Remark: Generated from `#/paths//api/v1/events/get(listEvents)/responses/429`.
@@ -2061,7 +2112,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The newest event's seq: how far a catching-up client has to go
+            /// The newest event's seq: how far a catching-up client has to go, and where a client past retention resumes after re-syncing
             ///
             /// - Remark: Generated from `#/paths//api/v1/events/latest/get(latestEvent)/responses/200`.
             ///
@@ -2315,13 +2366,13 @@ public enum Operations {
                 /// Creates a new `SwitchingProtocols`.
                 public init() {}
             }
-            /// Switching to a WebSocket. Each text frame is one `Event` (schema `Event`). Closed with 1013 when the client falls behind (a send blocked too long), with the reason `too slow; resume from the last seq read, at most <seq>`: `<seq>` is the last event the server tried to send. The hint is best effort; the client reconnects with `Last-Event-ID` set to the last seq it actually read. Also closed with 1001 (no pong) and 1011 (server error), with the same hint
+            /// Switching to a WebSocket. Each text frame is one `Event` (schema `Event`). Closed with 1013 when the client falls behind (a send blocked too long), with the reason `too slow; resume from the last seq read, at most <seq>`: `<seq>` is the last event the server tried to send. The hint is best effort; the client reconnects with `Last-Event-ID` set to the last seq it actually read. Also closed with 1001 (no pong) and 1011 (server error), with the same hint; with 4410 and `past retention, floor <seq>` when the resume point is below the retention floor (re-sync from `/api/v1/events/latest`)
             ///
             /// - Remark: Generated from `#/paths//api/v1/events/ws/get(streamEvents)/responses/101`.
             ///
             /// HTTP response code: `101 switchingProtocols`.
             case switchingProtocols(Operations.StreamEvents.Output.SwitchingProtocols)
-            /// Switching to a WebSocket. Each text frame is one `Event` (schema `Event`). Closed with 1013 when the client falls behind (a send blocked too long), with the reason `too slow; resume from the last seq read, at most <seq>`: `<seq>` is the last event the server tried to send. The hint is best effort; the client reconnects with `Last-Event-ID` set to the last seq it actually read. Also closed with 1001 (no pong) and 1011 (server error), with the same hint
+            /// Switching to a WebSocket. Each text frame is one `Event` (schema `Event`). Closed with 1013 when the client falls behind (a send blocked too long), with the reason `too slow; resume from the last seq read, at most <seq>`: `<seq>` is the last event the server tried to send. The hint is best effort; the client reconnects with `Last-Event-ID` set to the last seq it actually read. Also closed with 1001 (no pong) and 1011 (server error), with the same hint; with 4410 and `past retention, floor <seq>` when the resume point is below the retention floor (re-sync from `/api/v1/events/latest`)
             ///
             /// - Remark: Generated from `#/paths//api/v1/events/ws/get(streamEvents)/responses/101`.
             ///

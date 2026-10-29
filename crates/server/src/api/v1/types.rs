@@ -16,7 +16,10 @@
 /// audit log and settings. Citadel's contract, which reached minor 20, is parked with it in
 /// `modules/citadel/api/openapi.json`.
 /// 1: `GET /handshake` (E1-05.5).
-pub const API_MINOR: u32 = 1;
+/// 2: the event bus and audit hardening (E1-04, E1-10): `LatestEvent.floor`, the 410
+/// `PastRetention` of `listEvents`, the socket's 4410 close, and the registered event kinds and
+/// audit actions as `x-event-kinds` and `x-audit-actions`.
+pub const API_MINOR: u32 = 2;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

@@ -17,7 +17,9 @@ pub mod audit;
 mod backup;
 pub mod events;
 pub mod gov;
+pub mod kinds;
 pub mod migrate;
+pub mod redact;
 pub mod settings;
 
 pub use backup::{BackupError, backup, restore};
@@ -155,7 +157,8 @@ async fn check_pragmas(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 }
 
 /// Opens (creating if missing) the database at `path`, asserts its connection settings and
-/// applies the platform's pending migrations. Modules' migrations come after, with
+/// applies the platform's pending migrations and registers its event kinds and audit actions
+/// (`kinds`). Modules' migrations come after, with
 /// `migrate::migrate_modules`. A migration refusal is a `sqlx::Error::Configuration` holding
 /// the `MigrateError`.
 pub async fn connect(path: &Path) -> Result<SqlitePool, sqlx::Error> {
@@ -168,6 +171,7 @@ pub async fn connect(path: &Path) -> Result<SqlitePool, sqlx::Error> {
         MigrateError::Database(e) => e,
         e => sqlx::Error::Configuration(Box::new(e)),
     })?;
+    kinds::register_platform(&pool).await?;
     Ok(pool)
 }
 

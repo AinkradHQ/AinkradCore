@@ -152,7 +152,7 @@ pub(super) async fn audit_refusals(State(app): State<App>, req: Request, next: N
     };
     let written = async {
         let mut tx = crate::store::begin_write(&app.pool).await?;
-        audit::append(&mut *tx, &event).await?;
+        audit::append(&mut tx, &event).await?;
         tx.commit().await
     };
     if let Err(e) = written.await {

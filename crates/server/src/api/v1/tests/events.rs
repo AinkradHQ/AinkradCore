@@ -84,16 +84,16 @@ async fn audited(pool: &SqlitePool, action: &str) {
         entity: None,
         details: json!({}).to_string(),
     };
-    audit::append(pool, &e).await.unwrap();
+    audit::append_one(pool, &e).await.unwrap();
 }
 
 /// An event of a module's own kind, written as a module writes it.
 async fn emitted(pool: &SqlitePool, n: i64) {
-    sqlx::query("INSERT INTO events (kind, payload) VALUES ('ops.line', json_object('n', ?))")
-        .bind(n)
-        .execute(pool)
+    let mut tx = crate::store::begin_write(pool).await.unwrap();
+    crate::store::events::append(&mut tx, "ops.line", &json!({"n": n}))
         .await
         .unwrap();
+    tx.commit().await.unwrap();
 }
 
 fn seqs(events: &[Value]) -> Vec<i64> {
@@ -267,4 +267,54 @@ async fn a_silent_client_is_closed_after_three_heartbeats() {
     let (_, _, close) = drain(&mut ws).await;
     let (code, reason) = close.expect("a close frame");
     assert_eq!(code, CloseCode::Away, "{reason}");
+}
+
+/// E1-04.4: a client whose resume point was trimmed gets a defined answer on both paths, then
+/// recovers from the snapshot endpoint and misses nothing after it.
+#[tokio::test]
+async fn a_client_past_retention_gets_410_or_4410_and_recovers_from_latest() {
+    let fx = fx().await;
+    let pool = &fx.app.pool;
+    for n in 0..5 {
+        sqlx::query("INSERT INTO events (at, kind, payload) VALUES (?, 'ops.line', ?)")
+            .bind("2026-01-01T00:00:00.000Z")
+            .bind(json!({"n": n}).to_string())
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    // Everything so far is old by then, the device key's audit included.
+    let trimmed = crate::store::events::trim(pool, "2027-01-01T00:00:00.000Z", 3600, 1000)
+        .await
+        .unwrap()
+        .unwrap();
+    let floor = trimmed.floor;
+    assert!(trimmed.removed >= 5);
+
+    let (status, body) = fx.get("/api/v1/events?after=0").await;
+    assert_eq!(status, StatusCode::GONE, "{body}");
+    assert_eq!(body["code"], "past_retention");
+    assert_eq!(body["floor"], floor);
+    assert!(body["error_id"].as_str().unwrap().starts_with("err_"));
+
+    let app = serve(&fx, quick()).await;
+    let mut ws = connect(&app, &fx.key, Some("0")).await.unwrap();
+    let (got, _, close) = drain(&mut ws).await;
+    assert_eq!(got, 0, "nothing from below the floor");
+    let (code, reason) = close.expect("a close frame");
+    assert_eq!(code, CloseCode::from(4410), "{reason}");
+    assert!(reason.contains(&format!("floor {floor}")), "{reason}");
+
+    // Re-sync: the snapshot's seq, then everything after it.
+    let latest = fx.ok("/api/v1/events/latest").await;
+    assert_eq!(latest["floor"], floor);
+    let head = latest["seq"].as_i64().unwrap();
+    assert!(head >= floor);
+    emitted(pool, 99).await;
+    let page = fx.ok(&format!("/api/v1/events?after={head}")).await;
+    assert_eq!(seqs(page["items"].as_array().unwrap()), [head + 1]);
+    let mut ws = connect(&app, &fx.key, Some(&head.to_string()))
+        .await
+        .unwrap();
+    assert_eq!(next(&mut ws).await["payload"], json!({"n": 99}));
 }
