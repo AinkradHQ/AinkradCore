@@ -223,6 +223,12 @@ async fn the_sas_must_match_and_scopes_only_narrow() {
     );
     assert_eq!(status(&fx, &dev).await.1["status"], "pending");
     assert_eq!(audited(&fx, "pairing.refused").await, 1);
+    let (s, body) = approve(&fx, id, json!({"sas": ""})).await;
+    assert_eq!(
+        (s, &body["code"]),
+        (StatusCode::CONFLICT, &json!("sas_mismatch")),
+        "empty SAS"
+    );
     let (s, _) = approve(
         &fx,
         id,

@@ -298,7 +298,16 @@ pub async fn approve_pairing(
     by: Decider<'_>,
     now: i64,
 ) -> Result<Decision, Error> {
-    let Some(p) = get_pairing(pool, id).await? else {
+    // Read and decided in one write transaction: a claim racing this call is either wholly
+    // before it or wholly after.
+    let mut tx = begin_write(pool).await?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {COLUMNS} FROM core_pairings WHERE id = ?"
+    )))
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(p) = row.map(pairing).transpose()? else {
         return Ok(Decision::NotFound);
     };
     let scopes = narrow.unwrap_or(&p.scopes);
@@ -306,18 +315,10 @@ pub async fn approve_pairing(
     if !within(&p.scopes) || by.scopes.is_some_and(|mine| !within(mine)) {
         return Ok(Decision::Wider);
     }
-    let mut tx = begin_write(pool).await?;
-    let current: Option<(String, String)> =
-        sqlx::query_as("SELECT status, expires_at FROM core_pairings WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&mut *tx)
-            .await?;
-    let Some((status, expires_at)) = current else {
-        return Ok(Decision::NotFound);
-    };
-    if status != "claimed" {
+    if p.status != "claimed" || p.device_id.is_none() || p.sas.is_none() {
         return Ok(Decision::NotPending);
     }
+    let expires_at = p.expires_at.clone();
     let device = p.device_id.as_deref();
     if expires_at <= iso_of_unix(now) {
         expire_one(&mut tx, &p.id, device).await?;
