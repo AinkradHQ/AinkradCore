@@ -43,6 +43,30 @@ pub fn server_bin() -> PathBuf {
 
 pub const CTL: &str = env!("CARGO_BIN_EXE_ainkradctl");
 
+/// The step-up passphrase every test device seals its step-up key with.
+pub const PASSPHRASE: &str = "ctl test step-up passphrase";
+
+/// A file holding [`PASSPHRASE`], given to every ctl run through
+/// `$AINKRAD_STEPUP_PASSPHRASE_FILE`, so no run ever waits on a terminal prompt.
+pub fn passphrase_file() -> PathBuf {
+    static FILE: OnceLock<PathBuf> = OnceLock::new();
+    FILE.get_or_init(|| {
+        let p = std::env::temp_dir().join(format!("ctl-pass-{}", std::process::id()));
+        std::fs::write(&p, format!("{PASSPHRASE}\n")).unwrap();
+        p
+    })
+    .clone()
+}
+
+/// ctl with the test passphrase file and stdin closed.
+fn ctl_command(args: &[String]) -> Command {
+    let mut c = Command::new(CTL);
+    c.args(args)
+        .env("AINKRAD_STEPUP_PASSPHRASE_FILE", passphrase_file())
+        .stdin(Stdio::null());
+    c
+}
+
 /// What every ctl run printed (stdout and stderr), but `device add`'s, whose job is to print
 /// the code.
 static PRINTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -52,7 +76,7 @@ pub fn record(text: String) {
 }
 
 /// No run printed any of `secrets`, nor anything shaped like a signature (86 base64url
-/// characters) or a key (100+).
+/// characters), a key (100+) or a nonce (22 characters that are 16 bytes of base64url).
 pub fn assert_nothing_secret_printed(secrets: &[String]) {
     let all = PRINTED.lock().unwrap();
     assert!(!all.is_empty());
@@ -65,6 +89,10 @@ pub fn assert_nothing_secret_printed(secrets: &[String]) {
                 token.len() != 86 && token.len() < 100,
                 "a signature- or key-shaped token was printed: {token}"
             );
+            assert!(
+                token.len() != 22 || ainkrad_ctl::proto::unb64(token).is_none(),
+                "a nonce-shaped token was printed: {token}"
+            );
         }
     }
 }
@@ -73,6 +101,15 @@ pub fn assert_nothing_secret_printed(secrets: &[String]) {
 pub fn private_key_of(keystore: &Path) -> String {
     let v: serde_json::Value = serde_json::from_slice(&std::fs::read(keystore).unwrap()).unwrap();
     v["routine_pkcs8"].as_str().unwrap().to_owned()
+}
+
+/// The base64url PKCS#8 of a keystore's step-up key, unsealed: what must never be printed.
+pub fn stepup_key_of(keystore: &Path) -> String {
+    let ks = ainkrad_ctl::keystore::Keystore::load(keystore).unwrap();
+    let path = ainkrad_ctl::stepup::path_for(keystore);
+    let key = ainkrad_ctl::stepup::load(&path, PASSPHRASE.as_bytes(), &ks.device_id, &ks.core_fp)
+        .unwrap();
+    ainkrad_ctl::proto::b64(key.pkcs8())
 }
 
 pub struct Core {
@@ -193,11 +230,7 @@ impl Drop for Core {
 
 /// Runs ctl to the end and records what it printed.
 pub fn ctl(args: &[String]) -> Output {
-    let out = Command::new(CTL)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
+    let out = ctl_command(args).output().unwrap();
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -244,9 +277,7 @@ pub fn read_until(out: &mut BufReader<ChildStdout>, key: &str, seen: &mut String
 
 /// Starts ctl in the background, stdout and stderr piped.
 pub fn spawn_ctl(args: &[String]) -> Child {
-    Command::new(CTL)
-        .args(args)
-        .stdin(Stdio::null())
+    ctl_command(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
