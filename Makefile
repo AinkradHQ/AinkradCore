@@ -1,6 +1,6 @@
 CARGO ?= cargo
 
-.PHONY: build test lint format format-check contract e2e e2e-b audit test-linux-arm64 build-linux-x86_64 run
+.PHONY: build test lint format format-check contract e2e e2e-b audit test-linux-arm64 build-linux-x86_64 run build-citadel test-citadel
 build: lint ; $(CARGO) build --workspace
 test: lint ; $(CARGO) test --workspace
 lint: format-check ; $(CARGO) clippy --workspace --all-targets -- -D warnings
@@ -19,5 +19,9 @@ RUST_IMAGE ?= rust:1.99.1
 DOCKER_RUN = docker run --rm -v $(CURDIR):/src -w /src -e CARGO_TARGET_DIR=/cache/target -v ainkrad-core-cargo:/usr/local/cargo/registry -v ainkrad-core-target-$(1):/cache
 test-linux-arm64: ; $(call DOCKER_RUN,arm64) --platform linux/arm64 $(RUST_IMAGE) sh -c 'rustup show >/dev/null && cargo test --workspace'
 build-linux-x86_64: ; $(call DOCKER_RUN,amd64) --platform linux/amd64 $(RUST_IMAGE) sh -c 'rustup show >/dev/null && cargo build --workspace'
+# The parked Citadel monolith (P1.11), its own workspace; not part of `build`/`test`.
+CITADEL = --manifest-path modules/citadel/Cargo.toml --workspace
+build-citadel: ; $(CARGO) build $(CITADEL)
+test-citadel: ; $(CARGO) test $(CITADEL)
 # Local run (E1-01.5): loopback only, state in ./state (gitignored); `Run/run.sh run` comes here.
 run: ; mkdir -p state && $(CARGO) run -p ainkrad-core-server -- serve state/core.db

@@ -16,7 +16,13 @@ not here.
 
 `crates/core` (primitives) · `crates/server` (`ainkrad-core-server`: gateway, store, events, scheduler, push)
 · `crates/runner` (`ainkrad-runner`) · `crates/harness` · `crates/proto` · `crates/providers` · `api/` (generated
-OpenAPI, committed) · `scripts/`. Citadel domain code is being split out into `modules/citadel` (E1-02).
+OpenAPI, committed) · `scripts/`.
+
+`modules/citadel/{core,server}` (`citadel-core`, `citadel-server`) is a **parked, complete copy** of the Citadel
+monolith (P1.11), kept as the reference for the Citadel port (E2-13). It is its own cargo workspace, excluded
+from the Core one, and shares `crates/{proto,harness,providers,runner}` by path. Build and test it with
+`make build-citadel` / `make test-citadel`; neither is part of `make build`/`make test`. Its contract is
+`modules/citadel/api/openapi.json`. No Core crate may depend on anything under `modules/`.
 
 ## Rules
 

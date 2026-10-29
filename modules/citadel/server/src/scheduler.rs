@@ -1,0 +1,226 @@
+//! The scheduler loop (E2.9): calls `store::exec::tick` every `every` until shut down. The
+//! time comes from a `Clock`, so the engine never reads the system clock itself and tests
+//! drive it with a fake one.
+
+use std::future::Future;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use sqlx::SqlitePool;
+
+use crate::store::exec::tick;
+
+/// Where the scheduler gets "now", as ISO-8601 UTC text (`2026-10-21T10:00:00.000Z`).
+pub trait Clock {
+    fn now(&self) -> String;
+}
+
+/// The real clock.
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> String {
+        let since = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        iso8601(since.as_millis() as i64)
+    }
+}
+
+/// `ms` since the Unix epoch as ISO-8601 UTC with milliseconds, the stored format.
+fn iso8601(ms: i64) -> String {
+    let (days, ms) = (ms.div_euclid(86_400_000), ms.rem_euclid(86_400_000));
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    let (h, m, s) = (ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}.{:03}Z",
+        ms % 1000
+    )
+}
+
+/// How often the scheduler ticks, the pusher pushes and the forge poller polls: the
+/// `scheduler.tick_secs`, `push.interval_secs` and `forge.poll_secs` settings (E15.17), read
+/// once when `serve` starts.
+pub async fn loop_intervals(pool: &SqlitePool) -> Result<[Duration; 3], sqlx::Error> {
+    use citadel_core::settings::{Key, Scope};
+    let mut out = [Duration::ZERO; 3];
+    let keys = [
+        Key::SchedulerTickSecs,
+        Key::PushIntervalSecs,
+        Key::ForgePollSecs,
+    ];
+    for (d, key) in out.iter_mut().zip(keys) {
+        let secs = crate::store::settings::value(pool, key, Scope::Server).await?;
+        *d = Duration::from_secs(secs as u64);
+    }
+    Ok(out)
+}
+
+pub struct Scheduler<C> {
+    pub pool: SqlitePool,
+    pub clock: C,
+    /// Time between ticks.
+    pub every: Duration,
+}
+
+impl<C: Clock> Scheduler<C> {
+    /// Ticks at once, then every `every`, until `shutdown` completes; returns how many
+    /// ticks ran. A failed tick is reported on stderr and the loop goes on: the next tick
+    /// retries the same work, since every step of it is idempotent.
+    pub async fn run(&self, shutdown: impl Future<Output = ()>) -> u64 {
+        tokio::pin!(shutdown);
+        let mut every = tokio::time::interval(self.every);
+        every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut ticks = 0;
+        loop {
+            tokio::select! {
+                biased;
+                () = &mut shutdown => return ticks,
+                _ = every.tick() => {
+                    if let Err(e) = tick(&self.pool, &self.clock.now()).await {
+                        eprintln!("citadel-server: scheduler tick failed: {e}");
+                    }
+                    ticks += 1;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use citadel_core::org::{AgentId, AgentStatus, Harness, NewAgent, OrgRole};
+    use tokio::sync::oneshot;
+
+    use super::*;
+    use crate::store::connect;
+    use crate::store::exec::set_agent_timer;
+    use crate::store::org::{create_agent, create_company};
+
+    #[test]
+    fn formats_epoch_millis_as_stored_timestamps() {
+        assert_eq!(iso8601(0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(iso8601(1_792_576_800_123), "2026-10-21T10:00:00.123Z");
+        assert_eq!(iso8601(951_782_400_000), "2000-02-29T00:00:00.000Z");
+        assert_eq!(iso8601(-1), "1969-12-31T23:59:59.999Z");
+        assert_eq!(SystemClock.now().len(), 24);
+    }
+
+    /// Hands out `times` in order, then signals `done` and keeps repeating the last one.
+    struct Fake {
+        times: Mutex<Vec<&'static str>>,
+        done: Mutex<Option<oneshot::Sender<()>>>,
+    }
+
+    impl Clock for Fake {
+        fn now(&self) -> String {
+            let mut times = self.times.lock().unwrap();
+            if times.len() == 1 {
+                if let Some(done) = self.done.lock().unwrap().take() {
+                    let _ = done.send(());
+                }
+                return times[0].to_owned();
+            }
+            times.remove(0).to_owned()
+        }
+    }
+
+    #[tokio::test]
+    async fn the_loop_intervals_are_settings() {
+        use citadel_core::audit::AuditActor;
+        use citadel_core::settings::{Key, Scope};
+        let dir = std::env::temp_dir().join(format!("citadel-loops-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = connect(&dir.join("citadel.db")).await.unwrap();
+        let secs = |s: u64| Duration::from_secs(s);
+        assert_eq!(
+            loop_intervals(&pool).await.unwrap(),
+            [secs(10), secs(5), secs(60)]
+        );
+        let now = "2026-10-22T10:00:00.000Z";
+        for (key, v) in [
+            (Key::SchedulerTickSecs, "2"),
+            (Key::PushIntervalSecs, "3"),
+            (Key::ForgePollSecs, "30"),
+        ] {
+            let by = AuditActor::System;
+            crate::store::settings::set(&pool, key, Scope::Server, v, by, now)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            loop_intervals(&pool).await.unwrap(),
+            [secs(2), secs(3), secs(30)]
+        );
+        pool.close().await;
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_loop_ticks_on_the_clock_until_shut_down() {
+        let dir = std::env::temp_dir().join(format!("citadel-sched-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = connect(&dir.join("citadel.db")).await.unwrap();
+        let company = create_company(&pool, "A").await.unwrap();
+        let a = NewAgent {
+            company_id: company.id,
+            name: "Dev".to_owned(),
+            role: "Developer".to_owned(),
+            org_role: OrgRole::None,
+            reports_to: None,
+            harness: Harness::Claude,
+            model: "claude-opus".to_owned(),
+            runner_tags: vec![],
+            status: AgentStatus::Active,
+        };
+        let dev: AgentId = create_agent(&pool, &a).await.unwrap().id;
+        set_agent_timer(&pool, dev, Some(3600)).await.unwrap();
+        // Actionable: a pending wake.
+        sqlx::query(
+            "INSERT INTO wake_requests (agent_id, source, reason, idempotency_key) \
+             VALUES (?, 'manual', 'go', 'k')",
+        )
+        .bind(dev.0)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (tx, rx) = oneshot::channel();
+        let scheduler = Scheduler {
+            pool: pool.clone(),
+            clock: Fake {
+                times: Mutex::new(vec![
+                    "2026-10-21T10:00:00.000Z",
+                    "2026-10-21T10:30:00.000Z",
+                    "2026-10-21T11:00:00.000Z",
+                ]),
+                done: Mutex::new(Some(tx)),
+            },
+            every: Duration::from_millis(5),
+        };
+        // Shut down once the clock runs out, or after 5 s if the loop stops asking it.
+        let shutdown = async {
+            let _ = tokio::time::timeout(Duration::from_secs(5), rx).await;
+        };
+        let ticks = scheduler.run(shutdown).await;
+        assert!(ticks >= 3, "{ticks}");
+        let fired: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM wake_requests WHERE source = 'timer'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(fired, 2);
+        pool.close().await;
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

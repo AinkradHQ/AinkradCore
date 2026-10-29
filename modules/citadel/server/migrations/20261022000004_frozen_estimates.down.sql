@@ -1,0 +1,2 @@
+DROP TRIGGER issues_points_frozen_insert;
+DROP TRIGGER issues_points_frozen_update;

@@ -1,0 +1,16 @@
+# The parked Citadel monolith (P1.11): a reference copy for the Citadel port (E2-13), outside the
+# Core workspace. Build with `make build-citadel` / `make test-citadel`.
+[workspace]
+resolver = "3"
+members = ["core", "server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
