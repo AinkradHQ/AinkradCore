@@ -3,8 +3,12 @@
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Close, CoreWelcome, DriverInfo, ExecResult, ExecRun, OP_EXEC_RUN, OP_NOOP,
+    Close, CoreWelcome, DriverInfo, ExecResult, ExecRun, NO_CHANNEL_BINDING, OP_EXEC_RUN, OP_NOOP,
+    Rotation, rotation_message,
 };
+use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair};
+
+use super::key::{Enrolment, Key, b64, fingerprint, unb64};
 use tokio::io::DuplexStream;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::protocol::Role;
@@ -16,6 +20,31 @@ struct Core {
     ws: WebSocketStream<DuplexStream>,
     runner: JoinHandle<Result<(), StreamError>>,
     seq: u64,
+    key: Key,
+    enrolment: Arc<std::sync::Mutex<Enrolment>>,
+    /// The runner's public key.
+    runner_spki: Vec<u8>,
+}
+
+/// A fresh P-256 key, as a Core or a runner holds one.
+pub(super) fn new_key() -> Key {
+    let der = EcdsaKeyPair::generate_pkcs8(
+        &ECDSA_P256_SHA256_FIXED_SIGNING,
+        &ring::rand::SystemRandom::new(),
+    )
+    .unwrap();
+    Key::from_pkcs8(der.as_ref()).unwrap()
+}
+
+/// How the fake Core answers the hello.
+#[derive(Clone, Copy, PartialEq)]
+enum Answer {
+    /// The pinned key over this connection's binding.
+    Honest,
+    /// Another key: a second Core.
+    OtherCore,
+    /// The pinned key, but over another session's exporter: a relayed `sig_core`.
+    OtherSession,
 }
 
 impl Core {
@@ -33,17 +62,70 @@ impl Core {
     }
 
     async fn connect(capacity: u32) -> (Self, RunnerHello) {
+        let (mut core, hello) = Self::hello(capacity, None).await;
+        core.answer_hello(&hello, Answer::Honest).await;
+        let proof = core.recv().await;
+        let Ok(Some(Body::Control(Control::Proof(_)))) = proof.body() else {
+            panic!("expected the runner's proof, got {proof:?}")
+        };
+        (core, hello)
+    }
+
+    /// Up to the runner's hello, which is returned; `save` is where a rotated pin goes.
+    async fn hello(capacity: u32, save: Option<std::path::PathBuf>) -> (Self, RunnerHello) {
+        let key = new_key();
+        let enrolment = Arc::new(std::sync::Mutex::new(Enrolment {
+            url: "http://127.0.0.1:1".to_owned(),
+            device_id: "d_5v0v4qa7a8h2tb3219mtz5znvv".to_owned(),
+            core_fp: key.fp(),
+            rotation_seq: 0,
+        }));
+        let runner_key = Arc::new(new_key());
+        let runner_spki = runner_key.spki.clone();
+        let link = Link {
+            key: runner_key,
+            enrolment: Arc::clone(&enrolment),
+            save,
+            exporter: NO_CHANNEL_BINDING,
+        };
         let (a, b) = tokio::io::duplex(1 << 16);
         let runner_ws = WebSocketStream::from_raw_socket(a, Role::Client, None).await;
-        let runner = tokio::spawn(serve(runner_ws, Arc::new(driver(capacity))));
+        let exec = Arc::new(driver(capacity));
+        let runner = tokio::spawn(async move { serve(runner_ws, exec, &link).await });
         let ws = WebSocketStream::from_raw_socket(b, Role::Server, None).await;
-        let mut core = Self { ws, runner, seq: 0 };
+        let mut core = Self {
+            ws,
+            runner,
+            seq: 0,
+            key,
+            enrolment,
+            runner_spki,
+        };
         let first = core.recv().await;
         assert_eq!((first.stream_id, first.seq), (CONTROL_STREAM, 0));
         let Ok(Some(Body::Control(Control::Hello(hello)))) = first.body() else {
             panic!("first frame {first:?}")
         };
         (core, hello)
+    }
+
+    async fn answer_hello(&mut self, hello: &RunnerHello, how: Answer) {
+        let nonce_r = unb64(hello.nonce.as_deref().unwrap(), 43).unwrap();
+        let device = hello.device_id.as_deref().unwrap();
+        let other = new_key();
+        let (key, x) = match how {
+            Answer::Honest => (&self.key, NO_CHANNEL_BINDING),
+            Answer::OtherCore => (&other, NO_CHANNEL_BINDING),
+            Answer::OtherSession => (&self.key, [9; 32]),
+        };
+        let sig = key.sign(&core_auth_message(&x, &nonce_r, device));
+        let auth = CoreAuth {
+            core_spki: b64(&key.spki),
+            nonce: b64(&[3; 32]),
+            sig: b64(&sig),
+        };
+        self.send(CONTROL_STREAM, Body::Control(Control::Auth(auth)))
+            .await;
     }
 
     async fn send(&mut self, stream: u64, body: Body) {
@@ -189,6 +271,105 @@ async fn unknown_or_misplaced_commands_are_refused_and_unknown_kinds_skipped() {
     // Still serving.
     core.send(11, Body::Command(Command::Noop)).await;
     assert_eq!(core.answer(11).await, Body::Result(Reply::Noop));
+}
+
+#[tokio::test]
+async fn the_proof_signs_this_connection_for_the_pinned_core() {
+    let (mut core, hello) = Core::hello(1, None).await;
+    core.answer_hello(&hello, Answer::Honest).await;
+    let proof = core.recv().await;
+    let Ok(Some(Body::Control(Control::Proof(p)))) = proof.body() else {
+        panic!("{proof:?}")
+    };
+    let message = runner_auth_message(&NO_CHANNEL_BINDING, &[3; 32], &core.key.fp());
+    let sig = unb64(&p.sig, 86).unwrap();
+    assert!(key::verify(&core.runner_spki, &message, &sig));
+    assert!(!key::verify(&core.runner_spki, &message[1..], &sig));
+    assert_eq!(
+        hello.device_id.as_deref(),
+        Some("d_5v0v4qa7a8h2tb3219mtz5znvv")
+    );
+}
+
+/// Handshake spec §17 tests 27 and 28: a second Core, or the pinned Core's signature from
+/// another TLS session, is refused with `core_identity_mismatch`, and the runner sends nothing
+/// after its hello.
+#[tokio::test]
+async fn another_core_or_a_relayed_proof_is_refused_and_nothing_more_is_sent() {
+    for how in [Answer::OtherCore, Answer::OtherSession] {
+        let (mut core, hello) = Core::hello(1, None).await;
+        core.answer_hello(&hello, how).await;
+        let e = core.runner.await.unwrap().unwrap_err();
+        assert_eq!(e.code, ErrorCode::CoreIdentityMismatch);
+        let after = tokio::time::timeout(Duration::from_secs(5), core.ws.next())
+            .await
+            .unwrap();
+        assert!(
+            !matches!(after, Some(Ok(Message::Text(_)))),
+            "nothing after the hello: {after:?}"
+        );
+    }
+}
+
+/// Handshake spec §17 test 29: a statement signed by the pinned key moves the pin (and saves
+/// it); one signed by another key, one for another pin, or an old one is ignored.
+#[tokio::test]
+async fn a_rotation_by_the_pinned_key_moves_the_pin_and_anything_else_is_ignored() {
+    let dir = std::env::temp_dir().join(format!("runner-rotate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let save = dir.join("enrolment.json");
+    let (mut core, hello) = Core::hello(1, Some(save.clone())).await;
+    core.answer_hello(&hello, Answer::Honest).await;
+    core.recv().await;
+    core.send(
+        CONTROL_STREAM,
+        Body::Control(Control::Welcome(CoreWelcome {
+            protocol: PROTOCOL_VERSION.to_owned(),
+        })),
+    )
+    .await;
+    let old = core.key.fp();
+    let next = new_key();
+    let statement = |signer: &Key, old_fp: &str, seq| {
+        let mut r = Rotation {
+            old_fp: old_fp.to_owned(),
+            new_fp: fingerprint(&next.spki),
+            not_before: 1,
+            seq,
+            sig: String::new(),
+        };
+        r.sig = b64(&signer.sign(&rotation_message(&r)));
+        Body::Control(Control::Rotation(r))
+    };
+    let stranger = new_key();
+    core.send(CONTROL_STREAM, statement(&stranger, &old, 1))
+        .await;
+    core.send(CONTROL_STREAM, statement(&core.key, &stranger.fp(), 1))
+        .await;
+    // A noop round trip: every frame before it was handled.
+    core.send(1, Body::Command(Command::Noop)).await;
+    core.answer(1).await;
+    assert_eq!(core.enrolment.lock().unwrap().core_fp, old, "ignored");
+    assert!(!save.exists());
+
+    core.send(CONTROL_STREAM, statement(&core.key, &old, 1))
+        .await;
+    core.send(3, Body::Command(Command::Noop)).await;
+    core.answer(3).await;
+    let moved = core.enrolment.lock().unwrap().clone();
+    assert_eq!(
+        (moved.core_fp.as_str(), moved.rotation_seq),
+        (fingerprint(&next.spki).as_str(), 1)
+    );
+    assert_eq!(Enrolment::load(&save).unwrap(), moved, "saved");
+    // Replayed, or signed by the old key after the move: the pin stays.
+    core.send(CONTROL_STREAM, statement(&core.key, &old, 1))
+        .await;
+    core.send(5, Body::Command(Command::Noop)).await;
+    core.answer(5).await;
+    assert_eq!(core.enrolment.lock().unwrap().rotation_seq, 1);
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[tokio::test]

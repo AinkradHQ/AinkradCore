@@ -5,6 +5,7 @@
 
 mod proof;
 mod routing;
+mod runner;
 
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;

@@ -41,6 +41,8 @@ dependencies = [
  "ainkrad-proto",
  "base64 0.22.1",
  "futures-util",
+ "reqwest",
+ "ring",
  "rustls",
  "serde_json",
  "tokio",

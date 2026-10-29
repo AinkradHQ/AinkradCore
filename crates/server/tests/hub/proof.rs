@@ -152,12 +152,12 @@ async fn a_bad_proof_a_foreign_hello_or_an_old_major_is_refused_and_audited() {
 }
 
 /// A test CA and a public listener whose certificate it signed.
-struct Tls {
-    root: CertificateDer<'static>,
-    core: Core,
+pub struct Tls {
+    pub root: CertificateDer<'static>,
+    pub core: Core,
 }
 
-async fn tls_core(name: &str) -> Tls {
+pub async fn tls_core(name: &str) -> Tls {
     let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     let ca_key = KeyPair::generate().unwrap();

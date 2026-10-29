@@ -246,9 +246,10 @@ mod tests {
         };
         assert!(plain_ok(&parts(at("127.0.0.1"))));
         assert!(plain_ok(&parts(at("::1"))));
-        assert!(plain_ok(&parts(|e| drop(
-            e.insert(Local { same_user: false })
-        ))));
+        let local = |e: &mut axum::http::Extensions| {
+            e.insert(Local { same_user: false });
+        };
+        assert!(plain_ok(&parts(local)));
         assert!(!plain_ok(&parts(at("10.0.0.1"))));
         assert!(!plain_ok(&parts(at("2001:db8::1"))));
         assert!(!plain_ok(&parts(|_| {})));
