@@ -20,6 +20,12 @@
 //! `GET /api/v1/events/latest`, reloads the state it shows from the resource routes, and
 //! resumes from that `seq`.
 //!
+//! Scoped (E1-04.3, `store::events::view`): a device gets only the kinds its scopes may see
+//! (`audit` needs `admin`; a module's kinds its `Module::event_scope`), and every number it sees
+//! (each `seq`, `Last-Event-ID`, `after`, the head, the floor) counts its own view, gap-free, so
+//! it cannot tell that a hidden event exists. A cursor belongs to one view: a scope change closes
+//! the socket with 4003 and the client re-syncs from `GET /api/v1/events/latest`.
+//!
 //! Paperclip's UI polled and its socket only invalidated caches, with no replay; here the
 //! app polls nothing and misses nothing across a disconnect.
 
@@ -37,10 +43,13 @@ use utoipa::ToSchema;
 use super::types::{Page, Timestamp, ts};
 use super::{ApiError, ApiResult, Paging, trace};
 use crate::api::App;
-use crate::store::events::{self, MAX_EVENTS, StoredEvent};
+use crate::store::events::view::{self, View};
+use crate::store::events::{MAX_EVENTS, StoredEvent};
 
-/// One entry of the event stream. `seq` only grows: it is the replay cursor. New kinds may be
-/// added: a client skips an event whose kind it does not know.
+/// One entry of the event stream. `seq` only grows: it is the replay cursor, counted gap-free over
+/// the events this device's scopes may see (`x-event-scopes`), so it differs between devices
+/// with different scopes. New kinds may be added: a client skips an event whose kind it does not
+/// know.
 #[derive(Debug, Serialize, ToSchema, schemars::JsonSchema)]
 pub struct Event {
     pub seq: i64,
@@ -70,9 +79,14 @@ impl From<StoredEvent> for Event {
         at most `limit` (default and most 1000); the same events the WebSocket carries", body = Page<Event>),
         (status = 410, description = "`after` is below the retention floor: some events after it \
         were trimmed. Re-sync from `GET /api/v1/events/latest`", body = PastRetention)))]
-pub async fn replay(State(app): State<App>, Query(page): Query<Paging>) -> Response {
+pub async fn replay(
+    State(app): State<App>,
+    Extension(me): Extension<super::Caller>,
+    Query(page): Query<Paging>,
+) -> Response {
     let limit = page.limit.unwrap_or(MAX_EVENTS).clamp(1, MAX_EVENTS - 1);
-    match events::replay(&app.pool, page.after.unwrap_or(0), limit + 1).await {
+    let v = View::of(&me.device.scopes);
+    match view::replay(&app.pool, v, page.after.unwrap_or(0), limit + 1).await {
         Ok(Ok(got)) => {
             let got = got.into_iter().map(Event::from).collect();
             Json(Page::of(got, limit, |e| e.seq)).into_response()
@@ -131,10 +145,14 @@ pub struct LatestEvent {
     tag = "events",
     responses((status = 200, description = "The newest event's seq: how far a catching-up \
         client has to go, and where a client past retention resumes after re-syncing", body = LatestEvent)))]
-pub async fn latest(State(app): State<App>) -> ApiResult<LatestEvent> {
+pub async fn latest(
+    State(app): State<App>,
+    Extension(me): Extension<super::Caller>,
+) -> ApiResult<LatestEvent> {
+    let (seq, floor) = view::head(&app.pool, View::of(&me.device.scopes)).await?;
     Ok(Json(LatestEvent {
-        seq: events::last_event_seq(&app.pool).await?,
-        floor: Some(events::floor(&app.pool).await?),
+        seq,
+        floor: Some(floor),
     }))
 }
 
@@ -195,10 +213,11 @@ pub async fn ws(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
+    let v = View::of(&me.device.scopes);
     let after = match last_event_id(&headers) {
         Ok(Some(after)) => after,
-        Ok(None) => match events::last_event_seq(&app.pool).await {
-            Ok(head) => head,
+        Ok(None) => match view::head(&app.pool, v).await {
+            Ok((head, _)) => head,
             Err(e) => return ApiError::from(e).into_response(),
         },
         Err(e) => return e.into_response(),
@@ -223,7 +242,7 @@ pub async fn ws(
             () = rescoped => End::Rescoped,
         }
     };
-    ws.on_upgrade(move |socket| stream(app, socket, after, changed))
+    ws.on_upgrade(move |socket| stream(app, socket, v, after, changed))
 }
 
 /// Why a socket ended, for the log.
@@ -242,11 +261,13 @@ enum End {
     Rescoped,
 }
 
-/// Sends every event after `after`, then new ones as they land, until the client goes, falls
-/// behind or goes silent.
+/// Sends every event of view `v` after its seq `after`, then new ones as they land, until the
+/// client goes, falls behind or goes silent. `after` stays in the view's numbers (the close
+/// hint); the read position is the global seq it stands for.
 async fn stream(
     app: App,
     mut socket: WebSocket,
+    v: View,
     mut after: i64,
     changed: impl std::future::Future<Output = End>,
 ) {
@@ -257,10 +278,22 @@ async fn stream(
     ping.reset();
     let mut heard = Instant::now();
     let mut closing = app.closing.subscribe();
+    // Where the view cursor stands in the global seq; a resume point that fails ends at once.
+    let (mut global, mut ended) = match resume(&app, v, after).await {
+        Ok(Ok(at)) => (at, None),
+        Ok(Err(past)) => (0, Some(End::Past(past.floor))),
+        Err(e) => {
+            tracing::error!(error = %e, "event stream read failed");
+            (0, Some(End::Failed))
+        }
+    };
     let end = 'live: loop {
+        if let Some(end) = ended.take() {
+            break end;
+        }
         // Catch up page by page; only one page is ever held.
         loop {
-            let page = match events::replay(&app.pool, after, cfg.page).await {
+            let page = match read(&app, v, global, cfg.page).await {
                 Ok(Ok(page)) => page,
                 Ok(Err(past)) => break 'live End::Past(past.floor),
                 Err(e) => {
@@ -269,7 +302,7 @@ async fn stream(
                 }
             };
             let full = page.len() == cfg.page as usize;
-            for e in page {
+            for (g, e) in page {
                 let seq = e.seq;
                 let text = serde_json::to_string(&Event::from(e)).unwrap_or_default();
                 match tokio::time::timeout(
@@ -278,7 +311,7 @@ async fn stream(
                 )
                 .await
                 {
-                    Ok(Ok(())) => (after, heard) = (seq, Instant::now()),
+                    Ok(Ok(())) => (after, global, heard) = (seq, g, Instant::now()),
                     Ok(Err(_)) => break 'live End::Gone,
                     // The frame may still go out: the hint counts it as sent.
                     Err(_) => {
@@ -343,4 +376,26 @@ async fn stream(
         }
     };
     let _ = tokio::time::timeout(Duration::from_secs(2), closing).await;
+}
+
+/// `view::resume` on its own read.
+async fn resume(
+    app: &App,
+    v: View,
+    after: i64,
+) -> Result<Result<i64, crate::store::events::PastRetention>, sqlx::Error> {
+    view::resume(&mut *app.pool.acquire().await?, v, after).await
+}
+
+/// `view::read` in one snapshot.
+async fn read(
+    app: &App,
+    v: View,
+    global: i64,
+    limit: u32,
+) -> Result<Result<Vec<(i64, StoredEvent)>, crate::store::events::PastRetention>, sqlx::Error> {
+    let mut tx = app.pool.begin().await?;
+    let got = view::read(&mut tx, v, global, limit).await?;
+    tx.commit().await?;
+    Ok(got)
 }

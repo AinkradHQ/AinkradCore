@@ -30,7 +30,9 @@
 ///    `getDevice`, `renameDevice`, `setDeviceScopes`, `listLockouts`, `clearLockout`,
 ///    `Device.stepup`, `x-ainkrad-destructive` and 403 `step_up_required`, and the socket's
 ///    4003 close on a scope change.
-pub const API_MINOR: u32 = 5;
+/// 6: scoped event streams (E1-04.3): `Event.seq` counts the device's own view, and
+///    `x-event-scopes` lists each kind's scope.
+pub const API_MINOR: u32 = 6;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
