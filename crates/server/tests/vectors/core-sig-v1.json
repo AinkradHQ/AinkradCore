@@ -1,0 +1,9 @@
+{
+  "comment": "POST /handshake core_sig vector (handshake spec §4, §13). message = \"AINKRAD-CORE-V1\" LF host LF nonce (UTF-8, no trailing newline); host is the Core's configured Host, nonce the 22-character base64url text the client sent. core_sig is ES256 raw r||s, base64url without padding, and randomised: verify it, never expect to reproduce it. The key is the throwaway TEST key of handshake-v1.json.",
+  "core_fp": "EpGb6nSf7oTkVNn4nFAi3_4oofCpfpiRXxLVfDw8FQM",
+  "core_sig": "ycVDpwBPy210H3Jpq08i-_iBzNOF5mkaRbNJdbGipWdo9HZdqOePPlOnsV4j1Nr8DRnHn5r3Izb_kWpXO-7Vqg",
+  "core_spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEH8CDSRwsaoMBglUwR5IINtmeOq5qL9PFjL8-r2q7h7b8NB73opAeVdoW_lUHfeC8fsM5b4diTYLTpKs4VixMZg",
+  "host": "core.example",
+  "message": "AINKRAD-CORE-V1\ncore.example\nAAECAwQFBgcICQoLDA0ODw",
+  "nonce": "AAECAwQFBgcICQoLDA0ODw"
+}

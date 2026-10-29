@@ -40,7 +40,10 @@
 ///    `claimPasskeyPairing`, `webSignInOptions`, `webSignIn`, `createWsTicket`; the pairing kind
 ///    `passkey`; `StepUpRequest.assertion` (and `stepup_sig` optional), `Challenge.options`; the
 ///    `passkey.locked` audit action.
-pub const API_MINOR: u32 = 9;
+/// 10: handshake hardening (KAN-251/252): `proveHandshake` (`POST /handshake {nonce}` with
+///    `core_spki` and `core_sig`), `AuditEntry.entity_ref` (a device's `d_…` id; its
+///    `entity_id` is now absent), `target=device:d_…`, and `entity_ref` in `audit` events.
+pub const API_MINOR: u32 = 10;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

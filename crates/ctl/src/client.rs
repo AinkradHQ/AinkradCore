@@ -132,8 +132,8 @@ impl Client {
     }
 
     /// The Core must be the pinned one before anything is signed (§13: native clients check
-    /// `/handshake` on each connect). The served fingerprint is a claim, not a proof: the
-    /// server's `/handshake` carries no `core_sig` (see the conformance notes).
+    /// `/handshake` on each connect). The served fingerprint is a claim, not a proof: ctl does
+    /// not yet verify `POST /handshake`'s `core_sig` (KAN-252 follow-up).
     pub async fn check_identity(&self) -> Result<Handshake, Error> {
         let h = handshake(&self.net).await?;
         let served = h.identity_fingerprint.clone().unwrap_or_default();

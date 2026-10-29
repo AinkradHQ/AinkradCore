@@ -14,7 +14,7 @@
           "$ref": "#/$defs/Timestamp"
         },
         "kind": {
-          "description": "What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,\n`action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `details`), or a kind a\nmodule writes. The registered kinds are listed in `x-event-kinds`.",
+          "description": "What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,\n`action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;\na device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a\nmodule writes. The registered kinds are listed in `x-event-kinds`.",
           "type": "string"
         },
         "payload": true,

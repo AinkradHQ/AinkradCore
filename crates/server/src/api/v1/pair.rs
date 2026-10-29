@@ -24,6 +24,9 @@ use crate::gateway::Local;
 use crate::gateway::preauth::PREAUTH_BODY;
 use crate::store::gov::{self, ADDRESS, Claim};
 
+/// How long a pairing call's body may take to arrive (review R1).
+const BODY_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 const KEY_STORAGE: [&str; 5] = ["secure_enclave", "strongbox", "tee", "tpm", "software"];
 
 /// A claim. The credential hash is SHA-256 of the canonical typed code (upper-cased, dashes
@@ -142,6 +145,14 @@ pub(super) async fn budgeted(app: &App, req: Request, what: What) -> Response {
         Ok(None) => {}
         Err(e) => return ApiError::from(e).into_response(),
     }
+    // The body is read before any slot is taken, under its own short deadline: a slot covers
+    // only the evaluation, so claims drip-fed from one address cannot hold the global budget
+    // (review R1). A body that does not arrive in time is a 400, not a wrong claim.
+    let raw = match tokio::time::timeout(BODY_WAIT, gate::body(raw, PREAUTH_BODY)).await {
+        Ok(Ok(bytes)) => axum::body::Body::from(bytes),
+        Ok(Err(r)) => return *r,
+        Err(_) => return bad("the body did not arrive in time"),
+    };
     // One evaluation slot from the address's budget and one from the global one, taken under
     // their locks before any lookup: concurrent claims cannot all be guesses, and the ones
     // past either budget are a cheap 429 that reads and writes nothing more (review M2).

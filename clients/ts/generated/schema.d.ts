@@ -414,7 +414,7 @@ export interface paths {
         };
         get: operations["getHandshake"];
         put?: never;
-        post?: never;
+        post: operations["proveHandshake"];
         delete?: never;
         options?: never;
         head?: never;
@@ -576,9 +576,14 @@ export interface components {
             actor: components["schemas"]["EventActor"];
             at: components["schemas"]["Timestamp"];
             details: Record<string, never>;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description A numeric entity id; absent for a device, which is named by `entity_ref` only.
+             */
             entity_id?: number | null;
             entity_kind?: string | null;
+            /** @description The entity's public id: a device's opaque `d_…` id, else `entity_id` as text. */
+            entity_ref?: string | null;
             /** Format: int64 */
             seq: number;
         };
@@ -710,7 +715,8 @@ export interface components {
             at: components["schemas"]["Timestamp"];
             /**
              * @description What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,
-             *     `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `details`), or a kind a
+             *     `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;
+             *     a device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a
              *     module writes. The registered kinds are listed in `x-event-kinds`.
              */
             kind: string;
@@ -745,6 +751,17 @@ export interface components {
              * @description The contract minor this server speaks (`GET /api/v1/me` has it too).
              */
             api_minor?: number | null;
+            /**
+             * @description `POST` only: the Core identity key's ES256 signature (raw r||s, base64url) over the UTF-8
+             *     string `AINKRAD-CORE-V1` LF `<host>` LF `<nonce>`, no trailing newline; `host` is the
+             *     Core's configured Host (`localhost` on a Unix socket), `nonce` the text the client sent.
+             */
+            core_sig?: string | null;
+            /**
+             * @description `POST` only: the Core identity key, a P-256 SubjectPublicKeyInfo, base64url. Its
+             *     fingerprint is `identity_fingerprint`.
+             */
+            core_spki?: string | null;
             /** @description The commit it was built from (short sha), when the build knew it. */
             git_sha?: string | null;
             /**
@@ -759,6 +776,11 @@ export interface components {
              *     `api_minor`.
              */
             supported_minors?: number[] | null;
+        };
+        /** @description A liveness proof request: a fresh nonce from the client. */
+        HandshakeBody: {
+            /** @description 16 random bytes, base64url without padding (22 characters). */
+            nonce: string;
         };
         /** @description The newest event's seq a client would be shown: the catch-up target. */
         LatestEvent: {
@@ -1165,7 +1187,10 @@ export interface operations {
                 limit?: number;
                 /** @description Only actions starting with this: `device.` or `setting.set`. */
                 kind?: string;
-                /** @description Only rows about this entity: its kind (`device`), or kind and id (`device:3`). */
+                /**
+                 * @description Only rows about this entity: its kind (`device`), or kind and id (`device:d_…`, or
+                 *     `<kind>:<n>` for a kind with numeric ids).
+                 */
                 target?: string;
                 /** @description Only rows done by this kind of actor: `user` or `system`; another value is a 400. */
                 actor?: string;
@@ -1176,7 +1201,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Audit rows, newest first. A `target` id that is not a number, or an unknown `actor`, is a 400 */
+            /** @description Audit rows, newest first. A `target` id that is not a `d_…` device id or a number, or an unknown `actor`, is a 400 */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2084,6 +2109,37 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description The server's version and build, the contract minor and the minors it serves, and the Core identity fingerprint. Needs no signature */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Handshake"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    proveHandshake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HandshakeBody"];
+            };
+        };
+        responses: {
+            /** @description As `GET /handshake`, plus `core_spki` and `core_sig`, the Core identity key's signature over the client's nonce: check `fp(core_spki)` is the pinned `core_fp` and that `core_sig` verifies before trusting this Core. 400 for a nonce that is not 16 bytes of base64url. Needs no signature */
             200: {
                 headers: {
                     [name: string]: unknown;

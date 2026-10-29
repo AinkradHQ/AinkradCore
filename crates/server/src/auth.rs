@@ -142,9 +142,10 @@ impl Auth {
 
     /// A new challenge for `device`, asked from `addr`. Only a `known` (usable) device gets one
     /// stored: at most `CHALLENGES_PER_PAIR` per (device, address), a new one replacing that
-    /// pair's oldest, and `CHALLENGES_PER_DEVICE` in all. One address never evicts another's
-    /// challenge (review N3): past the device's total a newcomer's challenge is not stored, so
-    /// only its own session attempt fails. An unknown id gets an equally random challenge that
+    /// pair's oldest, and `CHALLENGES_PER_DEVICE` in all. At the device's total the address
+    /// holding the most gives up its oldest (`evict_from_top_holder`, review R2); when none holds
+    /// more than the newcomer, the newcomer's challenge is not stored, so only its own session
+    /// attempt fails and no address loses its last challenge (review N3). An unknown id gets an equally random challenge that
     /// is never stored. `None` only when the global safety cap is full of live challenges.
     pub fn challenge(&self, device: &str, addr: &str, known: bool, now: i64) -> Option<String> {
         let c = crypto::b64(&crypto::random::<32>());
@@ -165,7 +166,8 @@ impl Auth {
             }
         }
         let device_total = live.values().filter(|ch| ch.device == device).count();
-        if device_total >= CHALLENGES_PER_DEVICE {
+        if device_total >= CHALLENGES_PER_DEVICE && !evict_from_top_holder(&mut live, device, addr)
+        {
             return Some(c);
         }
         if live.len() >= CHALLENGES_MAX {
@@ -301,6 +303,35 @@ impl Auth {
     }
 }
 
+/// At `device`'s challenge cap: removes the oldest challenge of the address holding the most of
+/// the device's challenges, when it holds at least 2 and more than `addr` does (review R2). So
+/// addresses each asking 3 cannot starve the device's own address, and no address ever loses its
+/// last challenge to another. `false` when nothing was removed (the newcomer's is not stored).
+/// ponytail: about 256 addresses holding one challenge each (one IPv6 /48) still fill the cap;
+/// aggregate per /48 if that is ever seen.
+fn evict_from_top_holder(live: &mut HashMap<String, Challenge>, device: &str, addr: &str) -> bool {
+    let mut per_addr: HashMap<&str, (usize, u64, &str)> = HashMap::new();
+    for (k, ch) in live.iter().filter(|(_, ch)| ch.device == device) {
+        let e = per_addr.entry(&ch.addr).or_insert((0, u64::MAX, ""));
+        e.0 += 1;
+        if ch.order < e.1 {
+            (e.1, e.2) = (ch.order, k);
+        }
+    }
+    let mine = per_addr.get(addr).map_or(0, |e| e.0);
+    let top = per_addr
+        .values()
+        .max_by_key(|(n, oldest, _)| (*n, std::cmp::Reverse(*oldest)));
+    match top {
+        Some(&(n, _, key)) if n >= 2 && n > mine => {
+            let key = key.to_owned();
+            live.remove(&key);
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Resolves once `device`'s scopes are no longer `scopes`: at once on the broadcast, or within
 /// `every` by polling the database (a change by another process, or a lagged broadcast).
 pub async fn until_rescoped(
@@ -392,6 +423,34 @@ mod tests {
             a.challenge("d_a", &format!("ip:x{i}"), true, 300).unwrap();
         }
         assert!(a.take_challenge(&mine, "d_a", 300), "still live");
+    }
+
+    /// R2: 100 addresses asking 3 challenges each for a device fill its 256; the device's own
+    /// address still gets one that it can spend.
+    #[test]
+    fn addresses_filling_a_devices_challenges_do_not_starve_it() {
+        let a = auth();
+        for round in 0..2 {
+            for i in 0..100 {
+                for _ in 0..CHALLENGES_PER_PAIR {
+                    a.challenge("d_v", &format!("ip:10.0.{round}.{i}"), true, 100)
+                        .unwrap();
+                }
+            }
+        }
+        let count = |a: &Auth| {
+            let live = a.challenges.lock().unwrap();
+            live.values().filter(|c| c.device == "d_v").count()
+        };
+        assert_eq!(count(&a), CHALLENGES_PER_DEVICE, "full");
+        let own = a.challenge("d_v", "ip:victim", true, 100).unwrap();
+        assert_eq!(count(&a), CHALLENGES_PER_DEVICE, "still capped");
+        // The attackers keep asking; the victim's stays (it holds 1, they hold up to 3).
+        for i in 0..100 {
+            a.challenge("d_v", &format!("ip:10.0.0.{i}"), true, 101)
+                .unwrap();
+        }
+        assert!(a.take_challenge(&own, "d_v", 101), "spendable");
     }
 
     #[test]

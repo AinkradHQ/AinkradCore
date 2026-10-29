@@ -52,6 +52,7 @@ use super::{
         events::latest,
         ticket::issue,
         handshake::handshake,
+        handshake::prove,
         websession::options,
         websession::session,
         session::challenge,
@@ -90,7 +91,10 @@ Ainkrad-Session, Ainkrad-Alg (ES256), Ainkrad-Timestamp, Ainkrad-Nonce and Ainkr
 cover an exact canonical string of the Core identity fingerprint, the method, path, query, \
 time, nonce and the body's SHA-256 (handshake spec §5). A session comes from \
 POST /handshake/challenge then POST /handshake/session and lasts 15 minutes; there is no bearer \
-secret, and an Authorization header is refused. Requests carry the server's own Host and no \
+secret, and an Authorization header is refused. A signed body is at most 1 MiB: a larger one \
+is answered 401 auth_failed and counted as a failure against the address, so keep uploads below \
+it. Before trusting a Core, POST /handshake with a fresh nonce and check that core_sig verifies \
+under core_spki and that its fingerprint is the pinned one. Requests carry the server's own Host and no \
 Origin, or the Core's own origin from its web client. A web client signs in with a passkey \
 (POST /handshake/passkey/options, then POST /handshake/passkey/session) and signs every request \
 with a non-extractable WebCrypto P-256 session key in the same way; its event socket takes a \
