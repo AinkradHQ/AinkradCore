@@ -1,0 +1,2 @@
+ALTER TABLE runners DROP COLUMN disk_at;
+ALTER TABLE runners DROP COLUMN disk;
