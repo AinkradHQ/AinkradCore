@@ -163,6 +163,23 @@ fn bootstrap_pair_approve_events_and_revoke() {
         "the approval names the new device"
     );
 
+    // The audit stream is the admin's (#21): the read-only phone's view of it is empty.
+    let none = ctl(&args(&[
+        &b,
+        &s(&["events", "tail", "--after", "0", "--no-follow"]),
+    ]));
+    assert!(
+        none.status.success() && stdout(&none).is_empty(),
+        "{none:?}"
+    );
+    // Widened to admin (a scope change: elevated, audited), it sees the stream.
+    let o = ctl(&args(&[
+        &a,
+        &s(&["device", "scopes", &dev_b, "read,admin"]),
+    ]));
+    assert!(o.status.success(), "{o:?}");
+    assert!(stdout(&o).contains("\tactive\tread,admin\t"), "{o:?}");
+
     // The phone follows the live stream; revoking it closes the stream with 4001 (exit 6).
     let from = latest(&a);
     let mut tail = spawn_ctl(&args(&[
@@ -204,6 +221,8 @@ fn bootstrap_pair_approve_events_and_revoke() {
         code.replace('-', ""),
     ];
     secrets.push(code.to_lowercase());
+    secrets.push(PASSPHRASE.to_owned());
+    secrets.push(stepup_key_of(&ks_a));
     assert_nothing_secret_printed(&secrets);
 }
 

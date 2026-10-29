@@ -8,7 +8,8 @@ use serde_json::Value;
 use crate::Error;
 use crate::keystore::Keystore;
 use crate::net::{Net, Response};
-use crate::proto::{Canonical, nonce};
+use crate::proto::{Canonical, b64, nonce};
+use crate::stepup::{self, Passphrase};
 
 /// Renew a session this many seconds before it expires (§6.3: refresh before expiry).
 const RENEW_BEFORE: i64 = 60;
@@ -26,6 +27,8 @@ pub struct Session {
     pub id: String,
     pub expires: i64,
     pub scopes: Vec<String>,
+    /// Until when the Core says this session is elevated (§8), in this process's memory only.
+    pub elevated_until: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -33,6 +36,7 @@ struct Grant {
     session_id: Option<String>,
     expires_at: Option<String>,
     scopes: Option<Vec<String>>,
+    elevated_until: Option<String>,
 }
 
 pub struct Client {
@@ -42,6 +46,9 @@ pub struct Client {
     /// Seconds added to this machine's clock when signing. Zero but in tests that prove the
     /// Core refuses a skewed clock.
     pub clock_offset: i64,
+    /// The step-up key's file (beside the keystore) and where its passphrase comes from.
+    pub stepup_file: Option<std::path::PathBuf>,
+    pub passphrase: Passphrase,
 }
 
 pub fn unix_now() -> i64 {
@@ -115,6 +122,8 @@ impl Client {
             store,
             session: None,
             clock_offset: 0,
+            stepup_file: None,
+            passphrase: Passphrase::default(),
         }
     }
 
@@ -218,6 +227,7 @@ impl Client {
             id,
             expires,
             scopes: g.scopes.unwrap_or_default(),
+            elevated_until: g.elevated_until.as_deref().and_then(parse_timestamp),
         }))
     }
 
@@ -235,7 +245,8 @@ impl Client {
     }
 
     /// A signed request in a session. A `session_expired` answer (a restart, say) renews the
-    /// session and retries once with a new nonce and timestamp.
+    /// session and retries once; a `step_up_required` answer elevates this session once (§8)
+    /// and retries once. Each retry is a new nonce and timestamp.
     pub async fn call(
         &mut self,
         method: &str,
@@ -250,7 +261,8 @@ impl Client {
             "" => path.to_owned(),
             q => format!("{path}?{q}"),
         };
-        for retry in [false, true] {
+        let (mut renewed, mut elevated) = (false, false);
+        loop {
             let s = self.session().await?;
             let headers = self.sign(method, path, query, Some(&s.id), &body);
             let res = self
@@ -262,13 +274,96 @@ impl Client {
             }
             let err = refusal(&res, self.now());
             match &err {
-                Error::Refused { code, .. } if code == "session_expired" && !retry => {
+                Error::Refused { code, .. } if code == "session_expired" && !renewed => {
+                    renewed = true;
                     self.drop_session();
+                }
+                Error::Refused { code, .. } if code == "step_up_required" && !elevated => {
+                    elevated = true;
+                    self.elevate().await?;
                 }
                 _ => return Err(err),
             }
         }
-        unreachable!("the loop returns on its second pass")
+    }
+
+    /// Elevates the current session with the step-up key (§8): opens the key (asking for its
+    /// passphrase), takes a challenge for this session, signs the step-up message and posts
+    /// it. Returns `elevated_until`.
+    pub async fn elevate(&mut self) -> Result<i64, Error> {
+        let path = self.stepup_file.clone().ok_or_else(|| {
+            Error::StepUp("this device has no step-up key, so it cannot elevate".into())
+        })?;
+        let (device, core_fp) = (self.store.device_id.clone(), self.store.core_fp.clone());
+        // The key is opened before anything is sent: no key or a wrong passphrase costs the
+        // Core nothing and spends none of this device's step-up budget.
+        if !path.exists() {
+            return Err(Error::StepUp(stepup::no_key(&path)));
+        }
+        let pass = self.passphrase.read(false).map_err(Error::StepUp)?;
+        let key = stepup::load(&path, &pass, &device, &core_fp).map_err(Error::StepUp)?;
+        self.step_up_with(
+            |m| key.sign(m),
+            |s, c| stepup::message(&core_fp, &device, s, c),
+        )
+        .await
+    }
+
+    /// The step-up exchange with a given signer and message, so a test can prove the Core
+    /// refuses a proof made any other way than §8's.
+    pub async fn step_up_with(
+        &mut self,
+        sign: impl Fn(&[u8]) -> Vec<u8>,
+        message: impl Fn(&str, &str) -> Vec<u8>,
+    ) -> Result<i64, Error> {
+        let s = self.session().await?;
+        let res = self
+            .signed("POST", "/api/v1/auth/step-up/challenge", &s.id, Vec::new())
+            .await?;
+        let c: Value = parse(&res)?;
+        let challenge = c["challenge"]
+            .as_str()
+            .filter(|c| c.len() == 43)
+            .ok_or_else(|| Error::Protocol("a step-up challenge that is not 32 bytes".into()))?;
+        let proof = b64(&sign(&message(&s.id, challenge)));
+        let body = serde_json::json!({"challenge": challenge, "stepup_sig": proof});
+        let res = self
+            .signed(
+                "POST",
+                "/api/v1/auth/step-up",
+                &s.id,
+                serde_json::to_vec(&body).expect("serialisable"),
+            )
+            .await?;
+        let until = parse::<Value>(&res)?["elevated_until"]
+            .as_str()
+            .and_then(parse_timestamp)
+            .ok_or_else(|| Error::Protocol("a step-up answer without elevated_until".into()))?;
+        if let Some(cur) = self.session.as_mut().filter(|cur| cur.id == s.id) {
+            cur.elevated_until = Some(until);
+        }
+        Ok(until)
+    }
+
+    /// One signed request in session `session`, no retries; a non-2xx is the refusal.
+    async fn signed(
+        &self,
+        method: &str,
+        path: &str,
+        session: &str,
+        body: Vec<u8>,
+    ) -> Result<Response, Error> {
+        let headers = self.sign(method, path, "", Some(session), &body);
+        let res = self.net.send(method, path, &headers, body).await?;
+        match res.status {
+            200..300 => Ok(res),
+            _ => Err(refusal(&res, self.now())),
+        }
+    }
+
+    /// The current session, if one is open.
+    pub fn current(&self) -> Option<&Session> {
+        self.session.as_ref()
     }
 
     /// `call`, parsed.

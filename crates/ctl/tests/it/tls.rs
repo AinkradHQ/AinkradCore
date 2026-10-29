@@ -62,7 +62,8 @@ fn pair_by_qr_and_talk_over_tls() {
 
     let o = ctl(&args(&[
         &a,
-        &s(&["device", "add", "laptop", "--scopes", "read"]),
+        // `admin`, so its event view holds the audit stream (#21: `audit` is admin-scoped).
+        &s(&["device", "add", "laptop", "--scopes", "read,admin"]),
     ]));
     assert!(o.status.success(), "{o:?}");
     let out = stdout(&o);

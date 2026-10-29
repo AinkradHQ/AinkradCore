@@ -108,7 +108,7 @@ fn pairing_v1_code_secret_pop_and_sas() {
         ("code_hash", "pop_message_code", "pop_code"),
         ("secret_hash", "pop_message_secret", "pop_secret"),
     ] {
-        let m = pop_message(s(&v, "core_fp"), &bytes(&v, hash), &fp(&device));
+        let m = pop_message(s(&v, "core_fp"), &bytes(&v, hash), &fp(&device), None);
         assert_eq!(m, s(&v, message));
         assert!(verify(&device, m.as_bytes(), &bytes(&v, sig)), "{sig}");
         assert!(
@@ -126,4 +126,33 @@ fn codes_fold_as_the_spec_says() {
     for bad in ["", "ABCDE", "ABCDE-FGHJKX", "ABCDE-FGHJU", "ABCDE_FGHJK"] {
         assert_eq!(normal_code(bad), None, "{bad}");
     }
+}
+
+/// The step-up vector (§8): ctl's message is the vector's byte for byte, its SPKI is the one
+/// ctl derives from the test key, the vector's signature verifies over ctl's bytes, and so does
+/// ctl's own (signatures are randomised, so they are verified, never compared).
+#[test]
+fn stepup_v1_message_and_signature() {
+    let v = vector("stepup-v1.json");
+    let m = ainkrad_ctl::stepup::message(
+        s(&v, "core_fp"),
+        s(&v, "device_id"),
+        s(&v, "session_id"),
+        s(&v, "challenge"),
+    );
+    assert_eq!(m, s(&v, "message").as_bytes());
+    let key = Key::from_pkcs8(&bytes(&v, "stepup_pkcs8")).unwrap();
+    assert_eq!(b64(&key.spki()), s(&v, "stepup_spki"));
+    assert!(verify(&key.spki(), &m, &bytes(&v, "stepup_sig")));
+    assert!(verify(&key.spki(), &m, &key.sign(&m)), "ours");
+    // The same fields under another prefix are another message.
+    let wrong =
+        String::from_utf8(m.clone())
+            .unwrap()
+            .replacen("AINKRAD-STEPUP-V1", "AINKRAD-REQ-V1", 1);
+    assert!(!verify(
+        &key.spki(),
+        wrong.as_bytes(),
+        &bytes(&v, "stepup_sig")
+    ));
 }
