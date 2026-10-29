@@ -27,7 +27,7 @@ use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
 use tower::ServiceExt;
 
-use super::{Gateway, Listener, Local, preauth, tls};
+use super::{Exporter, Gateway, Listener, Local, preauth, tls};
 use crate::api::v1::ApiError;
 
 /// Request and connection limits.
@@ -164,7 +164,22 @@ async fn accept(
                         return;
                     }
                     let h2 = stream.get_ref().1.alpn_protocol() == Some(b"h2");
-                    serve_conn(stream, h2, Peer::Tcp(peer), app, &limits, watcher).await;
+                    // TLS 1.3 only, so one exporter for the whole connection.
+                    let mut x = [0; 32];
+                    let label = ainkrad_proto::v2::EXPORTER_LABEL;
+                    let exporter = match stream
+                        .get_ref()
+                        .1
+                        .export_keying_material(&mut x, label, None)
+                    {
+                        Ok(_) => Some(Exporter(x)),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "no TLS exporter");
+                            None
+                        }
+                    };
+                    let peer = Peer::Tls(peer, exporter);
+                    serve_conn(stream, h2, peer, app, &limits, watcher).await;
                 });
             }
             (Stream::Tcp(tcp), None) => {
@@ -203,6 +218,8 @@ async fn next(listener: &Listener) -> std::io::Result<(Stream, Option<SocketAddr
 /// Who is on the other end: a TCP address, or a local socket peer.
 enum Peer {
     Tcp(Option<SocketAddr>),
+    /// Over TLS, with its exporter.
+    Tls(Option<SocketAddr>, Option<Exporter>),
     Local(Local),
 }
 
@@ -213,6 +230,14 @@ where
     let service = hyper::service::service_fn(move |mut req: hyper::Request<Incoming>| {
         match peer {
             Peer::Tcp(Some(addr)) => drop(req.extensions_mut().insert(ConnectInfo(addr))),
+            Peer::Tls(addr, exporter) => {
+                if let Some(addr) = addr {
+                    req.extensions_mut().insert(ConnectInfo(addr));
+                }
+                if let Some(x) = exporter {
+                    req.extensions_mut().insert(x);
+                }
+            }
             Peer::Local(local) => drop(req.extensions_mut().insert(local)),
             Peer::Tcp(None) => {}
         }

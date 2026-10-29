@@ -1,0 +1,14 @@
+{
+  "comment": "Runner connection proof vectors (handshake spec §13; protocol v2 `auth`). core_auth_message = \"AINKRAD-CORE-AUTH-V1\" || exporter || nonce_r || device_id (UTF-8); runner_auth_message = \"AINKRAD-RUNNER-AUTH-V1\" || exporter || nonce_c || core_fp (the 43-character text). The exporter is TLS export_keying_material(label \"EXPORTER-ainkrad-core-v1\", no context, 32 bytes). Bytes are base64url without padding; signatures are ES256 raw r||s and randomised: verify them, never expect to reproduce them. Keys are the throwaway TEST keys of handshake-v1.json.",
+  "core_auth_message": "QUlOS1JBRC1DT1JFLUFVVEgtVjEAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4_ZF81djB2NHFhN2E4aDJ0YjMyMTltdHo1em52dg",
+  "core_fp": "EpGb6nSf7oTkVNn4nFAi3_4oofCpfpiRXxLVfDw8FQM",
+  "core_spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEH8CDSRwsaoMBglUwR5IINtmeOq5qL9PFjL8-r2q7h7b8NB73opAeVdoW_lUHfeC8fsM5b4diTYLTpKs4VixMZg",
+  "device_id": "d_5v0v4qa7a8h2tb3219mtz5znvv",
+  "device_spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEEb3J-hX1KUVYYXbGlnFPfzDjsKltnNFjggsIY_7Q7vKQ9ndOe-d9Qaq_rAbaJlz3h18a8IFJz5adlRRtufUgSw",
+  "exporter": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "nonce_c": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
+  "nonce_r": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+  "runner_auth_message": "QUlOS1JBRC1SVU5ORVItQVVUSC1WMQABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9FcEdiNm5TZjdvVGtWTm40bkZBaTNfNG9vZkNwZnBpUlh4TFZmRHc4RlFN",
+  "sig_core": "5VpFGfMnKUFKM9gr3ga1M7UYBDV0aVtVRZrPOPIi4Uy9iY0pyChRLLLWMW5BWE4dVgLoMoT6VblY2WwEGPxfyQ",
+  "sig_runner": "KxGaLSpbjOT2qksS_-SRmiBZuG6iVf4RrzRnt6rVHiORd1INLQcm4wS5a-k0ikhZL96wkV8_xHYka4fgOpN1nQ"
+}

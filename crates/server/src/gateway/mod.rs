@@ -69,6 +69,19 @@ pub struct Local {
     pub same_user: bool,
 }
 
+/// The TLS exporter of the connection a request came over (RFC 8446 §7.5; label
+/// `ainkrad_proto::v2::EXPORTER_LABEL`, no context, 32 bytes), for the runner hub's
+/// channel-bound proof (handshake spec §13). Present only on the TLS listener. A secret of the
+/// session: its `Debug` shows nothing, and it is never logged.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Exporter(pub [u8; 32]);
+
+impl std::fmt::Debug for Exporter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Exporter(..)")
+    }
+}
+
 /// Binds a Unix socket at `path`, `0600`, replacing a socket a killed server left there.
 fn bind_unix(path: &std::path::Path) -> std::io::Result<Listener> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};

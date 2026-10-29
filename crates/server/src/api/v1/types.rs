@@ -32,7 +32,8 @@
 ///    4003 close on a scope change.
 /// 6: scoped event streams (E1-04.3): `Event.seq` counts the device's own view, and
 ///    `x-event-scopes` lists each kind's scope.
-pub const API_MINOR: u32 = 6;
+/// 7: the runner hub (E1-11.2/.3): the `runner.refused` audit action.
+pub const API_MINOR: u32 = 7;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

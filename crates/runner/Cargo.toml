@@ -13,6 +13,10 @@ base64 = "0.22.1"
 ainkrad-harness = { path = "../harness" }
 ainkrad-proto = { path = "../proto" }
 futures-util = "0.3.34"
+# The connection proof and pairing (E1-11.3): P-256 keys, SHA-256, randomness; already under
+# rustls. HTTP to the Core's /handshake and /pair routes.
+reqwest = { version = "0.12.28", default-features = false, features = ["http2", "json", "rustls-tls"] }
+ring = "0.17.14"
 # Only to pick `ring` as rustls's crypto provider for wss://; tokio-tungstenite enables none.
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 serde_json = "1.0.154"
