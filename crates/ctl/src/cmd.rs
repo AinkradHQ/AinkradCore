@@ -13,7 +13,7 @@ use crate::keystore::{self, Keystore};
 use crate::net::{Endpoint, Net};
 use crate::pair::{Credential, Pairing};
 use crate::stepup::{self, Passphrase};
-use crate::{EXIT_CODES, Error, devices, events, pair};
+use crate::{EXIT_CODES, Error, devices, events, pair, runners};
 
 pub const USAGE: &str =
     "usage: ainkradctl [--socket <path> | --url <http(s)://host:port>] [--host <name>]
@@ -47,8 +47,15 @@ pub const USAGE: &str =
   device reject <pairing-id>*
   lockouts ls | clear <key>*
       The auth lockouts (ip:..., ipdev:..., stepup:<device>) and clearing one.
+  runner ls | show <id>
+      The paired runners: id, name, online|degraded|offline, load/capacity, the commands
+      it advertised, its version and last_seen (scope read).
+  run noop <runner-id>
+      Sends the runner the no-op command through the Core and prints `ok <ms> ms`
+      (scope agent; no step-up; audited as runner.command).
   events tail [--after <seq>] [--no-follow]
-      Events after <seq> (default: from now), one JSON object per line; follows the live
+      Events after <seq> (default: from now), one JSON object per line (every kind this
+      device may see, runner.connected/.disconnected/.degraded included); follows the live
       stream and resumes after drops and Core restarts, without gaps or repeats.
 
 The keystore (default $AINKRADCTL_KEYSTORE, else ~/.config/ainkradctl/keystore.json) holds
@@ -216,6 +223,8 @@ pub async fn run(args: &[String], out: &mut impl Write) -> Result<(), Error> {
             devices::device(&mut c, rest, a.value("--kind"), a.scopes(), json, out).await
         }
         ["lockouts", rest @ ..] => devices::lockouts(&mut a.client()?, rest, json, out).await,
+        ["runner", rest @ ..] => runners::runner(&mut a.client()?, rest, json, out).await,
+        ["run", rest @ ..] => runners::run(&mut a.client()?, rest, json, out).await,
         ["events", "tail"] => {
             let mut c = a.client()?;
             events::tail(&mut c, a.number("--after")?, !a.on("--no-follow"), out).await
