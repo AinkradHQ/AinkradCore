@@ -210,6 +210,19 @@ pub fn blob_path(root: &Path, sha256: &str) -> PathBuf {
     root.join("blobs").join(&sha256[..2]).join(sha256)
 }
 
+/// Resolve the content-addressed blob root next to the SQLite database file.
+pub async fn artifact_root(pool: &SqlitePool) -> Result<PathBuf, Error> {
+    let file: Option<String> =
+        sqlx::query_scalar("SELECT file FROM pragma_database_list WHERE name = 'main'")
+            .fetch_optional(pool)
+            .await?;
+    let dir = file
+        .filter(|s| !s.is_empty())
+        .and_then(|s| Path::new(&s).parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| std::env::temp_dir().join("ainkrad-citadel"));
+    Ok(dir.join("artifacts"))
+}
+
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(bytes)

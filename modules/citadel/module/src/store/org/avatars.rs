@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::path::Path;
 
 use ainkrad_core::audit::AuditActor;
 use ainkrad_core_server::store::begin_write;
@@ -24,6 +25,7 @@ use sqlx::{Error, SqlitePool};
 use super::agent;
 use super::chart::append_org_event;
 use crate::domain::org::{Agent, AgentId, CompanyId};
+use crate::store::artifacts::{blob_path, sha256_hex, store_blob};
 
 /// The figure versions the client draws.
 pub const FIGURE_VERSIONS: &[&str] = &["v1"];
@@ -180,6 +182,33 @@ pub async fn max_bytes(pool: &SqlitePool, agent: AgentId) -> Result<u64, AvatarE
     Ok(crate::settings::value(pool, "avatar.max_bytes").await? as u64)
 }
 
+/// Gives the agent `bytes` as its avatar image, stored under `root` (the artifacts dir); see
+/// the module docs for what is refused.
+pub async fn upload_avatar(
+    pool: &SqlitePool,
+    root: &Path,
+    agent: AgentId,
+    bytes: &[u8],
+    by: AuditActor,
+) -> Result<Agent, AvatarError> {
+    let (size, max) = (bytes.len() as u64, max_bytes(pool, agent).await?);
+    if size > max {
+        return Err(AvatarError::TooLarge { size, max });
+    }
+    let mime = sniff(bytes).ok_or(AvatarError::NotAnImage)?;
+    let sha = sha256_hex(bytes);
+    store_blob(root, &sha, bytes).map_err(|e| {
+        tracing::error!(error = %e, "storing an avatar failed");
+        AvatarError::Io(e)
+    })?;
+    let details = json!({"mime": mime, "size": size, "sha256": sha});
+    let c = Change {
+        image: Some(Some(&sha)),
+        ..Change::default()
+    };
+    change(pool, agent, c, ("agent.avatar_set", details), by).await
+}
+
 /// Removes the agent's avatar image: its figure is shown again.
 pub async fn reset_avatar(
     pool: &SqlitePool,
@@ -199,6 +228,34 @@ pub struct Image {
     pub mime: &'static str,
     pub sha256: String,
     pub bytes: Vec<u8>,
+}
+
+/// The agent's uploaded image (from `root`); `None` when it has none.
+pub async fn avatar_image(
+    pool: &SqlitePool,
+    root: &Path,
+    agent: AgentId,
+) -> Result<Option<Image>, AvatarError> {
+    let sha: Option<String> =
+        sqlx::query_scalar("SELECT avatar_sha256 FROM citadel_agents WHERE id = ?")
+            .bind(agent.0)
+            .fetch_optional(pool)
+            .await?
+            .ok_or(AvatarError::NoAgent(agent))?;
+    let Some(sha256) = sha else {
+        return Ok(None);
+    };
+    let path = blob_path(root, &sha256);
+    let bytes = tokio::fs::read(&path).await.map_err(|e| {
+        tracing::error!(path = %path.display(), error = %e, "reading an avatar failed");
+        AvatarError::Io(e.to_string())
+    })?;
+    let mime = sniff(&bytes).ok_or(AvatarError::NotAnImage)?;
+    Ok(Some(Image {
+        mime,
+        sha256,
+        bytes,
+    }))
 }
 
 /// What an agent is doing, for its figure's state.

@@ -91,10 +91,16 @@ pub async fn propose(
             let why = "a proposal targets the spec or a profile field, not both".to_owned();
             return Err(KnowledgeError::Invalid(why));
         }
-        // S4: validate with `profile::field_patch` and store `profile.<field>` as the target.
-        Some(_) => {
-            let why = "a profile proposal needs the project profile, which is not built yet";
-            return Err(KnowledgeError::Invalid(why.to_owned()));
+        Some(field) => {
+            // Checked now so a proposal that could never apply is refused at once.
+            let patch =
+                crate::profile::field_patch(field, &p.body).map_err(KnowledgeError::Invalid)?;
+            let mut check = crate::profile::Profile::default();
+            patch.apply(&mut check);
+            if let Some(why) = check.problem() {
+                return Err(KnowledgeError::Invalid(why));
+            }
+            Some(format!("profile.{field}"))
         }
         None => p.spec.then(|| "spec".to_owned()),
     };
@@ -227,11 +233,6 @@ pub async fn decide_knowledge(
             return Err(KnowledgeError::Invalid(why));
         }
     }
-    if accept && current.profile_field.is_some() {
-        // S4: apply it with `work::update_profile_in`.
-        let why = "a profile proposal needs the project profile, which is not built yet";
-        return Err(KnowledgeError::Invalid(why.to_owned()));
-    }
     let status = if accept { "accepted" } else { "rejected" };
     let decided = sqlx::query(concat!(
         "UPDATE citadel_knowledge_entries SET status = ?, decided_by_user_id = ?, \
@@ -252,6 +253,19 @@ pub async fn decide_knowledge(
                          "agent_id": by_agent});
     let action = format!("knowledge.{status}");
     append_knowledge_event(&mut tx, project, id.0, actor, &action, details).await?;
+    if accept && let Some(field) = &decided.profile_field {
+        let patch =
+            crate::profile::field_patch(field, &decided.body).map_err(KnowledgeError::Invalid)?;
+        let details = json!({"knowledge_entry": id.0, "agent_id": by_agent});
+        match crate::store::work::update_profile_in(&mut tx, project, &patch, actor, details).await
+        {
+            Ok(_) => {}
+            Err(Error::Protocol(why) | Error::InvalidArgument(why)) => {
+                return Err(KnowledgeError::Invalid(why));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
     if accept && decided.targets_spec {
         sqlx::query("UPDATE citadel_projects SET spec = ? WHERE id = ?")
             .bind(&decided.body)

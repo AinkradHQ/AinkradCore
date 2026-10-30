@@ -1,0 +1,4 @@
+# Non-secret bootstrap data. Credentials are entered through the Core secrets broker.
+[[companies]]
+name = "Ainkrad"
+kind = "own"

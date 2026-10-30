@@ -162,6 +162,34 @@ pub const SETTINGS: &[ModuleSetting] = &[
         YEAR,
         "The window a project's throughput and cycle and lead times are measured over.",
     ),
+    s(
+        "account.warn_percent",
+        80,
+        1,
+        100,
+        "An account limit's warning threshold when none is given.",
+    ),
+    s(
+        "account.drop_threshold",
+        3,
+        1,
+        50,
+        "Provider drops in account.drop_window_secs that mark an account unhealthy.",
+    ),
+    s(
+        "account.drop_window_secs",
+        1800,
+        60,
+        DAY,
+        "The window over which an account's provider drops are counted.",
+    ),
+    s(
+        "account.unhealthy_secs",
+        1800,
+        60,
+        7 * DAY,
+        "How long an account stays cooling after repeated provider drops.",
+    ),
 ];
 
 /// Citadel's settings handle.

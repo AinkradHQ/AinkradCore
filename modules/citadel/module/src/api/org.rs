@@ -29,13 +29,31 @@ fn kind(text: Option<&str>) -> Result<Option<Kind>, ApiError> {
     .transpose()
 }
 
+async fn company_out(
+    pool: &sqlx::SqlitePool,
+    c: crate::domain::org::Company,
+) -> Result<Company, sqlx::Error> {
+    let account_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT account_id FROM citadel_account_companies WHERE company_id = ? ORDER BY account_id",
+    )
+    .bind(c.id.0)
+    .fetch_all(pool)
+    .await?;
+    let mut out = Company::from(c);
+    out.account_ids = account_ids;
+    Ok(out)
+}
+
 #[utoipa::path(get, path = "/companies", operation_id = "listCompanies", tag = "org",
     responses((status = 200, description = "Every company, own or client (only the one named \
         in `X-Citadel-Company`, when it is sent): the company switcher", body = Vec<Company>)))]
 pub async fn list_companies(State(app): State<App>, acting: Acting) -> ApiResult<Vec<Company>> {
     let all = org::list_companies(&app.pool).await?;
-    let own = all.into_iter().filter(|c| acting.sees(Some(c.id.0)));
-    Ok(Json(own.map(Into::into).collect()))
+    let mut out = Vec::new();
+    for c in all.into_iter().filter(|c| acting.sees(Some(c.id.0))) {
+        out.push(company_out(&app.pool, c).await?);
+    }
+    Ok(Json(out))
 }
 
 #[utoipa::path(get, path = "/companies/{id}", operation_id = "getCompany", tag = "org",
@@ -47,7 +65,7 @@ pub async fn get_company(
     Path(id): Path<i64>,
 ) -> ApiResult<Company> {
     let c = found(org::get_company(&app.pool, CompanyId(id)).await?, "company")?;
-    Ok(Json(c.into()))
+    Ok(Json(company_out(&app.pool, c).await?))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -93,7 +111,7 @@ pub async fn create_company(
     let c = org::add_company_with(&app.pool, &n.name, kind, &profile, BY)
         .await
         .map_err(failed)?;
-    Ok(Json(c.into()))
+    Ok(Json(company_out(&app.pool, c).await?))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -162,7 +180,7 @@ pub async fn update_company(
         return Err(ApiError::not_found("no such company"));
     }
     let now = found(org::get_company(&app.pool, CompanyId(id)).await?, "company")?;
-    Ok(Json(now.into()))
+    Ok(Json(company_out(&app.pool, now).await?))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

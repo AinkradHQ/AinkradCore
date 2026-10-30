@@ -10,7 +10,9 @@ use crate::store::org::service::is_constraint;
 /// A failed write, as the client sees it.
 pub fn refused(e: sqlx::Error) -> ApiError {
     match e {
-        sqlx::Error::Protocol(why) => ApiError::bad_request(why),
+        sqlx::Error::Protocol(why) | sqlx::Error::InvalidArgument(why) => {
+            ApiError::bad_request(why)
+        }
         e if is_constraint(&e) => {
             ApiError::conflict("the change breaks a rule (a duplicate name or a missing parent)")
         }
