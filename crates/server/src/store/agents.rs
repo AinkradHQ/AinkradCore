@@ -53,6 +53,8 @@ pub struct Session {
     pub usage: Tokens,
     pub resumes: i64,
     pub created_by: String,
+    /// The module that created and drives it (`agents::create_for_module`); none for a client's.
+    pub owner_module: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub ended_at: Option<String>,
@@ -78,7 +80,7 @@ pub struct NewSession<'a> {
 
 const COLUMNS: &str = "n, id, runner, harness, model, prompt, workspace, policy, secrets, state, \
     harness_session, outcome, last_seq, tokens_in, tokens_out, cache_read, cache_write, \
-    cost_usd_micros, resumes, created_by, created_at, updated_at, ended_at";
+    cost_usd_micros, resumes, created_by, owner_module, created_at, updated_at, ended_at";
 
 fn of(r: &sqlx::sqlite::SqliteRow) -> Result<Session, sqlx::Error> {
     let json = |col: &str| -> Result<Option<Value>, sqlx::Error> {
@@ -115,6 +117,7 @@ fn of(r: &sqlx::sqlite::SqliteRow) -> Result<Session, sqlx::Error> {
         },
         resumes: r.try_get("resumes")?,
         created_by: r.try_get("created_by")?,
+        owner_module: r.try_get("owner_module")?,
         created_at: r.try_get("created_at")?,
         updated_at: r.try_get("updated_at")?,
         ended_at: r.try_get("ended_at")?,
@@ -207,12 +210,23 @@ pub async fn create(
     actor: AuditActor,
     now: &str,
 ) -> Result<Session, sqlx::Error> {
+    create_owned(pool, new, None, actor, now).await
+}
+
+/// [`create`] for a session `owner` (a module id) will drive.
+pub async fn create_owned(
+    pool: &SqlitePool,
+    new: &NewSession<'_>,
+    owner: Option<&str>,
+    actor: AuditActor,
+    now: &str,
+) -> Result<Session, sqlx::Error> {
     let id = crate::auth::crypto::random_id("as_");
     let mut tx = super::begin_write(pool).await?;
     let n: i64 = sqlx::query_scalar(
         "INSERT INTO core_agent_sessions (id, runner, harness, model, prompt, workspace, policy, \
-         secrets, state, created_by, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?) RETURNING n",
+         secrets, state, created_by, created_at, updated_at, owner_module) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?) RETURNING n",
     )
     .bind(&id)
     .bind(new.runner)
@@ -225,6 +239,7 @@ pub async fn create(
     .bind(new.created_by)
     .bind(now)
     .bind(now)
+    .bind(owner)
     .fetch_one(&mut *tx)
     .await?;
     let names: Vec<&str> = new.secrets.iter().map(|s| s.name.as_str()).collect();

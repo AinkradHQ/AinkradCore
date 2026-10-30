@@ -306,6 +306,13 @@ impl Hub {
         Elevated(())
     }
 
+    /// The capability of a module that drives the sessions it created (`agents::create_for_module`,
+    /// `agents::instruct_module`): no client is in hand when a run starts, retries or is cut at its
+    /// cap. Callers check the session names their module; the module's operator enabled it.
+    pub(crate) fn module_elevation(&self) -> Elevated {
+        Elevated(())
+    }
+
     /// Continue the elevated create for a live, persisted session after a Core restart. The
     /// session row is written only after the gated create route succeeds; this is not a route
     /// entry point and cannot elevate a new caller.

@@ -299,3 +299,88 @@ async fn refused_agent_writes_grow_no_audit_rows() {
     }
     assert_eq!(rows().await, before);
 }
+
+/// A module drives only the sessions it created (E2-13 S7): never a client's, never another
+/// module's, never a command that starts code, and never one that is over.
+#[tokio::test]
+async fn a_module_drives_only_its_own_live_sessions() {
+    use crate::agents::{Refusal, instruct_module};
+    use ainkrad_proto::v2::{AgentRead, AgentSend, AgentStop, Command};
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let policy = json!({});
+    let new = NewSession {
+        runner: &vm.id,
+        harness: "claude",
+        model: None,
+        prompt: None,
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: &fx.dev.id,
+    };
+    let owned = store::create_owned(
+        &fx.app.pool,
+        &new,
+        Some("citadel"),
+        ainkrad_core::audit::AuditActor::System,
+        NOW,
+    )
+    .await
+    .unwrap();
+    let clients = store::create(
+        &fx.app.pool,
+        &new,
+        ainkrad_core::audit::AuditActor::System,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!(owned.owner_module.as_deref(), Some("citadel"));
+    assert_eq!(clients.owner_module, None);
+    let stop = |s: &store::Session| {
+        Command::AgentStop(AgentStop {
+            session: s.id.clone(),
+            kill: true,
+        })
+    };
+    let why = |r: Result<(), Refusal>| match r {
+        Err(Refusal::Runner(e)) => e.message,
+        other => format!("{other:?}"),
+    };
+    // A client's session, and a session of another module's name.
+    assert!(
+        why(instruct_module(&fx.app, "citadel", &clients, stop(&clients)).await)
+            .contains("not this module's")
+    );
+    assert!(
+        why(instruct_module(&fx.app, "other", &owned, stop(&owned)).await)
+            .contains("not this module's")
+    );
+    // A command that would start or read, and one about another session.
+    let read = Command::AgentRead(AgentRead {
+        session: owned.id.clone(),
+        after: 0,
+        wait_ms: None,
+    });
+    assert!(why(instruct_module(&fx.app, "citadel", &owned, read).await).contains("only stop"));
+    let other = Command::AgentSend(AgentSend {
+        session: clients.id.clone(),
+        text: "x".into(),
+    });
+    assert!(
+        why(instruct_module(&fx.app, "citadel", &owned, other).await).contains("another session")
+    );
+    // Over: nothing is sent.
+    store::end(
+        &fx.app.pool,
+        &owned.id,
+        "ended",
+        &json!({"kind": "done"}),
+        NOW,
+    )
+    .await
+    .unwrap();
+    let over = store::get(&fx.app.pool, &owned.id).await.unwrap().unwrap();
+    assert!(why(instruct_module(&fx.app, "citadel", &over, stop(&over)).await).contains("over"));
+}
