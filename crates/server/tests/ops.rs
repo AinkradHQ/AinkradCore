@@ -430,3 +430,119 @@ async fn a_backup_lands_in_the_bucket_and_restores_from_it() {
     );
     assert_eq!(state(&fresh).await, state(&home).await);
 }
+
+/// The secrets broker (E2-07): an export (plaintext, beside the master key) never carries a
+/// secret, sealed or not; an encrypted backup does, and it opens on the restored home.
+#[tokio::test]
+async fn an_export_never_carries_secrets_and_a_backup_does() {
+    use ainkrad_core::audit::AuditActor;
+    use ainkrad_core::settings::{Key, Scope};
+    use ainkrad_core_server::ops::secretbox::SecretBox;
+    use ainkrad_core_server::store::secrets;
+    const VALUE: &str = "export-planted-value-3c9d";
+    let d = dir("secrets");
+    let home = d.0.join("home");
+    let fp = home_with_state(&home).await;
+    let pool = store::connect(&home.join("core.db")).await.unwrap();
+    let clock = std::sync::Arc::new(ainkrad_core_server::scheduler::SystemClock);
+    use ainkrad_core_server::auth::testing::TestDevice;
+    let owner = TestDevice::enroll(&pool, "owner", "device", &["admin"], "fp", clock.clone()).await;
+    let runner = TestDevice::enroll(&pool, "vm", "runner", &["runner"], "fp", clock).await;
+    let now = "2026-10-30T10:00:00.000Z";
+    store::settings::set(
+        &pool,
+        Key::SecretsMode,
+        Scope::Server,
+        "1",
+        AuditActor::System,
+        now,
+    )
+    .await
+    .unwrap();
+    let sealer = SecretBox::from_file(&home.join("keys/master.key")).unwrap();
+    let scope = [runner.id.clone()];
+    let new = secrets::NewValue {
+        value: VALUE,
+        runners: Some(&scope),
+        delivery: None,
+    };
+    secrets::create(
+        &pool,
+        &sealer,
+        "k",
+        &new,
+        &owner.id,
+        AuditActor::System,
+        now,
+    )
+    .await
+    .unwrap();
+    let sealed: Vec<u8> = sqlx::query_scalar("SELECT sealed FROM core_secrets")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    let config = home.join("config.toml");
+    let file = d.0.join("core.export");
+    ok(&["export", "--config", s(&config), s(&file)], &[]);
+    let plain = std::fs::read(&file).unwrap();
+    let has = |hay: &[u8], needle: &[u8]| hay.windows(needle.len()).any(|w| w == needle);
+    assert!(
+        !has(&plain, &sealed[13..45]),
+        "a sealed value in the export"
+    );
+    assert!(!has(&plain, VALUE.as_bytes()));
+    let imported = d.0.join("imported");
+    ok(&["import", s(&file), "--signer", &fp, s(&imported)], &[]);
+    let pool = store::connect(&imported.join("core.db")).await.unwrap();
+    assert!(secrets::list(&pool).await.unwrap().is_empty());
+    pool.close().await;
+
+    let keygen = ok(&["backup-keygen"], &[]);
+    let identity = d.0.join("identity.txt");
+    std::fs::write(&identity, &keygen).unwrap();
+    let recipient = keygen
+        .lines()
+        .find_map(|l| l.strip_prefix("# public key: "))
+        .unwrap();
+    let env = [("AINKRAD_BACKUP_RECIPIENT", recipient)];
+    let backup = ok(&["backup", "--config", s(&config), "--local-only"], &env);
+    let restored = d.0.join("restored");
+    ok_err(&[
+        "restore",
+        &backup,
+        "--identity",
+        s(&identity),
+        "--signer",
+        &fp,
+        s(&restored),
+    ]);
+    let pool = store::connect(&restored.join("core.db")).await.unwrap();
+    let sealer = SecretBox::from_file(&restored.join("keys/master.key")).unwrap();
+    let (lease, _) = secrets::lease(
+        &pool,
+        "k",
+        &runner.id,
+        None,
+        &owner.id,
+        AuditActor::System,
+        now,
+        1,
+    )
+    .await
+    .unwrap();
+    let got = secrets::redeem(
+        &pool,
+        &sealer,
+        &lease,
+        &runner.id,
+        AuditActor::System,
+        now,
+        2,
+    )
+    .await
+    .unwrap();
+    assert_eq!(got.value.as_str(), VALUE);
+    pool.close().await;
+}

@@ -1,5 +1,5 @@
 //! Signatures, nonces, challenges (session and step-up), public keys (the step-up key too),
-//! pairing codes, QR secrets and SAS strings never
+//! pairing codes, QR secrets, SAS strings, and the secrets broker's values and leases never
 //! reach the server log, whatever succeeds or fails. Its own test binary, so the global log subscriber sees every line.
 
 use std::io::Write;
@@ -183,6 +183,10 @@ async fn no_signature_nonce_challenge_or_key_is_logged() {
     // key and assertion (a wrong one too), a step-up assertion, and a WebSocket ticket.
     planted.extend(passkey_flow(&app, &mac, &identity.fp, clock.clone()).await);
 
+    // The secrets broker (E2-07): a value stored, a malformed body around another, a rotation,
+    // a lease and its redemption (then a spent one), and a real-shaped value refused.
+    planted.extend(secrets_flow(&mut app, &mac, clock.clone()).await);
+
     let log = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
     assert!(
         log.contains("pairing claimed") && log.contains("pairing claim refused"),
@@ -203,6 +207,11 @@ async fn no_signature_nonce_challenge_or_key_is_logged() {
         "an unattributed auth_failed: {log}"
     );
     assert!(log.contains("web session issued"), "{log}");
+    // The broker's refusals ran, so their lines are scanned too.
+    assert!(
+        log.contains("real_secret_refused") && log.contains("lease_expired"),
+        "{log}"
+    );
     // The passkey failure paths ran, so the scan below covers their lines too.
     assert!(log.contains("passkey registration refused"), "{log}");
     assert!(log.contains("assertion refused"), "{log}");
@@ -218,6 +227,102 @@ async fn no_signature_nonce_challenge_or_key_is_logged() {
     }
     pool.close().await;
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Stores, rotates, leases and redeems secrets; returns the values and the lease ids sent.
+async fn secrets_flow(app: &mut App, mac: &TestDevice, clock: Arc<SystemClock>) -> Vec<String> {
+    use ainkrad_core::settings::{Key, Scope};
+    let pool = app.pool.clone();
+    app.secrets = Some(Arc::new(
+        ainkrad_core_server::ops::secretbox::SecretBox::new(&[9; 32]),
+    ));
+    let by = ainkrad_core_server::api::v1::BY;
+    let now = clock.now();
+    ainkrad_core_server::store::settings::set(
+        &pool,
+        Key::SecretsMode,
+        Scope::Server,
+        "1",
+        by,
+        &now,
+    )
+    .await
+    .unwrap();
+    let runner = TestDevice::enroll(
+        &pool,
+        "vm",
+        "runner",
+        &["runner"],
+        &app.auth.identity.fp,
+        clock.clone(),
+    )
+    .await;
+    let s = app.auth.issue_session(&runner.id, clock.unix());
+    runner.set_session(Some(s.id));
+    let (v1, v2, v3) = (
+        "log-planted-one-5d1e",
+        "log-planted-two-a4c2",
+        "log-planted-bad-93f0",
+    );
+    let real = ainkrad_proto::redact::PLANTED[0].1.to_owned();
+    let call = |dev: &TestDevice, m: &str, uri: &str, body: serde_json::Value| {
+        let body = body.to_string();
+        let h = dev.headers(m, uri, body.as_bytes());
+        (m.to_owned(), uri.to_owned(), h, body)
+    };
+    let mut sent = vec![v1.to_owned(), v2.to_owned(), v3.to_owned(), real.clone()];
+    for (m, uri, h, body) in [
+        call(
+            mac,
+            "POST",
+            "/api/v1/secrets",
+            serde_json::json!({"name": "git.token", "value": v1, "runners": [runner.id]}),
+        ),
+        call(
+            mac,
+            "POST",
+            "/api/v1/secrets",
+            serde_json::json!({"name": 7, "value": v3}),
+        ),
+        call(
+            mac,
+            "POST",
+            "/api/v1/secrets",
+            serde_json::json!({"name": "real", "value": real}),
+        ),
+        call(
+            mac,
+            "PUT",
+            "/api/v1/secrets/git.token",
+            serde_json::json!({"value": v2}),
+        ),
+    ] {
+        send(app, &m, &uri, &h, &body).await;
+    }
+    let (_, uri, h, body) = call(
+        mac,
+        "POST",
+        "/api/v1/secrets/git.token/leases",
+        serde_json::json!({"runner": runner.id}),
+    );
+    let lease = json(&send(app, "POST", &uri, &h, &body).await)["lease"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut answers = Vec::new();
+    for _ in 0..2 {
+        let (_, uri, h, body) = call(
+            &runner,
+            "POST",
+            "/api/v1/secret-leases/redeem",
+            serde_json::json!({"lease": lease}),
+        );
+        answers.push(json(&send(app, "POST", &uri, &h, &body).await));
+    }
+    assert_eq!(answers[0]["value"], v2, "{answers:?}");
+    assert_eq!(answers[1]["code"], "lease_expired", "{answers:?}");
+    sent.push(lease);
+    sent
 }
 
 fn json(text: &str) -> serde_json::Value {
