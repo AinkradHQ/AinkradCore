@@ -1,0 +1,49 @@
+# One encrypted, signed backup of the Ainkrad Core to the bucket (E1-13, E1-16.x). Started by
+# ainkrad-backup.timer; `systemctl start ainkrad-backup` runs one now. Installed by scripts/install.sh.
+# The only unit that loads /etc/ainkrad/backup.env (the bucket credentials, root:ainkrad 0640): serve never
+# needs them. The bucket is create-only: each run PUTs one new object, nothing is overwritten or deleted.
+
+[Unit]
+Description=Ainkrad Core backup to the bucket
+After=network-online.target ainkrad-core.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ainkrad
+Group=ainkrad
+EnvironmentFile=/etc/ainkrad/core.env
+EnvironmentFile=/etc/ainkrad/backup.env
+Environment=HOME=/var/lib/ainkrad
+ExecStart=/usr/local/bin/ainkrad-core-server backup --config /var/lib/ainkrad/core/config.toml
+Nice=10
+IOSchedulingClass=idle
+UMask=0077
+LimitCORE=0
+
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ainkrad
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+DevicePolicy=closed
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Idempotent hardening for an Ainkrad Core host (E1-16.3). Run as root on a fresh Ubuntu VM:
-#   ssh ubuntu@HOST 'sudo bash -s' < scripts/host/harden.sh
+#   ssh <user>@<host> 'sudo bash -s' < scripts/host/harden.sh
 # It changes nothing the operator logs in with: sshd keeps key-only login, :22 stays open.
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
@@ -26,7 +26,16 @@ iptables -N AINKRAD_IN 2>/dev/null || iptables -F AINKRAD_IN
 iptables -A AINKRAD_IN -m state --state RELATED,ESTABLISHED -j ACCEPT
 iptables -A AINKRAD_IN -p icmp -j ACCEPT
 iptables -A AINKRAD_IN -i lo -j ACCEPT
-for port in 22 80 443; do
+# AINKRAD_SSH_FROM=<cidr>[,<cidr>...] admits new SSH only from those networks (scripts/install.sh checks that
+# the current session's address is inside first); unset, SSH is open to all.
+if [ -n "${AINKRAD_SSH_FROM:-}" ]; then
+  for cidr in ${AINKRAD_SSH_FROM//,/ }; do
+    iptables -A AINKRAD_IN -p tcp -m state --state NEW --dport 22 -s "$cidr" -j ACCEPT
+  done
+else
+  iptables -A AINKRAD_IN -p tcp -m state --state NEW --dport 22 -j ACCEPT
+fi
+for port in 80 443; do
   iptables -A AINKRAD_IN -p tcp -m state --state NEW --dport "$port" -j ACCEPT
 done
 iptables -A AINKRAD_IN -j REJECT --reject-with icmp-host-prohibited
