@@ -25,6 +25,7 @@ use crate::Error;
 pub trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
 pub type Stream = Pin<Box<dyn Io>>;
+pub type Ws = WebSocketStream<Stream>;
 
 /// Where the Core is.
 #[derive(Debug, Clone, PartialEq, Eq)]
