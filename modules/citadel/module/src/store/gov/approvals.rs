@@ -37,7 +37,9 @@ macro_rules! approval_columns {
 }
 
 mod allow;
+mod forge;
 pub use allow::{allow_for_issue, allow_rule, issue_allow_rules};
+pub(crate) use forge::{merge_decided_in, workflow_decided_in};
 #[cfg(any(test, feature = "test-support"))]
 mod raw;
 #[cfg(any(test, feature = "test-support"))]
@@ -330,7 +332,8 @@ async fn decide(
         ApprovalKind::PlanApproval => {
             crate::store::work::plan_decided_in(&mut tx, &decided, user_actor(by), now).await?
         }
-        // S6: PrMerge => merge_decided_in; WorkflowPush => workflow_decided_in.
+        ApprovalKind::PrMerge => merge_decided_in(&mut tx, &decided, by).await?,
+        ApprovalKind::WorkflowPush => workflow_decided_in(&mut tx, &decided).await?,
         ApprovalKind::BudgetOverrun => {
             if let Some(raise) = raise {
                 super::raise_in(&mut tx, &decided, raise, by).await?;
@@ -370,6 +373,12 @@ pub async fn expire_approvals(pool: &SqlitePool, now: &str) -> Result<Vec<Approv
         let a = approval_in(&mut tx, ApprovalId(id)).await?;
         let details = json!({"kind": a.kind.as_str(), "reason": a.reply});
         append_approval_event(&mut tx, &a, AuditActor::System, details).await?;
+        if a.kind == ApprovalKind::HireAgent {
+            crate::store::org::hire::hire_decided_in(&mut tx, &a, AuditActor::System).await?;
+        }
+        if a.kind == ApprovalKind::PlanApproval {
+            crate::store::work::plan_decided_in(&mut tx, &a, AuditActor::System, now).await?;
+        }
     }
     tx.commit().await?;
     Ok(ids.into_iter().map(ApprovalId).collect())

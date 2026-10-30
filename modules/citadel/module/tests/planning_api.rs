@@ -262,7 +262,6 @@ async fn the_profile_round_trips_and_changes_only_what_is_given() {
 /// The proposal half of the monolith's profile test: it needs `store::gov::propose` to accept a
 /// profile field, which S5 wires to `profile::field_patch` (S4b ships both).
 #[tokio::test]
-#[ignore = "S5: store::gov::propose refuses profile proposals until it calls profile::field_patch"]
 async fn an_agents_profile_proposal_is_listed_not_applied() {
     let fx = fx().await;
     let a = seed(&fx.app.pool, "A", "PRO", ProjectMode::Kanban).await;
