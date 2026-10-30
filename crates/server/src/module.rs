@@ -25,10 +25,15 @@
 //! Its scheduler jobs (E2-11) are `Module::jobs`: appended to the trait, so a module written
 //! before it keeps compiling.
 
+use std::any::Any;
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::routing::MethodRouter;
+pub use zeroize::Zeroizing;
 
 use crate::api::App;
 use crate::store::Migration;
@@ -42,6 +47,47 @@ pub struct ModuleSetting {
     pub min: i64,
     pub max: i64,
     pub description: &'static str,
+}
+
+/// A boxed future, so the hooks below stay object-safe.
+pub type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// One route a module lets a bearer token reach **without a device signature**
+/// (`Module::token_routes`). It is served at `/token/<module id>/v1<template>` by its own gate
+/// (`gateway::token`); nothing in the signed gate's scope tables is involved or loosened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenRoute {
+    /// `GET` or `POST`.
+    pub method: &'static str,
+    /// Absolute, relative to `/token/<id>/v1`; `{name}` only as a whole segment.
+    pub template: &'static str,
+    /// The most body bytes the route reads, `1..=MAX_TOKEN_BODY`; a larger one is a 413.
+    pub max_body: usize,
+}
+
+/// The largest `TokenRoute::max_body`.
+pub const MAX_TOKEN_BODY: usize = 1024 * 1024;
+
+/// Who a verified bearer token is, as the module understands it: handed to the handler as an
+/// extension (`TokenPrincipal`), and keyed in the per-principal rate limit by `key`.
+#[derive(Clone)]
+pub struct TokenGrant {
+    /// What the module's handlers read back with `downcast_ref`.
+    pub principal: Arc<dyn Any + Send + Sync>,
+    /// A short stable name of the principal for the rate limit (`run:12`); never the token.
+    pub key: String,
+}
+
+/// The verified principal of a token request (`Module::verify_token`), in the request's extensions.
+#[derive(Clone)]
+pub struct TokenPrincipal(pub Arc<dyn Any + Send + Sync>);
+
+/// A value a module hands a session's runner at launch (`Module::credentials`): delivered like a
+/// broker lease, held in the Core's memory only until redeemed, never stored or logged.
+pub struct Credential {
+    /// The variable name the runner delivers it under (`secrets::valid_var`).
+    pub var: String,
+    pub value: Zeroizing<String>,
 }
 
 /// A backend module mounted on the Core.
@@ -126,6 +172,38 @@ pub trait Module: Send + Sync + 'static {
     /// and run by the `jobs::Engine`. None by default. A job's name is unique within the module.
     fn jobs(&self) -> Vec<crate::jobs::Job> {
         Vec::new()
+    }
+
+    /// The routes a bearer token reaches without a device signature, listed (deny by default:
+    /// none). The Core builds the module's token router from this list and `token_handler`, so
+    /// the list is the whole unsigned surface of the module; `mount` validates it.
+    fn token_routes(&self) -> &'static [TokenRoute] {
+        &[]
+    }
+
+    /// The handler of a declared token route (`None` for a route it did not declare).
+    fn token_handler(&self, _method: &str, _template: &str) -> Option<MethodRouter<App>> {
+        None
+    }
+
+    /// Checks `token` (a bearer as sent; never logged) for a request on one of the module's
+    /// token routes. `None` refuses it, whatever the reason: the caller answers one identical 401.
+    fn verify_token<'a>(
+        &'a self,
+        _app: &'a App,
+        _token: &'a str,
+    ) -> BoxFut<'a, Option<TokenGrant>> {
+        Box::pin(async { None })
+    }
+
+    /// Credentials for the agent session `session` this module owns, minted fresh at every
+    /// launch (start and resume). `Err` fails the launch with that reason (never a value).
+    fn credentials<'a>(
+        &'a self,
+        _app: &'a App,
+        _session: &'a crate::store::agents::Session,
+    ) -> BoxFut<'a, Result<Vec<Credential>, String>> {
+        Box::pin(async { Ok(Vec::new()) })
     }
 }
 
@@ -236,6 +314,37 @@ pub(crate) fn validate(m: &dyn Module) {
             );
         }
     }
+    let mut token = HashSet::new();
+    for r in m.token_routes() {
+        assert!(
+            matches!(r.method, "GET" | "POST"),
+            "module {id}: bad token route method {:?}",
+            r.method
+        );
+        assert!(
+            legal_template(r.template),
+            "module {id}: bad token route template {:?}",
+            r.template
+        );
+        assert!(
+            (1..=MAX_TOKEN_BODY).contains(&r.max_body),
+            "module {id}: token route {} body cap {}",
+            r.template,
+            r.max_body
+        );
+        assert!(
+            token.insert((r.method, r.template)),
+            "module {id}: token route {} {} declared twice",
+            r.method,
+            r.template
+        );
+        assert!(
+            m.token_handler(r.method, r.template).is_some(),
+            "module {id}: token route {} {} has no handler",
+            r.method,
+            r.template
+        );
+    }
     let mut names = HashSet::new();
     for s in m.settings() {
         let legal = valid_id(s.name.replace('.', "_").as_str());
@@ -266,6 +375,21 @@ pub fn mount(modules: &[Arc<dyn Module>]) -> Router<App> {
         assert!(seen.insert(id), "duplicate module id {id:?}");
         validate(module.as_ref());
         router.nest(&format!("/modules/{id}/v1"), module.routes())
+    })
+}
+
+/// Every module's token routes, each at `/token/<id>/v1<template>`, built from the declared list
+/// only (`Module::token_routes`): a handler the module does not declare is never mounted. They
+/// are reached only through the token gate (`gateway::token`), which checks the declaration again.
+pub fn mount_token(modules: &[Arc<dyn Module>]) -> Router<App> {
+    modules.iter().fold(Router::new(), |router, module| {
+        let id = module.id();
+        module.token_routes().iter().fold(router, |router, r| {
+            match module.token_handler(r.method, r.template) {
+                Some(handler) => router.route(&format!("/token/{id}/v1{}", r.template), handler),
+                None => router,
+            }
+        })
     })
 }
 

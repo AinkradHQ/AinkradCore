@@ -60,7 +60,7 @@ impl RunToken {
     }
 }
 
-pub(crate) fn key_hash(raw: &str) -> String {
+pub fn key_hash(raw: &str) -> String {
     hex(&crypto::sha256(raw.as_bytes()))
 }
 

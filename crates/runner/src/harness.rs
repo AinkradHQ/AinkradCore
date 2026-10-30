@@ -490,7 +490,7 @@ mod warm;
 mod watch;
 
 use account::Credential;
-pub use files::mcp_url;
+pub use files::{core_mcp_url, mcp_url};
 use routes::routes;
 
 #[cfg(test)]

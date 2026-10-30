@@ -143,7 +143,12 @@ impl HarnessExecutor {
         reports: &mpsc::Sender<Report>,
         meter: &mut Meter,
     ) -> Outcome {
-        let mcp = self.mcp_url.as_deref().map(|url| (url, token));
+        // A session that was handed no token (no MCP) gets no MCP config.
+        let mcp = self
+            .mcp_url
+            .as_deref()
+            .filter(|_| !token.expose().is_empty())
+            .map(|url| (url, token));
         let private = self.work_root.join("private");
         let instructions = job.instructions.as_deref();
         // Removed when this future ends or is dropped (a cancelled run).

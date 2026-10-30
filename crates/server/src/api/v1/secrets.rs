@@ -296,6 +296,31 @@ pub async fn redeem(
     if me.device.kind != "runner" {
         return Err(ApiError::not_found("no such lease"));
     }
+    // A credential a module minted for this runner's session (`Module::credentials`): held in
+    // memory, single use, outside the broker's mode and tables.
+    if let Some(e) = app
+        .agents
+        .take_ephemeral(&b.lease, &me.device.id, app.clock.unix())
+    {
+        let hash = crate::auth::crypto::sha256(b.lease.as_bytes());
+        let lease: String = hash[..8].iter().map(|b| format!("{b:02x}")).collect();
+        let event = ainkrad_core::audit::NewAuditEvent {
+            actor: BY,
+            action: "secret.redeemed".to_owned(),
+            entity: None,
+            details: serde_json::json!({"name": e.var, "runner": me.device.id, "lease": lease,
+                                        "delivery": "env", "by_device": me.device.id})
+            .to_string(),
+        };
+        crate::store::audit::append_one(&app.pool, &event).await?;
+        return Ok(Json(LeasedSecret {
+            name: e.var,
+            version: 1,
+            delivery: "env".to_owned(),
+            value: e.value,
+            expires_at: ts(&iso_of_unix(e.expires)),
+        }));
+    }
     let r = store::redeem(
         &app.pool,
         sealer(&app)?,

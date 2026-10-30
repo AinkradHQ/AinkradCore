@@ -664,6 +664,7 @@ dependencies = [
  "ainkrad-proto",
  "axum",
  "citadel-module",
+ "rmcp",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -673,6 +674,7 @@ dependencies = [
  "tower",
  "tracing",
  "utoipa",
+ "zeroize",
 ]
 
 [[package]]
