@@ -2,7 +2,6 @@
 //! use marking, revocation and where pushes go (E10.4). A revoked device keeps its row.
 
 use ainkrad_core::audit::{AuditActor, AuditEntity, NewAuditEvent};
-use ainkrad_core::ids::DeviceKeyId;
 use serde_json::{Value, json};
 use sqlx::sqlite::SqlitePool;
 use sqlx::{Error, SqliteConnection};
@@ -163,65 +162,14 @@ pub(crate) async fn revoke_in(
     let Some(seq) = seq else {
         return Ok(false);
     };
+    // Its push tokens go with it (E2-12.1): a revoked device is pushed nothing.
+    sqlx::query("DELETE FROM core_push_tokens WHERE device_seq = ?")
+        .bind(seq)
+        .execute(&mut *conn)
+        .await?;
     let details = json!({"device": id, "by_device": by_device});
     audit_device(conn, seq, "device.revoked", by, details).await?;
     Ok(true)
-}
-
-/// Where a device gets pushes (E10.4).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PushTarget {
-    /// The device's row number.
-    pub device: DeviceKeyId,
-    /// The APNs device token, lowercase hex.
-    pub token: String,
-    /// A development build's token: the sandbox gateway.
-    pub sandbox: bool,
-}
-
-/// Sets (or with `None` clears) the device's push token; `false` when it is gone or not
-/// usable. A token is lowercase hex; anything else is `Error::InvalidArgument`.
-pub async fn set_push_token(
-    pool: &SqlitePool,
-    device: &str,
-    token: Option<(&str, bool)>,
-) -> Result<bool, Error> {
-    let token = token.map(|(t, sandbox)| (t.trim().to_ascii_lowercase(), sandbox));
-    if let Some((t, _)) = &token
-        && (!(32..=200).contains(&t.len()) || !t.bytes().all(|b| b.is_ascii_hexdigit()))
-    {
-        return Err(Error::InvalidArgument(
-            "a push token is 32 to 200 hex digits".to_owned(),
-        ));
-    }
-    sqlx::query(
-        "UPDATE core_devices SET push_token = ?, push_sandbox = ? \
-         WHERE id = ? AND status = 'active' AND revoked_at IS NULL",
-    )
-    .bind(token.as_ref().map(|(t, _)| t))
-    .bind(token.as_ref().is_some_and(|(_, s)| *s))
-    .bind(device)
-    .execute(pool)
-    .await
-    .map(|r| r.rows_affected() == 1)
-}
-
-/// Every usable device with a push token.
-pub async fn push_targets(pool: &SqlitePool) -> Result<Vec<PushTarget>, Error> {
-    let rows: Vec<(i64, String, bool)> = sqlx::query_as(
-        "SELECT seq, push_token, push_sandbox FROM core_devices \
-         WHERE status = 'active' AND revoked_at IS NULL AND push_token IS NOT NULL ORDER BY seq",
-    )
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .into_iter()
-        .map(|(seq, token, sandbox)| PushTarget {
-            device: DeviceKeyId(seq),
-            token,
-            sandbox,
-        })
-        .collect())
 }
 
 /// The last event seq the pusher has handled; `None` before its first run.

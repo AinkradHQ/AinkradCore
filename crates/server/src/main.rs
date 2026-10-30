@@ -29,8 +29,10 @@ const USAGE: &str = "usage:
                  [--acme-directory <url>] [--acme-http01]]
                  [--trusted-proxy <addr|cidr>[,…]]
                  [--passkeys] [--allow-origin <origin>[,…]]
+                 [--iroh [--iroh-relay <https-url>[,…]] [--iroh-bind <addr:port>[,…]]]
                  [--apns-key <file.p8> --apns-key-id <id> --apns-team-id <id>
                  --apns-topic <bundle-id>] [--log-format text|json]
+  ainkrad-core-server iroh-id <db>
   ainkrad-core-server openapi
   ainkrad-core-server backup <db> <dest>
   ainkrad-core-server restore [--force] <src> <db>
@@ -57,6 +59,11 @@ reconnect, and checkpoints the database. Limits and intervals are settings (`set
 read when serve starts. With the four --apns-* flags, what a module's push rules pick is pushed
 to the app's devices through APNs; without them it is only logged. The platform alone pushes
 nothing. --log-format json writes JSON lines; both formats are redacted (E1-13.4).
+--iroh (E2-19; off unless given) also serves the same API over iroh, for a Core behind NAT: QUIC with
+hole punching, through the relays named by --iroh-relay (your own `iroh-relay`; none means direct
+connections only, and no third-party relay is ever used), on the UDP addresses of --iroh-bind. iroh
+is transport only: a peer authenticates with the same signed device handshake as on any listener.
+The transport key is <db dir>/iroh.key (0600); iroh-id prints the endpoint id clients pin.
 openapi prints the client API's contract (api/openapi.json; `make contract`).
 device list shows every device (id, kind, name, status, fingerprint); device revoke stops one at
 once (its open sockets close within 2 s); the row stays listed. A device enrolls only by
@@ -121,6 +128,7 @@ async fn main() -> ExitCode {
         ["restore", "--force", src, db] => store::restore(Path::new(src), Path::new(db), true)
             .await
             .map_err(Into::into),
+        ["iroh-id", db] => iroh_id(Path::new(db)),
         ["openapi"] => {
             print!("{}", ainkrad_core_server::api::v1::spec::json());
             return ExitCode::SUCCESS;
@@ -229,6 +237,10 @@ struct Serve {
     passkeys: bool,
     /// `--allow-origin`: browser origins let through beside the Core's own.
     origins: Vec<String>,
+    /// `--iroh`: the opt-in iroh listener (E2-19). Off by default.
+    iroh: bool,
+    iroh_relays: Vec<String>,
+    iroh_bind: Vec<std::net::SocketAddr>,
 }
 
 /// `serve`'s flags; `None` (after saying why) on anything else.
@@ -245,6 +257,9 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
         log_json: false,
         passkeys: false,
         origins: Vec::new(),
+        iroh: false,
+        iroh_relays: Vec::new(),
+        iroh_bind: Vec::new(),
     };
     let mut apns: [Option<String>; 4] = Default::default();
     let mut it = flags.iter();
@@ -255,6 +270,10 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
         }
         if *flag == "--passkeys" {
             s.passkeys = true;
+            continue;
+        }
+        if *flag == "--iroh" {
+            s.iroh = true;
             continue;
         }
         let value = (*it.next()?).to_owned();
@@ -288,6 +307,20 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
                     s.origins.push(o.to_ascii_lowercase());
                 }
             }
+            "--iroh-relay" => s.iroh_relays.extend(comma_list(&value)),
+            "--iroh-bind" => {
+                for a in comma_list(&value) {
+                    match a.parse() {
+                        Ok(addr) => s.iroh_bind.push(addr),
+                        Err(_) => {
+                            eprintln!(
+                                "ainkrad-core-server: --iroh-bind {a}: an address like 0.0.0.0:7000"
+                            );
+                            return None;
+                        }
+                    }
+                }
+            }
             "--acme-contact" => s.acme_contact = Some(value),
             "--acme-directory" => s.acme_directory = value,
             "--trusted-proxy" => {
@@ -307,6 +340,10 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
             "--apns-topic" => apns[3] = Some(value),
             _ => return None,
         }
+    }
+    if !s.iroh && (!s.iroh_relays.is_empty() || !s.iroh_bind.is_empty()) {
+        eprintln!("ainkrad-core-server: --iroh-relay and --iroh-bind only go with --iroh");
+        return None;
     }
     s.apns = match apns {
         [Some(a), Some(b), Some(c), Some(d)] => Some([a, b, c, d]),
@@ -367,6 +404,49 @@ fn listen(db: &Path, flags: &Serve) -> Result<gateway::Listen, String> {
     })
 }
 
+/// Turns the iroh listener on (`--iroh`) and logs the endpoint id clients pin.
+#[cfg(feature = "iroh")]
+async fn with_iroh(
+    gateway: gateway::Gateway,
+    db: &Path,
+    flags: &Serve,
+) -> Result<gateway::Gateway, Box<dyn std::error::Error>> {
+    let config = gateway::p2p::Config {
+        key_path: state_dir(db).join("iroh.key"),
+        relays: flags.iroh_relays.clone(),
+        bind: flags.iroh_bind.clone(),
+    };
+    let gateway = gateway.with_iroh(config).await?;
+    if let Some(e) = gateway.iroh_endpoint() {
+        tracing::info!(endpoint_id = %e.id(), relays = flags.iroh_relays.len(), "iroh listener on");
+    }
+    Ok(gateway)
+}
+
+#[cfg(not(feature = "iroh"))]
+async fn with_iroh(
+    _: gateway::Gateway,
+    _: &Path,
+    _: &Serve,
+) -> Result<gateway::Gateway, Box<dyn std::error::Error>> {
+    Err("this build has no iroh support (built without the `iroh` feature)".into())
+}
+
+/// Prints the endpoint id of the iroh key next to `db`, making the key if there is none.
+#[cfg(feature = "iroh")]
+fn iroh_id(db: &Path) -> Result_ {
+    println!(
+        "{}",
+        gateway::p2p::endpoint_id(&state_dir(db).join("iroh.key"))?
+    );
+    Ok(())
+}
+
+#[cfg(not(feature = "iroh"))]
+fn iroh_id(_: &Path) -> Result_ {
+    Err("this build has no iroh support (built without the `iroh` feature)".into())
+}
+
 /// SIGTERM (systemd's stop) or Ctrl-C.
 async fn stop_signal() {
     use tokio::signal::unix::{SignalKind, signal};
@@ -412,25 +492,29 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
     // Read once: a change to these takes effect at the next start (E15.17).
     let [tick, push_every] = ainkrad_core_server::scheduler::loop_intervals(&pool).await?;
     let limits = Arc::new(ainkrad_core_server::api::v1::Limits::from_settings(&pool).await?);
-    let notifier: Arc<dyn push::Notifier> = match &flags.apns {
+    let apns = match &flags.apns {
         Some([key, key_id, team, topic]) => {
             let pem = std::fs::read_to_string(key)
                 .map_err(|e| format!("reading the APNs key {key}: {e}"))?;
-            Arc::new(push::apns::ApnsNotifier::new(&pem, key_id, team, topic)?)
+            Some(push::apns::ApnsNotifier::new(&pem, key_id, team, topic)?)
         }
-        None => Arc::new(push::LogNotifier),
+        None => None,
     };
-    let pusher = push::Pusher {
-        pool: pool.clone(),
-        notifier,
-        classifier: Arc::new(push::Silent),
-        every: push_every,
-    };
+    let pusher = push::Pusher::new(
+        pool.clone(),
+        push::providers(apns),
+        Arc::new(push::Silent),
+        push_every,
+        Arc::new(SystemClock),
+    );
     let host = flags.host.clone().unwrap_or_else(|| listen.default_host());
     let mut gateway = gateway::Gateway::bind(listen.clone(), gateway::Limits::default()).await?;
     // On TCP the host still gets a Unix socket, for `bootstrap`'s first device (§7.3).
     if !matches!(listen, gateway::Listen::Unix(_)) {
         gateway = gateway.with_admin_socket(&state_dir(db).join("admin.sock"))?;
+    }
+    if flags.iroh {
+        gateway = with_iroh(gateway, db, &flags).await?;
     }
     tracing::info!(listen = ?ListenLog(&listen), %host, "serving");
     let scheduler = Scheduler {
@@ -441,6 +525,21 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
     // Dropping `stop` ends both loops.
     let (stop, mut stopped) = tokio::sync::watch::channel(());
     let mut stopped_push = stopped.clone();
+    let mut stopped_jobs = stopped.clone();
+    // No module is mounted yet (E2-13); the jobs of those that are come from `Module::jobs`.
+    let modules: Arc<[Arc<dyn ainkrad_core_server::module::Module>]> = Arc::from([]);
+    ainkrad_core_server::jobs::register(&pool, &SystemClock.now(), &modules).await?;
+    let engine = ainkrad_core_server::jobs::Engine::new(
+        pool.clone(),
+        Arc::new(SystemClock),
+        &modules,
+        Default::default(),
+    );
+    let working = tokio::spawn(async move {
+        engine
+            .run(async { drop(stopped_jobs.changed().await) })
+            .await
+    });
     let pushing = tokio::spawn(async move {
         pusher
             .run(async { drop(stopped_push.changed().await) })
@@ -491,6 +590,7 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
     }
     drop(stop);
     ticking.await?;
+    working.await?;
     pushing.await?;
     // Folds the WAL back into the database file, so a stopped server leaves one file.
     sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -499,4 +599,21 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
     pool.close().await;
     tracing::info!("stopped");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::serve_flags;
+
+    #[test]
+    fn iroh_is_off_unless_asked_for() {
+        let s = serve_flags(&[]).unwrap();
+        assert!(!s.iroh && s.iroh_relays.is_empty() && s.iroh_bind.is_empty());
+        assert!(serve_flags(&["--iroh"]).unwrap().iroh);
+        // Its options mean nothing without it.
+        assert!(serve_flags(&["--iroh-relay", "https://relay.example.test"]).is_none());
+        assert!(serve_flags(&["--iroh-bind", "0.0.0.0:7000"]).is_none());
+        let s = serve_flags(&["--iroh", "--iroh-relay", "https://relay.example.test"]).unwrap();
+        assert_eq!(s.iroh_relays, ["https://relay.example.test"]);
+    }
 }

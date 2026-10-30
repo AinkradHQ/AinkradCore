@@ -12,12 +12,22 @@ ignore = [
   # no untrusted input. Every `age` release carries them (checked 0.11.5 and 0.12.1, E1-13.2). Drop when age does.
   { id = "RUSTSEC-2026-0374", reason = "basic-toml: build-time only, via age's i18n proc-macros" },
   { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2: build-time only, via age's i18n proc-macros" },
+  # E2-19 (iroh): "unmaintained", a compile-time macro crate reached through netlink-packet-core (netwatch, the
+  # Linux/Android network-change monitor). No runtime code, no untrusted input. Drop when iroh's netwatch moves off it.
+  { id = "RUSTSEC-2024-0436", reason = "paste: macro only, via iroh -> netwatch -> netlink-packet-core" },
 ]
 
 [licenses]
 version = 2
 # Our own crates are `publish = false` and carry no licence field.
 private = { ignore = true }
+# E2-19 (iroh): Unlicense (public-domain dedication) on three crates that exist only in iroh's browser (wasm) build
+# path (reqwest -> ws_stream_wasm -> pharos, async_io_stream); they are not compiled for any native target.
+exceptions = [
+  { name = "ws_stream_wasm", allow = ["Unlicense"] },
+  { name = "pharos", allow = ["Unlicense"] },
+  { name = "async_io_stream", allow = ["Unlicense"] },
+]
 allow = [
   "MIT",
   "Apache-2.0",

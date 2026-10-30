@@ -10,11 +10,13 @@ mod limits;
 mod manage;
 mod pairing;
 mod passkeys;
+mod pushtokens;
 pub use devices::*;
 pub use limits::*;
 pub use manage::*;
 pub use pairing::*;
 pub use passkeys::*;
+pub use pushtokens::*;
 
 /// The scope catalogue (spec §8, E1-09 enforces it).
 pub const SCOPES: [&str; 6] = ["read", "approve", "terminal", "agent", "admin", "runner"];

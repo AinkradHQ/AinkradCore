@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
 use ainkrad_core::audit::AuditFilter;
-use ainkrad_core::ids::UserId;
+use ainkrad_core::ids::{DeviceKeyId, UserId};
 
 use super::*;
 use crate::auth::testing::TestDevice;
 use crate::scheduler::SystemClock;
-use crate::store::gov::{device_usable, get_device, list_devices};
+use crate::store::gov::{
+    PushTarget, device_usable, get_device, list_devices, push_targets, set_push_token,
+};
 
 const BY: AuditActor = AuditActor::User(UserId(1));
 
@@ -175,6 +177,9 @@ async fn enroll_validate_mark_and_revoke() {
     );
     let want = PushTarget {
         device: DeviceKeyId(runner.seq),
+        device_id: runner.id.clone(),
+        scopes: runner.scopes.clone(),
+        provider: "apns".to_owned(),
         token: hex,
         sandbox: true,
     };
