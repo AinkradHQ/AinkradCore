@@ -7,9 +7,11 @@
 //! - `read`: what the device itself shows (its own identity and push token, events, settings).
 //! - `admin`: devices, pairing, setting changes, the audit log.
 //! - `agent`: sending a runner a command (`POST /api/v1/runners/{id}/noop`).
+//! - Secrets (E2-07): managing them and granting a lease is `admin` (and destructive); the one
+//!   route a `runner` device may call is redeeming a lease granted to it.
 //! - A module's routes need the module's own `Module::scope` (`admin` unless it says otherwise).
-//! - A `runner` device holds only `runner`, which no `/api/v1` route takes: it can call nothing
-//!   here (the runner hub is E1-11).
+//! - A `runner` device holds only `runner`, which only `POST /api/v1/secret-leases/redeem`
+//!   takes: it can call nothing else here (the runner hub is E1-11).
 //!
 //! **Destructive routes** (spec §8, E1-09.6) are listed in [`DESTRUCTIVE`] (a module's in
 //! `Module::destructive`): on top of its scope, such a route needs a session elevated by a
@@ -56,6 +58,12 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/runners", "read"),
     ("GET", "/api/v1/runners/{id}", "read"),
     ("POST", "/api/v1/runners/{id}/noop", "agent"),
+    ("GET", "/api/v1/secrets", "admin"),
+    ("POST", "/api/v1/secrets", "admin"),
+    ("PUT", "/api/v1/secrets/{id}", "admin"),
+    ("DELETE", "/api/v1/secrets/{id}", "admin"),
+    ("POST", "/api/v1/secrets/{id}/leases", "admin"),
+    ("POST", "/api/v1/secret-leases/redeem", "runner"),
 ];
 
 /// `(method, path template)` of every route that needs a live elevation (spec §8): device
@@ -77,6 +85,11 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("PUT", "/api/v1/settings/{scope}/{key}"),
     ("DELETE", "/api/v1/settings/{scope}/{key}"),
     ("POST", "/api/v1/auth/lockouts/clear"),
+    // Secrets (E2-07): every write, and a lease, the only way a value leaves the Core.
+    ("POST", "/api/v1/secrets"),
+    ("PUT", "/api/v1/secrets/{id}"),
+    ("DELETE", "/api/v1/secrets/{id}"),
+    ("POST", "/api/v1/secrets/{id}/leases"),
 ];
 
 /// Whether `path` fits `template` segment by segment.

@@ -46,7 +46,9 @@
 /// 11: handshake review (L3, L4, M1): `proveHandshake` answers its own `HandshakeProof`, with
 ///    `core_spki` and `core_sig` required, and is under the challenge rate (429); a challenge is
 ///    stateless (still 32 bytes, 43 characters).
-pub const API_MINOR: u32 = 11;
+/// 12: the secrets broker (E2-07): `listSecrets`, `createSecret`, `rotateSecret`, `deleteSecret`,
+///    `leaseSecret`, `redeemSecretLease` (scope `runner`), the `secret.*` audit actions.
+pub const API_MINOR: u32 = 12;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

@@ -187,6 +187,11 @@
           "recover.started",
           "runner.command",
           "runner.refused",
+          "secret.created",
+          "secret.deleted",
+          "secret.leased",
+          "secret.redeemed",
+          "secret.rotated",
           "setting.reset",
           "setting.set"
         ]
@@ -728,6 +733,53 @@
         ],
         "type": "object"
       },
+      "LeaseGrant": {
+        "description": "A granted lease: hand `lease` to the runner, which redeems it once before `expires_at`.",
+        "properties": {
+          "expires_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "lease": {
+            "description": "`l_…`; only its runner can redeem it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lease",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "LeasedSecret": {
+        "description": "A redeemed secret, for the runner only. No `Debug`.",
+        "properties": {
+          "delivery": {
+            "type": "string"
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "Drop it by then, or at the session's end."
+          },
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "delivery",
+          "value",
+          "expires_at"
+        ],
+        "type": "object"
+      },
       "Lockout": {
         "description": "A key that is locked now.",
         "properties": {
@@ -784,6 +836,27 @@
         ],
         "type": "object"
       },
+      "NewLease": {
+        "description": "A lease to grant.",
+        "properties": {
+          "runner": {
+            "description": "The runner's device id, `d_…`; it must be in the secret's scope.",
+            "type": "string"
+          },
+          "ttl_secs": {
+            "description": "Its lifetime; default and most `secrets.lease_secs`.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "runner"
+        ],
+        "type": "object"
+      },
       "NewPairingBody": {
         "additionalProperties": false,
         "properties": {
@@ -807,6 +880,40 @@
           "name",
           "kind",
           "scopes"
+        ],
+        "type": "object"
+      },
+      "NewSecret": {
+        "description": "A new secret. Deliberately no `Debug`.",
+        "properties": {
+          "delivery": {
+            "description": "`env` (the default), `file` or `askpass`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "runners": {
+            "description": "Runner device ids it may be leased to; default none.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "value": {
+            "description": "UTF-8 text, at most `secrets.max_bytes`; written, never read back.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
         ],
         "type": "object"
       },
@@ -1084,6 +1191,18 @@
         ],
         "type": "object"
       },
+      "RedeemLease": {
+        "description": "A lease to redeem.",
+        "properties": {
+          "lease": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lease"
+        ],
+        "type": "object"
+      },
       "Rename": {
         "additionalProperties": false,
         "description": "A device's new name.",
@@ -1095,6 +1214,33 @@
         },
         "required": [
           "name"
+        ],
+        "type": "object"
+      },
+      "RotateSecret": {
+        "description": "A rotation: the new value, and optionally a new scope or delivery. No `Debug`.",
+        "properties": {
+          "delivery": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runners": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
         ],
         "type": "object"
       },
@@ -1198,6 +1344,74 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "SecretDeleted": {
+        "description": "What a delete answers.",
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "type": "object"
+      },
+      "SecretInfo": {
+        "description": "A secret, never its value.",
+        "properties": {
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "delivery": {
+            "description": "How a runner hands it to a session: `env`, `file` or `askpass`.",
+            "type": "string"
+          },
+          "key_id": {
+            "description": "The master key it is sealed under.",
+            "type": "string"
+          },
+          "name": {
+            "description": "`[a-z][a-z0-9_.-]{0,63}`.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "The device that stored it, `d_…`.",
+            "type": "string"
+          },
+          "runners": {
+            "description": "The runner devices it may be leased to (its scope); empty: none.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "size": {
+            "description": "The value's length in bytes.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "version": {
+            "description": "1 when stored, one more per rotation.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "owner",
+          "runners",
+          "delivery",
+          "version",
+          "size",
+          "key_id",
+          "created_at",
+          "updated_at"
+        ],
         "type": "object"
       },
       "SessionGrant": {
@@ -1568,7 +1782,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.11.0"
+    "version": "1.12.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2818,6 +3032,334 @@
           "runners"
         ],
         "x-ainkrad-scope": "agent"
+      }
+    },
+    "/api/v1/secret-leases/redeem": {
+      "post": {
+        "operationId": "redeemSecretLease",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedeemLease"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeasedSecret"
+                }
+              }
+            },
+            "description": "The lease's runner (and only it) gets the value, once (audited as `secret.redeemed`). 404 for a lease that is not this runner's or no longer in scope, 410 `lease_expired` when spent or expired, 409 `secrets_disabled`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "secrets"
+        ],
+        "x-ainkrad-scope": "runner"
+      }
+    },
+    "/api/v1/secrets": {
+      "get": {
+        "operationId": "listSecrets",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SecretInfo"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Every secret, by name, without its value"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "secrets"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "post": {
+        "operationId": "createSecret",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewSecret"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretInfo"
+                }
+              }
+            },
+            "description": "Stored, sealed (audited as `secret.created`). 409 `secrets_disabled` (gate G-SEC, `secrets.mode` 0), `real_secret_refused` (mode 1 and a value shaped like a real credential), `conflict` or `limit_reached`; 400 `too_large`; 503 `secrets_unavailable` (no master key)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "secrets"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/secrets/{id}": {
+      "delete": {
+        "operationId": "deleteSecret",
+        "parameters": [
+          {
+            "description": "The secret's name",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretDeleted"
+                }
+              }
+            },
+            "description": "Deleted with its leases (audited as `secret.deleted`); works whatever `secrets.mode` is"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "secrets"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      },
+      "put": {
+        "operationId": "rotateSecret",
+        "parameters": [
+          {
+            "description": "The secret's name",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateSecret"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretInfo"
+                }
+              }
+            },
+            "description": "A new version (audited as `secret.rotated`); the refusals of `createSecret`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "secrets"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/secrets/{id}/leases": {
+      "post": {
+        "operationId": "leaseSecret",
+        "parameters": [
+          {
+            "description": "The secret's name",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewLease"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeaseGrant"
+                }
+              }
+            },
+            "description": "A lease for one runner in the secret's scope, one redemption, `ttl_secs` at most (audited as `secret.leased`). 409 `secrets_disabled` or `limit_reached`; 400 when the runner is not in scope"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "secrets"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
       }
     },
     "/api/v1/settings": {

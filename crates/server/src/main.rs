@@ -454,6 +454,17 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
     tracing::info!(core_fp = identity.fp, "Core identity");
     let mut app = App::new(pool, Arc::new(SystemClock), host, identity);
     app.limits = limits;
+    let master = ainkrad_core_server::ops::config::Home(state_dir(db).to_path_buf()).master_key();
+    if master.exists() {
+        let sealer = ainkrad_core_server::ops::secretbox::SecretBox::from_file(&master)?;
+        tracing::info!(
+            key_id = sealer.key_id(),
+            "secrets broker: master key loaded"
+        );
+        app.secrets = Some(Arc::new(sealer));
+    } else {
+        tracing::warn!("no keys/master.key beside the database: the secrets broker is unavailable");
+    }
     if let Some(list) = flags.trusted_proxies {
         app.trusted_proxies = list.into();
     }

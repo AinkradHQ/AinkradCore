@@ -32,8 +32,8 @@ use crate::module::Module;
 use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{
-    audit, devices, events, handshake, lockouts, me, pair, pairing, passkey, runners, session,
-    settings, stepup, ticket, types, websession,
+    audit, devices, events, handshake, lockouts, me, pair, pairing, passkey, runners, secrets,
+    session, settings, stepup, ticket, types, websession,
 };
 
 #[derive(OpenApi)]
@@ -80,6 +80,12 @@ use super::{
         stepup::step_up,
         lockouts::list,
         lockouts::clear,
+        secrets::list,
+        secrets::create,
+        secrets::rotate,
+        secrets::delete,
+        secrets::lease,
+        secrets::redeem,
     ),
     components(schemas(types::ErrorBody, events::Event))
 )]
