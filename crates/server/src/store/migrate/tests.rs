@@ -103,7 +103,8 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
             (3, "device_identity"),
             (4, "event_visibility"),
             (5, "passkeys"),
-            (6, "audit_device_ref")
+            (6, "audit_device_ref"),
+            (7, "secrets")
         ]
     );
     let sum: Vec<u8> =

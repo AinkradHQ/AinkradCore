@@ -13,18 +13,26 @@
 //! for (an ACME key cannot be swapped in as the identity key) and a version byte cannot be
 //! changed. Nonces are 96 random bits per seal: safe far beyond the handful of secrets a Core
 //! seals with one key (the bound is about 2^32 seals).
+//!
+//! Each key has a `key_id` (the first 8 bytes of a domain-separated SHA-256 of the key, hex):
+//! the secrets broker stores it beside every sealed value, so a value sealed under another
+//! master key is named as such instead of failing as tampered, and a rotation can find what it
+//! still has to re-seal. Plaintext buffers are wiped on drop (`Zeroizing`).
 
 use std::fmt;
 use std::path::Path;
 
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
+use ring::digest::{SHA256, digest};
 use ring::rand::{SecureRandom, SystemRandom};
+use zeroize::Zeroizing;
 
 const V1: u8 = 1;
 const TAG_LEN: usize = 16;
 
 pub struct SecretBox {
     key: LessSafeKey,
+    id: String,
 }
 
 /// Why a sealed value did not open. The cases are kept apart only for the message: none of
@@ -59,21 +67,33 @@ fn aad(label: &str) -> Vec<u8> {
 
 impl SecretBox {
     pub fn new(key: &[u8; 32]) -> Self {
+        let tagged = Zeroizing::new([b"ainkrad-master-key-id\n".as_slice(), key].concat());
+        let id = digest(&SHA256, &tagged).as_ref()[..8]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         let key = UnboundKey::new(&AES_256_GCM, key).expect("32 bytes is an AES-256 key");
         Self {
             key: LessSafeKey::new(key),
+            id,
         }
+    }
+
+    /// The key's id: 16 hex characters, safe to store and log.
+    pub fn key_id(&self) -> &str {
+        &self.id
     }
 
     /// The master key file: exactly 32 bytes.
     pub fn from_file(path: &Path) -> std::io::Result<Self> {
-        let bytes = std::fs::read(path)?;
-        let key: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("{} is not a 32-byte master key", path.display()),
-            )
-        })?;
+        let bytes = Zeroizing::new(std::fs::read(path)?);
+        let key: Zeroizing<[u8; 32]> =
+            Zeroizing::new(bytes.as_slice().try_into().map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("{} is not a 32-byte master key", path.display()),
+                )
+            })?);
         Ok(Self::new(&key))
     }
 
@@ -82,12 +102,14 @@ impl SecretBox {
         SystemRandom::new()
             .fill(&mut nonce)
             .map_err(|_| std::io::Error::other("the OS random source failed"))?;
-        let mut body = plaintext.to_vec();
+        // Room for the tag up front: a reallocation would free a plaintext copy unwiped.
+        let mut body = Zeroizing::new(Vec::with_capacity(plaintext.len() + TAG_LEN));
+        body.extend_from_slice(plaintext);
         self.key
             .seal_in_place_append_tag(
                 Nonce::assume_unique_for_key(nonce),
                 Aad::from(aad(label)),
-                &mut body,
+                &mut *body,
             )
             .map_err(|_| std::io::Error::other("sealing failed"))?;
         let mut out = Vec::with_capacity(1 + NONCE_LEN + body.len());
@@ -97,7 +119,8 @@ impl SecretBox {
         Ok(out)
     }
 
-    pub fn open(&self, label: &str, sealed: &[u8]) -> Result<Vec<u8>, OpenError> {
+    /// The plaintext, wiped when dropped.
+    pub fn open(&self, label: &str, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>, OpenError> {
         let (&version, rest) = sealed.split_first().ok_or(OpenError::Malformed)?;
         if version != V1 {
             return Err(OpenError::Version);
@@ -107,12 +130,12 @@ impl SecretBox {
         }
         let (nonce, body) = rest.split_at(NONCE_LEN);
         let nonce = Nonce::try_assume_unique_for_key(nonce).map_err(|_| OpenError::Malformed)?;
-        let mut body = body.to_vec();
+        let mut body = Zeroizing::new(body.to_vec());
         let plain = self
             .key
             .open_in_place(nonce, Aad::from(aad(label)), &mut body)
             .map_err(|_| OpenError::Rejected)?;
-        Ok(plain.to_vec())
+        Ok(Zeroizing::new(plain.to_vec()))
     }
 }
 
@@ -127,7 +150,7 @@ mod tests {
         assert_eq!(sealed[0], V1);
         assert_eq!(sealed.len(), 1 + NONCE_LEN + 15 + TAG_LEN);
         assert_eq!(
-            boxed.open("acme.account", &sealed).unwrap(),
+            boxed.open("acme.account", &sealed).unwrap().as_slice(),
             b"the account key"
         );
         assert_ne!(
@@ -158,5 +181,8 @@ mod tests {
             boxed.open("acme.account", &sealed[..20]),
             Err(OpenError::Malformed)
         );
+        assert_eq!(boxed.key_id().len(), 16);
+        assert_eq!(boxed.key_id(), SecretBox::new(&[7; 32]).key_id());
+        assert_ne!(boxed.key_id(), SecretBox::new(&[8; 32]).key_id());
     }
 }
