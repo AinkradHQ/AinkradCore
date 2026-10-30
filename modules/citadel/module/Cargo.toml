@@ -1,0 +1,27 @@
+[package]
+name = "citadel-module"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Raw writers that bypass the audited service, for fixtures only.
+test-support = []
+
+[dependencies]
+# The platform the module is built on (it never depends the other way: `dependency_direction`).
+ainkrad-core = { path = "../../../crates/core" }
+ainkrad-core-server = { path = "../../../crates/server" }
+axum = { version = "0.8.9", features = ["ws"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "json"] }
+
+[dev-dependencies]
+ainkrad-core-server = { path = "../../../crates/server", features = ["test-support"] }
+citadel-module = { path = ".", features = ["test-support"] }
+tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5.3", features = ["util"] }

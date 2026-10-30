@@ -6,6 +6,9 @@
 //! - `public`: TLS 1.3 on :443 with an ACME certificate (`tls`, `acme`), and :80 only when
 //!   HTTP-01 is turned on. Opt-in, and refused without a hostname and an ACME contact.
 //!
+//! - `p2p` (feature `iroh`, `serve --iroh`): off unless asked for; QUIC over iroh for a Core
+//!   behind NAT. Transport only: every stream carries HTTP/1.1 into the same router.
+//!
 //! Before routing, the pre-auth gate (`preauth`) lets four route prefixes through without a
 //! key and refuses everything else unauthenticated.
 
@@ -19,6 +22,8 @@ use tokio::net::{TcpListener, UnixListener};
 pub mod acme;
 mod conn;
 mod idle;
+#[cfg(feature = "iroh")]
+pub mod p2p;
 pub mod preauth;
 pub mod tls;
 
@@ -109,6 +114,9 @@ pub struct Gateway {
     http01: Option<TcpListener>,
     /// The public listener's certificates and how to renew them.
     tls: Option<(Arc<tls::Certs>, acme::Acme)>,
+    /// The opt-in iroh listener (`with_iroh`): off unless asked for.
+    #[cfg(feature = "iroh")]
+    iroh: Option<p2p::Listener>,
     limits: Limits,
 }
 
@@ -139,8 +147,24 @@ impl Gateway {
             admin: None,
             http01,
             tls,
+            #[cfg(feature = "iroh")]
+            iroh: None,
             limits,
         })
+    }
+
+    /// Also serves the same routes over iroh (E2-19): a second, opt-in listener for a Core
+    /// behind NAT. See `p2p`.
+    #[cfg(feature = "iroh")]
+    pub async fn with_iroh(mut self, config: p2p::Config) -> std::io::Result<Self> {
+        self.iroh = Some(p2p::Listener::bind(config).await?);
+        Ok(self)
+    }
+
+    /// The iroh endpoint, when `with_iroh` turned it on.
+    #[cfg(feature = "iroh")]
+    pub fn iroh_endpoint(&self) -> Option<&::iroh::Endpoint> {
+        self.iroh.as_ref().map(p2p::Listener::endpoint)
     }
 
     /// Also serves the same routes on a Unix socket at `path` (`0600`), so a TCP Core can be

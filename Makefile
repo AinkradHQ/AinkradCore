@@ -1,9 +1,13 @@
 CARGO ?= cargo
 
-.PHONY: perf test-web e1-exit e1-exit-faults soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel release-dry release-repro release-test fuzz-smoke audit-fuzz
+.PHONY: check-env install-test perf test-web e1-exit e1-exit-faults soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel release-dry release-repro release-test fuzz-smoke audit-fuzz
 build: lint ; $(CARGO) build --workspace
 test: lint ; $(CARGO) test --workspace
-lint: format-check ; $(CARGO) clippy --workspace --all-targets -- -D warnings
+lint: format-check check-env ; $(CARGO) clippy --workspace --all-targets -- -D warnings
+# No environment-specific values in the repo (hosts, IPs, namespaces, emails); the selftest proves the guard.
+check-env: ; scripts/no-env-values.sh && scripts/no-env-values.sh --selftest
+# The guided installer (scripts/install.sh): shellcheck, validator unit tests and a --dry-run; no root needed.
+install-test: ; shellcheck -x scripts/install.sh scripts/install/*.sh scripts/no-env-values.sh scripts/e1-exit-remote.sh scripts/host/harden.sh && scripts/install/test.sh
 format: ; $(CARGO) fmt --all
 format-check: ; $(CARGO) fmt --all --check
 # The contract (E10.1, E1-05.1): api/openapi.json, events.schema.json, runner.schema.json; `make test` fails while openapi.json is stale.

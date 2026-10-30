@@ -100,6 +100,8 @@ impl Gateway {
             })
         });
         let app_admin = app.clone();
+        #[cfg(feature = "iroh")]
+        let app_iroh = app.clone();
         let main = accept(self.main, tls, app, &limits, &graceful, closing.subscribe());
         let http01 = async {
             if let (Some(l80), Some((certs, _))) = (self.http01, &self.tls) {
@@ -114,8 +116,17 @@ impl Gateway {
                 accept(admin, None, app, &limits, &graceful, closing.subscribe()).await;
             }
         };
+        #[cfg(feature = "iroh")]
+        let iroh = async {
+            if let Some(iroh) = &self.iroh {
+                let closing = closing.subscribe();
+                iroh.accept(app_iroh, &limits, &graceful, closing).await;
+            }
+        };
+        #[cfg(not(feature = "iroh"))]
+        let iroh = async {};
         // Every loop ends once `closing` is set and drops its listener: nothing new comes.
-        tokio::join!(main, http01, admin);
+        tokio::join!(main, http01, admin, iroh);
         if let Some(renewing) = renewing {
             renewing.abort();
         }
@@ -124,6 +135,10 @@ impl Gateway {
             .is_err()
         {
             tracing::warn!(?grace, "requests still in flight after the grace; dropped");
+        }
+        #[cfg(feature = "iroh")]
+        if let Some(iroh) = &self.iroh {
+            iroh.close().await;
         }
         Ok(())
     }
@@ -216,15 +231,22 @@ async fn next(listener: &Listener) -> std::io::Result<(Stream, Option<SocketAddr
 /// reaches handlers as `ConnectInfo` (a socket peer has none: the client gate calls it
 /// `local`).
 /// Who is on the other end: a TCP address, or a local socket peer.
-enum Peer {
+#[derive(Clone, Copy)]
+pub(super) enum Peer {
     Tcp(Option<SocketAddr>),
     /// Over TLS, with its exporter.
     Tls(Option<SocketAddr>, Option<Exporter>),
     Local(Local),
 }
 
-async fn serve_conn<I>(io: I, h2: bool, peer: Peer, app: Router, limits: &Limits, w: Watcher)
-where
+pub(super) async fn serve_conn<I>(
+    io: I,
+    h2: bool,
+    peer: Peer,
+    app: Router,
+    limits: &Limits,
+    w: Watcher,
+) where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let service = hyper::service::service_fn(move |mut req: hyper::Request<Incoming>| {
