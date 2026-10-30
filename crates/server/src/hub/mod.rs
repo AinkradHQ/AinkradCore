@@ -87,6 +87,7 @@ struct Pending {
     // ponytail: every Core frame is kept until the answer; credits pile up on a stream with
     // much output. Drop the ones below the runner's count once output streams exist (E2).
     sent: Vec<Frame>,
+    next_sent: u64,
     received: u64,
     credit: u64,
     /// A `pty.open`/`pty.attach` stream: it may carry one `opened` and credited `snapshot`s.
@@ -97,8 +98,15 @@ struct Pending {
 impl Pending {
     /// The next Core frame on this stream, kept for a resend.
     fn frame(&mut self, stream: u64, body: Body) -> Frame {
-        let f = Frame::new(stream, self.sent.len() as u64, body);
+        let f = Frame::new(stream, self.next_sent, body);
+        self.next_sent = self.next_sent.saturating_add(1);
         self.sent.push(f.clone());
+        f
+    }
+
+    fn ephemeral(&mut self, stream: u64, body: Body) -> Frame {
+        let f = Frame::new(stream, self.next_sent, body);
+        self.next_sent = self.next_sent.saturating_add(1);
         f
     }
 }
@@ -260,6 +268,7 @@ impl Hub {
         let mut p = Pending {
             to,
             sent: Vec::new(),
+            next_sent: 0,
             received: 0,
             credit: STREAM_WINDOW,
             terminal,
@@ -294,6 +303,28 @@ impl Hub {
     pub fn online(&self, runner: &str) -> bool {
         let all = self.runners.lock().unwrap();
         all.get(runner).is_some_and(|r| r.conn.is_some())
+    }
+
+    /// Sends a bounded, non-retained terminal input/control frame. Terminal input is deliberately
+    /// not part of the resume buffer: typed passwords must live only long enough to reach the
+    /// runner. The initial command and protocol control frames remain resumable.
+    pub fn send_terminal(&self, runner: &str, stream: u64, body: Body) -> Result<(), StreamError> {
+        let mut all = self.runners.lock().unwrap();
+        let r = all
+            .get_mut(runner)
+            .filter(|r| r.conn.is_some())
+            .ok_or_else(|| err(ErrorCode::Offline, "the runner is not connected"))?;
+        let p = r
+            .inflight
+            .get_mut(&stream)
+            .ok_or_else(|| err(ErrorCode::Lost, "the terminal stream is gone"))?;
+        let frame = p.ephemeral(stream, body);
+        r.conn
+            .as_ref()
+            .expect("filtered above")
+            .out
+            .try_send(frame)
+            .map_err(|_| err(ErrorCode::Busy, "the runner's connection is backed up"))
     }
 
     /// Every runner that connected since the Core started, by device id.
@@ -346,17 +377,20 @@ impl Hub {
             r.lose_all();
         }
         let mut streams = Vec::with_capacity(r.inflight.len());
-        for (id, p) in &r.inflight {
+        for (id, p) in &mut r.inflight {
             let got = hello
                 .streams
                 .iter()
                 .find(|s| s.stream_id == *id)
                 .map_or(0, |s| s.received);
-            for f in p
-                .sent
-                .iter()
-                .skip(usize::try_from(got).unwrap_or(usize::MAX))
-            {
+            // The runner's hello is an acknowledgement of the Core frames it received.
+            // Drop that prefix before resending: terminal input can include passwords and must
+            // not remain in Core memory for the lifetime of a stream.
+            let acknowledged = usize::try_from(got).unwrap_or(usize::MAX).min(p.sent.len());
+            if acknowledged > 0 {
+                p.sent.drain(..acknowledged);
+            }
+            for f in &p.sent {
                 // ponytail: a resend past the queue is dropped; the runner would then wait
                 // for the command until the Core loses it. Fine below OUT_QUEUE in flight.
                 let _ = out.try_send(f.clone());
