@@ -163,7 +163,9 @@ pub async fn gate(
     let Some(grant) = grant else {
         tracing::warn!(addr, module = module.id(), "token request refused");
         let resp = match gov::locked_until(&app.pool, &[&key], now).await {
-            Ok(Some(until)) => too_many(std::time::Duration::from_secs((until - now).max(1) as u64)),
+            Ok(Some(until)) => {
+                too_many(std::time::Duration::from_secs((until - now).max(1) as u64))
+            }
             Err(e) => ApiError::from(e).into_response(),
             Ok(None) if app.auth.token_failures.count(&addr, now) => {
                 match gov::record_failure(&app.pool, &key, ADDRESS, now).await {

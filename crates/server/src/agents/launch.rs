@@ -109,7 +109,12 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
     match minted(app, s).await {
         Ok(grants) => secrets.extend(grants),
         Err(e) => {
-            fail(app, s, &format!("minting its credentials: {}", describe(&e))).await;
+            fail(
+                app,
+                s,
+                &format!("minting its credentials: {}", describe(&e)),
+            )
+            .await;
             return Err(e);
         }
     }

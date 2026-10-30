@@ -81,7 +81,11 @@ pub struct AgentConfig {
 // ponytail: one agy at a time; a home per run would lose its login, so that is the upgrade
 // only once agy takes its config by flag.
 fn one_at_a_time(harness: &str, slots: usize) -> usize {
-    if harness == "agy" { slots.min(1) } else { slots }
+    if harness == "agy" {
+        slots.min(1)
+    } else {
+        slots
+    }
 }
 
 impl AgentConfig {

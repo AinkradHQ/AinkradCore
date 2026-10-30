@@ -63,7 +63,11 @@ fn script(s: &str) -> Script {
 
 impl Executor for Script {
     async fn start(&self, job: &Job) -> Result<Option<String>, String> {
-        if self.starts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+        if self
+            .starts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            == 0
+        {
             tokio::time::sleep(self.first_start).await;
         }
         Ok(Some(format!("h-{}", job.context_ref)))
@@ -725,7 +729,10 @@ async fn a_retried_start_mints_a_fresh_credential_instead_of_resending_a_spent_l
     let (done, _) = finished(&core, &s.id).await;
     assert_eq!(done.outcome.as_ref().unwrap()["kind"], "succeeded");
     let mints = MINTS.load(std::sync::atomic::Ordering::SeqCst) - before;
-    assert!(mints >= 2, "the retry reused the first attempt's lease ({mints} minted)");
+    assert!(
+        mints >= 2,
+        "the retry reused the first attempt's lease ({mints} minted)"
+    );
     r.halt().await;
     let _ = std::fs::remove_dir_all(&st.0);
 }

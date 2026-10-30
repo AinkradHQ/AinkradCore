@@ -196,6 +196,19 @@ impl HarnessExecutor {
         if let Some(c) = credential {
             env.push((c.var, c.value.into()));
         }
+        // The `citadel` CLI first on `PATH` (E15.18). The run token stays out of the
+        // environment, as before: the CLI reads the run's private token file.
+        if let Some(token) = &files.token {
+            env.push(("CITADEL_RUN_TOKEN_FILE".to_owned(), token.into()));
+        }
+        if let Some(bin) = &files.bin {
+            let mut path = std::ffi::OsString::from(bin);
+            if let Some(rest) = std::env::var_os("PATH") {
+                path.push(":");
+                path.push(rest);
+            }
+            env.push(("PATH".to_owned(), path));
+        }
         let default_model = HARNESSES
             .iter()
             .find(|(name, _)| *name == job.harness)
