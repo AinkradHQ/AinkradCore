@@ -1,0 +1,28 @@
+# Self-hosted iroh relay for a NAT'd Ainkrad Core (E2-19). Placeholders only: fill the <...> values on
+# the host, in /etc/ainkrad-relay/relay.toml (see ainkrad-iroh-relay.service). Never commit real values.
+#
+# The relay forwards encrypted QUIC packets between endpoints and sees only endpoint ids and byte
+# counts. It is not a trust anchor: a peer still authenticates to the Core with its device key.
+
+# Relay HTTP (also the ACME HTTP port). The relay's HTTPS port is 443 (below).
+http_bind_addr = "0.0.0.0:80"
+
+# QUIC address discovery lets clients learn their public address, which direct hole punching
+# needs. It uses UDP; set it to false to keep the host TCP-only (the relay path still works).
+# Open UDP 7842 in the host firewall and the cloud security list only when this is true
+# (deploy/iroh-relay/firewall.sh).
+enable_quic_addr_discovery = true
+
+[tls]
+https_bind_addr = "0.0.0.0:443"
+quic_bind_addr = "0.0.0.0:7842"
+cert_mode = "LetsEncrypt"
+hostname = "<relay-hostname>"
+contact = "<acme-contact-email>"
+cert_dir = "/var/lib/ainkrad-relay/certs"
+prod_tls = true
+
+# Bound what one client can push through the relay (bytes per second, and a burst).
+[limits.client.rx]
+bytes_per_second = 1048576
+max_burst_bytes = 4194304
