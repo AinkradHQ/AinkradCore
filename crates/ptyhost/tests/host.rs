@@ -8,7 +8,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use ainkrad_proto::v2::Size;
-use ainkrad_ptyhost::client::{HostReader, HostWriter, connect, launch, new_id, scan};
+use ainkrad_ptyhost::client::{HostReader, HostWriter, connect, launch, new_id, scan, scan_report};
 use ainkrad_ptyhost::host::{HostConfig, random_hex, record_path, run, socket_path};
 use ainkrad_ptyhost::pty::{Exit, Spec, environment};
 use ainkrad_ptyhost::screen::Raw;
@@ -267,7 +267,9 @@ async fn hosts_survive_their_runner_and_are_re_adopted() {
     )
     .unwrap();
 
-    let found = scan(&dir).await;
+    let report = scan_report(&dir).await;
+    assert_eq!(report.orphaned, vec!["t_stale"]);
+    let found = report.live;
     let mut want = ids.clone();
     want.sort();
     assert_eq!(found.iter().map(|i| i.id.clone()).collect::<Vec<_>>(), want);

@@ -153,9 +153,16 @@ pub async fn launch(bin: &Path, dir: &Path, id: &str, spec: &Spec) -> io::Result
 /// its socket), for re-adoption. Files are removed only for a host that is provably gone: its
 /// socket is missing or refuses the connection (review M1). A host that is slow to answer,
 /// speaks a newer protocol, or answers as another process is left alone and not listed.
-pub async fn scan(dir: &Path) -> Vec<HostInfo> {
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ScanReport {
+    pub live: Vec<HostInfo>,
+    /// Records whose host was provably gone. The runner can report these to Core before cleanup.
+    pub orphaned: Vec<String>,
+}
+
+pub async fn scan_report(dir: &Path) -> ScanReport {
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
+        return ScanReport::default();
     };
     let ids: Vec<String> = entries
         .filter_map(Result::ok)
@@ -166,6 +173,7 @@ pub async fn scan(dir: &Path) -> Vec<HostInfo> {
         })
         .collect();
     let mut live = Vec::new();
+    let mut orphaned = Vec::new();
     for id in ids {
         let record: Option<HostRecord> = std::fs::read(record_path(dir, &id))
             .ok()
@@ -180,6 +188,7 @@ pub async fn scan(dir: &Path) -> Vec<HostInfo> {
                     io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
                 ) =>
             {
+                orphaned.push(id.clone());
                 let _ = std::fs::remove_file(record_path(dir, &id));
                 let _ = std::fs::remove_file(socket_path(dir, &id));
             }
@@ -187,7 +196,12 @@ pub async fn scan(dir: &Path) -> Vec<HostInfo> {
         }
     }
     live.sort_by(|a, b| a.id.cmp(&b.id));
-    live
+    orphaned.sort();
+    ScanReport { live, orphaned }
+}
+
+pub async fn scan(dir: &Path) -> Vec<HostInfo> {
+    scan_report(dir).await.live
 }
 
 /// The host binary: `$AINKRAD_PTYHOST`, else `ainkrad-ptyhost` next to the running executable
