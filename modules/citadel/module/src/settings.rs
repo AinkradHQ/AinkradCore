@@ -235,6 +235,21 @@ pub const SETTINGS: &[ModuleSetting] = &[
         "How long a run's token for its agent's callbacks lives (it is revoked when the run ends).",
     ),
     s(
+        "mcp.enabled",
+        0,
+        0,
+        1,
+        "Whether a run's agent is handed a token for the MCP server (1) or none (0). The engine \
+         works without it; with it an agent reads and updates its own issue.",
+    ),
+    s(
+        "mcp.max_calls_per_run",
+        2000,
+        1,
+        100_000,
+        "The most tool calls one run's token may make; past it every call is refused.",
+    ),
+    s(
         "wake.timer_batch",
         50,
         1,

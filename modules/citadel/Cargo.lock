@@ -132,6 +132,7 @@ dependencies = [
 name = "ainkrad-harness"
 version = "0.1.0"
 dependencies = [
+ "ainkrad-sys",
  "getrandom 0.4.3",
  "reqwest 0.12.28",
  "serde",
@@ -655,6 +656,7 @@ dependencies = [
  "ainkrad-proto",
  "axum",
  "citadel-module",
+ "rmcp",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -664,6 +666,7 @@ dependencies = [
  "tower",
  "tracing",
  "utoipa",
+ "zeroize",
 ]
 
 [[package]]
