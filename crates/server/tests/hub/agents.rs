@@ -81,6 +81,21 @@ impl Executor for Script {
             .unwrap();
         let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            if line == "APPROVAL" {
+                let (reply, answer) = ainkrad_runner::Reply::new();
+                let ask = Report::Approval {
+                    id: "t1".to_owned(),
+                    tool: "Bash".to_owned(),
+                    input: json!({"command": "make deploy"}),
+                    timeout_secs: 30,
+                    reply,
+                };
+                let _ = reports.send(ask).await;
+                let approved = answer.await.is_ok_and(|a| a.approved);
+                let answered = json!({"type": "answer", "approved": approved});
+                let _ = reports.send(Report::Event(answered)).await;
+                continue;
+            }
             let _ = reports
                 .send(Report::Event(json!({"type": "line", "text": line})))
                 .await;
@@ -498,5 +513,64 @@ async fn the_core_and_the_runner_restarting_mid_session_leave_no_gap_and_resume(
     );
     r.halt().await;
     std::mem::forget(first); // its Drop would remove the directory the second one uses
+    let _ = std::fs::remove_dir_all(&st.0);
+}
+
+/// E2-08.4 through the Core: the harness's tool call becomes an `agent.approval_requested`
+/// event (pushed to `approve` devices by the platform classifier); a decision sent by the Core
+/// reaches the waiting harness, which goes on.
+#[tokio::test]
+async fn a_decision_from_the_core_unblocks_the_waiting_harness() {
+    use ainkrad_core_server::push::Classifier;
+    let core = Core::start("agents-approve", hub_quick()).await;
+    let base = format!("http://{}", core.host);
+    let st = state("agents-approve");
+    paired(&core, &base, None, &st).await;
+    let r = run_runner(&core, &base, &st, script("echo APPROVAL; echo after")).await;
+    let id = session(&core, &r.id, &[]).await;
+    let mut asked = None;
+    for _ in 0..300 {
+        let after = ainkrad_core_server::store::events::list_events(&core.app.pool, 0, 1000)
+            .await
+            .unwrap();
+        asked = after
+            .into_iter()
+            .find(|e| e.kind == "agent.approval_requested");
+        if asked.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let asked = asked.expect("the approval reached the event log");
+    assert_eq!(
+        (
+            asked.payload.0["session"].as_str(),
+            asked.payload.0["request"].as_str()
+        ),
+        (Some(id.as_str()), Some("t1"))
+    );
+    let push = ainkrad_core_server::push::Platform
+        .notification(&asked)
+        .expect("pushed");
+    assert_eq!((push.kind, push.scope), ("approval_needed", "approve"));
+    assert_eq!(push.data["approval_id"], "t1");
+    let decide = ainkrad_proto::v2::Command::AgentDecide(ainkrad_proto::v2::AgentDecide {
+        session: id.clone(),
+        request: "t1".to_owned(),
+        approved: true,
+        reply: None,
+    });
+    service::ask(&core.app, &r.id, decide, Duration::from_secs(5))
+        .await
+        .unwrap();
+    let (s, t) = finished(&core, &id).await;
+    assert_eq!(s.outcome.as_ref().unwrap()["kind"], "succeeded");
+    assert!(
+        t.iter()
+            .any(|b| b["type"] == "answer" && b["approved"] == true),
+        "{t:?}"
+    );
+    assert!(t.iter().any(|b| b["type"] == "approval_decided"));
+    r.halt().await;
     let _ = std::fs::remove_dir_all(&st.0);
 }

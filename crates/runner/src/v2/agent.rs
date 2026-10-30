@@ -206,7 +206,9 @@ impl AgentDriver {
             sandbox: Arc::new(Unconfined),
             sessions: Mutex::new(sessions),
             changed: Notify::new(),
-            next_run: Mutex::new(1),
+            // Unique across runner processes: a harness names its scratch dirs `run-<id>`, and a
+            // run after a restart must never land in a dead session's.
+            next_run: Mutex::new(now_ms()),
         })
     }
 

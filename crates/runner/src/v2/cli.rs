@@ -182,12 +182,15 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             ..super::PtyConfig::new(state.0.join("terminals"))
         }))
     });
-    let agents = match agents_enabled.then(|| agents(&state.0)).transpose() {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("ainkrad-runner: agents: {e}");
-            return ExitCode::FAILURE;
-        }
+    let agents = match agents_enabled.then(|| agents(&state.0)) {
+        None => None,
+        Some(a) => match a.await {
+            Ok(a) => Some(a),
+            Err(e) => {
+                eprintln!("ainkrad-runner: agents: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
     };
     match super::daemon::from_state(&state, exec, pty, agents, tls, stopping).await {
         Ok(()) => ExitCode::SUCCESS,
@@ -205,7 +208,11 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
 /// The agent driver over `<state>/agents`, driving the real harnesses (`HarnessExecutor`).
 /// Delivered secrets go to `$XDG_RUNTIME_DIR` (a tmpfs on most Linux hosts), in a dir named
 /// for this state dir so two runners never sweep each other's; else `<state>/secrets`.
-fn agents(state: &std::path::Path) -> std::io::Result<super::agent::AgentDriver> {
+///
+/// As the v1 runner does: the work root is outside the home and under no harness instruction
+/// file (`check_roots`), and each harness's version is probed; only an installed one the
+/// compat matrix does not refuse gets a slot, so any other is refused at `agent.start`.
+async fn agents(state: &std::path::Path) -> Result<super::agent::AgentDriver, String> {
     let secrets = match std::env::var_os("XDG_RUNTIME_DIR") {
         Some(run) => {
             let tag =
@@ -218,8 +225,26 @@ fn agents(state: &std::path::Path) -> std::io::Result<super::agent::AgentDriver>
         }
         None => state.join("secrets"),
     };
-    let executor =
-        crate::HarnessExecutor::new(state.join("agents-work"), state.join("agents-config"));
-    let config = super::agent::AgentConfig::new(state.join("agents"), secrets);
-    super::agent::AgentDriver::new(config, executor)
+    let tag = ring::digest::digest(&ring::digest::SHA256, state.as_os_str().as_encoded_bytes());
+    let tag: String = tag.as_ref()[..6]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let work = std::env::temp_dir().join(format!("ainkrad-agent-runs-{tag}"));
+    let executor = crate::HarnessExecutor::new(work, state.join("agents-config"));
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    executor.check_roots(&home)?;
+    let mut config = super::agent::AgentConfig::new(state.join("agents"), secrets);
+    for (name, version) in executor.probe(Duration::from_secs(10)).await {
+        let verdict = ainkrad_harness::compat::check(&name, Some(&version), &Default::default());
+        if !verdict.refused {
+            config.slots.insert(name, config.capacity);
+        }
+    }
+    if config.slots.is_empty() {
+        return Err("no harness is installed in a version the compat matrix takes".to_owned());
+    }
+    super::agent::AgentDriver::new(config, executor).map_err(|e| e.to_string())
 }

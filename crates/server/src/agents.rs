@@ -350,6 +350,17 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
         Err(e) => return Err(e.into()),
     };
     let held = store::apply(&app.pool, &s.id, &ev, &app.clock.now()).await?;
+    if held >= store::MAX_TRANSCRIPT && held < ev.last_seq {
+        // Nothing more is stored: the session is stopped, not read forever.
+        let stop = Command::AgentStop(ainkrad_proto::v2::AgentStop {
+            session: s.id.clone(),
+            kill: true,
+        });
+        let _ = ask(app, &s.runner, stop, cfg.answer).await;
+        let why = format!("the transcript reached {} entries", store::MAX_TRANSCRIPT);
+        fail(app, s, &why).await;
+        return Ok(());
+    }
     if held < ev.last_seq {
         return Ok(()); // more to read first
     }
