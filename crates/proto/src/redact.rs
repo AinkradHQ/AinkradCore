@@ -175,12 +175,13 @@ impl Redactor {
         // cannot disable boundary filtering. Only a preceding withheld prefix authorizes
         // masking the next event's beginning, so ordinary labels stay intact.
         for (name, value) in &self.known {
-            // A shorter edge (one stray character) would mangle ordinary text that merely ends
-            // like a secret begins; 4+ bytes is a real prefix.
-            for n in (MIN_EDGE..value.len().min(rest.len() + 1)).rev() {
+            for n in (1..value.len().min(rest.len() + 1)).rev() {
                 if value.is_char_boundary(n) && rest.ends_with(&value[..n]) {
                     self.pending.push((name.clone(), value[n..].to_owned()));
-                    if n > tail {
+                    // A short edge (one stray character) is only tracked, so ordinary text
+                    // that merely ends like a secret begins is not mangled: if the rest
+                    // follows, it is masked. A real prefix (MIN_EDGE+) is held back.
+                    if n >= MIN_EDGE && n > tail {
                         tail = n;
                         tail_name = name;
                     }

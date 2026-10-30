@@ -279,13 +279,24 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
 }
 
 /// Kills the group a restart record names. Safe on a recycled pid: it signals when the leader
-/// still matches the record's start time, or when any process still has that group id (a pgid
-/// cannot be reused while a member lives), so a leader that exited leaving a member is reaped.
+/// still matches the record's start time, or when it is gone but a process still has that group id
+/// (a pgid cannot be reused while a member lives), so a leader that exited leaving a member is reaped.
 pub fn reap_group(record: &str) -> bool {
     let Ok(pgid) = record.split(':').next().unwrap_or("").parse::<u32>() else {
         return false;
     };
-    if pgid <= 1 || !(identity(pgid).is_ok_and(|id| id == record) || tree::group_alive(pgid)) {
+    if pgid <= 1 {
+        return false;
+    }
+    // A process with this pid exists: it is the recorded leader only if its start time
+    // matches, else the number was recycled by an unrelated process. No such process: the
+    // number cannot have been reused while a member of the group lives, so members mean the
+    // recorded group, orphaned.
+    let ours = match identity(pgid) {
+        Ok(id) => id == record,
+        Err(_) => tree::group_alive(pgid),
+    };
+    if !ours {
         return false;
     }
     ainkrad_sys::killpg(pgid, 9).unwrap_or(false)
