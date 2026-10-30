@@ -7,7 +7,7 @@ use std::time::Duration;
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::Error;
@@ -109,7 +109,12 @@ impl Drop for RawMode {
     }
 }
 
-async fn attach_once(c: &mut Client, terminal: &str, after: u64) -> Result<(bool, u64), Error> {
+async fn attach_once(
+    c: &mut Client,
+    terminal: &str,
+    after: u64,
+    out: &mut impl Write,
+) -> Result<(bool, u64), Error> {
     let mut ws = c
         .websocket(
             &format!("/api/v1/terminals/{terminal}/ws"),
@@ -118,7 +123,6 @@ async fn attach_once(c: &mut Client, terminal: &str, after: u64) -> Result<(bool
         .await?;
     send(&mut ws, frame("credit", json!({"bytes": WINDOW}), 0)).await?;
     let mut input = tokio::io::stdin();
-    let mut stdout = tokio::io::stdout();
     let mut buf = [0u8; 4096];
     let mut wire_seq = 1;
     let mut next = after;
@@ -156,11 +160,13 @@ async fn attach_once(c: &mut Client, terminal: &str, after: u64) -> Result<(bool
                 let f: Value = serde_json::from_slice(&bytes).map_err(|e| Error::Protocol(format!("terminal frame: {e}")))?;
                 match f["kind"].as_str().unwrap_or("") {
                     "control" => match f["payload"]["type"].as_str().unwrap_or("") {
-                        "opened" => { next = f["payload"]["seq"].as_u64().unwrap_or(next); }
-                        "snapshot" => { let data = output_data(&f["payload"]).unwrap_or_default(); stdout.write_all(&data).await.map_err(|e| Error::Unreachable(format!("stdout: {e}")))?; stdout.flush().await.ok(); next = f["payload"]["seq"].as_u64().unwrap_or(next); send(&mut ws, frame("credit", json!({"bytes": data.len()}), wire_seq)).await?; wire_seq += 1; }
+                        // `opened.seq` is the host's head, not where the bytes that follow start: a replay from `after`
+                        // (or a snapshot, which names its own seq) comes next, so `next` is not set here.
+                        "opened" => {}
+                        "snapshot" => { let data = output_data(&f["payload"]).unwrap_or_default(); out.write_all(&data).and_then(|()| out.flush()).map_err(|e| Error::Unreachable(format!("stdout: {e}")))?; next = f["payload"]["seq"].as_u64().unwrap_or(next); send(&mut ws, frame("credit", json!({"bytes": data.len()}), wire_seq)).await?; wire_seq += 1; }
                         _ => {}
                     },
-                    "output" => { let data = output_data(&f["payload"]).unwrap_or_default(); stdout.write_all(&data).await.map_err(|e| Error::Unreachable(format!("stdout: {e}")))?; stdout.flush().await.ok(); next = next.checked_add(data.len() as u64).ok_or_else(|| Error::Protocol("terminal sequence overflow".into()))?; send(&mut ws, frame("credit", json!({"bytes": data.len()}), wire_seq)).await?; wire_seq += 1; }
+                    "output" => { let data = output_data(&f["payload"]).unwrap_or_default(); out.write_all(&data).and_then(|()| out.flush()).map_err(|e| Error::Unreachable(format!("stdout: {e}")))?; next = next.checked_add(data.len() as u64).ok_or_else(|| Error::Protocol("terminal sequence overflow".into()))?; send(&mut ws, frame("credit", json!({"bytes": data.len()}), wire_seq)).await?; wire_seq += 1; }
                     "result" => return Ok((false, next)),
                     _ => {}
                 }
@@ -169,11 +175,12 @@ async fn attach_once(c: &mut Client, terminal: &str, after: u64) -> Result<(bool
     }
 }
 
-async fn attach(c: &mut Client, terminal: &str) -> Result<(), Error> {
+// `out` is main's locked stdout: tokio's own stdout would wait on that lock forever.
+async fn attach(c: &mut Client, terminal: &str, out: &mut impl Write) -> Result<(), Error> {
     let _raw = RawMode::enter()?;
     let mut after = 0;
     loop {
-        match attach_once(c, terminal, after).await {
+        match attach_once(c, terminal, after, out).await {
             Ok((done, seq)) if done => {
                 after = seq;
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -217,7 +224,7 @@ pub async fn terminal(
             let v: Value = parse(&res)?;
             if json_out { line(out, v) } else { line(out, s(&v["id"])) }
         }
-        ["attach", terminal] => attach(c, id(terminal)?).await,
+        ["attach", terminal] => attach(c, id(terminal)?, out).await,
         ["detach", terminal] => { let _ = c.websocket(&format!("/api/v1/terminals/{}/ws", id(terminal)?), "after=0").await?; Ok(()) }
         ["resize", terminal] => { let (r, co) = size(options.rows, options.cols)?; let mut ws = c.websocket(&format!("/api/v1/terminals/{}/ws", id(terminal)?), "after=0").await?; send(&mut ws, frame("control", json!({"type":"resize","rows":r,"cols":co}), 0)).await?; ws.close(None).await.ok(); Ok(()) }
         ["signal", terminal] => { let sig = options.signal.ok_or_else(|| Error::Usage("term signal <id> --signal <name>".into()))?; let body = json!({"signal": sig}); let _ = c.call("POST", &format!("/api/v1/terminals/{}/signal", id(terminal)?), "", Some(&body)).await?; Ok(()) }
