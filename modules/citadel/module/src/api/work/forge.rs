@@ -92,7 +92,7 @@ pub struct LinearBody {
     pub team_id: String,
     /// Absent: Linear's public API.
     pub api_url: Option<String>,
-    /// The broker secret holding the API token, `citadel.<name>`.
+    /// The broker secret holding the API token, `citadel.linear.<name>`.
     pub secret_name: String,
 }
 
@@ -122,6 +122,11 @@ pub async fn set_linear(
     Json(b): Json<LinearBody>,
 ) -> ApiResult<LinearLink> {
     let p = project(&app, id).await?;
+    if crate::store::forge::is_account_secret(&app.pool, &b.secret_name).await? {
+        return Err(ApiError::bad_request(
+            "that secret is a provider account's, not Linear's",
+        ));
+    }
     let api_url = b.api_url.unwrap_or_else(|| LINEAR_API.to_owned());
     let hosts = crate::store::forge::list_hosts(&app.pool).await?;
     let policy = ainkrad_providers::guard::Policy::public().with_hosts(hosts);

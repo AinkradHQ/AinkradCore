@@ -202,7 +202,10 @@ impl Forge for GitHub {
             .await?;
         match merged["merged"].as_bool() {
             Some(true) => Ok(()),
-            _ => Err(Error::Decode(format!("not merged: {merged}"))),
+            _ => Err(Error::Decode(format!(
+                "not merged: {}",
+                merged.to_string().chars().take(200).collect::<String>()
+            ))),
         }
     }
 

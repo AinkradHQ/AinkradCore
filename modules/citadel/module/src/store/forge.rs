@@ -156,6 +156,24 @@ pub async fn issue_pr(
     Ok(issue_prs(pool, issue).await?.into_iter().next())
 }
 
+/// Text from outside Citadel (a forge's error or check name, a runner's reason, a Linear title)
+/// as one plain line of at most `max` characters: whitespace folded, control characters gone.
+/// Everything a forge or runner says goes through this before it reaches a comment, an approval
+/// or an audit row, where it could pass for the admin's own words.
+pub(crate) fn untrusted(s: &str, max: usize) -> String {
+    let line: String = s
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    match line.char_indices().nth(max) {
+        Some((at, _)) => format!("{}…", &line[..at]),
+        None => line,
+    }
+}
+
 /// Why a PR was not requested.
 #[derive(Debug)]
 pub enum PrError {

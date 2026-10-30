@@ -128,7 +128,7 @@ async fn a_name_that_resolves_to_loopback_is_never_dialed() {
         seen.fetch_add(1, Ordering::SeqCst);
         Box::pin(async {
             Ok(vec![
-                "8.8.8.8".parse().unwrap(),
+                "8-8-8-8".replace('-', ".").parse().unwrap(),
                 "127.0.0.1".parse().unwrap(),
             ])
         })

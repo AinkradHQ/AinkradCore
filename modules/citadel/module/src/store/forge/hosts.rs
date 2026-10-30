@@ -78,3 +78,54 @@ pub async fn remove_host(pool: &SqlitePool, host: &str, actor: AuditActor) -> Re
     tx.commit().await?;
     Ok(gone)
 }
+
+/// The company that owns `project`.
+pub async fn company_of_project(
+    pool: &SqlitePool,
+    project: crate::domain::work::ProjectId,
+) -> Result<i64, Error> {
+    sqlx::query_scalar("SELECT company_id FROM citadel_projects WHERE id = ?")
+        .bind(project.0)
+        .fetch_one(pool)
+        .await
+}
+
+/// Whether `secret` is a provider account's credential (`citadel_accounts`): never a forge's.
+pub async fn is_account_secret(pool: &SqlitePool, secret: &str) -> Result<bool, Error> {
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM citadel_accounts WHERE secret_name = ?")
+        .bind(secret)
+        .fetch_one(pool)
+        .await?;
+    Ok(n > 0)
+}
+
+/// Binds `secret` to `host` and `company` the first time it is used; afterwards any other host
+/// or company is refused (`Ok(Err(why))`): one credential, one place it may be sent.
+pub async fn bind_secret(
+    pool: &SqlitePool,
+    secret: &str,
+    host: &str,
+    company: i64,
+) -> Result<Result<(), String>, Error> {
+    sqlx::query(
+        "INSERT OR IGNORE INTO citadel_forge_secret_hosts (secret, host, company_id) \
+         VALUES (?, ?, ?)",
+    )
+    .bind(secret)
+    .bind(host)
+    .bind(company)
+    .execute(pool)
+    .await?;
+    let (bound_host, bound_company): (String, i64) =
+        sqlx::query_as("SELECT host, company_id FROM citadel_forge_secret_hosts WHERE secret = ?")
+            .bind(secret)
+            .fetch_one(pool)
+            .await?;
+    Ok(if (bound_host.as_str(), bound_company) == (host, company) {
+        Ok(())
+    } else {
+        Err(format!(
+            "the credential {secret} is bound to another host or company; use a new secret for this link"
+        ))
+    })
+}

@@ -53,15 +53,21 @@ pub(crate) fn forge_problem(f: &ProjectForge) -> Option<String> {
         return Some(format!("bad repository path {:?}", f.repo));
     }
     if !secret_name_ok(&f.secret) {
-        return Some("the secret must be a broker secret named citadel.<name>".to_owned());
+        return Some("the secret must be a broker secret named citadel.forge.<name>".to_owned());
     }
     None
 }
 
-/// Whether `name` may be a forge or tracker credential: a broker secret in the module's own
-/// namespace (`secrets::open_for_module` opens nothing else).
+/// Whether `name` may be a forge's credential: a broker secret in the module's `citadel.forge.`
+/// namespace (`secrets::open_for_module` opens nothing outside `citadel.`, and provider accounts
+/// live elsewhere in it).
 pub(crate) fn secret_name_ok(name: &str) -> bool {
-    ainkrad_core_server::store::secrets::valid_name(name) && name.starts_with("citadel.")
+    ainkrad_core_server::store::secrets::valid_name(name) && name.starts_with("citadel.forge.")
+}
+
+/// The same for a project's Linear link: `citadel.linear.`.
+pub(crate) fn linear_secret_name_ok(name: &str) -> bool {
+    ainkrad_core_server::store::secrets::valid_name(name) && name.starts_with("citadel.linear.")
 }
 
 /// Appends `action` about `entity` (`(kind, id)`) of `company` by `actor`.

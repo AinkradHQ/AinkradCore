@@ -10,9 +10,14 @@
 //!   addresses are never dialed, no proxy, no redirects, timeouts, a size cap on answers. An
 //!   API URL is checked against the list on every pass, not only when it is stored.
 //! - **Credentials from the broker only.** A repo or a Linear link names a secret
-//!   (`citadel.<name>`); a pass opens it with `secrets::open_for_module` (audited `secret.used`,
+//!   (`citadel.forge.<name>`, `citadel.linear.<name>`); a pass opens it with `secrets::open_for_module` (audited `secret.used`,
 //!   once per secret per pass), holds it for the pass, and never stores or logs it. The
 //!   providers cut it out of any error text.
+//! - **A credential serves one host and one company.** Forge secrets are `citadel.forge.*` and
+//!   Linear's `citadel.linear.*`, never a provider account's; the first poll binds a secret to the
+//!   host and company it was linked for, and any other host or company is refused.
+//! - **One pass at a time.** Each job takes a lock, so an overlapping occurrence skips: two passes
+//!   can never act on one PR together.
 //! - **A merge is bound to a head.** A PR merges only at the head sha its approval was given
 //!   for; the forge refuses a moved head.
 //! - **A rate-limited host rests.** A 429 (or a 403 that says so) pauses that host for a
@@ -47,7 +52,14 @@ pub struct Runtime {
     sealer: Arc<SecretBox>,
     base: Policy,
     resting: Mutex<HashMap<String, Instant>>,
+    /// Opened credentials, for `TOKEN_TTL`: one audited `secret.used` per secret per lease, not per pass.
+    tokens: Mutex<HashMap<String, (Secret, Instant)>>,
+    forge_lock: tokio::sync::Mutex<()>,
+    linear_lock: tokio::sync::Mutex<()>,
 }
+
+/// How long an opened credential is kept (a rotation takes effect within it).
+const TOKEN_TTL: Duration = Duration::from_secs(300);
 
 impl Runtime {
     pub fn new(pool: SqlitePool, sealer: Arc<SecretBox>) -> Arc<Self> {
@@ -61,6 +73,9 @@ impl Runtime {
             sealer,
             base,
             resting: Mutex::new(HashMap::new()),
+            tokens: Mutex::new(HashMap::new()),
+            forge_lock: tokio::sync::Mutex::new(()),
+            linear_lock: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -84,7 +99,6 @@ impl Runtime {
             rt: self.clone(),
             client: policy.client(),
             policy,
-            tokens: HashMap::new(),
         })
     }
 
@@ -123,7 +137,6 @@ pub(crate) struct Pass {
     rt: Arc<Runtime>,
     pub(crate) client: Client,
     policy: Policy,
-    tokens: HashMap<String, Secret>,
 }
 
 impl Pass {
@@ -139,14 +152,39 @@ impl Pass {
         Ok(host)
     }
 
-    /// The credential in broker secret `name`, opened once per pass; why not otherwise (never a
-    /// value).
-    pub(crate) async fn token(&mut self, name: &str, purpose: &str) -> Result<Secret, String> {
-        if let Some(t) = self.tokens.get(name) {
-            return Ok(t.clone());
+    /// The credential in broker secret `name` for `host` and `company`, opened at most once per
+    /// `TOKEN_TTL`; why not otherwise (never a value). A secret of a provider account, or one
+    /// bound to another host or company, is refused.
+    pub(crate) async fn token(
+        &mut self,
+        name: &str,
+        (host, company): (&str, i64),
+        purpose: &str,
+    ) -> Result<Secret, String> {
+        let pool = &self.rt.pool;
+        let bad = |e: sqlx::Error| format!("the credential {name} is unavailable: {e}");
+        if crate::store::forge::is_account_secret(pool, name)
+            .await
+            .map_err(bad)?
+        {
+            return Err(format!(
+                "the credential {name} is a provider account's, not a forge's"
+            ));
+        }
+        crate::store::forge::bind_secret(pool, name, host, company)
+            .await
+            .map_err(bad)??;
+        let cached = {
+            let at = self.rt.tokens.lock().unwrap_or_else(|e| e.into_inner());
+            at.get(name)
+                .filter(|(_, since)| since.elapsed() < TOKEN_TTL)
+                .map(|(t, _)| t.clone())
+        };
+        if let Some(t) = cached {
+            return Ok(t);
         }
         let opened = ainkrad_core_server::store::secrets::open_for_module(
-            &self.rt.pool,
+            pool,
             &self.rt.sealer,
             "citadel",
             name,
@@ -155,7 +193,8 @@ impl Pass {
         .await
         .map_err(|e| format!("the credential {name} is unavailable: {e}"))?;
         let token = Secret::new(opened.as_str());
-        self.tokens.insert(name.to_owned(), token.clone());
+        let mut at = self.rt.tokens.lock().unwrap_or_else(|e| e.into_inner());
+        at.insert(name.to_owned(), (token.clone(), Instant::now()));
         Ok(token)
     }
 
@@ -164,14 +203,21 @@ impl Pass {
         if rate_limited(e) {
             self.rt.rest(host);
         }
+        // A refused credential may have been rotated: open it again next pass.
+        if matches!(e, Error::Http { status: 401, .. }) {
+            self.rt
+                .tokens
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+        }
     }
 }
 
 fn reqwest_host(url: &str) -> Option<String> {
-    let rest = url.split_once("://")?.1;
-    let host = rest.split(['/', '?', '#']).next()?;
-    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
-    Some(host.to_ascii_lowercase())
+    let u = ainkrad_providers::guard::parse(url)?;
+    let host = u.host_str()?.to_ascii_lowercase();
+    Some(u.port().map_or(host.clone(), |p| format!("{host}:{p}")))
 }
 
 enum Kind {

@@ -4,7 +4,7 @@
 //! (`transition_issue_in`), so the next-actor and WIP rules still hold.
 
 use crate::domain::work::{
-    Actor, Issue, IssueId, IssueKind, IssueState, IssueTransition, NewIssue, NextActor, ProjectId,
+    Issue, IssueId, IssueKind, IssueState, IssueTransition, NewIssue, NextActor, ProjectId,
 };
 use ainkrad_core::audit::AuditActor;
 use serde_json::json;
@@ -13,7 +13,8 @@ use sqlx::{Error, Row, SqliteConnection};
 
 use super::org::ESCALATION_USER;
 use super::work::{
-    IssueTransitionError, append, create_issue_in, issue_in, secret_name_ok, transition_issue_in,
+    IssueTransitionError, append, create_issue_in, issue_in, linear_secret_name_ok,
+    transition_issue_in,
 };
 
 /// The public GraphQL API.
@@ -49,6 +50,20 @@ pub struct Link {
     pub synced: Synced,
 }
 
+/// Text from Linear as it may enter an issue: control characters gone (a newline and a tab
+/// stay) and at most `max` characters. Anyone on the linked Linear team writes it, and agents
+/// read it.
+pub(crate) fn clip(s: &str, max: usize) -> String {
+    let clean: String = s
+        .chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .collect();
+    match clean.char_indices().nth(max) {
+        Some((at, _)) => clean[..at].to_owned(),
+        None => clean,
+    }
+}
+
 /// The Linear state type an issue in `state` is in.
 pub fn state_kind(state: IssueState) -> &'static str {
     match state {
@@ -60,29 +75,22 @@ pub fn state_kind(state: IssueState) -> &'static str {
     }
 }
 
-/// The transitions that take an issue in `from` to Linear state type `to`; `None` when the
-/// engine has no way there (e.g. back to the backlog, or done straight from blocked).
+/// The transitions Linear may cause. Linear is a mirror, not an authority: a person on the
+/// linked team can rename an issue and take it from the backlog to todo (`Ready`, which wakes
+/// nobody), and that is all. Starting work, completing or cancelling an issue, reopening one and
+/// moving one in review are the module's own gates (the QA verdict, the `pr_merge` approval, a
+/// person in Citadel), so a state Linear asks for beyond that is `None`: refused and audited
+/// (`linear.state_refused`), and the next push puts Citadel's state back in Linear.
 pub fn path(from: IssueState, to: &str) -> Option<Vec<IssueTransition>> {
     use IssueState as S;
     use IssueTransition as T;
     if state_kind(from) == to {
         return Some(vec![]);
     }
-    let reopen = || T::Reopen {
-        next: NextActor::Human(ESCALATION_USER),
-    };
-    Some(match (from, to) {
-        (S::Backlog, "unstarted") => vec![T::Ready],
-        (S::Done | S::Cancelled, "unstarted") => vec![reopen()],
-        (S::Backlog | S::Todo, "started") => vec![T::Start],
-        (S::Done | S::Cancelled, "started") => vec![reopen(), T::Start],
-        (S::InProgress, "completed") => vec![T::Done],
-        (S::InReview, "completed") => vec![T::Approve],
-        (S::Backlog | S::Todo, "completed") => vec![T::Start, T::Done],
-        (S::Cancelled, "completed") => vec![reopen(), T::Start, T::Done],
-        (s, "canceled") if !s.is_terminal() => vec![T::Cancel],
-        _ => return None,
-    })
+    match (from, to) {
+        (S::Backlog, "unstarted") => Some(vec![T::Ready]),
+        _ => None,
+    }
 }
 
 fn config(row: SqliteRow) -> Result<ProjectLinear, Error> {
@@ -130,8 +138,8 @@ pub async fn set_project_linear(
             "bad Linear API URL or team".to_owned(),
         ));
     }
-    if !secret_name_ok(&l.secret) {
-        let why = "the secret must be a broker secret named citadel.<name>".to_owned();
+    if !linear_secret_name_ok(&l.secret) {
+        let why = "the secret must be a broker secret named citadel.linear.<name>".to_owned();
         return Err(Error::InvalidArgument(why));
     }
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
@@ -370,23 +378,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn linear_states_map_to_engine_paths() {
+    fn linear_can_only_ready_a_backlog_issue() {
         use IssueState as S;
         let names = |from, to| {
             path(from, to).map(|p| p.iter().map(IssueTransition::name).collect::<Vec<_>>())
         };
         assert_eq!(names(S::Todo, "unstarted"), Some(vec![]));
-        assert_eq!(names(S::Backlog, "started"), Some(vec!["start"]));
-        assert_eq!(names(S::InReview, "completed"), Some(vec!["approve"]));
-        assert_eq!(names(S::Done, "started"), Some(vec!["reopen", "start"]));
-        assert_eq!(names(S::Blocked, "canceled"), Some(vec!["cancel"]));
-        assert_eq!(
-            names(S::InProgress, "backlog"),
-            None,
-            "never back to the backlog"
-        );
-        assert_eq!(names(S::Blocked, "completed"), None);
-        assert_eq!(names(S::Done, "canceled"), None);
+        assert_eq!(names(S::Backlog, "unstarted"), Some(vec!["ready"]));
+        // Never: start, complete, cancel, reopen, back to the backlog, or out of review.
+        for from in [
+            S::Backlog,
+            S::Todo,
+            S::InProgress,
+            S::InReview,
+            S::Blocked,
+            S::Done,
+            S::Cancelled,
+        ] {
+            for to in ["started", "completed", "canceled", "backlog"] {
+                if state_kind(from) != to {
+                    assert_eq!(names(from, to), None, "{from:?} -> {to}");
+                }
+            }
+        }
+        assert_eq!(names(S::InReview, "unstarted"), None);
+        assert_eq!(names(S::Done, "unstarted"), None);
         assert_eq!(state_kind(S::InReview), "started");
     }
 }

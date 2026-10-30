@@ -16,3 +16,11 @@ CREATE TABLE citadel_forge_hosts (
                                        AND host NOT GLOB '.*' AND host NOT GLOB '*.'),
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 ) STRICT;
+
+-- A forge or Linear secret serves one host for one company: bound at its first use, so a secret
+-- linked to another project or a self-hosted host is refused, not sent.
+CREATE TABLE citadel_forge_secret_hosts (
+    secret     TEXT PRIMARY KEY,
+    host       TEXT NOT NULL,
+    company_id INTEGER NOT NULL REFERENCES citadel_companies(id) ON DELETE CASCADE
+) STRICT;

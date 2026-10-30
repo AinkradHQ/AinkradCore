@@ -15,13 +15,15 @@ use ainkrad_providers::fake;
 use ainkrad_providers::guard::Policy;
 use axum::Router;
 use axum::http::{HeaderMap, StatusCode, header};
-use citadel_module::domain::work::{IssueId, IssueState, IssueTransition, NextActor};
+use citadel_module::domain::work::{
+    Actor, IssueId, IssueState, IssueTransition, NextActor, UserId,
+};
 use citadel_module::forge::{Runtime, linear_sync};
 use citadel_module::store::linear::{ProjectLinear, set_project_linear};
 use citadel_module::store::work::{get_issue, list_issues, transition_issue, update_issue};
 use forge_seed::*;
 
-const LINEAR_SECRET: &str = "citadel.linear";
+const LINEAR_SECRET: &str = "citadel.linear.key";
 const LINEAR_KEY: &str = "lin_key";
 
 struct Lin {
@@ -127,7 +129,8 @@ async fn edits_round_trip_both_ways_and_nothing_echoes() {
         "no echo: nothing written either way"
     );
 
-    // Linear to Citadel: a rename and a start, through the engine.
+    // Linear to Citadel: a rename comes in; a start does not (Linear never starts work), and the
+    // sync puts Citadel's state back in Linear.
     l.board.lock().unwrap().edit(&filed, |i| {
         i.title = "Renamed in Linear".to_owned();
         i.state_id = "st-2".to_owned();
@@ -136,12 +139,16 @@ async fn edits_round_trip_both_ways_and_nothing_echoes() {
     let i = get_issue(pool, theirs).await.unwrap().unwrap();
     assert_eq!(
         (i.title.as_str(), i.state),
-        ("Renamed in Linear", IssueState::InProgress)
+        ("Renamed in Linear", IssueState::Backlog)
     );
     assert_eq!(
-        l.board.lock().unwrap().mutations.len(),
-        1,
-        "nothing pushed back"
+        l.board.lock().unwrap().by_identifier(&filed).state_id,
+        "st-0",
+        "put back"
+    );
+    assert_eq!(
+        l.board.lock().unwrap().mutations,
+        ["IssueCreate", "IssueUpdate"]
     );
 
     // Citadel to Linear: a rename and an assignee Linear knows by name.
@@ -194,20 +201,34 @@ async fn edits_round_trip_both_ways_and_nothing_echoes() {
     .unwrap();
     assert_eq!(conflicts, ["linear", "citadel"]);
 
-    // Back to the backlog is not a move the engine makes: Linear gets the state back.
+    // Linear may ready a backlog issue; completing, cancelling or starting one is refused and
+    // Linear gets the state back.
     l.board
         .lock()
         .unwrap()
-        .edit(&filed, |i| i.state_id = "st-0".to_owned());
+        .edit(&filed, |i| i.state_id = "st-1".to_owned());
     sync(&l).await;
     assert_eq!(
         get_issue(pool, theirs).await.unwrap().unwrap().state,
-        IssueState::InProgress
+        IssueState::Todo
     );
-    assert_eq!(
-        l.board.lock().unwrap().by_identifier(&filed).state_id,
-        "st-2"
-    );
+    for state in ["st-4", "st-5", "st-2"] {
+        l.board
+            .lock()
+            .unwrap()
+            .edit(&filed, |i| i.state_id = state.to_owned());
+        sync(&l).await;
+        assert_eq!(
+            get_issue(pool, theirs).await.unwrap().unwrap().state,
+            IssueState::Todo,
+            "{state}"
+        );
+        assert_eq!(
+            l.board.lock().unwrap().by_identifier(&filed).state_id,
+            "st-1",
+            "{state}"
+        );
+    }
     let before = settled(&l).await;
     sync(&l).await;
     sync(&l).await;
@@ -312,5 +333,89 @@ async fn a_token_linear_echoes_is_in_no_log_and_not_in_the_database() {
     assert!(
         !contains(&db_bytes(&l.fx).await, LINEAR_KEY),
         "the token is on disk"
+    );
+}
+
+#[tokio::test]
+async fn linear_cannot_finish_reviewed_work_assign_agents_or_start_runs() {
+    let l = lin().await;
+    let pool = &l.fx.app.pool;
+    link(&l, &l.api, LINEAR_SECRET).await;
+    // An issue in review with its merge approval pending.
+    let issue = l.s.issue;
+    transition_issue(pool, issue, &IssueTransition::Start, BY)
+        .await
+        .unwrap();
+    let review = IssueTransition::SubmitForReview {
+        reviewer: Actor::Human(UserId(1)),
+    };
+    transition_issue(pool, issue, &review, BY).await.unwrap();
+    sync(&l).await;
+    // Someone on the Linear team marks it Completed, Cancelled, then Todo; and assigns the agent.
+    for state in ["st-4", "st-5", "st-1"] {
+        l.board.lock().unwrap().edit("ENG-1", |i| {
+            i.state_id = state.to_owned();
+            i.assignee_id = Some("u-0".to_owned());
+        });
+        sync(&l).await;
+        let i = get_issue(pool, issue).await.unwrap().unwrap();
+        assert_eq!(
+            i.state,
+            IssueState::InReview,
+            "{state} must not move an issue in review"
+        );
+        assert_eq!(
+            i.next_actor,
+            Some(NextActor::Human(UserId(1))),
+            "Linear assigns no agent"
+        );
+    }
+    let refused: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE action = 'citadel.linear.state_refused'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(refused >= 2, "each refusal is audited");
+    // A new Linear issue that says "started" is a todo for the admin, not work in progress.
+    l.board.lock().unwrap().file("Do the thing", "In Progress");
+    sync(&l).await;
+    let theirs = list_issues(pool, l.s.project)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|i| i.title == "Do the thing")
+        .unwrap();
+    assert_eq!(
+        (theirs.state, theirs.next_actor),
+        (IssueState::Todo, Some(NextActor::Human(UserId(1))))
+    );
+}
+
+#[tokio::test]
+async fn text_from_linear_is_bounded_and_plain() {
+    let l = lin().await;
+    let pool = &l.fx.app.pool;
+    link(&l, &l.api, LINEAR_SECRET).await;
+    let title = format!("T\u{1b}[31m{}", "t".repeat(5000));
+    l.board.lock().unwrap().file(&title, "Backlog");
+    sync(&l).await;
+    let theirs = list_issues(pool, l.s.project)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|i| i.title.starts_with('T'))
+        .unwrap();
+    assert!(
+        theirs.title.chars().count() <= 200 && !theirs.title.contains('\u{1b}'),
+        "{}",
+        theirs.title.len()
+    );
+    let before = settled(&l).await;
+    sync(&l).await;
+    assert_eq!(
+        settled(&l).await,
+        before,
+        "a clipped title does not echo back"
     );
 }

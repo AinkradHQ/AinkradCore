@@ -31,7 +31,7 @@ async fn a_repos_forge_names_a_broker_secret_and_an_allowed_host() {
     for (why, body) in [
         (
             "token file",
-            repo(json!("citadel.forge"), Value::Null, "/etc/token"),
+            repo(json!("citadel.forge.token"), Value::Null, "/etc/token"),
         ),
         ("no secret", repo(Value::Null, Value::Null, "")),
         (
@@ -45,35 +45,50 @@ async fn a_repos_forge_names_a_broker_secret_and_an_allowed_host() {
         (
             "unlisted host",
             repo(
-                json!("citadel.forge"),
+                json!("citadel.forge.token"),
                 json!("https://git.example.test/api"),
                 "",
             ),
         ),
         (
             "loopback",
-            repo(json!("citadel.forge"), json!("https://127.0.0.1/"), ""),
+            repo(
+                json!("citadel.forge.token"),
+                json!("https://127.0.0.1/"),
+                "",
+            ),
         ),
         (
             "metadata",
             repo(
-                json!("citadel.forge"),
+                json!("citadel.forge.token"),
                 json!("https://169.254.169.254/"),
                 "",
             ),
         ),
         (
             "http",
-            repo(json!("citadel.forge"), json!("http://api.github.com"), ""),
+            repo(
+                json!("citadel.forge.token"),
+                json!("http://api.github.com"),
+                "",
+            ),
         ),
     ] {
         let r = post(body).await;
         assert_eq!(r.0, StatusCode::BAD_REQUEST, "{why}: {r:?}");
     }
+    // A provider account's secret is not a forge's, whatever it is called.
+    sqlx::query("INSERT INTO citadel_accounts (harness, label, secret_name) VALUES ('claude', 'a', 'citadel.forge.acct')")
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    let r = post(repo(json!("citadel.forge.acct"), Value::Null, "")).await;
+    assert_eq!(r.0, StatusCode::BAD_REQUEST, "account secret: {r:?}");
     // The public host with a broker secret is accepted, and the secret (never a path) comes back.
-    let r = post(repo(json!("citadel.forge"), Value::Null, "")).await;
+    let r = post(repo(json!("citadel.forge.token"), Value::Null, "")).await;
     assert_eq!(r.0, StatusCode::OK, "{r:?}");
-    assert_eq!(r.1["forge"]["secret_name"], "citadel.forge");
+    assert_eq!(r.1["forge"]["secret_name"], "citadel.forge.token");
     assert_eq!(r.1["forge"]["token_file"], "");
     // A self-hosted forge needs its host added first, by the operator.
     let host = "/forge/hosts/git.example.test";
@@ -81,7 +96,7 @@ async fn a_repos_forge_names_a_broker_secret_and_an_allowed_host() {
     assert_eq!(r.0, StatusCode::OK, "{r:?}");
     assert_eq!(r.1["added"], json!(["git.example.test"]));
     let mut body = repo(
-        json!("citadel.forge"),
+        json!("citadel.forge.token"),
         json!("https://git.example.test/api/v4"),
         "",
     );
@@ -123,7 +138,7 @@ async fn linear_links_and_forge_hosts_are_step_up_and_admin_only() {
     let fx = fx().await;
     let s = seed(&fx.app.pool, "A", "AAA").await;
     let link = format!("/projects/{}/linear", s.project.0);
-    let body = json!({"team_id": "team-1", "secret_name": "citadel.linear"});
+    let body = json!({"team_id": "team-1", "secret_name": "citadel.linear.key"});
     let laptop = enroll(&fx.app, "laptop", &["admin"], true).await;
     let phone = enroll(&fx.app, "phone", &["read", "approve"], true).await;
     for (m, path, b) in [
@@ -151,13 +166,14 @@ async fn linear_links_and_forge_hosts_are_step_up_and_admin_only() {
     // Elevated: set, read back, refuse a bad secret or a host off the list, remove.
     let r = call(&fx, Some(&fx.dev), Method::PUT, &link, Some(body.clone())).await;
     assert_eq!(r.0, StatusCode::OK, "{r:?}");
-    assert_eq!(r.1["secret_name"], "citadel.linear");
+    assert_eq!(r.1["secret_name"], "citadel.linear.key");
     assert_eq!(r.1["api_url"], "https://api.linear.app/graphql");
     for bad in [
         json!({"team_id": "t", "secret_name": "git.deploy"}),
-        json!({"team_id": "t", "secret_name": "citadel.linear", "api_url": "https://evil.example/graphql"}),
-        json!({"team_id": "t", "secret_name": "citadel.linear", "api_url": "https://127.0.0.1/graphql"}),
-        json!({"team_id": "t", "secret_name": "citadel.linear", "token_file": "/etc/t"}),
+        json!({"team_id": "t", "secret_name": "citadel.forge.token"}),
+        json!({"team_id": "t", "secret_name": "citadel.linear.key", "api_url": "https://evil.example/graphql"}),
+        json!({"team_id": "t", "secret_name": "citadel.linear.key", "api_url": "https://127.0.0.1/graphql"}),
+        json!({"team_id": "t", "secret_name": "citadel.linear.key", "token_file": "/etc/t"}),
     ] {
         let r = call(&fx, Some(&fx.dev), Method::PUT, &link, Some(bad.clone())).await;
         assert!(r.0.is_client_error(), "{bad}: {r:?}");

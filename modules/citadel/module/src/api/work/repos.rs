@@ -30,7 +30,7 @@ pub struct RepoForge {
     #[serde(default)]
     #[schema(required = false)]
     pub token_file: String,
-    /// The broker secret holding the API token, `citadel.<name>` (never the token). Required
+    /// The broker secret holding the API token, `citadel.forge.<name>` (never the token). Required
     /// when setting.
     #[serde(default)]
     #[schema(required = false)]
@@ -141,7 +141,15 @@ pub(super) async fn check_body(app: &App, b: &RepoBody) -> Result<(), ApiError> 
         }
         match &f.secret_name {
             Some(n) if work::secret_name_ok(n) => {}
-            _ => return bad("secret_name must be a broker secret named citadel.<name>".to_owned()),
+            _ => {
+                return bad(
+                    "secret_name must be a broker secret named citadel.forge.<name>".to_owned(),
+                );
+            }
+        }
+        let name = f.secret_name.as_deref().unwrap_or_default();
+        if crate::store::forge::is_account_secret(&app.pool, name).await? {
+            return bad("that secret is a provider account's, not a forge's".to_owned());
         }
         let url = match &f.api_url {
             Some(url) => url.clone(),

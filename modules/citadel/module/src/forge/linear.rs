@@ -19,21 +19,26 @@ use std::collections::HashMap;
 
 use std::sync::Arc;
 
-use crate::domain::org::AgentId;
 use crate::domain::work::{IssueState, ProjectId};
 use ainkrad_providers::linear::{Changes, Issue as Remote, Linear, Team};
 use sqlx::SqlitePool;
 
 use super::Runtime;
 use crate::store::linear::{
-    ProjectLinear, Pull, Synced, import, linear_projects, link_issue, links, local, pull, pushed,
-    set_cursor, state_kind,
+    ProjectLinear, Pull, Synced, clip, import, linear_projects, link_issue, links, local, pull,
+    pushed, set_cursor, state_kind,
 };
 use crate::store::work::list_issues;
+
+/// The most Linear issues one pass reads per project.
+const MAX_PER_PASS: usize = 500;
 
 /// One pass over every synced project. A project whose Linear cannot be reached, or whose
 /// credential or API URL is refused, is logged and tried again next pass.
 pub async fn sync(rt: &Arc<Runtime>) -> Result<(), sqlx::Error> {
+    let Ok(_pass_lock) = rt.linear_lock.try_lock() else {
+        return Ok(());
+    };
     let pool = &rt.pool;
     let configs = linear_projects(pool).await?;
     if configs.is_empty() {
@@ -48,7 +53,11 @@ pub async fn sync(rt: &Arc<Runtime>) -> Result<(), sqlx::Error> {
                 continue;
             }
         };
-        let token = match pass.token(&config.secret, "linear sync").await {
+        let company = crate::store::forge::company_of_project(pool, config.project_id).await?;
+        let token = match pass
+            .token(&config.secret, (&host, company), "linear sync")
+            .await
+        {
             Ok(token) => token,
             Err(why) => {
                 tracing::warn!(project = config.project_id.0, %why, "Linear sync skipped");
@@ -111,20 +120,16 @@ fn state_id(team: &Team, state: IssueState) -> Option<String> {
 
 async fn project(pool: &SqlitePool, linear: &Linear, config: &ProjectLinear) -> Result<(), Failed> {
     let team = linear.team(&config.team_id).await?;
-    let agents: HashMap<String, AgentId> = sqlx::query_as(
-        "SELECT a.name, a.id FROM citadel_agents a JOIN citadel_projects p ON p.company_id = a.company_id \
-         WHERE p.id = ?",
-    )
-    .bind(config.project_id.0)
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(|(name, id): (String, i64)| (name, AgentId(id)))
-    .collect();
-
-    let changed = linear
+    let mut changed = linear
         .issues_since(&config.team_id, config.cursor.as_deref())
         .await?;
+    // Anyone on the Linear team writes these: plain, bounded text. At most `MAX_PER_PASS` per
+    // pass, oldest change first, so the cursor (the latest read) resumes where this stopped.
+    changed.truncate(MAX_PER_PASS);
+    for r in &mut changed {
+        r.title = clip(&r.title, 200);
+        r.description = clip(&r.description, 20_000);
+    }
     let linked: HashMap<String, _> = links(pool, config.project_id)
         .await?
         .into_iter()
@@ -172,12 +177,6 @@ async fn project(pool: &SqlitePool, linear: &Linear, config: &ProjectLinear) -> 
                     linear_later,
                     &mut p.conflicts,
                 );
-                let name = remote.assignee.as_ref().map(|(_, name)| name);
-                if let Some(name) = name.filter(|n| Some(*n) != s.assignee.as_ref())
-                    && let Some(agent) = agents.get(name)
-                {
-                    p.assignee = Some((*agent, name.clone()));
-                }
                 if p != Pull::default() {
                     pull(pool, l.issue_id, &p).await?;
                 }

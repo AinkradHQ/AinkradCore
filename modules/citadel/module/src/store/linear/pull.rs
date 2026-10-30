@@ -10,8 +10,6 @@ pub struct Pull {
     pub body: Option<String>,
     /// A Linear state type.
     pub state: Option<String>,
-    /// An agent of the issue's company, by name.
-    pub assignee: Option<(crate::domain::org::AgentId, String)>,
     /// Fields both sides changed: (field, which side won).
     pub conflicts: Vec<(&'static str, &'static str)>,
 }
@@ -94,20 +92,6 @@ pub async fn pull(pool: &SqlitePool, issue: IssueId, p: &Pull) -> Result<(), Err
             .await?;
         }
     }
-    if let Some((agent, name)) = &p.assignee {
-        let current = issue_in(&mut tx, issue).await?.ok_or(Error::RowNotFound)?;
-        if !current.state.is_terminal() {
-            let to = IssueTransition::Reassign {
-                next: Actor::Agent(*agent).into(),
-            };
-            match transition_issue_in(&mut tx, issue, &to, system).await {
-                Ok(_) => fields.push("assignee"),
-                Err(IssueTransitionError::Db(e)) => return Err(e),
-                Err(_) => {}
-            }
-        }
-        synced.assignee = Some(name.clone());
-    }
     snapshot(&mut tx, issue, &synced).await?;
     let details = json!({"linear": linear, "fields": fields});
     append(&mut tx, company, system, "linear.pulled", entity, details).await?;
@@ -126,40 +110,35 @@ pub async fn import(
     body: &str,
     kind: &str,
 ) -> Result<IssueId, Error> {
-    let (state, start) = match kind {
-        "backlog" => (IssueState::Backlog, false),
-        "completed" => (IssueState::Done, false),
-        "canceled" => (IssueState::Cancelled, false),
-        "started" => (IssueState::Todo, true),
-        _ => (IssueState::Todo, false),
+    let state = match kind {
+        "backlog" => IssueState::Backlog,
+        // Finished history is recorded as it is; nothing is reviewed or merged for it.
+        "completed" => IssueState::Done,
+        "canceled" => IssueState::Cancelled,
+        // Linear does not start work here: a started issue arrives as todo, waiting on the
+        // admin, who starts it (or hands it to an agent) in Citadel; the next push says so.
+        _ => IssueState::Todo,
     };
+    let (title, body) = (clip(title, 200), clip(body, 20_000));
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
     let new = NewIssue {
         project_id: project,
         epic_id: None,
         parent_id: None,
         kind: IssueKind::Task,
-        title: title.to_owned(),
-        body: body.to_owned(),
+        title: title.clone(),
+        body: body.clone(),
         state,
         owner: None,
         next_actor: (!state.is_terminal()).then_some(NextActor::Human(ESCALATION_USER)),
         points: None,
         sprint_id: None,
     };
-    let mut created = create_issue_in(&mut tx, &new).await?;
-    if start {
-        let step = IssueTransition::Start;
-        match transition_issue_in(&mut tx, created.id, &step, AuditActor::System).await {
-            Ok(i) => created = i,
-            Err(IssueTransitionError::Db(e)) => return Err(e),
-            Err(_) => {}
-        }
-    }
-    // Linear's own state: if the issue could not start, the next push says so in Linear.
+    let created = create_issue_in(&mut tx, &new).await?;
+    // Linear's own state: where Citadel did not follow it, the next push says so in Linear.
     let synced = Synced {
-        title: title.to_owned(),
-        body: body.to_owned(),
+        title,
+        body,
         state: kind.to_owned(),
         assignee: None,
     };

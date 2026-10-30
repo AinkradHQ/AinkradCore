@@ -21,7 +21,7 @@ pub use crate::common::*;
 pub use crate::gov_seed::*;
 
 pub const TOKEN: &str = "forge_token";
-pub const SECRET: &str = "citadel.forge";
+pub const SECRET: &str = "citadel.forge.token";
 
 /// The address a fake's API URL (`http://127.0.0.1:port`) names.
 pub fn addr_of(api: &str) -> SocketAddr {

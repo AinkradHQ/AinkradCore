@@ -320,15 +320,22 @@ pub async fn pr_merge_refused(
     why: &str,
     now: &str,
 ) -> Result<(), Error> {
+    let why = &super::untrusted(why, 300);
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
     let Some((company, prs)) = live_prs(&mut tx, issue).await? else {
         return Ok(());
     };
-    let Some(pr) = prs.iter().find(|p| p.repo_id == repo) else {
+    // Only a PR being merged can be refused a merge: one that is merged (an overlapping pass
+    // merged it first), open or closed stays as it is, and never flips back to open.
+    let Some(pr) = prs
+        .iter()
+        .find(|p| p.repo_id == repo && p.phase == PrPhase::Merging)
+    else {
         return Ok(());
     };
     sqlx::query(
-        "UPDATE citadel_issue_prs SET state = 'open', last_error = ? WHERE issue_id = ? AND repo_id = ?",
+        "UPDATE citadel_issue_prs SET state = 'open', last_error = ? \
+         WHERE issue_id = ? AND repo_id = ? AND state = 'merging'",
     )
     .bind(why)
     .bind(issue.0)
@@ -394,7 +401,7 @@ pub async fn pr_merge_refused(
             payload["head_sha"] = json!(first.head_sha);
         }
         payload["reopened_from"] = id.into();
-        payload["reason"] = why.into();
+        payload["reason"] = why.as_str().into();
         let at = (company, issue, AgentId(requester));
         let reopened = merge_approval(&mut tx, at, payload, now).await?;
         let details = json!({"approval": reopened.id.0, "reopened_from": id, "reason": why});

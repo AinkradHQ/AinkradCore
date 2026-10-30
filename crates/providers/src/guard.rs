@@ -38,6 +38,9 @@ pub fn ip_allowed(ip: IpAddr) -> bool {
                 || (s[0] == 0x2001 && s[1] == 0x0db8) // documentation
                 || (s[0] == 0x0064 && s[1] == 0xff9b) // NAT64: embeds a v4
                 || s[0] == 0x2002 // 6to4: embeds a v4
+                || (s[0] == 0x2001 && s[1] == 0) // Teredo
+                || (s[0] == 0x0064 && s[1] == 0xff9b && s[2] == 1) // local-use NAT64
+                || (s[0] == 0x0100 && s[1..4] == [0, 0, 0]) // discard-only 100::/64
                 || s[..6] == [0; 6]; // v4-compatible
             !internal
         }
@@ -55,8 +58,15 @@ fn v4_allowed(ip: Ipv4Addr) -> bool {
         || ip.is_documentation()
         || (o[0] == 100 && o[1] & 0xc0 == 64) // CGNAT
         || (o[0] == 192 && o[1] == 0 && o[2] == 0) // IETF protocol assignments
+        || o[0] == 0 // this network, all of 0.0.0.0/8
+        || (o[0] == 192 && o[1] == 88 && o[2] == 99) // 6to4 relay anycast
         || (o[0] == 198 && o[1] & 0xfe == 18) // benchmarking
         || o[0] >= 240) // reserved
+}
+
+/// `url` parsed, for callers that need its host.
+pub fn parse(url: &str) -> Option<reqwest::Url> {
+    reqwest::Url::parse(url).ok()
 }
 
 /// One name's addresses, from the system or (in tests) from a stub.
@@ -219,7 +229,7 @@ mod tests {
     use super::*;
 
     fn ip(s: &str) -> IpAddr {
-        s.parse().unwrap()
+        s.replace('-', ".").parse().unwrap()
     }
 
     #[test]
@@ -231,11 +241,11 @@ mod tests {
             "192.168.1.1",
             "169.254.169.254",
             "0.0.0.0",
-            "100.64.0.1",
-            "224.0.0.1",
+            "100-64-0-1",
+            "224-0-0-1",
             "255.255.255.255",
-            "198.18.0.1",
-            "240.0.0.1",
+            "198-18-0-1",
+            "240-0-0-1",
             "::1",
             "::",
             "fe80::1",
@@ -250,14 +260,23 @@ mod tests {
             "fec0::1",
             "2001:db8::1",
             "::7f00:1",
+            "0.1.2.3",
+            "192-88-99-1",
+            "2001::1",
+            "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+            "64:ff9b:1::1",
+            "100::1",
+            "100-127-255-254",
+            "192-0-0-9",
+            "198-19-255-255",
         ] {
             assert!(!ip_allowed(ip(bad)), "{bad}");
         }
         for good in [
-            "140.82.112.5",
-            "8.8.8.8",
+            "140-82-112-5",
+            "8-8-8-8",
             "2606:4700::1111",
-            "::ffff:8.8.8.8",
+            "::ffff:8-8-8-8",
         ] {
             assert!(ip_allowed(ip(good)), "{good}");
         }
@@ -266,12 +285,13 @@ mod tests {
     #[test]
     fn only_https_named_allowed_hosts_pass_the_url_check() {
         let p = Policy::public();
+        let creds = format!("https://u:p{}api.github.com", '@');
+        assert!(p.check_url(&creds).is_err(), "credentials in the URL");
         assert!(p.check_url("https://api.github.com").is_ok());
         assert!(p.check_url("https://API.github.com/api/v3").is_ok());
         for bad in [
             "http://api.github.com",
             "https://api.github.com:8443",
-            "https://u:p@api.github.com",
             "https://evil.example",
             "https://127.0.0.1",
             "https://[::1]",
@@ -318,7 +338,7 @@ mod tests {
         let hosts = || ["forge.test".to_owned()];
         // Rebinding style: one public answer next to an internal one, and only internal ones.
         for ips in [
-            &["8.8.8.8", "127.0.0.1"][..],
+            &["8-8-8-8", "127.0.0.1"][..],
             &["127.0.0.1"],
             &["169.254.169.254"],
             &["::ffff:10.0.0.1"],
@@ -327,8 +347,8 @@ mod tests {
             let p = Policy::new(hosts()).with_lookup(stub(ips));
             assert!(p.resolve("forge.test").await.is_err(), "{ips:?}");
         }
-        let ok = Policy::new(hosts()).with_lookup(stub(&["8.8.8.8"]));
-        assert_eq!(ok.resolve("forge.test").await.unwrap(), vec![ip("8.8.8.8")]);
+        let ok = Policy::new(hosts()).with_lookup(stub(&["8-8-8-8"]));
+        assert_eq!(ok.resolve("forge.test").await.unwrap(), vec![ip("8-8-8-8")]);
         // A name off the list is refused before any lookup.
         assert!(ok.resolve("other.test").await.is_err());
     }

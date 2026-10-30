@@ -328,7 +328,7 @@ async fn send(req: reqwest::RequestBuilder, token: &Secret) -> Result<serde_json
         let message = body["message"]
             .as_str()
             .or(body["error"].as_str())
-            .map(str::to_owned)
+            .map(|m| m.chars().take(300).collect::<String>())
             .unwrap_or_else(|| text.chars().take(300).collect());
         return Err(Error::Http {
             status: status.as_u16(),

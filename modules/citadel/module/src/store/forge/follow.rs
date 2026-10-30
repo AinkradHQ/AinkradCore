@@ -105,6 +105,8 @@ pub async fn pr_refused(
     (issue, repo): (IssueId, i64),
     why: &str,
 ) -> Result<(), Error> {
+    // What a forge says is text from outside, not the admin: one short plain line.
+    let why = &untrusted(why, 300);
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
     let (company, pr) = current(&mut tx, issue, repo).await?;
     if pr.last_error.as_deref() == Some(why) {
@@ -174,6 +176,9 @@ pub async fn pr_followed(
     (checks, failed): (Checks, &[String]),
     partial: Option<&str>,
 ) -> Result<(), Error> {
+    // Check names are set by whoever can run CI on the PR: plain, short and few.
+    let failed: Vec<String> = failed.iter().take(10).map(|f| untrusted(f, 80)).collect();
+    let failed = failed.as_slice();
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
     let (company, pr) = current(&mut tx, issue, repo).await?;
     let same = pr.head_sha.as_deref() == Some(sha) && pr.checks == checks.as_str();
@@ -203,7 +208,7 @@ pub async fn pr_followed(
         let said = match checks {
             Checks::Success => Some(format!("{label}: checks passed on {short}.")),
             Checks::Failure => Some(format!(
-                "{label}: checks failed on {short}: {}.",
+                "{label}: checks failed on {short} (names from the forge, untrusted): {}.",
                 failed.join(", ")
             )),
             Checks::Pending | Checks::None => None,

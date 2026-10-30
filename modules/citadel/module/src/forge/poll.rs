@@ -81,6 +81,10 @@ async fn delete_head(
 /// One pass over the PRs with work. An issue's approved PRs merge in its project's repo order
 /// (E15.16, #54): one waits while an earlier one of its issue is still merging or failed.
 pub async fn sync(rt: &Arc<Runtime>) -> Result<(), sqlx::Error> {
+    // One pass at a time: an overlapping occurrence skips (two could merge one PR twice).
+    let Ok(_pass_lock) = rt.forge_lock.try_lock() else {
+        return Ok(());
+    };
     let pool = &rt.pool;
     let mut due = due_prs(pool).await?;
     if due.is_empty() {
@@ -109,7 +113,8 @@ pub async fn sync(rt: &Arc<Runtime>) -> Result<(), sqlx::Error> {
             pr_refused(pool, at, "unknown forge kind").await?;
             continue;
         };
-        let token = match pass.token(&f.secret, "forge poll").await {
+        let company = crate::store::forge::company_of_project(pool, f.project_id).await?;
+        let token = match pass.token(&f.secret, (&host, company), "forge poll").await {
             Ok(token) => token,
             Err(why) => {
                 pr_refused(pool, at, &why).await?;
@@ -163,7 +168,7 @@ pub async fn sync(rt: &Arc<Runtime>) -> Result<(), sqlx::Error> {
                 let title = format!(
                     "Merge {}: {}",
                     pr.head,
-                    issue_title(pool, pr.issue_id).await?
+                    crate::store::forge::untrusted(&issue_title(pool, pr.issue_id).await?, 200)
                 );
                 match forge.merge(n, &sha, &title).await {
                     // The next one of its issue may go.

