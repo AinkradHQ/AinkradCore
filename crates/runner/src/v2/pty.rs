@@ -203,6 +203,12 @@ impl PtyDriver {
             match rd.recv().await.map_err(lost)? {
                 Some(FromHost::Exit { exit }) => {
                     let _ = wr.send(&ToHost::Ack).await;
+                    // Answered once the host is gone (it closes us after cleaning up), so the
+                    // terminal is reaped when the Core hears of it, not a moment later.
+                    let _ = tokio::time::timeout(Duration::from_secs(5), async {
+                        while let Ok(Some(_)) = rd.recv().await {}
+                    })
+                    .await;
                     return Ok(exit_of(terminal, &exit));
                 }
                 Some(_) => {}

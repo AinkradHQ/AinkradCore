@@ -8,8 +8,10 @@
 //!   longer is dropped. It reattaches at its last `seq` (a snapshot, if that is gone).
 //! - The socket is `0600` in a `0700` directory, and a peer whose uid is not the allowed one
 //!   (the host's own) is closed before it gets a byte (E2-03.4).
-//! - The child's exit goes to every connected client once the output is drained (or 500 ms
-//!   on, if a background job keeps the PTY open). The host ends when a client acks it.
+//! - The child's exit goes to every connected client, once each, after its last output byte:
+//!   the host holds its own slave fd for `DRAIN` after the exit (macOS may drop unread output
+//!   when the last slave closes), then waits for EOF (`LATE` at most, if a background job keeps
+//!   the PTY open). The host ends when a client acks it.
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
@@ -56,8 +58,11 @@ impl HostConfig {
 
 /// How long output waits for an attached client's room before the client is dropped.
 const SLOW: Duration = Duration::from_secs(5);
-/// How long the exit waits for the last output once the child is gone.
-const DRAIN: Duration = Duration::from_millis(500);
+/// How long after the exit our slave fd is held while the output drains (`Pty::slave`).
+const DRAIN: Duration = Duration::from_millis(200);
+/// How long the exit then waits for the reader to finish (a background job may hold the
+/// PTY open for good).
+const LATE: Duration = Duration::from_secs(2);
 /// The bounds of a `close`'s grace between signals.
 const GRACE: (u64, u64) = (50, 10_000);
 
@@ -114,6 +119,8 @@ enum Event {
 struct Client {
     tx: mpsc::Sender<FromHost>,
     attached: bool,
+    /// The exit was sent to this client: it gets it once.
+    told: bool,
 }
 
 struct State {
@@ -219,9 +226,14 @@ impl State {
                     ),
                     None => self.send(client, self.snapshot()),
                 }
+                let told = self.clients.get(&client).is_none_or(|c| c.told);
                 if self.announced
+                    && !told
                     && let Some(exit) = self.exit.clone()
                 {
+                    if let Some(c) = self.clients.get_mut(&client) {
+                        c.told = true;
+                    }
                     self.send(client, FromHost::Exit { exit });
                 }
             }
@@ -435,16 +447,31 @@ pub async fn serve(
     let mut exit_rx = spawned.exit;
     let mut reader_done = false;
     let mut drain_until: Option<Instant> = None;
+    let mut released = false;
     let mut next_client = 0u64;
     loop {
+        let now = Instant::now();
+        // The exit is known and the output had DRAIN to arrive: let the master see EOF.
+        if !released && drain_until.is_some_and(|d| now >= d) {
+            st.pty.release_slave();
+            released = true;
+        }
+        // Announced once the output is all read (EOF), or LATE after that if a background job
+        // keeps the PTY open: after every output byte, so the exit is always last.
         if !st.announced
             && let Some(exit) = st.exit.clone()
-            && (reader_done || drain_until.is_some_and(|d| Instant::now() >= d))
+            && released
+            && (reader_done || drain_until.is_some_and(|d| now >= d + LATE))
         {
             st.announced = true;
+            for c in st.clients.values_mut() {
+                c.told = true;
+            }
             st.broadcast(&FromHost::Exit { exit }, false).await;
         }
-        let due = drain_until.filter(|_| !st.announced && !reader_done);
+        let due = drain_until
+            .filter(|_| !st.announced)
+            .map(|d| if released { d + LATE } else { d });
         let wake = async move {
             match due {
                 Some(d) => tokio::time::sleep_until(d).await,
@@ -476,7 +503,7 @@ pub async fn serve(
                     if let Some(tx) = serve_client(stream, next_client, st.cfg.allow_uid, hello,
                         st.cfg.client_queue, events_tx.clone())
                     {
-                        st.clients.insert(next_client, Client { tx, attached: false });
+                        st.clients.insert(next_client, Client { tx, attached: false, told: false });
                     }
                 }
             }

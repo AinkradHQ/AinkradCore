@@ -19,7 +19,7 @@ use std::io::{self, Read, Write};
 use std::time::Duration;
 
 use ainkrad_proto::v2::Size;
-use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{CommandBuilder, MasterPty, PtySize, SlavePty, native_pty_system};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
@@ -107,6 +107,11 @@ fn io_err(e: impl std::fmt::Display) -> io::Error {
 /// A running PTY: its master and its child's pid (which is also its process group).
 pub struct Pty {
     master: Box<dyn MasterPty + Send>,
+    /// Our own slave fd, held until the exit is announced: macOS may discard output the master
+    /// has not read yet when the last slave fd closes, which loses a fast child's output (an
+    /// `echo` that exits at once). Held, the master never sees EOF; the host releases it once
+    /// the exit is known and the output had time to drain ([`Pty::release_slave`]).
+    slave: Option<Box<dyn SlavePty + Send>>,
     pub pid: u32,
 }
 
@@ -156,8 +161,7 @@ impl Pty {
             }
         }
         let child = pair.slave.spawn_command(cmd).map_err(io_err)?;
-        // The master sees EOF only once every slave fd is closed: ours goes now.
-        drop(pair.slave);
+        // Our slave fd stays open until the exit is announced (see `Pty::slave`).
         let pid = child
             .process_id()
             .ok_or_else(|| io::Error::other("the child has no pid"))?;
@@ -189,6 +193,7 @@ impl Pty {
         Ok(Spawned {
             pty: Pty {
                 master: pair.master,
+                slave: Some(pair.slave),
                 pid,
             },
             reader,
@@ -203,6 +208,11 @@ impl Pty {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "bad size"));
         }
         self.master.resize(pty_size(size)).map_err(io_err)
+    }
+
+    /// Closes our slave fd, so the master reads EOF once the child's last fd is gone too.
+    pub fn release_slave(&mut self) {
+        self.slave = None;
     }
 
     /// Reaps the exited child, freeing its pid and group id: only once its exit was seen, and
