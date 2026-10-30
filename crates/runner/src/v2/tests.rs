@@ -728,16 +728,21 @@ mod pty {
         )
         .await;
         let (mut bytes, mut snapshot) = (0u64, None);
-        let mut granted = false;
+        let mut grants = 0u64;
         while snapshot.is_none() {
             // The window is spent and the flood keeps coming: no snapshot goes without credit
-            // (it costs credit too); one more grant brings it.
-            if bytes >= STREAM_WINDOW && !granted {
-                tokio::time::sleep(Duration::from_millis(500)).await;
+            // (it costs credit too). A grant may be spent on output before the backlog
+            // overflows, on a slow machine, so grant again whenever the stream goes quiet.
+            let next = if bytes >= STREAM_WINDOW {
+                tokio::time::timeout(Duration::from_millis(500), core.recv()).await
+            } else {
+                Ok(core.recv().await)
+            };
+            let Ok(f) = next else {
                 core.send(1, Body::Credit(Credit { bytes: 4096 })).await;
-                granted = true;
-            }
-            let f = core.recv().await;
+                grants += 1;
+                continue;
+            };
             if matches!(f.body(), Ok(Some(Body::Heartbeat(_)))) {
                 core.send(CONTROL_STREAM, Body::Heartbeat(Default::default()))
                     .await;
@@ -751,7 +756,10 @@ mod pty {
                 _ => {}
             }
         }
-        assert!(bytes <= STREAM_WINDOW + 4096, "{bytes} past the credit");
+        assert!(
+            bytes <= STREAM_WINDOW + grants * 4096,
+            "{bytes} past the credit"
+        );
         assert!(snapshot.unwrap().seq > bytes);
         // More credit: the stream carries on (output, or another snapshot under the flood).
         core.send(1, Body::Credit(Credit { bytes: 65536 })).await;
