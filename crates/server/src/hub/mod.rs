@@ -44,8 +44,8 @@ pub mod connect;
 
 /// Proof that a command's caller stepped up for it (handshake spec §8): what
 /// [`Hub::dispatch_elevated`] takes. Nothing outside the crate can make one, so no module can
-/// expose `exec.run` without the gate (security review RH5). No route sends `exec.run` yet;
-/// the one that does (E2) mints this after its destructive check.
+/// send anything but `noop` (`exec.run`, `pty.*`) without the gate (security review RH5). No
+/// route sends those yet; the one that does mints this after its destructive check.
 #[derive(Debug)]
 pub struct Elevated(());
 
@@ -256,24 +256,25 @@ impl Hub {
 
     /// Sends `command` to `runner`: `offline`, `unsupported_command` (not advertised) and
     /// `busy` (in-flight cap or a full send queue) are answered here, before anything is sent.
-    /// `exec.run` runs code on the runner, so it goes only through [`Hub::dispatch_elevated`];
-    /// here it is refused (`invalid_args`) and never sent (security review RH5).
+    /// Deny by default (security review RH5, re-review M1): only `noop` goes through here. Every
+    /// other op (`exec.run`, `pty.open`, `pty.attach`, and whatever comes next) runs or drives
+    /// code on the runner, so it goes only through [`Hub::dispatch_elevated`]; here it is
+    /// refused (`invalid_args`) and never sent.
     pub fn dispatch(
         self: &Arc<Self>,
         runner: &str,
         command: Command,
     ) -> Result<Dispatched, StreamError> {
-        if matches!(command, Command::ExecRun(_)) {
+        if !matches!(command, Command::Noop) {
             return Err(err(
                 ErrorCode::InvalidArgs,
-                "exec.run needs a step-up (Hub::dispatch_elevated)",
+                "only noop is dispatched without a step-up (Hub::dispatch_elevated)",
             ));
         }
         self.send_command(runner, command)
     }
 
-    /// [`Hub::dispatch`] for any command, `exec.run` included, given proof that the caller
-    /// stepped up for it.
+    /// [`Hub::dispatch`] for any command, given proof that the caller stepped up for it.
     pub fn dispatch_elevated(
         self: &Arc<Self>,
         runner: &str,
