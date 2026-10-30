@@ -8,7 +8,7 @@ use ainkrad_core::settings::{Key, Scope};
 use ainkrad_core_server::scheduler::{Clock, SystemClock};
 use ainkrad_core_server::store::{self, settings};
 
-use crate::{ADMIN, Result_};
+use super::{ADMIN, Result_};
 
 mod audit;
 pub mod bootstrap;

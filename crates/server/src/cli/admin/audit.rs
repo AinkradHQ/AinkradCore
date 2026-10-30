@@ -8,7 +8,7 @@ use std::path::Path;
 use ainkrad_core_server::store::audit::chain::{self, Verified};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 
-use crate::Result_;
+use crate::cli::Result_;
 
 /// Runs an audit command; `None` when `args` is not one.
 pub async fn run(args: &[&str]) -> Option<Result_> {
