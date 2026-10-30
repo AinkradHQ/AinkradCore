@@ -607,16 +607,16 @@ impl AgentDriver {
         }
         self.harness.session_env(run, None);
         let me = Arc::clone(self);
-        let session = session.to_owned();
+        let cleanup_session = session.to_owned();
         tokio::spawn(async move {
-            me.harness.cleanup_agent_workspace(&session).await;
-            me.end(
-                &session,
-                Outcome::Cancelled {
-                    reason: "killed".to_owned(),
-                },
-            );
+            me.harness.cleanup_agent_workspace(&cleanup_session).await;
         });
+        self.end(
+            session,
+            Outcome::Cancelled {
+                reason: "killed".to_owned(),
+            },
+        );
     }
 
     fn running(
