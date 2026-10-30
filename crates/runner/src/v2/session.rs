@@ -25,8 +25,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, CONTROL_STREAM, Command, Control, ErrorCode, Frame, FrameKind, Reply, RunnerHello,
-    StreamError, StreamState,
+    Body, CONTROL_STREAM, Command, Control, ErrorCode, Frame, FrameKind, Heartbeat, HostLoad,
+    Reply, RunnerHello, StreamError, StreamState,
 };
 use futures_util::StreamExt;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -38,6 +38,7 @@ use tokio_tungstenite::tungstenite::Message;
 use super::agent::AgentDriver;
 use super::pty::{Op, PtyDriver};
 use super::{ExecDriver, Link, handshake, key, lost, rotate, send};
+use crate::load::host_load;
 
 /// The pace when the Core names none.
 const HEARTBEAT: Duration = Duration::from_secs(15);
@@ -181,6 +182,10 @@ impl Session {
             boot: Some(self.boot.clone()),
             streams: held,
             terminals,
+            load: host_load().map(|l| HostLoad {
+                avg1: l.avg1,
+                cores: l.cores,
+            }),
             ..RunnerHello::default()
         };
         let (welcome, core_spki) = handshake(&mut sink, &mut source, link, hello).await?;
@@ -240,7 +245,20 @@ impl Session {
                     if heard.elapsed() > heartbeat * 3 {
                         return Err(lost("the Core went silent"));
                     }
-                    send(&mut sink, Frame::new(CONTROL_STREAM, control, Body::Heartbeat)).await?;
+                    send(
+                        &mut sink,
+                        Frame::new(
+                            CONTROL_STREAM,
+                            control,
+                            Body::Heartbeat(Heartbeat {
+                                load: host_load().map(|l| HostLoad {
+                                    avg1: l.avg1,
+                                    cores: l.cores,
+                                }),
+                            }),
+                        ),
+                    )
+                    .await?;
                     control += 1;
                     continue;
                 }

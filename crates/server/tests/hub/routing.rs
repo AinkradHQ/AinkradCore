@@ -82,6 +82,65 @@ async fn the_noop_runs_end_to_end_and_only_advertised_commands_reach_the_runner(
     noop.await.unwrap().expect("the no-op answered");
 }
 
+/// E2-15.2: a runner whose host is past `cores * 2` load is `busy` (hello or heartbeat); it takes
+/// work again once a heartbeat reports it back under.
+#[tokio::test]
+async fn a_loaded_host_refuses_new_commands_until_its_load_drops() {
+    let core = Core::start("hostload", quick()).await;
+    let dev = core.runner().await;
+    let hot = HostLoad {
+        avg1: 9.0,
+        cores: 4,
+    };
+    let cool = HostLoad {
+        avg1: 1.0,
+        cores: 4,
+    };
+    let mut fake = Fake::plain(&core, &dev).await;
+    fake.load = Some(hot);
+    let auth = fake
+        .hello(&dev, vec![exec_driver(&[OP_NOOP], 2)], &super::random32())
+        .await;
+    fake.prove(
+        &dev,
+        &auth,
+        &super::NO_CHANNEL_BINDING,
+        &core.app.auth.identity.fp,
+    )
+    .await;
+    fake.welcome().await;
+    let hub = Arc::clone(&core.app.hub);
+    let busy = hub.dispatch(&dev.id, Command::Noop).err().expect("loaded");
+    assert_eq!(busy.code, ErrorCode::Busy);
+    assert!(busy.message.contains("load"), "{}", busy.message);
+    assert_eq!(hub.runners()[&dev.id].host_load, Some(hot));
+
+    fake.heartbeat(Some(cool)).await;
+    for _ in 0..100 {
+        if hub.runners()[&dev.id].host_load == Some(cool) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    hub.dispatch(&dev.id, Command::Noop).expect("load dropped");
+    // A heartbeat without a measure keeps the last one.
+    fake.heartbeat(None).await;
+    fake.heartbeat(Some(hot)).await;
+    for _ in 0..100 {
+        if hub.runners()[&dev.id].host_load == Some(hot) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        hub.dispatch(&dev.id, Command::Noop)
+            .err()
+            .expect("loaded again")
+            .code,
+        ErrorCode::Busy
+    );
+}
+
 #[tokio::test]
 async fn past_its_capacity_a_runner_is_busy_and_output_is_held_to_its_credit() {
     let core = Core::start("busy", quick()).await;

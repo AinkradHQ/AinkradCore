@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, CONTROL_STREAM, Control, CoreWelcome, Frame, PROTOCOL_VERSION, RunnerHello, close_code,
+    Body, CONTROL_STREAM, Control, CoreWelcome, Frame, Heartbeat, PROTOCOL_VERSION, RunnerHello,
+    close_code,
 };
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use tokio::sync::{Notify, mpsc};
@@ -116,7 +117,12 @@ pub(super) async fn run(
                     emit(&app, DEGRADED, json!({"device_id": device.id, "reason": "silent"})).await;
                 }
                 control_seq += 1;
-                match timed(&mut socket, Frame::new(CONTROL_STREAM, control_seq, Body::Heartbeat), cfg.send_timeout).await {
+                match timed(
+                    &mut socket,
+                    Frame::new(CONTROL_STREAM, control_seq, Body::Heartbeat(Heartbeat::default())),
+                    cfg.send_timeout,
+                )
+                .await {
                     Ok(Ok(())) => {}
                     Ok(Err(_)) => break End::Gone,
                     Err(_) => break End::Slow,
@@ -127,7 +133,12 @@ pub(super) async fn run(
                     heard = Instant::now();
                     match serde_json::from_str::<Frame>(&text) {
                         Ok(f) if f.stream_id != CONTROL_STREAM => hub.received(&device.id, f),
-                        Ok(_) => {}
+                        Ok(f) => {
+                            // Heartbeat frames carry the host load (E2-15.2).
+                            if let Ok(Some(Body::Heartbeat(hb))) = f.body() {
+                                hub.load(&device.id, hb);
+                            }
+                        }
                         Err(_) => tracing::debug!(device = device.id, "not a frame; skipped"),
                     }
                 }

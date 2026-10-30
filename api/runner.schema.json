@@ -949,7 +949,7 @@
           "$ref": "#/$defs/FrameKind"
         },
         "payload": {
-          "description": "The body for `kind` (`Body`; schema `V2Payload`); absent for `heartbeat`."
+          "description": "The body for `kind` (`Body`; schema `V2Payload`); absent for `heartbeat` when its payload\nis the default `Heartbeat`."
         },
         "seq": {
           "format": "uint64",
@@ -991,6 +991,23 @@
         }
       ]
     },
+    "Heartbeat": {
+      "description": "A runner's heartbeat: carries `load` when the runner measured one.",
+      "properties": {
+        "load": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostLoad2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The host's load when the heartbeat was sent; absent when the runner has no measure."
+        }
+      },
+      "type": "object"
+    },
     "HostLoad": {
       "description": "The host's load when a heartbeat was sent (1.26): its one-minute load average and its CPU\ncount. The server stretches a loaded runner's lease by `avg1 / cores`, up to a cap.",
       "properties": {
@@ -999,6 +1016,27 @@
           "type": "number"
         },
         "cores": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "avg1",
+        "cores"
+      ],
+      "type": "object"
+    },
+    "HostLoad2": {
+      "description": "The host's load when a heartbeat was sent (E2-15.2): its one-minute load average and its\nCPU count, so the hub can apply load-based back-pressure and report it through the API.",
+      "properties": {
+        "avg1": {
+          "description": "The one-minute load average.",
+          "format": "double",
+          "type": "number"
+        },
+        "cores": {
+          "description": "How many CPUs the runner sees.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
@@ -1599,6 +1637,17 @@
           },
           "type": "array"
         },
+        "load": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostLoad2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The host's load when the hello was sent (E2-15.2): the one-minute average and CPU count,\nso the hub can apply load-based back-pressure before any heartbeat."
+        },
         "nonce": {
           "description": "`nonce_r`, 32 random bytes, base64url (`auth`). The Core refuses a hello without it.",
           "type": [
@@ -2069,9 +2118,15 @@
         },
         {
           "$ref": "#/$defs/Close"
+        },
+        {
+          "$ref": "#/$defs/Heartbeat"
+        },
+        {
+          "$ref": "#/$defs/HostLoad2"
         }
       ],
-      "description": "A v2 Frame's payload by kind: control Control, command Command, result Reply, error StreamError, output Output, credit Credit, close Close, heartbeat none."
+      "description": "A v2 Frame's payload by kind: control Control, command Command, result Reply, error StreamError, output Output, credit Credit, close Close, heartbeat Heartbeat."
     },
     "Workspace": {
       "description": "Where an issue's run works: a git worktree of `repo` on `branch`, cut from `base`.",

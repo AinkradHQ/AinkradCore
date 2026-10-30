@@ -35,8 +35,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, Close, Command, Control, Credit, DriverInfo, ErrorCode, Frame, OP_AGENT_READ,
-    OP_PTY_ATTACH, OP_PTY_OPEN, RunnerHello, STREAM_WINDOW, StreamError, StreamState,
+    Body, Close, Command, Control, Credit, DriverInfo, ErrorCode, Frame, Heartbeat, HostLoad,
+    OP_AGENT_READ, OP_PTY_ATTACH, OP_PTY_OPEN, RunnerHello, STREAM_WINDOW, StreamError,
+    StreamState,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -94,6 +95,12 @@ impl Default for HubConfig {
 /// Frames queued per connection before `dispatch` answers `busy`.
 const OUT_QUEUE: usize = 256;
 
+/// Whether a host's one-minute load is past `cores * 2.0` (E2-15.2): saturated, so the hub
+/// refuses new commands (`busy`) rather than starve the work the runner already has.
+fn overloaded(load: HostLoad) -> bool {
+    load.avg1 > f64::from(load.cores) * 2.0
+}
+
 /// The live connection of a runner.
 struct Conn {
     generation: u64,
@@ -137,6 +144,8 @@ struct Runner {
     /// Unix seconds of the last frame.
     last_seen: i64,
     degraded: bool,
+    /// The host's load as last reported (hello or heartbeat); `None` until one.
+    load: Option<HostLoad>,
 }
 
 impl Runner {
@@ -212,6 +221,9 @@ pub struct RunnerState {
     pub capacity: usize,
     /// Commands in flight.
     pub load: usize,
+    /// The host's load as last reported; `None` until a hello or heartbeat carries one
+    /// (E2-15.2).
+    pub host_load: Option<HostLoad>,
 }
 
 pub struct Hub {
@@ -365,6 +377,9 @@ impl Hub {
                 "the runner did not advertise that command",
             ));
         }
+        if r.load.is_some_and(overloaded) {
+            return Err(err(ErrorCode::Busy, "the runner's host is under load"));
+        }
         let (full, own) = r.full(command.op(), self.config.max_inflight);
         if full {
             return Err(err(ErrorCode::Busy, "the runner is at its capacity"));
@@ -425,6 +440,7 @@ impl Hub {
                     drivers: r.hello.drivers.clone(),
                     capacity: r.capacity(self.config.max_inflight),
                     load: r.inflight.len(),
+                    host_load: r.load,
                 };
                 (id.clone(), state)
             })
@@ -454,6 +470,7 @@ impl Hub {
             inflight: HashMap::new(),
             last_seen: now,
             degraded: false,
+            load: None,
         });
         if let Some(old) = r.conn.take() {
             old.replaced.notify_one();
@@ -484,6 +501,7 @@ impl Hub {
         }
         streams.sort_by_key(|s| s.stream_id);
         r.name = name.to_owned();
+        r.load = hello.load;
         r.hello = hello;
         r.epoch += 1;
         r.last_seen = now;
@@ -533,6 +551,16 @@ impl Hub {
         let turned = degraded && !r.degraded;
         r.degraded = degraded;
         turned
+    }
+
+    /// Updates `device`'s host load from a heartbeat (E2-15.2).
+    fn load(&self, device: &str, heartbeat: Heartbeat) {
+        let mut all = self.runners.lock().unwrap();
+        if let Some(r) = all.get_mut(device)
+            && let Some(load) = heartbeat.load
+        {
+            r.load = Some(load);
+        }
     }
 
     /// A frame from the runner on a command stream. A frame seen before is dropped.
