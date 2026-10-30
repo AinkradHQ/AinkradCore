@@ -1540,7 +1540,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Its harness is killed now and its delivered secrets removed (audited as `agent.killed`)
+            /// Its harness is killed now and its delivered secrets removed (audited as `agent.killed`). A module's session: `admin` only, the break-glass stop when the module's own routes cannot
             ///
             /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/kill/post(killAgentSession)/responses/200`.
             ///

@@ -24,9 +24,7 @@ use crate::auth::crypto::is_id;
 use crate::store::agents::{self as store, Session, SessionSecret};
 use ainkrad_proto::v2::{AgentDecide, AgentSend, AgentStop, Command};
 
-const MAX_PROMPT: usize = 64 * 1024;
 const MAX_MESSAGE: usize = 16 * 1024;
-const MAX_SECRETS: usize = 16;
 
 /// Tokens used, as the harness reported them.
 #[derive(Debug, Serialize, ToSchema)]
@@ -206,12 +204,6 @@ fn not_a_modules(s: &Session) -> Result<(), ApiError> {
     }
 }
 
-fn harness_ok(h: &str) -> bool {
-    (1..=32).contains(&h.len())
-        && h.bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
-}
-
 #[utoipa::path(post, path = "/api/v1/agent-sessions", operation_id = "createAgentSession",
     tag = "agents",
     request_body = NewAgentSession,
@@ -226,19 +218,6 @@ pub async fn create(
     body: Bytes,
 ) -> ApiResult<AgentSession> {
     let b: NewAgentSession = parse(&body)?;
-    if !is_id(&b.runner, "d_") {
-        return Err(ApiError::bad_request("runner is a runner's device id, d_…"));
-    }
-    if !harness_ok(&b.harness) {
-        return Err(ApiError::bad_request("harness is [a-z0-9_-]{1,32}"));
-    }
-    if b.prompt.as_ref().is_some_and(|p| p.len() > MAX_PROMPT)
-        || b.model.as_ref().is_some_and(|m| m.len() > 128)
-    {
-        return Err(ApiError::bad_request(
-            "the prompt (64 KiB) or model is too long",
-        ));
-    }
     let secrets: Vec<SessionSecret> = b
         .secrets
         .unwrap_or_default()
@@ -248,47 +227,9 @@ pub async fn create(
             var: s.var,
         })
         .collect();
-    if secrets.len() > MAX_SECRETS
-        || secrets.iter().any(|s| {
-            !crate::store::secrets::valid_name(&s.name)
-                || !ainkrad_proto::v2::valid_secret_var(&s.var)
-        })
-    {
-        return Err(ApiError::bad_request(
-            "at most 16 secrets, each a secret's name and a variable [A-Z_][A-Z0-9_]* the runner \
-             does not set itself",
-        ));
-    }
-    if !secrets.is_empty() && !me.device.scopes.iter().any(|scope| scope == "admin") {
-        return Err(ApiError::new(
-            StatusCode::FORBIDDEN,
-            "forbidden_scope",
-            "naming broker secrets requires the admin scope",
-        ));
-    }
-    let workspace_ok = b.workspace.as_ref().is_none_or(|w| {
-        serde_json::from_value::<ainkrad_proto::runner::Workspace>(w.clone())
-            .is_ok_and(|workspace| workspace.problem().is_none())
-    });
     let policy = b.policy.unwrap_or_else(|| {
         serde_json::to_value(ainkrad_proto::runner::Policy::default()).expect("a policy serializes")
     });
-    let parsed_policy = serde_json::from_value::<ainkrad_proto::runner::Policy>(policy.clone());
-    if !workspace_ok || parsed_policy.is_err() {
-        return Err(ApiError::bad_request(
-            "workspace or policy does not have its shape",
-        ));
-    }
-    if ainkrad_proto::runner::has_destructive_allow(parsed_policy.as_ref().unwrap())
-        && !me.device.scopes.iter().any(|scope| scope == "admin")
-    {
-        return Err(ApiError::new(
-            StatusCode::FORBIDDEN,
-            "forbidden_scope",
-            "approval bypasses require the admin scope",
-        ));
-    }
-    agents::admit(&app, &b.runner, &b.harness).await?;
     let new = store::NewSession {
         runner: &b.runner,
         harness: &b.harness,
@@ -299,6 +240,14 @@ pub async fn create(
         secrets: &secrets,
         created_by: &me.device.id,
     };
+    let admin = me.device.scopes.iter().any(|scope| scope == "admin");
+    agents::validate_new(&new, admin).map_err(|e| match e {
+        agents::Invalid::Bad(why) => ApiError::bad_request(why),
+        agents::Invalid::Forbidden(why) => {
+            ApiError::new(StatusCode::FORBIDDEN, "forbidden_scope", why)
+        }
+    })?;
+    agents::admit(&app, &b.runner, &b.harness).await?;
     let s = store::create(&app.pool, &new, BY, &app.clock.now()).await?;
     agents::authorize_create(&app, &me, &s.id);
     agents::start(&app, &s).await?;
@@ -364,6 +313,10 @@ pub async fn transcript(
 /// Sends `command` about `s` to its runner (answer within the service's wait).
 async fn tell(app: &App, s: &Session, command: Command, caller: &Caller) -> Result<(), ApiError> {
     not_a_modules(s)?;
+    send(app, s, command, caller).await
+}
+
+async fn send(app: &App, s: &Session, command: Command, caller: &Caller) -> Result<(), ApiError> {
     if !s.live() {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
@@ -477,16 +430,24 @@ pub async fn decide(
 
 async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSession> {
     let s = one(&app, &id).await?;
-    tell(
-        &app,
-        &s,
-        Command::AgentStop(AgentStop {
-            session: s.id.clone(),
-            kill,
-        }),
-        &me,
-    )
-    .await?;
+    let command = Command::AgentStop(AgentStop {
+        session: s.id.clone(),
+        kill,
+    });
+    if s.owner_module.is_some() && kill {
+        // Break-glass: a runaway harness of a module whose own routes cannot stop it (the module
+        // is gone, its run row lost). Kill only, and only an admin.
+        if !me.device.scopes.iter().any(|scope| scope == "admin") {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "forbidden_scope",
+                "killing a module's session requires the admin scope",
+            ));
+        }
+        send(&app, &s, command, &me).await?;
+    } else {
+        tell(&app, &s, command, &me).await?;
+    }
     let action = if kill {
         "agent.killed"
     } else {
@@ -513,7 +474,8 @@ pub async fn cancel(
     operation_id = "killAgentSession", tag = "agents",
     params(("id" = String, Path, description = "The session's id, `as_…`")),
     responses((status = 200, description = "Its harness is killed now and its delivered secrets \
-        removed (audited as `agent.killed`)", body = AgentSession)))]
+        removed (audited as `agent.killed`). A module's session: `admin` only, the break-glass \
+        stop when the module's own routes cannot", body = AgentSession)))]
 pub async fn kill(
     State(app): State<App>,
     Extension(me): Extension<Caller>,

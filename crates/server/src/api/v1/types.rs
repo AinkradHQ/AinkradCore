@@ -59,7 +59,8 @@
 ///    (scope `agent`, approvals `approve`) and audit actions; `RunnerDriver.slots`.
 /// 16: runner host load in the API (E2-15.2): `Runner.host_load` carries `avg1` and `cores`.
 /// 17: terminal service (E2-05/06): live attach/detach, resize, signal and close behavior.
-pub const API_MINOR: u32 = 17;
+/// 18: `killAgentSession` also stops a module's session, for an `admin` device (break-glass).
+pub const API_MINOR: u32 = 18;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

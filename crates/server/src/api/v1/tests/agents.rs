@@ -304,7 +304,7 @@ async fn refused_agent_writes_grow_no_audit_rows() {
 /// module's, never a command that starts code, and never one that is over.
 #[tokio::test]
 async fn a_module_drives_only_its_own_live_sessions() {
-    use crate::agents::{Refusal, instruct_module};
+    use crate::agents::{ModuleAgents, Refusal};
     use ainkrad_proto::v2::{AgentRead, AgentSend, AgentStop, Command};
     let fx = fx().await;
     let vm = super::secrets::runner(&fx, "vm").await;
@@ -348,14 +348,17 @@ async fn a_module_drives_only_its_own_live_sessions() {
         Err(Refusal::Runner(e)) => e.message,
         other => format!("{other:?}"),
     };
+    let (citadel, other_module) = (ModuleAgents::named("citadel"), ModuleAgents::named("other"));
     // A client's session, and a session of another module's name.
     assert!(
-        why(instruct_module(&fx.app, "citadel", &clients, stop(&clients)).await)
+        why(citadel.instruct(&fx.app, &clients.id, stop(&clients)).await)
             .contains("not this module's")
     );
     assert!(
-        why(instruct_module(&fx.app, "other", &owned, stop(&owned)).await)
-            .contains("not this module's")
+        why(other_module
+            .instruct(&fx.app, &owned.id, stop(&owned))
+            .await)
+        .contains("not this module's")
     );
     // A command that would start or read, and one about another session.
     let read = Command::AgentRead(AgentRead {
@@ -363,13 +366,16 @@ async fn a_module_drives_only_its_own_live_sessions() {
         after: 0,
         wait_ms: None,
     });
-    assert!(why(instruct_module(&fx.app, "citadel", &owned, read).await).contains("only stop"));
+    assert!(why(citadel.instruct(&fx.app, &owned.id, read).await).contains("only stop"));
     let other = Command::AgentSend(AgentSend {
         session: clients.id.clone(),
         text: "x".into(),
     });
+    assert!(why(citadel.instruct(&fx.app, &owned.id, other).await).contains("another session"));
+    // A session id that does not exist is not this module's either.
     assert!(
-        why(instruct_module(&fx.app, "citadel", &owned, other).await).contains("another session")
+        why(citadel.instruct(&fx.app, "as_missing", stop(&owned)).await)
+            .contains("not this module's")
     );
     // Over: nothing is sent.
     store::end(
@@ -382,7 +388,7 @@ async fn a_module_drives_only_its_own_live_sessions() {
     .await
     .unwrap();
     let over = store::get(&fx.app.pool, &owned.id).await.unwrap().unwrap();
-    assert!(why(instruct_module(&fx.app, "citadel", &over, stop(&over)).await).contains("over"));
+    assert!(why(citadel.instruct(&fx.app, &over.id, stop(&over)).await).contains("over"));
 }
 
 /// A client's write on a session a module drives would bypass the module's own audit and
@@ -415,7 +421,6 @@ async fn a_client_cannot_drive_or_read_a_session_a_module_owns() {
     for (path, body) in [
         ("messages", json!({"text": "hi"})),
         ("cancel", Value::Null),
-        ("kill", Value::Null),
         ("resume", Value::Null),
         ("approvals/req-1", json!({"approved": true})),
     ] {
@@ -460,4 +465,141 @@ async fn a_client_cannot_drive_or_read_a_session_a_module_owns() {
     )
     .await;
     assert_eq!(r.0, StatusCode::OK, "{r:?}");
+}
+
+/// What a module's `create` answers (the refusal's message), for these inputs.
+async fn module_create(
+    fx: &Fx,
+    runner: &str,
+    by: &str,
+    secrets: &[SessionSecret],
+    policy: &Value,
+    prompt: Option<&str>,
+) -> String {
+    use crate::agents::{ModuleAgents, Refusal};
+    let new = NewSession {
+        runner,
+        harness: "claude",
+        model: None,
+        prompt,
+        workspace: None,
+        policy,
+        secrets,
+        created_by: by,
+    };
+    match ModuleAgents::named("citadel").create(&fx.app, &new).await {
+        Err(Refusal::Runner(e)) => e.message,
+        other => format!("{:?}", other.map(|s| s.id)),
+    }
+}
+
+/// A module creates a session through the same checks as the client route: naming a broker
+/// secret needs `created_by` to be an admin device, and a malformed policy, an oversized prompt
+/// or a sandbox mode without the flag is refused (never defaulted).
+#[tokio::test]
+async fn a_module_create_passes_the_same_checks_as_the_route() {
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let agent = super::stepup::plain(&fx, "agent-only", &["agent", "read"], true).await;
+    let secrets = [SessionSecret {
+        name: "git.token".into(),
+        var: "GIT_TOKEN".into(),
+    }];
+    let ask = json!({"mode": "ask"});
+    for by in [agent.id.as_str(), "d_00000000000000000000000000"] {
+        let why = module_create(&fx, &vm.id, by, &secrets, &ask, None).await;
+        assert!(why.contains("admin scope"), "{by}: {why}");
+    }
+    let (by, admin) = (agent.id.as_str(), fx.dev.id.as_str());
+    let bad = [
+        (by, json!({"mode": "yolo"}), None, "does not have its shape"),
+        (by, ask.clone(), Some("x".repeat(70_000)), "too long"),
+        (
+            admin,
+            json!({"mode": "sandboxed", "sandboxed": false}),
+            None,
+            "sandbox flag",
+        ),
+    ];
+    for (by, policy, prompt, expect) in bad {
+        let why = module_create(&fx, &vm.id, by, &[], &policy, prompt.as_deref()).await;
+        assert!(why.contains(expect), "{expect}: {why}");
+    }
+    // The admin device passes validation and reaches the runner check (not connected here).
+    let why = module_create(&fx, &vm.id, &fx.dev.id, &secrets, &ask, None).await;
+    assert!(!why.contains("admin scope"), "{why}");
+    assert!(
+        fx.ok("/api/v1/agent-sessions")
+            .await
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Break-glass (M3): an `admin` device kills a module's runaway session through the Core;
+/// message, cancel and resume stay the module's, and a non-admin cannot kill it.
+#[tokio::test]
+async fn an_admin_may_kill_a_module_session_and_nobody_else() {
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let policy = json!({});
+    let new = NewSession {
+        runner: &vm.id,
+        harness: "claude",
+        model: None,
+        prompt: None,
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: &fx.dev.id,
+    };
+    let owned = store::create_owned(
+        &fx.app.pool,
+        &new,
+        Some("citadel"),
+        ainkrad_core::audit::AuditActor::System,
+        NOW,
+    )
+    .await
+    .unwrap();
+    let uri = format!("/api/v1/agent-sessions/{}/kill", owned.id);
+    let agent = super::stepup::plain(&fx, "agent-only", &["agent", "read"], true).await;
+    assert_eq!(super::stepup::step_up(&fx, &agent).await.0, StatusCode::OK);
+    let r = call(&fx, &agent, Method::POST, &uri, Value::Null).await;
+    assert_eq!(
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("forbidden_scope")),
+        "{r:?}"
+    );
+    // The admin gets past the module guard: the refusal is now the offline runner's.
+    let r = call(&fx, &fx.dev, Method::POST, &uri, Value::Null).await;
+    assert_ne!(r.1["code"].as_str(), Some("module_owned"), "{r:?}");
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::POST,
+        &uri.replace("kill", "cancel"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(r.1["code"].as_str(), Some("module_owned"), "{r:?}");
+}
+
+/// What a session's outcome says reaches `read` devices (a module's run list): a key shape in a
+/// harness error is redacted when the outcome is stored, as a transcript entry is.
+#[tokio::test]
+async fn an_outcome_reason_is_redacted_when_stored() {
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let s = stored(&fx, &vm.id).await;
+    let key = "sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let outcome = json!({"kind": "failed", "reason": format!("auth failed with {key}")});
+    store::end(&fx.app.pool, &s.id, "ended", &outcome, NOW)
+        .await
+        .unwrap();
+    let got = store::get(&fx.app.pool, &s.id).await.unwrap().unwrap();
+    let reason = got.outcome.unwrap()["reason"].as_str().unwrap().to_owned();
+    assert!(reason.contains("auth failed with"), "{reason}");
+    assert!(!reason.contains("sk-ant-"), "{reason}");
 }
