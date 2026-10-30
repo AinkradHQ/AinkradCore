@@ -738,8 +738,9 @@ mod pty {
                 granted = true;
             }
             let f = core.recv().await;
-            if matches!(f.body(), Ok(Some(Body::Heartbeat))) {
-                core.send(CONTROL_STREAM, Body::Heartbeat).await;
+            if matches!(f.body(), Ok(Some(Body::Heartbeat(_)))) {
+                core.send(CONTROL_STREAM, Body::Heartbeat(Default::default()))
+                    .await;
                 continue;
             }
             match f.body().unwrap().unwrap() {
