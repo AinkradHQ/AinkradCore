@@ -47,7 +47,7 @@ fn words(key: &str) -> Vec<String> {
 }
 
 /// Whether a value under `key` is a secret by its name.
-fn secret_name(key: &str) -> bool {
+pub(crate) fn secret_name(key: &str) -> bool {
     let words = words(key);
     words.iter().any(|w| SECRET_WORDS.contains(&w.as_str()))
         || (words.len() > 1 && words.last().is_some_and(|w| w == "key"))

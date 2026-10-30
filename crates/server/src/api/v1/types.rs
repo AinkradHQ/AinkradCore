@@ -46,10 +46,12 @@
 /// 11: handshake review (L3, L4, M1): `proveHandshake` answers its own `HandshakeProof`, with
 ///    `core_spki` and `core_sig` required, and is under the challenge rate (429); a challenge is
 ///    stateless (still 32 bytes, 43 characters).
-/// 12: terminals (E2-01): `createTerminal`, `listTerminals`, `getTerminal`, `closeTerminal`,
+/// 12: scheduler and notifications (E2-11/12): the `job.ran`, `job.failed`, `job.missed` and
+///    `notify.token_pruned` audit actions, the `notify.delivery` event kind (scope `admin`).
+/// 13: terminals (E2-01): `createTerminal`, `listTerminals`, `getTerminal`, `closeTerminal`,
 ///    `signalTerminal`, `attachTerminal` (501 until the terminal service, E2-05), the scope
 ///    `terminal` with step-up on create and attach, and the `terminal.*` event kinds.
-pub const API_MINOR: u32 = 12;
+pub const API_MINOR: u32 = 13;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

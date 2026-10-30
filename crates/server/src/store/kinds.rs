@@ -21,10 +21,12 @@ pub const PLATFORM: &str = "core";
 
 /// The platform's event kinds: `audit`, one per audit row, written by the `events_from_audit`
 /// trigger; and the runner hub's presence (`hub`): `runner.connected`, `runner.disconnected`,
-/// `runner.degraded` (silent past two heartbeats); and a terminal's life (E2-01), who and
-/// when, never its content: `terminal.opened`, `.attached`, `.detached`, `.exited`, `.closed`.
+/// `runner.degraded` (silent past two heartbeats); `notify.delivery`, one per push the
+/// notifications service tried (E2-12); and a terminal's life (E2-01), who and when, never its
+/// content: `terminal.opened`, `.attached`, `.detached`, `.exited`, `.closed`.
 pub const PLATFORM_EVENT_KINDS: &[&str] = &[
     "audit",
+    "notify.delivery",
     "runner.connected",
     "runner.degraded",
     "runner.disconnected",
@@ -63,6 +65,10 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "device.enrolled",
     "device.last_admin_refused",
     "device.revoked",
+    "job.failed",
+    "job.missed",
+    "job.ran",
+    "notify.token_pruned",
     "pairing.approved",
     "pairing.burned",
     "pairing.claimed",
