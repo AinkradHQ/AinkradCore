@@ -97,6 +97,44 @@ impl SecretBox {
         Ok(Self::new(&key))
     }
 
+    /// [`from_file`](Self::from_file), refusing a key file that group or others may read
+    /// (review L8): `init` and `restore` write it 0600.
+    pub fn from_private_file(path: &Path) -> std::io::Result<Self> {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path)?.permissions().mode();
+        if mode & 0o077 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "{} is mode {:o}; a master key must be 0600 (chmod 600 it)",
+                    path.display(),
+                    mode & 0o777
+                ),
+            ));
+        }
+        Self::from_file(path)
+    }
+
+    /// The secrets broker's key for `serve`: `None`, with the reason logged, when the file is
+    /// missing, malformed or readable by group or others. The broker then answers 503
+    /// `secrets_unavailable`; the rest of the Core serves on (review L8).
+    pub fn for_serve(path: &Path) -> Option<Self> {
+        if !path.exists() {
+            tracing::warn!(path = %path.display(), "no master key: the secrets broker is unavailable");
+            return None;
+        }
+        match Self::from_private_file(path) {
+            Ok(b) => {
+                tracing::info!(key_id = b.key_id(), "secrets broker: master key loaded");
+                Some(b)
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "master key not loaded: the secrets broker is unavailable");
+                None
+            }
+        }
+    }
+
     pub fn seal(&self, label: &str, plaintext: &[u8]) -> std::io::Result<Vec<u8>> {
         let mut nonce = [0u8; NONCE_LEN];
         SystemRandom::new()
@@ -142,6 +180,34 @@ impl SecretBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review L8: a missing, short or group/other-readable key leaves the broker off instead
+    /// of failing, and only a 0600 32-byte file loads.
+    #[test]
+    fn serve_loads_only_a_private_well_formed_key() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("core-masterkey-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = dir.join("master.key");
+        let write = |bytes: &[u8], mode: u32| {
+            std::fs::write(&key, bytes).unwrap();
+            std::fs::set_permissions(&key, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        assert!(SecretBox::for_serve(&key).is_none(), "missing");
+        write(&[7; 31], 0o600);
+        assert!(SecretBox::for_serve(&key).is_none(), "short");
+        write(&[7; 32], 0o644);
+        let e = SecretBox::from_private_file(&key).err().unwrap();
+        assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(SecretBox::for_serve(&key).is_none(), "world-readable");
+        write(&[7; 32], 0o640);
+        assert!(SecretBox::for_serve(&key).is_none(), "group-readable");
+        write(&[7; 32], 0o600);
+        let b = SecretBox::for_serve(&key).expect("0600 and 32 bytes");
+        assert_eq!(b.key_id(), SecretBox::new(&[7; 32]).key_id());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn seals_and_opens_and_refuses_a_change_a_wrong_label_and_a_wrong_key() {

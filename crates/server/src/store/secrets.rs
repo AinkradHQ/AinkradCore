@@ -317,7 +317,8 @@ pub async fn create(
 }
 
 /// Replaces `name`'s value (and its scope or delivery, when given): a new version, audited as
-/// `secret.rotated`. Leases already granted redeem the new value.
+/// `secret.rotated`. Every outstanding lease on it is dropped in the same transaction (review
+/// M2): a grant made for one version never delivers the next; a new value needs a new grant.
 pub async fn rotate(
     pool: &SqlitePool,
     sealer: &SecretBox,
@@ -352,9 +353,15 @@ pub async fn rotate(
     .bind(old.id)
     .execute(&mut *tx)
     .await?;
+    let dropped = sqlx::query("DELETE FROM core_secret_leases WHERE secret_id = ?")
+        .bind(old.id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
     let details = json!({"name": name, "version": version, "runners": runners,
                          "delivery": delivery, "size": new.value.len(),
-                         "key_id": sealer.key_id(), "by_device": by_device});
+                         "key_id": sealer.key_id(), "leases_revoked": dropped,
+                         "by_device": by_device});
     audit(&mut tx, actor, "secret.rotated", old.id, details).await?;
     let m = find(&mut tx, name).await?;
     tx.commit().await?;
@@ -521,7 +528,8 @@ pub async fn redeem(
         .await?;
     let delivery: String = row.try_get("delivery")?;
     let details = json!({"name": name, "version": version, "runner": runner,
-                         "lease": hex8(hash.as_ref()), "delivery": delivery});
+                         "lease": hex8(hash.as_ref()), "delivery": delivery,
+                         "by_device": runner});
     audit(&mut tx, actor, "secret.redeemed", secret, details).await?;
     tx.commit().await?;
     Ok(Redeemed {

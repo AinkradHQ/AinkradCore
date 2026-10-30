@@ -37,7 +37,7 @@ async fn broker() -> (Fx, TestDevice) {
     (fx, runner)
 }
 
-async fn runner(fx: &Fx, name: &str) -> TestDevice {
+pub(super) async fn runner(fx: &Fx, name: &str) -> TestDevice {
     let r = TestDevice::enroll(
         &fx.app.pool,
         name,
@@ -127,6 +127,15 @@ async fn a_secret_is_sealed_listed_without_its_value_rotated_and_leased_once() {
     assert_eq!(l.0, StatusCode::OK, "{}", l.1);
     let got = redeem(&fx, &vm, &l.1).await;
     assert_eq!(got.0, StatusCode::OK, "{}", got.1);
+    // Review L6: the redemption is audited as the user's device action, naming the runner.
+    let (kind, by): (String, String) = sqlx::query_as(
+        "SELECT actor_kind, json_extract(details, '$.by_device') FROM audit_events \
+         WHERE action = 'secret.redeemed'",
+    )
+    .fetch_one(&fx.app.pool)
+    .await
+    .unwrap();
+    assert_eq!((kind.as_str(), by.as_str()), ("user", vm.id.as_str()));
     assert_eq!(
         (&got.1["value"], &got.1["version"], &got.1["name"]),
         (&json!(V1), &json!(1), &json!("git.token"))
@@ -258,6 +267,28 @@ async fn leases_go_only_to_their_runner_in_scope_and_not_after_expiry_or_revocat
     assert_eq!(redeem(&fx, &vm, &bogus).await.0, StatusCode::NOT_FOUND);
     assert_eq!(redeem(&fx, &vm, &l.1).await.0, StatusCode::OK);
 
+    // Rotated after the grant (review M2): the lease is dropped, the new value needs a new one.
+    let l = lease(&fx, "k", &vm.id, None).await;
+    let uri = "/api/v1/secrets/k";
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::PUT,
+        uri,
+        json!({"value": "rotated-once"}),
+    )
+    .await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    assert_eq!(redeem(&fx, &vm, &l.1).await.0, StatusCode::NOT_FOUND);
+    let revoked: i64 = sqlx::query_scalar(
+        "SELECT json_extract(details, '$.leases_revoked') FROM audit_events \
+         WHERE action = 'secret.rotated' ORDER BY seq DESC LIMIT 1",
+    )
+    .fetch_one(&fx.app.pool)
+    .await
+    .unwrap();
+    assert_eq!(revoked, 1);
+
     // Expired.
     let l = lease(&fx, "k", &vm.id, Some(10)).await;
     fx.clock.advance(11);
@@ -267,7 +298,6 @@ async fn leases_go_only_to_their_runner_in_scope_and_not_after_expiry_or_revocat
     );
     // Narrowed out of scope after the grant.
     let l = lease(&fx, "k", &vm.id, None).await;
-    let uri = "/api/v1/secrets/k";
     let r = call(
         &fx,
         &fx.dev,
@@ -387,4 +417,32 @@ async fn no_master_key_and_malformed_bodies_never_echo_a_value() {
     fx.app.secrets = Some(Arc::new(SecretBox::new(&[7; 32])));
     assert_eq!(redeem(&fx, &vm, &l.1).await.1["value"], V1);
     assert!(!trail(&fx).await.contains(V1));
+}
+
+/// Review L4 and the value structs: nothing that carries a value or a live lease implements
+/// `Debug`, so no `{:?}` can print one. (Autoref probe: the inherent `IS` exists only for
+/// `T: Debug`; otherwise the trait's `false` is found.)
+#[test]
+#[allow(clippy::assertions_on_constants)] // the point: each is decided at compile time
+fn nothing_that_carries_a_value_or_a_lease_is_debug() {
+    use std::marker::PhantomData;
+    trait NotDebug {
+        const IS: bool = false;
+    }
+    struct Probe<T>(PhantomData<T>);
+    impl<T> NotDebug for Probe<T> {}
+    #[allow(dead_code)]
+    impl<T: std::fmt::Debug> Probe<T> {
+        const IS: bool = true;
+    }
+    use super::super::secrets as api;
+    use crate::store::secrets as store;
+    assert!(Probe::<String>::IS, "the probe sees Debug");
+    assert!(!Probe::<api::LeaseGrant>::IS);
+    assert!(!Probe::<api::RedeemLease>::IS);
+    assert!(!Probe::<api::NewSecret>::IS);
+    assert!(!Probe::<api::RotateSecret>::IS);
+    assert!(!Probe::<api::LeasedSecret>::IS);
+    assert!(!Probe::<store::Redeemed>::IS);
+    assert!(!Probe::<store::NewValue<'static>>::IS);
 }

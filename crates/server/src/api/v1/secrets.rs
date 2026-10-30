@@ -6,7 +6,6 @@
 //! Bodies are parsed here, not by axum's `Json`: a serde error can quote the input, and the
 //! input may be the value. A malformed body gets one fixed message.
 
-use ainkrad_core::audit::AuditActor;
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Extension, Path, State};
@@ -92,15 +91,16 @@ pub struct NewLease {
 }
 
 /// A granted lease: hand `lease` to the runner, which redeems it once before `expires_at`.
-#[derive(Debug, Serialize, ToSchema)]
+/// No `Debug` (review L4): a log line must never print a live lease.
+#[derive(Serialize, ToSchema)]
 pub struct LeaseGrant {
     /// `l_…`; only its runner can redeem it.
     pub lease: String,
     pub expires_at: Timestamp,
 }
 
-/// A lease to redeem.
-#[derive(Debug, Deserialize, ToSchema)]
+/// A lease to redeem. No `Debug` (review L4).
+#[derive(Deserialize, ToSchema)]
 pub struct RedeemLease {
     pub lease: String,
 }
@@ -301,7 +301,7 @@ pub async fn redeem(
         sealer(&app)?,
         &b.lease,
         &me.device.id,
-        AuditActor::System,
+        BY,
         &app.clock.now(),
         app.clock.unix(),
     )
