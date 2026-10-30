@@ -80,7 +80,7 @@ mod workspace;
 use connect::request;
 pub use connect::{Config, Error};
 pub use executor::*;
-pub use harness::{HarnessExecutor, mcp_url};
+pub use harness::{HarnessExecutor, core_mcp_url, mcp_url};
 use load::host_load;
 pub use workspace::{SessionWorkspace, Workspaces};
 

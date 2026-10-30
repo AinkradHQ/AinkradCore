@@ -33,9 +33,8 @@ impl Drop for RunFiles {
     }
 }
 
-/// The MCP server URL a runner's server URL implies: `wss://h/runner/v2/connect` →
-/// `https://h/token/citadel/v1/mcp` (`ws://` → `http://`, which the runner allows only to
-/// loopback): the Citadel module's token route on the Core (E2-13 S8).
+/// The MCP server URL a runner's server URL implies: `wss://h/runner/v1/connect` →
+/// `https://h/mcp/v1` (`ws://` → `http://`, which the runner allows only to loopback).
 pub fn mcp_url(server: &str) -> Option<String> {
     let (scheme, rest) = server.split_once("://")?;
     let scheme = match scheme {
@@ -44,7 +43,15 @@ pub fn mcp_url(server: &str) -> Option<String> {
         _ => return None,
     };
     let authority = rest.split('/').next().filter(|a| !a.is_empty())?;
-    Some(format!("{scheme}://{authority}/token/citadel/v1/mcp"))
+    Some(format!("{scheme}://{authority}/mcp/v1"))
+}
+
+/// The Core's MCP server for a runner's server URL (`wss://h/runner/v2/connect`): the Citadel
+/// module's token route `https://h/token/citadel/v1/mcp` (`ws://` → `http://`, loopback only).
+/// `mcp_url` stays the monolith's `/mcp/v1`, which its reference tests still use.
+pub fn core_mcp_url(server: &str) -> Option<String> {
+    let url = mcp_url(server)?;
+    Some(url.replace("/mcp/v1", "/token/citadel/v1/mcp"))
 }
 
 /// Writes one 0600 file, refusing to follow or reuse anything already there.
@@ -130,11 +137,15 @@ mod tests {
         let url = |s| mcp_url(s);
         assert_eq!(
             url("wss://citadel.lan/runner/v1/connect").as_deref(),
-            Some("https://citadel.lan/token/citadel/v1/mcp")
+            Some("https://citadel.lan/mcp/v1")
         );
         assert_eq!(
             url("ws://127.0.0.1:7700/runner/v1/connect").as_deref(),
-            Some("http://127.0.0.1:7700/token/citadel/v1/mcp")
+            Some("http://127.0.0.1:7700/mcp/v1")
+        );
+        assert_eq!(
+            core_mcp_url("wss://core.lan/runner/v2/connect").as_deref(),
+            Some("https://core.lan/token/citadel/v1/mcp")
         );
         assert_eq!(url("http://x/runner"), None);
         assert_eq!(url("ws:///runner"), None);
