@@ -16,6 +16,7 @@ pub mod governance;
 pub mod model;
 mod org;
 pub mod org_admin;
+pub mod planning;
 pub mod scope;
 pub mod scopes;
 pub mod spec;
@@ -48,6 +49,7 @@ pub static DESTRUCTIVE: LazyLock<Vec<(&str, &str)>> = LazyLock::new(|| {
         DESTRUCTIVE_ORG,
         org_admin::DESTRUCTIVE,
         work::DESTRUCTIVE,
+        planning::DESTRUCTIVE,
         governance::DESTRUCTIVE,
     ]
     .concat()
@@ -57,6 +59,7 @@ pub fn routes() -> Router<App> {
     Router::new()
         .merge(org_admin::routes())
         .merge(work::routes())
+        .merge(planning::routes())
         .merge(governance::routes())
         .route(
             "/companies",

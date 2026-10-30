@@ -124,6 +124,7 @@ async fn owner(app: &App, segment: &str, value: &str) -> Result<Option<i64>, sql
         .iter()
         .chain(super::org_admin::OWNERS)
         .chain(super::work::OWNERS)
+        .chain(super::planning::OWNERS)
         .chain(super::governance::OWNERS);
     let Some((_, sql)) = rows.clone().find(|(s, _)| *s == segment) else {
         return Ok(None);

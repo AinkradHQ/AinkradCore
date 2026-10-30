@@ -54,6 +54,7 @@ pub fn document() -> Value {
     for other in [
         super::org_admin::Doc::openapi(),
         super::work::Doc::openapi(),
+        super::planning::Doc::openapi(),
         super::governance::Doc::openapi(),
     ] {
         api.merge(other);

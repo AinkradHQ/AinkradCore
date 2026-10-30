@@ -1,6 +1,6 @@
-//! Work: projects, repos, epics, issues, sprints, requirements, plans, intake, hub threads, quest, charts, profile.
+//! Work: projects, repos, epics, issues (state machine, checkout, kanban, backlog, sprints, review), charts, logos, branch names.
 //!
-//! Slice S4 of the port (`Docs/Plans/2026-10-30-citadel-port-slices.md`). This file is the
+//! Slice S4 (work half) of the port (`Docs/Plans/2026-10-30-citadel-port-slices.md`). This file is the
 //! slice's seam with the rest of the module: it exports its routes, its per-route scopes, its
 //! destructive routes, its company-owner rows and its OpenAPI document, and `api.rs`, `scopes.rs`,
 //! `scope.rs` and `spec.rs` aggregate them. Handlers live in submodules next to this file.
