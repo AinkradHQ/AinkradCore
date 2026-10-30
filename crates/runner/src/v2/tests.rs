@@ -121,6 +121,18 @@ impl Core {
         enrolment: Arc<std::sync::Mutex<Enrolment>>,
         pty: Option<Arc<PtyDriver>>,
     ) -> (Self, RunnerHello) {
+        Self::hello_with(capacity, save, key, enrolment, pty, None).await
+    }
+
+    /// [`Core::hello_as`] with the runner's wall clock replaced by `clock`.
+    async fn hello_with(
+        capacity: u32,
+        save: Option<std::path::PathBuf>,
+        key: Key,
+        enrolment: Arc<std::sync::Mutex<Enrolment>>,
+        pty: Option<Arc<PtyDriver>>,
+        clock: Option<session::Clock>,
+    ) -> (Self, RunnerHello) {
         let runner_key = Arc::new(new_key());
         let runner_spki = runner_key.spki.clone();
         let link = Link {
@@ -133,10 +145,14 @@ impl Core {
         let runner_ws = WebSocketStream::from_raw_socket(a, Role::Client, None).await;
         let exec = Arc::new(driver(capacity));
         let runner = tokio::spawn(async move {
-            match pty {
-                Some(p) => Session::new(exec).with_pty(p).serve(runner_ws, &link).await,
-                None => serve(runner_ws, exec, &link).await,
+            let mut session = Session::new(exec);
+            if let Some(c) = clock {
+                session = session.with_clock(c);
             }
+            if let Some(p) = pty {
+                session = session.with_pty(p);
+            }
+            session.serve(runner_ws, &link).await
         });
         let ws = WebSocketStream::from_raw_socket(b, Role::Server, None).await;
         let mut core = Self {
@@ -730,4 +746,48 @@ mod pty {
         .await;
         until(&mut core, 3, &mut more, |_, b| matches!(b, Body::Result(_))).await;
     }
+}
+
+/// E2-15.3: a wall-clock jump of over two beats (the machine slept) ends the connection with
+/// `Ok` so the daemon redials at once; an ordinary beat does not.
+#[tokio::test]
+async fn a_wall_clock_jump_ends_the_connection_so_the_daemon_redials() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let slept = Arc::new(AtomicU64::new(0));
+    let skew = Arc::clone(&slept);
+    let clock: session::Clock =
+        Arc::new(move || std::time::UNIX_EPOCH + Duration::from_secs(skew.load(Ordering::SeqCst)));
+    let key = new_key();
+    let enrolment = Arc::new(std::sync::Mutex::new(Enrolment {
+        url: "http://127.0.0.1:1".to_owned(),
+        device_id: "d_5v0v4qa7a8h2tb3219mtz5znvv".to_owned(),
+        core_fp: key.fp(),
+        rotation_seq: 0,
+        next_fp: None,
+    }));
+    let (mut core, hello) = Core::hello_with(1, None, key, enrolment, None, Some(clock)).await;
+    core.answer_hello(&hello, Answer::Honest).await;
+    core.recv().await; // the proof
+    core.send(
+        CONTROL_STREAM,
+        Body::Control(Control::Welcome(CoreWelcome {
+            protocol: PROTOCOL_VERSION.to_owned(),
+            heartbeat_ms: Some(50),
+            ..Default::default()
+        })),
+    )
+    .await;
+    // Beats on time keep the connection.
+    for _ in 0..2 {
+        let f = core.recv().await;
+        assert_eq!(f.kind, ainkrad_proto::v2::FrameKind::Heartbeat, "{f:?}");
+    }
+    assert!(!core.runner.is_finished());
+    // An hour passes while it sleeps: the next tick ends the connection, cleanly.
+    slept.store(3600, Ordering::SeqCst);
+    let ended = tokio::time::timeout(Duration::from_secs(10), core.runner)
+        .await
+        .expect("it ends by itself")
+        .unwrap();
+    assert!(matches!(ended, Ok(None)), "{ended:?}");
 }
