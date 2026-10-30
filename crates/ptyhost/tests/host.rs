@@ -437,6 +437,11 @@ async fn a_scan_removes_only_provably_dead_hosts() {
     // Dead: a socket file nobody listens on.
     drop(std::os::unix::net::UnixListener::bind(socket_path(&dir, "t_dead")).unwrap());
     record("t_dead");
+    let dead = connect(&dir, "t_dead").await.err().map(|e| e.kind());
+    assert!(
+        matches!(dead, Some(std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound)),
+        "a socket nobody listens on must refuse, got {dead:?}"
+    );
     assert!(scan(&dir).await.is_empty());
     assert!(record_path(&dir, "t_slow").exists() && socket_path(&dir, "t_slow").exists());
     assert!(!record_path(&dir, "t_dead").exists() && !socket_path(&dir, "t_dead").exists());
