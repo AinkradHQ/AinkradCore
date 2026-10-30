@@ -107,10 +107,7 @@ impl Proc {
         let supervisor = (cfg!(target_os = "macos") && budget.is_some())
             .then(|| crate::sandbox::tree::supervise(pgid, std::process::id()))
             .transpose()
-            .map_err(|e| {
-                kill_group(pgid);
-                e
-            })?;
+            .inspect_err(|_| kill_group(pgid))?;
         let stdout = child
             .stdout
             .take()

@@ -87,6 +87,7 @@ fn the_tracker_follows_a_setsid_child_after_the_leader_is_gone() {
 }
 
 #[test]
+#[allow(clippy::zombie_processes)] // the guard kills them; a failed assertion must not hang on wait
 fn the_supervisor_kills_the_tree_when_the_runner_dies() {
     use std::os::unix::process::CommandExt;
     let mut runner = std::process::Command::new("/bin/sleep")
