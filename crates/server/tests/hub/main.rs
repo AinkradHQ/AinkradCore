@@ -259,6 +259,7 @@ impl Fake {
             nonce: Some(b64(nonce_r)),
             boot: self.boot.clone(),
             streams: self.streams.clone(),
+            terminals: vec![],
         };
         self.send(CONTROL_STREAM, Body::Control(Control::Hello(hello)))
             .await;

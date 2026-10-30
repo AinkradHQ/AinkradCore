@@ -11,6 +11,7 @@ src/main/kotlin/ainkrad/client/apis/EventsApi.kt
 src/main/kotlin/ainkrad/client/apis/HandshakeApi.kt
 src/main/kotlin/ainkrad/client/apis/PairingApi.kt
 src/main/kotlin/ainkrad/client/apis/RunnersApi.kt
+src/main/kotlin/ainkrad/client/apis/SecretsApi.kt
 src/main/kotlin/ainkrad/client/apis/SettingsApi.kt
 src/main/kotlin/ainkrad/client/auth/ApiKeyAuth.kt
 src/main/kotlin/ainkrad/client/auth/Authentication.kt
@@ -43,10 +44,14 @@ src/main/kotlin/ainkrad/client/models/Handshake.kt
 src/main/kotlin/ainkrad/client/models/HandshakeBody.kt
 src/main/kotlin/ainkrad/client/models/HandshakeProof.kt
 src/main/kotlin/ainkrad/client/models/LatestEvent.kt
+src/main/kotlin/ainkrad/client/models/LeaseGrant.kt
+src/main/kotlin/ainkrad/client/models/LeasedSecret.kt
 src/main/kotlin/ainkrad/client/models/Lockout.kt
 src/main/kotlin/ainkrad/client/models/Me.kt
 src/main/kotlin/ainkrad/client/models/Named.kt
+src/main/kotlin/ainkrad/client/models/NewLease.kt
 src/main/kotlin/ainkrad/client/models/NewPairingBody.kt
+src/main/kotlin/ainkrad/client/models/NewSecret.kt
 src/main/kotlin/ainkrad/client/models/NoopResult.kt
 src/main/kotlin/ainkrad/client/models/PageEvent.kt
 src/main/kotlin/ainkrad/client/models/PairStatus.kt
@@ -57,9 +62,13 @@ src/main/kotlin/ainkrad/client/models/PasskeyOptionsBody.kt
 src/main/kotlin/ainkrad/client/models/PasskeyRegistrationOptions.kt
 src/main/kotlin/ainkrad/client/models/PastRetention.kt
 src/main/kotlin/ainkrad/client/models/PushToken.kt
+src/main/kotlin/ainkrad/client/models/RedeemLease.kt
 src/main/kotlin/ainkrad/client/models/Rename.kt
+src/main/kotlin/ainkrad/client/models/RotateSecret.kt
 src/main/kotlin/ainkrad/client/models/Runner.kt
 src/main/kotlin/ainkrad/client/models/RunnerDriver.kt
+src/main/kotlin/ainkrad/client/models/SecretDeleted.kt
+src/main/kotlin/ainkrad/client/models/SecretInfo.kt
 src/main/kotlin/ainkrad/client/models/SessionGrant.kt
 src/main/kotlin/ainkrad/client/models/SessionRequest.kt
 src/main/kotlin/ainkrad/client/models/SetScopes.kt

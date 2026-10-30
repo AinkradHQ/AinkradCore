@@ -596,6 +596,8 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
             },
         ));
     }
+    let master = ainkrad_core_server::ops::config::Home(state_dir(db).to_path_buf()).master_key();
+    app.secrets = ainkrad_core_server::ops::secretbox::SecretBox::for_serve(&master).map(Arc::new);
     if let Some(list) = flags.trusted_proxies {
         app.trusted_proxies = list.into();
     }

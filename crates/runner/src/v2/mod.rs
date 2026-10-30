@@ -31,8 +31,10 @@ pub mod dial;
 mod exec;
 pub mod key;
 pub mod pair;
+pub mod pty;
 mod session;
 pub use exec::{ExecConfig, ExecDriver};
+pub use pty::{PtyConfig, PtyDriver};
 pub use session::Session;
 
 /// What the runner proves itself with on one connection.

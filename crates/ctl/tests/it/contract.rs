@@ -18,6 +18,10 @@ const CALLS: &[(&str, &str, Option<&str>)] = &[
     ("get", "/api/v1/pairings/{id}", Some("admin")),
     ("post", "/api/v1/pairings/{id}/approve", Some("admin")),
     ("post", "/api/v1/pairings/{id}/reject", Some("admin")),
+    ("get", "/api/v1/secrets", Some("admin")),
+    ("post", "/api/v1/secrets", Some("admin")),
+    ("put", "/api/v1/secrets/{id}", Some("admin")),
+    ("delete", "/api/v1/secrets/{id}", Some("admin")),
 ];
 
 #[test]

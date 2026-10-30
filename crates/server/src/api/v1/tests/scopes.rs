@@ -1,6 +1,7 @@
 //! Scopes over the whole contract (handshake spec §8, §17.11, E1-09.1/.2): every authenticated
 //! operation declares one, a `read` device and a `runner` device get 403 on every `admin`
-//! operation, a runner on every operation, and the admin device on none.
+//! operation, a runner on every operation but the one `runner` route (redeeming a secret
+//! lease), and the admin device on none.
 
 use super::*;
 
@@ -65,7 +66,11 @@ async fn read_and_runner_devices_are_refused_what_their_scopes_do_not_allow() {
             r.0 == StatusCode::FORBIDDEN && r.1["code"] == "forbidden_scope"
         };
         let r = send(&fx.app, as_(&runner)).await;
-        assert!(refused(r.clone()), "runner {m} {uri}: {r:?}");
+        assert_eq!(
+            refused(r.clone()),
+            scope != "runner",
+            "runner {m} {uri}: {r:?}"
+        );
         let r = send(&fx.app, as_(&reader)).await;
         // The reader holds `read` and `approve`: anything else (`admin`, `agent`) is refused.
         assert_eq!(

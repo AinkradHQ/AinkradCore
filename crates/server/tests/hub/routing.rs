@@ -173,3 +173,96 @@ async fn revocation_shutdown_and_silence_close_with_their_codes() {
     core.app.closing.send_replace(true);
     assert_eq!(fake.closed().await, close_code::RESTART);
 }
+
+/// Review M2: a terminal stream takes one `opened` and snapshots under credit (read back as
+/// credit, like output); a second `opened`, a snapshot with no credit left, or any control on
+/// a plain command stream fails that stream.
+#[tokio::test]
+async fn terminal_streams_take_only_metered_snapshots_and_one_opened() {
+    let core = Core::start("pty", quick()).await;
+    let dev = core.runner().await;
+    let pty = DriverInfo {
+        name: DRIVER_PTY.to_owned(),
+        commands: vec![OP_PTY_OPEN.to_owned(), OP_PTY_ATTACH.to_owned()],
+        capacity: 4,
+    };
+    let mut fake = Fake::welcomed(&core, &dev, vec![exec_driver(&[OP_NOOP], 4), pty]).await;
+    let hub = Arc::clone(&core.app.hub);
+    let attach = |t: &str| {
+        Command::PtyAttach(PtyAttach {
+            terminal: t.to_owned(),
+            seq: 0,
+        })
+    };
+    let info = TerminalInfo {
+        terminal: "t_a".to_owned(),
+        state: TerminalState::Running,
+        size: Size { rows: 24, cols: 80 },
+        seq: 0,
+        pid: None,
+        exit: None,
+    };
+    let opened = || Body::Control(Control::Opened(info.clone()));
+    let snap = |n: usize| {
+        Body::Control(Control::Snapshot(Snapshot {
+            seq: 1,
+            data: "AAAA".repeat(n / 3),
+        }))
+    };
+
+    // Opened once, then a snapshot of the whole window: delivered, and granted back on read.
+    let mut a = hub.dispatch(&dev.id, attach("t_a")).unwrap();
+    let sa = fake.next().await.stream_id;
+    fake.send(sa, opened()).await;
+    assert_eq!(a.next().await, Some(opened()));
+    fake.send(sa, snap(STREAM_WINDOW as usize)).await;
+    assert!(matches!(
+        a.next().await,
+        Some(Body::Control(Control::Snapshot(_)))
+    ));
+    let credit = fake.next().await;
+    assert_eq!(
+        credit.body().unwrap(),
+        Some(Body::Credit(Credit {
+            bytes: (STREAM_WINDOW / 3) * 3
+        }))
+    );
+    // A second `opened` fails the stream.
+    fake.send(sa, opened()).await;
+    assert_eq!(a.outcome().await.unwrap_err().code, ErrorCode::BadFrame);
+
+    // A snapshot past an empty credit fails the stream: overdraw once (to zero), not twice.
+    let b = hub.dispatch(&dev.id, attach("t_b")).unwrap();
+    let sb = loop {
+        let f = fake.next().await;
+        if f.kind == FrameKind::Command {
+            break f.stream_id;
+        }
+    };
+    fake.send(sb, snap(2 * STREAM_WINDOW as usize)).await;
+    fake.send(sb, snap(3)).await;
+    // The hub failed it (and told the runner) before anything was read, so no grant raced in.
+    loop {
+        let f = fake.next().await;
+        if (f.stream_id, f.kind) == (sb, FrameKind::Close) {
+            break;
+        }
+    }
+    let mut b = b;
+    assert!(matches!(
+        b.next().await,
+        Some(Body::Control(Control::Snapshot(_)))
+    ));
+    assert_eq!(b.outcome().await.unwrap_err().code, ErrorCode::BadFrame);
+
+    // Any control on a plain command stream fails it.
+    let c = hub.dispatch(&dev.id, Command::Noop).unwrap();
+    let sc = loop {
+        let f = fake.next().await;
+        if f.kind == FrameKind::Command {
+            break f.stream_id;
+        }
+    };
+    fake.send(sc, opened()).await;
+    assert_eq!(c.outcome().await.unwrap_err().code, ErrorCode::BadFrame);
+}

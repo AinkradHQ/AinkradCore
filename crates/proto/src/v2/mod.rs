@@ -40,8 +40,10 @@ use serde_json::Value;
 
 mod auth;
 mod command;
+mod terminal;
 pub use auth::*;
 pub use command::*;
+pub use terminal::*;
 
 /// The v2 protocol version, `major.minor`; minors only add optional fields and kinds.
 pub const PROTOCOL_VERSION: &str = "2.0";
@@ -172,6 +174,14 @@ pub enum Control {
     Proof(RunnerProof),
     /// Core to runner: a planned identity key rotation (`auth`).
     Rotation(Rotation),
+    /// Runner to Core, the first frame on a `pty.open` or `pty.attach` stream (`terminal`).
+    Opened(TerminalInfo),
+    /// Core to runner on a terminal stream: the client's new size.
+    Resize(Size),
+    /// Core to runner on a terminal stream: deliver a signal to its process group.
+    Signal(SignalReq),
+    /// Runner to Core on a terminal stream: the screen now; output resumes at its `seq`.
+    Snapshot(Snapshot),
     /// A type from a newer peer: ignored. Never sent.
     #[serde(other)]
     Unknown,
@@ -204,6 +214,10 @@ pub struct RunnerHello {
     /// each: the Core resends the rest.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub streams: Vec<StreamState>,
+    /// Every terminal this runner's host processes hold (E2-03), so a Core that lost its
+    /// streams (a runner or Core restart) can `pty.attach` again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terminals: Vec<TerminalInfo>,
 }
 
 /// Resume by `seq` (E1-11.4): how many of the peer's frames one side received on a stream.

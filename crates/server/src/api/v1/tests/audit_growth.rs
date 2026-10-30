@@ -159,3 +159,28 @@ async fn a_failed_step_up_takes_the_floor_and_the_hosts_socket_survives_a_full_a
     // The host's own socket (no peer address: `ip:local`) still steps up.
     assert_eq!(step_up(&fx, &mac).await.0, StatusCode::OK);
 }
+
+/// Review M1: a runner (the lowest-trust device, and since E2-07 able to reach one handler)
+/// cannot grow the audit log by repeating refused redemptions: the broker off, a junk lease, a
+/// malformed body. They are counted, not written.
+#[tokio::test]
+async fn refused_secret_redemptions_add_no_audit_row_each() {
+    let mut fx = fx().await;
+    fx.app.limits = Arc::new(Limits {
+        requests: Limiter::new(100_000, 1.0),
+    });
+    fx.app.secrets = Some(Arc::new(crate::ops::secretbox::SecretBox::new(&[7; 32])));
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let start = rows(&fx, None).await;
+    let uri = "/api/v1/secret-leases/redeem";
+    for n in 0..30 {
+        let body = match n % 3 {
+            0 => json!({"lease": "l_00000000000000000000000000"}),
+            1 => json!({"lease": format!("junk-{n}")}),
+            _ => json!({"nope": n}),
+        };
+        let (s, _) = send(&fx.app, req(Method::POST, uri, Some(&vm), Some(body))).await;
+        assert!(s.is_client_error(), "{s}");
+    }
+    assert_eq!(rows(&fx, None).await, start, "no row per refusal");
+}

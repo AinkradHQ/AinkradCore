@@ -44,6 +44,8 @@ age = { version = "0.11", default-features = false }
 # It brings `openssl` over the SYSTEM OpenSSL (Homebrew on macOS, libssl3 on Linux); no vendored C build.
 webauthn-rs = { version = "0.5.5", default-features = false, features = ["conditional-ui"] }
 toml = "1"
+# Secrets broker (E2-07): plaintext secret buffers are wiped on drop.
+zeroize = { version = "1.9.1", features = ["serde"] }
 # The optional iroh listener (E2-19): QUIC with hole punching and a self-hosted relay, for a NAT'd Core.
 # No default features: no n0 services, no UPnP port mapping, no metrics; ring, as the rest of the TLS stack.
 iroh = { version = "1.4.1", default-features = false, features = ["tls-ring"], optional = true }

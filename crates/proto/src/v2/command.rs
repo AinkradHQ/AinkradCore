@@ -18,6 +18,12 @@ pub enum Command {
     Noop,
     #[serde(rename = "exec.run")]
     ExecRun(ExecRun),
+    #[serde(rename = "pty.open")]
+    PtyOpen(super::PtyOpen),
+    #[serde(rename = "pty.attach")]
+    PtyAttach(super::PtyAttach),
+    #[serde(rename = "pty.close")]
+    PtyClose(super::PtyClose),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -29,6 +35,9 @@ impl Command {
         match self {
             Self::Noop => OP_NOOP,
             Self::ExecRun(_) => OP_EXEC_RUN,
+            Self::PtyOpen(_) => super::OP_PTY_OPEN,
+            Self::PtyAttach(_) => super::OP_PTY_ATTACH,
+            Self::PtyClose(_) => super::OP_PTY_CLOSE,
             Self::Unknown => "unknown",
         }
     }
@@ -76,6 +85,13 @@ pub enum Reply {
     Noop,
     #[serde(rename = "exec.run")]
     ExecRun(ExecResult),
+    /// A terminal's exit, on the stream of the op that saw it.
+    #[serde(rename = "pty.open")]
+    PtyOpen(super::TerminalExit),
+    #[serde(rename = "pty.attach")]
+    PtyAttach(super::TerminalExit),
+    #[serde(rename = "pty.close")]
+    PtyClose(super::TerminalExit),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

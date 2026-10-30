@@ -354,3 +354,49 @@ async fn pairing_enrols_a_second_key_never_the_routine_key_twice() {
         .unwrap();
     assert_eq!(row.stepup_spki.as_deref(), Some(dev.stepup_spki.as_slice()));
 }
+
+/// E2-01, spec §17.11/§17.12: opening or attaching a terminal needs `terminal` and a live
+/// elevation; `read` may only list; an expired elevation is refused again.
+#[tokio::test]
+async fn terminals_need_their_scope_and_a_live_step_up() {
+    let fx = fx().await;
+    let open = json!({"runner": "d_00000000000000000000000000", "size": {"rows": 24, "cols": 80}});
+    let attach = |dev| {
+        let uri = "/api/v1/terminals/t_x/ws";
+        req(Method::GET, uri, Some(dev), None)
+    };
+    let phone = plain(&fx, "phone", &["read", "approve"], true).await;
+    assert_eq!(
+        code(&post(&fx, &phone, "/api/v1/terminals", open.clone()).await),
+        forbidden("forbidden_scope")
+    );
+    assert_eq!(
+        code(&send(&fx.app, attach(&phone)).await),
+        forbidden("forbidden_scope")
+    );
+    let listed = send(
+        &fx.app,
+        req(Method::GET, "/api/v1/terminals", Some(&phone), None),
+    )
+    .await;
+    assert_ne!(code(&listed), forbidden("forbidden_scope"));
+
+    let mac = plain(&fx, "mac", &["read", "terminal"], true).await;
+    assert_eq!(
+        code(&post(&fx, &mac, "/api/v1/terminals", open.clone()).await),
+        forbidden("step_up_required")
+    );
+    assert_eq!(
+        code(&send(&fx.app, attach(&mac)).await),
+        forbidden("step_up_required")
+    );
+    step_up(&fx, &mac).await;
+    // Past the gate: the terminal service answers (501 until E2-05).
+    let r = post(&fx, &mac, "/api/v1/terminals", open.clone()).await;
+    assert_eq!(r.0, StatusCode::NOT_IMPLEMENTED, "{r:?}");
+    fx.clock.advance(301);
+    assert_eq!(
+        code(&post(&fx, &mac, "/api/v1/terminals", open).await),
+        forbidden("step_up_required")
+    );
+}

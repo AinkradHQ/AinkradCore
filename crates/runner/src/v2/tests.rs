@@ -74,6 +74,34 @@ impl Core {
 
     /// Up to the runner's hello, which is returned; `save` is where a rotated pin goes.
     async fn hello(capacity: u32, save: Option<std::path::PathBuf>) -> (Self, RunnerHello) {
+        Self::hello_pty(capacity, save, None).await
+    }
+
+    /// A runner that also offers `pty`, past its hello and our welcome.
+    async fn start_pty(pty: Arc<PtyDriver>) -> (Self, RunnerHello) {
+        let (mut core, hello) = Self::hello_pty(1, None, Some(pty)).await;
+        core.answer_hello(&hello, Answer::Honest).await;
+        let proof = core.recv().await;
+        assert!(matches!(
+            proof.body(),
+            Ok(Some(Body::Control(Control::Proof(_))))
+        ));
+        core.send(
+            CONTROL_STREAM,
+            Body::Control(Control::Welcome(CoreWelcome {
+                protocol: PROTOCOL_VERSION.to_owned(),
+                ..Default::default()
+            })),
+        )
+        .await;
+        (core, hello)
+    }
+
+    async fn hello_pty(
+        capacity: u32,
+        save: Option<std::path::PathBuf>,
+        pty: Option<Arc<PtyDriver>>,
+    ) -> (Self, RunnerHello) {
         let key = new_key();
         let enrolment = Arc::new(std::sync::Mutex::new(Enrolment {
             url: "http://127.0.0.1:1".to_owned(),
@@ -82,7 +110,7 @@ impl Core {
             rotation_seq: 0,
             next_fp: None,
         }));
-        Self::hello_as(capacity, save, key, enrolment).await
+        Self::hello_as(capacity, save, key, enrolment, pty).await
     }
 
     /// [`Core::hello`] for a Core holding `key` and a runner with `enrolment`.
@@ -91,6 +119,7 @@ impl Core {
         save: Option<std::path::PathBuf>,
         key: Key,
         enrolment: Arc<std::sync::Mutex<Enrolment>>,
+        pty: Option<Arc<PtyDriver>>,
     ) -> (Self, RunnerHello) {
         let runner_key = Arc::new(new_key());
         let runner_spki = runner_key.spki.clone();
@@ -103,7 +132,12 @@ impl Core {
         let (a, b) = tokio::io::duplex(1 << 16);
         let runner_ws = WebSocketStream::from_raw_socket(a, Role::Client, None).await;
         let exec = Arc::new(driver(capacity));
-        let runner = tokio::spawn(async move { serve(runner_ws, exec, &link).await });
+        let runner = tokio::spawn(async move {
+            match pty {
+                Some(p) => Session::new(exec).with_pty(p).serve(runner_ws, &link).await,
+                None => serve(runner_ws, exec, &link).await,
+            }
+        });
         let ws = WebSocketStream::from_raw_socket(b, Role::Server, None).await;
         let mut core = Self {
             ws,
@@ -271,7 +305,7 @@ async fn unknown_or_misplaced_commands_are_refused_and_unknown_kinds_skipped() {
     // A newer kind and a newer command op, as a newer Core would send them.
     let raw = [
         r#"{"stream_id":7,"kind":"resize","seq":9,"payload":{"cols":80}}"#,
-        r#"{"stream_id":9,"kind":"command","seq":10,"payload":{"op":"pty.open"}}"#,
+        r#"{"stream_id":9,"kind":"command","seq":10,"payload":{"op":"vm.boot"}}"#,
     ];
     for text in raw {
         core.ws.send(Message::Text(text.into())).await.unwrap();
@@ -398,15 +432,21 @@ async fn a_rotation_is_accepted_beside_the_pin_until_the_core_proves_the_new_key
     let old_key = core.key;
 
     // A third key is refused, the window notwithstanding.
-    let (mut third, hello) =
-        Core::hello_as(1, Some(save.clone()), new_key(), Arc::clone(&enrolment)).await;
+    let (mut third, hello) = Core::hello_as(
+        1,
+        Some(save.clone()),
+        new_key(),
+        Arc::clone(&enrolment),
+        None,
+    )
+    .await;
     third.answer_hello(&hello, Answer::Honest).await;
     let refused = third.runner.await.unwrap().unwrap_err();
     assert_eq!(refused.code, ErrorCode::CoreIdentityMismatch);
 
     // The Core switched keys: it proves the next one, the runner signs for it and moves the pin.
     let (mut switched, hello) =
-        Core::hello_as(1, Some(save.clone()), next, Arc::clone(&enrolment)).await;
+        Core::hello_as(1, Some(save.clone()), next, Arc::clone(&enrolment), None).await;
     switched.answer_hello(&hello, Answer::Honest).await;
     let proof = switched.recv().await;
     let Ok(Some(Body::Control(Control::Proof(p)))) = proof.body() else {
@@ -426,7 +466,7 @@ async fn a_rotation_is_accepted_beside_the_pin_until_the_core_proves_the_new_key
     assert_eq!(Enrolment::load(&save).unwrap(), moved, "saved");
 
     // The old key is no longer accepted.
-    let (mut stale, hello) = Core::hello_as(1, None, old_key, enrolment).await;
+    let (mut stale, hello) = Core::hello_as(1, None, old_key, enrolment, None).await;
     stale.answer_hello(&hello, Answer::Honest).await;
     let refused = stale.runner.await.unwrap().unwrap_err();
     assert_eq!(refused.code, ErrorCode::CoreIdentityMismatch);
@@ -487,4 +527,206 @@ async fn a_hostile_core_cannot_grow_the_held_streams() {
     core.send(1, Body::Close(Close::default())).await;
     core.send(next + 2, Body::Command(Command::Noop)).await;
     assert_eq!(core.answer(next + 2).await, Body::Result(Reply::Noop));
+}
+
+mod pty {
+    //! The `pty` driver through the session (E2-02, E2-03), with the real `ainkrad-ptyhost`.
+
+    use ainkrad_proto::v2::{
+        Credit, OP_PTY_ATTACH, OP_PTY_CLOSE, OP_PTY_OPEN, Output, PtyAttach, PtyClose, PtyOpen,
+        STREAM_WINDOW, Size, TerminalExit,
+    };
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+
+    use super::*;
+
+    fn driver(dir: &std::path::Path, enabled: bool) -> Arc<PtyDriver> {
+        let host = ainkrad_ptyhost::client::find_host_binary()
+            .expect("ainkrad-ptyhost is built next to the tests (cargo test --workspace)");
+        Arc::new(PtyDriver::new(PtyConfig {
+            enabled,
+            capacity: 4,
+            host,
+            grace: Duration::from_millis(200),
+            ..PtyConfig::new(dir.to_path_buf())
+        }))
+    }
+
+    fn tmp() -> std::path::PathBuf {
+        let r = b64(&super::super::key::random::<6>()).replace(['-', '_'], "x");
+        std::path::PathBuf::from(format!("/tmp/apr-{r}"))
+    }
+
+    fn open(script: &str) -> Body {
+        Body::Command(Command::PtyOpen(PtyOpen {
+            program: Some("/bin/sh".to_owned()),
+            args: vec!["-c".to_owned(), script.to_owned()],
+            cwd: Some("/".to_owned()),
+            env: Default::default(),
+            env_pass: vec![],
+            size: Size { rows: 24, cols: 80 },
+        }))
+    }
+
+    /// Frames on `stream` until `done` says so of the output read so far (and the frame).
+    async fn until(
+        core: &mut Core,
+        stream: u64,
+        out: &mut String,
+        done: impl Fn(&str, &Body) -> bool,
+    ) -> Body {
+        loop {
+            let f = core.recv().await;
+            if f.stream_id != stream {
+                continue;
+            }
+            let b = f.body().unwrap().unwrap();
+            if let Body::Output(Output { data }) = &b {
+                out.push_str(&String::from_utf8_lossy(&STANDARD.decode(data).unwrap()));
+            }
+            if done(out, &b) {
+                return b;
+            }
+        }
+    }
+
+    fn input(text: &str) -> Body {
+        Body::Output(Output {
+            data: STANDARD.encode(text),
+        })
+    }
+
+    #[tokio::test]
+    async fn pty_is_off_unless_enabled() {
+        let (mut core, hello) = Core::start(1).await;
+        assert!(hello.drivers.iter().all(|d| d.name != "pty"));
+        core.send(1, open("true")).await;
+        assert_eq!(error(core.answer(1).await), ErrorCode::UnsupportedCommand);
+        let (mut core, hello) = Core::start_pty(driver(&tmp(), false)).await;
+        assert!(hello.drivers.iter().all(|d| d.name != "pty"));
+        core.send(1, open("true")).await;
+        assert_eq!(error(core.answer(1).await), ErrorCode::UnsupportedCommand);
+    }
+
+    /// Open, type, detach (the terminal keeps running), a new runner session re-announces it
+    /// in its hello, attach resumes from byte 0, close answers the exit on both streams.
+    #[tokio::test]
+    async fn a_terminal_outlives_its_stream_and_its_session() {
+        let dir = tmp();
+        let (mut core, hello) = Core::start_pty(driver(&dir, true)).await;
+        let pty = hello.drivers.iter().find(|d| d.name == "pty").unwrap();
+        assert_eq!(pty.commands, [OP_PTY_OPEN, OP_PTY_ATTACH, OP_PTY_CLOSE]);
+        core.send(1, open("echo UP; while read l; do echo \"got $l\"; done"))
+            .await;
+        let mut out = String::new();
+        let Body::Control(Control::Opened(info)) = until(&mut core, 1, &mut out, |_, _| true).await
+        else {
+            panic!("opened first")
+        };
+        let id = info.terminal;
+        until(&mut core, 1, &mut out, |o, _| o.contains("UP")).await;
+        core.send(1, input("ping\n")).await;
+        until(&mut core, 1, &mut out, |o, _| o.contains("got ping")).await;
+        core.send(1, Body::Close(Close::default())).await;
+        let detached = until(&mut core, 1, &mut out, |_, b| matches!(b, Body::Error(_))).await;
+        assert_eq!(error(detached), ErrorCode::Cancelled);
+
+        // A restarted runner: a new session over the same terminal directory.
+        let (mut core, hello) = Core::start_pty(driver(&dir, true)).await;
+        assert_eq!(hello.terminals.len(), 1, "{hello:?}");
+        assert_eq!(hello.terminals[0].terminal, id);
+        assert!(hello.terminals[0].seq > 0);
+        core.send(
+            3,
+            Body::Command(Command::PtyAttach(PtyAttach {
+                terminal: id.clone(),
+                seq: 0,
+            })),
+        )
+        .await;
+        let mut out = String::new();
+        until(&mut core, 3, &mut out, |o, _| o.contains("got ping")).await;
+        assert!(out.starts_with("UP"), "{out:?}");
+        core.send(
+            5,
+            Body::Command(Command::PtyClose(PtyClose {
+                terminal: id.clone(),
+            })),
+        )
+        .await;
+        let (mut closed, mut attach_end) = (None, None);
+        while closed.is_none() || attach_end.is_none() {
+            let f = core.recv().await;
+            match (f.stream_id, f.body().unwrap().unwrap()) {
+                (5, b @ (Body::Result(_) | Body::Error(_))) => closed = Some(b),
+                (3, b @ (Body::Result(_) | Body::Error(_))) => attach_end = Some(b),
+                _ => {}
+            }
+        }
+        let Some(Body::Result(Reply::PtyClose(TerminalExit {
+            terminal,
+            exit_code,
+            ..
+        }))) = closed
+        else {
+            panic!("{closed:?}")
+        };
+        assert_eq!((terminal.as_str(), exit_code), (id.as_str(), None));
+        assert!(
+            matches!(attach_end, Some(Body::Result(Reply::PtyAttach(_)))),
+            "{attach_end:?}"
+        );
+        let (_, hello) = Core::start_pty(driver(&dir, true)).await;
+        assert!(hello.terminals.is_empty(), "reaped: {hello:?}");
+    }
+
+    /// E2-01.4 on the wire: with no credit from the Core, a flood sends at most the window and
+    /// is cut to a snapshot rather than buffered without bound; credit lets output flow again.
+    #[tokio::test]
+    async fn output_respects_credit_and_a_flood_becomes_a_snapshot() {
+        let dir = tmp();
+        let (mut core, _) = Core::start_pty(driver(&dir, true)).await;
+        core.send(
+            1,
+            open("while :; do echo 0123456789abcdefghijklmnopqrstuvwxyz; done"),
+        )
+        .await;
+        let (mut bytes, mut snapshot) = (0u64, None);
+        let mut granted = false;
+        while snapshot.is_none() {
+            // The window is spent and the flood keeps coming: no snapshot goes without credit
+            // (it costs credit too); one more grant brings it.
+            if bytes == STREAM_WINDOW && !granted {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                core.send(1, Body::Credit(Credit { bytes: 4096 })).await;
+                granted = true;
+            }
+            let f = core.recv().await;
+            match f.body().unwrap().unwrap() {
+                Body::Output(Output { data }) => {
+                    bytes += STANDARD.decode(data).unwrap().len() as u64
+                }
+                Body::Control(Control::Snapshot(s)) => snapshot = Some(s),
+                _ => {}
+            }
+        }
+        assert!(bytes <= STREAM_WINDOW + 4096, "{bytes} past the credit");
+        assert!(snapshot.unwrap().seq > bytes);
+        // More credit: the stream carries on (output, or another snapshot under the flood).
+        core.send(1, Body::Credit(Credit { bytes: 65536 })).await;
+        let mut more = String::new();
+        until(&mut core, 1, &mut more, |o, b| {
+            !o.is_empty() || matches!(b, Body::Control(Control::Snapshot(_)))
+        })
+        .await;
+        core.send(
+            3,
+            Body::Command(Command::PtyClose(PtyClose {
+                terminal: ainkrad_ptyhost::client::scan(&dir).await[0].id.clone(),
+            })),
+        )
+        .await;
+        until(&mut core, 3, &mut more, |_, b| matches!(b, Body::Result(_))).await;
+    }
 }

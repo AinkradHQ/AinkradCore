@@ -20,6 +20,7 @@ pub mod gov;
 pub mod kinds;
 pub mod migrate;
 pub mod redact;
+pub mod secrets;
 pub mod settings;
 
 pub use backup::{BackupError, backup, restore};
