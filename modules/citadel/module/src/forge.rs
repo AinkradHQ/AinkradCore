@@ -228,9 +228,24 @@ enum Kind {
 struct Poll(Arc<Runtime>, Kind);
 
 impl JobHandler for Poll {
-    fn run<'a>(&'a self, _run: &'a Run) -> Done<'a> {
+    fn run<'a>(&'a self, run: &'a Run) -> Done<'a> {
         Box::pin(async move {
             // The error is stored and audited by the scheduler: a store error says no secret.
+            let pool = &self.0.pool;
+            // Nothing to poll is an idle run: a frequent poll must not fill the audit chain.
+            let idle = match self.1 {
+                Kind::Forge => crate::store::forge::due_prs(pool)
+                    .await
+                    .map(|d| d.is_empty()),
+                Kind::Linear => crate::store::linear::linear_projects(pool)
+                    .await
+                    .map(|d| d.is_empty()),
+            }
+            .map_err(|e| e.to_string())?;
+            if idle {
+                run.idle();
+                return Ok(());
+            }
             match self.1 {
                 Kind::Forge => forge_sync(&self.0).await,
                 Kind::Linear => linear_sync(&self.0).await,
