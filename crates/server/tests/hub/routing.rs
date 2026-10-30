@@ -217,7 +217,7 @@ async fn terminal_streams_take_only_metered_snapshots_and_one_opened() {
     assert_eq!(
         credit.body().unwrap(),
         Some(Body::Credit(Credit {
-            bytes: STREAM_WINDOW
+            bytes: (STREAM_WINDOW / 3) * 3
         }))
     );
     // A second `opened` fails the stream.
