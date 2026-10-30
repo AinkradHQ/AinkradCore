@@ -158,3 +158,124 @@ async fn a_seq_at_its_maximum_fails_only_its_stream() {
         assert_eq!(d.outcome().await.unwrap(), Body::Result(Reply::Noop));
     }
 }
+
+/// H3: a resume resends by `seq`, not by count. Typed input is never kept or resent, a credit
+/// the runner missed is resent (as one frame however many were missed), and one it got is not.
+#[tokio::test]
+async fn a_terminal_resume_resends_missed_credit_once_and_never_typed_input() {
+    use ainkrad_core_server::hub::Elevated;
+    use base64::Engine;
+    let core = Core::start("tresume", window(Duration::from_secs(10))).await;
+    let dev = core.runner().await;
+    let hub = Arc::clone(&core.app.hub);
+    let pty = DriverInfo {
+        name: DRIVER_PTY.to_owned(),
+        commands: vec![OP_PTY_OPEN.to_owned(), OP_PTY_ATTACH.to_owned()],
+        capacity: 4,
+        ..DriverInfo::default()
+    };
+    let as_process = |received: Option<(u64, u64)>| {
+        let (core, dev, pty) = (&core, &dev, pty.clone());
+        async move {
+            let mut f = Fake::plain(core, dev).await;
+            f.boot = Some("b_one".to_owned());
+            f.streams = received
+                .map(|(stream_id, received)| StreamState {
+                    stream_id,
+                    received,
+                })
+                .into_iter()
+                .collect();
+            let auth = f.hello(dev, vec![pty], &random32()).await;
+            f.prove(dev, &auth, &NO_CHANNEL_BINDING, &core.app.auth.identity.fp)
+                .await;
+            f.welcome().await;
+            f
+        }
+    };
+    let mut f = as_process(None).await;
+    let attach = Command::PtyAttach(PtyAttach {
+        terminal: "t_a".to_owned(),
+        seq: 0,
+    });
+    let mut d = hub
+        .dispatch_elevated(&dev.id, attach, Elevated::for_tests())
+        .unwrap();
+    assert_eq!(f.next().await.kind, FrameKind::Command);
+    let info = TerminalInfo {
+        terminal: "t_a".to_owned(),
+        state: TerminalState::Running,
+        size: Size { rows: 24, cols: 80 },
+        seq: 0,
+        pid: None,
+        exit: None,
+    };
+    f.send(d.stream, Body::Control(Control::Opened(info))).await;
+    assert!(matches!(
+        d.next().await,
+        Some(Body::Control(Control::Opened(_)))
+    ));
+    let typed = base64::engine::general_purpose::STANDARD.encode("hunter2\n");
+    hub.send_terminal(&dev.id, d.stream, Body::Output(Output { data: typed }))
+        .unwrap();
+    assert_eq!(f.next().await.seq, 1);
+    let chunk = "aGkK".repeat(1024);
+    for _ in 0..3 {
+        f.send(
+            d.stream,
+            Body::Output(Output {
+                data: chunk.clone(),
+            }),
+        )
+        .await;
+        d.next().await;
+        assert_eq!(f.next().await.kind, FrameKind::Credit);
+    }
+    drop(f);
+
+    // Back having received seqs 0 and 1 only: the three credits (seq 2..=4) were missed.
+    let mut f = as_process(Some((d.stream, 2))).await;
+    let c = f.next().await;
+    assert_eq!((c.kind, c.seq), (FrameKind::Credit, 4));
+    assert_eq!(
+        c.body().unwrap(),
+        Some(Body::Credit(Credit { bytes: 3 * 3072 }))
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(400), f.next())
+            .await
+            .is_err(),
+        "no command, no input"
+    );
+    drop(f);
+    // Back having received it all: nothing to resend.
+    let mut f = as_process(Some((d.stream, 5))).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(400), f.next())
+            .await
+            .is_err()
+    );
+
+    // Many grants stay bounded: one merged frame, with every byte.
+    for n in 0..200 {
+        // A new connection's fake counts its own seqs from 0: go past the ones the hub saw.
+        let out = Body::Output(Output {
+            data: chunk.clone(),
+        });
+        f.send_frame(&Frame::new(d.stream, 100 + n, out)).await;
+        d.next().await;
+        assert_eq!(f.next().await.kind, FrameKind::Credit);
+    }
+    drop(f);
+    let mut f = as_process(Some((d.stream, 5))).await;
+    let c = f.next().await;
+    assert_eq!(
+        c.body().unwrap(),
+        Some(Body::Credit(Credit { bytes: 200 * 3072 }))
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(400), f.next())
+            .await
+            .is_err()
+    );
+}

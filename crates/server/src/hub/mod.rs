@@ -91,6 +91,13 @@ impl Default for HubConfig {
     }
 }
 
+/// Credit grants a stream remembers for a resume. Past it the two oldest merge into one at the
+/// newer `seq`: a runner reconnect after more than this many unacknowledged grants may be
+/// over-granted by the merged bytes (the hub then fails the stream if it truly overruns), but
+/// memory stays bounded. ponytail: the runner never acknowledges mid-connection; an ack frame
+/// would make this exact.
+const CREDIT_KEEP: usize = 64;
+
 /// Frames queued per connection before `dispatch` answers `busy`.
 const OUT_QUEUE: usize = 256;
 
@@ -106,9 +113,13 @@ struct Conn {
 /// how many runner frames arrived, and the runner's output credit left.
 struct Pending {
     to: mpsc::UnboundedSender<Body>,
-    // ponytail: every Core frame is kept until the answer; credits pile up on a stream with
-    // much output. Drop the ones below the runner's count once output streams exist (E2).
+    /// Core frames kept for a resend, each with its `seq`: the command (a terminal's is dropped
+    /// once `opened` shows the runner has it) and the closing `close`. Terminal input and credit
+    /// are never kept here.
     sent: Vec<Frame>,
+    /// Credit grants not yet known to be received, `(seq, bytes)`: sent once, resent on a resume
+    /// as one frame (see [`CREDIT_KEEP`]).
+    credits: Vec<(u64, u64)>,
     next_sent: u64,
     received: u64,
     credit: u64,
@@ -128,6 +139,7 @@ impl Pending {
         f
     }
 
+    /// A frame that is not kept for a resend: typed input and credit.
     fn ephemeral(&mut self, stream: u64, body: Body) -> Frame {
         let f = Frame::new(stream, self.next_sent, body);
         self.next_sent = self.next_sent.saturating_add(1);
@@ -304,6 +316,20 @@ impl Hub {
         Elevated(())
     }
 
+    /// Mint the terminal capability after the API gate has verified route scope and step-up
+    /// (`POST /terminals`, its `ws`, `signal` and `DELETE`, all `DESTRUCTIVE`).
+    pub(crate) fn terminal_elevation(&self, caller: &crate::api::v1::Caller) -> Elevated {
+        debug_assert!(caller.device.scopes.iter().any(|s| s == "terminal"));
+        Elevated(())
+    }
+
+    /// Re-open a monitor stream for a terminal the Core already persisted (after a restart).
+    /// It is called only from handlers that passed the terminal gate and only for a row that
+    /// exists; it cannot start a new shell (`pty.attach` reaches a running host only).
+    pub(crate) fn continue_terminal_elevation(&self) -> Elevated {
+        Elevated(())
+    }
+
     /// Continue the elevated create for a live, persisted session after a Core restart. The
     /// session row is written only after the gated create route succeeds; this is not a route
     /// entry point and cannot elevate a new caller.
@@ -383,6 +409,7 @@ impl Hub {
         let mut p = Pending {
             to,
             sent: Vec::new(),
+            credits: Vec::new(),
             next_sent: 0,
             received: 0,
             credit: STREAM_WINDOW,
@@ -502,14 +529,21 @@ impl Hub {
             // The runner's hello is an acknowledgement of the Core frames it received.
             // Drop that prefix before resending: terminal input can include passwords and must
             // not remain in Core memory for the lifetime of a stream.
-            let acknowledged = usize::try_from(got).unwrap_or(usize::MAX).min(p.sent.len());
-            if acknowledged > 0 {
-                p.sent.drain(..acknowledged);
+            // `got` is the runner's count of Core frames: the next `seq` it expects. Frames
+            // below it were received; ephemeral ones (input) skip `sent`, so go by `seq`.
+            p.sent.retain(|f| f.seq >= got);
+            p.credits.retain(|c| c.0 >= got);
+            let mut resend = p.sent.clone();
+            if let Some(last) = p.credits.last().map(|c| c.0) {
+                let bytes = p.credits.iter().map(|c| c.1).sum();
+                p.credits = vec![(last, bytes)];
+                resend.push(Frame::new(*id, last, Body::Credit(Credit { bytes })));
             }
-            for f in &p.sent {
+            resend.sort_by_key(|f| f.seq);
+            for f in resend {
                 // ponytail: a resend past the queue is dropped; the runner would then wait
                 // for the command until the Core loses it. Fine below OUT_QUEUE in flight.
-                let _ = out.try_send(f.clone());
+                let _ = out.try_send(f);
             }
             streams.push(StreamState {
                 stream_id: *id,
@@ -624,6 +658,8 @@ impl Hub {
             // unmetered.
             Body::Control(Control::Opened(o)) if p.terminal && !p.opened => {
                 p.opened = true;
+                // The runner has the command (and with it a create's `env`): no resend needs it.
+                p.sent.retain(|f| f.seq != 0);
                 let _ = p.to.send(Body::Control(Control::Opened(o)));
                 return;
             }
@@ -666,9 +702,14 @@ impl Hub {
             return;
         };
         p.credit += bytes;
-        let frame = p.frame(stream, Body::Credit(Credit { bytes }));
+        let frame = p.ephemeral(stream, Body::Credit(Credit { bytes }));
+        p.credits.push((frame.seq, bytes));
+        if p.credits.len() > CREDIT_KEEP {
+            let (_, b) = p.credits.remove(0);
+            p.credits[0].1 += b;
+        }
         if let Some(c) = &r.conn {
-            // Kept in `sent` either way: a resume delivers it.
+            // Remembered in `credits` either way: a resume delivers it.
             let _ = c.out.try_send(frame);
         }
     }

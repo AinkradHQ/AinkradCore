@@ -104,6 +104,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "terminal.detached",
     "terminal.exited",
     "terminal.opened",
+    "terminal.signalled",
     "secret.created",
     "secret.deleted",
     "secret.leased",
