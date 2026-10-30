@@ -82,7 +82,7 @@ pub use connect::{Config, Error};
 pub use executor::*;
 pub use harness::{HarnessExecutor, mcp_url};
 use load::host_load;
-pub use workspace::Workspaces;
+pub use workspace::{SessionWorkspace, Workspaces};
 
 const MIN_BACKOFF: Duration = Duration::from_millis(250);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);

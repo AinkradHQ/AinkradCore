@@ -152,6 +152,28 @@ fn v2_frames_are_pinned() {
         })),
     );
     v2(
+        "hello_load",
+        CONTROL_STREAM,
+        0,
+        Body::Control(Control::Hello(RunnerHello {
+            protocol: PROTOCOL_VERSION.to_owned(),
+            runner_version: "0.1.0".to_owned(),
+            drivers: vec![DriverInfo {
+                name: "exec".to_owned(),
+                commands: vec![OP_NOOP.to_owned(), OP_EXEC_RUN.to_owned()],
+                capacity: 4,
+                ..Default::default()
+            }],
+            os: Some("linux".to_owned()),
+            arch: Some("aarch64".to_owned()),
+            load: Some(HostLoad {
+                avg1: 0.5,
+                cores: 4,
+            }),
+            ..Default::default()
+        })),
+    );
+    v2(
         "hello_auth",
         CONTROL_STREAM,
         0,
@@ -234,7 +256,23 @@ fn v2_frames_are_pinned() {
             }],
         })),
     );
-    v2("heartbeat", CONTROL_STREAM, 1, Body::Heartbeat);
+    v2(
+        "heartbeat",
+        CONTROL_STREAM,
+        1,
+        Body::Heartbeat(Heartbeat::default()),
+    );
+    v2(
+        "heartbeat_load",
+        CONTROL_STREAM,
+        1,
+        Body::Heartbeat(Heartbeat {
+            load: Some(HostLoad {
+                avg1: 1.5,
+                cores: 8,
+            }),
+        }),
+    );
     v2("command_noop", 1, 0, Body::Command(Command::Noop));
     v2("result_noop", 1, 0, Body::Result(Reply::Noop));
     v2(

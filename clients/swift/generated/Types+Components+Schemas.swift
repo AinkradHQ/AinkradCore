@@ -2163,6 +2163,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/drivers`.
             public var drivers: [Components.Schemas.RunnerDriver]?
+            /// The host's load as its runner last reported it (E2-15.2), if it has.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/host_load`.
+            public var hostLoad: Components.Schemas.RunnerHostLoad?
             /// The runner's device id, `d_…`.
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/id`.
@@ -2191,6 +2195,7 @@ extension Components {
             ///   - capacity: Commands it takes at once.
             ///   - degraded: Connected but silent past two heartbeats.
             ///   - drivers: What it last advertised (empty until it first connected since the Core started).
+            ///   - hostLoad: The host's load as its runner last reported it (E2-15.2), if it has.
             ///   - id: The runner's device id, `d_…`.
             ///   - lastSeen: Its last frame or request; null if never seen.
             ///   - load: Commands in flight.
@@ -2201,6 +2206,7 @@ extension Components {
                 capacity: Swift.Int32? = nil,
                 degraded: Swift.Bool? = nil,
                 drivers: [Components.Schemas.RunnerDriver]? = nil,
+                hostLoad: Components.Schemas.RunnerHostLoad? = nil,
                 id: Swift.String,
                 lastSeen: Components.Schemas.Timestamp? = nil,
                 load: Swift.Int32? = nil,
@@ -2211,6 +2217,7 @@ extension Components {
                 self.capacity = capacity
                 self.degraded = degraded
                 self.drivers = drivers
+                self.hostLoad = hostLoad
                 self.id = id
                 self.lastSeen = lastSeen
                 self.load = load
@@ -2222,6 +2229,7 @@ extension Components {
                 case capacity
                 case degraded
                 case drivers
+                case hostLoad = "host_load"
                 case id
                 case lastSeen = "last_seen"
                 case load
@@ -2293,6 +2301,35 @@ extension Components {
                 case commands
                 case name
                 case slots
+            }
+        }
+        /// The host's load as last reported by a runner (E2-15.2), if any.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunnerHostLoad`.
+        public struct RunnerHostLoad: Codable, Hashable, Sendable {
+            /// The one-minute load average.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerHostLoad/avg1`.
+            public var avg1: Swift.Double
+            /// How many CPUs the runner sees.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerHostLoad/cores`.
+            public var cores: Swift.Int32
+            /// Creates a new `RunnerHostLoad`.
+            ///
+            /// - Parameters:
+            ///   - avg1: The one-minute load average.
+            ///   - cores: How many CPUs the runner sees.
+            public init(
+                avg1: Swift.Double,
+                cores: Swift.Int32
+            ) {
+                self.avg1 = avg1
+                self.cores = cores
+            }
+            public enum CodingKeys: String, CodingKey {
+                case avg1
+                case cores
             }
         }
         /// What a delete answers.

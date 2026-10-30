@@ -39,6 +39,12 @@ impl Workspace {
         if bad_name {
             return Some(format!("bad repo name {:?}", self.name));
         }
+        if self.also.len() > 15 || self.also.iter().any(|w| !w.also.is_empty()) {
+            return Some("too many or nested repositories".into());
+        }
+        if let Some(why) = self.also.iter().find_map(Workspace::problem) {
+            return Some(why);
+        }
         repo_url_problem(&self.repo).or_else(|| {
             [&self.base, &self.branch]
                 .into_iter()
@@ -52,24 +58,60 @@ impl Workspace {
 /// credentials in an http(s) URL (they belong in the runner's GIT_ASKPASS, never in a URL
 /// that logs and process lists keep).
 pub fn repo_url_problem(url: &str) -> Option<String> {
-    if url.is_empty() || url.starts_with('-') || url.chars().any(char::is_control) {
+    if url.is_empty()
+        || url.len() > 2048
+        || url.starts_with('-')
+        || url.chars().any(char::is_control)
+    {
         return Some(format!("bad repo URL {url:?}"));
     }
+    if url.contains(['?', '#', '\'']) || url.chars().any(char::is_whitespace) {
+        return Some("repo URLs may not contain secrets, fragments or whitespace".into());
+    }
     let lower = url.to_ascii_lowercase();
-    let authority = ["https://", "http://"]
-        .iter()
-        .find_map(|scheme| lower.strip_prefix(scheme))
-        .map(|rest| rest.split('/').next().unwrap_or(""));
-    authority
-        .is_some_and(|a| a.contains('@'))
-        .then(|| "the repo URL holds credentials; give the runner a GIT_ASKPASS instead".into())
+    let valid = if lower.starts_with("https://") || lower.starts_with("ssh://") {
+        let authority = url
+            .split_once("://")
+            .unwrap()
+            .1
+            .split('/')
+            .next()
+            .unwrap_or("");
+        let host = authority.rsplit('@').next().unwrap_or("");
+        !host.is_empty()
+            && if lower.starts_with("https://") {
+                !authority.contains('@')
+            } else {
+                !authority.split('@').next().unwrap_or("").contains(':') || !authority.contains('@')
+            }
+    } else if let Some((host, path)) = url.split_once(':') {
+        host.contains('@')
+            && !host.contains('/')
+            && !path.is_empty()
+            && host.split('@').all(|s| {
+                !s.is_empty()
+                    && s.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+            })
+    } else {
+        false
+    };
+    (!valid)
+        .then(|| "repo must use https or ssh without credentials; local paths are forbidden".into())
 }
 
 /// A plain branch name: `[A-Za-z0-9._/-]`, not starting with `-` or `/`, no `..`.
 pub fn branch_name_ok(name: &str) -> bool {
     !name.is_empty()
+        && name.len() <= 256
         && !name.starts_with(['-', '/'])
         && !name.contains("..")
+        && !name.contains("//")
+        && !name.contains("@{")
+        && !name.ends_with(['/', '.'])
+        && !name
+            .split('/')
+            .any(|part| part.is_empty() || part.ends_with(".lock"))
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"._/-".contains(&b))

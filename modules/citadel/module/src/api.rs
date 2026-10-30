@@ -11,6 +11,7 @@ use ainkrad_core_server::api::App;
 use axum::Router;
 use axum::routing::{get, put};
 
+pub mod accounts;
 mod error;
 pub mod governance;
 pub mod model;
@@ -37,6 +38,8 @@ pub const QUERY: &[&str] = &[
     "until",
     "harness",
     "model",
+    "name",
+    "kind",
 ];
 
 /// The routes of slices 1 and 2 that need a live step-up.
@@ -51,6 +54,7 @@ pub static DESTRUCTIVE: LazyLock<Vec<(&str, &str)>> = LazyLock::new(|| {
         work::DESTRUCTIVE,
         planning::DESTRUCTIVE,
         governance::DESTRUCTIVE,
+        accounts::DESTRUCTIVE,
     ]
     .concat()
 });
@@ -61,6 +65,7 @@ pub fn routes() -> Router<App> {
         .merge(work::routes())
         .merge(planning::routes())
         .merge(governance::routes())
+        .merge(accounts::routes())
         .route(
             "/companies",
             get(org::list_companies).post(org::create_company),

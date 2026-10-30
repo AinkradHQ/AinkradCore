@@ -346,7 +346,7 @@ async fn a_project_repo_is_set_validated_and_read_through_its_issues() {
     assert_eq!(get_project_repo(pool, p.id).await.unwrap(), None);
     let ours = repo("https://example.test/acme/citadel.git", "development");
     set_project_repo(pool, &ours).await.unwrap();
-    set_project_repo(pool, &repo("/srv/old.git", "main"))
+    set_project_repo(pool, &repo("https://example.test/old.git", "main"))
         .await
         .unwrap();
     set_project_repo(pool, &ours).await.unwrap();
@@ -357,7 +357,8 @@ async fn a_project_repo_is_set_validated_and_read_through_its_issues() {
     for (url, branch) in [
         ("https://ghp_secret@example.test/a/b.git", "main"),
         ("--upload-pack=x", "main"),
-        ("/srv/r.git", "-f"),
+        ("https://example.test/r.git", "-f"),
+        ("/srv/r.git", "main"),
     ] {
         let refused = set_project_repo(pool, &repo(url, branch)).await;
         assert!(matches!(refused, Err(Error::InvalidArgument(_))), "{url}");

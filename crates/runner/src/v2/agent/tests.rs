@@ -4,8 +4,11 @@
 //! harness sees a value, the transcript never holds it, its files are 0600 in a 0700 dir and go
 //! at the end, at a kill, and after a `kill -9` of the runner.
 
+use crate::workspace::command::Group;
+use crate::workspace::tests::TestDir;
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Stdio;
 
@@ -63,7 +66,11 @@ impl Executor for Script {
             .get(&job.run)
             .cloned()
             .unwrap_or_default();
-        let mut child = tokio::process::Command::new("/bin/sh")
+        let mut command = tokio::process::Command::new("/bin/sh");
+        if std::env::var_os("AGENT_KILL9_ROOT").is_none() {
+            command.as_std_mut().process_group(0);
+        }
+        let mut child = command
             .arg("-c")
             .arg(&self.script)
             .env_clear()
@@ -73,6 +80,7 @@ impl Executor for Script {
             .kill_on_drop(true)
             .spawn()
             .unwrap();
+        let _group = Group(child.id().unwrap());
         let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
         let mut last = String::new();
         while let Ok(Some(line)) = lines.next_line().await {
@@ -130,14 +138,14 @@ impl Executor for Script {
     }
 }
 
-fn dirs(name: &str) -> (PathBuf, AgentConfig) {
+fn dirs(name: &str) -> (TestDir, AgentConfig) {
     let root = std::env::temp_dir().join(format!("agent-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let config = AgentConfig {
         stop_grace: Duration::from_millis(300),
         ..AgentConfig::new(root.join("agents"), root.join("secrets"))
     };
-    (root, config)
+    (TestDir(root), config)
 }
 
 fn start(session: &str, harness: &str) -> AgentStart {
@@ -444,7 +452,7 @@ async fn cancel_ends_after_the_grace_and_kill_at_once() {
         kill: true,
     })
     .unwrap();
-    assert_eq!(d.states()["as_a"], AgentState::Ended, "a kill ends it now");
+    until("kill teardown", || d.states()["as_a"] == AgentState::Ended).await;
     d.stop(AgentStop {
         session: "as_b".into(),
         kill: false,
@@ -559,7 +567,7 @@ async fn a_secret_reaches_only_its_session_and_never_its_transcript() {
     let (root, config) = dirs("secrets");
     let gate = root.join("go");
     let s = script(&format!(
-        "echo \"env=$TOKEN\"; echo \"file=$(cat \"$TOKEN_FILE\")\"; echo \"askpass=$(\"$GIT_ASKPASS\")\"; \
+        "echo \"env=$TOKEN\"; echo \"file=$(cat \"$TOKEN_FILE\")\"; echo \"askpass=$(\"$ASKPASS\")\"; \
          echo \"same=$ASKPASS\"; while [ ! -e '{}' ]; do sleep 0.05; done; echo \"$TOKEN\"; exit 3",
         gate.display()
     ));
@@ -605,7 +613,9 @@ async fn a_secret_reaches_only_its_session_and_never_its_transcript() {
     assert_eq!(mode(&config.secrets_dir), 0o700);
     for f in std::fs::read_dir(&dir).unwrap().flatten() {
         let body = std::fs::read_to_string(f.path()).unwrap();
-        if f.file_name().to_string_lossy().ends_with(".askpass") {
+        if f.file_name().to_string_lossy().ends_with(".askpass")
+            || f.file_name() == "git-credential"
+        {
             assert_eq!(mode(&f.path()), 0o700);
             assert!(
                 !body.contains(ASKPASS_VALUE),
@@ -744,7 +754,9 @@ async fn kill9_helper() {
 #[tokio::test]
 async fn after_a_kill_9_the_next_runner_removes_the_secrets() {
     let (root, config) = dirs("kill9");
-    let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+    let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+    command.as_std_mut().process_group(0);
+    let mut child = command
         .args([
             "--exact",
             "v2::agent::tests::kill9_helper",
@@ -756,6 +768,7 @@ async fn after_a_kill_9_the_next_runner_removes_the_secrets() {
         .kill_on_drop(true)
         .spawn()
         .unwrap();
+    let _group = Group(child.id().unwrap());
     let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
     let ready = tokio::time::timeout(Duration::from_secs(30), async {
         while let Ok(Some(l)) = lines.next_line().await {

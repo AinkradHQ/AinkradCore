@@ -31,7 +31,7 @@ fn adds_lists_and_assigns_repos() {
             "REP",
             "Repos",
             "--repo",
-            "/srv/core.git",
+            "https://example.test/core.git",
         ],
     );
     let forge = [
@@ -46,7 +46,7 @@ fn adds_lists_and_assigns_repos() {
         &db,
         &["repo", "add"],
         &[
-            &[p.as_str(), "app", "/srv/app.git", "--test", "make test"][..],
+            &[p.as_str(), "app", "https://example.test/app.git", "--test", "make test"][..],
             &forge[..],
         ]
         .concat(),
@@ -55,12 +55,12 @@ fn adds_lists_and_assigns_repos() {
     let listed = run(&db, &["repo", "list"], &[&p]).unwrap();
     let lines: Vec<&str> = listed.lines().collect();
     assert!(
-        lines[0].ends_with("\trep\t/srv/core.git\tmain\t-\tprimary"),
+        lines[0].ends_with("\trep\thttps://example.test/core.git\tmain\t-\tprimary"),
         "{listed}"
     );
     assert_eq!(
         lines[1],
-        format!("{app}\tapp\t/srv/app.git\tmain\tgitlab acme/app")
+        format!("{app}\tapp\thttps://example.test/app.git\tmain\tgitlab acme/app")
     );
     let issue = ok(&db, &["issue", "add", &p, "Both"]);
     let set = run(&db, &["issue", "repos"], &[&issue, "app", "rep"]).unwrap();
@@ -69,5 +69,5 @@ fn adds_lists_and_assigns_repos() {
         run(&db, &["repo", "remove"], &[&app]).is_err(),
         "an open issue touches it"
     );
-    assert!(run(&db, &["repo", "add"], &[&p, "bad name", "/srv/x.git"]).is_err());
+    assert!(run(&db, &["repo", "add"], &[&p, "bad name", "https://example.test/x.git"]).is_err());
 }

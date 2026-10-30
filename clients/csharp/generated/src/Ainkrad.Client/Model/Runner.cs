@@ -43,13 +43,14 @@ namespace Ainkrad.Client.Model
         /// <param name="capacity">Commands it takes at once..</param>
         /// <param name="degraded">Connected but silent past two heartbeats..</param>
         /// <param name="drivers">What it last advertised (empty until it first connected since the Core started)..</param>
+        /// <param name="hostLoad">The host&#39;s load as its runner last reported it (E2-15.2), if it has..</param>
         /// <param name="id">The runner&#39;s device id, &#x60;d_…&#x60;. (required).</param>
         /// <param name="lastSeen">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4)..</param>
         /// <param name="load">Commands in flight..</param>
         /// <param name="name">name (required).</param>
         /// <param name="online">Connected to this Core now..</param>
         /// <param name="varVersion">Its &#x60;ainkrad-runner&#x60; version, once connected..</param>
-        public Runner(int? capacity = default, bool? degraded = default, List<RunnerDriver> drivers = default, string id = default, DateTime lastSeen = default, int? load = default, string name = default, bool? online = default, string varVersion = default)
+        public Runner(int? capacity = default, bool? degraded = default, List<RunnerDriver> drivers = default, RunnerHostLoad hostLoad = default, string id = default, DateTime lastSeen = default, int? load = default, string name = default, bool? online = default, string varVersion = default)
         {
             // to ensure "id" is required (not null)
             if (id == null)
@@ -66,6 +67,7 @@ namespace Ainkrad.Client.Model
             this.Capacity = capacity;
             this.Degraded = degraded;
             this.Drivers = drivers;
+            this.HostLoad = hostLoad;
             this.LastSeen = lastSeen;
             this.Load = load;
             this.Online = online;
@@ -92,6 +94,13 @@ namespace Ainkrad.Client.Model
         /// <value>What it last advertised (empty until it first connected since the Core started).</value>
         [DataMember(Name = "drivers", EmitDefaultValue = true)]
         public List<RunnerDriver> Drivers { get; set; }
+
+        /// <summary>
+        /// The host&#39;s load as its runner last reported it (E2-15.2), if it has.
+        /// </summary>
+        /// <value>The host&#39;s load as its runner last reported it (E2-15.2), if it has.</value>
+        [DataMember(Name = "host_load", EmitDefaultValue = false)]
+        public RunnerHostLoad HostLoad { get; set; }
 
         /// <summary>
         /// The runner&#39;s device id, &#x60;d_…&#x60;.
@@ -145,6 +154,7 @@ namespace Ainkrad.Client.Model
             sb.Append("  Capacity: ").Append(Capacity).Append("\n");
             sb.Append("  Degraded: ").Append(Degraded).Append("\n");
             sb.Append("  Drivers: ").Append(Drivers).Append("\n");
+            sb.Append("  HostLoad: ").Append(HostLoad).Append("\n");
             sb.Append("  Id: ").Append(Id).Append("\n");
             sb.Append("  LastSeen: ").Append(LastSeen).Append("\n");
             sb.Append("  Load: ").Append(Load).Append("\n");

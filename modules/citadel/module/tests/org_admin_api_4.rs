@@ -102,7 +102,6 @@ async fn companies_are_listed_added_and_changed() {
 }
 
 #[tokio::test]
-#[ignore = "S9: a company's pool accounts (account_ids) need the accounts slice"]
 async fn a_company_lists_its_pool_accounts() {
     let fx = fx().await;
     let a = company(&fx, "A").await;

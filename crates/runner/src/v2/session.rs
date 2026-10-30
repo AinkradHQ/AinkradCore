@@ -22,11 +22,11 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use ainkrad_proto::v2::{
-    Body, CONTROL_STREAM, Command, Control, ErrorCode, Frame, FrameKind, Reply, RunnerHello,
-    StreamError, StreamState,
+    Body, CONTROL_STREAM, Command, Control, ErrorCode, Frame, FrameKind, Heartbeat, HostLoad,
+    Reply, RunnerHello, StreamError, StreamState,
 };
 use futures_util::StreamExt;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -38,6 +38,10 @@ use tokio_tungstenite::tungstenite::Message;
 use super::agent::AgentDriver;
 use super::pty::{Op, PtyDriver};
 use super::{ExecDriver, Link, handshake, key, lost, rotate, send};
+use crate::load::host_load;
+
+/// The wall clock; a test swaps it to fake a sleep (E2-15.3).
+pub(super) type Clock = Arc<dyn Fn() -> SystemTime + Send + Sync>;
 
 /// The pace when the Core names none.
 const HEARTBEAT: Duration = Duration::from_secs(15);
@@ -110,6 +114,8 @@ pub struct Session {
     pty: Option<Arc<PtyDriver>>,
     /// Agent sessions (`--enable-agents`), if offered.
     agent: Option<Arc<AgentDriver>>,
+    /// Where wall time comes from: a monotonic clock stands still while the machine sleeps.
+    clock: Clock,
     boot: String,
     core_boot: Option<String>,
     streams: HashMap<u64, Held>,
@@ -124,12 +130,20 @@ impl Session {
             exec,
             pty: None,
             agent: None,
+            clock: Arc::new(SystemTime::now),
             boot: format!("b_{}", key::b64(&key::random::<16>())),
             core_boot: None,
             streams: HashMap::new(),
             done_tx,
             done_rx,
         }
+    }
+
+    /// Reads wall time from `clock` (tests fake a sleep with it).
+    #[cfg(test)]
+    pub(super) fn with_clock(mut self, clock: Clock) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Offers the `pty` driver too (when its config enables it).
@@ -181,6 +195,10 @@ impl Session {
             boot: Some(self.boot.clone()),
             streams: held,
             terminals,
+            load: host_load().map(|l| HostLoad {
+                avg1: l.avg1,
+                cores: l.cores,
+            }),
             ..RunnerHello::default()
         };
         let (welcome, core_spki) = handshake(&mut sink, &mut source, link, hello).await?;
@@ -222,6 +240,7 @@ impl Session {
         beat.reset();
         let mut heard = Instant::now();
         let mut control = 2;
+        let mut ticked = (self.clock)();
         loop {
             let frame = tokio::select! {
                 Some((stream, body)) = self.done_rx.recv() => {
@@ -237,10 +256,34 @@ impl Session {
                     continue;
                 }
                 _ = beat.tick() => {
+                    // A wall-clock gap of over two beats means the machine slept (E2-15.3): the
+                    // link is dead or the Core has dropped it, so end it now; the daemon redials
+                    // at once and the streams resume by `seq`, rather than waiting out the
+                    // silence check below.
+                    let now = (self.clock)();
+                    let gap = now.duration_since(ticked).unwrap_or_default();
+                    ticked = now;
+                    if gap > heartbeat * 2 {
+                        tracing::info!(?gap, "woke from sleep; reconnecting");
+                        return Ok(None);
+                    }
                     if heard.elapsed() > heartbeat * 3 {
                         return Err(lost("the Core went silent"));
                     }
-                    send(&mut sink, Frame::new(CONTROL_STREAM, control, Body::Heartbeat)).await?;
+                    send(
+                        &mut sink,
+                        Frame::new(
+                            CONTROL_STREAM,
+                            control,
+                            Body::Heartbeat(Heartbeat {
+                                load: host_load().map(|l| HostLoad {
+                                    avg1: l.avg1,
+                                    cores: l.cores,
+                                }),
+                            }),
+                        ),
+                    )
+                    .await?;
                     control += 1;
                     continue;
                 }

@@ -12,7 +12,7 @@
 
 use std::sync::LazyLock;
 
-use super::{governance, org_admin, planning, work};
+use super::{accounts, governance, org_admin, planning, work};
 
 /// `(method, template, scope)`, templates relative to `/modules/citadel/v1`: slices 1 and 2's;
 /// each later slice lists its own in its seam file (`org_admin`, `work`, `governance`).
@@ -37,6 +37,7 @@ pub static ALL: LazyLock<Vec<(&str, &str, &str)>> = LazyLock::new(|| {
         work::SCOPES,
         planning::SCOPES,
         governance::SCOPES,
+        accounts::SCOPES,
     ]
     .concat()
 });
@@ -49,6 +50,7 @@ pub fn is_admin_read(template: &str) -> bool {
         work::ADMIN_READS,
         planning::ADMIN_READS,
         governance::ADMIN_READS,
+        accounts::ADMIN_READS,
     ]
     .iter()
     .any(|l| l.contains(&template))
@@ -81,7 +83,9 @@ mod tests {
                 } else if scope != "admin" {
                     assert!(
                         scope == "approve"
-                            && (path.ends_with("/decide") || path.ends_with("/raise")),
+                            && (path.ends_with("/decide")
+                                || path.ends_with("/decide-forge")
+                                || path.ends_with("/raise")),
                         "{method} {path} is {scope}: only an approval decision may be below admin"
                     );
                 }

@@ -10,7 +10,7 @@ use utoipa::{IntoParams, ToSchema};
 use crate::api::error::found;
 use crate::api::model::governance::Approval;
 use crate::api::scope::Acting;
-use crate::domain::gov::{ApprovalId, ApprovalStatus};
+use crate::domain::gov::{ApprovalId, ApprovalKind, ApprovalStatus};
 use crate::domain::org::CompanyId;
 use crate::domain::work::UserId;
 use crate::store::gov::{self, DecideError};
@@ -75,12 +75,57 @@ pub async fn decide(
             "a raise goes through POST /approvals/{id}/raise",
         ));
     }
+    check_kind(&app, id, false).await?;
+    decide_as_admin(&app, id, d).await
+}
+
+fn is_forge(k: ApprovalKind) -> bool {
+    matches!(k, ApprovalKind::PrMerge | ApprovalKind::WorkflowPush)
+}
+
+/// `decide` takes every kind but a forge one, `decide-forge` only those: the forge kinds merge
+/// a PR or release a workflow-file push, so they are decided on the step-up route.
+async fn check_kind(app: &App, id: i64, forge: bool) -> Result<(), ApiError> {
+    let a = found(
+        gov::get_approval(&app.pool, ApprovalId(id)).await?,
+        "approval",
+    )?;
+    match (forge, is_forge(a.kind)) {
+        (false, true) => Err(ApiError::bad_request(
+            "a PR merge or workflow push goes through POST /approvals/{id}/decide-forge",
+        )),
+        (true, false) => Err(ApiError::bad_request(
+            "decide-forge is for a PR merge or a workflow push only",
+        )),
+        _ => Ok(()),
+    }
+}
+
+async fn decide_as_admin(app: &App, id: i64, d: Decision) -> ApiResult<Approval> {
     let (id, now, reply) = (ApprovalId(id), app.clock.now(), d.reply.as_deref());
     let by = UserId(ADMIN.0);
     let a = gov::decide_approval(&app.pool, id, d.approve, by, reply, &now)
         .await
         .map_err(decided)?;
     Ok(Json(a.into()))
+}
+
+#[utoipa::path(post, path = "/approvals/{id}/decide-forge", operation_id = "decideForgeApproval",
+    tag = "approvals", params(("id" = i64, Path, description = "Approval id")),
+    request_body = Decision,
+    responses((status = 200, description = "A decided `pr_merge` or `workflow_push`; needs a \
+        step-up", body = Approval)))]
+pub async fn decide_forge(
+    State(app): State<App>,
+    _: Acting,
+    Path(id): Path<i64>,
+    Json(d): Json<Decision>,
+) -> ApiResult<Approval> {
+    if d.raise_tokens.is_some() {
+        return Err(ApiError::bad_request("a forge decision takes no raise"));
+    }
+    check_kind(&app, id, true).await?;
+    decide_as_admin(&app, id, d).await
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

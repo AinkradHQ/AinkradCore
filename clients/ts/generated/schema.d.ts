@@ -1391,6 +1391,8 @@ export interface components {
             degraded?: boolean | null;
             /** @description What it last advertised (empty until it first connected since the Core started). */
             drivers?: components["schemas"]["RunnerDriver"][] | null;
+            /** @description The host's load as its runner last reported it (E2-15.2), if it has. */
+            host_load?: components["schemas"]["RunnerHostLoad"];
             /** @description The runner's device id, `d_…`. */
             id: string;
             /** @description Its last frame or request; null if never seen. */
@@ -1421,6 +1423,19 @@ export interface components {
             slots?: {
                 [key: string]: number;
             } | null;
+        };
+        /** @description The host's load as last reported by a runner (E2-15.2), if any. */
+        RunnerHostLoad: {
+            /**
+             * Format: double
+             * @description The one-minute load average.
+             */
+            avg1: number;
+            /**
+             * Format: int32
+             * @description How many CPUs the runner sees.
+             */
+            cores: number;
         };
         /** @description What a delete answers. */
         SecretDeleted: {

@@ -320,11 +320,12 @@ mod tests {
             "https://github.com/a/b",
             "ssh://git@h/a",
             "git@github.com:a/b.git",
-            "/srv/repo",
         ] {
             assert_eq!(url_problem(ok), None, "{ok}");
         }
         for bad in [
+            "/srv/repo",
+            "http://example.test/repo",
             "ext::sh -c id",
             "--upload-pack=x",
             "file:///x",

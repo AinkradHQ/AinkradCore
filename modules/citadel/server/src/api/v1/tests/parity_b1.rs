@@ -618,14 +618,14 @@ async fn the_profile_preview_is_the_run_context_text() {
 }
 
 #[tokio::test]
-async fn a_repo_shows_its_stack_and_who_uses_it_and_probes_without_saving() {
+async fn a_repo_shows_its_stack_and_who_uses_it_and_rejects_local_probes() {
     let fx = fx().await;
     let a = seed(&fx.app.pool, "A", "AAA", ProjectMode::Kanban).await;
     let repos = format!("/api/v1/projects/{}/repos", a.project.0);
     let added = fx
         .ok_post(
             &repos,
-            json!({"name": "app", "url": "/srv/app", "stack": "Swift"}),
+            json!({"name": "app", "url": "https://example.test/app", "stack": "Swift"}),
         )
         .await;
     assert_eq!(
@@ -646,7 +646,7 @@ async fn a_repo_shows_its_stack_and_who_uses_it_and_probes_without_saving() {
     let (status, got) = put(
         &fx,
         &format!("/api/v1/repos/{}", added["id"]),
-        json!({"name": "app", "url": "/srv/app"}),
+        json!({"name": "app", "url": "https://example.test/app"}),
     )
     .await;
     assert_eq!(
@@ -657,67 +657,28 @@ async fn a_repo_shows_its_stack_and_who_uses_it_and_probes_without_saving() {
     let (_, got) = put(
         &fx,
         &format!("/api/v1/repos/{}", added["id"]),
-        json!({"name": "app", "url": "/srv/app", "stack": "Rust"}),
+        json!({"name": "app", "url": "https://example.test/app", "stack": "Rust"}),
     )
     .await;
     assert_eq!(got["stack"], "Rust");
 
-    // A local repo: reachable, its default branch, the stack its files show; nothing saved.
-    let dir = std::env::temp_dir().join(format!("citadel-probe-test-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
-    std::fs::write(dir.join("Makefile"), "test:\n\tcargo test\n").unwrap();
-    let git = |args: &[&str]| {
-        let ok = std::process::Command::new("git")
-            .args([
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@t",
-                "-c",
-                "init.defaultBranch=trunk",
-            ])
-            .args(args)
-            .current_dir(&dir)
-            .status()
-            .unwrap()
-            .success();
-        assert!(ok, "git {args:?}");
-    };
-    git(&["init", "-q"]);
-    git(&["add", "."]);
-    git(&["commit", "-q", "-m", "init"]);
+    // Local probes are refused without running git or saving a repo.
     let probe = format!("{repos}/probe");
-    let found = fx
-        .ok_post(&probe, json!({"url": dir.to_str().unwrap()}))
-        .await;
-    assert_eq!(found["reachable"], true, "{found}");
-    assert_eq!(found["default_branch"], "trunk");
-    assert_eq!(found["stack"], "Rust");
-    assert_eq!(found["commands"]["build"], "cargo build");
-    assert_eq!(found["commands"]["test"], "make test");
-    assert!(found["can_push"].is_null());
-    assert_eq!(
-        fx.ok(&repos).await.as_array().unwrap().len(),
-        1,
-        "nothing was saved"
-    );
-    let gone = fx.ok_post(&probe, json!({"url": "/no/such/repo"})).await;
-    assert_eq!(
-        (gone["reachable"].clone(), gone["stack"].clone()),
-        (json!(false), json!(""))
-    );
-    assert!(gone["note"].is_string());
-    for bad in ["ext::sh -c id", "relative", "--upload-pack=x"] {
+    assert_eq!(fx.ok(&repos).await.as_array().unwrap().len(), 1);
+    for bad in [
+        "ext::sh -c id",
+        "relative",
+        "--upload-pack=x",
+        "/srv/repo",
+        "/no/such/repo",
+    ] {
         let (status, _) = fx.post(&probe, json!({"url": bad})).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
     }
     let (status, _) = fx
-        .post(&probe, json!({"url": "/x", "forge": {"kind": "github", "repo": "a/b", "token_file": "/no/token"}}))
+        .post(&probe, json!({"url": "https://example.test/x", "forge": {"kind": "github", "repo": "a/b", "token_file": "/no/token"}}))
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "an unreadable token file");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]

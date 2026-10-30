@@ -16,6 +16,7 @@
 package ainkrad.client.models
 
 import ainkrad.client.models.RunnerDriver
+import ainkrad.client.models.RunnerHostLoad
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
@@ -29,6 +30,7 @@ import kotlinx.serialization.Contextual
  * @param capacity Commands it takes at once.
  * @param degraded Connected but silent past two heartbeats.
  * @param drivers What it last advertised (empty until it first connected since the Core started).
+ * @param hostLoad The host's load as its runner last reported it (E2-15.2), if it has.
  * @param lastSeen RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param load Commands in flight.
  * @param online Connected to this Core now.
@@ -56,6 +58,10 @@ data class Runner (
     /* What it last advertised (empty until it first connected since the Core started). */
     @SerialName(value = "drivers")
     val drivers: kotlin.collections.List<RunnerDriver>? = null,
+
+    /* The host's load as its runner last reported it (E2-15.2), if it has. */
+    @SerialName(value = "host_load")
+    val hostLoad: RunnerHostLoad? = null,
 
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "last_seen")

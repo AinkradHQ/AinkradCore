@@ -10,6 +10,7 @@ use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use serde::Deserialize;
+use serde::Serialize;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::api::error::found;
@@ -21,6 +22,31 @@ use crate::domain::org::{AgentId, CompanyId, DepartmentId, Harness as CoreHarnes
 use crate::domain::work::{IssueId, ProjectId, SprintId};
 use crate::store::gov;
 use crate::store::org;
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CostReport {
+    pub company_id: i64,
+    pub runs: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_tokens: i64,
+    pub cost_usd_micros: i64,
+    pub unpriced_tokens: i64,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct LedgerEntry {
+    pub id: i64,
+    pub agent_id: i64,
+    pub issue_id: Option<i64>,
+    pub account_id: Option<i64>,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_tokens: i64,
+    pub cost_usd_micros: Option<i64>,
+    pub priced: bool,
+    pub created_at: String,
+}
 
 fn invalid(e: sqlx::Error) -> ApiError {
     match e {
@@ -254,4 +280,61 @@ pub async fn price_history(
         set_at: ts(&at),
     });
     Ok(Json(out.collect()))
+}
+
+#[utoipa::path(get, path = "/companies/{id}/costs", operation_id = "getCompanyCosts", tag = "money",
+    params(("id" = i64, Path, description = "Company id")), responses((status = 200, body = CostReport)))]
+pub async fn company_costs(
+    State(app): State<App>,
+    _: Acting,
+    Path(id): Path<i64>,
+) -> ApiResult<CostReport> {
+    found(org::get_company(&app.pool, CompanyId(id)).await?, "company")?;
+    let r = sqlx::query_as::<_, (i64, i64, i64, i64, i64, i64)>(
+        "SELECT count(*), coalesce(sum(c.input_tokens),0), coalesce(sum(c.output_tokens),0), \
+         coalesce(sum(c.cache_tokens),0), coalesce(sum(c.cost_usd_micros),0), \
+         coalesce(sum(CASE WHEN c.priced = 0 THEN c.input_tokens + c.output_tokens + c.cache_tokens ELSE 0 END),0) \
+         FROM citadel_cost_events c JOIN citadel_agents a ON a.id = c.agent_id WHERE a.company_id = ?",
+    ).bind(id).fetch_one(&app.pool).await?;
+    Ok(Json(CostReport {
+        company_id: id,
+        runs: r.0,
+        input_tokens: r.1,
+        output_tokens: r.2,
+        cache_tokens: r.3,
+        cost_usd_micros: r.4,
+        unpriced_tokens: r.5,
+    }))
+}
+
+#[utoipa::path(get, path = "/companies/{id}/ledger", operation_id = "listCompanyLedger", tag = "money",
+    params(("id" = i64, Path, description = "Company id")), responses((status = 200, body = Vec<LedgerEntry>)))]
+pub async fn company_ledger(
+    State(app): State<App>,
+    _: Acting,
+    Path(id): Path<i64>,
+) -> ApiResult<Vec<LedgerEntry>> {
+    found(org::get_company(&app.pool, CompanyId(id)).await?, "company")?;
+    let rows = sqlx::query(
+        "SELECT c.id, c.agent_id, c.issue_id, c.account_id, c.input_tokens, c.output_tokens, \
+         c.cache_tokens, c.cost_usd_micros, c.priced, c.created_at FROM citadel_cost_events c \
+         JOIN citadel_agents a ON a.id = c.agent_id WHERE a.company_id = ? ORDER BY c.id DESC LIMIT 500",
+    ).bind(id).fetch_all(&app.pool).await?;
+    use sqlx::Row;
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| LedgerEntry {
+                id: r.get("id"),
+                agent_id: r.get("agent_id"),
+                issue_id: r.get("issue_id"),
+                account_id: r.get("account_id"),
+                input_tokens: r.get("input_tokens"),
+                output_tokens: r.get("output_tokens"),
+                cache_tokens: r.get("cache_tokens"),
+                cost_usd_micros: r.get("cost_usd_micros"),
+                priced: r.get::<i64, _>("priced") != 0,
+                created_at: r.get("created_at"),
+            })
+            .collect(),
+    ))
 }

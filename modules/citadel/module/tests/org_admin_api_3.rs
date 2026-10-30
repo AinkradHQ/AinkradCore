@@ -155,7 +155,6 @@ async fn appearance_is_listed_changed_and_drawn_until_an_image_is_uploaded() {
 // The image upload and its download need the artifacts slice's blob store (S5): the routes are
 // not built, so the test is the monolith's, adapted only where a Core call it used is gone.
 #[tokio::test]
-#[ignore = "S5: avatar upload/download need the artifacts blob store"]
 async fn an_uploaded_image_is_checked_served_safely_and_reset() {
     let fx = fx().await;
     let a = company(&fx, "A").await;
@@ -330,7 +329,6 @@ async fn a_company_logo_is_reset_and_audited() {
 }
 
 #[tokio::test]
-#[ignore = "S5: logo upload/download need the artifacts blob store"]
 async fn a_company_logo_follows_the_avatar_rules() {
     let fx = fx().await;
     let a = company(&fx, "A").await;

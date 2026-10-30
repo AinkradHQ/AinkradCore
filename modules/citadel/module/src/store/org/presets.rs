@@ -84,17 +84,27 @@ fn invalid(why: impl Into<String>) -> Error {
 }
 
 /// Every pinned account must be in the company's pool.
-// ponytail: the account pool (`account_companies`) arrives with the accounts slice (S9); until
-// then no account is in any pool, so every pin is refused, the answer the pool check gives.
 async fn check_pins(
-    _conn: &mut SqliteConnection,
-    _company: i64,
+    conn: &mut SqliteConnection,
+    company: i64,
     entries: &[ChainEntry],
 ) -> Result<(), Error> {
-    match entries.iter().find_map(|e| e.account_id) {
-        Some(a) => Err(invalid(format!("account {a} is not in the company's pool"))),
-        None => Ok(()),
+    for e in entries {
+        if let Some(a) = e.account_id {
+            let in_pool: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM citadel_account_companies \
+                 WHERE account_id = ? AND company_id = ?)",
+            )
+            .bind(a)
+            .bind(company)
+            .fetch_one(&mut *conn)
+            .await?;
+            if !in_pool {
+                return Err(invalid(format!("account {a} is not in the company's pool")));
+            }
+        }
     }
+    Ok(())
 }
 
 async fn write_entries(

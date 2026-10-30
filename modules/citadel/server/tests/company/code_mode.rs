@@ -154,7 +154,7 @@ pub async fn routed(stage: &mut Stage, o: &Org) -> (ProjectId, IssueId) {
             id: 0,
             project_id: project,
             name: name.to_owned(),
-            url: stage.bare(name).display().to_string(),
+            url: stage.repo_url(&stage.bare(name)),
             default_branch: "main".to_owned(),
             position: 0,
             primary: false,

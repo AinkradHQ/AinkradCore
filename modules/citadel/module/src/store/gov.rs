@@ -19,6 +19,7 @@ mod approvals;
 mod budgets;
 mod ledger;
 mod library;
+pub use crate::store::accounts::*;
 pub use approvals::*;
 pub use budgets::*;
 pub use ledger::*;
