@@ -5,7 +5,8 @@
 //! destructive routes, its company-owner rows and its OpenAPI document, and `api.rs`, `scopes.rs`,
 //! `scope.rs` and `spec.rs` aggregate them. Handlers live in submodules next to this file.
 //!
-//! Not here, and why: `probeRepo` (git workspace, forge clients: E2-10, S6); the project logo
+//! Not here, and why: `probeRepo` (clones the repo through the git workspace, then asks the
+//! forge: the workspace lives on a runner (E2-10), so the probe comes with the run engine, S7); the project logo
 //! routes (`getProjectLogo`, `uploadProjectLogo`, `resetProjectLogo`: the Core has no artifacts
 //! root to store the image under, and the avatar image helpers are S3's); `checkoutIssue` (the
 //! run engine, S7).
@@ -16,6 +17,7 @@ use axum::routing::{delete, get, patch, post, put};
 use utoipa::OpenApi;
 
 mod charts;
+mod forge;
 mod issues;
 mod projects;
 mod repos;
@@ -42,6 +44,17 @@ pub fn routes() -> Router<App> {
         .route(
             "/issues/{id}/repos",
             get(repos::get_issue_repos).put(repos::set_issue_repos),
+        )
+        .route("/forge/hosts", get(forge::list_hosts))
+        .route(
+            "/forge/hosts/{host}",
+            put(forge::add_host).delete(forge::remove_host),
+        )
+        .route(
+            "/projects/{id}/linear",
+            get(forge::get_linear)
+                .put(forge::set_linear)
+                .delete(forge::remove_linear),
         )
         .route("/projects/{id}/cfd", get(charts::cfd))
         .route("/projects/{id}/profile/preview", get(charts::preview))
@@ -105,7 +118,13 @@ pub const SCOPES: &[(&str, &str, &str)] = &[
 
 /// GET templates that deliberately stay `admin` (`api::scopes::ADMIN_READS`): a repo shows the
 /// path of its forge token file, and the profile preview is the text a run is instructed with.
-pub const ADMIN_READS: &[&str] = &["/projects/{id}/repos", "/projects/{id}/profile/preview"];
+pub const ADMIN_READS: &[&str] = &[
+    "/projects/{id}/repos",
+    "/projects/{id}/profile/preview",
+    // Where credentials are sent: the allowed hosts, and a project's Linear secret name.
+    "/forge/hosts",
+    "/projects/{id}/linear",
+];
 
 /// `(method, template)` of the slice's routes that need a live step-up (`Module::destructive`):
 /// the two that delete data (an empty sprint, a repo).
@@ -115,6 +134,11 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     // A repo sets the commands a runner runs, a token file path and a forge URL.
     ("POST", "/projects/{id}/repos"),
     ("PUT", "/repos/{id}"),
+    // Where the server sends a credential: a forge host, and a project's Linear link.
+    ("PUT", "/forge/hosts/{host}"),
+    ("DELETE", "/forge/hosts/{host}"),
+    ("PUT", "/projects/{id}/linear"),
+    ("DELETE", "/projects/{id}/linear"),
 ];
 
 /// `(path segment, SQL)` rows for `scope::OWNERS`: the company that owns what `segment/{id}` names.
@@ -167,6 +191,12 @@ pub const OWNERS: &[(&str, &str)] = &[];
         repos::set_issue_repos,
         charts::cfd,
         charts::preview,
+        forge::list_hosts,
+        forge::add_host,
+        forge::remove_host,
+        forge::get_linear,
+        forge::set_linear,
+        forge::remove_linear,
     ),
     components(schemas(
         super::model::work::Project,
@@ -207,6 +237,9 @@ pub const OWNERS: &[(&str, &str)] = &[];
         repos::RepoNames,
         repos::RepoRequest,
         repos::IssueRepos,
+        forge::ForgeHosts,
+        forge::LinearLink,
+        forge::LinearBody,
         charts::CfdDay,
         charts::ProfilePreview,
     ))

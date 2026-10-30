@@ -2,8 +2,6 @@
 //! validation, and the audit and comment helpers its writes use. The forge itself (the PR
 //! poller, push and done flows, the provider clients) is S6's and E2-10's.
 
-use std::path::PathBuf;
-
 use ainkrad_core::audit::AuditActor;
 use sqlx::{Error, SqliteConnection};
 
@@ -20,8 +18,8 @@ pub struct ProjectForge {
     pub api_url: String,
     /// The repository's path on the forge: `owner/name`, or a GitLab project path.
     pub repo: String,
-    /// The server-side file holding the API token.
-    pub token_file: PathBuf,
+    /// The broker secret holding the API token (`citadel.<name>`); never the token.
+    pub secret: String,
 }
 
 /// The public API of a forge `kind` (`github` or `gitlab`); `None` for another kind.
@@ -34,8 +32,7 @@ pub fn default_api(kind: &str) -> Option<&'static str> {
 }
 
 /// Why `f` cannot be stored: an unknown kind, an API URL that is not http(s), a repository path
-/// with anything but `[A-Za-z0-9._/-]` (or an empty or absolute one), or a token file path that
-/// is not absolute.
+/// with anything but `[A-Za-z0-9._/-]` (or an empty or absolute one), or a secret that is not a `citadel.` broker name.
 pub(crate) fn forge_problem(f: &ProjectForge) -> Option<String> {
     if default_api(&f.kind).is_none() {
         return Some(format!("unknown forge kind {:?}", f.kind));
@@ -55,10 +52,16 @@ pub(crate) fn forge_problem(f: &ProjectForge) -> Option<String> {
     if !repo_ok {
         return Some(format!("bad repository path {:?}", f.repo));
     }
-    if !f.token_file.is_absolute() {
-        return Some("the token file path must be absolute".to_owned());
+    if !secret_name_ok(&f.secret) {
+        return Some("the secret must be a broker secret named citadel.<name>".to_owned());
     }
     None
+}
+
+/// Whether `name` may be a forge or tracker credential: a broker secret in the module's own
+/// namespace (`secrets::open_for_module` opens nothing else).
+pub(crate) fn secret_name_ok(name: &str) -> bool {
+    ainkrad_core_server::store::secrets::valid_name(name) && name.starts_with("citadel.")
 }
 
 /// Appends `action` about `entity` (`(kind, id)`) of `company` by `actor`.

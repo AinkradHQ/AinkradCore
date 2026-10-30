@@ -11,7 +11,7 @@ use citadel_module::Citadel;
 use serde_json::Value;
 
 fn merged() -> String {
-    json_for(&[Arc::new(Citadel) as Arc<dyn Module>])
+    json_for(&[Arc::new(Citadel::default()) as Arc<dyn Module>])
 }
 
 #[test]

@@ -77,3 +77,21 @@ pub async fn audited(pool: &SqlitePool, action: &str) -> Vec<serde_json::Value> 
         .map(|d| serde_json::from_str(d).unwrap())
         .collect()
 }
+
+/// A second issue in `project`, for tests that need two PRs on one repo.
+pub async fn second_issue(pool: &SqlitePool, project: ProjectId) -> IssueId {
+    let issue = NewIssue {
+        project_id: project,
+        epic_id: None,
+        parent_id: None,
+        kind: IssueKind::Task,
+        title: "Ship more".to_owned(),
+        body: String::new(),
+        state: IssueState::Todo,
+        owner: None,
+        next_actor: Some(NextActor::Human(UserId(1))),
+        points: None,
+        sprint_id: None,
+    };
+    create_issue(pool, &issue).await.unwrap().id
+}

@@ -81,7 +81,7 @@ async fn a_budget_raise_needs_a_step_up_and_decide_refuses_one() {
     );
 }
 
-/// F3 + F7: the routes that set runner commands, a token file and a forge URL, and the one that
+/// F3 + F7: the routes that set runner commands, a forge secret and a forge URL, and the one that
 /// applies a profile proposal, are step-up routes.
 #[tokio::test]
 async fn repo_writes_and_profile_proposals_need_a_step_up() {
@@ -109,37 +109,37 @@ async fn repo_writes_and_profile_proposals_need_a_step_up() {
 async fn a_repo_body_with_a_bad_command_path_or_url_is_refused() {
     let fx = fx().await;
     let base = |f: Value, c: Value| json!({"name": "app", "url": "git@example.test:a/app.git", "forge": f, "commands": c});
-    let forge = |token: &str, api: Option<&str>| json!({"kind": "github", "repo": "a/app", "token_file": token, "api_url": api});
-    let ok_forge = forge("/etc/forge/token", None);
+    let forge = |token: &str, api: Option<&str>| json!({"kind": "github", "repo": "a/app", "secret_name": token, "api_url": api});
+    let ok_forge = forge("citadel.forge", None);
     let none = json!({});
     let bad = [
         base(ok_forge.clone(), json!({"build": "make\nrm -rf /"})),
         base(ok_forge.clone(), json!({"test": "a\u{0}b"})),
         base(ok_forge.clone(), json!({"lint": "x".repeat(3000)})),
         base(forge("relative/token", None), none.clone()),
-        base(forge("/etc/../root/.master-key", None), none.clone()),
+        base(forge("git.deploy", None), none.clone()),
         base(
-            forge("/etc/forge/token", Some("http://127.0.0.1:9/")),
+            forge("citadel.forge", Some("http://127.0.0.1:9/")),
             none.clone(),
         ),
         base(
-            forge("/etc/forge/token", Some("https://localhost/")),
+            forge("citadel.forge", Some("https://localhost/")),
             none.clone(),
         ),
         base(
-            forge("/etc/forge/token", Some("http://169.254.169.254/latest")),
+            forge("citadel.forge", Some("http://169.254.169.254/latest")),
             none.clone(),
         ),
         base(
-            forge("/etc/forge/token", Some("https://u:p@host.example/")),
+            forge("citadel.forge", Some("https://u:p@host.example/")),
             none.clone(),
         ),
         base(
-            forge("/etc/forge/token", Some("ftp://host.example/")),
+            forge("citadel.forge", Some("ftp://host.example/")),
             none.clone(),
         ),
         base(
-            forge("/etc/forge/token", Some("https://host.example/?x=1")),
+            forge("citadel.forge", Some("https://host.example/?x=1")),
             none.clone(),
         ),
     ];
@@ -153,10 +153,7 @@ async fn a_repo_body_with_a_bad_command_path_or_url_is_refused() {
         }
     }
     // A sane body gets past validation (404: no such project).
-    let good = base(
-        forge("/etc/forge/token", Some("https://git.example.test/api")),
-        json!({"build": "make"}),
-    );
+    let good = base(forge("citadel.forge", None), json!({"build": "make"}));
     let (s, _) = call(
         &fx,
         Some(&fx.dev),

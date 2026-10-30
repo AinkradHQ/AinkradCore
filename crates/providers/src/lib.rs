@@ -16,6 +16,7 @@ use std::time::Duration;
 
 pub mod github;
 pub mod gitlab;
+pub mod guard;
 pub mod linear;
 
 pub use reqwest::Client;
@@ -317,10 +318,7 @@ async fn send(req: reqwest::RequestBuilder, token: &Secret) -> Result<serde_json
         .await
         .map_err(|e| Error::Transport(scrub(e.without_url().to_string())))?;
     let status = res.status();
-    let text = res
-        .text()
-        .await
-        .map_err(|e| Error::Transport(scrub(e.without_url().to_string())))?;
+    let text = read_capped(res, &scrub).await?;
     let body: serde_json::Value = if text.trim().is_empty() {
         serde_json::Value::Null
     } else {
@@ -338,6 +336,34 @@ async fn send(req: reqwest::RequestBuilder, token: &Secret) -> Result<serde_json
         });
     }
     Ok(body)
+}
+
+/// The most of an answer read: a hostile or broken host cannot fill memory.
+pub const MAX_ANSWER_BYTES: usize = 4 * 1024 * 1024;
+
+async fn read_capped(
+    mut res: reqwest::Response,
+    scrub: &impl Fn(String) -> String,
+) -> Result<String> {
+    let too_big = || Error::Transport(format!("the answer is over {MAX_ANSWER_BYTES} bytes"));
+    if res
+        .content_length()
+        .is_some_and(|n| n > MAX_ANSWER_BYTES as u64)
+    {
+        return Err(too_big());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = res
+        .chunk()
+        .await
+        .map_err(|e| Error::Transport(scrub(e.without_url().to_string())))?
+    {
+        if body.len() + chunk.len() > MAX_ANSWER_BYTES {
+            return Err(too_big());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
 /// A field of an API answer, or `Error::Decode` naming it.

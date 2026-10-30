@@ -653,6 +653,7 @@ dependencies = [
  "ainkrad-core",
  "ainkrad-core-server",
  "ainkrad-proto",
+ "ainkrad-providers",
  "axum",
  "citadel-module",
  "serde",

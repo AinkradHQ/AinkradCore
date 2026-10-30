@@ -15,6 +15,7 @@ use axum::Router;
 pub mod admin;
 pub mod api;
 pub mod domain;
+pub mod forge;
 pub mod kinds;
 pub mod migrations;
 pub mod notifications;
@@ -24,9 +25,19 @@ pub mod store;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 
-/// The Citadel module: hand it to `module::mount` and `migrate::migrate_modules`.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Citadel;
+/// The Citadel module: hand it to `module::mount` and `migrate::migrate_modules`. `default()`
+/// declares no jobs; `with_forge` adds the forge and Linear pollers (S6), which need the store
+/// and the broker's key.
+#[derive(Default, Clone)]
+pub struct Citadel {
+    forge: Option<std::sync::Arc<forge::Runtime>>,
+}
+
+impl Citadel {
+    pub fn with_forge(forge: std::sync::Arc<forge::Runtime>) -> Self {
+        Self { forge: Some(forge) }
+    }
+}
 
 impl Module for Citadel {
     fn id(&self) -> &'static str {
@@ -72,5 +83,9 @@ impl Module for Citadel {
 
     fn destructive(&self) -> &'static [(&'static str, &'static str)] {
         api::DESTRUCTIVE.as_slice()
+    }
+
+    fn jobs(&self) -> Vec<ainkrad_core_server::jobs::Job> {
+        self.forge.as_ref().map_or_else(Vec::new, |f| f.jobs())
     }
 }

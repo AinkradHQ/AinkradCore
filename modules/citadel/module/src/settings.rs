@@ -194,7 +194,7 @@ pub const SETTINGS: &[ModuleSetting] = &[
 
 /// Citadel's settings handle.
 pub fn handle() -> ModuleSettings {
-    ModuleSettings::of(&Citadel as &dyn Module)
+    ModuleSettings::of(&Citadel::default() as &dyn Module)
 }
 
 /// `name`'s value: the stored one, else the default. `name` must be one of [`SETTINGS`]; an
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn the_declared_settings_are_legal_and_unique() {
-        let modules: [std::sync::Arc<dyn Module>; 1] = [std::sync::Arc::new(Citadel)];
+        let modules: [std::sync::Arc<dyn Module>; 1] = [std::sync::Arc::new(Citadel::default())];
         let _ = ainkrad_core_server::module::mount(&modules);
     }
 

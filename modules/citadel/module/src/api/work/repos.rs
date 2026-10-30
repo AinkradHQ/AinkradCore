@@ -5,8 +5,6 @@
 //! Not here: `probeRepo` (`POST /projects/{id}/repos/probe`), which clones and asks the forge:
 //! it needs the git workspace and the forge clients (E2-10, S6).
 
-use std::path::PathBuf;
-
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY};
 use axum::Json;
@@ -27,8 +25,16 @@ pub struct RepoForge {
     pub api_url: Option<String>,
     /// `owner/name`, or a GitLab project path.
     pub repo: String,
-    /// The server-side file holding the API token (never the token).
+    /// Retired: credentials live in the secrets broker. Always empty in answers; a non-empty
+    /// value in a request is refused.
+    #[serde(default)]
+    #[schema(required = false)]
     pub token_file: String,
+    /// The broker secret holding the API token, `citadel.<name>` (never the token). Required
+    /// when setting.
+    #[serde(default)]
+    #[schema(required = false)]
+    pub secret_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
@@ -75,7 +81,8 @@ impl From<StoredRepo> for Repo {
                 kind: f.kind,
                 api_url: Some(f.api_url),
                 repo: f.repo,
-                token_file: f.token_file.to_string_lossy().into_owned(),
+                token_file: String::new(),
+                secret_name: Some(f.secret),
             }),
             commands: RepoCommands {
                 build: r.commands.build,
@@ -103,12 +110,13 @@ pub struct RepoBody {
     pub stack: Option<String>,
 }
 
-/// What a repo body may carry. A repo's commands run on a runner and its forge settings name a
-/// server file and a URL the forge client will call with that file's content, so both are
-/// checked here (and the routes are step-up routes): no control characters in a command, no
-/// `..` or NUL in the token path, and an API URL that is http(s), has a host, no credentials,
-/// query or fragment, and is not a loopback, link-local or unspecified address.
-pub(super) fn check_body(b: &RepoBody) -> Result<(), ApiError> {
+/// What a repo body may carry. A repo's commands run on a runner, and its forge settings name a
+/// broker secret and an API URL the forge client will call with that secret's value, so both are
+/// checked here (and the routes are step-up routes): no control characters in a command; a
+/// secret in the module's own namespace and no token file; and an API URL that passes the call
+/// policy (https, a host name on the allow-list: the public hosts and `citadel_forge_hosts`).
+/// The poller checks the URL again on every pass.
+pub(super) async fn check_body(app: &App, b: &RepoBody) -> Result<(), ApiError> {
     let bad = |why: String| Err(ApiError::bad_request(why));
     let c = &b.commands;
     for (name, cmd) in [
@@ -124,34 +132,31 @@ pub(super) fn check_body(b: &RepoBody) -> Result<(), ApiError> {
         }
     }
     if let Some(f) = &b.forge {
-        let path = std::path::Path::new(&f.token_file);
-        let dots = path
-            .components()
-            .any(|p| matches!(p, std::path::Component::ParentDir));
-        if !path.is_absolute() || dots || f.token_file.contains('\0') {
-            return bad("the token file must be an absolute path without `..`".to_owned());
+        if !f.token_file.is_empty() {
+            return bad(
+                "token files are retired: store the token in the secrets broker and \
+                        name it in secret_name"
+                    .to_owned(),
+            );
         }
-        if let Some(url) = &f.api_url {
-            let rest = url
-                .strip_prefix("https://")
-                .or_else(|| url.strip_prefix("http://"));
-            let host = rest.map(|r| {
-                r.split(['/', ':'])
-                    .next()
-                    .unwrap_or_default()
-                    .to_ascii_lowercase()
-            });
-            let ok = rest.is_some_and(|r| !r.contains(['@', '?', '#', ' ', '\\']) && !r.is_empty())
-                && host.as_deref().is_some_and(|h| {
-                    !h.is_empty()
-                        && h != "localhost"
-                        && h != "0.0.0.0"
-                        && !h.starts_with("127.")
-                        && !h.starts_with("169.254.")
-                        && !h.starts_with('[')
-                });
-            if !ok {
-                return bad(format!("the API URL {url:?} is not an allowed forge URL"));
+        match &f.secret_name {
+            Some(n) if work::secret_name_ok(n) => {}
+            _ => return bad("secret_name must be a broker secret named citadel.<name>".to_owned()),
+        }
+        let url = match &f.api_url {
+            Some(url) => url.clone(),
+            None => work::default_api(&f.kind).unwrap_or_default().to_owned(),
+        };
+        if !url.is_empty() {
+            let hosts: Vec<String> = sqlx::query_scalar("SELECT host FROM citadel_forge_hosts")
+                .fetch_all(&app.pool)
+                .await
+                .map_err(|e| ApiError::from(e))?;
+            let policy = ainkrad_providers::guard::Policy::public().with_hosts(hosts);
+            if let Err(why) = policy.check_url(&url) {
+                return bad(format!(
+                    "the API URL {url:?} is not an allowed forge URL: {why}"
+                ));
             }
         }
     }
@@ -159,7 +164,6 @@ pub(super) fn check_body(b: &RepoBody) -> Result<(), ApiError> {
 }
 
 fn stored(project: ProjectId, id: i64, b: RepoBody) -> Result<StoredRepo, ApiError> {
-    check_body(&b)?;
     let forge = match b.forge {
         Some(f) => {
             let default = work::default_api(&f.kind)
@@ -169,7 +173,7 @@ fn stored(project: ProjectId, id: i64, b: RepoBody) -> Result<StoredRepo, ApiErr
                 kind: f.kind,
                 api_url: f.api_url.unwrap_or_else(|| default.to_owned()),
                 repo: f.repo,
-                token_file: PathBuf::from(f.token_file),
+                secret: f.secret_name.unwrap_or_default(),
             })
         }
         None => None,
@@ -252,6 +256,7 @@ pub async fn add(
     Path(id): Path<i64>,
     Json(b): Json<RepoBody>,
 ) -> ApiResult<Repo> {
+    check_body(&app, &b).await?;
     let stack = b.stack.clone();
     let r = stored(ProjectId(id), 0, b)?;
     let added = work::add_repo(&app.pool, &r, BY)
@@ -275,7 +280,7 @@ pub async fn update(
     Path(id): Path<i64>,
     Json(b): Json<RepoBody>,
 ) -> ApiResult<Repo> {
-    check_body(&b)?;
+    check_body(&app, &b).await?;
     let current = repo(&app, id).await?;
     let stack = b.stack.clone();
     let r = stored(current.project_id, id, b)?;
