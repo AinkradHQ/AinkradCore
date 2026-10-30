@@ -29,6 +29,7 @@ const USAGE: &str = "usage:
                  [--acme-directory <url>] [--acme-http01]]
                  [--trusted-proxy <addr|cidr>[,…]]
                  [--passkeys] [--allow-origin <origin>[,…]] [--allow-plain-runner]
+                 [--max-host-load <per-core>]
                  [--iroh [--iroh-relay <https-url>[,…]] [--iroh-bind <addr:port>[,…]]]
                  [--apns-key <file.p8> --apns-key-id <id> --apns-team-id <id>
                  --apns-topic <bundle-id>] [--log-format text|json]
@@ -63,6 +64,8 @@ nothing. --log-format json writes JSON lines; both formats are redacted (E1-13.4
 Runners connect over TLS, end to end to the Core (a TLS-terminating proxy in front breaks their
 channel-bound proof), or over the Unix socket as the Core's own user; --allow-plain-runner also
 lets them in over plain HTTP from loopback TCP (development and tests only).
+--max-host-load sets the one-minute load per CPU past which a runner's host is refused new
+commands as busy (default 4).
 --iroh (E2-19; off unless given) also serves the same API over iroh, for a Core behind NAT: QUIC with
 hole punching, through the relays named by --iroh-relay (your own `iroh-relay`; none means direct
 connections only, and no third-party relay is ever used), on the UDP addresses of --iroh-bind. iroh
@@ -268,6 +271,8 @@ struct Serve {
     origins: Vec<String>,
     /// `--allow-plain-runner`: runners over plain HTTP from loopback TCP (RH2).
     plain_runner: bool,
+    /// `--max-host-load`: load per CPU past which a runner is busy (E2-15.2).
+    max_host_load: Option<f64>,
     /// `--iroh`: the opt-in iroh listener (E2-19). Off by default.
     iroh: bool,
     iroh_relays: Vec<String>,
@@ -289,6 +294,7 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
         passkeys: false,
         origins: Vec::new(),
         plain_runner: false,
+        max_host_load: None,
         iroh: false,
         iroh_relays: Vec::new(),
         iroh_bind: Vec::new(),
@@ -314,6 +320,10 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
         }
         let value = (*it.next()?).to_owned();
         match *flag {
+            "--max-host-load" => match value.parse::<f64>() {
+                Ok(v) if v.is_finite() && v > 0.0 => s.max_host_load = Some(v),
+                _ => return None,
+            },
             "--bind" | "--listen" if s.listen.is_some() => {
                 eprintln!("ainkrad-core-server: one of --bind and --listen");
                 return None;
@@ -600,10 +610,14 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
     app.limits = limits;
     if flags.plain_runner {
         tracing::warn!("runners may connect over plain HTTP from loopback (--allow-plain-runner)");
+    }
+    if flags.plain_runner || flags.max_host_load.is_some() {
+        let default = ainkrad_core_server::hub::HubConfig::default();
         app.hub = Arc::new(ainkrad_core_server::hub::Hub::new(
             ainkrad_core_server::hub::HubConfig {
-                allow_plain_loopback: true,
-                ..Default::default()
+                allow_plain_loopback: flags.plain_runner,
+                max_host_load: flags.max_host_load.unwrap_or(default.max_host_load),
+                ..default
             },
         ));
     }

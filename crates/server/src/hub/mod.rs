@@ -77,6 +77,9 @@ pub struct HubConfig {
     /// that sits between a runner and the Core could pass both proofs through. A Unix-socket
     /// peer of the Core's own user is always allowed.
     pub allow_plain_loopback: bool,
+    /// One-minute load per CPU past which a runner's host is refused new commands (`busy`,
+    /// E2-15.2): saturated, so the work it already has is not starved.
+    pub max_host_load: f64,
 }
 
 impl Default for HubConfig {
@@ -88,18 +91,13 @@ impl Default for HubConfig {
             max_inflight: 64,
             resume: Duration::from_secs(60),
             allow_plain_loopback: false,
+            max_host_load: 4.0,
         }
     }
 }
 
 /// Frames queued per connection before `dispatch` answers `busy`.
 const OUT_QUEUE: usize = 256;
-
-/// Whether a host's one-minute load is past `cores * 4.0` (E2-15.2): saturated, so the hub
-/// refuses new commands (`busy`) rather than starve the work the runner already has.
-fn overloaded(load: HostLoad) -> bool {
-    load.avg1 > f64::from(load.cores) * 4.0
-}
 
 /// The live connection of a runner.
 struct Conn {
@@ -377,7 +375,9 @@ impl Hub {
                 "the runner did not advertise that command",
             ));
         }
-        if r.load.is_some_and(overloaded) {
+        if r.load
+            .is_some_and(|l| l.avg1 > f64::from(l.cores) * self.config.max_host_load)
+        {
             return Err(err(ErrorCode::Busy, "the runner's host is under load"));
         }
         let (full, own) = r.full(command.op(), self.config.max_inflight);

@@ -173,6 +173,8 @@ impl Core {
             .arg("serve")
             .arg(&self.db)
             .args(&self.listen)
+            // Tests run many processes at once: the host's real load must not make a runner busy.
+            .args(["--max-host-load", "100000"])
             .stdout(Stdio::null())
             .stderr(log)
             .spawn()
