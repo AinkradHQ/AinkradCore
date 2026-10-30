@@ -1,0 +1,10 @@
+5 20
+size 5x20 alt=false cursor=0,5 hidden=false modes=\e>\e[?1l\e[?2004l
+pen \e[m
+-- scrollback 0
+-- screen
+|homeU
+|\e[2C\e[31;1mrestored-red
+|
+|
+|elsewhere

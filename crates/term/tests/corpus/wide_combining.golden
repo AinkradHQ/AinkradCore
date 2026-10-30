@@ -1,0 +1,11 @@
+5 10
+size 5x10 alt=false cursor=4,4 hidden=false modes=\e>\e[?1l\e[?2004l
+pen \e[m
+-- scrollback 1
+漢字かな\e[m
+-- screen
+|éäôñ
+|123456789
+|漢
+|😀x👍🏽y
+|\e[2C宽
