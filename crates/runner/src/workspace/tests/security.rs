@@ -270,7 +270,10 @@ async fn broker_credentials_are_host_scoped_and_clone_uses_only_helper_path() {
         .unwrap()
         .unwrap();
     let query = |host: &str| {
-        let mut child = Std::new(&helper)
+        // Reading the script through its interpreter avoids Linux ETXTBSY when an
+        // unrelated concurrent fork briefly inherited its just-closed writer fd.
+        let mut child = Std::new("/bin/sh")
+            .arg(&helper)
             .process_group(0)
             .arg("get")
             .stdin(Stdio::piped())

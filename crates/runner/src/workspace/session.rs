@@ -117,8 +117,14 @@ impl Workspaces {
                 continue;
             }
             let saved = self.root.join("session-wip").join(&session);
-            if private_dir(saved.parent().expect("parent")).is_ok() && !saved.exists() {
-                let _ = std::fs::rename(entry.path(), saved);
+            // Per generation, so an earlier cleanup's saved dir never blocks the reap.
+            if private_dir(&saved).is_ok()
+                && let Ok(gens) = std::fs::read_dir(entry.path())
+            {
+                for g in gens.flatten() {
+                    let _ = std::fs::rename(g.path(), saved.join(g.file_name()));
+                }
+                let _ = std::fs::remove_dir(entry.path());
             }
         }
     }

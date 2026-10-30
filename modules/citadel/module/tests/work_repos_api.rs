@@ -25,7 +25,7 @@ async fn repos_round_trip_through_the_api() {
     let core = ok_post(
         &fx,
         &format!("/projects/{p}/repos"),
-        json!({"name": "core", "url": "/srv/core.git",
+        json!({"name": "core", "url": "https://example.test/core.git",
                "forge": {"kind": "github", "repo": "acme/core", "token_file": "/etc/t"},
                "commands": {"test": "cargo test"}}),
     )
@@ -36,7 +36,7 @@ async fn repos_round_trip_through_the_api() {
     let app = ok_post(
         &fx,
         &format!("/projects/{p}/repos"),
-        json!({"name": "app", "url": "/srv/app.git", "default_branch": "development"}),
+        json!({"name": "app", "url": "https://example.test/app.git", "default_branch": "development"}),
     )
     .await;
     assert_eq!(
@@ -44,9 +44,10 @@ async fn repos_round_trip_through_the_api() {
         (json!(false), json!(1))
     );
     for bad in [
-        json!({"name": "core", "url": "/srv/x.git"}),
+        json!({"name": "local", "url": "/srv/x.git"}),
+        json!({"name": "core", "url": "https://example.test/x.git"}),
         json!({"name": "x", "url": "https://u:p@h/x.git"}),
-        json!({"name": "x", "url": "/srv/x.git", "forge": {"kind": "svn", "repo": "a", "token_file": "/t"}}),
+        json!({"name": "x", "url": "https://example.test/x.git", "forge": {"kind": "svn", "repo": "a", "token_file": "/t"}}),
     ] {
         let (status, body) = post(&fx, &format!("/projects/{p}/repos"), bad.clone()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {body}");
@@ -58,13 +59,13 @@ async fn repos_round_trip_through_the_api() {
         Method::PUT,
         uri.clone(),
         Some(json!({"name": "app",
-        "url": "/srv/app2.git", "commands": {"lint": "make lint"}})),
+        "url": "https://example.test/app2.git", "commands": {"lint": "make lint"}})),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{set}");
     assert_eq!(
         (set["url"].clone(), set["default_branch"].clone()),
-        (json!("/srv/app2.git"), json!("main"))
+        (json!("https://example.test/app2.git"), json!("main"))
     );
 
     let order = format!("/projects/{p}/repo-order");
@@ -114,7 +115,7 @@ async fn an_issue_without_an_explicit_repo_is_flagged_only_in_a_multi_repo_proje
         ok_post(
             &fx,
             &repos,
-            json!({"name": name, "url": format!("/srv/{name}.git")}),
+            json!({"name": name, "url": format!("https://example.test/{name}.git")}),
         )
     };
     add("core").await;

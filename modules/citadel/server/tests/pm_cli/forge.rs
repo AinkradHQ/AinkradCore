@@ -15,7 +15,7 @@ fn sets_and_shows_a_projects_forge() {
             "FRG",
             "Forge",
             "--repo",
-            "/srv/git/f.git",
+            "https://example.test/git/f.git",
         ],
     );
     let set = [
