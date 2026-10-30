@@ -6,9 +6,12 @@
 //! Core to give the module an artifacts directory (the monolith's `serve --artifacts`).
 
 use ainkrad_core_server::api::App;
-use ainkrad_core_server::api::v1::{ApiResult, Paging};
+use ainkrad_core_server::api::v1::{ApiError, ApiResult, Paging};
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -16,7 +19,7 @@ use crate::api::error::found;
 use crate::api::model::governance::Artifact;
 use crate::api::scope::Acting;
 use crate::api::types::{ArtifactKind, Page};
-use crate::domain::gov::ArtifactId;
+use crate::domain::gov::{ArtifactId, ArtifactKind as DomainArtifactKind};
 use crate::domain::org::{AgentId, CompanyId};
 use crate::domain::work::{IssueId, RequirementId};
 use crate::store::artifacts as store;
@@ -24,6 +27,41 @@ use crate::store::org;
 
 /// Default and most artifacts on a page.
 const PAGE: u32 = 100;
+const MAX_NAME: usize = 200;
+
+async fn artifact_root(app: &App) -> Result<std::path::PathBuf, ApiError> {
+    store::artifact_root(&app.pool).await.map_err(Into::into)
+}
+
+fn served(bytes: Vec<u8>, mime: &str, name: &str) -> Response {
+    let mut response = bytes.into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(mime)
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || ".-_ ".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!("attachment; filename=\"{safe}\""))
+            .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+    );
+    response
+}
 
 /// Narrows the list.
 #[derive(Debug, Default, Deserialize, IntoParams)]
@@ -96,4 +134,79 @@ pub async fn usage(
         quota_bytes,
         max_file_bytes,
     }))
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct UploadQuery {
+    pub name: String,
+    pub kind: Option<String>,
+}
+
+#[utoipa::path(post, path = "/companies/{id}/artifacts", operation_id = "uploadArtifact", tag = "artifacts",
+    params(("id" = i64, Path, description = "Company id"), UploadQuery),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
+    responses((status = 200, body = Artifact)))]
+pub async fn upload(
+    State(app): State<App>,
+    _: Acting,
+    Path(company): Path<i64>,
+    Query(q): Query<UploadQuery>,
+    body: Bytes,
+) -> ApiResult<Artifact> {
+    if q.name.len() > MAX_NAME || q.name.contains(['/', '\\']) || q.name.starts_with('.') {
+        return Err(ApiError::bad_request(
+            "artifact name must be a plain file name",
+        ));
+    }
+    let new = store::NewArtifact {
+        company: CompanyId(company),
+        issue: None,
+        requirement: None,
+        run: None,
+        agent: None,
+        name: q.name,
+        kind: q
+            .kind
+            .as_deref()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DomainArtifactKind::File),
+        user: None,
+    };
+    let root = artifact_root(&app).await?;
+    let artifact = store::publish_artifact(
+        &app.pool,
+        &root,
+        &new,
+        &body,
+        &ainkrad_proto::redact::Redactor::new(),
+    )
+    .await
+    .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    Ok(Json(artifact.into()))
+}
+
+#[utoipa::path(get, path = "/artifacts/{id}/content", operation_id = "downloadArtifact", tag = "artifacts",
+    params(("id" = i64, Path, description = "Artifact id")), responses((status = 200, body = Vec<u8>)))]
+pub async fn download(
+    State(app): State<App>,
+    _: Acting,
+    Path(id): Path<i64>,
+) -> Result<Response, ApiError> {
+    let artifact = found(
+        store::get_artifact(&app.pool, ArtifactId(id)).await?,
+        "artifact",
+    )?;
+    if artifact.sha256.len() != 64 || !artifact.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "artifact_path",
+            "invalid artifact path",
+        ));
+    }
+    let path = store::blob_path(&artifact_root(&app).await?, &artifact.sha256);
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|_| ApiError::new(StatusCode::GONE, "gone", "artifact content is unavailable"))?;
+    Ok(served(bytes, &artifact.mime, &artifact.name))
 }

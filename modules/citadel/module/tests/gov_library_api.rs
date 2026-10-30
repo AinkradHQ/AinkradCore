@@ -261,9 +261,3 @@ async fn artifacts_are_listed_and_kept_to_their_company() {
     assert_eq!(usage["used_bytes"], (html.len() + 9 + 6) as i64);
     assert_eq!(usage["quota_bytes"], 2_000_000_000_i64);
 }
-
-#[tokio::test]
-#[ignore = "the Core gives the module no artifacts dir: downloadArtifact and previewArtifact are not ported"]
-async fn artifacts_are_served_safely() {
-    todo!("monolith api/v1/tests/artifacts.rs: content as an attachment, nosniff, CSP, previews")
-}

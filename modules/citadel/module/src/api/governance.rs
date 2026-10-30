@@ -31,6 +31,8 @@ pub fn routes() -> Router<App> {
         .route("/approvals/{id}/raise", post(approvals::raise))
         .route("/prices", get(money::list_prices).post(money::set_price))
         .route("/prices/history", get(money::price_history))
+        .route("/companies/{id}/costs", get(money::company_costs))
+        .route("/companies/{id}/ledger", get(money::company_ledger))
         .route(
             "/companies/{id}/budgets",
             put(money::set_budget).post(money::create_budget),
@@ -48,6 +50,8 @@ pub fn routes() -> Router<App> {
         .route("/artifacts", get(artifacts::list))
         .route("/artifacts/{id}", get(artifacts::get))
         .route("/companies/{id}/artifact-usage", get(artifacts::usage))
+        .route("/companies/{id}/artifacts", post(artifacts::upload))
+        .route("/artifacts/{id}/content", get(artifacts::download))
 }
 
 /// `(method, template, scope)` of the slice's routes below `admin` (`api::scopes`): every GET a
@@ -58,11 +62,14 @@ pub const SCOPES: &[(&str, &str, &str)] = &[
     ("POST", "/approvals/{id}/raise", "approve"),
     ("GET", "/prices", "read"),
     ("GET", "/prices/history", "read"),
+    ("GET", "/companies/{id}/costs", "read"),
+    ("GET", "/companies/{id}/ledger", "read"),
     ("GET", "/companies/{id}/skills", "read"),
     ("GET", "/projects/{id}/knowledge", "read"),
     ("GET", "/artifacts", "read"),
     ("GET", "/artifacts/{id}", "read"),
     ("GET", "/companies/{id}/artifact-usage", "read"),
+    ("GET", "/artifacts/{id}/content", "read"),
 ];
 
 /// GET templates that deliberately stay `admin` (`api::scopes::ADMIN_READS`): none.
@@ -77,6 +84,7 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/approvals/{id}/raise"),
     // Accepting a knowledge entry may apply a profile proposal.
     ("POST", "/knowledge/{id}/accept"),
+    ("POST", "/companies/{id}/artifacts"),
 ];
 
 /// `(path segment, SQL)` rows for `scope::OWNERS`: the company that owns what `segment/{id}` names
@@ -94,6 +102,8 @@ pub const OWNERS: &[(&str, &str)] = &[("budgets", crate::store::gov::BUDGET_COMP
         money::list_prices,
         money::set_price,
         money::price_history,
+        money::company_costs,
+        money::company_ledger,
         money::set_budget,
         money::create_budget,
         money::delete_budget,
@@ -107,6 +117,8 @@ pub const OWNERS: &[(&str, &str)] = &[("budgets", crate::store::gov::BUDGET_COMP
         artifacts::list,
         artifacts::get,
         artifacts::usage,
+        artifacts::upload,
+        artifacts::download,
     ),
     components(schemas(
         model::Approval,
@@ -126,6 +138,8 @@ pub const OWNERS: &[(&str, &str)] = &[("budgets", crate::store::gov::BUDGET_COMP
         library::Retirement,
         library::Supersession,
         artifacts::ArtifactUsage,
+        money::CostReport,
+        money::LedgerEntry,
     ))
 )]
 pub struct Doc;

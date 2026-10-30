@@ -30,6 +30,7 @@ use crate::store::org::avatars;
 use crate::store::org::chart::OrgError;
 
 pub mod agents;
+pub mod images;
 pub mod presets;
 pub mod routing;
 pub mod staffing;
@@ -130,7 +131,12 @@ pub fn routes() -> Router<App> {
         )
         .route("/avatars/palettes", get(agents::palettes))
         .route("/agents/{id}/appearance", put(agents::set_appearance))
-        .route("/agents/{id}/avatar", delete(agents::reset_avatar))
+        .route(
+            "/agents/{id}/avatar",
+            delete(agents::reset_avatar)
+                .put(images::upload_avatar)
+                .get(images::download_avatar),
+        )
         .route(
             "/agents/{id}/fallbacks",
             get(agents::list_fallbacks).put(agents::set_fallbacks),
@@ -163,7 +169,12 @@ pub fn routes() -> Router<App> {
         .route("/companies/{id}/org", get(structure::org_chart))
         .route("/departments/{id}", patch(structure::patch_department))
         .route("/teams/{id}", patch(structure::patch_team))
-        .route("/companies/{id}/logo", delete(structure::reset_logo))
+        .route(
+            "/companies/{id}/logo",
+            delete(structure::reset_logo)
+                .put(images::upload_logo)
+                .get(images::download_logo),
+        )
         .route(
             "/teams/{id}/members/{agent_id}",
             put(structure::seat).delete(structure::unseat),
@@ -174,6 +185,8 @@ pub fn routes() -> Router<App> {
 pub const SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/companies/{id}/org", "read"),
     ("GET", "/avatars/palettes", "read"),
+    ("GET", "/agents/{id}/avatar", "read"),
+    ("GET", "/companies/{id}/logo", "read"),
     ("GET", "/agents/{id}/fallbacks", "read"),
     ("GET", "/agents/{id}/tiers", "read"),
     ("GET", "/projects/{id}/tier-rules", "read"),
@@ -186,8 +199,12 @@ pub const ADMIN_READS: &[&str] = &[];
 
 /// `(method, template)` of the slice's routes that need a live step-up (`Module::destructive`):
 /// deleting a chain preset or a role.
-pub const DESTRUCTIVE: &[(&str, &str)] =
-    &[("DELETE", "/chain-presets/{id}"), ("DELETE", "/roles/{id}")];
+pub const DESTRUCTIVE: &[(&str, &str)] = &[
+    ("DELETE", "/chain-presets/{id}"),
+    ("DELETE", "/roles/{id}"),
+    ("PUT", "/agents/{id}/avatar"),
+    ("PUT", "/companies/{id}/logo"),
+];
 
 /// `(path segment, SQL)` rows for `scope::OWNERS`: the company that owns what `segment/{id}` names.
 /// `/teams/{id}/members/{agent_id}` names an agent under `members`.
@@ -205,6 +222,10 @@ pub const OWNERS: &[(&str, &str)] = &[(
         agents::palettes,
         agents::set_appearance,
         agents::reset_avatar,
+        images::upload_avatar,
+        images::download_avatar,
+        images::upload_logo,
+        images::download_logo,
         agents::list_fallbacks,
         agents::set_fallbacks,
         staffing::propose_agent,
