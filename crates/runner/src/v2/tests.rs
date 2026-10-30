@@ -697,7 +697,7 @@ mod pty {
         while snapshot.is_none() {
             // The window is spent and the flood keeps coming: no snapshot goes without credit
             // (it costs credit too); one more grant brings it.
-            if bytes == STREAM_WINDOW && !granted {
+            if bytes >= STREAM_WINDOW && !granted {
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 core.send(1, Body::Credit(Credit { bytes: 4096 })).await;
                 granted = true;
