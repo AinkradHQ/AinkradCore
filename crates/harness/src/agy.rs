@@ -279,7 +279,7 @@ impl Agy {
         std::fs::create_dir_all(&settings)?;
         std::fs::write(settings.join("settings.json"), SETTINGS)?;
         Ok(Self {
-            proc: Proc::spawn(command(spec, resume))?,
+            proc: Proc::spawn_with_pgid_file(command(spec, resume), proc::sandbox_pgid_file(spec))?,
             decoder: Decoder {
                 resumed: resume.is_some(),
                 ..Decoder::default()

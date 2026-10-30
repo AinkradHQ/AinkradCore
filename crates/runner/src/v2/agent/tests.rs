@@ -139,7 +139,17 @@ impl Executor for Script {
 }
 
 fn dirs(name: &str) -> (TestDir, AgentConfig) {
-    let root = std::env::temp_dir().join(format!("agent-{name}-{}", std::process::id()));
+    let base = if cfg!(target_os = "linux") {
+        std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir())
+            .unwrap_or_else(|| PathBuf::from("/dev/shm"))
+    } else {
+        std::env::var_os("AINKRAD_TEST_RAMDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+    };
+    let root = base.join(format!("agent-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let config = AgentConfig {
         stop_grace: Duration::from_millis(300),
@@ -563,6 +573,10 @@ fn mode(p: &Path) -> u32 {
 /// prints is masked in the transcript (memory and disk) and in its failure reason; the files
 /// are private and gone at the end.
 #[tokio::test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "OWNER: requires AINKRAD_TEST_RAMDIR on a verified RAM disk"
+)]
 async fn a_secret_reaches_only_its_session_and_never_its_transcript() {
     let (root, config) = dirs("secrets");
     let gate = root.join("go");
@@ -683,6 +697,10 @@ async fn a_secret_reaches_only_its_session_and_never_its_transcript() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "OWNER: requires AINKRAD_TEST_RAMDIR on a verified RAM disk"
+)]
 async fn a_kill_removes_the_secrets_and_a_reserved_variable_is_refused() {
     let (root, config) = dirs("kill");
     let d = Arc::new(
@@ -745,13 +763,35 @@ async fn kill9_helper() {
     req.secrets = grants();
     d.start(req).unwrap();
     until("delivery", || root.join("secrets/as_a/s1").exists()).await;
+    // A real orphan group with an environment secret must die before startup sweeps files.
+    let mut orphan = std::process::Command::new("/bin/sh");
+    use std::os::unix::process::CommandExt;
+    let mut child = orphan
+        .args(["-c", "sleep 600 & wait"])
+        .env("ORPHAN_SECRET", ENV_VALUE)
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    std::fs::write(
+        root.join("agents/as_a/pgid"),
+        ainkrad_harness::process_identity(pid).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(root.join("orphan-pid"), pid.to_string()).unwrap();
     println!("AGENT-KILL9-READY");
     tokio::time::sleep(Duration::from_secs(60)).await;
+    child.kill().unwrap();
+    child.wait().unwrap();
 }
 
 /// A runner killed with SIGKILL removes nothing; the next one to start removes it all, and
 /// finds the session interrupted.
 #[tokio::test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "OWNER: requires AINKRAD_TEST_RAMDIR on a verified RAM disk"
+)]
 async fn after_a_kill_9_the_next_runner_removes_the_secrets() {
     let (root, config) = dirs("kill9");
     let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
@@ -794,5 +834,47 @@ async fn after_a_kill_9_the_next_runner_removes_the_secrets() {
     );
     assert_eq!(std::fs::read_dir(&config.secrets_dir).unwrap().count(), 0);
     assert_eq!(next.states()["as_a"], AgentState::Interrupted);
+    let pid = std::fs::read_to_string(root.join("orphan-pid")).unwrap();
+    until("whole orphan group gone", || {
+        let ps = std::process::Command::new("ps")
+            .args(["-A", "-o", "pgid=,stat="])
+            .output()
+            .unwrap();
+        !String::from_utf8_lossy(&ps.stdout).lines().any(|line| {
+            let mut cols = line.split_whitespace();
+            cols.next() == Some(pid.trim()) && !cols.next().unwrap_or("").starts_with('Z')
+        })
+    })
+    .await;
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn a_stale_process_record_cannot_kill_an_unrelated_group() {
+    use std::os::unix::process::CommandExt;
+    let (root, config) = dirs("stale-pid");
+    let mut unrelated = std::process::Command::new("sleep")
+        .arg("60")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let pid = unrelated.id();
+    let dir = config.dir.join("as_stale");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("pgid"), format!("{pid}:wrong-start-time")).unwrap();
+    let _driver = AgentDriver::new(config, script("true")).unwrap();
+    assert!(
+        unrelated.try_wait().unwrap().is_none(),
+        "a recycled pid was killed"
+    );
+    unrelated.kill().unwrap();
+    unrelated.wait().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn requested_isolation_never_falls_back_to_unconfined() {
+    let mut request = start("as_closed", "fake");
+    request.policy.sandboxed = true;
+    assert!(Unconfined.prepare(&request, &mut vec![]).is_err());
 }

@@ -20,6 +20,15 @@ pub(super) struct Credential {
 impl HarnessExecutor {
     /// The harness config dir `job` works with: its account's, or this runner's own.
     pub(super) fn config_dir(&self, job: &Job) -> Result<PathBuf, String> {
+        if self
+            .run_env
+            .lock()
+            .expect("run env lock")
+            .get(&job.run)
+            .is_some_and(|env| env.iter().any(|(n, _)| n == "AINKRAD_SANDBOX"))
+        {
+            return Ok(self.config_root.join("sessions").join(&job.context_ref));
+        }
         match &job.account {
             None => Ok(self.config_root.join(&job.harness)),
             Some(a) if relative_path_ok(&a.config_dir) => Ok(self.config_root.join(&a.config_dir)),

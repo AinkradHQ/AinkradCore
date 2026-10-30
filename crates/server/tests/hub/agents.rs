@@ -201,7 +201,7 @@ async fn finished(core: &Core, id: &str) -> (sessions::Session, Vec<Value>) {
     panic!("session {id} did not end: {:?}", state_of(core, id).await);
 }
 
-async fn throwaway_mode(core: &Core) {
+pub(super) async fn throwaway_mode(core: &Core) {
     let now = core.app.clock.now();
     ainkrad_core_server::store::settings::set(
         &core.app.pool,
@@ -215,7 +215,7 @@ async fn throwaway_mode(core: &Core) {
     .unwrap();
 }
 
-async fn secret(core: &Core, name: &str, runners: &[String], delivery: &str) {
+pub(super) async fn secret(core: &Core, name: &str, runners: &[String], delivery: &str) {
     let sealer = core.app.secrets.as_deref().unwrap();
     let new = NewValue {
         value: VALUE,

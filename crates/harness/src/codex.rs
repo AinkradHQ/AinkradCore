@@ -338,7 +338,7 @@ impl Codex {
     async fn spawn(spec: &Spec, resume: Option<&str>) -> io::Result<Self> {
         let params = thread_params(spec, resume)?;
         let mut codex = Self {
-            proc: Proc::spawn(command(spec))?,
+            proc: Proc::spawn_with_pgid_file(command(spec), proc::sandbox_pgid_file(spec))?,
             thread: String::new(),
             decoder: Decoder::default(),
             queued: VecDeque::new(),

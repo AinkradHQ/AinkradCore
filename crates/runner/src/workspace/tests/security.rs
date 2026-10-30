@@ -250,10 +250,21 @@ async fn git_timeout_output_and_disk_caps_terminate_processes_and_do_not_lock_re
 }
 
 #[tokio::test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "OWNER: requires AINKRAD_TEST_RAMDIR on a verified RAM disk"
+)]
 async fn broker_credentials_are_host_scoped_and_clone_uses_only_helper_path() {
     let dir = scratch("secure-broker");
+    // Secret files are refused outside a verified RAM filesystem, so they live in one.
+    let ram = if cfg!(target_os = "linux") {
+        std::path::PathBuf::from("/dev/shm")
+    } else {
+        std::env::var_os("AINKRAD_TEST_RAMDIR").map_or_else(std::env::temp_dir, Into::into)
+    };
+    let secrets = TestDir(ram.join(format!("broker-secrets-{}", std::process::id())));
     let mut delivered = deliver(
-        &dir.join("secrets"),
+        &secrets.0,
         "as_a",
         vec![(
             "TOKEN".into(),

@@ -12,6 +12,10 @@ use std::io;
 pub const INVENTORY: &[(&str, &str)] = &[
     ("setsid", "libc::setsid: no arguments, no memory"),
     ("killpg", "libc::kill with a negative pid: integers only"),
+    (
+        "kill_pid",
+        "libc::kill with one positive pid: integers only",
+    ),
     ("getuid", "libc::getuid: no arguments, cannot fail"),
     ("wait_exited", "libc::waitid into a zeroed siginfo_t we own"),
     ("reap", "libc::waitpid with a null status pointer"),
@@ -43,6 +47,29 @@ pub fn killpg(pgid: u32, signal: i32) -> io::Result<bool> {
     // SAFETY: kill(2) with integer arguments only; a negative pid addresses the group, and
     // `pgid > 1` was checked above so it can never mean "every process" (-1).
     let r = unsafe { libc::kill(-pgid, signal) };
+    if r == 0 {
+        return Ok(true);
+    }
+    let e = io::Error::last_os_error();
+    match e.raw_os_error() {
+        Some(libc::ESRCH) => Ok(false),
+        _ => Err(e),
+    }
+}
+
+/// Sends `signal` to the single process `pid`. `Ok(false)` when it is gone (ESRCH). A `pid`
+/// of 0 or 1 is refused: those mean "my own group" and "init".
+#[allow(unsafe_code)]
+pub fn kill_pid(pid: u32, signal: i32) -> io::Result<bool> {
+    let Ok(pid) = i32::try_from(pid) else {
+        return Err(io::Error::from(io::ErrorKind::InvalidInput));
+    };
+    if pid <= 1 {
+        return Err(io::Error::from(io::ErrorKind::InvalidInput));
+    }
+    // SAFETY: kill(2) with integer arguments only; `pid > 1` was checked, so it is never a
+    // group (<= 0) or "every process" (-1).
+    let r = unsafe { libc::kill(pid, signal) };
     if r == 0 {
         return Ok(true);
     }
