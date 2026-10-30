@@ -39,6 +39,7 @@ pub(super) fn quick() -> StreamConfig {
         heartbeat: Duration::from_secs(30),
         send_timeout: Duration::from_secs(5),
         page: 7,
+        backstop: crate::auth::BACKSTOP,
     }
 }
 
@@ -326,4 +327,39 @@ async fn a_client_past_retention_gets_410_or_4410_and_recovers_from_latest() {
         .await
         .unwrap();
     assert_eq!(next(&mut ws).await["payload"], json!({"n": 99}));
+}
+
+/// More idle sockets than the pool has connections: none is closed and the API still answers.
+/// Each socket's revocation and scope pollers read the database; a poller parked mid-query by
+/// the socket's own loop held its connection, and four of them starved the pool (E1-19).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn many_idle_sockets_never_starve_the_pool() {
+    let fx = fx().await;
+    // A backstop as fast as the read poll, so a socket often parks its watcher mid-check.
+    let stream = StreamConfig {
+        backstop: Duration::from_millis(20),
+        ..quick()
+    };
+    let app = serve(&fx, stream).await;
+    let mut sockets = vec![];
+    for n in 0..40 {
+        let dev = fx.enroll(&format!("s{n}"), &ALL).await;
+        sockets.push(connect(&app, &dev, None).await.expect("connected"));
+    }
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let answered = tokio::time::timeout(Duration::from_secs(3), fx.get("/api/v1/me")).await;
+    assert_eq!(
+        answered.expect("the API answers within 3 s").0,
+        StatusCode::OK
+    );
+    for ws in &mut sockets {
+        let got = tokio::time::timeout(Duration::from_millis(10), ws.next()).await;
+        assert!(
+            !matches!(
+                got,
+                Ok(Some(Ok(Message::Close(_)))) | Ok(None) | Ok(Some(Err(_)))
+            ),
+            "{got:?}"
+        );
+    }
 }

@@ -168,6 +168,8 @@ pub struct StreamConfig {
     pub send_timeout: Duration,
     /// Events read (and held) at a time.
     pub page: u32,
+    /// How often the socket re-checks its device in the database (`auth::BACKSTOP`).
+    pub backstop: Duration,
 }
 
 impl Default for StreamConfig {
@@ -179,6 +181,7 @@ impl Default for StreamConfig {
             heartbeat: Duration::from_secs(20),
             send_timeout: Duration::from_secs(10),
             page: 200,
+            backstop: crate::auth::BACKSTOP,
         }
     }
 }
@@ -232,14 +235,14 @@ pub async fn ws(
         app.pool.clone(),
         app.auth.subscribe(),
         me.device.id.clone(),
-        crate::auth::BACKSTOP,
+        app.stream.backstop,
     );
     let rescoped = crate::auth::until_rescoped(
         app.pool.clone(),
         app.auth.subscribe_rescoped(),
         me.device.id,
         me.device.scopes,
-        crate::auth::BACKSTOP,
+        app.stream.backstop,
     );
     let changed = async move {
         tokio::select! {

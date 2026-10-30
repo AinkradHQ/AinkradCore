@@ -292,7 +292,12 @@ pub async fn until_rescoped(
                 Err(broadcast::error::RecvError::Closed) => open = false,
             },
             _ = poll.tick() => {
-                if let Ok(Some(d)) = crate::store::gov::get_device(&pool, &device).await
+                // On its own task: the owner stops polling this future whenever
+                // another of its branches wins, and an inline check would then park holding its
+                // pool connection; a few such sockets starve the pool (E1-19).
+                let (p, d) = (pool.clone(), device.clone());
+                let check = tokio::spawn(async move { crate::store::gov::get_device(&p, &d).await });
+                if let Ok(Ok(Some(d))) = check.await
                     && d.scopes != scopes
                 {
                     return;
@@ -322,7 +327,12 @@ pub async fn until_revoked(
                 Err(broadcast::error::RecvError::Closed) => open = false,
             },
             _ = poll.tick() => {
-                if let Ok(false) = crate::store::gov::device_usable(&pool, &device).await {
+                // On its own task: the owner stops polling this future whenever
+                // another of its branches wins, and an inline check would then park holding its
+                // pool connection; a few such sockets starve the pool (E1-19).
+                let (p, d) = (pool.clone(), device.clone());
+                let check = tokio::spawn(async move { crate::store::gov::device_usable(&p, &d).await });
+                if let Ok(Ok(false)) = check.await {
                     return;
                 }
             }
@@ -413,5 +423,45 @@ mod tests {
         }
         assert_eq!(a.take_nonce("d_c", "x", 1), Err(Replay::Full));
         assert_eq!(a.take_nonce("d_c", "x", REPLAY_TTL + 1), Ok(()));
+    }
+
+    /// A socket's loop stops polling its watcher whenever another branch wins (a read, a ping).
+    /// A watcher parked mid-check must not keep a pool connection: four did, and starved the
+    /// pool for every socket and request (E1-19).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_parked_watcher_holds_no_pool_connection() {
+        let dir = std::env::temp_dir().join(format!("core-auth-park-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = crate::store::connect(&dir.join("core.db")).await.unwrap();
+        let (_tx, rx) = broadcast::channel(1);
+        // An unknown device never matches, so the watcher polls forever.
+        let watch = until_rescoped(
+            pool.clone(),
+            rx,
+            "d_x".into(),
+            vec![],
+            Duration::from_millis(1),
+        );
+        tokio::pin!(watch);
+        // Keep all but one connection, so the watcher's check takes the last.
+        let mut held = vec![];
+        while held.len() + 1 < pool.options().get_max_connections() as usize {
+            held.push(pool.acquire().await.unwrap());
+        }
+        let mut parked_mid_check = false;
+        for _ in 0..10_000 {
+            let _ = tokio::time::timeout(Duration::from_micros(200), &mut watch).await;
+            if pool.size() == pool.options().get_max_connections() && pool.num_idle() == 0 {
+                parked_mid_check = true;
+                break;
+            }
+        }
+        assert!(parked_mid_check, "never caught the watcher mid-check");
+        // The watcher is no longer polled; the last connection still comes back.
+        let got = tokio::time::timeout(Duration::from_secs(2), pool.acquire()).await;
+        assert!(got.is_ok(), "the parked watcher kept its connection");
+        drop((held, got));
+        pool.close().await;
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
