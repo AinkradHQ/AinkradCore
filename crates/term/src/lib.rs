@@ -39,6 +39,9 @@
 //! SCO cursor save; `ESC 7`/`ESC 8` work); full-screen apps re-emit them on their next
 //! redraw, so the host should send the child a `SIGWINCH` after a snapshot attach. A width change
 //! truncates or pads rows (no reflow), matching the SwiftTerm `ainkrad-no-reflow` client.
+//! When the cursor waits past the last column of a row whose last cell was then erased, the
+//! emulator's serialiser rebuilds that state with `ESC 7`/`ESC 8`, which overwrites the DECSC
+//! slot restored before it (the slot then holds the cursor position).
 
 mod boundary;
 mod replay;
