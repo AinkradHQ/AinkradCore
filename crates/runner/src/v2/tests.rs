@@ -405,3 +405,27 @@ async fn a_seq_at_its_maximum_is_refused_and_the_session_serves_on() {
     core.send(3, Body::Command(Command::Noop)).await;
     assert_eq!(core.answer(3).await, Body::Result(Reply::Noop));
 }
+
+/// Security review RH9: a Core that opens streams and never closes them is answered `busy`
+/// past `MAX_HELD`, and malformed frames on fresh stream ids are answered without being held;
+/// closing a stream frees its place.
+#[tokio::test]
+async fn a_hostile_core_cannot_grow_the_held_streams() {
+    let (mut core, _) = Core::start(1).await;
+    for i in 0..session::MAX_HELD as u64 {
+        core.send(2 * i + 1, Body::Command(Command::Noop)).await;
+        assert_eq!(core.answer(2 * i + 1).await, Body::Result(Reply::Noop));
+    }
+    let next = 2 * session::MAX_HELD as u64 + 1;
+    core.send(next, Body::Command(Command::Noop)).await;
+    assert_eq!(error(core.answer(next).await), ErrorCode::Busy);
+    for id in [1001_u64, 1003, 1005] {
+        let text = format!(r#"{{"stream_id":{id},"kind":"command","seq":0,"payload":{{"op":7}}}}"#);
+        core.ws.send(Message::Text(text.into())).await.unwrap();
+        assert_eq!(error(core.answer(id).await), ErrorCode::BadFrame);
+    }
+    // Closing one makes room again.
+    core.send(1, Body::Close(Close::default())).await;
+    core.send(next + 2, Body::Command(Command::Noop)).await;
+    assert_eq!(core.answer(next + 2).await, Body::Result(Reply::Noop));
+}

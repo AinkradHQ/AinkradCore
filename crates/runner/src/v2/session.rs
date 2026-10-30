@@ -34,6 +34,12 @@ use super::{ExecDriver, Link, handshake, key, lost, rotate, send};
 /// The pace when the Core names none.
 const HEARTBEAT: Duration = Duration::from_secs(15);
 
+/// Command streams held at once: the Core's own in-flight cap (`HubConfig::max_inflight`). A
+/// Core that opens more without closing them gets `busy`, so a hostile one cannot grow the
+/// runner's memory without bound (security review RH9). Each holds at most one `exec` result
+/// (2 MiB of output) plus its frames.
+pub(super) const MAX_HELD: usize = 64;
+
 #[derive(Default)]
 struct Held {
     /// Core frames received: the next `seq` expected.
@@ -215,6 +221,10 @@ impl Session {
                     let why = format!("stream {stream} has a command already");
                     return Some(Frame::new(stream, 0, refuse(ErrorCode::BadFrame, why)));
                 }
+                if self.streams.len() >= MAX_HELD {
+                    let why = format!("{MAX_HELD} streams held; close some first");
+                    return Some(Frame::new(stream, 0, refuse(ErrorCode::Busy, why)));
+                }
                 let mut h = Held {
                     received: next,
                     ..Held::default()
@@ -238,10 +248,12 @@ impl Session {
             }
             // Heartbeats, credit, output (no driver takes input yet), unknown kinds.
             Ok(_) => None,
-            Err(e) => {
-                let h = self.streams.entry(stream).or_default();
-                Some(h.frame(stream, Body::Error(e)))
-            }
+            // On a stream it holds, numbered in it; on any other, answered once and not held,
+            // so malformed frames on fresh ids grow nothing (RH9).
+            Err(e) => match self.streams.get_mut(&stream) {
+                Some(h) => Some(h.frame(stream, Body::Error(e))),
+                None => Some(Frame::new(stream, 0, Body::Error(e))),
+            },
         }
     }
 
