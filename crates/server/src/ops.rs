@@ -52,7 +52,7 @@ key (core-identity.p8, 0600; so paired devices and runners still accept it) from
 new config and a new signing key; a backup without the identity restores with a warning that
 everything must be paired again. export writes the same signed archive unencrypted, 0600,
 never over an existing file: it holds the master key, so move it like a private key; it never
-holds the Core identity. import is restore for an export (a new identity: pair again).";
+holds the Core identity nor the broker's secrets (only a backup carries those). import is restore for an export (a new identity: pair again).";
 
 /// Runs an operations verb; `None` when `args` is not one (the caller prints the usage).
 pub async fn run(args: &[&str]) -> Option<Result_> {

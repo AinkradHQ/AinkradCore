@@ -23,7 +23,8 @@ pub async fn export(config: &Config, dest: &Path) -> Result_ {
         Ok(m) => {
             eprintln!(
                 "exported {} ({} bytes of database), signed by {}. It holds the master key in \
-                 clear: move it like a private key. Import it with --signer {}.",
+                 clear: move it like a private key. Secrets are not exported: enter them again on the \
+                 new Core (a backup carries them). Import it with --signer {}.",
                 dest.display(),
                 m.files[0].size,
                 m.signer_fp,

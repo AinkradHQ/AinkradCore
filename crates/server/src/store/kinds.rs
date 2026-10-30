@@ -71,6 +71,11 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "recover.started",
     "runner.command",
     "runner.refused",
+    "secret.created",
+    "secret.deleted",
+    "secret.leased",
+    "secret.redeemed",
+    "secret.rotated",
     "setting.reset",
     "setting.set",
 ];
