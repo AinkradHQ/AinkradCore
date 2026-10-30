@@ -118,3 +118,19 @@ pub async fn call_in(
         serde_json::from_slice(&bytes).unwrap_or(Value::Null),
     )
 }
+
+impl Fx {
+    /// A GET as the admin device that must answer 200: the body.
+    pub async fn ok(&self, path: &str) -> Value {
+        let (status, body) = call(self, Some(&self.dev), Method::GET, path, None).await;
+        assert_eq!(status, StatusCode::OK, "GET {path}: {body}");
+        body
+    }
+
+    /// A POST as the admin device that must answer 200: the body.
+    pub async fn ok_post(&self, path: &str, body: Value) -> Value {
+        let (status, got) = call(self, Some(&self.dev), Method::POST, path, Some(body)).await;
+        assert_eq!(status, StatusCode::OK, "POST {path}: {got}");
+        got
+    }
+}

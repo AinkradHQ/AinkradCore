@@ -16,6 +16,7 @@ pub mod api;
 pub mod domain;
 pub mod kinds;
 pub mod migrations;
+pub mod profile;
 pub mod settings;
 pub mod store;
 #[cfg(any(test, feature = "test-support"))]

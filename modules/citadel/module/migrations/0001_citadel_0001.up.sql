@@ -593,7 +593,7 @@ CREATE TABLE citadel_roles (
     harness       TEXT    CHECK (harness IS NULL OR harness IN ('claude', 'codex', 'opencode', 'agy')),
     model         TEXT    CHECK (model IS NULL OR model <> ''),
     budget_tokens INTEGER CHECK (budget_tokens IS NULL OR budget_tokens >= 0),
-    citadel_skills        TEXT    NOT NULL DEFAULT '[]' CHECK (json_valid(citadel_skills)),
+    skills                TEXT    NOT NULL DEFAULT '[]' CHECK (json_valid(skills)),
     instructions  TEXT    NOT NULL DEFAULT '',
     created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     UNIQUE (company_id, name)
