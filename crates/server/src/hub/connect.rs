@@ -5,8 +5,11 @@
 //!    (`gate::verify`, §5.3): the same uniform `auth_failed`, limits and lockouts as every
 //!    other signed call. Nothing below runs for a stranger.
 //! 2. A `runner` device holding the `runner` scope, else 403 `forbidden_scope` (audited).
-//! 3. The channel binding: the TLS exporter, or `NO_CHANNEL_BINDING` for a Unix-socket or
-//!    loopback peer; plain HTTP from anywhere else is refused (400).
+//! 3. The channel binding: the TLS exporter, or `NO_CHANNEL_BINDING` for a Unix-socket peer
+//!    of the Core's own user, or a loopback TCP peer when `serve --allow-plain-runner` is set
+//!    (`HubConfig::allow_plain_loopback`, security review RH2); any other plain HTTP is refused
+//!    (400). A runner reaching the Core through a TLS-terminating proxy has an exporter the
+//!    Core does not share: runners need TLS end to end to the Core.
 //! 4. A WebSocket upgrade, else 400.
 //! 5. In the socket, within `HubConfig::handshake`: `hello` naming the signed device with a
 //!    32-byte nonce, the Core's `auth`, the runner's `proof`. Any failure is the one `error`
@@ -68,7 +71,7 @@ pub async fn connect(State(app): State<App>, req: Request) -> Response {
     }
     let binding = match parts.extensions.get::<Exporter>() {
         Some(x) => x.0,
-        None if plain_ok(&parts) => NO_CHANNEL_BINDING,
+        None if plain_ok(&parts, app.hub.config.allow_plain_loopback) => NO_CHANNEL_BINDING,
         None => {
             tracing::warn!(device = device.id, addr, "runner hub refused: no TLS");
             return ApiError::bad_request("runners connect over TLS").into_response();
@@ -80,22 +83,27 @@ pub async fn connect(State(app): State<App>, req: Request) -> Response {
     };
     // Subscribed before the upgrade, so a revocation in between is not missed.
     let revoked = crate::auth::until_revoked(
-        app.pool.clone(),
+        app.live.devices(&app.pool, crate::auth::BACKSTOP),
         app.auth.subscribe(),
         device.id.clone(),
-        crate::auth::BACKSTOP,
     );
     ws.max_message_size(MAX_MESSAGE)
         .on_upgrade(move |socket| serve(app, socket, device, binding, revoked))
 }
 
-/// Plain HTTP only from this host: the Unix socket, or a loopback TCP peer.
-fn plain_ok(parts: &axum::http::request::Parts) -> bool {
-    parts.extensions.get::<Local>().is_some()
-        || parts
-            .extensions
-            .get::<ConnectInfo<SocketAddr>>()
-            .is_some_and(|ConnectInfo(a)| a.ip().is_loopback())
+/// Plain HTTP only from this host: the Unix socket from the Core's own user, or a loopback
+/// TCP peer when `loopback` allows it (RH2).
+fn plain_ok(parts: &axum::http::request::Parts, loopback: bool) -> bool {
+    match parts.extensions.get::<Local>() {
+        Some(local) => local.same_user,
+        None => {
+            loopback
+                && parts
+                    .extensions
+                    .get::<ConnectInfo<SocketAddr>>()
+                    .is_some_and(|ConnectInfo(a)| a.ip().is_loopback())
+        }
+    }
 }
 
 async fn serve(
@@ -243,21 +251,30 @@ mod tests {
         parts
     }
 
+    /// Security review RH2: plain text from loopback TCP only behind the flag; from the Unix
+    /// socket only for the Core's own user; never from anywhere else.
     #[test]
-    fn plain_http_only_from_this_host() {
+    fn plain_http_only_from_this_host_and_loopback_only_by_flag() {
         let at = |ip: &'static str| {
             move |e: &mut axum::http::Extensions| {
                 e.insert(ConnectInfo(SocketAddr::new(ip.parse().unwrap(), 1)));
             }
         };
-        assert!(plain_ok(&parts(at("127.0.0.1"))));
-        assert!(plain_ok(&parts(at("::1"))));
-        let local = |e: &mut axum::http::Extensions| {
-            e.insert(Local { same_user: false });
+        for ip in ["127.0.0.1", "::1"] {
+            assert!(plain_ok(&parts(at(ip)), true));
+            assert!(!plain_ok(&parts(at(ip)), false), "{ip} without the flag");
+        }
+        let local = |same_user| {
+            move |e: &mut axum::http::Extensions| {
+                e.insert(Local { same_user });
+            }
         };
-        assert!(plain_ok(&parts(local)));
-        assert!(!plain_ok(&parts(at("10.0.0.1"))));
-        assert!(!plain_ok(&parts(at("2001:db8::1"))));
-        assert!(!plain_ok(&parts(|_| {})));
+        for flag in [false, true] {
+            assert!(plain_ok(&parts(local(true)), flag));
+            assert!(!plain_ok(&parts(local(false)), flag), "another user");
+            assert!(!plain_ok(&parts(at("10.0.0.1")), flag));
+            assert!(!plain_ok(&parts(at("2001:db8::1")), flag));
+            assert!(!plain_ok(&parts(|_| {}), flag));
+        }
     }
 }

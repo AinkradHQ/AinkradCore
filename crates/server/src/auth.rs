@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use sqlx::SqlitePool;
 use tokio::sync::broadcast;
 
 use crate::api::limit::Limiter;
@@ -274,16 +273,15 @@ impl Auth {
 }
 
 /// Resolves once `device`'s scopes are no longer `scopes`: at once on the broadcast, or within
-/// `every` by polling the database (a change by another process, or a lagged broadcast).
+/// the backstop by the shared device snapshot (`crate::live`: a change by another process, or a
+/// lagged broadcast). A device missing from the snapshot is left to `until_revoked`.
 pub async fn until_rescoped(
-    pool: SqlitePool,
+    mut devices: crate::live::DeviceWatch,
     mut rescoped: broadcast::Receiver<String>,
     device: String,
     scopes: Vec<String>,
-    every: Duration,
 ) {
-    let mut poll = tokio::time::interval(every);
-    let mut open = true;
+    let (mut open, mut live) = (true, true);
     loop {
         tokio::select! {
             got = rescoped.recv(), if open => match got {
@@ -291,51 +289,50 @@ pub async fn until_rescoped(
                 Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => open = false,
             },
-            _ = poll.tick() => {
-                // On its own task: the owner stops polling this future whenever
-                // another of its branches wins, and an inline check would then park holding its
-                // pool connection; a few such sockets starve the pool (E1-19).
-                let (p, d) = (pool.clone(), device.clone());
-                let check = tokio::spawn(async move { crate::store::gov::get_device(&p, &d).await });
-                if let Ok(Ok(Some(d))) = check.await
-                    && d.scopes != scopes
-                {
-                    return;
+            changed = devices.rx.changed(), if live => match changed {
+                Ok(()) => {
+                    if let Some(Some(d)) = devices.current(&device)
+                        && d.scopes != scopes
+                    {
+                        return;
+                    }
                 }
-            }
+                Err(_) => live = false,
+            },
+            else => std::future::pending().await,
         }
     }
 }
 
 /// Resolves once `device` is revoked or otherwise no longer usable: at once on the broadcast,
-/// or within `every` by polling the database (a revocation by the CLI, from another process,
-/// or a broadcast that lagged). A database error keeps waiting; the next poll retries.
+/// or within the backstop by the shared device snapshot (`crate::live`: a revocation by the
+/// CLI, from another process, or a broadcast that lagged). A device with no row counts as
+/// revoked; a failed read keeps the last snapshot.
 pub async fn until_revoked(
-    pool: SqlitePool,
+    mut devices: crate::live::DeviceWatch,
     mut revoked: broadcast::Receiver<String>,
     device: String,
-    every: Duration,
 ) {
-    let mut poll = tokio::time::interval(every);
-    let mut open = true;
+    let (mut open, mut live) = (true, true);
     loop {
         tokio::select! {
             got = revoked.recv(), if open => match got {
                 Ok(d) if d == device => return,
                 Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
-                // The sender is gone; the poll still runs.
+                // The sender is gone; the snapshot still runs.
                 Err(broadcast::error::RecvError::Closed) => open = false,
             },
-            _ = poll.tick() => {
-                // On its own task: the owner stops polling this future whenever
-                // another of its branches wins, and an inline check would then park holding its
-                // pool connection; a few such sockets starve the pool (E1-19).
-                let (p, d) = (pool.clone(), device.clone());
-                let check = tokio::spawn(async move { crate::store::gov::device_usable(&p, &d).await });
-                if let Ok(Ok(false)) = check.await {
-                    return;
+            changed = devices.rx.changed(), if live => match changed {
+                Ok(()) => {
+                    if let Some(state) = devices.current(&device)
+                        && !state.is_some_and(|d| d.usable)
+                    {
+                        return;
+                    }
                 }
-            }
+                Err(_) => live = false,
+            },
+            else => std::future::pending().await,
         }
     }
 }
@@ -427,40 +424,56 @@ mod tests {
 
     /// A socket's loop stops polling its watcher whenever another branch wins (a read, a ping).
     /// A watcher parked mid-check must not keep a pool connection: four did, and starved the
-    /// pool for every socket and request (E1-19).
+    /// pool for every socket and request (E1-19). The check now runs on the shared poller's own
+    /// task (`crate::live`), so many parked watchers never hold one, and still see a change.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_parked_watcher_holds_no_pool_connection() {
         let dir = std::env::temp_dir().join(format!("core-auth-park-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let pool = crate::store::connect(&dir.join("core.db")).await.unwrap();
+        let live = crate::live::Live::default();
         let (_tx, rx) = broadcast::channel(1);
-        // An unknown device never matches, so the watcher polls forever.
-        let watch = until_rescoped(
-            pool.clone(),
-            rx,
-            "d_x".into(),
-            vec![],
-            Duration::from_millis(1),
-        );
-        tokio::pin!(watch);
-        // Keep all but one connection, so the watcher's check takes the last.
+        // Watchers polled in short bursts, then parked, again and again, while the snapshot
+        // is read every millisecond.
+        let mut watchers: Vec<_> = (0..50)
+            .map(|_| {
+                let w = until_revoked(
+                    live.devices(&pool, Duration::from_millis(1)),
+                    rx.resubscribe(),
+                    "d_x".into(),
+                );
+                Some(Box::pin(w))
+            })
+            .collect();
+        // Keep all but one connection, so a check can only take the last.
         let mut held = vec![];
         while held.len() + 1 < pool.options().get_max_connections() as usize {
             held.push(pool.acquire().await.unwrap());
         }
-        let mut parked_mid_check = false;
-        for _ in 0..10_000 {
-            let _ = tokio::time::timeout(Duration::from_micros(200), &mut watch).await;
-            if pool.size() == pool.options().get_max_connections() && pool.num_idle() == 0 {
-                parked_mid_check = true;
+        // An unknown device counts as revoked: each watcher resolves on a snapshot read after it
+        // subscribed, polled only in short bursts.
+        for _ in 0..2_000 {
+            for slot in &mut watchers {
+                if let Some(w) = slot
+                    && tokio::time::timeout(Duration::from_micros(50), w.as_mut())
+                        .await
+                        .is_ok()
+                {
+                    *slot = None;
+                }
+            }
+            if watchers.iter().all(Option::is_none) {
                 break;
             }
         }
-        assert!(parked_mid_check, "never caught the watcher mid-check");
-        // The watcher is no longer polled; the last connection still comes back.
+        assert!(
+            watchers.iter().all(Option::is_none),
+            "every watcher saw the snapshot"
+        );
         let got = tokio::time::timeout(Duration::from_secs(2), pool.acquire()).await;
-        assert!(got.is_ok(), "the parked watcher kept its connection");
-        drop((held, got));
+        assert!(got.is_ok(), "a parked watcher kept a connection");
+        drop(got);
+        drop(held);
         pool.close().await;
         std::fs::remove_dir_all(&dir).unwrap();
     }

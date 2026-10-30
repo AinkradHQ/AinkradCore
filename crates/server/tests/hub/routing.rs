@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use ainkrad_core::audit::AuditActor;
+use ainkrad_core_server::hub::Elevated;
 use ainkrad_core_server::store::gov;
 use ainkrad_proto::v2::*;
 
@@ -25,7 +26,33 @@ async fn the_noop_runs_end_to_end_and_only_advertised_commands_reach_the_runner(
         env_pass: vec![],
         limits: ExecLimits::default(),
     });
-    let refused = hub.dispatch(&dev.id, exec).err().expect("not advertised");
+    // Security review RH5: exec.run without a step-up proof is refused before anything else.
+    let unelevated = hub.dispatch(&dev.id, exec.clone()).err().expect("no proof");
+    assert_eq!(unelevated.code, ErrorCode::InvalidArgs);
+    // Re-review M1: deny by default; a shell (`pty.open`) or typing into one (`pty.attach`) is
+    // code on the runner too.
+    let shell = Command::PtyOpen(PtyOpen {
+        program: Some("/bin/sh".to_owned()),
+        args: vec!["-c".to_owned(), "id".to_owned()],
+        cwd: None,
+        env: Default::default(),
+        env_pass: vec![],
+        size: Size { rows: 24, cols: 80 },
+    });
+    for cmd in [
+        shell,
+        Command::PtyAttach(PtyAttach {
+            terminal: "t_x".to_owned(),
+            seq: 0,
+        }),
+    ] {
+        let refused = hub.dispatch(&dev.id, cmd).err().expect("no proof");
+        assert_eq!(refused.code, ErrorCode::InvalidArgs);
+    }
+    let refused = hub
+        .dispatch_elevated(&dev.id, exec, Elevated::for_tests())
+        .err()
+        .expect("not advertised");
     assert_eq!(refused.code, ErrorCode::UnsupportedCommand);
     let other = hub.dispatch("d_00000000000000000000000000", Command::Noop);
     assert_eq!(other.err().unwrap().code, ErrorCode::Offline);
@@ -205,7 +232,9 @@ async fn terminal_streams_take_only_metered_snapshots_and_one_opened() {
     };
 
     // Opened once, then a snapshot of the whole window: delivered, and granted back on read.
-    let mut a = hub.dispatch(&dev.id, attach("t_a")).unwrap();
+    let mut a = hub
+        .dispatch_elevated(&dev.id, attach("t_a"), Elevated::for_tests())
+        .unwrap();
     let sa = fake.next().await.stream_id;
     fake.send(sa, opened()).await;
     assert_eq!(a.next().await, Some(opened()));
@@ -226,7 +255,9 @@ async fn terminal_streams_take_only_metered_snapshots_and_one_opened() {
     assert_eq!(a.outcome().await.unwrap_err().code, ErrorCode::BadFrame);
 
     // A snapshot past an empty credit fails the stream: overdraw once (to zero), not twice.
-    let b = hub.dispatch(&dev.id, attach("t_b")).unwrap();
+    let b = hub
+        .dispatch_elevated(&dev.id, attach("t_b"), Elevated::for_tests())
+        .unwrap();
     let sb = loop {
         let f = fake.next().await;
         if f.kind == FrameKind::Command {

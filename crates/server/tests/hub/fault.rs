@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ainkrad_core_server::hub::{Dispatched, HubConfig};
+use ainkrad_core_server::hub::{Dispatched, Elevated, HubConfig};
 use ainkrad_proto::redact::Redactor;
 use ainkrad_proto::v2::*;
 use ainkrad_runner::v2::client::Client;
@@ -144,7 +144,10 @@ async fn a_cut_mid_stream_loses_nothing_and_answers_once() {
     // Commands running across the cut: they finish while the runner is away, and their
     // answers come over the next connection.
     let first: Vec<Dispatched> = (0..6)
-        .map(|i| hub.dispatch(&e.device_id, echo(i, 600)).unwrap())
+        .map(|i| {
+            hub.dispatch_elevated(&e.device_id, echo(i, 600), Elevated::for_tests())
+                .unwrap()
+        })
         .collect();
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(proxy.cut() >= 1, "a connection was cut");
@@ -154,7 +157,10 @@ async fn a_cut_mid_stream_loses_nothing_and_answers_once() {
     // Commands sent into a connection as it dies: resent on the next, run once.
     online(&core, &e.device_id).await;
     let second: Vec<Dispatched> = (10..14)
-        .map(|i| hub.dispatch(&e.device_id, echo(i, 0)).unwrap())
+        .map(|i| {
+            hub.dispatch_elevated(&e.device_id, echo(i, 0), Elevated::for_tests())
+                .unwrap()
+        })
         .collect();
     proxy.cut();
     let got = answers(second).await;

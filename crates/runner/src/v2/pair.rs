@@ -192,6 +192,7 @@ pub async fn pair(
         device_id: device,
         core_fp: expected,
         rotation_seq: 0,
+        next_fp: None,
     };
     enrolment
         .save(&state.enrolment())
@@ -322,6 +323,7 @@ mod tests {
             device_id: "d_x".to_owned(),
             core_fp: key.fp(),
             rotation_seq: 2,
+            next_fp: Some("n".repeat(43)),
         };
         e.save(&state.enrolment()).unwrap();
         assert_eq!(mode(&state.enrolment()), 0o600);

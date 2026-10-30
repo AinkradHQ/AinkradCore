@@ -7,7 +7,8 @@
 //! Before any command, the connection proof (`ainkrad_proto::v2::auth`, handshake spec §13):
 //! the hello carries the device id and a nonce; the Core's `auth` must come from the pinned
 //! identity and sign this connection's exporter, or the runner closes and sends nothing more;
-//! then the runner's own `proof`. A `rotation` from the Core moves the pin (`Enrolment::rotate`).
+//! then the runner's own `proof`. A `rotation` from the Core announces its next key, accepted
+//! beside the pin until the Core proves it, which moves the pin (`Enrolment::rotate`).
 //! `client` and `pair` are the HTTP side. A [`Session`] outlives connections: the daemon
 //! (`daemon`) reconnects with backoff and resumes its streams by `seq` (E1-11.4).
 
@@ -74,9 +75,9 @@ async fn handshake<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let (device, pin) = {
+    let (device, pins) = {
         let e = link.enrolment.lock().unwrap();
-        (e.device_id.clone(), e.core_fp.clone())
+        (e.device_id.clone(), e.clone())
     };
     let nonce_r = key::random::<32>();
     let hello = Control::Hello(RunnerHello {
@@ -94,7 +95,17 @@ where
         _ => return Err(StreamError::new(ErrorCode::BadFrame, "expected auth")),
     };
     // Nothing more goes to a Core that is not the pinned one: returning drops the socket.
-    let core_spki = check_core(&auth, &pin, &link.exporter, &nonce_r, &device)?;
+    let core_spki = check_core(&auth, &pins, &link.exporter, &nonce_r, &device)?;
+    // The fingerprint the Core proved: the pin, or the announced next key, which now becomes
+    // the pin.
+    let pin = key::fingerprint(&core_spki);
+    {
+        let mut e = link.enrolment.lock().unwrap();
+        if e.proven(&pin) {
+            tracing::info!(core_fp = pin, "the Core proved its rotated key; pin moved");
+            save(link, &e);
+        }
+    }
     let nonce_c = key::unb64(&auth.nonce, 43)
         .ok_or_else(|| StreamError::new(ErrorCode::BadFrame, "auth has no 32-byte nonce"))?;
     let sig = link
@@ -107,10 +118,11 @@ where
     Ok((welcome(source).await?, core_spki))
 }
 
-/// The Core's `auth` checked against the pin and this connection: its SPKI when it holds.
+/// The Core's `auth` checked against the pins (`Enrolment::accepts`) and this connection: its
+/// SPKI when it holds.
 fn check_core(
     auth: &CoreAuth,
-    pin: &str,
+    pins: &key::Enrolment,
     exporter: &[u8],
     nonce_r: &[u8],
     device: &str,
@@ -121,7 +133,8 @@ fn check_core(
     };
     let spki = key::unb64(&auth.core_spki, 122).unwrap_or_default();
     let presented = key::fingerprint(&spki);
-    if presented != pin {
+    let pin = &pins.core_fp;
+    if !pins.accepts(&presented) {
         return Err(mismatch(format!(
             "pinned Core {pin}, this server presents {presented}"
         )));
@@ -136,22 +149,33 @@ fn check_core(
     Ok(spki)
 }
 
-/// Applies a rotation statement and saves the moved pin; anything else is ignored.
+/// Applies a rotation statement and saves the announced key; the Core re-sends the statement
+/// on every connection of its window, so one already recorded is skipped quietly. Anything
+/// else is ignored.
 fn rotate(link: &Link, r: &ainkrad_proto::v2::Rotation, core_spki: &[u8]) {
     let mut e = link.enrolment.lock().unwrap();
+    if e.next_fp.as_deref() == Some(r.new_fp.as_str()) && e.rotation_seq == r.seq {
+        return;
+    }
     if !e.rotate(r, core_spki) {
         tracing::warn!("a rotation statement that does not hold was ignored");
         return;
     }
     tracing::info!(
-        new_fp = e.core_fp,
+        next_fp = r.new_fp,
+        not_before = r.not_before,
         seq = e.rotation_seq,
-        "Core identity rotated; pin moved"
+        "Core identity rotation announced; the new key is accepted beside the pin"
     );
+    save(link, &e);
+}
+
+/// Saves the enrolment where `link` says, if anywhere.
+fn save(link: &Link, e: &key::Enrolment) {
     if let Some(path) = &link.save
         && let Err(err) = e.save(path)
     {
-        tracing::error!(error = %err, "saving the rotated pin failed");
+        tracing::error!(error = %err, "saving the enrolment failed");
     }
 }
 
