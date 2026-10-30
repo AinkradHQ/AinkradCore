@@ -89,7 +89,7 @@ async fn a_loaded_host_refuses_new_commands_until_its_load_drops() {
     let core = Core::start("hostload", quick()).await;
     let dev = core.runner().await;
     let hot = HostLoad {
-        avg1: 9.0,
+        avg1: 20.0,
         cores: 4,
     };
     let cool = HostLoad {
