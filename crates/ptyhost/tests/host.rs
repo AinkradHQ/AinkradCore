@@ -445,6 +445,20 @@ async fn a_scan_removes_only_provably_dead_hosts() {
     // Dead: a socket file nobody listens on.
     drop(std::os::unix::net::UnixListener::bind(socket_path(&dir, "t_dead")).unwrap());
     record("t_dead");
+    // The kernel may tear a closed listener down a moment late; wait until it refuses, so the
+    // premise "nobody listens" holds before the scan is judged on it.
+    let dead_path = socket_path(&dir, "t_dead");
+    let mut refused = false;
+    for _ in 0..100 {
+        match std::os::unix::net::UnixStream::connect(&dead_path) {
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                refused = true;
+                break;
+            }
+            _ => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
+    assert!(refused, "a closed listener never started refusing");
     assert!(scan(&dir).await.is_empty());
     assert!(record_path(&dir, "t_slow").exists() && socket_path(&dir, "t_slow").exists());
     assert!(!record_path(&dir, "t_dead").exists() && !socket_path(&dir, "t_dead").exists());
