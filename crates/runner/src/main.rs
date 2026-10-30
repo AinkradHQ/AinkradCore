@@ -44,7 +44,7 @@ above) and, when the account names a credential file, the token in
 $HOME/.ainkrad-runner/credentials/<file> (mode 0600), read when the run starts and passed
 only in the harness's environment; the runner's own CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY
 are then withheld. A missing file fails the run with the path in its reason.
-Each run's harness reaches the server's MCP tools at <server>/mcp/v1 (https://, or http:// to
+Each run's harness reaches the server's MCP tools at <server>/token/citadel/v1/mcp (https://, or http:// to
 loopback) with the run's token, from a 0600 config file in $TMPDIR/citadel-runs/private/run-<id>
 removed when the run ends. Tool calls follow each project's permission policy (default: ask);
 the Citadel MCP tools always go ahead, as the token scopes them. One outside it waits for
@@ -230,7 +230,7 @@ async fn main() -> ExitCode {
     )
     .with_env(args.env);
     executor.sandboxed = std::env::var("CITADEL_RUNNER_SANDBOXED").as_deref() == Ok("1");
-    executor.mcp_url = ainkrad_runner::mcp_url(&args.url);
+    executor.mcp_url = ainkrad_runner::core_mcp_url(&args.url);
     executor.workspaces.askpass = std::env::var_os("CITADEL_GIT_ASKPASS").map(PathBuf::from);
     if let Err(why) = executor.check_roots(&home) {
         eprintln!("ainkrad-runner: {why}");

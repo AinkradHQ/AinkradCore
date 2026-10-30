@@ -44,6 +44,9 @@ use crate::{Answer, Control, Executor, Job, Report};
 pub mod secrets;
 use secrets::{Delivered, Redeem};
 
+/// The variable the Core delivers a run's token under (`Module::credentials` of Citadel).
+pub const RUN_TOKEN_VAR: &str = "CITADEL_RUN_TOKEN";
+
 type Fut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// The longest an `agent.read` waits, whatever the Core asks.
@@ -115,7 +118,12 @@ impl Sandbox for Unconfined {
 trait Harness: Send + Sync {
     fn secrets(&self) -> Fut<'_, Vec<(String, String)>>;
     fn start<'a>(&'a self, job: &'a Job) -> Fut<'a, Result<Option<String>, String>>;
-    fn run<'a>(&'a self, job: &'a Job, reports: mpsc::Sender<Report>) -> Fut<'a, Outcome>;
+    fn run<'a>(
+        &'a self,
+        job: &'a Job,
+        token: RunToken,
+        reports: mpsc::Sender<Report>,
+    ) -> Fut<'a, Outcome>;
     fn run_secrets(&self, job: &Job) -> Vec<(String, String)>;
     fn control(&self, run: i64, control: Control);
     fn session_env(&self, run: i64, env: Option<Vec<(String, String)>>);
@@ -136,14 +144,13 @@ impl<E: Executor> Harness for E {
     fn start<'a>(&'a self, job: &'a Job) -> Fut<'a, Result<Option<String>, String>> {
         Box::pin(Executor::start(self, job))
     }
-    fn run<'a>(&'a self, job: &'a Job, reports: mpsc::Sender<Report>) -> Fut<'a, Outcome> {
-        // The run token is Citadel's MCP credential (E2-13 brings it back); none here.
-        Box::pin(Executor::run(
-            self,
-            job,
-            RunToken::new(String::new()),
-            reports,
-        ))
+    fn run<'a>(
+        &'a self,
+        job: &'a Job,
+        token: RunToken,
+        reports: mpsc::Sender<Report>,
+    ) -> Fut<'a, Outcome> {
+        Box::pin(Executor::run(self, job, token, reports))
     }
     fn run_secrets(&self, job: &Job) -> Vec<(String, String)> {
         Executor::run_secrets(self, job)
@@ -395,7 +402,7 @@ impl AgentDriver {
             redactor.known(&name, &value);
         }
         // Held to the end of this task: dropping it (the end, a kill's abort) removes the files.
-        let mut delivered = match self.deliver(&req, &mut redactor).await {
+        let (mut delivered, run_token) = match self.deliver(&req, &mut redactor).await {
             Ok(d) => d,
             Err(why) => {
                 if workspace_prepared {
@@ -461,7 +468,7 @@ impl AgentDriver {
         });
         let (tx, mut rx) = mpsc::channel(64);
         let outcome = {
-            let run = self.harness.run(&job, tx);
+            let run = self.harness.run(&job, RunToken::new(run_token), tx);
             tokio::pin!(run);
             loop {
                 tokio::select! {
@@ -485,8 +492,12 @@ impl AgentDriver {
         &self,
         req: &AgentStart,
         redactor: &mut Redactor,
-    ) -> Result<Delivered, String> {
+    ) -> Result<(Delivered, String), String> {
         let mut leased = Vec::with_capacity(req.secrets.len());
+        // The run's token for its MCP server (`RUN_TOKEN_VAR`): redacted like every leased
+        // value, but kept out of the harness's environment; it goes to the harness's private 0600
+        // MCP config only (`harness::files`).
+        let mut run_token = String::new();
         if !req.secrets.is_empty() {
             let redeem = self
                 .redeem
@@ -495,11 +506,16 @@ impl AgentDriver {
             for grant in &req.secrets {
                 let secret = redeem(grant.lease.clone()).await?;
                 redactor.known(&secret.name, &secret.value);
+                if grant.var == RUN_TOKEN_VAR {
+                    run_token = secret.value.to_string();
+                    continue;
+                }
                 leased.push((grant.var.clone(), secret));
             }
         }
-        secrets::deliver(&self.config.secrets_dir, &req.session, leased)
-            .map_err(|e| format!("delivering the session's secrets: {e}"))
+        let delivered = secrets::deliver(&self.config.secrets_dir, &req.session, leased)
+            .map_err(|e| format!("delivering the session's secrets: {e}"))?;
+        Ok((delivered, run_token))
     }
 
     /// Runs `f` on the session, if it is still held.

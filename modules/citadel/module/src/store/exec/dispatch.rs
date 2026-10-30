@@ -46,6 +46,9 @@ pub enum Instruction {
 /// What a session is started with.
 #[derive(Debug, Clone)]
 pub struct StartSpec {
+    /// The run this session is for: the platform's pointer back to it (`owner_ref`), so a
+    /// resumed session finds its run and is handed a fresh token (`mcp::credentials`).
+    pub run: RunId,
     pub runner: String,
     pub harness: String,
     pub model: String,
@@ -124,7 +127,8 @@ impl Host for Platform {
             secrets: &[],
             created_by: &spec.by_device,
         };
-        match agents().create(app, &new).await {
+        let owner_ref = format!("run:{}", spec.run.0);
+        match agents().create_ref(app, &new, Some(&owner_ref)).await {
             Ok(s) => Ok(s.id),
             Err(Refusal::Runner(e)) if matches!(e.code, ErrorCode::Busy | ErrorCode::Offline) => {
                 Err(StartFailure::Busy(e.message))
@@ -197,6 +201,7 @@ pub async fn dispatch_next<H: Host>(app: &App, host: &H, now: &str) -> Result<Op
         return Ok(None);
     };
     let spec = StartSpec {
+        run: run.id,
         runner,
         harness: c.harness.as_str().to_owned(),
         model: c.model.clone(),

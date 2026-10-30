@@ -26,7 +26,7 @@ use ainkrad_core_server::scheduler::{Clock, SystemClock};
 use ainkrad_core_server::store::{self, audit, gov};
 use sqlx::SqlitePool;
 
-use crate::Result_;
+use crate::cli::Result_;
 
 pub const USAGE: &str = "Devices (E1-07):
   ainkrad-core-server bootstrap <db> [<name>]

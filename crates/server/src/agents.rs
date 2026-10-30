@@ -68,6 +68,24 @@ pub struct Agents {
     supervised: Mutex<HashSet<String>>,
     elevated: Mutex<HashMap<String, Elevated>>,
     leases: Mutex<HashMap<String, (i64, Vec<SecretGrant>)>>,
+    /// Module credentials awaiting redemption (`Module::credentials`), by the SHA-256 of their
+    /// lease id. In memory only: never stored, never logged, gone at the first redemption, at
+    /// expiry or with the process.
+    ephemeral: Mutex<HashMap<[u8; 32], Ephemeral>>,
+}
+
+/// How long a module credential's lease lasts: the runner redeems it at the start of the session.
+pub const EPHEMERAL_SECS: i64 = 120;
+
+/// The most module credentials held at once.
+const EPHEMERAL_MAX: usize = 4096;
+
+/// A credential held for one runner to redeem once. No `Debug`.
+pub struct Ephemeral {
+    pub runner: String,
+    pub var: String,
+    pub value: zeroize::Zeroizing<String>,
+    pub expires: i64,
 }
 
 /// Why the service refused, as the API maps it.
@@ -335,6 +353,17 @@ impl ModuleAgents {
     /// usable device with the admin scope, a `sandboxed` mode needs the sandbox flag, and a
     /// workspace or policy that does not parse is refused. Audited `agent.created`, by the system.
     pub async fn create(&self, app: &App, new: &store::NewSession<'_>) -> Result<Session, Refusal> {
+        self.create_ref(app, new, None).await
+    }
+
+    /// [`create`](Self::create) with `owner_ref`, the module's own pointer to the session
+    /// (`run:12`), which `Module::credentials` reads back at every launch. Never a credential.
+    pub async fn create_ref(
+        &self,
+        app: &App,
+        new: &store::NewSession<'_>,
+        owner_ref: Option<&str>,
+    ) -> Result<Session, Refusal> {
         let admin = crate::store::gov::get_device(&app.pool, new.created_by)
             .await?
             .is_some_and(|d| d.usable() && d.scopes.iter().any(|s| s == "admin"));
@@ -349,10 +378,11 @@ impl ModuleAgents {
             return Err(invalid_args("a sandboxed mode needs the sandbox flag"));
         }
         admit(app, new.runner, new.harness).await?;
-        let s = store::create_owned(
+        let s = store::create_owned_ref(
             &app.pool,
             new,
             Some(self.module),
+            owner_ref,
             AuditActor::System,
             &app.clock.now(),
         )
@@ -573,6 +603,67 @@ impl Agents {
             supervised: Mutex::default(),
             elevated: Mutex::default(),
             leases: Mutex::default(),
+            ephemeral: Mutex::default(),
         })
+    }
+
+    /// Holds `e` under lease `id` (a `l_…`), dropping what has expired; `false` when the table
+    /// is full.
+    pub(crate) fn stash(&self, id: &str, e: Ephemeral, now: i64) -> bool {
+        let mut held = self.ephemeral.lock().unwrap();
+        held.retain(|_, v| v.expires > now);
+        if held.len() >= EPHEMERAL_MAX {
+            return false;
+        }
+        held.insert(crate::auth::crypto::sha256(id.as_bytes()), e);
+        true
+    }
+
+    /// The credential under lease `id` if it is `runner`'s and live; it is removed either way a
+    /// match is found (single use). Another runner's lease is not found.
+    pub fn take_ephemeral(&self, id: &str, runner: &str, now: i64) -> Option<Ephemeral> {
+        let key = crate::auth::crypto::sha256(id.as_bytes());
+        let mut held = self.ephemeral.lock().unwrap();
+        if held.get(&key)?.runner != runner {
+            return None;
+        }
+        held.remove(&key).filter(|e| e.expires > now)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn held(runner: &str, expires: i64) -> Ephemeral {
+        Ephemeral {
+            runner: runner.to_owned(),
+            var: "x".to_owned(),
+            value: zeroize::Zeroizing::new("v".to_owned()),
+            expires,
+        }
+    }
+
+    #[test]
+    fn a_credential_is_redeemed_once_by_its_runner_before_it_expires() {
+        let a = Agents::new(AgentsConfig::default());
+        assert!(a.stash("l_one", held("d_a", 100), 0));
+        // Another runner does not find it, and does not spend it.
+        assert!(a.take_ephemeral("l_one", "d_b", 1).is_none());
+        assert!(a.take_ephemeral("l_two", "d_a", 1).is_none());
+        assert!(a.take_ephemeral("l_one", "d_a", 1).is_some());
+        assert!(a.take_ephemeral("l_one", "d_a", 1).is_none(), "single use");
+        assert!(a.stash("l_old", held("d_a", 10), 0));
+        assert!(a.take_ephemeral("l_old", "d_a", 10).is_none(), "expired");
+    }
+
+    #[test]
+    fn the_table_is_bounded_and_forgets_the_expired() {
+        let a = Agents::new(AgentsConfig::default());
+        for i in 0..EPHEMERAL_MAX {
+            assert!(a.stash(&format!("l_{i}"), held("d_a", 100), 0));
+        }
+        assert!(!a.stash("l_more", held("d_a", 100), 0), "full");
+        assert!(a.stash("l_more", held("d_a", 300), 200), "the expired went");
     }
 }
