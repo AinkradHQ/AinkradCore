@@ -23,6 +23,37 @@ async fn leases(app: &App, s: &Session) -> Result<(i64, Vec<SecretGrant>), Refus
             var: secret.var.clone(),
         });
     }
+    // What the owning module mints for this start (the run token): held in memory for the
+    // runner to redeem once, sent as a lease like any other, never stored.
+    if let Some(module) = s
+        .owner_module
+        .as_deref()
+        .and_then(|id| app.modules.iter().find(|m| m.id() == id))
+    {
+        let invalid = |why: String| Refusal::Runner(StreamError::new(ErrorCode::InvalidArgs, why));
+        let minted = module.credentials(app, s).await.map_err(invalid)?;
+        let now = app.clock.unix();
+        for c in minted {
+            if !ainkrad_proto::v2::valid_secret_var(&c.var) {
+                return Err(invalid(
+                    "a module credential names an illegal variable".into(),
+                ));
+            }
+            let lease = crate::auth::crypto::random_id("l_");
+            let until = now + EPHEMERAL_SECS;
+            let held = Ephemeral {
+                runner: s.runner.clone(),
+                var: c.var.to_lowercase(),
+                value: c.value,
+                expires: until,
+            };
+            if !app.agents.stash(&lease, held, now) {
+                return Err(busy("too many credentials await redemption"));
+            }
+            expires = expires.min(until);
+            out.push(SecretGrant { lease, var: c.var });
+        }
+    }
     Ok((expires, out))
 }
 

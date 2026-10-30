@@ -43,6 +43,7 @@ mod sessions;
 mod settings;
 mod signed;
 mod stepup;
+mod token;
 mod web;
 mod web_socket;
 

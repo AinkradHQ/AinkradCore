@@ -132,6 +132,8 @@ pub fn router(app: App) -> Router {
     Router::new()
         .merge(preauth_routes)
         .merge(v1::router(app.clone()))
+        // Only declared token routes, only behind `gateway::token` (called from the pre-auth gate).
+        .merge(crate::module::mount_token(&app.modules).with_state(app.clone()))
         .layer(axum::middleware::from_fn_with_state(app, preauth::gate))
 }
 
