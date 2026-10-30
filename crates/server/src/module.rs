@@ -16,7 +16,8 @@
 //!
 //! A module's routes need its one `scope` (`admin` unless it declares another; per-route scopes
 //! come when a module needs them); the ones that need a step-up are its `destructive` routes.
-//! Scheduler jobs (E2-11) are not here yet.
+//! Its scheduler jobs (E2-11) are `Module::jobs`: appended to the trait, so a module written
+//! before it keeps compiling.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -69,6 +70,12 @@ pub trait Module: Send + Sync + 'static {
     /// `("POST", "/runs/{id}/kill")`. None by default.
     fn destructive(&self) -> &'static [(&'static str, &'static str)] {
         &[]
+    }
+
+    /// The scheduler jobs the module declares (E2-11), recorded at start by `jobs::register`
+    /// and run by the `jobs::Engine`. None by default. A job's name is unique within the module.
+    fn jobs(&self) -> Vec<crate::jobs::Job> {
+        Vec::new()
     }
 }
 
