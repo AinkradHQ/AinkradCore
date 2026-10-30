@@ -40,12 +40,13 @@ no valid_origins http://app.example.com; no valid_origins https://app.example.co
 ok valid_cidrs 198.51.100.0/24; ok valid_cidrs 198.51.100.0/24,203.0.113.0/24; no valid_cidrs 2001:db8::/32; ok valid_cidrs ''
 no valid_cidrs 198.51.100.7; no valid_cidrs 300.1.1.0/24; no valid_cidrs 198.51.100.0/33
 ok ip_in_cidrs 198.51.100.7 203.0.113.0/24,198.51.100.0/24; no ip_in_cidrs 192.0.2.1 198.51.100.0/24
+ok valid_pair_code ABCDE-FGHJK; ok valid_pair_code abcdefghjk; ok valid_pair_code ''; no valid_pair_code ABCDE-FGHJU; no valid_pair_code ABCDE-FGHJ; no valid_pair_code 'ABCDE FGHJK'
 ok valid_schedule daily; ok valid_schedule '*-*-* 03:00:00'; no valid_schedule 'daily; rm -rf /'; no valid_schedule "$(printf 'x\ny')"
 [ "$(mask abcdefghijkl)" = 'ab****kl' ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: mask" >&2; }
 [ "$(mask short)" = '********' ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: mask short" >&2; }
 
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
-mkdir "$t/bin"; for n in ainkrad-core-server ainkradctl ainkrad-runner; do printf '#!/bin/sh\n' >"$t/bin/$n"; done
+mkdir "$t/bin"; for n in ainkrad-core-server ainkradctl ainkrad-runner ainkrad-ptyhost; do printf '#!/bin/sh\n' >"$t/bin/$n"; done
 SECRET=planted$(date +%s)secretvalue
 answers() {
   cat <<EOF
@@ -63,6 +64,9 @@ BACKUP_BUCKET=core-backups
 BACKUP_ACCESS_KEY=AKIDEXAMPLE0001
 BACKUP_SECRET_KEY="$SECRET"
 BACKUP_RECIPIENT=$R
+RUNNER=yes
+RUNNER_PTY=yes
+RUNNER_PAIR_CODE=abcde-fghjk
 EOF
 }
 
@@ -86,7 +90,7 @@ if bash "$HERE/../install.sh" --config "$t/answers" --dry-run >"$t/out" 2>&1; th
 for want in 'write /etc/ainkrad/core.env' 'AINKRAD_HOSTNAME=core.example.com' 'acme-staging-v02' '--acme-http01' \
   '--passkeys --allow-origin https://app.example.com' 'write /etc/ainkrad/backup.env' 'AINKRAD_BACKUP_SECRET_KEY=pl****ue' \
   'ainkrad-backup.timer' 'OnCalendar=daily' 'systemctl restart ainkrad-core.service' 'bootstrap /var/lib/ainkrad/core/core.db' \
-  'Still yours to do'; do
+  'RUNNER_ARGS=--enable-pty' '/ainkrad-ptyhost /usr/local/bin/ainkrad-ptyhost' 'Runner on this host (terminals ON; exec.run OFF)' 'Still yours to do'; do
   grep -qF -- "$want" "$t/out" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: dry run lacks: $want" >&2; }
 done
 grep -qF "$SECRET" "$t/out" && { fail=$((fail + 1)); echo "FAIL: the secret key was printed" >&2; } || pass=$((pass + 1))
@@ -98,6 +102,50 @@ else grep -q 'missing in .*ACME_CONTACT, BACKUP_RECIPIENT' "$t/out2" && pass=$((
 # --uninstall --dry-run never names backup.env for removal.
 bash "$HERE/../install.sh" --uninstall --purge --dry-run </dev/null >"$t/out3" 2>&1 || true
 grep '^+ ' "$t/out3" | grep -q backup.env && { fail=$((fail + 1)); echo "FAIL: uninstall touches backup.env" >&2; } || pass=$((pass + 1))
+
+# RUNNER_PTY / RUNNER_PAIR_CODE without RUNNER=yes are refused.
+{ answers; echo RUNNER=no; } >"$t/norunner"
+bash "$HERE/../install.sh" --config "$t/norunner" --dry-run >"$t/out4" 2>&1 && { fail=$((fail + 1)); echo "FAIL: RUNNER_PTY without RUNNER accepted" >&2; } || pass=$((pass + 1))
+
+# The runner installer (deploy/install-linux.sh) into a throwaway prefix: terminals are off unless asked for.
+D=$HERE/../../deploy
+chmod +x "$t"/bin/*
+bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --prefix "$t/p1" >/dev/null 2>&1 &&
+  grep -qx 'RUNNER_ARGS=' "$t/p1/etc/ainkrad-runner/runner.env" && [ -x "$t/p1/usr/local/bin/ainkrad-ptyhost" ] &&
+  pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: runner install, pty off" >&2; }
+bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --pty --prefix "$t/p2" >/dev/null 2>&1 &&
+  grep -qx 'RUNNER_ARGS=--enable-pty' "$t/p2/etc/ainkrad-runner/runner.env" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: runner install, pty on" >&2; }
+bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --pty --ca /x/ca.pem --prefix "$t/p3" >/dev/null 2>&1 &&
+  grep -qx 'RUNNER_ARGS=--enable-pty --ca /x/ca.pem' "$t/p3/etc/ainkrad-runner/runner.env" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: runner install, ca" >&2; }
+rm "$t/bin/ainkrad-ptyhost"
+bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --pty --prefix "$t/p4" >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: --pty without a ptyhost accepted" >&2; } || pass=$((pass + 1))
+bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --pair http://core.example.com --code X --dry-run >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: --pair over http accepted" >&2; } || pass=$((pass + 1))
+bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --pair https://core.example.com --dry-run >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: --pair without a code accepted" >&2; } || pass=$((pass + 1))
+bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --pty --pair https://core.example.com --code ABCDE-FGHJK --dry-run >"$t/out5" 2>&1 &&
+  grep -q 'runuser -u ainkrad-runner -- /usr/local/bin/ainkrad-runner pair https://core.example.com --code ABCDE-FGHJK --state /var/lib/ainkrad-runner/core' "$t/out5" &&
+  pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: --pair dry run" >&2; }
+
+# The units: terminal hosts must outlive a runner stop; exec.run and pty are never switched on by the unit itself.
+U=$D/systemd/ainkrad-runner.service
+grep -qx 'KillMode=process' "$U" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: unit lacks KillMode=process" >&2; }
+grep -v '^#' "$U" | grep -q -- '--enable-' && { fail=$((fail + 1)); echo "FAIL: the unit enables a driver" >&2; } || pass=$((pass + 1))
+P=$D/launchd/io.ainkrad.runner.plist
+grep -A1 '<key>AbandonProcessGroup</key>' "$P" | grep -q '<true/>' && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: plist lacks AbandonProcessGroup" >&2; }
+sed '/<!--/,/-->/d' "$P" | grep -q -- '--enable-' && { fail=$((fail + 1)); echo "FAIL: the plist enables a driver" >&2; } || pass=$((pass + 1))
+# The Mac side, dry: nothing is loaded or written.
+bash "$D/launchd/install.sh" install --binary-dir "$t/bin" --dry-run >"$t/out6" 2>&1 && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: launchd install dry run" >&2; }
+bash "$D/launchd/install.sh" pair https://core.example.com --code ABCDE-FGHJK --dry-run >"$t/out7" 2>&1 || true
+if [ "$(uname -s)" = Darwin ]; then
+  plutil -lint "$P" >/dev/null && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: plist does not lint" >&2; }
+  # The package: refuses to sign or notarise without its environment, and an ad hoc package is made from stub binaries.
+  M=$HERE/../release/mac-package.sh
+  mkdir "$t/mb"; for n in ainkrad-runner ainkrad-ptyhost; do cp /usr/bin/true "$t/mb/$n"; done
+  env -u MACOS_SIGN_ID -u MACOS_TEAM_ID bash "$M" 9.9.9 --bin-dir "$t/mb" --out "$t/o1" --sign >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: --sign without MACOS_SIGN_ID" >&2; } || pass=$((pass + 1))
+  MACOS_SIGN_ID="Developer ID Application: Test (AAAAAAAAAA)" MACOS_TEAM_ID=BBBBBBBBBB bash "$M" 9.9.9 --bin-dir "$t/mb" --out "$t/o1" --sign >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: identity/team mismatch accepted" >&2; } || pass=$((pass + 1))
+  env -u AINKRAD_RELEASE_APPROVED MACOS_SIGN_ID="Developer ID Application: Test (AAAAAAAAAA)" MACOS_TEAM_ID=AAAAAAAAAA NOTARY_PROFILE=x bash "$M" 9.9.9 --bin-dir "$t/mb" --out "$t/o1" --sign --notarize >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: --notarize without approval" >&2; } || pass=$((pass + 1))
+  bash "$M" 9.9.9 --bin-dir "$t/mb" --out "$t/o2" >"$t/out8" 2>&1 && ls "$t/o2"/ainkrad-runner-9.9.9-macos-*-adhoc.zip >/dev/null 2>&1 && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: ad hoc package:" >&2; tail -n5 "$t/out8" >&2; }
+  grep -q 'NOT RUN: notarisation' "$t/out8" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: ad hoc package did not say notarisation is not run" >&2; }
+fi
 
 echo "install tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]

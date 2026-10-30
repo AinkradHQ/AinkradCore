@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # E1-15.3, macOS sign + notarise DRY RUN: scripts/release/macos.sh <binary>...
-# Signs with the Developer ID when that identity is in the keychain (ad hoc otherwise), then verifies with codesign
+# Signs with the Developer ID named by MACOS_SIGN_ID when that identity is in the keychain (ad hoc otherwise), then verifies with codesign
 # and spctl.
 # Then RUNS each signed binary (`--help`): a signature that verifies can still be refused at launch (a
 # dylib the hardened runtime will not map), and only running it shows that. `MACOS_SIGN_ID=-` signs ad hoc
@@ -9,7 +9,9 @@
 # Apple's secure timestamp, which notarisation requires and which contacts timestamp.apple.com; the dry run signs
 # with `--timestamp=none` and contacts nobody.
 set -uo pipefail
-ID=${MACOS_SIGN_ID:-"Developer ID Application: ULINK sp. z o.o. (RT9AA68C38)"}
+# The Developer ID identity comes from the environment only (MACOS_SIGN_ID="Developer ID Application: <name> (<team>)"); no
+# identity lives in the repo. Unset means ad hoc (`-`), which is what a dry run on any Mac uses.
+ID=${MACOS_SIGN_ID:--}
 if [ "$ID" != - ] && ! security find-identity -v -p codesigning | grep -qF "$ID"; then
   [ "${CODESIGN_TIMESTAMP:-0}" = 1 ] && { echo "macos: identity '$ID' is not in the keychain: a release cannot sign"; exit 1; }
   echo "macos: identity '$ID' is not in the keychain: signing ad hoc instead (MACOS_SIGN_ID=-)"; ID=-
