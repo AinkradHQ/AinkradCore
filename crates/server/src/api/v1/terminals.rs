@@ -426,6 +426,7 @@ pub async fn attach(
             )
         })
 }
+#[allow(clippy::too_many_arguments)]
 async fn stream(
     app: App,
     mut socket: WebSocket,
