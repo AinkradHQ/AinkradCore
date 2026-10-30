@@ -10,7 +10,7 @@
 use serde_json::Value;
 use utoipa::OpenApi;
 
-use super::{model, org};
+use super::{accounts, model, org};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -52,6 +52,7 @@ fn prefixed(id: &str) -> String {
 pub fn document() -> Value {
     let mut api = ApiDoc::openapi();
     for other in [
+        accounts::Doc::openapi(),
         super::org_admin::Doc::openapi(),
         super::work::Doc::openapi(),
         super::planning::Doc::openapi(),

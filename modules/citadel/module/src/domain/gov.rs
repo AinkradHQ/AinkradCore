@@ -13,6 +13,7 @@ mod knowledge;
 pub use knowledge::*;
 
 id!(
+    AccountId,
     ApprovalId,
     BudgetId,
     SkillId,
@@ -20,6 +21,25 @@ id!(
     PriceId,
     ArtifactId
 );
+
+text_enum!(AccountStatus {
+    Active => "active",
+    Cooling => "cooling",
+    Disabled => "disabled",
+});
+
+text_enum!(LimitUnit {
+    Tokens => "tokens",
+    Messages => "messages",
+});
+
+text_enum!(PlanTier {
+    Pro => "pro",
+    Max5x => "max_5x",
+    Max20x => "max_20x",
+    Plus => "plus",
+    Api => "api",
+});
 
 // What an agent published (E15.12).
 text_enum!(ArtifactKind {

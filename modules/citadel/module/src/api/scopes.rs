@@ -12,7 +12,7 @@
 
 use std::sync::LazyLock;
 
-use super::{governance, org_admin, planning, work};
+use super::{accounts, governance, org_admin, planning, work};
 
 /// `(method, template, scope)`, templates relative to `/modules/citadel/v1`: slices 1 and 2's;
 /// each later slice lists its own in its seam file (`org_admin`, `work`, `governance`).
@@ -37,6 +37,7 @@ pub static ALL: LazyLock<Vec<(&str, &str, &str)>> = LazyLock::new(|| {
         work::SCOPES,
         planning::SCOPES,
         governance::SCOPES,
+        accounts::SCOPES,
     ]
     .concat()
 });
