@@ -240,6 +240,8 @@ async fn a_rotated_core_keeps_its_runners() {
     let now = SystemClock.unix();
     let old = Identity::load_at(&dir, now).unwrap();
     let r = Identity::rotate(&dir, now).unwrap();
+    // What `serve` does on loading the statement: the window starts now.
+    Identity::announce(&dir, now).unwrap();
     let tcp = || Listen::Tcp("127.0.0.1:0".to_owned());
     let a = Core::start_on("rotate-a", quick(), tcp(), Some(&dir), None).await;
     assert_eq!(
@@ -277,7 +279,7 @@ async fn a_rotated_core_keeps_its_runners() {
     first.abort();
 
     // The window is over: the next start of the Core is the new key.
-    Identity::load_at(&dir, r.not_before).unwrap();
+    Identity::load_at(&dir, now + ainkrad_core_server::auth::identity::WINDOW).unwrap();
     let b = Core::start_on("rotate-b", quick(), tcp(), Some(&dir), None).await;
     assert_eq!(b.app.auth.identity.fp, r.new_fp);
     assert!(b.app.auth.identity.rotation.is_none());

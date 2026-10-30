@@ -216,11 +216,13 @@ fn rotate_identity(db: &Path) -> Result_ {
     // that lands with the next contract change.
     let r = Identity::rotate(state_dir(db), SystemClock.unix())?;
     eprintln!(
-        "rotation to {} started; the current key {} signs for {} more days.\n\
-         Restart serve now so runners receive the statement; the first start from {} on \
-         switches to the new key. Native clients and runners offline for the whole window pair again.",
+        "rotation to {} started; the current key {} signs for at least {} more days.\n\
+         Restart serve now so runners receive the statement: the window counts from that \
+         start, and the first start {} days after it (and not before {}) switches to the new key. \
+         Native clients and runners offline for the whole window pair again.",
         r.new_fp,
         r.old_fp,
+        WINDOW / 86_400,
         WINDOW / 86_400,
         r.not_before
     );
@@ -585,6 +587,15 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
         state_dir(db),
     )?);
     tracing::info!(core_fp = identity.fp, "Core identity");
+    if let Some(r) = &identity.rotation {
+        // This serve announces the statement: the window counts from the first one that does.
+        ainkrad_core_server::auth::Identity::announce(state_dir(db), SystemClock.unix())?;
+        tracing::warn!(
+            new_fp = r.new_fp,
+            "Core identity rotation pending: runners get the statement; the new key takes over at \
+             the first start a full window after the first announcement"
+        );
+    }
     let mut app = App::new(pool, Arc::new(SystemClock), host, identity);
     app.limits = limits;
     if flags.plain_runner {

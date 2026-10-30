@@ -5,11 +5,16 @@
 //! **Rotation** (handshake spec §13, planned rotation; never for a compromised key):
 //! `ainkrad-core-server identity rotate <db>` ([`rotate`]) writes a new key beside the current
 //! one (`core-identity.next.p8`, 0600) and the statement `Rotation{old_fp, new_fp, not_before,
-//! seq}` signed by the current key (`core-rotation.json`), `not_before` [`WINDOW`] ahead. While
-//! the window is open the Core keeps presenting the current key and the hub sends the statement
-//! on every runner connection, so a runner that connects at any time in the window records the
-//! new key beside its pin. The first start at or after `not_before` makes the new key the
-//! identity: the old key file is replaced (destroyed) and the statement removed. A runner then
+//! seq}` signed by the current key (`core-rotation.json`), `not_before` [`WINDOW`] ahead. The
+//! window counts from the first `serve` that loads the statement and so starts announcing it
+//! (`core-rotation.announced`, stamped by [`Identity::announce`]), not from `rotate`: a Core not
+//! restarted after `rotate` has announced nothing, and switching keys at its first restart would
+//! strand every runner (re-review M2). Until `max(not_before, announced + WINDOW)` the Core keeps
+//! presenting the current key and the hub sends the statement on every runner connection, so a
+//! runner that connects at any time in the window records the new key beside its pin. The first
+//! start after that makes the new key the identity: the old key file is replaced (destroyed) and
+//! the statement removed. While a rotation is pending, the next key must be there and match the
+//! statement, or the Core refuses to start before announcing anything (L1). A runner then
 //! moves its pin when the Core first proves the new key. Not covered: a runner offline for the
 //! whole window, and native clients (they get no statement); both pair again. A backup taken
 //! during the window does not carry the next key.
@@ -31,6 +36,8 @@ pub const FILE: &str = "core-identity.p8";
 pub const NEXT: &str = "core-identity.next.p8";
 /// The rotation statement during its window.
 pub const ROTATION: &str = "core-rotation.json";
+/// When a `serve` first announced the statement (unix seconds, unsigned): the window's start.
+pub const ANNOUNCED: &str = "core-rotation.announced";
 /// How long the current key keeps signing after `identity rotate`, seconds (§13: 7 days).
 pub const WINDOW: i64 = 7 * 86_400;
 
@@ -91,8 +98,9 @@ impl Identity {
     pub fn load_at(dir: &Path, now: i64) -> std::io::Result<Self> {
         let path = dir.join(FILE);
         let pending = read_rotation(dir)?;
+        let announced = read_announced(dir)?;
         if let Some(r) = &pending
-            && now >= r.not_before
+            && announced.is_some_and(|at| now >= r.not_before.max(at.saturating_add(WINDOW)))
         {
             // The window is over: the next key becomes the identity. A crash after the rename
             // leaves the statement, which the next start removes (the key already matches).
@@ -115,6 +123,7 @@ impl Identity {
                 )));
             }
             std::fs::remove_file(dir.join(ROTATION))?;
+            let _ = std::fs::remove_file(dir.join(ANNOUNCED));
             tracing::info!(core_fp = current.fp, "Core identity rotated to the new key");
             return Ok(current);
         }
@@ -152,20 +161,62 @@ impl Identity {
                     me.fp
                 )));
             }
+            // The key the statement announces must be here for the switch, checked before
+            // anything is announced (re-review L1).
+            let next = dir.join(NEXT);
+            let fp = read_private(&next)
+                .and_then(|der| Self::from_pkcs8(&der))
+                .map_err(|e| {
+                    std::io::Error::other(format!(
+                        "{ROTATION} announces {} but {} is unusable ({e}); restore it, or remove \
+                         {ROTATION} to abandon the rotation",
+                        r.new_fp,
+                        next.display()
+                    ))
+                })?
+                .fp;
+            if fp != r.new_fp {
+                return Err(std::io::Error::other(format!(
+                    "{} is {fp}, not the key {ROTATION} announces ({})",
+                    next.display(),
+                    r.new_fp
+                )));
+            }
             me.rotation = Some(r);
         }
         Ok(me)
     }
 
+    /// Stamps the window's start the first time a `serve` loads a pending statement (and so
+    /// announces it); later calls keep the first stamp. Nothing to do without a statement.
+    pub fn announce(dir: &Path, now: i64) -> std::io::Result<()> {
+        if !dir.join(ROTATION).exists() || read_announced(dir)?.is_some() {
+            return Ok(());
+        }
+        match write_private(&dir.join(ANNOUNCED), now.to_string().as_bytes(), true) {
+            Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => Err(e),
+            _ => Ok(()),
+        }
+    }
+
     /// Starts a rotation in `dir` at `now` (`identity rotate`): writes the next key and the
     /// statement, signed by the current key, with `not_before = now + WINDOW`. Refused while a
-    /// rotation is pending. The running Core sends the statement from its next start.
+    /// rotation is pending. The running Core sends the statement from its next start, and the
+    /// window counts from then. What an interrupted earlier `rotate` left (a next key or a
+    /// stamp with no statement) is cleared first (re-review L2).
     pub fn rotate(dir: &Path, now: i64) -> std::io::Result<Rotation> {
         if let Some(r) = read_rotation(dir)? {
             return Err(std::io::Error::other(format!(
-                "a rotation to {} is already pending until {}",
+                "a rotation to {} is already pending (not before {}, and a full window after the \
+                 first serve that announces it)",
                 r.new_fp, r.not_before
             )));
+        }
+        for stale in [NEXT, ANNOUNCED] {
+            match std::fs::remove_file(dir.join(stale)) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+                _ => {}
+            }
         }
         let current = Self::load_at(dir, now)?;
         let der = Self::generate_pkcs8()?;
@@ -239,6 +290,20 @@ fn write_private(path: &Path, bytes: &[u8], new: bool) -> std::io::Result<()> {
     written
 }
 
+/// When a `serve` first announced the pending statement, if one did.
+fn read_announced(dir: &Path) -> std::io::Result<Option<i64>> {
+    let path = dir.join(ANNOUNCED);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = String::from_utf8_lossy(&read_private(&path)?)
+        .trim()
+        .to_owned();
+    text.parse()
+        .map(Some)
+        .map_err(|e| std::io::Error::other(format!("{}: {e}", path.display())))
+}
+
 /// The pending rotation statement in `dir`, if any.
 fn read_rotation(dir: &Path) -> std::io::Result<Option<Rotation>> {
     let path = dir.join(ROTATION);
@@ -303,16 +368,31 @@ mod tests {
             "one rotation per window"
         );
 
-        let during = Identity::load_at(&dir, 1_000 + WINDOW - 1).unwrap();
-        assert_eq!(during.fp, old.fp, "the old key signs through the window");
+        // Never announced (no serve since `rotate`): past `not_before` the old key stays, so a
+        // late first restart strands no runner (re-review M2).
+        let unannounced = Identity::load_at(&dir, 1_000 + 2 * WINDOW).unwrap();
+        assert_eq!(unannounced.fp, old.fp);
+        assert_eq!(unannounced.rotation.as_ref(), Some(&r));
+        // The first serve announces it late; the window counts from then, and a second stamp
+        // keeps the first.
+        let first = 1_000 + 2 * WINDOW;
+        Identity::announce(&dir, first).unwrap();
+        Identity::announce(&dir, first + 50).unwrap();
+        let during = Identity::load_at(&dir, first + WINDOW - 1).unwrap();
+        assert_eq!(
+            during.fp, old.fp,
+            "the old key signs through the announced window"
+        );
         assert_eq!(during.rotation.as_ref(), Some(&r));
 
-        let after = Identity::load_at(&dir, 1_000 + WINDOW).unwrap();
+        let after = Identity::load_at(&dir, first + WINDOW).unwrap();
         assert_eq!(after.fp, r.new_fp);
         assert!(after.rotation.is_none());
-        assert!(!dir.join(NEXT).exists() && !dir.join(ROTATION).exists());
+        for f in [NEXT, ROTATION, ANNOUNCED] {
+            assert!(!dir.join(f).exists(), "{f}");
+        }
         assert_eq!(
-            Identity::load_at(&dir, 1_000 + WINDOW).unwrap().fp,
+            Identity::load_at(&dir, first + WINDOW).unwrap().fp,
             r.new_fp
         );
 
@@ -325,6 +405,34 @@ mod tests {
         std::fs::set_permissions(dir.join(ROTATION), std::fs::Permissions::from_mode(0o600))
             .unwrap();
         assert!(Identity::load_at(&dir, 1_000).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Re-review L1 and L2: a pending rotation whose next key is missing or another key stops
+    /// the Core before it announces anything; a `rotate` interrupted before its statement was
+    /// written does not block the next one.
+    #[test]
+    fn a_missing_next_key_fails_early_and_an_interrupted_rotate_recovers() {
+        let dir = std::env::temp_dir().join(format!("core-identity-l12-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = Identity::load_at(&dir, 1_000).unwrap();
+        // L2: an orphan next key (the crash came before the statement).
+        write_private(&dir.join(NEXT), b"not a key", true).unwrap();
+        let r = Identity::rotate(&dir, 1_000).unwrap();
+        assert_eq!(r.old_fp, old.fp);
+        // L1: the next key goes missing, or is replaced, while the rotation is pending.
+        let der = std::fs::read(dir.join(NEXT)).unwrap();
+        std::fs::remove_file(dir.join(NEXT)).unwrap();
+        let e = Identity::load_at(&dir, 1_001).unwrap_err().to_string();
+        assert!(e.contains(NEXT), "{e}");
+        let other = Identity::generate_pkcs8().unwrap();
+        write_private(&dir.join(NEXT), &other, true).unwrap();
+        let e = Identity::load_at(&dir, 1_001).unwrap_err().to_string();
+        assert!(e.contains("not the key"), "{e}");
+        std::fs::remove_file(dir.join(NEXT)).unwrap();
+        write_private(&dir.join(NEXT), &der, true).unwrap();
+        assert_eq!(Identity::load_at(&dir, 1_001).unwrap().rotation, Some(r));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
