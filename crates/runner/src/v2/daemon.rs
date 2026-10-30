@@ -19,7 +19,7 @@ use tokio::sync::watch;
 use super::client::{Client, LinkError};
 use super::dial::dial;
 use super::key::{self, Enrolment, Key};
-use super::{ExecDriver, Link, Session};
+use super::{ExecDriver, Link, PtyDriver, Session};
 
 /// Dials in a row refused `auth_failed` before the runner gives up. Under the Core's lockout of
 /// an address and device (5 failures in 10 minutes), so the last answer is still the refusal,
@@ -59,6 +59,8 @@ pub struct Daemon {
     /// Where a rotated pin is saved.
     pub save: Option<PathBuf>,
     pub exec: Arc<ExecDriver>,
+    /// Terminals (`--enable-pty`), if offered.
+    pub pty: Option<Arc<PtyDriver>>,
     pub tls: Option<Arc<rustls::ClientConfig>>,
     pub backoff: Backoff,
 }
@@ -67,6 +69,9 @@ impl Daemon {
     /// Runs until `stop` turns true (`Ok`) or a configuration error (`Err`).
     pub async fn run(self, mut stop: watch::Receiver<bool>) -> Result<(), LinkError> {
         let mut session = Session::new(Arc::clone(&self.exec));
+        if let Some(pty) = &self.pty {
+            session = session.with_pty(Arc::clone(pty));
+        }
         let mut delay = self.backoff.min;
         let mut refused = 0;
         loop {
@@ -142,6 +147,7 @@ impl Daemon {
 pub async fn from_state(
     state: &key::State,
     exec: Arc<ExecDriver>,
+    pty: Option<Arc<PtyDriver>>,
     tls: Option<Arc<rustls::ClientConfig>>,
     stop: watch::Receiver<bool>,
 ) -> Result<(), LinkError> {
@@ -154,6 +160,7 @@ pub async fn from_state(
         enrolment: Arc::new(Mutex::new(enrolment)),
         save: Some(state.enrolment()),
         exec,
+        pty,
         tls,
         backoff: Backoff::default(),
     };
@@ -216,6 +223,7 @@ mod tests {
             enrolment: Arc::new(Mutex::new(enrolment)),
             save: None,
             exec: Arc::new(super::super::exec::tests::driver(1)),
+            pty: None,
             tls: None,
             backoff: Backoff {
                 min: Duration::from_millis(10),

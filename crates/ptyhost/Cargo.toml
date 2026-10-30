@@ -7,6 +7,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[[bin]]
+name = "ainkrad-ptyhost"
+path = "src/main.rs"
+
 [dependencies]
 ainkrad-proto = { path = "../proto" }
 ainkrad-sys = { path = "../sys" }
