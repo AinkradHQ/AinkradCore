@@ -18,6 +18,16 @@ pub enum Command {
     Noop,
     #[serde(rename = "exec.run")]
     ExecRun(ExecRun),
+    #[serde(rename = "agent.start")]
+    AgentStart(super::AgentStart),
+    #[serde(rename = "agent.read")]
+    AgentRead(super::AgentRead),
+    #[serde(rename = "agent.send")]
+    AgentSend(super::AgentSend),
+    #[serde(rename = "agent.decide")]
+    AgentDecide(super::AgentDecide),
+    #[serde(rename = "agent.stop")]
+    AgentStop(super::AgentStop),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -29,6 +39,11 @@ impl Command {
         match self {
             Self::Noop => OP_NOOP,
             Self::ExecRun(_) => OP_EXEC_RUN,
+            Self::AgentStart(_) => super::OP_AGENT_START,
+            Self::AgentRead(_) => super::OP_AGENT_READ,
+            Self::AgentSend(_) => super::OP_AGENT_SEND,
+            Self::AgentDecide(_) => super::OP_AGENT_DECIDE,
+            Self::AgentStop(_) => super::OP_AGENT_STOP,
             Self::Unknown => "unknown",
         }
     }
@@ -76,6 +91,17 @@ pub enum Reply {
     Noop,
     #[serde(rename = "exec.run")]
     ExecRun(ExecResult),
+    /// Every `agent.*` op answers with the session's state (`agent.read` with its entries).
+    #[serde(rename = "agent.start")]
+    AgentStart(super::AgentEvents),
+    #[serde(rename = "agent.read")]
+    AgentRead(super::AgentEvents),
+    #[serde(rename = "agent.send")]
+    AgentSend(super::AgentEvents),
+    #[serde(rename = "agent.decide")]
+    AgentDecide(super::AgentEvents),
+    #[serde(rename = "agent.stop")]
+    AgentStop(super::AgentEvents),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

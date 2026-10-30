@@ -144,6 +144,7 @@ fn v2_frames_are_pinned() {
                 name: "exec".to_owned(),
                 commands: vec![OP_NOOP.to_owned(), OP_EXEC_RUN.to_owned()],
                 capacity: 4,
+                ..Default::default()
             }],
             os: Some("linux".to_owned()),
             arch: Some("aarch64".to_owned()),
@@ -318,4 +319,97 @@ fn v2_reads_what_a_newer_peer_sends() {
     // A close may come without a payload.
     let f = frame(r#"{"stream_id":1,"kind":"close","seq":1}"#);
     assert_eq!(f.body(), Ok(Some(Body::Close(Close::default()))));
+}
+
+/// Agent sessions (E2-08): the `agent` driver's ops, and a driver with slots and streams.
+#[test]
+fn v2_agent_frames_are_pinned() {
+    let v2 = |name, stream, seq, body| check("v2", name, Frame::new(stream, seq, body));
+    v2(
+        "hello_agent",
+        CONTROL_STREAM,
+        0,
+        Body::Control(Control::Hello(RunnerHello {
+            protocol: PROTOCOL_VERSION.to_owned(),
+            runner_version: "0.1.0".to_owned(),
+            drivers: vec![DriverInfo {
+                name: AGENT_DRIVER.to_owned(),
+                commands: AGENT_OPS.iter().map(|o| (*o).to_owned()).collect(),
+                capacity: 2,
+                slots: BTreeMap::from([("claude".to_owned(), 2), ("codex".to_owned(), 1)]),
+                streams: Some(12),
+            }],
+            ..Default::default()
+        })),
+    );
+    v2(
+        "agent_start",
+        5,
+        0,
+        Body::Command(Command::AgentStart(AgentStart {
+            session: "as_a".to_owned(),
+            harness: "claude".to_owned(),
+            model: Some("haiku".to_owned()),
+            prompt: Some("fix the bug".to_owned()),
+            workspace: None,
+            policy: Policy::default(),
+            resume: Some("h-1".to_owned()),
+            secrets: vec![SecretGrant {
+                lease: "l_lease".to_owned(),
+                var: "GH_TOKEN".to_owned(),
+            }],
+        })),
+    );
+    v2(
+        "agent_read",
+        7,
+        0,
+        Body::Command(Command::AgentRead(AgentRead {
+            session: "as_a".to_owned(),
+            after: 3,
+            wait_ms: Some(20000),
+        })),
+    );
+    v2(
+        "agent_events",
+        7,
+        0,
+        Body::Result(Reply::AgentRead(AgentEvents {
+            session: "as_a".to_owned(),
+            state: AgentState::Ended,
+            last_seq: 4,
+            entries: vec![TranscriptEntry {
+                seq: 4,
+                at: 1761730000000,
+                body: json!({"type": "ended", "outcome": {"kind": "succeeded"}}),
+            }],
+            harness_session: Some("h-1".to_owned()),
+            usage: Some(runner::Tokens {
+                input: 10,
+                output: 20,
+                ..Default::default()
+            }),
+            outcome: Some(Outcome::Succeeded),
+        })),
+    );
+    v2(
+        "agent_decide",
+        9,
+        0,
+        Body::Command(Command::AgentDecide(AgentDecide {
+            session: "as_a".to_owned(),
+            request: "t1".to_owned(),
+            approved: false,
+            reply: Some("not on main".to_owned()),
+        })),
+    );
+    v2(
+        "agent_stop",
+        11,
+        0,
+        Body::Command(Command::AgentStop(AgentStop {
+            session: "as_a".to_owned(),
+            kill: true,
+        })),
+    );
 }

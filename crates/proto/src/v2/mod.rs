@@ -38,8 +38,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod agent;
 mod auth;
 mod command;
+pub use agent::*;
 pub use auth::*;
 pub use command::*;
 
@@ -214,14 +216,24 @@ pub struct StreamState {
     pub received: u64,
 }
 
-/// A driver a runner offers (`exec` now; `pty`, `harness` later).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+/// A driver a runner offers (`exec`, `agent`; `pty` later).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DriverInfo {
     pub name: String,
     /// The command ops it takes, e.g. `noop`, `exec.run`.
     pub commands: Vec<String>,
-    /// How many of its commands run at once; one more is answered `busy`.
+    /// How many of its commands run at once; one more is answered `busy`. For `agent`: how
+    /// many sessions.
     pub capacity: u32,
+    /// Per kind within the driver (`agent`: per harness), how many run at once; together at
+    /// most `capacity`. Empty: no split.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub slots: std::collections::BTreeMap<String, u32>,
+    /// How many of its commands may be in flight at once, when that is not `capacity` (a
+    /// driver whose work outlives its commands, like `agent`): the hub counts these per
+    /// driver. Absent: `capacity`, counted with every other driver's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub streams: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

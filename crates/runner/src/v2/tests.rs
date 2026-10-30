@@ -181,6 +181,7 @@ async fn hello_lists_the_exec_driver_and_its_capacity_then_noop_answers() {
             name: "exec".to_owned(),
             commands: vec![OP_NOOP.to_owned(), OP_EXEC_RUN.to_owned()],
             capacity: 3,
+            ..DriverInfo::default()
         }]
     );
     core.send(1, Body::Command(Command::Noop)).await;

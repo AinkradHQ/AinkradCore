@@ -12,7 +12,8 @@
 //!   Core runs) and hands back its frames as a [`Dispatched`] stream: `output` frames, then one
 //!   `result` or `error`. [`Hub::noop`] is the no-op command end to end.
 //! - **Backpressure.** At most `min(sum of the runner's driver capacities, max_inflight)`
-//!   commands in flight per runner (`busy` past it), a bounded send queue per connection
+//!   commands in flight per runner (`busy` past it); a driver that declares its own `streams`
+//!   (`agent`, E2-08.1: its sessions outlive its commands) is counted apart, against that, a bounded send queue per connection
 //!   (`busy` when full; a send stuck past `send_timeout` closes with 1013), and per-stream
 //!   credit for `output`: a runner may send `STREAM_WINDOW` bytes, and more only as the
 //!   dispatcher reads them (`credit`). Output past its credit fails the stream.
@@ -89,6 +90,8 @@ struct Pending {
     sent: Vec<Frame>,
     received: u64,
     credit: u64,
+    /// The driver, when it declares its own `streams` (counted apart).
+    own: Option<String>,
 }
 
 impl Pending {
@@ -125,9 +128,41 @@ impl Runner {
             .hello
             .drivers
             .iter()
-            .map(|d| u64::from(d.capacity))
+            .map(|d| u64::from(d.streams.unwrap_or(d.capacity)))
             .sum();
         usize::try_from(sum).unwrap_or(usize::MAX).min(max)
+    }
+
+    /// Whether one more `op` is over a cap: its driver's own `streams` (E2-08.1), or else the
+    /// capacity the drivers without their own share; and `max` in all.
+    fn full(&self, op: &str, max: usize) -> (bool, Option<String>) {
+        let d = self
+            .hello
+            .drivers
+            .iter()
+            .find(|d| d.commands.iter().any(|c| c == op));
+        let own = d.and_then(|d| d.streams.map(|s| (d.name.clone(), s)));
+        let count = |name: Option<&str>| {
+            self.inflight
+                .values()
+                .filter(|p| p.own.as_deref() == name)
+                .count()
+        };
+        let full = self.inflight.len() >= max
+            || match &own {
+                Some((name, streams)) => count(Some(name)) >= *streams as usize,
+                None => {
+                    let shared: u64 = self
+                        .hello
+                        .drivers
+                        .iter()
+                        .filter(|d| d.streams.is_none())
+                        .map(|d| u64::from(d.capacity))
+                        .sum();
+                    count(None) as u64 >= shared
+                }
+            };
+        (full, own.map(|o| o.0))
     }
 
     /// Every command in flight is reported `lost`, once.
@@ -242,7 +277,8 @@ impl Hub {
                 "the runner did not advertise that command",
             ));
         }
-        if r.inflight.len() >= r.capacity(self.config.max_inflight) {
+        let (full, own) = r.full(command.op(), self.config.max_inflight);
+        if full {
             return Err(err(ErrorCode::Busy, "the runner is at its capacity"));
         }
         let stream = self.streams.fetch_add(2, Ordering::Relaxed);
@@ -252,6 +288,7 @@ impl Hub {
             sent: Vec::new(),
             received: 0,
             credit: STREAM_WINDOW,
+            own,
         };
         let frame = p.frame(stream, Body::Command(command));
         let conn = r.conn.as_ref().expect("filtered above");
