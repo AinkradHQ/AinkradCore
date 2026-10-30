@@ -194,12 +194,6 @@
           "at": {
             "$ref": "#/components/schemas/Timestamp"
           },
-          "note": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "plan_tier": {
             "$ref": "#/components/schemas/PlanTierApi"
           },
@@ -277,9 +271,6 @@
             },
             "type": "array"
           },
-          "delivery": {
-            "type": "string"
-          },
           "five_hours": {
             "$ref": "#/components/schemas/WindowUsageOut"
           },
@@ -314,15 +305,6 @@
             "format": "int64",
             "type": "integer"
           },
-          "runners": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "secret_name": {
-            "type": "string"
-          },
           "seven_days": {
             "$ref": "#/components/schemas/WindowUsageOut"
           },
@@ -346,9 +328,6 @@
           "id",
           "harness",
           "label",
-          "secret_name",
-          "delivery",
-          "runners",
           "billing",
           "status",
           "company_ids",
@@ -1522,6 +1501,7 @@
           "citadel.issue.moved",
           "citadel.issue.nudged",
           "citadel.issue.pr_closed",
+          "citadel.issue.pr_merge_stale",
           "citadel.issue.pr_merged",
           "citadel.issue.pr_merging",
           "citadel.issue.pr_opened",
@@ -12074,7 +12054,7 @@
         "tags": [
           "governance"
         ],
-        "x-ainkrad-scope": "read"
+        "x-ainkrad-scope": "admin"
       },
       "post": {
         "operationId": "citadelCreateAccount",
@@ -13368,6 +13348,71 @@
         "x-ainkrad-scope": "approve"
       }
     },
+    "/modules/citadel/v1/approvals/{id}/decide-forge": {
+      "post": {
+        "operationId": "citadelDecideForgeApproval",
+        "parameters": [
+          {
+            "description": "Approval id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Decision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Approval"
+                }
+              }
+            },
+            "description": "A decided `pr_merge` or `workflow_push`; needs a step-up"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "approvals"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "approve"
+      }
+    },
     "/modules/citadel/v1/approvals/{id}/raise": {
       "post": {
         "operationId": "citadelRaiseApproval",
@@ -13640,7 +13685,7 @@
         "tags": [
           "artifacts"
         ],
-        "x-ainkrad-scope": "read"
+        "x-ainkrad-scope": "admin"
       }
     },
     "/modules/citadel/v1/avatars/palettes": {

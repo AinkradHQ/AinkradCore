@@ -116,14 +116,37 @@ async fn every_mutating_account_and_upload_route_needs_a_step_up_and_a_scope() {
             "{path}"
         );
     }
-    // A read-only device can still read the accounts and the reports.
-    for p in ["/accounts", "/accounts/usage"] {
-        assert_eq!(
-            call(&fx, Some(&reader), Method::GET, p, None).await.0,
-            StatusCode::OK,
-            "{p}"
+    // A read-only device reads the usage report, but never the routing detail or the bytes.
+    broker_secret(&fx, "claude-main").await;
+    let body = json!({"harness": "claude", "label": "main", "secret_name": "claude-main", "config_dir": "accounts/main"});
+    let (s, a) = call(&fx, Some(&fx.dev), Method::POST, "/accounts", Some(body)).await;
+    assert_eq!(s, StatusCode::OK, "{a}");
+    for p in ["/accounts/usage", "/companies/1/account-usage"] {
+        let (s, body) = call(&fx, Some(&reader), Method::GET, p, None).await;
+        assert!(
+            s == StatusCode::OK || s == StatusCode::NOT_FOUND,
+            "{p}: {s}"
         );
+        let text = body.to_string();
+        for leak in [
+            "claude-main",
+            "runner-1",
+            "accounts/main",
+            "secret_name",
+            "runners",
+            "delivery",
+            "config_dir",
+            "\"note\"",
+        ] {
+            assert!(!text.contains(leak), "{p} leaks {leak}: {text}");
+        }
     }
+    let usage = call(&fx, Some(&reader), Method::GET, "/accounts/usage", None).await;
+    assert_eq!(usage.0, StatusCode::OK, "the report itself is a read");
+    let r = call(&fx, Some(&reader), Method::GET, "/accounts", None).await;
+    assert_eq!(r.0, StatusCode::FORBIDDEN, "the full list is admin");
+    let r = raw(&fx, &reader, Method::GET, "/artifacts/1/content", vec![]).await;
+    assert_eq!(r.0, StatusCode::FORBIDDEN, "artifact bytes are admin");
 }
 
 #[tokio::test]
@@ -164,6 +187,13 @@ async fn an_account_names_one_broker_secret_and_no_value_is_stored_or_audited() 
             .1
             .to_string()
             .contains("claude-main")
+    );
+    // One broker secret backs one account.
+    let again = json!({"harness": "claude", "label": "second", "secret_name": "claude-main"});
+    let (s, _) = call(&fx, Some(&fx.dev), Method::POST, "/accounts", Some(again)).await;
+    assert!(
+        s.is_client_error(),
+        "a second account on the same secret: {s}"
     );
 
     // No table but the broker's own holds the value; neither does an audit row or an event.
@@ -246,6 +276,12 @@ async fn an_upload_round_trips_and_abuse_is_refused() {
         .unwrap();
     let h = res.headers();
     assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    assert!(
+        h[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap()
+            .contains("sandbox")
+    );
     assert!(
         h[header::CONTENT_DISPOSITION]
             .to_str()

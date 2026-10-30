@@ -45,6 +45,10 @@ fn served(bytes: Vec<u8>, mime: &str, name: &str) -> Response {
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'none'; sandbox"),
+    );
     let safe: String = name
         .chars()
         .map(|c| {

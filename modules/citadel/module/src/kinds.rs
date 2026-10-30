@@ -91,6 +91,7 @@ pub const AUDIT_ACTIONS: &[&str] = &[
     "citadel.issue.moved",
     "citadel.issue.nudged",
     "citadel.issue.pr_closed",
+    "citadel.issue.pr_merge_stale",
     "citadel.issue.pr_merged",
     "citadel.issue.pr_merging",
     "citadel.issue.pr_opened",

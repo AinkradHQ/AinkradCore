@@ -50,6 +50,7 @@ pub fn is_admin_read(template: &str) -> bool {
         work::ADMIN_READS,
         planning::ADMIN_READS,
         governance::ADMIN_READS,
+        accounts::ADMIN_READS,
     ]
     .iter()
     .any(|l| l.contains(&template))
@@ -82,7 +83,9 @@ mod tests {
                 } else if scope != "admin" {
                     assert!(
                         scope == "approve"
-                            && (path.ends_with("/decide") || path.ends_with("/raise")),
+                            && (path.ends_with("/decide")
+                                || path.ends_with("/decide-forge")
+                                || path.ends_with("/raise")),
                         "{method} {path} is {scope}: only an approval decision may be below admin"
                     );
                 }

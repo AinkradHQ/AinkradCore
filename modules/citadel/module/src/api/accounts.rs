@@ -104,7 +104,6 @@ pub struct AccountSignalOut {
     pub plan_tier: Option<PlanTierApi>,
     pub used_percent: Option<u8>,
     pub reset_at: Option<Timestamp>,
-    pub note: Option<String>,
     pub at: Timestamp,
 }
 
@@ -114,7 +113,6 @@ impl From<AccountSignal> for AccountSignalOut {
             plan_tier: s.plan_tier.map(Into::into),
             used_percent: s.used_percent,
             reset_at: opt_ts(s.reset_at.as_deref()),
-            note: s.note,
             at: ts(&s.at),
         }
     }
@@ -248,9 +246,6 @@ pub struct AccountUsageReport {
     pub id: i64,
     pub harness: Harness,
     pub label: String,
-    pub secret_name: String,
-    pub delivery: String,
-    pub runners: Vec<String>,
     pub billing: BillingModel,
     pub status: AccountStatusApi,
     pub status_reason: Option<String>,
@@ -274,9 +269,6 @@ impl From<store::AccountUsage> for AccountUsageReport {
             id: a.id.0,
             harness: a.harness.into(),
             label: a.label,
-            secret_name: a.secret_name,
-            delivery: a.delivery,
-            runners: a.runners,
             billing: a.billing.into(),
             status: a.status.into(),
             status_reason: a.status_reason,
@@ -581,10 +573,12 @@ pub fn routes() -> Router<App> {
 }
 
 pub const SCOPES: &[(&str, &str, &str)] = &[
-    ("GET", "/accounts", "read"),
     ("GET", "/accounts/usage", "read"),
     ("GET", "/companies/{id}/account-usage", "read"),
 ];
+
+/// The full account list names broker secrets and runners: `admin`, not a phone read.
+pub const ADMIN_READS: &[&str] = &["/accounts"];
 
 pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/accounts"),

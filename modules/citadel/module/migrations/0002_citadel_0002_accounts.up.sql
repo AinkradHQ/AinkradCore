@@ -6,7 +6,7 @@ CREATE TABLE citadel_accounts (
     id            INTEGER PRIMARY KEY,
     harness       TEXT    NOT NULL CHECK (harness IN ('claude', 'codex', 'opencode', 'agy')),
     label         TEXT    NOT NULL UNIQUE CHECK (length(label) BETWEEN 1 AND 64),
-    secret_name   TEXT    NOT NULL CHECK (length(secret_name) BETWEEN 1 AND 64),
+    secret_name   TEXT    NOT NULL UNIQUE CHECK (length(secret_name) BETWEEN 1 AND 64),
     delivery      TEXT    NOT NULL DEFAULT 'env' CHECK (delivery IN ('env', 'file', 'askpass')),
     runners       TEXT    NOT NULL DEFAULT '[]'
                   CHECK (json_valid(runners) AND json_type(runners) = 'array'),

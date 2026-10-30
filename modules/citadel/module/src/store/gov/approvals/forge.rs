@@ -51,6 +51,33 @@ pub(crate) async fn merge_decided_in(
     let Some(repo) = repo else {
         return Ok(());
     };
+    // The decision is for the head the approver saw: a branch that moved since (or an approval
+    // that names none) merges nothing and says so.
+    let head: Option<String> = sqlx::query_scalar(
+        "SELECT head_sha FROM citadel_issue_prs WHERE issue_id = ? AND repo_id = ?",
+    )
+    .bind(issue.0)
+    .bind(repo)
+    .fetch_one(&mut *conn)
+    .await?;
+    let stale = match payload["head_sha"].as_str() {
+        Some(seen) => head.as_deref() != Some(seen),
+        None => true,
+    };
+    if a.status == ApprovalStatus::Approved && stale {
+        let company: i64 =
+            sqlx::query_scalar("SELECT company_id FROM citadel_projects WHERE id = ?")
+                .bind(i.project_id.0)
+                .fetch_one(&mut *conn)
+                .await?;
+        let details = json!({"repo_id": repo, "number": number, "approval": a.id.0});
+        let ev = Event::new(user_actor(by), "issue.pr_merge_stale")
+            .entity("issue", i.id.0)
+            .company(company)
+            .details(details);
+        append(conn, ev).await?;
+        return Ok(());
+    }
     match a.status {
         ApprovalStatus::Approved => {
             sqlx::query(
@@ -93,8 +120,12 @@ pub(crate) async fn merge_decided_in(
                 let back = IssueTransition::RequestChanges {
                     assignee: Actor::Agent(dev),
                 };
-                let _ = crate::store::work::transition_issue_in(conn, issue, &back, user_actor(by))
-                    .await;
+                if let Err(e) =
+                    crate::store::work::transition_issue_in(conn, issue, &back, user_actor(by))
+                        .await
+                {
+                    tracing::warn!(error = %e, issue = issue.0, "returning a rejected merge to its author failed");
+                }
             }
         }
         _ => {}
