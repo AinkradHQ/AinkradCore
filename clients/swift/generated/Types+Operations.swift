@@ -12748,7 +12748,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Known terminals
+            /// The caller's own terminals
             ///
             /// - Remark: Generated from `#/paths//api/v1/terminals/get(listTerminals)/responses/200`.
             ///

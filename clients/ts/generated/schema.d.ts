@@ -3062,7 +3062,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Known terminals */
+            /** @description The caller's own terminals */
             200: {
                 headers: {
                     [name: string]: unknown;

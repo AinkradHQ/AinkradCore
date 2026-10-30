@@ -439,7 +439,7 @@ async fn listing_is_private_exited_terminals_are_reaped_and_the_cap_holds() {
     };
     assert_eq!(
         ids(&fx.call(a, "GET", "/api/v1/terminals", None).await.1),
-        [ida.clone()]
+        std::slice::from_ref(&ida)
     );
     assert_eq!(
         ids(&fx.call(b, "GET", "/api/v1/terminals", None).await.1),

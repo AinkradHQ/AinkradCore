@@ -444,7 +444,8 @@
           "terminal.closed",
           "terminal.detached",
           "terminal.exited",
-          "terminal.opened"
+          "terminal.opened",
+          "terminal.signalled"
         ]
       },
       "AuditPage": {
@@ -4779,7 +4780,7 @@
                 }
               }
             },
-            "description": "Known terminals"
+            "description": "The caller's own terminals"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -4909,6 +4910,7 @@
         "tags": [
           "terminals"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "terminal"
       },
       "get": {
@@ -5014,6 +5016,7 @@
         "tags": [
           "terminals"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "terminal"
       }
     },
