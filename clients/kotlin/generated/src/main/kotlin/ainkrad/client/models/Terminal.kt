@@ -23,35 +23,32 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual
 
 /**
- * A terminal on a runner.
+ * 
  *
- * @param id `t_…`.
- * @param runner The runner's device id, `d_…`.
+ * @param id 
+ * @param runner 
  * @param status 
- * @param attached Clients attached now.
+ * @param attached 
  * @param createdAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
- * @param exitCode Once it exited: its code, absent when a signal ended it.
- * @param exitSignal The signal that ended it, if one did.
- * @param openedBy The device that opened it, `d_…`.
- * @param seq Output bytes so far: where an attach resumes.
+ * @param exitCode 
+ * @param exitSignal 
+ * @param openedBy 
+ * @param seq 
  * @param propertySize 
  */
 @Serializable
 
 data class Terminal (
 
-    /* `t_…`. */
     @SerialName(value = "id")
     val id: kotlin.String,
 
-    /* The runner's device id, `d_…`. */
     @SerialName(value = "runner")
     val runner: kotlin.String,
 
     @SerialName(value = "status")
     val status: TerminalStatus,
 
-    /* Clients attached now. */
     @SerialName(value = "attached")
     val attached: kotlin.Int? = null,
 
@@ -59,19 +56,15 @@ data class Terminal (
     @Contextual @SerialName(value = "created_at")
     val createdAt: java.time.OffsetDateTime? = null,
 
-    /* Once it exited: its code, absent when a signal ended it. */
     @SerialName(value = "exit_code")
     val exitCode: kotlin.Int? = null,
 
-    /* The signal that ended it, if one did. */
     @SerialName(value = "exit_signal")
     val exitSignal: kotlin.String? = null,
 
-    /* The device that opened it, `d_…`. */
     @SerialName(value = "opened_by")
     val openedBy: kotlin.String? = null,
 
-    /* Output bytes so far: where an attach resumes. */
     @SerialName(value = "seq")
     val seq: kotlin.Long? = null,
 

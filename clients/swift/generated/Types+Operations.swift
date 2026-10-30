@@ -12748,7 +12748,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Every terminal the Core knows of, live or exited and not yet reaped
+            /// The caller's own terminals
             ///
             /// - Remark: Generated from `#/paths//api/v1/terminals/get(listTerminals)/responses/200`.
             ///
@@ -13028,7 +13028,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The terminal is open on its runner (audited and `terminal.opened`). 409 `runner_offline` or `unsupported_command` (no `pty` driver), 503 `runner_busy`, 501 `not_implemented` before the terminal service
+            /// The terminal was opened
             ///
             /// - Remark: Generated from `#/paths//api/v1/terminals/post(createTerminal)/responses/201`.
             ///
@@ -13250,14 +13250,12 @@ public enum Operations {
         public struct Input: Sendable, Hashable {
             /// - Remark: Generated from `#/paths/api/v1/terminals/{id}/GET/path`.
             public struct Path: Sendable, Hashable {
-                /// The terminal, `t_…`
-                ///
                 /// - Remark: Generated from `#/paths/api/v1/terminals/{id}/GET/path/id`.
                 public var id: Swift.String
                 /// Creates a new `Path`.
                 ///
                 /// - Parameters:
-                ///   - id: The terminal, `t_…`
+                ///   - id:
                 public init(id: Swift.String) {
                     self.id = id
                 }
@@ -13539,14 +13537,12 @@ public enum Operations {
         public struct Input: Sendable, Hashable {
             /// - Remark: Generated from `#/paths/api/v1/terminals/{id}/DELETE/path`.
             public struct Path: Sendable, Hashable {
-                /// The terminal, `t_…`
-                ///
                 /// - Remark: Generated from `#/paths/api/v1/terminals/{id}/DELETE/path/id`.
                 public var id: Swift.String
                 /// Creates a new `Path`.
                 ///
                 /// - Parameters:
-                ///   - id: The terminal, `t_…`
+                ///   - id:
                 public init(id: Swift.String) {
                     self.id = id
                 }
@@ -13606,7 +13602,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Hung up (HUP, then TERM, then KILL to its process group) and reaped; its exit. Audited and `terminal.closed`
+            /// The terminal was closed
             ///
             /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/delete(closeTerminal)/responses/200`.
             ///
@@ -13828,14 +13824,12 @@ public enum Operations {
         public struct Input: Sendable, Hashable {
             /// - Remark: Generated from `#/paths/api/v1/terminals/{id}/signal/POST/path`.
             public struct Path: Sendable, Hashable {
-                /// The terminal, `t_…`
-                ///
                 /// - Remark: Generated from `#/paths/api/v1/terminals/{id}/signal/POST/path/id`.
                 public var id: Swift.String
                 /// Creates a new `Path`.
                 ///
                 /// - Parameters:
-                ///   - id: The terminal, `t_…`
+                ///   - id:
                 public init(id: Swift.String) {
                     self.id = id
                 }
@@ -13880,13 +13874,13 @@ public enum Operations {
                 /// Creates a new `NoContent`.
                 public init() {}
             }
-            /// Delivered to the terminal's process group
+            /// The signal was delivered
             ///
             /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/signal/post(signalTerminal)/responses/204`.
             ///
             /// HTTP response code: `204 noContent`.
             case noContent(Operations.SignalTerminal.Output.NoContent)
-            /// Delivered to the terminal's process group
+            /// The signal was delivered
             ///
             /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/signal/post(signalTerminal)/responses/204`.
             ///
@@ -14110,14 +14104,12 @@ public enum Operations {
         public struct Input: Sendable, Hashable {
             /// - Remark: Generated from `#/paths/api/v1/terminals/{id}/ws/GET/path`.
             public struct Path: Sendable, Hashable {
-                /// The terminal, `t_…`
-                ///
                 /// - Remark: Generated from `#/paths/api/v1/terminals/{id}/ws/GET/path/id`.
                 public var id: Swift.String
                 /// Creates a new `Path`.
                 ///
                 /// - Parameters:
-                ///   - id: The terminal, `t_…`
+                ///   - id:
                 public init(id: Swift.String) {
                     self.id = id
                 }
@@ -14125,14 +14117,12 @@ public enum Operations {
             public var path: Operations.AttachTerminal.Input.Path
             /// - Remark: Generated from `#/paths/api/v1/terminals/{id}/ws/GET/query`.
             public struct Query: Sendable, Hashable {
-                /// Resume output at this byte offset (`Terminal.seq` of an earlier attach); absent or older than the runner keeps: a `snapshot` first
-                ///
                 /// - Remark: Generated from `#/paths/api/v1/terminals/{id}/ws/GET/query/after`.
                 public var after: Swift.Int64?
                 /// Creates a new `Query`.
                 ///
                 /// - Parameters:
-                ///   - after: Resume output at this byte offset (`Terminal.seq` of an earlier attach); absent or older than the runner keeps: a `snapshot` first
+                ///   - after:
                 public init(after: Swift.Int64? = nil) {
                     self.after = after
                 }
@@ -14140,21 +14130,12 @@ public enum Operations {
             public var query: Operations.AttachTerminal.Input.Query
             /// - Remark: Generated from `#/paths/api/v1/terminals/{id}/ws/GET/header`.
             public struct Headers: Sendable, Hashable {
-                /// A browser: `ainkrad.v1, ainkrad-ticket.<ticket>`, as for streamEvents
-                ///
-                /// - Remark: Generated from `#/paths/api/v1/terminals/{id}/ws/GET/header/Sec-WebSocket-Protocol`.
-                public var secWebSocketProtocol: Swift.String?
                 public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AttachTerminal.AcceptableContentType>]
                 /// Creates a new `Headers`.
                 ///
                 /// - Parameters:
-                ///   - secWebSocketProtocol: A browser: `ainkrad.v1, ainkrad-ticket.<ticket>`, as for streamEvents
                 ///   - accept:
-                public init(
-                    secWebSocketProtocol: Swift.String? = nil,
-                    accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AttachTerminal.AcceptableContentType>] = .defaultValues()
-                ) {
-                    self.secWebSocketProtocol = secWebSocketProtocol
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AttachTerminal.AcceptableContentType>] = .defaultValues()) {
                     self.accept = accept
                 }
             }
@@ -14180,13 +14161,13 @@ public enum Operations {
                 /// Creates a new `SwitchingProtocols`.
                 public init() {}
             }
-            /// Switching to a WebSocket that carries the runner protocol's terminal frames (`Frame` in runner.schema.json, stream 0): the server sends `control` `opened`, `output` (out), `control` `snapshot`, `result` (exit); the client sends `output` (in), `control` `resize` and `signal`, and `credit` (it starts with 65536 bytes of output and grants more as it renders). Closing the socket detaches; the terminal keeps running. Input and resize follow the arbitration rules (every attached client sees output; the most recent typist sets the size). A client that falls behind is cut to a fresh snapshot. Closed with 4001 (device revoked), 4003 (scopes changed)
+            /// Terminal WebSocket
             ///
             /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/ws/get(attachTerminal)/responses/101`.
             ///
             /// HTTP response code: `101 switchingProtocols`.
             case switchingProtocols(Operations.AttachTerminal.Output.SwitchingProtocols)
-            /// Switching to a WebSocket that carries the runner protocol's terminal frames (`Frame` in runner.schema.json, stream 0): the server sends `control` `opened`, `output` (out), `control` `snapshot`, `result` (exit); the client sends `output` (in), `control` `resize` and `signal`, and `credit` (it starts with 65536 bytes of output and grants more as it renders). Closing the socket detaches; the terminal keeps running. Input and resize follow the arbitration rules (every attached client sees output; the most recent typist sets the size). A client that falls behind is cut to a fresh snapshot. Closed with 4001 (device revoked), 4003 (scopes changed)
+            /// Terminal WebSocket
             ///
             /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/ws/get(attachTerminal)/responses/101`.
             ///
