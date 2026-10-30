@@ -181,7 +181,7 @@ impl Core {
     }
 
     async fn recv(&mut self) -> Frame {
-        let msg = tokio::time::timeout(Duration::from_secs(10), self.ws.next())
+        let msg = tokio::time::timeout(Duration::from_secs(30), self.ws.next())
             .await
             .expect("a frame in time")
             .expect("open")
