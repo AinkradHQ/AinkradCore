@@ -154,6 +154,14 @@ pub const AGGREGATED: &[(&str, &str)] = &[
     // A runner's only route (E2-07, review M1): a stolen runner key must not grow the log per
     // request. A redemption that succeeds is audited as `secret.redeemed`.
     ("POST", "/api/v1/secret-leases/redeem"),
+    // Agent sessions (E2-08): a refused message, decision or stop is repeatable at the
+    // caller's request rate; what is done is audited by the route itself.
+    ("POST", "/api/v1/agent-sessions"),
+    ("POST", "/api/v1/agent-sessions/{id}/messages"),
+    ("POST", "/api/v1/agent-sessions/{id}/approvals/{request}"),
+    ("POST", "/api/v1/agent-sessions/{id}/cancel"),
+    ("POST", "/api/v1/agent-sessions/{id}/kill"),
+    ("POST", "/api/v1/agent-sessions/{id}/resume"),
 ];
 
 /// Audits each refused write as `api.refused`, but counts a 429 and the [`AGGREGATED`] routes'.

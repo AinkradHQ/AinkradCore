@@ -85,6 +85,12 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../migrations/0008_secrets.up.sql"),
         down: include_str!("../../migrations/0008_secrets.down.sql"),
     },
+    Migration {
+        version: 9,
+        name: "agent_sessions",
+        up: include_str!("../../migrations/0009_agent_sessions.up.sql"),
+        down: include_str!("../../migrations/0009_agent_sessions.down.sql"),
+    },
 ];
 
 #[derive(Debug)]

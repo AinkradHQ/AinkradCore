@@ -120,6 +120,7 @@ impl PtyDriver {
                 .map(str::to_owned)
                 .to_vec(),
             capacity: self.config.capacity,
+            ..DriverInfo::default()
         })
     }
 

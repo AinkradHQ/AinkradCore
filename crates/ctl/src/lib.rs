@@ -5,6 +5,7 @@
 //! Nothing here prints or logs a private key, a pairing code or secret it was given, a nonce
 //! or a signature.
 
+pub mod agents;
 pub mod client;
 pub mod cmd;
 pub mod devices;

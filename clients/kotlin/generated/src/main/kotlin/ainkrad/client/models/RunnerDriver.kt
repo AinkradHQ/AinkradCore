@@ -23,15 +23,16 @@ import kotlinx.serialization.Contextual
 /**
  * A driver a runner offers, as it advertised it.
  *
- * @param capacity How many of its commands run at once.
+ * @param capacity How many of its commands run at once (`agent`: sessions).
  * @param commands The command ops it takes: `noop`, `exec.run`.
  * @param name `exec` now; `pty`, `harness` later.
+ * @param slots `agent`: how many sessions each harness may run at once (E2-08.1); absent, no split.
  */
 @Serializable
 
 data class RunnerDriver (
 
-    /* How many of its commands run at once. */
+    /* How many of its commands run at once (`agent`: sessions). */
     @SerialName(value = "capacity")
     val capacity: kotlin.Int? = null,
 
@@ -41,7 +42,11 @@ data class RunnerDriver (
 
     /* `exec` now; `pty`, `harness` later. */
     @SerialName(value = "name")
-    val name: kotlin.String? = null
+    val name: kotlin.String? = null,
+
+    /* `agent`: how many sessions each harness may run at once (E2-08.1); absent, no split. */
+    @SerialName(value = "slots")
+    val slots: kotlin.collections.Map<kotlin.String, kotlin.Int>? = null
 
 ) {
 

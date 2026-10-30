@@ -15,6 +15,8 @@
 //!   `credit` on it go to its bridge (`pty`), and its frames come back as they are made. Its
 //!   sent frames are kept only until the Core's credit shows it read them, so a terminal's
 //!   history is never held here (the host holds it, by byte `seq`).
+//! - An `agent.*` command is a request about a session the agent driver owns (`agent`), not
+//!   the session itself: forgetting its stream (a Core restart) leaves the harness running.
 //! - Heartbeats go out at the Core's pace (`welcome.heartbeat_ms`); a Core silent for three is
 //!   a dead connection, ended so the daemon redials.
 
@@ -33,6 +35,7 @@ use tokio::time::Instant;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 
+use super::agent::AgentDriver;
 use super::pty::{Op, PtyDriver};
 use super::{ExecDriver, Link, handshake, key, lost, rotate, send};
 
@@ -105,6 +108,8 @@ impl Held {
 pub struct Session {
     exec: Arc<ExecDriver>,
     pty: Option<Arc<PtyDriver>>,
+    /// Agent sessions (`--enable-agents`), if offered.
+    agent: Option<Arc<AgentDriver>>,
     boot: String,
     core_boot: Option<String>,
     streams: HashMap<u64, Held>,
@@ -118,6 +123,7 @@ impl Session {
         Self {
             exec,
             pty: None,
+            agent: None,
             boot: format!("b_{}", key::b64(&key::random::<16>())),
             core_boot: None,
             streams: HashMap::new(),
@@ -129,6 +135,12 @@ impl Session {
     /// Offers the `pty` driver too (when its config enables it).
     pub fn with_pty(mut self, pty: Arc<PtyDriver>) -> Self {
         self.pty = Some(pty);
+        self
+    }
+
+    /// Offers the `agent` driver too.
+    pub fn with_agents(mut self, agent: Arc<AgentDriver>) -> Self {
+        self.agent = Some(agent);
         self
     }
 
@@ -162,7 +174,10 @@ impl Session {
             None => (None, Vec::new()),
         };
         let hello = RunnerHello {
-            drivers: std::iter::once(self.exec.info()).chain(pty_info).collect(),
+            drivers: std::iter::once(self.exec.info())
+                .chain(pty_info)
+                .chain(self.agent.as_ref().map(|a| a.info()))
+                .collect(),
             boot: Some(self.boot.clone()),
             streams: held,
             terminals,
@@ -359,6 +374,11 @@ impl Session {
             Command::PtyOpen(_) | Command::PtyAttach(_) | Command::PtyClose(_) => {
                 self.start_pty(stream, command, h)
             }
+            Command::AgentStart(_)
+            | Command::AgentRead(_)
+            | Command::AgentSend(_)
+            | Command::AgentDecide(_)
+            | Command::AgentStop(_) => self.start_agent(stream, command),
             Command::Unknown => Some(Body::Error(StreamError::new(
                 ErrorCode::UnsupportedCommand,
                 "no driver of this runner takes that command",
@@ -408,6 +428,35 @@ impl Session {
                 .bridge(op, terminal, seq, stream, inbox, cancel_rx, done.clone())
                 .await;
             let _ = done.send((stream, last));
+        });
+        None
+    }
+}
+
+impl Session {
+    /// An `agent.*` command, answered by a task: the session it names lives in the driver.
+    fn start_agent(&self, stream: u64, command: Command) -> Option<Body> {
+        let Some(agent) = self.agent.as_ref() else {
+            return Some(Body::Error(StreamError::new(
+                ErrorCode::UnsupportedCommand,
+                "agents are off on this runner (ainkrad-runner connect --enable-agents)",
+            )));
+        };
+        let (agent, done) = (Arc::clone(agent), self.done_tx.clone());
+        tokio::spawn(async move {
+            let answer = match command {
+                Command::AgentStart(req) => agent.start(req).map(Reply::AgentStart),
+                Command::AgentRead(req) => agent.read(&req).await.map(Reply::AgentRead),
+                Command::AgentSend(req) => agent.send(&req.session, req.text).map(Reply::AgentSend),
+                Command::AgentDecide(req) => agent.decide(req).map(Reply::AgentDecide),
+                Command::AgentStop(req) => agent.stop(req).map(Reply::AgentStop),
+                _ => return,
+            };
+            let body = match answer {
+                Ok(reply) => Body::Result(reply),
+                Err(e) => Body::Error(e),
+            };
+            let _ = done.send((stream, body));
         });
         None
     }

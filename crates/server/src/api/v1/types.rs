@@ -53,7 +53,11 @@
 /// 14: terminals (E2-01): `createTerminal`, `listTerminals`, `getTerminal`, `closeTerminal`,
 ///    `signalTerminal`, `attachTerminal` (501 until the terminal service, E2-05), the scope
 ///    `terminal` with step-up on create and attach, and the `terminal.*` event kinds.
-pub const API_MINOR: u32 = 14;
+/// 15: agent sessions (E2-08): `createAgentSession`, `listAgentSessions`, `getAgentSession`,
+///    `getAgentTranscript`, `sendAgentMessage`, `decideAgentApproval` (scope `approve`),
+///    `cancelAgentSession`, `killAgentSession`, `resumeAgentSession`; the `agent.*` event kinds
+///    (scope `agent`, approvals `approve`) and audit actions; `RunnerDriver.slots`.
+pub const API_MINOR: u32 = 15;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

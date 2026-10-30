@@ -34,8 +34,10 @@ pub struct RunnerDriver {
     pub name: Option<String>,
     /// The command ops it takes: `noop`, `exec.run`.
     pub commands: Option<Vec<String>>,
-    /// How many of its commands run at once.
+    /// How many of its commands run at once (`agent`: sessions).
     pub capacity: Option<u32>,
+    /// `agent`: how many sessions each harness may run at once (E2-08.1); absent, no split.
+    pub slots: Option<std::collections::BTreeMap<String, u32>>,
 }
 
 /// A paired runner and its live state.
@@ -78,6 +80,7 @@ fn of(d: gov::Device, live: Option<&RunnerState>) -> Runner {
                     name: Some(d.name),
                     commands: Some(d.commands),
                     capacity: Some(d.capacity),
+                    slots: (!d.slots.is_empty()).then_some(d.slots),
                 })
                 .collect(),
         ),
@@ -140,7 +143,7 @@ pub struct NoopResult {
 }
 
 /// A failed command as an API error.
-fn failed(e: &StreamError) -> ApiError {
+pub(super) fn failed(e: &StreamError) -> ApiError {
     let (status, code) = match e.code {
         ErrorCode::Offline => (StatusCode::CONFLICT, "runner_offline"),
         ErrorCode::UnsupportedCommand => (StatusCode::CONFLICT, "unsupported_command"),

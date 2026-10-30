@@ -433,6 +433,19 @@ pub async fn lease(
             format!("secrets.max_leases ({max}) leases are live"),
         );
     }
+    // One runner may hold a quarter of them (review L5): a runaway agent session, now that the
+    // Core grants leases itself (E2-08), cannot starve every other runner.
+    let per_runner = (max / 4).max(2).min(max);
+    let mine: i64 = sqlx::query_scalar("SELECT count(*) FROM core_secret_leases WHERE runner = ?")
+        .bind(runner)
+        .fetch_one(&mut *tx)
+        .await?;
+    if mine >= per_runner {
+        return refused(
+            "limit_reached",
+            format!("this runner holds {per_runner} live leases (a quarter of secrets.max_leases)"),
+        );
+    }
     let id = crate::auth::crypto::random_id("l_");
     let hash = digest(&SHA256, id.as_bytes());
     let expires_at = now_unix + ttl;

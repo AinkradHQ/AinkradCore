@@ -93,6 +93,7 @@ impl ExecDriver {
                 vec![OP_NOOP.to_owned()]
             },
             capacity: self.config.capacity,
+            ..DriverInfo::default()
         }
     }
 

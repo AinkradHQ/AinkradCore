@@ -177,6 +177,13 @@ pub trait Executor: Send + Sync + 'static {
         vec![]
     }
 
+    /// Variables for run `run`'s harness processes only, before `start` (E2-07.2: a session's
+    /// leased secrets); `None` drops them when it ends. Never the runner's own environment, and
+    /// never another run's. Ignored by an executor that spawns nothing.
+    fn session_env(&self, run: i64, env: Option<Vec<(String, String)>>) {
+        let _ = (run, env);
+    }
+
     /// The issues whose worktrees it holds (E3.7), listed in every `Ready`.
     fn workspaces(&self) -> Vec<i64> {
         vec![]

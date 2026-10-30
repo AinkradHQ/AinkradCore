@@ -3,6 +3,7 @@
 //! `routing` covers commands, capabilities, backpressure and connection ends; `proof` the
 //! upgrade's authentication and the channel-bound proof, over loopback and over TLS.
 
+mod agents;
 mod fault;
 mod health;
 mod proof;
@@ -126,6 +127,10 @@ impl Core {
         };
         let mut app = App::new(pool, Arc::new(SystemClock), host.clone(), identity);
         app.hub = Arc::new(ainkrad_core_server::hub::Hub::new(hub));
+        // The secrets broker's master key and quick agent supervisors (`agents`).
+        let master = ainkrad_core_server::ops::secretbox::SecretBox::new(&[7; 32]);
+        app.secrets = Some(Arc::new(master));
+        app.agents = ainkrad_core_server::agents::Agents::new(agents::quick());
         let closing = Arc::clone(&app.closing);
         tokio::spawn(gateway.serve(router(app.clone()), closing, Duration::from_secs(2)));
         Self {
@@ -198,6 +203,7 @@ pub fn exec_driver(commands: &[&str], capacity: u32) -> DriverInfo {
         name: "exec".to_owned(),
         commands: commands.iter().map(|c| (*c).to_owned()).collect(),
         capacity,
+        ..DriverInfo::default()
     }
 }
 

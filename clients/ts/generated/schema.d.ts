@@ -4,6 +4,134 @@
  */
 
 export interface paths {
+    "/api/v1/agent-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAgentSessions"];
+        put?: never;
+        post: operations["createAgentSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-sessions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAgentSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-sessions/{id}/approvals/{request}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["decideAgentApproval"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-sessions/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["cancelAgentSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-sessions/{id}/kill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["killAgentSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-sessions/{id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["sendAgentMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-sessions/{id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["resumeAgentSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-sessions/{id}/transcript": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAgentTranscript"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/audit": {
         parameters: {
             query?: never;
@@ -453,6 +581,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/terminals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listTerminals"];
+        put?: never;
+        post: operations["createTerminal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/terminals/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getTerminal"];
+        put?: never;
+        post?: never;
+        delete: operations["closeTerminal"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/terminals/{id}/signal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["signalTerminal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/terminals/{id}/ws": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["attachTerminal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/ws-ticket": {
         parameters: {
             query?: never;
@@ -617,6 +809,106 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AgentDecision: {
+            approved: boolean;
+            /** @description Told to the agent; a denial's reason. */
+            reply?: string | null;
+        };
+        AgentMessage: {
+            text: string;
+        };
+        /** @description A secret for the session: the broker's secret `name`, delivered under `var`. */
+        AgentSecret: {
+            name: string;
+            /**
+             * @description `[A-Z_][A-Z0-9_]*`, not `PATH`, `HOME` or a loader's: the value (`env` delivery), the
+             *     path of a 0600 file holding it (`file`), or of an askpass helper (`askpass`).
+             */
+            var: string;
+        };
+        /** @description An agent session: a harness on a runner. */
+        AgentSession: {
+            created_at: components["schemas"]["Timestamp"];
+            created_by: string;
+            ended_at?: components["schemas"]["Timestamp"];
+            harness: string;
+            /** @description The harness's own session id, what a resume continues. */
+            harness_session?: string | null;
+            /** @description `as_…`. */
+            id: string;
+            /**
+             * Format: int64
+             * @description Its row: page `listAgentSessions` with `before`.
+             */
+            index?: number | null;
+            /**
+             * Format: int64
+             * @description The newest transcript `seq` stored.
+             */
+            last_seq: number;
+            model?: string | null;
+            /**
+             * @description Once over: `{"kind": "succeeded" | "failed" | "cancelled" | "token_cap" | "stalled" |
+             *     "lost", "reason": …}`.
+             */
+            outcome?: Record<string, never> | null;
+            /**
+             * Format: int64
+             * @description How many times it was resumed.
+             */
+            resumes?: number | null;
+            /** @description The runner's device id, `d_…`. */
+            runner: string;
+            /** @description The secrets it is leased at each start, by name. */
+            secrets?: string[] | null;
+            /**
+             * @description `starting`, `running`, `interrupted` (its runner restarted; it is resumed), `ended`,
+             *     `lost`.
+             */
+            state: string;
+            updated_at: components["schemas"]["Timestamp"];
+            usage?: components["schemas"]["AgentUsage"];
+        };
+        AgentTranscript: {
+            entries: components["schemas"]["AgentTranscriptEntry"][];
+            /** Format: int64 */
+            last_seq: number;
+            session: string;
+            state: string;
+        };
+        AgentTranscriptEntry: {
+            /**
+             * Format: int64
+             * @description Unix milliseconds, on the runner.
+             */
+            at_ms: number;
+            /**
+             * @description A harness event, or the session's own (`started`, `message`, `approval_request`,
+             *     `approval_decided`, `interrupted`, `gap`, `ended`), redacted.
+             */
+            body: Record<string, never>;
+            /**
+             * Format: int64
+             * @description From 1, by one: replay from any `seq` with `after`.
+             */
+            seq: number;
+        };
+        /** @description Tokens used, as the harness reported them. */
+        AgentUsage: {
+            /** Format: int64 */
+            cache_read: number;
+            /** Format: int64 */
+            cache_write: number;
+            /**
+             * Format: int64
+             * @description Millionths of a US dollar, when the harness says.
+             */
+            cost_usd_micros?: number | null;
+            /** Format: int64 */
+            input: number;
+            /** Format: int64 */
+            output: number;
+        };
         /** @description The contract a server speaks: `/api/<major>` and its additions so far. */
         ApiVersion: {
             /** @description `v1`. */
@@ -919,6 +1211,24 @@ export interface components {
             id: string;
             name: string;
         };
+        /** @description A session to start. No `Debug`: the prompt is the caller's. */
+        NewAgentSession: {
+            /** @description `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). */
+            harness: string;
+            model?: string | null;
+            /** @description `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`. */
+            policy?: Record<string, never> | null;
+            prompt?: string | null;
+            /** @description The runner's device id, `d_…`. */
+            runner: string;
+            /** @description At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC). */
+            secrets?: components["schemas"]["AgentSecret"][] | null;
+            /**
+             * @description The repo and worktree to work in (`{"repo_url", "base_branch", "branch", …}`); absent, a
+             *     scratch dir.
+             */
+            workspace?: Record<string, never> | null;
+        };
         /** @description A lease to grant. */
         NewLease: {
             /** @description The runner's device id, `d_…`; it must be in the secret's scope. */
@@ -946,6 +1256,21 @@ export interface components {
             runners?: string[] | null;
             /** @description UTF-8 text, at most `secrets.max_bytes`; written, never read back. */
             value: string;
+        };
+        /** @description `createTerminal`'s body. */
+        NewTerminal: {
+            args?: string[] | null;
+            /** @description An absolute directory; absent, the user's home. */
+            cwd?: string | null;
+            /** @description Variables set as given; the rest of the environment is the runner's allow-list. */
+            env?: {
+                [key: string]: string;
+            } | null;
+            /** @description Absent: the user's login shell. */
+            program?: string | null;
+            /** @description The runner's device id, `d_…`; it must advertise the `pty` driver. */
+            runner: string;
+            size: components["schemas"]["TerminalSize"];
         };
         /** @description The no-op's answer. */
         NoopResult: {
@@ -1090,13 +1415,17 @@ export interface components {
         RunnerDriver: {
             /**
              * Format: int32
-             * @description How many of its commands run at once.
+             * @description How many of its commands run at once (`agent`: sessions).
              */
             capacity?: number | null;
             /** @description The command ops it takes: `noop`, `exec.run`. */
             commands?: string[] | null;
             /** @description `exec` now; `pty`, `harness` later. */
             name?: string | null;
+            /** @description `agent`: how many sessions each harness may run at once (E2-08.1); absent, no split. */
+            slots?: {
+                [key: string]: number;
+            } | null;
         };
         /** @description What a delete answers. */
         SecretDeleted: {
@@ -1208,6 +1537,48 @@ export interface components {
              */
             stepup_sig?: string;
         };
+        /** @description A terminal on a runner. */
+        Terminal: {
+            /**
+             * Format: int32
+             * @description Clients attached now.
+             */
+            attached?: number | null;
+            created_at?: components["schemas"]["Timestamp"];
+            /**
+             * Format: int32
+             * @description Once it exited: its code, absent when a signal ended it.
+             */
+            exit_code?: number | null;
+            /** @description The signal that ended it, if one did. */
+            exit_signal?: string | null;
+            /** @description `t_…`. */
+            id: string;
+            /** @description The device that opened it, `d_…`. */
+            opened_by?: string | null;
+            /** @description The runner's device id, `d_…`. */
+            runner: string;
+            /**
+             * Format: int64
+             * @description Output bytes so far: where an attach resumes.
+             */
+            seq?: number | null;
+            size?: components["schemas"]["TerminalSize"];
+            status: components["schemas"]["TerminalStatus"];
+        };
+        /** @description `signalTerminal`'s body. */
+        TerminalSignal: {
+            /** @description `HUP`, `INT`, `QUIT`, `TERM`, `KILL`, `USR1`, `USR2`, `CONT`, `STOP`, `TSTP` or `WINCH`. */
+            signal: string;
+        };
+        /** @description A terminal's size in cells, each 1 to 1000. */
+        TerminalSize: {
+            /** Format: int32 */
+            cols: number;
+            /** Format: int32 */
+            rows: number;
+        };
+        TerminalStatus: ("created" | "running" | "exited" | "reaped") | string;
         /**
          * Format: date-time
          * @description RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a
@@ -1338,6 +1709,291 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listAgentSessions: {
+        parameters: {
+            query?: {
+                /** @description Sessions with an `index` below this; absent, from the newest. */
+                before?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sessions, newest first (at most `limit`, 50 by default, 200 at most) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSession"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createAgentSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewAgentSession"];
+            };
+        };
+        responses: {
+            /** @description Started on the runner (`running`), or `starting` while the runner is away (audited as `agent.created`). 409 `runner_offline` or `unsupported_command` (no agent driver), 503 `runner_busy` (its capacity or the harness's slot is full), the secrets broker's refusals (`secrets_disabled`, `limit_reached`, 400 when the runner is not in a secret's scope) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAgentSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's id, `as_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    decideAgentApproval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's id, `as_…` */
+                id: string;
+                /** @description The `id` of its `approval_request` entry */
+                request: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentDecision"];
+            };
+        };
+        responses: {
+            /** @description The waiting tool call is allowed or denied, from any device with `approve` (audited as `agent.decided`). 502 `runner_failed` when no such request waits */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    cancelAgentSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's id, `as_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Its tool call in flight finishes, then it ends (killed after the runner's grace; audited as `agent.cancelled`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    killAgentSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's id, `as_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Its harness is killed now and its delivered secrets removed (audited as `agent.killed`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    sendAgentMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's id, `as_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentMessage"];
+            };
+        };
+        responses: {
+            /** @description Given to the harness as its next turn (audited as `agent.messaged`, its length only). 409 `session_over`, 502 `runner_failed` when it is not running */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    resumeAgentSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's id, `as_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A `lost` or `interrupted` session is started again on its runner, continuing the harness's own session, with fresh leases (audited as `agent.resumed`). 409 `not_resumable` otherwise */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAgentTranscript: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The session's id, `as_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Entries with `seq` above `after`, oldest first, at most `limit` (500 by default, 1000 at most); the `agent.transcript` events say when there are more */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentTranscript"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listAudit: {
         parameters: {
             query?: {
@@ -2409,6 +3065,190 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SettingChange"][];
                 };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listTerminals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every terminal the Core knows of, live or exited and not yet reaped */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Terminal"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createTerminal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewTerminal"];
+            };
+        };
+        responses: {
+            /** @description The terminal is open on its runner (audited and `terminal.opened`). 409 `runner_offline` or `unsupported_command` (no `pty` driver), 503 `runner_busy`, 501 `not_implemented` before the terminal service */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Terminal"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getTerminal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The terminal, `t_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One terminal */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Terminal"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    closeTerminal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The terminal, `t_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Hung up (HUP, then TERM, then KILL to its process group) and reaped; its exit. Audited and `terminal.closed` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Terminal"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    signalTerminal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The terminal, `t_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TerminalSignal"];
+            };
+        };
+        responses: {
+            /** @description Delivered to the terminal's process group */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    attachTerminal: {
+        parameters: {
+            query?: {
+                /** @description Resume output at this byte offset (`Terminal.seq` of an earlier attach); absent or older than the runner keeps: a `snapshot` first */
+                after?: number;
+            };
+            header?: {
+                /** @description A browser: `ainkrad.v1, ainkrad-ticket.<ticket>`, as for streamEvents */
+                "Sec-WebSocket-Protocol"?: string | null;
+            };
+            path: {
+                /** @description The terminal, `t_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Switching to a WebSocket that carries the runner protocol's terminal frames (`Frame` in runner.schema.json, stream 0): the server sends `control` `opened`, `output` (out), `control` `snapshot`, `result` (exit); the client sends `output` (in), `control` `resize` and `signal`, and `credit` (it starts with 65536 bytes of output and grants more as it renders). Closing the socket detaches; the terminal keeps running. Input and resize follow the arbitration rules (every attached client sees output; the most recent typist sets the size). A client that falls behind is cut to a fresh snapshot. Closed with 4001 (device revoked), 4003 (scopes changed) */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];

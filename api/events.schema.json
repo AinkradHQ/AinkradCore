@@ -56,6 +56,13 @@
   ],
   "title": "Ainkrad event stream",
   "x-event-kinds": [
+    "agent.approval_decided",
+    "agent.approval_requested",
+    "agent.created",
+    "agent.ended",
+    "agent.message",
+    "agent.state",
+    "agent.transcript",
     "audit",
     "notify.delivery",
     "runner.connected",

@@ -171,6 +171,10 @@ impl HarnessExecutor {
             .map(|(name, value)| (name.clone(), value.into()))
             .collect();
         env.extend(self.workspaces.env());
+        // The run's own (E2-07.2), after the runner's: a session's secret wins.
+        if let Some(own) = self.run_env.lock().expect("run env lock").get(&job.run) {
+            env.extend(own.iter().map(|(n, v)| (n.clone(), v.into())));
+        }
         // Every worktree of a repo builds into its one shared cache (E15.9).
         if let (Some(_), Some(issue)) = (&job.workspace, job.issue) {
             env.extend(self.workspaces.cache_env(issue, &job.trees()));
