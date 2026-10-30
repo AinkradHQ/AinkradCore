@@ -99,9 +99,15 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 11,
+        name: "terminals",
+        up: include_str!("../../migrations/0011_terminals.up.sql"),
+        down: include_str!("../../migrations/0011_terminals.down.sql"),
+    },
+    Migration {
+        version: 12,
         name: "agent_session_owner_ref",
-        up: include_str!("../../migrations/0011_agent_session_owner_ref.up.sql"),
-        down: include_str!("../../migrations/0011_agent_session_owner_ref.down.sql"),
+        up: include_str!("../../migrations/0012_agent_session_owner_ref.up.sql"),
+        down: include_str!("../../migrations/0012_agent_session_owner_ref.down.sql"),
     },
 ];
 

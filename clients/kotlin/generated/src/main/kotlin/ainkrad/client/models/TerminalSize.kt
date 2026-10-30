@@ -21,7 +21,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual
 
 /**
- * A terminal's size in cells, each 1 to 1000.
+ * 
  *
  * @param cols 
  * @param rows 

@@ -488,3 +488,37 @@ impl ScreenSink for Terminal {
         (self.applied(), now.state_diff(prev).into_bytes())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Attach, Limits, ScreenSink, Size, Terminal};
+
+    #[test]
+    fn replay_and_scrollback_are_bounded_per_terminal() {
+        let mut term = Terminal::new(
+            Size { rows: 2, cols: 8 },
+            Limits {
+                scrollback_lines: 2,
+                scrollback_bytes: 32,
+                replay_bytes: 8,
+            },
+        );
+        term.feed(b"one\ntwo\nthree\nfour\n");
+        assert!(term.replay_window().end - term.replay_window().start <= 8);
+        let lines = term.scrollback(0..u64::MAX);
+        assert!(lines.lines.len() <= 2);
+        assert!(lines.lines.iter().map(String::len).sum::<usize>() <= 32);
+        assert!(matches!(term.attach(Some(0), 2), Ok(Attach::Snapshot(_))));
+    }
+
+    #[test]
+    fn stale_attach_snapshot_restores_alternate_screen() {
+        let mut term = Terminal::new(Size { rows: 3, cols: 10 }, Limits::default());
+        term.feed(b"\x1b[?1049hALT\x1b[2;1Hscreen");
+        let Attach::Snapshot(snapshot) = term.attach(None, 0).unwrap() else {
+            panic!("new attach must receive a snapshot")
+        };
+        assert!(snapshot.alt_screen);
+        assert!(snapshot.bytes.windows(3).any(|w| w == b"ALT"));
+    }
+}

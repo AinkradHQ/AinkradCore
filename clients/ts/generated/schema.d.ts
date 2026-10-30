@@ -1257,18 +1257,13 @@ export interface components {
             /** @description UTF-8 text, at most `secrets.max_bytes`; written, never read back. */
             value: string;
         };
-        /** @description `createTerminal`'s body. */
         NewTerminal: {
             args?: string[] | null;
-            /** @description An absolute directory; absent, the user's home. */
             cwd?: string | null;
-            /** @description Variables set as given; the rest of the environment is the runner's allow-list. */
             env?: {
                 [key: string]: string;
             } | null;
-            /** @description Absent: the user's login shell. */
             program?: string | null;
-            /** @description The runner's device id, `d_…`; it must advertise the `pty` driver. */
             runner: string;
             size: components["schemas"]["TerminalSize"];
         };
@@ -1552,41 +1547,24 @@ export interface components {
              */
             stepup_sig?: string;
         };
-        /** @description A terminal on a runner. */
         Terminal: {
-            /**
-             * Format: int32
-             * @description Clients attached now.
-             */
+            /** Format: int32 */
             attached?: number | null;
             created_at?: components["schemas"]["Timestamp"];
-            /**
-             * Format: int32
-             * @description Once it exited: its code, absent when a signal ended it.
-             */
+            /** Format: int32 */
             exit_code?: number | null;
-            /** @description The signal that ended it, if one did. */
             exit_signal?: string | null;
-            /** @description `t_…`. */
             id: string;
-            /** @description The device that opened it, `d_…`. */
             opened_by?: string | null;
-            /** @description The runner's device id, `d_…`. */
             runner: string;
-            /**
-             * Format: int64
-             * @description Output bytes so far: where an attach resumes.
-             */
+            /** Format: int64 */
             seq?: number | null;
             size?: components["schemas"]["TerminalSize"];
             status: components["schemas"]["TerminalStatus"];
         };
-        /** @description `signalTerminal`'s body. */
         TerminalSignal: {
-            /** @description `HUP`, `INT`, `QUIT`, `TERM`, `KILL`, `USR1`, `USR2`, `CONT`, `STOP`, `TSTP` or `WINCH`. */
             signal: string;
         };
-        /** @description A terminal's size in cells, each 1 to 1000. */
         TerminalSize: {
             /** Format: int32 */
             cols: number;
@@ -3099,7 +3077,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every terminal the Core knows of, live or exited and not yet reaped */
+            /** @description The caller's own terminals */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3130,7 +3108,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The terminal is open on its runner (audited and `terminal.opened`). 409 `runner_offline` or `unsupported_command` (no `pty` driver), 503 `runner_busy`, 501 `not_implemented` before the terminal service */
+            /** @description The terminal was opened */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -3153,7 +3131,6 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The terminal, `t_…` */
                 id: string;
             };
             cookie?: never;
@@ -3183,14 +3160,13 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The terminal, `t_…` */
                 id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Hung up (HUP, then TERM, then KILL to its process group) and reaped; its exit. Audited and `terminal.closed` */
+            /** @description The terminal was closed */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3213,7 +3189,6 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The terminal, `t_…` */
                 id: string;
             };
             cookie?: never;
@@ -3224,7 +3199,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Delivered to the terminal's process group */
+            /** @description The signal was delivered */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -3243,22 +3218,17 @@ export interface operations {
     attachTerminal: {
         parameters: {
             query?: {
-                /** @description Resume output at this byte offset (`Terminal.seq` of an earlier attach); absent or older than the runner keeps: a `snapshot` first */
                 after?: number;
             };
-            header?: {
-                /** @description A browser: `ainkrad.v1, ainkrad-ticket.<ticket>`, as for streamEvents */
-                "Sec-WebSocket-Protocol"?: string | null;
-            };
+            header?: never;
             path: {
-                /** @description The terminal, `t_…` */
                 id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Switching to a WebSocket that carries the runner protocol's terminal frames (`Frame` in runner.schema.json, stream 0): the server sends `control` `opened`, `output` (out), `control` `snapshot`, `result` (exit); the client sends `output` (in), `control` `resize` and `signal`, and `credit` (it starts with 65536 bytes of output and grants more as it renders). Closing the socket detaches; the terminal keeps running. Input and resize follow the arbitration rules (every attached client sees output; the most recent typist sets the size). A client that falls behind is cut to a fresh snapshot. Closed with 4001 (device revoked), 4003 (scopes changed) */
+            /** @description Terminal WebSocket */
             101: {
                 headers: {
                     [name: string]: unknown;
