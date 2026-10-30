@@ -98,3 +98,41 @@ async fn a_read_only_device_neither_sees_nor_can_count_hidden_events() {
     assert_eq!(items.len(), 30);
     assert!(items.iter().all(|e| e["kind"] != "audit"));
 }
+
+/// T-EV-1 for the platform's own terminal events (E2-01): a `read` device never sees a
+/// `terminal.*` event, in replay or live; a `terminal` device does.
+#[tokio::test]
+async fn terminal_events_are_hidden_from_a_read_device() {
+    let fx = fx().await;
+    let phone = fx.enroll("phone", &["read", "approve"]).await;
+    let term = fx.enroll("term", &["read", "terminal"]).await;
+    let mut tx = crate::store::begin_write(&fx.app.pool).await.unwrap();
+    for kind in ["terminal.opened", "terminal.attached", "terminal.closed"] {
+        crate::store::events::append(&mut tx, kind, &json!({"terminal": "t_x"}))
+            .await
+            .unwrap();
+    }
+    tx.commit().await.unwrap();
+    let page = |dev| req(Method::GET, "/api/v1/events?after=0", Some(dev), None);
+    let (s, seen) = send(&fx.app, page(&phone)).await;
+    assert_eq!(s, StatusCode::OK, "{seen}");
+    assert!(
+        seen["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| !e["kind"].as_str().unwrap().starts_with("terminal.")),
+        "{seen}"
+    );
+    let (_, seen) = send(&fx.app, page(&term)).await;
+    let kinds: Vec<&str> = seen["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["kind"].as_str())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["terminal.opened", "terminal.attached", "terminal.closed"]
+    );
+}

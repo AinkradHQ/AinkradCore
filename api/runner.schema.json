@@ -104,6 +104,45 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/PtyOpen",
+          "properties": {
+            "op": {
+              "const": "pty.open",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/PtyAttach",
+          "properties": {
+            "op": {
+              "const": "pty.attach",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/PtyClose",
+          "properties": {
+            "op": {
+              "const": "pty.close",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An op from a newer Core: answered `unsupported_command`. Never sent.",
           "properties": {
             "op": {
@@ -183,6 +222,62 @@
           "properties": {
             "type": {
               "const": "rotation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TerminalInfo",
+          "description": "Runner to Core, the first frame on a `pty.open` or `pty.attach` stream (`terminal`).",
+          "properties": {
+            "type": {
+              "const": "opened",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/Size",
+          "description": "Core to runner on a terminal stream: the client's new size.",
+          "properties": {
+            "type": {
+              "const": "resize",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SignalReq",
+          "description": "Core to runner on a terminal stream: deliver a signal to its process group.",
+          "properties": {
+            "type": {
+              "const": "signal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/Snapshot",
+          "description": "Runner to Core on a terminal stream: the screen now; output resumes at its `seq`.",
+          "properties": {
+            "type": {
+              "const": "snapshot",
               "type": "string"
             }
           },
@@ -765,6 +860,83 @@
       ],
       "type": "object"
     },
+    "PtyAttach": {
+      "description": "`pty.attach`: reach a running terminal and resume its output at `seq`.",
+      "properties": {
+        "seq": {
+          "default": 0,
+          "description": "The next output byte the attacher wants; older than the runner keeps gets a snapshot.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminal": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "terminal"
+      ],
+      "type": "object"
+    },
+    "PtyClose": {
+      "description": "`pty.close`: hang the terminal up (HUP, then TERM, then KILL) and answer its exit.",
+      "properties": {
+        "terminal": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "terminal"
+      ],
+      "type": "object"
+    },
+    "PtyOpen": {
+      "description": "`pty.open`: a login shell, or `program args…`, in a new PTY.",
+      "properties": {
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cwd": {
+          "description": "An absolute directory; absent, the user's home.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Set in the child as given.",
+          "type": "object"
+        },
+        "env_pass": {
+          "description": "Names of the runner's own variables to pass on; only those on its allow-list are.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "program": {
+          "description": "Absent: the user's login shell.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size": {
+          "$ref": "#/$defs/Size"
+        }
+      },
+      "required": [
+        "size"
+      ],
+      "type": "object"
+    },
     "Reply": {
       "description": "Runner to Core, a command's last frame when it ran.",
       "oneOf": [
@@ -785,6 +957,46 @@
           "properties": {
             "op": {
               "const": "exec.run",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TerminalExit",
+          "description": "A terminal's exit, on the stream of the op that saw it.",
+          "properties": {
+            "op": {
+              "const": "pty.open",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TerminalExit",
+          "properties": {
+            "op": {
+              "const": "pty.attach",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TerminalExit",
+          "properties": {
+            "op": {
+              "const": "pty.close",
               "type": "string"
             }
           },
@@ -1035,6 +1247,13 @@
             "$ref": "#/$defs/StreamState"
           },
           "type": "array"
+        },
+        "terminals": {
+          "description": "Every terminal this runner's host processes hold (E2-03), so a Core that lost its\nstreams (a runner or Core restart) can `pty.attach` again.",
+          "items": {
+            "$ref": "#/$defs/TerminalInfo"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -1141,6 +1360,58 @@
       ],
       "type": "object"
     },
+    "SignalReq": {
+      "description": "`control` `signal`: deliver one of [`SIGNALS`] to the terminal's process group.",
+      "properties": {
+        "signal": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "signal"
+      ],
+      "type": "object"
+    },
+    "Size": {
+      "description": "A terminal's size in cells; `control` `resize` carries one.",
+      "properties": {
+        "cols": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rows": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rows",
+        "cols"
+      ],
+      "type": "object"
+    },
+    "Snapshot": {
+      "description": "`control` `snapshot`: the visible screen as bytes a terminal view replays (standard\nbase64), after which output resumes at `seq`.",
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "data"
+      ],
+      "type": "object"
+    },
     "StreamError": {
       "description": "A command's failure, or (on stream 0) a connection's. `message` is human text, redacted.",
       "properties": {
@@ -1176,6 +1447,111 @@
         "received"
       ],
       "type": "object"
+    },
+    "TerminalExit": {
+      "description": "How a terminal's child ended: the `result` of every `pty.*` op.",
+      "properties": {
+        "exit_code": {
+          "description": "Absent when it was ended by a signal.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "signal": {
+          "description": "The signal's description, when one ended it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "terminal": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "terminal"
+      ],
+      "type": "object"
+    },
+    "TerminalInfo": {
+      "description": "A terminal as its runner sees it: `control` `opened`, and each entry of\n`RunnerHello::terminals`.",
+      "properties": {
+        "exit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalExit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Set once the child exited."
+        },
+        "pid": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "seq": {
+          "description": "Output bytes so far: the next byte's offset.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "size": {
+          "$ref": "#/$defs/Size"
+        },
+        "state": {
+          "$ref": "#/$defs/TerminalState"
+        },
+        "terminal": {
+          "description": "`t_…`, chosen by the runner.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "terminal",
+        "state",
+        "size",
+        "seq"
+      ],
+      "type": "object"
+    },
+    "TerminalState": {
+      "description": "A terminal's lifecycle (E2-01.1): created → running → exited → reaped.",
+      "oneOf": [
+        {
+          "enum": [
+            "running"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "created",
+          "description": "Asked for; the child is not running yet.",
+          "type": "string"
+        },
+        {
+          "const": "exited",
+          "description": "The child ended (it is waited for); its exit is not read yet.",
+          "type": "string"
+        },
+        {
+          "const": "reaped",
+          "description": "A client read the exit: the host is gone and the id is free.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A state from a newer peer.",
+          "type": "string"
+        }
+      ]
     },
     "TokenCaps": {
       "description": "A run's caps, split (1.27): what the runner counts its tokens against. A run stops when\neither applies. Its tokens are counted from its events, and the caps stay exact for the\nbudgets and the issue; only `run` is weighted.",
