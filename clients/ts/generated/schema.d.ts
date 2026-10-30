@@ -1894,7 +1894,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Its harness is killed now and its delivered secrets removed (audited as `agent.killed`) */
+            /** @description Its harness is killed now and its delivered secrets removed (audited as `agent.killed`). A module's session: `admin` only, the break-glass stop when the module's own routes cannot */
             200: {
                 headers: {
                     [name: string]: unknown;
