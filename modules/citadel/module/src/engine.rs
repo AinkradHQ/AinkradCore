@@ -35,16 +35,20 @@ struct Reconcile;
 struct Timers;
 
 impl JobHandler for Dispatch {
-    fn run<'a>(&'a self, _: &'a Run) -> Done<'a> {
+    fn run<'a>(&'a self, run: &'a Run) -> Done<'a> {
         Box::pin(async {
             let app = app()?;
+            let mut started = 0;
             for _ in 0..BATCH {
                 let now = app.clock.now();
                 match exec::dispatch_next(&app, &Platform, &now).await {
-                    Ok(Some(_)) => {}
+                    Ok(Some(_)) => started += 1,
                     Ok(None) => break,
                     Err(e) => return Err(e.to_string()),
                 }
+            }
+            if started == 0 {
+                run.idle();
             }
             Ok(())
         })
@@ -52,32 +56,37 @@ impl JobHandler for Dispatch {
 }
 
 impl JobHandler for Reconcile {
-    fn run<'a>(&'a self, _: &'a Run) -> Done<'a> {
+    fn run<'a>(&'a self, run: &'a Run) -> Done<'a> {
         Box::pin(async {
             let app = app()?;
-            exec::reconcile(&app, &Platform, &app.clock.now())
+            let report = exec::reconcile(&app, &Platform, &app.clock.now())
                 .await
-                .map(drop)
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string())?;
+            if report == exec::Report::default() {
+                run.idle();
+            }
+            Ok(())
         })
     }
 }
 
 impl JobHandler for Timers {
-    fn run<'a>(&'a self, _: &'a Run) -> Done<'a> {
+    fn run<'a>(&'a self, run: &'a Run) -> Done<'a> {
         Box::pin(async {
             let app = app()?;
-            exec::timer::fire_timers(&app.pool, &app.clock.now())
+            let report = exec::timer::fire_timers(&app.pool, &app.clock.now())
                 .await
-                .map(drop)
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string())?;
+            if report.woken.is_empty() {
+                run.idle();
+            }
+            Ok(())
         })
     }
 }
 
 /// `Module::jobs`: a missed pass is skipped (the next is seconds away), a failed one retried.
-// ponytail: the Core audits every job run (`job.ran`), so these cadences cost about 14k audit rows a
-// day; a quiet flag for jobs that did nothing, or `jobs::wake` from the writers, is the upgrade.
+// A pass that did nothing calls `Run::idle`, so an idle engine writes no `job.ran` audit rows.
 pub fn jobs() -> Vec<Job> {
     let job = |name, every, handler: Arc<dyn JobHandler>| Job {
         missed: Missed::Skip,

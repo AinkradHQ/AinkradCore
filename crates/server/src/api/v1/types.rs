@@ -59,11 +59,12 @@
 ///    (scope `agent`, approvals `approve`) and audit actions; `RunnerDriver.slots`.
 /// 16: runner host load in the API (E2-15.2): `Runner.host_load` carries `avg1` and `cores`.
 /// 17: terminal service (E2-05/06): live attach/detach, resize, signal and close behavior.
-/// 18: terminal lifecycle (E2-05/06): `Terminal.orphaned`, a terminal whose runner host died ends
+/// 18: `killAgentSession` also stops a module's session, for an `admin` device (break-glass).
+/// 19: terminal lifecycle (E2-05/06): `Terminal.orphaned`, a terminal whose runner host died ends
 ///    `exited` (`terminal.exited` with reason `host_lost`), idle terminals are closed
 ///    (`terminal.closed`, reason `idle`), and the settings `terminal.idle_secs`,
 ///    `terminal.max_per_device` and `terminal.max_per_runner`.
-pub const API_MINOR: u32 = 18;
+pub const API_MINOR: u32 = 19;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

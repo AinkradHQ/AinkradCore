@@ -5,10 +5,10 @@
 # Every key an answers file may hold, and the default of those that have one ('' = no default; ask/require).
 KEYS="BINARY_DIR BUILD HOSTNAME PUBLIC_IP ACME_CONTACT ACME_ENV ACME_CHALLENGE PASSKEYS ALLOW_ORIGINS BACKUP
 BACKUP_ENDPOINT BACKUP_REGION BACKUP_BUCKET BACKUP_PREFIX BACKUP_ACCESS_KEY BACKUP_SECRET_KEY BACKUP_SCHEDULE
-BACKUP_RECIPIENT RUNNER RUNNER_PTY RUNNER_PAIR_CODE HARDEN SSH_FROM BOOTSTRAP SELFTEST_BACKUP"
+BACKUP_RECIPIENT ENABLE_CITADEL RUNNER RUNNER_PTY RUNNER_PAIR_CODE HARDEN SSH_FROM BOOTSTRAP SELFTEST_BACKUP"
 default_of() {
   case $1 in
-    BUILD | PASSKEYS | RUNNER | RUNNER_PTY | HARDEN) echo no ;;
+    BUILD | PASSKEYS | ENABLE_CITADEL | RUNNER | RUNNER_PTY | HARDEN) echo no ;;
     ACME_ENV) echo staging ;;
     ACME_CHALLENGE) echo tls-alpn-01 ;;
     BACKUP_PREFIX) echo core/ ;;
@@ -133,7 +133,7 @@ missing_keys() {
 # The validator for a key.
 validator_of() {
   case $1 in
-    BINARY_DIR) echo valid_dir ;; BUILD | PASSKEYS | RUNNER | RUNNER_PTY | HARDEN) echo valid_yesno ;;
+    BINARY_DIR) echo valid_dir ;; BUILD | PASSKEYS | ENABLE_CITADEL | RUNNER | RUNNER_PTY | HARDEN) echo valid_yesno ;;
     RUNNER_PAIR_CODE) echo valid_pair_code ;;
     HOSTNAME) echo valid_hostname ;; PUBLIC_IP) echo valid_ip_or_empty ;; ACME_CONTACT) echo valid_email ;;
     ACME_ENV) echo valid_acme_env ;; ACME_CHALLENGE) echo valid_challenge ;; ALLOW_ORIGINS) echo valid_origins ;;

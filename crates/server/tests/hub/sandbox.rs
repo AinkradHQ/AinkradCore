@@ -36,7 +36,7 @@ async fn retried_starts_reuse_the_same_lease() {
         name: "test.retry".into(),
         var: "TOKEN".into(),
     }];
-    let policy = serde_json::json!({});
+    let policy = serde_json::json!({"mode": "ask"});
     let session = sessions::create(
         &core.app.pool,
         &NewSession {
