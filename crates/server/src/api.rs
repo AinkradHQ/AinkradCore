@@ -65,6 +65,8 @@ pub struct App {
     pub origins: Arc<[String]>,
     /// Passkeys and the web client (E1-08), when `serve --passkeys` turned them on.
     pub passkeys: Option<Arc<crate::auth::web::Passkeys>>,
+    /// The event head and device snapshot every socket shares (`crate::live`, E1-19).
+    pub live: Arc<crate::live::Live>,
     /// The master key (`keys/master.key`) for the secrets broker (E2-07); without it the broker
     /// stores and redeems nothing (503 `secrets_unavailable`).
     pub secrets: Option<Arc<crate::ops::secretbox::SecretBox>>,
@@ -97,6 +99,7 @@ impl App {
             closing: Arc::new(tokio::sync::watch::Sender::new(false)),
             hub: Arc::new(crate::hub::Hub::new(crate::hub::HubConfig::default())),
             passkeys: None,
+            live: Arc::default(),
             secrets: None,
         }
     }

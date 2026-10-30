@@ -25,7 +25,9 @@ pub async fn dial(
     tls: Option<Arc<rustls::ClientConfig>>,
 ) -> Result<(Socket, [u8; 32]), LinkError> {
     let presented = client.core_fp().await?;
-    if presented != enrolment.core_fp {
+    // The pin, or the next key a rotation announced (`Enrolment::accepts`); the request is
+    // signed for the one presented, which `serve` then holds the Core's proof to.
+    if !enrolment.accepts(&presented) {
         tracing::error!(
             pinned = enrolment.core_fp,
             presented,
@@ -39,7 +41,7 @@ pub async fn dial(
     let signer = Signer {
         key,
         device: &enrolment.device_id,
-        core_fp: &enrolment.core_fp,
+        core_fp: &presented,
     };
     let session = client.session(signer).await?;
     let mut req = client

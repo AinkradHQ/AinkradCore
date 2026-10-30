@@ -160,7 +160,8 @@ pub async fn latest(
 /// How the socket paces itself.
 #[derive(Debug, Clone, Copy)]
 pub struct StreamConfig {
-    /// How often a caught-up socket looks for new events.
+    /// How often the process looks for new events (`crate::live`: one read of the head for
+    /// every socket; a socket reads its page only when the head moved past it).
     pub poll: Duration,
     /// Ping interval; a socket silent for three is closed.
     pub heartbeat: Duration,
@@ -175,8 +176,6 @@ pub struct StreamConfig {
 impl Default for StreamConfig {
     fn default() -> Self {
         Self {
-            // ponytail: each socket polls the table; a broadcast from the writers if many
-            // clients ever make that cost show.
             poll: Duration::from_millis(250),
             heartbeat: Duration::from_secs(20),
             send_timeout: Duration::from_secs(10),
@@ -232,17 +231,15 @@ pub async fn ws(
     };
     // Subscribed before the upgrade, so a revocation or scope change in between is not missed.
     let revoked = crate::auth::until_revoked(
-        app.pool.clone(),
+        app.live.devices(&app.pool, app.stream.backstop),
         app.auth.subscribe(),
         me.device.id.clone(),
-        app.stream.backstop,
     );
     let rescoped = crate::auth::until_rescoped(
-        app.pool.clone(),
+        app.live.devices(&app.pool, app.stream.backstop),
         app.auth.subscribe_rescoped(),
         me.device.id,
         me.device.scopes,
-        app.stream.backstop,
     );
     let changed = async move {
         tokio::select! {
@@ -284,7 +281,7 @@ async fn stream(
 ) {
     tokio::pin!(changed);
     let cfg = app.stream;
-    let mut poll = tokio::time::interval(cfg.poll);
+    let mut head = app.live.head(&app.pool, cfg.poll);
     let mut ping = tokio::time::interval(cfg.heartbeat);
     ping.reset();
     let mut heard = Instant::now();
@@ -298,49 +295,57 @@ async fn stream(
             (0, Some(End::Failed))
         }
     };
+    // The first pass always reads (the replay); after it, only a head past the cursor does.
+    let mut first = true;
     let end = 'live: loop {
         if let Some(end) = ended.take() {
             break end;
         }
+        // Seen before the read, so an event landing during it wakes the next pass.
+        let behind = *head.borrow_and_update() > global;
         // Catch up page by page; only one page is ever held.
-        loop {
-            let page = match read(&app, v, global, cfg.page).await {
-                Ok(Ok(page)) => page,
-                Ok(Err(past)) => break 'live End::Past(past.floor),
-                Err(e) => {
-                    tracing::error!(error = %e, "event stream read failed");
-                    break 'live End::Failed;
-                }
-            };
-            let full = page.events.len() == cfg.page as usize;
-            for (g, e) in page.events {
-                let seq = e.seq;
-                let text = serde_json::to_string(&Event::from(e)).unwrap_or_default();
-                match tokio::time::timeout(
-                    cfg.send_timeout,
-                    socket.send(Message::Text(text.into())),
-                )
-                .await
-                {
-                    Ok(Ok(())) => (after, global, heard) = (seq, g, Instant::now()),
-                    Ok(Err(_)) => break 'live End::Gone,
-                    // The frame may still go out: the hint counts it as sent.
-                    Err(_) => {
-                        after = seq;
-                        break 'live End::Slow;
+        if std::mem::take(&mut first) || behind {
+            loop {
+                let page = match read(&app, v, global, cfg.page).await {
+                    Ok(Ok(page)) => page,
+                    Ok(Err(past)) => break 'live End::Past(past.floor),
+                    Err(e) => {
+                        tracing::error!(error = %e, "event stream read failed");
+                        break 'live End::Failed;
+                    }
+                };
+                let full = page.events.len() == cfg.page as usize;
+                for (g, e) in page.events {
+                    let seq = e.seq;
+                    let text = serde_json::to_string(&Event::from(e)).unwrap_or_default();
+                    match tokio::time::timeout(
+                        cfg.send_timeout,
+                        socket.send(Message::Text(text.into())),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => (after, global, heard) = (seq, g, Instant::now()),
+                        Ok(Err(_)) => break 'live End::Gone,
+                        // The frame may still go out: the hint counts it as sent.
+                        Err(_) => {
+                            after = seq;
+                            break 'live End::Slow;
+                        }
                     }
                 }
-            }
-            if !full {
-                // Every hidden event up to the snapshot's head was passed over: never again.
-                global = global.max(page.scanned_to);
-                break;
+                if !full {
+                    // Every hidden event up to the snapshot's head was passed over: never again.
+                    global = global.max(page.scanned_to);
+                    break;
+                }
             }
         }
         tokio::select! {
             () = crate::api::stopping(&mut closing) => break End::Restart,
             end = &mut changed => break end,
-            _ = poll.tick() => {}
+            moved = head.changed() => if moved.is_err() {
+                break End::Failed;
+            },
             _ = ping.tick() => {
                 if heard.elapsed() > cfg.heartbeat * 3 {
                     break End::Silent;
@@ -397,6 +402,9 @@ async fn resume(
     v: View,
     after: i64,
 ) -> Result<Result<i64, crate::store::events::PastRetention>, sqlx::Error> {
+    app.live
+        .reads
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     view::resume(&mut *app.pool.acquire().await?, v, after).await
 }
 
@@ -407,6 +415,9 @@ async fn read(
     global: i64,
     limit: u32,
 ) -> Result<Result<view::Page, crate::store::events::PastRetention>, sqlx::Error> {
+    app.live
+        .reads
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut tx = app.pool.begin().await?;
     let got = view::read(&mut tx, v, global, limit).await?;
     tx.commit().await?;

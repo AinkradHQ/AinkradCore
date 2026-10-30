@@ -42,6 +42,21 @@ use tokio::sync::{Notify, mpsc};
 mod conn;
 pub mod connect;
 
+/// Proof that a command's caller stepped up for it (handshake spec §8): what
+/// [`Hub::dispatch_elevated`] takes. Nothing outside the crate can make one, so no module can
+/// send anything but `noop` (`exec.run`, `pty.*`) without the gate (security review RH5). No
+/// route sends those yet; the one that does mints this after its destructive check.
+#[derive(Debug)]
+pub struct Elevated(());
+
+impl Elevated {
+    /// For tests that drive the hub directly.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_tests() -> Self {
+        Self(())
+    }
+}
+
 /// How the hub paces and bounds connections.
 #[derive(Debug, Clone)]
 pub struct HubConfig {
@@ -55,6 +70,11 @@ pub struct HubConfig {
     pub max_inflight: usize,
     /// How long a disconnected runner's commands wait for it to come back.
     pub resume: Duration,
+    /// Plain HTTP from a loopback TCP peer (`serve --allow-plain-runner`), whose proof then has
+    /// no channel binding. Off by default (security review RH2): another process on the host
+    /// that sits between a runner and the Core could pass both proofs through. A Unix-socket
+    /// peer of the Core's own user is always allowed.
+    pub allow_plain_loopback: bool,
 }
 
 impl Default for HubConfig {
@@ -65,6 +85,7 @@ impl Default for HubConfig {
             send_timeout: Duration::from_secs(10),
             max_inflight: 64,
             resume: Duration::from_secs(60),
+            allow_plain_loopback: false,
         }
     }
 }
@@ -235,7 +256,35 @@ impl Hub {
 
     /// Sends `command` to `runner`: `offline`, `unsupported_command` (not advertised) and
     /// `busy` (in-flight cap or a full send queue) are answered here, before anything is sent.
+    /// Deny by default (security review RH5, re-review M1): only `noop` goes through here. Every
+    /// other op (`exec.run`, `pty.open`, `pty.attach`, and whatever comes next) runs or drives
+    /// code on the runner, so it goes only through [`Hub::dispatch_elevated`]; here it is
+    /// refused (`invalid_args`) and never sent.
     pub fn dispatch(
+        self: &Arc<Self>,
+        runner: &str,
+        command: Command,
+    ) -> Result<Dispatched, StreamError> {
+        if !matches!(command, Command::Noop) {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "only noop is dispatched without a step-up (Hub::dispatch_elevated)",
+            ));
+        }
+        self.send_command(runner, command)
+    }
+
+    /// [`Hub::dispatch`] for any command, given proof that the caller stepped up for it.
+    pub fn dispatch_elevated(
+        self: &Arc<Self>,
+        runner: &str,
+        command: Command,
+        _proof: Elevated,
+    ) -> Result<Dispatched, StreamError> {
+        self.send_command(runner, command)
+    }
+
+    fn send_command(
         self: &Arc<Self>,
         runner: &str,
         command: Command,

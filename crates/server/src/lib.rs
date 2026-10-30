@@ -3,6 +3,7 @@ pub mod auth;
 pub mod gateway;
 pub mod hub;
 pub mod jobs;
+pub mod live;
 pub mod module;
 pub mod ops;
 pub mod push;
