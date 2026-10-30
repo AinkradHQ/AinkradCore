@@ -392,17 +392,15 @@ pub async fn attach(
         return e.into_response();
     }
     let revoked = crate::auth::until_revoked(
-        app.pool.clone(),
+        app.live.devices(&app.pool, app.stream.backstop),
         app.auth.subscribe(),
         me.device.id.clone(),
-        app.stream.backstop,
     );
     let rescoped = crate::auth::until_rescoped(
-        app.pool.clone(),
+        app.live.devices(&app.pool, app.stream.backstop),
         app.auth.subscribe_rescoped(),
         me.device.id.clone(),
         me.device.scopes.clone(),
-        app.stream.backstop,
     );
     let elevation = app
         .auth
