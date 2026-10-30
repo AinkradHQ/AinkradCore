@@ -103,7 +103,63 @@ pub struct RepoBody {
     pub stack: Option<String>,
 }
 
+/// What a repo body may carry. A repo's commands run on a runner and its forge settings name a
+/// server file and a URL the forge client will call with that file's content, so both are
+/// checked here (and the routes are step-up routes): no control characters in a command, no
+/// `..` or NUL in the token path, and an API URL that is http(s), has a host, no credentials,
+/// query or fragment, and is not a loopback, link-local or unspecified address.
+pub(super) fn check_body(b: &RepoBody) -> Result<(), ApiError> {
+    let bad = |why: String| Err(ApiError::bad_request(why));
+    let c = &b.commands;
+    for (name, cmd) in [
+        ("build", &c.build),
+        ("test", &c.test),
+        ("lint", &c.lint),
+        ("format", &c.format),
+    ] {
+        if cmd.len() > 2048 || cmd.chars().any(|ch| ch == '\0' || ch == '\n' || ch == '\r') {
+            return bad(format!(
+                "the {name} command must be one line of at most 2048 characters"
+            ));
+        }
+    }
+    if let Some(f) = &b.forge {
+        let path = std::path::Path::new(&f.token_file);
+        let dots = path
+            .components()
+            .any(|p| matches!(p, std::path::Component::ParentDir));
+        if !path.is_absolute() || dots || f.token_file.contains('\0') {
+            return bad("the token file must be an absolute path without `..`".to_owned());
+        }
+        if let Some(url) = &f.api_url {
+            let rest = url
+                .strip_prefix("https://")
+                .or_else(|| url.strip_prefix("http://"));
+            let host = rest.map(|r| {
+                r.split(['/', ':'])
+                    .next()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase()
+            });
+            let ok = rest.is_some_and(|r| !r.contains(['@', '?', '#', ' ', '\\']) && !r.is_empty())
+                && host.as_deref().is_some_and(|h| {
+                    !h.is_empty()
+                        && h != "localhost"
+                        && h != "0.0.0.0"
+                        && !h.starts_with("127.")
+                        && !h.starts_with("169.254.")
+                        && !h.starts_with('[')
+                });
+            if !ok {
+                return bad(format!("the API URL {url:?} is not an allowed forge URL"));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn stored(project: ProjectId, id: i64, b: RepoBody) -> Result<StoredRepo, ApiError> {
+    check_body(&b)?;
     let forge = match b.forge {
         Some(f) => {
             let default = work::default_api(&f.kind)

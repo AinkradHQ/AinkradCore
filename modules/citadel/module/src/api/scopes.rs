@@ -80,7 +80,8 @@ mod tests {
                     );
                 } else if scope != "admin" {
                     assert!(
-                        scope == "approve" && path.ends_with("/decide"),
+                        scope == "approve"
+                            && (path.ends_with("/decide") || path.ends_with("/raise")),
                         "{method} {path} is {scope}: only an approval decision may be below admin"
                     );
                 }

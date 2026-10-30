@@ -28,6 +28,7 @@ pub fn routes() -> Router<App> {
     Router::new()
         .route("/companies/{id}/approvals", get(approvals::list_approvals))
         .route("/approvals/{id}/decide", post(approvals::decide))
+        .route("/approvals/{id}/raise", post(approvals::raise))
         .route("/prices", get(money::list_prices).post(money::set_price))
         .route("/prices/history", get(money::price_history))
         .route(
@@ -54,6 +55,7 @@ pub fn routes() -> Router<App> {
 pub const SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/companies/{id}/approvals", "read"),
     ("POST", "/approvals/{id}/decide", "approve"),
+    ("POST", "/approvals/{id}/raise", "approve"),
     ("GET", "/prices", "read"),
     ("GET", "/prices/history", "read"),
     ("GET", "/companies/{id}/skills", "read"),
@@ -71,6 +73,10 @@ pub const ADMIN_READS: &[&str] = &[];
 pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("DELETE", "/budgets/{id}"),
     ("PUT", "/companies/{id}/budgets"),
+    // Approving a budget overrun with a raise widens spend, so it is its own step-up route.
+    ("POST", "/approvals/{id}/raise"),
+    // Accepting a knowledge entry may apply a profile proposal.
+    ("POST", "/knowledge/{id}/accept"),
 ];
 
 /// `(path segment, SQL)` rows for `scope::OWNERS`: the company that owns what `segment/{id}` names
@@ -84,6 +90,7 @@ pub const OWNERS: &[(&str, &str)] = &[("budgets", crate::store::gov::BUDGET_COMP
     paths(
         approvals::list_approvals,
         approvals::decide,
+        approvals::raise,
         money::list_prices,
         money::set_price,
         money::price_history,
@@ -111,6 +118,7 @@ pub const OWNERS: &[(&str, &str)] = &[("budgets", crate::store::gov::BUDGET_COMP
         model::Knowledge,
         model::Artifact,
         approvals::Decision,
+        approvals::Raise,
         money::NewPrice,
         money::BudgetBody,
         library::NewSkillVersion,

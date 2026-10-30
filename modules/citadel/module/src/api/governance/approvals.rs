@@ -56,8 +56,7 @@ pub struct Decision {
     pub approve: bool,
     /// Goes back to the agent that asked.
     pub reply: Option<String>,
-    /// A `budget_overrun` is approved with this many more tokens for the period (millionths of
-    /// a dollar when the approval's payload `unit` is `usd_micros`).
+    /// Refused here: a raise widens spend and has its own step-up route (`raiseApproval`).
     pub raise_tokens: Option<i64>,
 }
 
@@ -71,18 +70,42 @@ pub async fn decide(
     Path(id): Path<i64>,
     Json(d): Json<Decision>,
 ) -> ApiResult<Approval> {
+    if d.raise_tokens.is_some() {
+        return Err(ApiError::bad_request(
+            "a raise goes through POST /approvals/{id}/raise",
+        ));
+    }
     let (id, now, reply) = (ApprovalId(id), app.clock.now(), d.reply.as_deref());
     let by = UserId(ADMIN.0);
-    let a = match d.raise_tokens {
-        Some(raise) if d.approve => {
-            gov::approve_budget_raise(&app.pool, id, raise, by, reply, &now)
-                .await
-                .map_err(decided)?
-        }
-        Some(_) => return Err(ApiError::bad_request("a raise only goes with approve")),
-        None => gov::decide_approval(&app.pool, id, d.approve, by, reply, &now)
-            .await
-            .map_err(decided)?,
-    };
+    let a = gov::decide_approval(&app.pool, id, d.approve, by, reply, &now)
+        .await
+        .map_err(decided)?;
+    Ok(Json(a.into()))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct Raise {
+    /// More tokens for the period (millionths of a dollar when the approval's payload `unit`
+    /// is `usd_micros`); more than 0.
+    pub raise_tokens: i64,
+    pub reply: Option<String>,
+}
+
+#[utoipa::path(post, path = "/approvals/{id}/raise", operation_id = "raiseApproval",
+    tag = "approvals", params(("id" = i64, Path, description = "Approval id")),
+    request_body = Raise,
+    responses((status = 200, description = "The budget overrun approved with a raise; needs a \
+        step-up", body = Approval)))]
+pub async fn raise(
+    State(app): State<App>,
+    _: Acting,
+    Path(id): Path<i64>,
+    Json(r): Json<Raise>,
+) -> ApiResult<Approval> {
+    let (id, now) = (ApprovalId(id), app.clock.now());
+    let by = UserId(ADMIN.0);
+    let a = gov::approve_budget_raise(&app.pool, id, r.raise_tokens, by, r.reply.as_deref(), &now)
+        .await
+        .map_err(decided)?;
     Ok(Json(a.into()))
 }

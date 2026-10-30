@@ -97,6 +97,11 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/requirements/{id}/cancel"),
     ("DELETE", "/projects/{id}/labels/{label_id}"),
     ("PUT", "/projects/{id}/profile"),
+    // Applies an agent-written value to the same fields as the direct edit.
+    (
+        "POST",
+        "/projects/{id}/profile/proposals/{proposal_id}/decision",
+    ),
 ];
 
 /// `(path segment, SQL)` rows for `scope::OWNERS`: the company that owns what `segment/{id}` names

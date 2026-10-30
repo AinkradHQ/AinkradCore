@@ -109,7 +109,13 @@ pub const ADMIN_READS: &[&str] = &["/projects/{id}/repos", "/projects/{id}/profi
 
 /// `(method, template)` of the slice's routes that need a live step-up (`Module::destructive`):
 /// the two that delete data (an empty sprint, a repo).
-pub const DESTRUCTIVE: &[(&str, &str)] = &[("DELETE", "/sprints/{id}"), ("DELETE", "/repos/{id}")];
+pub const DESTRUCTIVE: &[(&str, &str)] = &[
+    ("DELETE", "/sprints/{id}"),
+    ("DELETE", "/repos/{id}"),
+    // A repo sets the commands a runner runs, a token file path and a forge URL.
+    ("POST", "/projects/{id}/repos"),
+    ("PUT", "/repos/{id}"),
+];
 
 /// `(path segment, SQL)` rows for `scope::OWNERS`: the company that owns what `segment/{id}` names.
 /// Every `{id}` of the slice's routes is a company, project, issue, epic, sprint or repo, and the
