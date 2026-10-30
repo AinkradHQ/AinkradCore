@@ -903,8 +903,10 @@ async fn stream(
             Some(Ok(Message::Close(_)))|Some(Err(_))|None=>break,
             _=>{}}}
     }
-    app.terminals.leave(&terminal);
+    // Stamped before the client is counted out, so a pass never sees "nobody attached" with a
+    // stale stamp.
     touch(&app, &terminal).await;
+    app.terminals.leave(&terminal);
     let _ = audit(&app, "terminal.detached", &terminal, &by_device, None).await;
     let _ = event(&app, "terminal.detached", &terminal, &by_device).await;
     let _ = app
