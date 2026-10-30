@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use ainkrad_proto::v2::close_code;
 use tokio::sync::watch;
@@ -25,6 +25,11 @@ use super::{ExecDriver, Link, PtyDriver, Session};
 /// an address and device (5 failures in 10 minutes), so the last answer is still the refusal,
 /// not a 429; over 1 so a refusal from a Core restart mid-handshake is retried.
 pub const REJECT_AFTER: u32 = 3;
+
+/// How often the daemon checks the wall clock while sleeping between connections (E2-15.3).
+/// If wall time jumped more than this interval, the machine slept or the network changed and
+/// the daemon redials at once instead of waiting out the backoff.
+pub const WAKE_CHECK: Duration = Duration::from_secs(1);
 
 /// How long to wait between connections.
 #[derive(Debug, Clone, Copy)]
@@ -51,6 +56,9 @@ fn jitter(wait: Duration) -> Duration {
     wait - wait / 2 * u32::try_from(r).unwrap_or(0) / 1000
 }
 
+/// The wall clock; a test swaps it to fake a sleep (E2-15.3).
+pub type WallClock = Arc<dyn Fn() -> SystemTime + Send + Sync>;
+
 /// What the daemon runs with.
 pub struct Daemon {
     pub client: Client,
@@ -65,6 +73,8 @@ pub struct Daemon {
     pub agents: Option<Arc<super::agent::AgentDriver>>,
     pub tls: Option<Arc<rustls::ClientConfig>>,
     pub backoff: Backoff,
+    /// Wall-time source for sleep/wake detection (E2-15.3).
+    pub wall: WallClock,
 }
 
 impl Daemon {
@@ -140,9 +150,35 @@ impl Daemon {
                     wait
                 }
             };
-            tokio::select! {
-                () = tokio::time::sleep(jitter(wait)) => {}
-                _ = stop.wait_for(|s| *s) => return Ok(()),
+            // Sleep `jitter(wait)` between connections, checking the wall clock every
+            // `WAKE_CHECK`: a jump larger than the interval means the machine slept or the
+            // network changed, so redial at once and reset the backoff (E2-15.3).
+            let total = jitter(wait);
+            let mut remaining = total;
+            let mut wall_prev = (self.wall)();
+            let mut mono_prev = Instant::now();
+            loop {
+                let tick = remaining.min(WAKE_CHECK);
+                tokio::select! {
+                    () = tokio::time::sleep(tick) => {
+                        let wall_now = (self.wall)();
+                        let mono_now = Instant::now();
+                        let wall_elapsed = wall_now.duration_since(wall_prev).unwrap_or_default();
+                        let mono_elapsed = mono_now.saturating_duration_since(mono_prev);
+                        if wall_elapsed > WAKE_CHECK {
+                            tracing::info!(?wall_elapsed, ?mono_elapsed, "wall clock jumped; reconnecting");
+                            delay = self.backoff.min;
+                            break;
+                        }
+                        remaining = remaining.saturating_sub(mono_elapsed);
+                        if remaining == Duration::ZERO {
+                            break;
+                        }
+                        wall_prev = wall_now;
+                        mono_prev = mono_now;
+                    }
+                    _ = stop.wait_for(|s| *s) => return Ok(()),
+                }
             }
         }
     }
@@ -184,6 +220,7 @@ pub async fn from_state(
         agents,
         tls,
         backoff: Backoff::default(),
+        wall: Arc::new(SystemTime::now),
     };
     daemon.run(stop).await
 }

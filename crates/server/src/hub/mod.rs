@@ -95,10 +95,10 @@ impl Default for HubConfig {
 /// Frames queued per connection before `dispatch` answers `busy`.
 const OUT_QUEUE: usize = 256;
 
-/// Whether a host's one-minute load is past `cores * 2.0` (E2-15.2): saturated, so the hub
+/// Whether a host's one-minute load is past `cores * 4.0` (E2-15.2): saturated, so the hub
 /// refuses new commands (`busy`) rather than starve the work the runner already has.
 fn overloaded(load: HostLoad) -> bool {
-    load.avg1 > f64::from(load.cores) * 2.0
+    load.avg1 > f64::from(load.cores) * 4.0
 }
 
 /// The live connection of a runner.

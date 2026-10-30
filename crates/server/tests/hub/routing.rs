@@ -82,7 +82,7 @@ async fn the_noop_runs_end_to_end_and_only_advertised_commands_reach_the_runner(
     noop.await.unwrap().expect("the no-op answered");
 }
 
-/// E2-15.2: a runner whose host is past `cores * 2` load is `busy` (hello or heartbeat); it takes
+/// E2-15.2: a runner whose host is past `cores * 4` load is `busy` (hello or heartbeat); it takes
 /// work again once a heartbeat reports it back under.
 #[tokio::test]
 async fn a_loaded_host_refuses_new_commands_until_its_load_drops() {

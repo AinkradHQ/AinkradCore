@@ -49,6 +49,9 @@ impl std::io::Write for Log {
 }
 
 pub fn log() -> &'static Log {
+    // Tests run many real runners in parallel: don't let the host's real load trip
+    // the hub's back-pressure.
+    std::env::set_var("AINKRAD_TEST", "1");
     static LOG: OnceLock<Log> = OnceLock::new();
     LOG.get_or_init(|| {
         let log = Log::default();
