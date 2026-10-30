@@ -55,6 +55,11 @@ pub struct HubConfig {
     pub max_inflight: usize,
     /// How long a disconnected runner's commands wait for it to come back.
     pub resume: Duration,
+    /// Plain HTTP from a loopback TCP peer (`serve --allow-plain-runner`), whose proof then has
+    /// no channel binding. Off by default (security review RH2): another process on the host
+    /// that sits between a runner and the Core could pass both proofs through. A Unix-socket
+    /// peer of the Core's own user is always allowed.
+    pub allow_plain_loopback: bool,
 }
 
 impl Default for HubConfig {
@@ -65,6 +70,7 @@ impl Default for HubConfig {
             send_timeout: Duration::from_secs(10),
             max_inflight: 64,
             resume: Duration::from_secs(60),
+            allow_plain_loopback: false,
         }
     }
 }

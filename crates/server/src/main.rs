@@ -28,7 +28,7 @@ const USAGE: &str = "usage:
                  [--hostname <dns-name> --acme-contact <email>
                  [--acme-directory <url>] [--acme-http01]]
                  [--trusted-proxy <addr|cidr>[,…]]
-                 [--passkeys] [--allow-origin <origin>[,…]]
+                 [--passkeys] [--allow-origin <origin>[,…]] [--allow-plain-runner]
                  [--apns-key <file.p8> --apns-key-id <id> --apns-team-id <id>
                  --apns-topic <bundle-id>] [--log-format text|json]
   ainkrad-core-server openapi
@@ -57,6 +57,9 @@ reconnect, and checkpoints the database. Limits and intervals are settings (`set
 read when serve starts. With the four --apns-* flags, what a module's push rules pick is pushed
 to the app's devices through APNs; without them it is only logged. The platform alone pushes
 nothing. --log-format json writes JSON lines; both formats are redacted (E1-13.4).
+Runners connect over TLS, end to end to the Core (a TLS-terminating proxy in front breaks their
+channel-bound proof), or over the Unix socket as the Core's own user; --allow-plain-runner also
+lets them in over plain HTTP from loopback TCP (development and tests only).
 openapi prints the client API's contract (api/openapi.json; `make contract`).
 device list shows every device (id, kind, name, status, fingerprint); device revoke stops one at
 once (its open sockets close within 2 s); the row stays listed. A device enrolls only by
@@ -229,6 +232,8 @@ struct Serve {
     passkeys: bool,
     /// `--allow-origin`: browser origins let through beside the Core's own.
     origins: Vec<String>,
+    /// `--allow-plain-runner`: runners over plain HTTP from loopback TCP (RH2).
+    plain_runner: bool,
 }
 
 /// `serve`'s flags; `None` (after saying why) on anything else.
@@ -245,6 +250,7 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
         log_json: false,
         passkeys: false,
         origins: Vec::new(),
+        plain_runner: false,
     };
     let mut apns: [Option<String>; 4] = Default::default();
     let mut it = flags.iter();
@@ -255,6 +261,10 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
         }
         if *flag == "--passkeys" {
             s.passkeys = true;
+            continue;
+        }
+        if *flag == "--allow-plain-runner" {
+            s.plain_runner = true;
             continue;
         }
         let value = (*it.next()?).to_owned();
@@ -454,6 +464,15 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
     tracing::info!(core_fp = identity.fp, "Core identity");
     let mut app = App::new(pool, Arc::new(SystemClock), host, identity);
     app.limits = limits;
+    if flags.plain_runner {
+        tracing::warn!("runners may connect over plain HTTP from loopback (--allow-plain-runner)");
+        app.hub = Arc::new(ainkrad_core_server::hub::Hub::new(
+            ainkrad_core_server::hub::HubConfig {
+                allow_plain_loopback: true,
+                ..Default::default()
+            },
+        ));
+    }
     if let Some(list) = flags.trusted_proxies {
         app.trusted_proxies = list.into();
     }
