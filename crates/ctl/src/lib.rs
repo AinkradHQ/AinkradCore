@@ -17,6 +17,7 @@ pub mod proto;
 pub mod runners;
 pub mod secrets;
 pub mod stepup;
+pub mod terminals;
 
 /// Why a command failed; each kind has its own exit code (`code`).
 #[derive(Debug)]
