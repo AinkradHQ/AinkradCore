@@ -5,13 +5,7 @@ use ainkrad_proto::runner::HostLoad;
 
 /// The host's one-minute load average and CPU count; `None` where this platform gives no load
 /// average. Sampled on each heartbeat, from the heartbeat's own thread.
-///
-/// Returns `None` under `AINKRAD_TEST` so test runs (which may run many runners in parallel
-/// and report a high load) do not trip the hub's load-based back-pressure.
 pub fn host_load() -> Option<HostLoad> {
-    if std::env::var_os("AINKRAD_TEST").is_some() {
-        return None;
-    }
     let cores = u32::try_from(std::thread::available_parallelism().ok()?.get()).ok()?;
     let avg1 = load_avg1()?;
     Some(HostLoad { avg1, cores })
