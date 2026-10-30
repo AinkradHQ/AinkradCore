@@ -311,7 +311,10 @@ pub async fn body(body: Body, limit: usize) -> Result<Bytes, Refusal> {
 /// layer `gateway::preauth::gate`, so an unknown path without a valid signature is the same 401
 /// as a known one.
 pub(crate) async fn client_gate(State(app): State<App>, req: Request, next: Next) -> Response {
-    if let Some((status, code, why)) = refusal(&app, req.uri(), req.headers(), query_ok) {
+    // A module's own routes may take the extra query names it declares (`Module::query_names`).
+    let query =
+        |q: &str| query_ok(q) || super::scopes::module_query_ok(&app.modules, req.uri().path(), q);
+    if let Some((status, code, why)) = refusal(&app, req.uri(), req.headers(), query) {
         tracing::warn!(%status, why, "client request refused");
         return ApiError::new(status, code, why).into_response();
     }

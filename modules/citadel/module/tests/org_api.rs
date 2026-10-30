@@ -1,107 +1,11 @@
 //! The org routes end to end through the Core's client gate: signed, scoped, step-up on the
 //! destructive ones, audited, and the module's migrations applied on top of the platform's.
 
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+mod common;
 
-use ainkrad_core_server::api::{App, router};
-use ainkrad_core_server::auth::Identity;
-use ainkrad_core_server::auth::testing::TestDevice;
-use ainkrad_core_server::module::Module;
-use ainkrad_core_server::scheduler::{Clock, SystemClock};
-use ainkrad_core_server::store::{connect, gov, migrate};
-use axum::body::{Body, to_bytes};
-use axum::http::{Method, Request, StatusCode, header};
-use citadel_module::Citadel;
-use serde_json::{Value, json};
-use tower::ServiceExt;
-
-const HOST: &str = "core.test";
-const BASE: &str = "/modules/citadel/v1";
-
-struct Fx {
-    app: App,
-    dev: TestDevice,
-    dir: PathBuf,
-}
-
-impl Drop for Fx {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-/// A Core with Citadel mounted and migrated, and an admin device logged in and elevated.
-async fn fx() -> Fx {
-    static N: AtomicUsize = AtomicUsize::new(0);
-    let n = N.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("citadel-api-{}-{n}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let pool = connect(&dir.join("core.db")).await.unwrap();
-    let modules: Vec<Arc<dyn Module>> = vec![Arc::new(Citadel)];
-    migrate::migrate_modules(&pool, &modules).await.unwrap();
-    let identity = Arc::new(Identity::load_or_create(&dir).unwrap());
-    let clock = Arc::new(SystemClock);
-    let mut app = App::new(pool, clock.clone(), HOST.to_owned(), identity);
-    app.modules = Arc::from(modules);
-    let dev = enroll(&app, "mac", &gov::SCOPES, true).await;
-    let session = dev.session.lock().unwrap().clone().unwrap();
-    app.auth.elevate(&session, &dev.id, clock.unix() + 3600);
-    Fx { app, dev, dir }
-}
-
-/// A device with `scopes` and a session that is not elevated.
-async fn enroll(app: &App, name: &str, scopes: &[&str], stepup: bool) -> TestDevice {
-    let clock = Arc::new(SystemClock);
-    let dev = TestDevice::enroll_keys(
-        &app.pool,
-        name,
-        "device",
-        scopes,
-        &app.auth.identity.fp,
-        clock.clone(),
-        stepup,
-    )
-    .await;
-    let s = app.auth.issue_session(&dev.id, clock.unix());
-    dev.set_session(Some(s.id));
-    dev
-}
-
-async fn call(
-    fx: &Fx,
-    dev: Option<&TestDevice>,
-    method: Method,
-    path: &str,
-    body: Option<Value>,
-) -> (StatusCode, Value) {
-    let uri = format!("{BASE}{path}");
-    let bytes = body.map(|v| v.to_string()).unwrap_or_default();
-    let mut b = Request::builder()
-        .method(method.clone())
-        .uri(&uri)
-        .header(header::HOST, HOST);
-    if let Some(dev) = dev {
-        for (name, value) in dev.headers(method.as_str(), &uri, bytes.as_bytes()) {
-            b = b.header(name, value);
-        }
-    }
-    if !bytes.is_empty() {
-        b = b.header(header::CONTENT_TYPE, "application/json");
-    }
-    let res = router(fx.app.clone())
-        .oneshot(b.body(Body::from(bytes)).unwrap())
-        .await
-        .unwrap();
-    let status = res.status();
-    let bytes = to_bytes(res.into_body(), 1 << 22).await.unwrap();
-    (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    )
-}
+use axum::http::{Method, StatusCode};
+use common::*;
+use serde_json::json;
 
 async fn actions(fx: &Fx) -> Vec<String> {
     sqlx::query_scalar("SELECT action FROM audit_events WHERE action LIKE 'citadel.%' ORDER BY seq")
@@ -287,7 +191,21 @@ async fn the_core_gate_covers_the_module_scope_and_step_up() {
     );
 
     let phone = enroll(&fx.app, "phone", &["read"], true).await;
-    let (status, body) = call(&fx, Some(&phone), Method::GET, "/companies", None).await;
+    // A read-only device reads (the route declares `read`), but cannot write.
+    assert_eq!(
+        call(&fx, Some(&phone), Method::GET, "/companies", None)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (status, body) = call(
+        &fx,
+        Some(&phone),
+        Method::POST,
+        "/companies",
+        Some(json!({"name": "B"})),
+    )
+    .await;
     assert_eq!(
         (status, &body["code"]),
         (StatusCode::FORBIDDEN, &json!("forbidden_scope"))
