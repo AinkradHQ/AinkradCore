@@ -439,7 +439,10 @@ async fn a_scan_removes_only_provably_dead_hosts() {
     record("t_dead");
     let dead = connect(&dir, "t_dead").await.err().map(|e| e.kind());
     assert!(
-        matches!(dead, Some(std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound)),
+        matches!(
+            dead,
+            Some(std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound)
+        ),
         "a socket nobody listens on must refuse, got {dead:?}"
     );
     assert!(scan(&dir).await.is_empty());
