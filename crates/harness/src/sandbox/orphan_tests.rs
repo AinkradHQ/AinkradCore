@@ -58,7 +58,10 @@ fn the_tracker_follows_a_setsid_child_after_the_leader_is_gone() {
     let mut leader = {
         use std::os::unix::process::CommandExt;
         std::process::Command::new("/bin/bash")
-            .args(["-c", "setsid sleep 8801 & wait"])
+            .args([
+                "-c",
+                "perl -MPOSIX -e \'POSIX::setsid(); exec q(sleep), q(8801)\' & wait",
+            ])
             .process_group(0)
             .spawn()
             .unwrap()
@@ -95,7 +98,10 @@ fn the_supervisor_kills_the_tree_when_the_runner_dies() {
         .spawn()
         .unwrap();
     let mut leader = std::process::Command::new("/bin/bash")
-        .args(["-c", "setsid sleep 8803 & wait"])
+        .args([
+            "-c",
+            "perl -MPOSIX -e \'POSIX::setsid(); exec q(sleep), q(8803)\' & wait",
+        ])
         .process_group(0)
         .spawn()
         .unwrap();
@@ -164,7 +170,10 @@ async fn a_sandboxed_setsid_child_dies_with_its_session() {
     let (root, spec) = fixture("setsid");
     let mut cmd = crate::proc::command(
         OsStr::new("/bin/bash"),
-        &["-c".into(), "setsid sleep 8805 & echo ready; wait".into()],
+        &[
+            "-c".into(),
+            "perl -MPOSIX -e \'POSIX::setsid(); exec q(sleep), q(8805)\' & echo ready; wait".into(),
+        ],
         &spec,
         &[],
     );
@@ -196,7 +205,7 @@ async fn the_watchdog_counts_descendants_that_left_the_group() {
         OsStr::new("/bin/bash"),
         &[
             "-c".into(),
-            "for i in 1 2 3 4 5 6 7 8 9 10; do setsid sleep 8806 & done; wait".into(),
+            "for i in 1 2 3 4 5 6 7 8 9 10; do perl -MPOSIX -e \'POSIX::setsid(); exec q(sleep), q(8806)\' & done; wait".into(),
         ],
         &spec,
         &[],
