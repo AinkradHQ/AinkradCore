@@ -381,7 +381,7 @@ async fn scan_approvals(
     now: &str,
     report: &mut Report,
 ) -> Result<(), Error> {
-    if i64::try_from(s.last_seq).unwrap_or(0) <= 0 {
+    if s.last_seq <= 0 {
         return Ok(());
     }
     let entries = sessions::transcript(pool, &s.id, r.approval_seq(pool).await?, 200).await?;

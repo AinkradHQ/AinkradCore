@@ -234,7 +234,7 @@ pub async fn dispatch_next<H: Host>(app: &App, host: &H, now: &str) -> Result<Op
                 .map_err(into_db)?;
         }
     }
-    Ok(get_run(&app.pool, run.id).await?)
+    get_run(&app.pool, run.id).await
 }
 
 pub(crate) fn into_db(e: TransitionError) -> Error {

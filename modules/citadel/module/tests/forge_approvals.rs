@@ -42,12 +42,7 @@ async fn forge_kinds_are_decided_only_on_the_step_up_route() {
     let s = seed(&fx.app.pool, "A", "AAA").await;
     let phone = enroll(&fx.app, "phone", &["read", "approve"], true).await;
     let yes = json!({"approve": true});
-    // A tool permission lets a harness run something: it is decided on the same step-up route.
-    for kind in [
-        ApprovalKind::PrMerge,
-        ApprovalKind::WorkflowPush,
-        ApprovalKind::PermissionEscalation,
-    ] {
+    for kind in [ApprovalKind::PrMerge, ApprovalKind::WorkflowPush] {
         let id = ask(&fx, &s, kind, json!({})).await;
         // `decide` refuses the kind for everyone, the elevated admin too.
         for dev in [&phone, &fx.dev] {

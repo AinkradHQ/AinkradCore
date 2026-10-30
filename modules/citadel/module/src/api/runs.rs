@@ -347,7 +347,7 @@ pub struct EngineState {
 #[utoipa::path(get, path = "/engine", operation_id = "getEngine", tag = "runs",
     responses((status = 200, description = "Whether the engine may start runs on its own",
         body = EngineState)))]
-pub async fn get_engine(State(app): State<App>) -> ApiResult<EngineState> {
+pub async fn get_engine(State(app): State<App>, _: Acting) -> ApiResult<EngineState> {
     Ok(Json(EngineState {
         enabled: engine::engine_device(&app.pool).await?.is_some(),
     }))
@@ -365,6 +365,7 @@ pub struct EngineBody {
         run starts and the live ones go on", body = EngineState)))]
 pub async fn set_engine(
     State(app): State<App>,
+    _: Acting,
     Extension(me): Extension<Caller>,
     Json(b): Json<EngineBody>,
 ) -> ApiResult<EngineState> {
