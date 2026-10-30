@@ -46,7 +46,13 @@ fn mechanism_available() -> bool {
             std::env::var_os("AINKRAD_REQUIRE_SANDBOX").is_none(),
             "required bubblewrap/user namespaces cannot run"
         );
-        eprintln!("SKIP SANDBOX ENFORCEMENT: bubblewrap/user namespaces cannot run on this host");
+        // Bypass libtest's success-output capture: a skipped enforcement probe must
+        // be visible even in an ordinary `make test` log without --nocapture.
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stderr(),
+            "SKIP SANDBOX ENFORCEMENT: bubblewrap/user namespaces cannot run on this host"
+        );
         return false;
     }
     true
