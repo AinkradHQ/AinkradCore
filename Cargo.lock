@@ -159,6 +159,7 @@ dependencies = [
 name = "ainkrad-harness"
 version = "0.1.0"
 dependencies = [
+ "ainkrad-sys",
  "getrandom 0.4.3",
  "reqwest 0.12.28",
  "serde",

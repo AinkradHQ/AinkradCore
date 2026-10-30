@@ -17,6 +17,38 @@ pub struct Policy {
     pub sandboxed: bool,
 }
 
+/// Caller-selected approval bypasses authorize code execution, including aliases and
+/// command prefixes. The API requires admin for every such exception, not a shell denylist.
+pub fn has_destructive_allow(policy: &Policy) -> bool {
+    !policy.allow.is_empty() || policy.mode == PermissionMode::Sandboxed
+}
+
+#[cfg(test)]
+mod authority_tests {
+    use super::*;
+    #[test]
+    fn approval_bypasses_cannot_hide_behind_tool_aliases_or_prefixes() {
+        for tool in [
+            "Bash",
+            "Bash:curl",
+            "commandExecution",
+            "unknown-alias",
+            "Edit",
+        ] {
+            let p = Policy {
+                allow: vec![tool.into()],
+                ..Policy::default()
+            };
+            assert!(has_destructive_allow(&p));
+        }
+        assert!(!has_destructive_allow(&Policy::default()));
+        assert!(has_destructive_allow(&Policy {
+            mode: PermissionMode::Sandboxed,
+            ..Policy::default()
+        }));
+    }
+}
+
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
 )]

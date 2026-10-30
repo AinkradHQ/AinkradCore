@@ -98,7 +98,7 @@ async fn a_transition_into_a_full_column_is_refused() {
 /// `(agent, issue, key)` of every wake for a freed kanban slot, oldest first.
 async fn freed_wakes(pool: &SqlitePool) -> Vec<(i64, i64, String)> {
     sqlx::query_as(
-        "SELECT agent_id, issue_id, idempotency_key FROM wake_requests \
+        "SELECT agent_id, issue_id, idempotency_key FROM citadel_wake_requests \
          WHERE idempotency_key LIKE 'wip:%' ORDER BY id",
     )
     .fetch_all(pool)
@@ -110,7 +110,6 @@ async fn freed_wakes(pool: &SqlitePool) -> Vec<(i64, i64, String)> {
 /// held back, once per freed slot, whether an issue moved on or was deleted; a column that
 /// was not full wakes nobody.
 #[tokio::test]
-#[ignore = "S7: needs the wake queue (wake_requests); wake_freed_in comes with it"]
 async fn a_freed_column_wakes_the_oldest_held_back_issue() {
     let db = db().await;
     let pool = &db.pool;

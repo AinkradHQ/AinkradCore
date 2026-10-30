@@ -14,7 +14,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup show
+      - name: Enable the Linux sandbox (bubblewrap and unprivileged user namespaces)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --unshare-all --ro-bind / / -- /bin/true
+      # On Linux the enforcement tests FAIL, not skip, when the sandbox cannot run.
       - run: make test
+        env:
+          AINKRAD_REQUIRE_SANDBOX: ${{ runner.os == 'Linux' && '1' || '' }}
   deny:
     runs-on: ubuntu-24.04
     steps:

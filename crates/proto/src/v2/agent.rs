@@ -51,6 +51,8 @@ pub fn valid_secret_var(var: &str) -> bool {
         && b.iter()
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == b'_')
         && !RESERVED_VARS.contains(&var)
+        && !var.starts_with("AINKRAD_")
+        && !matches!(var, "BASH_ENV" | "ENV" | "NODE_OPTIONS" | "PYTHONPATH")
         && !var.starts_with("LD_")
         && !var.starts_with("DYLD_")
 }

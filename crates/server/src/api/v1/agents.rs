@@ -193,6 +193,19 @@ async fn one(app: &App, id: &str) -> Result<Session, ApiError> {
     found.ok_or_else(|| ApiError::not_found("no such agent session"))
 }
 
+/// A session a module drives answers to that module's own routes (its audit, its approvals, its
+/// run state): a client's write on it would bypass them, so it is refused.
+fn not_a_modules(s: &Session) -> Result<(), ApiError> {
+    match &s.owner_module {
+        Some(m) => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "module_owned",
+            format!("the session belongs to the {m} module: use its routes"),
+        )),
+        None => Ok(()),
+    }
+}
+
 fn harness_ok(h: &str) -> bool {
     (1..=32).contains(&h.len())
         && h.bytes()
@@ -260,11 +273,19 @@ pub async fn create(
     let policy = b.policy.unwrap_or_else(|| {
         serde_json::to_value(ainkrad_proto::runner::Policy::default()).expect("a policy serializes")
     });
-    if !workspace_ok
-        || serde_json::from_value::<ainkrad_proto::runner::Policy>(policy.clone()).is_err()
-    {
+    let parsed_policy = serde_json::from_value::<ainkrad_proto::runner::Policy>(policy.clone());
+    if !workspace_ok || parsed_policy.is_err() {
         return Err(ApiError::bad_request(
             "workspace or policy does not have its shape",
+        ));
+    }
+    if ainkrad_proto::runner::has_destructive_allow(parsed_policy.as_ref().unwrap())
+        && !me.device.scopes.iter().any(|scope| scope == "admin")
+    {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden_scope",
+            "approval bypasses require the admin scope",
         ));
     }
     agents::admit(&app, &b.runner, &b.harness).await?;
@@ -310,10 +331,19 @@ pub async fn get(State(app): State<App>, Path(id): Path<String>) -> ApiResult<Ag
         there are more", body = AgentTranscript)))]
 pub async fn transcript(
     State(app): State<App>,
+    Extension(me): Extension<Caller>,
     Path(id): Path<String>,
     Query(p): Query<super::Paging>,
 ) -> ApiResult<AgentTranscript> {
     let s = one(&app, &id).await?;
+    // What a module's agent saw and did is the module's `admin` read, not an `agent` device's.
+    if s.owner_module.is_some() && !me.device.scopes.iter().any(|scope| scope == "admin") {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden_scope",
+            "a module's session transcript requires the admin scope",
+        ));
+    }
     let limit = p.limit.unwrap_or(500).clamp(1, 1000);
     let entries = store::transcript(&app.pool, &s.id, p.after.unwrap_or(0), limit).await?;
     Ok(Json(AgentTranscript {
@@ -333,6 +363,7 @@ pub async fn transcript(
 
 /// Sends `command` about `s` to its runner (answer within the service's wait).
 async fn tell(app: &App, s: &Session, command: Command, caller: &Caller) -> Result<(), ApiError> {
+    not_a_modules(s)?;
     if !s.live() {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
@@ -503,6 +534,7 @@ pub async fn resume(
     Path(id): Path<String>,
 ) -> ApiResult<AgentSession> {
     let s = one(&app, &id).await?;
+    not_a_modules(&s)?;
     if !store::reopen(&app.pool, &s.id, &app.clock.now()).await? {
         return Err(ApiError::new(
             StatusCode::CONFLICT,

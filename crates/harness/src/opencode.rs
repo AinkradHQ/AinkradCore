@@ -311,7 +311,8 @@ impl OpenCode {
             ))
         })?;
         let password = crate::claude::new_session_id()?;
-        let mut proc = Proc::spawn(command(spec, &password))?;
+        let mut proc =
+            Proc::spawn_with_pgid_file(command(spec, &password), proc::sandbox_pgid_file(spec))?;
         let listening = async {
             while let Some(line) = proc.line().await {
                 if let Some((_, url)) = line.split_once("listening on ") {
