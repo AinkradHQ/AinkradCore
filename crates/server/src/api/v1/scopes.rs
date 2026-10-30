@@ -11,7 +11,8 @@
 //! - Secrets (E2-07): managing them and granting a lease is `admin` (and destructive); the one
 //!   route a `runner` device may call is redeeming a lease granted to it.
 //! - `terminal`: opening, attaching, signalling and closing a terminal (listing is `read`).
-//! - A module's routes need the module's own `Module::scope` (`admin` unless it says otherwise).
+//! - A module's routes need the module's own `Module::scope` (`admin` unless it says otherwise),
+//!   or the scope its `Module::route_scopes` declares for that route (`module_scope`).
 //! - A `runner` device holds only `runner`, which only `POST /api/v1/secret-leases/redeem`
 //!   takes: it can call nothing else here (the runner hub is E1-11).
 //!
@@ -149,19 +150,123 @@ pub fn declared_destructive(method: &str, template: &str) -> bool {
         .any(|(m, t)| m.eq_ignore_ascii_case(method) && *t == template)
 }
 
+/// `("citadel", "/companies/x")` of `/modules/citadel/v1/companies/x`; `None` for a path that
+/// is not under a module's `/v1/` (the module's id is the segment right after `/modules/`).
+fn module_path(path: &str) -> Option<(&str, &str)> {
+    let rest = path.strip_prefix("/modules/")?;
+    let (id, sub) = rest.split_once('/')?;
+    let sub = sub.strip_prefix("v1")?;
+    (sub.starts_with('/')).then_some((id, sub))
+}
+
+/// Whether every name of `query` is allowed on a module route: a platform name
+/// (`super::QUERY`) or one the path's module declares in `Module::query_names`. Never true for
+/// a path outside `/modules/<id>/v1`, nor for another module's names.
+pub fn module_query_ok(modules: &[Arc<dyn Module>], path: &str, query: &str) -> bool {
+    let Some((id, _)) = module_path(path) else {
+        return false;
+    };
+    let Some(m) = modules.iter().find(|m| m.id() == id) else {
+        return false;
+    };
+    query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| pair.split('=').next().unwrap_or(pair))
+        .all(|n| super::QUERY.contains(&n) || m.query_names().contains(&n))
+}
+
+/// The segments of `template` that are not `{…}`: how specific it is.
+fn literals(template: &str) -> usize {
+    template.split('/').filter(|s| !s.starts_with('{')).count()
+}
+
+/// How strict a scope is, for resolving a tie: `read` < the others < `admin`.
+fn rank(scope: &str) -> u8 {
+    match scope {
+        "read" => 0,
+        "admin" => 2,
+        _ => 1,
+    }
+}
+
+/// The stricter of two scopes; two different ones of the same rank (`approve` and `agent`) are
+/// not comparable, so they become `admin`.
+fn stricter(a: &'static str, b: &'static str) -> &'static str {
+    match (a == b, rank(a).cmp(&rank(b))) {
+        (true, _) => a,
+        (_, std::cmp::Ordering::Greater) => a,
+        (_, std::cmp::Ordering::Less) => b,
+        _ => "admin",
+    }
+}
+
+/// A module's request method as its tables see it: `HEAD` is the `GET` it is served by, so it
+/// needs that route's scope and step-up. `None` for a method no module route takes.
+fn module_method(method: &str) -> Option<&str> {
+    match method {
+        m if m.eq_ignore_ascii_case("HEAD") => Some("GET"),
+        m if ["GET", "POST", "PUT", "PATCH", "DELETE"]
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case(m)) =>
+        {
+            Some(m)
+        }
+        _ => None,
+    }
+}
+
+/// The scope `m` needs for `method` on `sub` (relative to its prefix; a contract template or a
+/// real path): its own `route_scopes` entry that fits, the most specific, else `Module::scope`.
+/// Two equally specific templates that disagree resolve to the stricter scope; an entry whose
+/// scope is not allowed on a module route is `admin`. `HEAD` is `GET`; a method no module route
+/// takes (`OPTIONS`, `TRACE`) needs `admin`.
+pub fn module_scope(m: &dyn Module, method: &str, sub: &str) -> &'static str {
+    let Some(method) = module_method(method) else {
+        return "admin";
+    };
+    let mut best: Option<(usize, &'static str)> = None;
+    for (mm, t, scope) in m.route_scopes() {
+        if !mm.eq_ignore_ascii_case(method) || !fits(t, sub) {
+            continue;
+        }
+        let n = literals(t);
+        let scope = if crate::module::route_scope_ok(scope) {
+            *scope
+        } else {
+            "admin"
+        };
+        best = match best {
+            Some((b, _)) if b > n => best,
+            Some((b, s)) if b == n => Some((b, stricter(s, scope))),
+            _ => Some((n, scope)),
+        };
+    }
+    best.map_or_else(|| m.scope(), |(_, scope)| scope)
+}
+
+/// Whether `m` declares `method` on `sub` destructive (`Module::destructive`); `HEAD` is `GET`,
+/// and a method no module route takes counts as destructive (it needs `admin` anyway).
+pub fn module_destructive(m: &dyn Module, method: &str, sub: &str) -> bool {
+    let Some(method) = module_method(method) else {
+        return true;
+    };
+    m.destructive()
+        .iter()
+        .any(|(mm, t)| mm.eq_ignore_ascii_case(method) && fits(t, sub))
+}
+
 /// Whether a request needs a live elevation: its route is in [`DESTRUCTIVE`], or in its
 /// module's `Module::destructive` (relative to `/modules/<id>/v1`).
 pub fn destructive(method: &Method, path: &str, modules: &[Arc<dyn Module>]) -> bool {
-    if let Some(rest) = path.strip_prefix("/modules/") {
-        let id = rest.split('/').next().unwrap_or_default();
-        let Some(sub) = rest.strip_prefix(id).and_then(|r| r.strip_prefix("/v1")) else {
+    if path.starts_with("/modules/") {
+        let Some((id, sub)) = module_path(path) else {
             return false;
         };
-        return modules.iter().filter(|m| m.id() == id).any(|m| {
-            m.destructive()
-                .iter()
-                .any(|(mm, t)| *mm == method.as_str() && fits(t, sub))
-        });
+        return modules
+            .iter()
+            .filter(|m| m.id() == id)
+            .any(|m| module_destructive(m.as_ref(), method.as_str(), sub));
     }
     DESTRUCTIVE
         .iter()
@@ -170,13 +275,12 @@ pub fn destructive(method: &Method, path: &str, modules: &[Arc<dyn Module>]) -> 
 
 /// The scope a request needs; `None` when nothing declares one (refused).
 pub fn required(method: &Method, path: &str, modules: &[Arc<dyn Module>]) -> Option<&'static str> {
-    if let Some(rest) = path.strip_prefix("/modules/") {
-        let id = rest.split('/').next().unwrap_or_default();
-        let under = rest.strip_prefix(id).is_some_and(|r| r.starts_with("/v1/"));
+    if path.starts_with("/modules/") {
+        let (id, sub) = module_path(path)?;
         return modules
             .iter()
-            .find(|m| m.id() == id && under)
-            .map(|m| m.scope());
+            .find(|m| m.id() == id)
+            .map(|m| module_scope(m.as_ref(), method.as_str(), sub));
     }
     // A WebSocket upgrade is a GET.
     ROUTES

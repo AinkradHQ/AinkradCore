@@ -378,6 +378,19 @@ pub struct Label {
     pub name: String,
 }
 
+// Why a wake is enqueued for an agent (ported from the monolith's `exec`). The wake queue is the
+// run engine's (S7); the work transitions only name the source, as plain data.
+text_enum!(WakeSource {
+    Assignment => "assignment",
+    Comment => "comment",
+    BlockerClosed => "blocker_closed",
+    Timer => "timer",
+    Manual => "manual",
+    Approval => "approval",
+    Escalation => "escalation",
+    Retry => "retry",
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;

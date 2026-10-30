@@ -12,3 +12,8 @@ cargo run -q -p ainkrad-core-server -- openapi > "$t/openapi.json"
 cargo run -q -p ainkrad-core-server --example events_schema > "$t/events.schema.json"
 cargo run -q -p ainkrad-proto --example runner_schema > "$t/runner.schema.json"
 cp "$t"/*.json "$out/"
+# The Core's contract with the parked Citadel module's routes merged in (E2-13): only for the default out dir.
+if [ "$out" = "api" ]; then
+  cargo run -q --manifest-path modules/citadel/Cargo.toml -p citadel-module --example contract > "$t/openapi.core.json"
+  cp "$t/openapi.core.json" modules/citadel/api/openapi.core.json
+fi

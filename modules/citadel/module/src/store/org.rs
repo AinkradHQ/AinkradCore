@@ -1,8 +1,8 @@
 //! Org repository: companies, departments, teams, agents and team memberships.
 //!
 //! `update_*` / `delete_*` return `false` when no row matched the id. The audited service,
-//! the escalation chain, the hire gate and the Engineering template are later slices of the
-//! port (`Docs/Plans/2026-10-30-citadel-port-slices.md`). `create_agent` and `update_agent`
+//! the escalation chain, the hire gate and the Engineering template are in `service`, `chart`,
+//! `chain`, `hire` and `template` (`Docs/Plans/2026-10-30-citadel-port-slices.md`). `create_agent` and `update_agent`
 //! are raw, unaudited writes, test-only (`cfg(test)` or the `test-support` feature): a new
 //! agent goes through the hire gate, a reporting line through the audited service.
 
@@ -537,5 +537,47 @@ pub async fn delete_membership(
 
 pub mod service;
 
+// The rest of the slice (S3). Declared after the column macros above, which they use.
+mod agent_edit;
+pub mod avatars;
+mod chain;
+pub mod chart;
+mod fallbacks;
+pub mod hire;
+pub mod logo;
+mod presets;
+mod roles;
+mod structure;
+pub mod template;
+mod tiers;
+pub use agent_edit::edit_agent;
+pub use chain::{
+    ESCALATION_USER, escalation_target_in, is_cross_department, product_owner_in,
+    set_cross_department,
+};
+pub use chart::{
+    OrgError, add_company_with, add_department, add_team, edit_company, org_chart, seat_member,
+    set_manager, unseat_member,
+};
+pub use fallbacks::{fallbacks_in, list_fallbacks, set_fallbacks};
+pub use hire::{HireExtras, bootstrap_ceo, hire_agent, hire_agent_with};
+pub use presets::*;
+pub use roles::*;
+pub use structure::*;
+pub use template::{Applied, ENGINEERING, ENGINEERING_TEAM, apply_engineering};
+pub use tiers::*;
+
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_avatars;
+#[cfg(test)]
+mod tests_hire;
+#[cfg(test)]
+mod tests_routing;
+#[cfg(test)]
+mod tests_service;
+#[cfg(test)]
+mod tests_template;
+#[cfg(test)]
+mod tests_util;
