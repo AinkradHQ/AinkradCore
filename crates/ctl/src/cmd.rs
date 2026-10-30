@@ -13,7 +13,7 @@ use crate::keystore::{self, Keystore};
 use crate::net::{Endpoint, Net};
 use crate::pair::{Credential, Pairing};
 use crate::stepup::{self, Passphrase};
-use crate::{EXIT_CODES, Error, agents, devices, events, pair, runners, secrets};
+use crate::{EXIT_CODES, Error, agents, devices, events, pair, runners, secrets, terminals};
 
 pub const USAGE: &str =
     "usage: ainkradctl [--socket <path> | --url <http(s)://host:port>] [--host <name>]
@@ -59,8 +59,9 @@ pub const USAGE: &str =
       The Core's secrets (scope admin): set and rotate read the value from stdin (never
       the command line); there is no get, a value never comes back to a client. A secret
       is leased only to the runners listed (default none).
-  agent ls  |  show <id>
+  agent ls  |  show <id>  |  tail <id> [--after <seq>] [--no-follow]
   agent run <runner-id> <harness> [prompt...]* [--secrets <name>:<VAR>,...]
+  agent send <id> <message...>*  |  approve <id> <request>  |  deny <id> <request> [reason...]
   agent cancel <id>*  |  agent kill <id>*
       Agent sessions on runners (scope agent): run starts one (the runner must offer
       agents: ainkrad-runner connect --enable-agents); --secrets leases each named secret
@@ -80,7 +81,7 @@ signed or sent before the Core signs a fresh nonce with that key (POST /handshak
 admin socket answers to the Core's own host name).
 ";
 
-const VALUED: [&str; 14] = [
+const VALUED: [&str; 18] = [
     "--socket",
     "--url",
     "--host",
@@ -95,6 +96,10 @@ const VALUED: [&str; 14] = [
     "--runners",
     "--delivery",
     "--secrets",
+    "--rows",
+    "--cols",
+    "--cwd",
+    "--signal",
 ];
 const SWITCHES: [&str; 4] = ["--json", "--no-follow", "--help", "--no-stepup"];
 
@@ -253,7 +258,25 @@ pub async fn run(args: &[String], out: &mut impl Write) -> Result<(), Error> {
         }
         ["agent", rest @ ..] => {
             let secrets = a.value("--secrets");
-            agents::agent(&mut a.client()?, rest, secrets, json, out).await
+            agents::agent(
+                &mut a.client()?,
+                rest,
+                secrets,
+                a.number("--after")?,
+                !a.on("--no-follow"),
+                json,
+                out,
+            )
+            .await
+        }
+        ["term", rest @ ..] | ["terminal", rest @ ..] => {
+            let options = terminals::Options {
+                rows: a.number("--rows")?,
+                cols: a.number("--cols")?,
+                cwd: a.value("--cwd"),
+                signal: a.value("--signal"),
+            };
+            terminals::terminal(&mut a.client()?, rest, &options, json, out).await
         }
         ["events", "tail"] => {
             let mut c = a.client()?;

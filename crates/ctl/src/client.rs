@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::Error;
 use crate::keystore::Keystore;
-use crate::net::{Net, Response};
+use crate::net::{Net, Response, Ws, WsError};
 use crate::proto::{Canonical, b64, fp, nonce, unb64, verify};
 use crate::stepup::{self, Passphrase};
 
@@ -396,6 +396,38 @@ impl Client {
     /// `call`, parsed.
     pub async fn get<T: DeserializeOwned>(&mut self, path: &str, query: &str) -> Result<T, Error> {
         parse(&self.call("GET", path, query, None).await?)
+    }
+
+    /// Opens a signed, session-bound WebSocket. Destructive upgrades use the same transparent
+    /// step-up retry as REST calls; the server's refusal body is preserved for diagnostics.
+    pub async fn websocket(&mut self, path: &str, query: &str) -> Result<Ws, Error> {
+        let (mut renewed, mut elevated) = (false, false);
+        loop {
+            let s = self.session().await?;
+            let headers = self.sign("GET", path, query, Some(&s.id), &[]);
+            let target = match query {
+                "" => path.to_owned(),
+                q => format!("{path}?{q}"),
+            };
+            match self.net.websocket(&target, &headers).await {
+                Ok(ws) => return Ok(ws),
+                Err(WsError::Refused(res)) => {
+                    let err = refusal(&res, self.now());
+                    match &err {
+                        Error::Refused { code, .. } if code == "session_expired" && !renewed => {
+                            renewed = true;
+                            self.drop_session();
+                        }
+                        Error::Refused { code, .. } if code == "step_up_required" && !elevated => {
+                            elevated = true;
+                            self.elevate().await?;
+                        }
+                        _ => return Err(err),
+                    }
+                }
+                Err(WsError::Net(e)) => return Err(e),
+            }
+        }
     }
 
     /// The scopes of the current session, once one is open.
