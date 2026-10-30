@@ -8,7 +8,7 @@ use std::process::ExitCode;
 
 use ainkrad_ptyhost::host::{HostConfig, prepare, serve};
 use ainkrad_ptyhost::pty::{Pty, Spec};
-use ainkrad_ptyhost::screen::Raw;
+use ainkrad_ptyhost::screen::Terminal;
 
 const USAGE: &str = "usage: ainkrad-ptyhost serve --dir <dir> --id <t_…> < spec.json
 Started by ainkrad-runner for each terminal; not meant to be run by hand.";
@@ -74,7 +74,7 @@ fn main() -> ExitCode {
             serde_json::to_string(info).unwrap_or_default()
         ));
     };
-    let screen = Box::new(Raw::new(64 * 1024));
+    let screen = Box::new(Terminal::new(spec.size));
     match rt.block_on(serve(cfg, spawned, spec.size, screen, ready)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

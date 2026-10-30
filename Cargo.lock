@@ -193,6 +193,7 @@ version = "0.1.0"
 dependencies = [
  "ainkrad-proto",
  "ainkrad-sys",
+ "ainkrad-term",
  "base64 0.22.1",
  "portable-pty",
  "serde",
