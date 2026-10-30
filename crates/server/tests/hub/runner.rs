@@ -152,7 +152,16 @@ async fn a_paired_runner_connects_and_runs_the_noop_over_loopback() {
         env_pass: vec![],
         limits: Default::default(),
     });
-    let refused = core.app.hub.dispatch(&e.device_id, exec).err().unwrap();
+    let refused = core
+        .app
+        .hub
+        .dispatch_elevated(
+            &e.device_id,
+            exec,
+            ainkrad_core_server::hub::Elevated::for_tests(),
+        )
+        .err()
+        .unwrap();
     assert_eq!(
         refused.code,
         ainkrad_proto::v2::ErrorCode::UnsupportedCommand

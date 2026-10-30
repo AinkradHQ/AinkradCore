@@ -42,6 +42,21 @@ use tokio::sync::{Notify, mpsc};
 mod conn;
 pub mod connect;
 
+/// Proof that a command's caller stepped up for it (handshake spec §8): what
+/// [`Hub::dispatch_elevated`] takes. Nothing outside the crate can make one, so no module can
+/// expose `exec.run` without the gate (security review RH5). No route sends `exec.run` yet;
+/// the one that does (E2) mints this after its destructive check.
+#[derive(Debug)]
+pub struct Elevated(());
+
+impl Elevated {
+    /// For tests that drive the hub directly.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_tests() -> Self {
+        Self(())
+    }
+}
+
 /// How the hub paces and bounds connections.
 #[derive(Debug, Clone)]
 pub struct HubConfig {
@@ -232,7 +247,34 @@ impl Hub {
 
     /// Sends `command` to `runner`: `offline`, `unsupported_command` (not advertised) and
     /// `busy` (in-flight cap or a full send queue) are answered here, before anything is sent.
+    /// `exec.run` runs code on the runner, so it goes only through [`Hub::dispatch_elevated`];
+    /// here it is refused (`invalid_args`) and never sent (security review RH5).
     pub fn dispatch(
+        self: &Arc<Self>,
+        runner: &str,
+        command: Command,
+    ) -> Result<Dispatched, StreamError> {
+        if matches!(command, Command::ExecRun(_)) {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "exec.run needs a step-up (Hub::dispatch_elevated)",
+            ));
+        }
+        self.send_command(runner, command)
+    }
+
+    /// [`Hub::dispatch`] for any command, `exec.run` included, given proof that the caller
+    /// stepped up for it.
+    pub fn dispatch_elevated(
+        self: &Arc<Self>,
+        runner: &str,
+        command: Command,
+        _proof: Elevated,
+    ) -> Result<Dispatched, StreamError> {
+        self.send_command(runner, command)
+    }
+
+    fn send_command(
         self: &Arc<Self>,
         runner: &str,
         command: Command,

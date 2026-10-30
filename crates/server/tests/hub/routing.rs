@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use ainkrad_core::audit::AuditActor;
+use ainkrad_core_server::hub::Elevated;
 use ainkrad_core_server::store::gov;
 use ainkrad_proto::v2::*;
 
@@ -25,7 +26,13 @@ async fn the_noop_runs_end_to_end_and_only_advertised_commands_reach_the_runner(
         env_pass: vec![],
         limits: ExecLimits::default(),
     });
-    let refused = hub.dispatch(&dev.id, exec).err().expect("not advertised");
+    // Security review RH5: exec.run without a step-up proof is refused before anything else.
+    let unelevated = hub.dispatch(&dev.id, exec.clone()).err().expect("no proof");
+    assert_eq!(unelevated.code, ErrorCode::InvalidArgs);
+    let refused = hub
+        .dispatch_elevated(&dev.id, exec, Elevated::for_tests())
+        .err()
+        .expect("not advertised");
     assert_eq!(refused.code, ErrorCode::UnsupportedCommand);
     let other = hub.dispatch("d_00000000000000000000000000", Command::Noop);
     assert_eq!(other.err().unwrap().code, ErrorCode::Offline);
