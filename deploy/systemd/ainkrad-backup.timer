@@ -1,0 +1,13 @@
+# Schedule for ainkrad-backup.service. scripts/install.sh sets the time in a drop-in
+# (/etc/systemd/system/ainkrad-backup.timer.d/schedule.conf); this default is daily.
+
+[Unit]
+Description=Ainkrad Core backup schedule
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

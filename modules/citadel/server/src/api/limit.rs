@@ -153,37 +153,42 @@ mod tests {
             client_ip(ip("203.0.113.9"), [].into_iter(), &trusted),
             ip("203.0.113.9")
         );
-        let spoofed = ["1.2.3.4"].into_iter();
+        let spoofed = ["192.0.2.4"].into_iter();
         assert_eq!(
             client_ip(ip("203.0.113.9"), spoofed, &trusted),
             ip("203.0.113.9")
         );
         // Through the proxy: the right-most untrusted entry, not a client-sent one left of it.
-        let xff = ["1.2.3.4, 198.51.100.7"].into_iter();
+        let xff = ["192.0.2.4, 198.51.100.7"].into_iter();
         assert_eq!(
             client_ip(ip("127.0.0.1"), xff, &trusted),
             ip("198.51.100.7")
         );
-        let two = ["1.2.3.4", "198.51.100.7, 127.0.0.2"].into_iter();
+        let two = ["192.0.2.4", "198.51.100.7, 127.0.0.2"].into_iter();
         assert_eq!(
             client_ip(ip("127.0.0.1"), two, &trusted),
             ip("198.51.100.7")
         );
         // No header, or a broken one: the proxy itself.
         assert_eq!(client_ip(ip("::1"), [].into_iter(), &trusted), ip("::1"));
-        let junk = ["1.2.3.4, unknown"].into_iter();
+        let junk = ["192.0.2.4, unknown"].into_iter();
         assert_eq!(client_ip(ip("127.0.0.1"), junk, &trusted), ip("127.0.0.1"));
         // A wider trust list skips more hops; an IPv4-mapped peer is its IPv4 address.
-        let cf: Vec<Cidr> = ["127.0.0.1", "173.245.48.0/20"]
+        let cf: Vec<Cidr> = ["127.0.0.1", "203.0.113.0/24"]
             .map(|c| c.parse().unwrap())
             .into();
-        let xff = ["198.51.100.7, 173.245.48.1"].into_iter();
+        let xff = ["198.51.100.7, 203.0.113.1"].into_iter();
         assert_eq!(
             client_ip(ip("::ffff:127.0.0.1"), xff, &cf),
             ip("198.51.100.7")
         );
         assert!("10.0.0.0/33".parse::<Cidr>().is_err());
-        assert!("0.0.0.0/0".parse::<Cidr>().unwrap().contains(ip("8.8.8.8")));
+        assert!(
+            "0.0.0.0/0"
+                .parse::<Cidr>()
+                .unwrap()
+                .contains(ip("192.0.2.8"))
+        );
     }
 
     #[test]
