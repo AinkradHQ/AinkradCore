@@ -116,6 +116,8 @@ pub struct HarnessExecutor {
     sessions: Mutex<HashMap<i64, String>>,
     /// Each running job's controls from the admin (1.19).
     inboxes: Mutex<HashMap<i64, Arc<inbox::Inbox>>>,
+    /// Each run's own variables (`Executor::session_env`), set on its harness processes only.
+    pub(crate) run_env: Mutex<HashMap<i64, Vec<(String, String)>>>,
     /// Account tokens read by `start` for each entry of the run's chain (or why one could not
     /// be), until `run` hands them to the harness.
     credentials: Mutex<HashMap<i64, Vec<Read>>>,
@@ -167,6 +169,7 @@ impl HarnessExecutor {
             runner_limits: Mutex::new(RunnerLimits::default()),
             sessions: Mutex::new(HashMap::new()),
             inboxes: Mutex::new(HashMap::new()),
+            run_env: Mutex::new(HashMap::new()),
             credentials: Mutex::new(HashMap::new()),
             versions: Mutex::new(BTreeMap::new()),
         }
@@ -375,6 +378,14 @@ impl Executor for HarnessExecutor {
 
     fn control(&self, run: i64, control: crate::Control) {
         self.inbox(run).put(control);
+    }
+
+    fn session_env(&self, run: i64, env: Option<Vec<(String, String)>>) {
+        let mut all = self.run_env.lock().expect("run env lock");
+        match env {
+            Some(env) => drop(all.insert(run, env)),
+            None => drop(all.remove(&run)),
+        }
     }
 
     async fn prune(&self, issues: Vec<i64>) {

@@ -12,7 +12,8 @@
 //!   Core runs) and hands back its frames as a [`Dispatched`] stream: `output` frames, then one
 //!   `result` or `error`. [`Hub::noop`] is the no-op command end to end.
 //! - **Backpressure.** At most `min(sum of the runner's driver capacities, max_inflight)`
-//!   commands in flight per runner (`busy` past it), a bounded send queue per connection
+//!   commands in flight per runner (`busy` past it); a driver that declares its own `streams`
+//!   (`agent`, E2-08.1: its sessions outlive its commands) is counted apart, against that, a bounded send queue per connection
 //!   (`busy` when full; a send stuck past `send_timeout` closes with 1013), and per-stream
 //!   credit for `output`: a runner may send `STREAM_WINDOW` bytes, and more only as the
 //!   dispatcher reads them (`credit`). Output past its credit fails the stream.
@@ -34,8 +35,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, Close, Command, Control, Credit, DriverInfo, ErrorCode, Frame, OP_PTY_ATTACH,
-    OP_PTY_OPEN, RunnerHello, STREAM_WINDOW, StreamError, StreamState,
+    Body, Close, Command, Control, Credit, DriverInfo, ErrorCode, Frame, OP_AGENT_READ,
+    OP_PTY_ATTACH, OP_PTY_OPEN, RunnerHello, STREAM_WINDOW, StreamError, StreamState,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -46,7 +47,7 @@ pub mod connect;
 /// [`Hub::dispatch_elevated`] takes. Nothing outside the crate can make one, so no module can
 /// send anything but `noop` (`exec.run`, `pty.*`) without the gate (security review RH5). No
 /// route sends those yet; the one that does mints this after its destructive check.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Elevated(());
 
 impl Elevated {
@@ -114,6 +115,8 @@ struct Pending {
     /// A `pty.open`/`pty.attach` stream: it may carry one `opened` and credited `snapshot`s.
     terminal: bool,
     opened: bool,
+    /// The driver, when it declares its own `streams` (counted apart).
+    own: Option<String>,
 }
 
 impl Pending {
@@ -157,9 +160,41 @@ impl Runner {
             .hello
             .drivers
             .iter()
-            .map(|d| u64::from(d.capacity))
+            .map(|d| u64::from(d.streams.unwrap_or(d.capacity)))
             .sum();
         usize::try_from(sum).unwrap_or(usize::MAX).min(max)
+    }
+
+    /// Whether one more `op` is over a cap: its driver's own `streams` (E2-08.1), or else the
+    /// capacity the drivers without their own share; and `max` in all.
+    fn full(&self, op: &str, max: usize) -> (bool, Option<String>) {
+        let d = self
+            .hello
+            .drivers
+            .iter()
+            .find(|d| d.commands.iter().any(|c| c == op));
+        let own = d.and_then(|d| d.streams.map(|s| (d.name.clone(), s)));
+        let count = |name: Option<&str>| {
+            self.inflight
+                .values()
+                .filter(|p| p.own.as_deref() == name)
+                .count()
+        };
+        let full = self.inflight.len() >= max
+            || match &own {
+                Some((name, streams)) => count(Some(name)) >= *streams as usize,
+                None => {
+                    let shared: u64 = self
+                        .hello
+                        .drivers
+                        .iter()
+                        .filter(|d| d.streams.is_none())
+                        .map(|d| u64::from(d.capacity))
+                        .sum();
+                    count(None) as u64 >= shared
+                }
+            };
+        (full, own.map(|o| o.0))
     }
 
     /// Every command in flight is reported `lost`, once.
@@ -262,6 +297,20 @@ impl Hub {
         }
     }
 
+    /// Mint the agent capability after the API gate has verified both route scope and step-up.
+    /// Keeping this constructor here prevents callers from manufacturing an elevated token.
+    pub(crate) fn agent_elevation(&self, caller: &crate::api::v1::Caller) -> Elevated {
+        debug_assert!(caller.device.scopes.iter().any(|s| s == "agent"));
+        Elevated(())
+    }
+
+    /// Continue the elevated create for a live, persisted session after a Core restart. The
+    /// session row is written only after the gated create route succeeds; this is not a route
+    /// entry point and cannot elevate a new caller.
+    pub(crate) fn continue_agent_elevation(&self) -> Elevated {
+        Elevated(())
+    }
+
     /// Sends `command` to `runner`: `offline`, `unsupported_command` (not advertised) and
     /// `busy` (in-flight cap or a full send queue) are answered here, before anything is sent.
     /// Deny by default (security review RH5, re-review M1): only `noop` goes through here. Every
@@ -292,6 +341,22 @@ impl Hub {
         self.send_command(runner, command)
     }
 
+    /// The sole non-code agent operation. Transcript reads do not need elevation, but are
+    /// still restricted to the agent driver and cannot be smuggled through plain dispatch.
+    pub fn dispatch_agent_read(
+        self: &Arc<Self>,
+        runner: &str,
+        command: Command,
+    ) -> Result<Dispatched, StreamError> {
+        if command.op() != OP_AGENT_READ {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "only agent.read uses the read path",
+            ));
+        }
+        self.send_command(runner, command)
+    }
+
     fn send_command(
         self: &Arc<Self>,
         runner: &str,
@@ -308,7 +373,8 @@ impl Hub {
                 "the runner did not advertise that command",
             ));
         }
-        if r.inflight.len() >= r.capacity(self.config.max_inflight) {
+        let (full, own) = r.full(command.op(), self.config.max_inflight);
+        if full {
             return Err(err(ErrorCode::Busy, "the runner is at its capacity"));
         }
         let stream = self.streams.fetch_add(2, Ordering::Relaxed);
@@ -322,6 +388,7 @@ impl Hub {
             credit: STREAM_WINDOW,
             terminal,
             opened: false,
+            own,
         };
         let frame = p.frame(stream, Body::Command(command));
         let conn = r.conn.as_ref().expect("filtered above");

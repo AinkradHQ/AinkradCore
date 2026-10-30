@@ -5,6 +5,33 @@ public import struct Foundation.Data
 public import struct Foundation.Date
 /// A type that performs HTTP operations defined by the OpenAPI document.
 public protocol APIProtocol: Sendable {
+    /// - Remark: HTTP `GET /api/v1/agent-sessions`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/get(listAgentSessions)`.
+    func listAgentSessions(_ input: Operations.ListAgentSessions.Input) async throws -> Operations.ListAgentSessions.Output
+    /// - Remark: HTTP `POST /api/v1/agent-sessions`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/post(createAgentSession)`.
+    func createAgentSession(_ input: Operations.CreateAgentSession.Input) async throws -> Operations.CreateAgentSession.Output
+    /// - Remark: HTTP `GET /api/v1/agent-sessions/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/get(getAgentSession)`.
+    func getAgentSession(_ input: Operations.GetAgentSession.Input) async throws -> Operations.GetAgentSession.Output
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/approvals/{request}`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/approvals/{request}/post(decideAgentApproval)`.
+    func decideAgentApproval(_ input: Operations.DecideAgentApproval.Input) async throws -> Operations.DecideAgentApproval.Output
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/cancel`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/cancel/post(cancelAgentSession)`.
+    func cancelAgentSession(_ input: Operations.CancelAgentSession.Input) async throws -> Operations.CancelAgentSession.Output
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/kill`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/kill/post(killAgentSession)`.
+    func killAgentSession(_ input: Operations.KillAgentSession.Input) async throws -> Operations.KillAgentSession.Output
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/messages`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/messages/post(sendAgentMessage)`.
+    func sendAgentMessage(_ input: Operations.SendAgentMessage.Input) async throws -> Operations.SendAgentMessage.Output
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/resume`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/resume/post(resumeAgentSession)`.
+    func resumeAgentSession(_ input: Operations.ResumeAgentSession.Input) async throws -> Operations.ResumeAgentSession.Output
+    /// - Remark: HTTP `GET /api/v1/agent-sessions/{id}/transcript`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/transcript/get(getAgentTranscript)`.
+    func getAgentTranscript(_ input: Operations.GetAgentTranscript.Input) async throws -> Operations.GetAgentTranscript.Output
     /// - Remark: HTTP `GET /api/v1/audit`.
     /// - Remark: Generated from `#/paths//api/v1/audit/get(listAudit)`.
     func listAudit(_ input: Operations.ListAudit.Input) async throws -> Operations.ListAudit.Output
@@ -167,6 +194,111 @@ public protocol APIProtocol: Sendable {
 
 /// Convenience overloads for operation inputs.
 extension APIProtocol {
+    /// - Remark: HTTP `GET /api/v1/agent-sessions`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/get(listAgentSessions)`.
+    public func listAgentSessions(
+        query: Operations.ListAgentSessions.Input.Query = .init(),
+        headers: Operations.ListAgentSessions.Input.Headers = .init()
+    ) async throws -> Operations.ListAgentSessions.Output {
+        try await listAgentSessions(Operations.ListAgentSessions.Input(
+            query: query,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/agent-sessions`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/post(createAgentSession)`.
+    public func createAgentSession(
+        headers: Operations.CreateAgentSession.Input.Headers = .init(),
+        body: Operations.CreateAgentSession.Input.Body
+    ) async throws -> Operations.CreateAgentSession.Output {
+        try await createAgentSession(Operations.CreateAgentSession.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/agent-sessions/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/get(getAgentSession)`.
+    public func getAgentSession(
+        path: Operations.GetAgentSession.Input.Path,
+        headers: Operations.GetAgentSession.Input.Headers = .init()
+    ) async throws -> Operations.GetAgentSession.Output {
+        try await getAgentSession(Operations.GetAgentSession.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/approvals/{request}`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/approvals/{request}/post(decideAgentApproval)`.
+    public func decideAgentApproval(
+        path: Operations.DecideAgentApproval.Input.Path,
+        headers: Operations.DecideAgentApproval.Input.Headers = .init(),
+        body: Operations.DecideAgentApproval.Input.Body
+    ) async throws -> Operations.DecideAgentApproval.Output {
+        try await decideAgentApproval(Operations.DecideAgentApproval.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/cancel`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/cancel/post(cancelAgentSession)`.
+    public func cancelAgentSession(
+        path: Operations.CancelAgentSession.Input.Path,
+        headers: Operations.CancelAgentSession.Input.Headers = .init()
+    ) async throws -> Operations.CancelAgentSession.Output {
+        try await cancelAgentSession(Operations.CancelAgentSession.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/kill`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/kill/post(killAgentSession)`.
+    public func killAgentSession(
+        path: Operations.KillAgentSession.Input.Path,
+        headers: Operations.KillAgentSession.Input.Headers = .init()
+    ) async throws -> Operations.KillAgentSession.Output {
+        try await killAgentSession(Operations.KillAgentSession.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/messages`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/messages/post(sendAgentMessage)`.
+    public func sendAgentMessage(
+        path: Operations.SendAgentMessage.Input.Path,
+        headers: Operations.SendAgentMessage.Input.Headers = .init(),
+        body: Operations.SendAgentMessage.Input.Body
+    ) async throws -> Operations.SendAgentMessage.Output {
+        try await sendAgentMessage(Operations.SendAgentMessage.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/resume`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/resume/post(resumeAgentSession)`.
+    public func resumeAgentSession(
+        path: Operations.ResumeAgentSession.Input.Path,
+        headers: Operations.ResumeAgentSession.Input.Headers = .init()
+    ) async throws -> Operations.ResumeAgentSession.Output {
+        try await resumeAgentSession(Operations.ResumeAgentSession.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/agent-sessions/{id}/transcript`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/transcript/get(getAgentTranscript)`.
+    public func getAgentTranscript(
+        path: Operations.GetAgentTranscript.Input.Path,
+        query: Operations.GetAgentTranscript.Input.Query = .init(),
+        headers: Operations.GetAgentTranscript.Input.Headers = .init()
+    ) async throws -> Operations.GetAgentTranscript.Output {
+        try await getAgentTranscript(Operations.GetAgentTranscript.Input(
+            path: path,
+            query: query,
+            headers: headers
+        ))
+    }
     /// - Remark: HTTP `GET /api/v1/audit`.
     /// - Remark: Generated from `#/paths//api/v1/audit/get(listAudit)`.
     public func listAudit(

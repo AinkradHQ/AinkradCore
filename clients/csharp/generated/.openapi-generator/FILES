@@ -6,6 +6,7 @@ api/openapi.yaml
 appveyor.yml
 git_push.sh
 src/Ainkrad.Client/Ainkrad.Client.csproj
+src/Ainkrad.Client/Api/AgentsApi.cs
 src/Ainkrad.Client/Api/DevicesApi.cs
 src/Ainkrad.Client/Api/EventsApi.cs
 src/Ainkrad.Client/Api/HandshakeApi.cs
@@ -32,6 +33,13 @@ src/Ainkrad.Client/Client/RequestOptions.cs
 src/Ainkrad.Client/Client/RetryConfiguration.cs
 src/Ainkrad.Client/Client/WebRequestPathBuilder.cs
 src/Ainkrad.Client/Model/AbstractOpenAPISchema.cs
+src/Ainkrad.Client/Model/AgentDecision.cs
+src/Ainkrad.Client/Model/AgentMessage.cs
+src/Ainkrad.Client/Model/AgentSecret.cs
+src/Ainkrad.Client/Model/AgentSession.cs
+src/Ainkrad.Client/Model/AgentTranscript.cs
+src/Ainkrad.Client/Model/AgentTranscriptEntry.cs
+src/Ainkrad.Client/Model/AgentUsage.cs
 src/Ainkrad.Client/Model/ApiVersion.cs
 src/Ainkrad.Client/Model/ApproveBody.cs
 src/Ainkrad.Client/Model/AuditEntry.cs
@@ -58,6 +66,7 @@ src/Ainkrad.Client/Model/LeasedSecret.cs
 src/Ainkrad.Client/Model/Lockout.cs
 src/Ainkrad.Client/Model/Me.cs
 src/Ainkrad.Client/Model/Named.cs
+src/Ainkrad.Client/Model/NewAgentSession.cs
 src/Ainkrad.Client/Model/NewLease.cs
 src/Ainkrad.Client/Model/NewPairingBody.cs
 src/Ainkrad.Client/Model/NewSecret.cs

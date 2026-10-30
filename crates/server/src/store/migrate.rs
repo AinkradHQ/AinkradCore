@@ -87,9 +87,15 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 9,
+        name: "agent_sessions",
+        up: include_str!("../../migrations/0009_agent_sessions.up.sql"),
+        down: include_str!("../../migrations/0009_agent_sessions.down.sql"),
+    },
+    Migration {
+        version: 10,
         name: "terminals",
-        up: include_str!("../../migrations/0009_terminals.up.sql"),
-        down: include_str!("../../migrations/0009_terminals.down.sql"),
+        up: include_str!("../../migrations/0010_terminals.up.sql"),
+        down: include_str!("../../migrations/0010_terminals.down.sql"),
     },
 ];
 

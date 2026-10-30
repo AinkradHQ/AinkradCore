@@ -110,6 +110,7 @@ pub async fn pair_main(args: &[&str]) -> ExitCode {
 
 pub const CONNECT_USAGE: &str = "usage:
   ainkrad-runner connect [--state <dir>] [--ca <pem>] [--enable-exec] [--enable-pty]
+                         [--enable-agents]
 
 Serves the Core it paired with (`ainkrad-runner pair`) over protocol v2, reconnecting with a
 jittered backoff and resuming commands in flight. Stops on SIGTERM or Ctrl-C; commands still
@@ -119,6 +120,9 @@ environment), so turn it on only where that is wanted. --enable-pty offers termi
 as this runner's user, each held by a detached ainkrad-ptyhost (found next to this binary, or
 at $AINKRAD_PTYHOST) that outlives the runner; their sockets are in <dir>/terminals. A
 runner started as root gives root shells.
+--enable-agents offers agent sessions (the harnesses on PATH, as this runner's user, unconfined
+until E2-09): transcripts in <dir>/agents, delivered secrets in $XDG_RUNTIME_DIR (else
+<dir>/secrets), emptied at start.
 Exit status: 0 stopped (SIGTERM, Ctrl-C); 1 an error that retrying cannot fix (state, URL, TLS);
 2 usage; 6 rejected by the Core: this runner was revoked (close 4001), or the Core refused it
 as an unknown or revoked device (auth_failed) 3 dials in a row; pair it again. Network errors,
@@ -127,13 +131,18 @@ as an unknown or revoked device (auth_failed) 3 dials in a row; pair it again. N
 /// `connect`'s exit status when the Core rejects this runner (as ctl's for a revoked device).
 pub const EXIT_REJECTED: u8 = 6;
 
+fn agents_enabled(args: &[&str]) -> bool {
+    args.contains(&"--enable-agents")
+}
+
 pub async fn connect_main(args: &[&str]) -> ExitCode {
     let run_enabled = args.contains(&"--enable-exec");
     let pty_enabled = args.contains(&"--enable-pty");
+    let agents_enabled = agents_enabled(args);
     let args: Vec<&str> = args
         .iter()
         .copied()
-        .filter(|a| !matches!(*a, "--enable-exec" | "--enable-pty"))
+        .filter(|a| !matches!(*a, "--enable-exec" | "--enable-pty" | "--enable-agents"))
         .collect();
     let args = args.as_slice();
     if !args.len().is_multiple_of(2) || args.chunks(2).any(|f| !matches!(f[0], "--state" | "--ca"))
@@ -177,7 +186,17 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             ..super::PtyConfig::new(state.0.join("terminals"))
         }))
     });
-    match super::daemon::from_state(&state, exec, pty, tls, stopping).await {
+    let agents = match agents_enabled.then(|| agents(&state.0)) {
+        None => None,
+        Some(a) => match a.await {
+            Ok(a) => Some(a),
+            Err(e) => {
+                eprintln!("ainkrad-runner: agents: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+    match super::daemon::from_state(&state, exec, pty, agents, tls, stopping).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e @ super::client::LinkError::Rejected(_)) => {
             eprintln!("ainkrad-runner: {e}");
@@ -187,5 +206,64 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             eprintln!("ainkrad-runner: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// The agent driver over `<state>/agents`, driving the real harnesses (`HarnessExecutor`).
+/// Delivered secrets go to `$XDG_RUNTIME_DIR` (a tmpfs on most Linux hosts), in a dir named
+/// for this state dir so two runners never sweep each other's; else `<state>/secrets`.
+///
+/// Agents are opt-in and unconfined until E2-09: this is a loud safety boundary, not sandboxing.
+/// Until E2-09, no real credentials may be delivered; the Core's `secrets.mode` gate remains
+/// authoritative and the Core refuses sessions when no runner advertises this driver.
+/// Secret files require a runtime filesystem (tmpfs/ramdisk); persistent fallback is refused.
+/// As the v1 runner does: the work root is outside the home and under no harness instruction
+/// file (`check_roots`), and each harness's version is probed; only an installed one the
+/// compat matrix does not refuse gets a slot, so any other is refused at `agent.start`.
+async fn agents(state: &std::path::Path) -> Result<super::agent::AgentDriver, String> {
+    let secrets = match std::env::var_os("XDG_RUNTIME_DIR") {
+        Some(run) => {
+            let tag =
+                ring::digest::digest(&ring::digest::SHA256, state.as_os_str().as_encoded_bytes());
+            let tag: String = tag.as_ref()[..6]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            PathBuf::from(run).join(format!("ainkrad-runner-{tag}"))
+        }
+        None => return Err("agent secrets require XDG_RUNTIME_DIR on a tmpfs/ramdisk".to_owned()),
+    };
+    let tag = ring::digest::digest(&ring::digest::SHA256, state.as_os_str().as_encoded_bytes());
+    let tag: String = tag.as_ref()[..6]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let work = std::env::temp_dir().join(format!("ainkrad-agent-runs-{tag}"));
+    let executor = crate::HarnessExecutor::new(work, state.join("agents-config"));
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    executor.check_roots(&home)?;
+    let mut config = super::agent::AgentConfig::new(state.join("agents"), secrets);
+    for (name, version) in executor.probe(Duration::from_secs(10)).await {
+        let verdict = ainkrad_harness::compat::check(&name, Some(&version), &Default::default());
+        if !verdict.refused {
+            config.slots.insert(name, config.capacity);
+        }
+    }
+    if config.slots.is_empty() {
+        return Err("no harness is installed in a version the compat matrix takes".to_owned());
+    }
+    super::agent::AgentDriver::new(config, executor).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::agents_enabled;
+
+    #[test]
+    fn agents_are_off_by_default() {
+        assert!(!agents_enabled(&["--state", "/tmp/runner"]));
+        assert!(agents_enabled(&["--enable-agents"]));
     }
 }

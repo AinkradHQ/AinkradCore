@@ -3,8 +3,11 @@
 # unlisted break still fails. Once the baseline (newest v* tag, else origin/development) no
 # longer has the old shape, a line can never match again: delete it in the next change to api/.
 #
-# Handshake review L4 (minor 11): POST /handshake answers its own HandshakeProof with core_spki and
-# core_sig required; GET's Handshake never sent them and no longer lists them. Minor 10 was never
-# tagged and no client has shipped.
-openapi.json: removed /components/schemas/Handshake/properties/core_sig
-openapi.json: removed /components/schemas/Handshake/properties/core_spki
+
+# The merged terminal/agent runner protocol keeps the existing terminal exit and agent event
+# reply shapes wire-compatible; the positional schema comparison sees their op tags as changed.
+runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/TerminalExit/properties/op
+runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/AgentEvents/properties/op
+runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/AgentEvents/properties/op
+runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/AgentEvents/properties/op
+runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/AgentEvents/properties/op

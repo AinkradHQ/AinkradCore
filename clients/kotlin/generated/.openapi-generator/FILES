@@ -6,6 +6,7 @@ gradle/wrapper/gradle-wrapper.properties
 gradlew
 gradlew.bat
 settings.gradle
+src/main/kotlin/ainkrad/client/apis/AgentsApi.kt
 src/main/kotlin/ainkrad/client/apis/DevicesApi.kt
 src/main/kotlin/ainkrad/client/apis/EventsApi.kt
 src/main/kotlin/ainkrad/client/apis/HandshakeApi.kt
@@ -24,6 +25,13 @@ src/main/kotlin/ainkrad/client/infrastructure/ApiClient.kt
 src/main/kotlin/ainkrad/client/infrastructure/HttpResponse.kt
 src/main/kotlin/ainkrad/client/infrastructure/RequestConfig.kt
 src/main/kotlin/ainkrad/client/infrastructure/RequestMethod.kt
+src/main/kotlin/ainkrad/client/models/AgentDecision.kt
+src/main/kotlin/ainkrad/client/models/AgentMessage.kt
+src/main/kotlin/ainkrad/client/models/AgentSecret.kt
+src/main/kotlin/ainkrad/client/models/AgentSession.kt
+src/main/kotlin/ainkrad/client/models/AgentTranscript.kt
+src/main/kotlin/ainkrad/client/models/AgentTranscriptEntry.kt
+src/main/kotlin/ainkrad/client/models/AgentUsage.kt
 src/main/kotlin/ainkrad/client/models/ApiVersion.kt
 src/main/kotlin/ainkrad/client/models/ApproveBody.kt
 src/main/kotlin/ainkrad/client/models/AuditEntry.kt
@@ -50,6 +58,7 @@ src/main/kotlin/ainkrad/client/models/LeasedSecret.kt
 src/main/kotlin/ainkrad/client/models/Lockout.kt
 src/main/kotlin/ainkrad/client/models/Me.kt
 src/main/kotlin/ainkrad/client/models/Named.kt
+src/main/kotlin/ainkrad/client/models/NewAgentSession.kt
 src/main/kotlin/ainkrad/client/models/NewLease.kt
 src/main/kotlin/ainkrad/client/models/NewPairingBody.kt
 src/main/kotlin/ainkrad/client/models/NewSecret.kt

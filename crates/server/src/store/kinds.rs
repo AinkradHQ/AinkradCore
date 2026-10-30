@@ -23,9 +23,17 @@ pub const PLATFORM: &str = "core";
 /// trigger; and the runner hub's presence (`hub`): `runner.connected`, `runner.disconnected`,
 /// `runner.degraded` (silent past two heartbeats); `notify.delivery`, one per push the
 /// notifications service tried (E2-12); and a terminal's life (E2-01), who and when, never its
-/// content: `terminal.opened`, `.attached`, `.detached`, `.exited`, `.closed`.
+/// content: `terminal.opened`, `.attached`, `.detached`, `.exited`, `.closed`; and agent
+/// sessions' (`agent.*`, E2-08).
 pub const PLATFORM_EVENT_KINDS: &[&str] = &[
     "audit",
+    "agent.approval_decided",
+    "agent.approval_requested",
+    "agent.created",
+    "agent.ended",
+    "agent.message",
+    "agent.state",
+    "agent.transcript",
     "notify.delivery",
     "runner.connected",
     "runner.degraded",
@@ -45,7 +53,12 @@ pub const VISIBLE: [&str; 5] = ["read", "approve", "terminal", "agent", "admin"]
 /// is; a terminal's (`terminal.*`) is `terminal`. A `runner` device sees none: it reads no
 /// event stream at all.
 pub fn platform_scope(kind: &str) -> &'static str {
-    if kind.starts_with("runner.") {
+    if kind.starts_with("agent.approval_") {
+        // Whoever decides a tool call must hear of it (E2-08.4).
+        "approve"
+    } else if kind.starts_with("agent.") {
+        "agent"
+    } else if kind.starts_with("runner.") {
         "read"
     } else if kind.starts_with("terminal.") {
         "terminal"
@@ -56,6 +69,12 @@ pub fn platform_scope(kind: &str) -> &'static str {
 
 /// The platform's audit actions.
 pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
+    "agent.cancelled",
+    "agent.created",
+    "agent.decided",
+    "agent.killed",
+    "agent.messaged",
+    "agent.resumed",
     "api.refused",
     "auth.lockout",
     "auth.lockout_cleared",
