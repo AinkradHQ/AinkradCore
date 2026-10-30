@@ -43,6 +43,16 @@ fn pids(marker: &str) -> Vec<u32> {
 fn alive(marker: &str) -> usize {
     pids(marker).len()
 }
+/// The escapee takes a moment to exec after the shell reports it started.
+async fn running(marker: &str) -> bool {
+    for _ in 0..100 {
+        if alive(marker) == 1 {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    false
+}
 async fn gone(marker: &str) -> bool {
     for _ in 0..100 {
         if alive(marker) == 0 {
@@ -151,7 +161,10 @@ async fn a_leader_that_exits_leaving_a_member_is_still_reaped_from_its_record() 
     let text = std::fs::read_to_string(&record).unwrap();
     // The runner dies here: no `Drop` runs.
     std::mem::forget(child);
-    assert_eq!(alive("8804"), 1, "control: the member outlived its leader");
+    assert!(
+        running("8804").await,
+        "control: the member outlived its leader"
+    );
     assert!(reap_group(&text), "a surviving member must be reaped");
     assert!(gone("8804").await, "the orphan survived the reap");
     assert!(!reap_group("garbage") && !reap_group("1:x") && !reap_group("0:x"));
@@ -181,7 +194,7 @@ async fn a_sandboxed_setsid_child_dies_with_its_session() {
     let mut child = Proc::spawn_with_pgid_file(cmd, None).unwrap();
     let _guard = Guard(vec![child.pgid], vec!["8805"]);
     assert_eq!(child.line().await.as_deref(), Some("ready"));
-    assert_eq!(alive("8805"), 1, "control: the escapee runs");
+    assert!(running("8805").await, "control: the escapee runs");
     drop(child);
     assert!(gone("8805").await, "a setsid child survived its session");
     let _ = std::fs::remove_dir_all(root);
