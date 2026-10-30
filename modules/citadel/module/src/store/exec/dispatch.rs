@@ -89,7 +89,7 @@ pub trait Host: Send + Sync {
 
 /// The module's handle on the Core's agent sessions: its id comes from the module itself.
 fn agents() -> ModuleAgents {
-    ModuleAgents::of(&crate::Citadel)
+    ModuleAgents::of(&crate::Citadel::default())
 }
 
 /// The Core's agent-session service.
