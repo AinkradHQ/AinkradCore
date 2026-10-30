@@ -628,7 +628,7 @@ async fn a_module_credential_reaches_the_runner_as_its_run_token_and_nowhere_els
     let r = run_runner(&core, &base, &st, exec).await;
     let mut app = core.app.clone();
     app.modules = Arc::from([Arc::new(Minter) as Arc<dyn ainkrad_core_server::module::Module>]);
-    let policy = json!({});
+    let policy = json!({"mode": "ask"});
     let new = NewSession {
         runner: &e.device_id,
         harness: "fake",
