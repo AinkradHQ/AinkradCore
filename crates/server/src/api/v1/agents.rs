@@ -254,7 +254,8 @@ pub async fn create(
         ));
     }
     let workspace_ok = b.workspace.as_ref().is_none_or(|w| {
-        serde_json::from_value::<ainkrad_proto::runner::Workspace>(w.clone()).is_ok()
+        serde_json::from_value::<ainkrad_proto::runner::Workspace>(w.clone())
+            .is_ok_and(|workspace| workspace.problem().is_none())
     });
     let policy = b.policy.unwrap_or_else(|| {
         serde_json::to_value(ainkrad_proto::runner::Policy::default()).expect("a policy serializes")

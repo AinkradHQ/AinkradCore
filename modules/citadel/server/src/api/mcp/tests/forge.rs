@@ -25,7 +25,7 @@ async fn open_pr_needs_a_forge_and_shows_on_the_issue() {
 
     let repo = ProjectRepo {
         project_id: project,
-        url: "/srv/git/a.git".to_owned(),
+        url: "https://example.test/git/a.git".to_owned(),
         default_branch: "develop".to_owned(),
     };
     set_project_repo(pool, &repo).await.unwrap();

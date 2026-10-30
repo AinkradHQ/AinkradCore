@@ -96,9 +96,7 @@ impl Drop for Stage {
         for t in &self.tasks {
             t.abort();
         }
-        if !std::thread::panicking() {
-            let _ = std::fs::remove_dir_all(&self.dir);
-        }
+        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 
@@ -138,6 +136,14 @@ impl Stage {
         let (_, key) = exec::register_runner(&pool, &new).await.unwrap();
         let url = format!("ws://{host}/runner/v1/connect");
         let mut executor = HarnessExecutor::new(dir.join("work"), dir.join("config"));
+        // Only the test transport maps validated HTTPS fixtures onto local bare repos.
+        let git_shim = dir.join("fixture-git");
+        std::fs::write(&git_shim, format!(
+            "#!/bin/sh\nexport GIT_ALLOW_PROTOCOL=https:ssh:file\nexec git -c protocol.file.allow=always -c 'url.file://{}/.insteadOf=https://fixture.invalid/' \"$@\"\n",
+            dir.display()
+        )).unwrap();
+        std::fs::set_permissions(&git_shim, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+        executor.workspaces.git = git_shim;
         executor.bins.insert("claude".to_owned(), fake);
         executor.mcp_url = mcp_url(&url);
         executor.usage_every = Duration::from_millis(200);
@@ -318,6 +324,11 @@ impl Stage {
         std::fs::write(self.dir.join("plays").join(format!("{key}.{n}.sh")), sh).unwrap();
     }
 
+    pub fn repo_url(&self, path: &Path) -> String {
+        let name = path.strip_prefix(&self.dir).unwrap().to_str().unwrap();
+        format!("https://fixture.invalid/{name}")
+    }
+
     /// A bare repo `origin.git` with one commit on `main`, for a project's `--repo`.
     pub fn origin(&self) -> PathBuf {
         let seed = self.dir.join("seed");
@@ -356,7 +367,7 @@ impl Stage {
         let origin = self.origin();
         let repo = ProjectRepo {
             project_id: project,
-            url: origin.display().to_string(),
+            url: self.repo_url(&origin),
             default_branch: "main".to_owned(),
         };
         work::set_project_repo(&self.pool, &repo).await.unwrap();

@@ -393,7 +393,7 @@ async fn assigns_carry_the_worktree_and_closed_ones_are_pruned() {
     let (done, live) = (issue(pool, p).await, issue(pool, p).await);
     let repo = ProjectRepo {
         project_id: p,
-        url: "/srv/git/citadel.git".to_owned(),
+        url: "https://example.test/git/citadel.git".to_owned(),
         default_branch: "development".to_owned(),
     };
     set_project_repo(pool, &repo).await.unwrap();

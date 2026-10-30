@@ -182,7 +182,7 @@ async fn every_operation_refuses_another_companys_data() {
         id: 0,
         project_id: b.project,
         name: "core".to_owned(),
-        url: "/srv/core.git".to_owned(),
+        url: "https://example.test/core.git".to_owned(),
         default_branch: "main".to_owned(),
         position: 0,
         primary: false,

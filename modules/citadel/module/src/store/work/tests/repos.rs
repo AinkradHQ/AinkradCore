@@ -11,7 +11,7 @@ fn repo(project: ProjectId, name: &str) -> Repo {
         id: 0,
         project_id: project,
         name: name.to_owned(),
-        url: format!("/srv/{name}.git"),
+        url: format!("https://example.test/{name}.git"),
         default_branch: "main".to_owned(),
         position: 0,
         primary: false,
@@ -83,7 +83,7 @@ async fn repos_are_validated_ordered_and_one_is_primary() {
     assert_eq!(names(primary), ["app"]);
     assert_eq!(
         get_project_repo(pool, p.id).await.unwrap().unwrap().url,
-        "/srv/app.git"
+        "https://example.test/app.git"
     );
 
     // An issue touches the primary unless set; a repo an open issue touches stays.
