@@ -6,8 +6,8 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use ainkrad_ptyhost::host::{HostConfig, run};
-use ainkrad_ptyhost::pty::Spec;
+use ainkrad_ptyhost::host::{HostConfig, prepare, serve};
+use ainkrad_ptyhost::pty::{Pty, Spec};
 use ainkrad_ptyhost::screen::Raw;
 
 const USAGE: &str = "usage: ainkrad-ptyhost serve --dir <dir> --id <t_…> < spec.json
@@ -48,6 +48,15 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // The child is forked while this process has one thread: no runtime yet (review L1).
+    let cfg = HostConfig::new(PathBuf::from(dir), id);
+    let spawned = match prepare(&cfg).and_then(|()| Pty::spawn(&spec)) {
+        Ok(s) => s,
+        Err(e) => {
+            say(&format!("error {e}"));
+            return ExitCode::FAILURE;
+        }
+    };
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
@@ -59,14 +68,14 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let cfg = HostConfig::new(PathBuf::from(dir), id);
     let ready = |info: &ainkrad_ptyhost::wire::HostInfo| {
         say(&format!(
             "ready {}",
             serde_json::to_string(info).unwrap_or_default()
         ));
     };
-    match rt.block_on(run(cfg, spec, Box::new(Raw::new(64 * 1024)), ready)) {
+    let screen = Box::new(Raw::new(64 * 1024));
+    match rt.block_on(serve(cfg, spawned, spec.size, screen, ready)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             say(&format!("error {e}"));

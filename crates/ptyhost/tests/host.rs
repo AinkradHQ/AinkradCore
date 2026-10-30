@@ -205,7 +205,11 @@ async fn a_hundred_open_close_cycles_leave_nothing() {
     let me = std::process::id().to_string();
     let zombie = |line: &str| {
         let f: Vec<&str> = line.split_whitespace().collect();
-        f.get(1) == Some(&me.as_str()) && f.get(2).is_some_and(|s| s.starts_with('Z'))
+        // Hosts this test launched, left unreaped. (In-process hosts of other tests hold their
+        // exited children as zombies on purpose until acked: review H1.)
+        f.get(1) == Some(&me.as_str())
+            && f.get(2).is_some_and(|s| s.starts_with('Z'))
+            && line.contains("ainkrad-ptyhos")
     };
     // Hosts of tests running alongside may be a moment from being reaped: retry briefly.
     let mut table = ps();
@@ -362,4 +366,90 @@ async fn resume_by_seq_and_a_snapshot_when_it_is_gone() {
         other => panic!("{other:?}"),
     }
     w3.send(&ToHost::Close { grace_ms: 100 }).await.unwrap();
+}
+
+fn stat(pid: u32) -> String {
+    let o = Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&o.stdout).trim().to_owned()
+}
+
+/// Review H1: once the child exited, its pid stays a zombie (so its group id cannot be
+/// recycled) until the host ends, and a signal is refused rather than sent to that group.
+#[tokio::test]
+async fn after_the_exit_nothing_is_signalled_and_the_group_id_stays_ours() {
+    let dir = tmp();
+    let id = in_process(&dir, sh("exit 3"), |_| {}).await;
+    let (info, mut r, mut w) = connect(&dir, &id).await.unwrap();
+    let child = info.child.unwrap();
+    w.send(&ToHost::Attach { seq: 0 }).await.unwrap();
+    let mut out = Vec::new();
+    let exit = read_until(&mut r, &mut out, |_| false).await.unwrap();
+    assert_eq!(exit.code, Some(3));
+    assert!(
+        stat(child).starts_with('Z'),
+        "a zombie holds the pid: {:?}",
+        stat(child)
+    );
+    w.send(&ToHost::Signal {
+        signal: "KILL".to_owned(),
+    })
+    .await
+    .unwrap();
+    match r.recv().await.unwrap() {
+        Some(FromHost::Error { message }) => assert!(message.contains("exited"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    // Close after the exit signals nothing either; the ack reaps the child.
+    w.send(&ToHost::Close { grace_ms: 50 }).await.unwrap();
+    ack(&dir, &id, &mut r, &mut w).await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !stat(child).is_empty() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(stat(child), "", "reaped once the host ended");
+}
+
+/// Review M1: a scan removes the files of a host that is provably gone (its socket refuses),
+/// never of one that is only slow to answer.
+#[tokio::test]
+async fn a_scan_removes_only_provably_dead_hosts() {
+    let dir = tmp();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let record = |id: &str| {
+        std::fs::write(
+            record_path(&dir, id),
+            r#"{"protocol":1,"pid":1,"boot":"x","started":0}"#,
+        )
+        .unwrap();
+    };
+    // Slow: listens, accepts, never says hello.
+    let slow = tokio::net::UnixListener::bind(socket_path(&dir, "t_slow")).unwrap();
+    record("t_slow");
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((s, _)) = slow.accept().await {
+            held.push(s);
+        }
+    });
+    // Dead: a socket file nobody listens on.
+    drop(std::os::unix::net::UnixListener::bind(socket_path(&dir, "t_dead")).unwrap());
+    record("t_dead");
+    assert!(scan(&dir).await.is_empty());
+    assert!(record_path(&dir, "t_slow").exists() && socket_path(&dir, "t_slow").exists());
+    assert!(!record_path(&dir, "t_dead").exists() && !socket_path(&dir, "t_dead").exists());
+}
+
+/// Review L2: a socket in a directory others can enter is not trusted.
+#[tokio::test]
+async fn a_socket_in_an_open_directory_is_refused() {
+    let dir = tmp();
+    let id = in_process(&dir, sh("sleep 2"), |_| {}).await;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let e = connect(&dir, &id).await.err().unwrap();
+    assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(connect(&dir, &id).await.is_ok());
 }

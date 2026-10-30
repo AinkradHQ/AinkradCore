@@ -5,9 +5,12 @@
 //!   foreground job, and nothing of the host's.
 //! - Its environment is built here from an allow-list ([`environment`]): nothing is inherited
 //!   by accident. `TERM`, `COLORTERM` and `LANG` are set deliberately.
-//! - The child is always waited for (the PTYReaper lesson): [`Pty::spawn`] hands the waiter to
-//!   a thread that blocks in `wait` and reports the exit. Closing escalates HUP → TERM → KILL
-//!   ([`hang_up`]), then whatever is left of the group is killed once the leader is reaped.
+//! - The child is always waited for (the PTYReaper lesson), in two steps. A thread observes the
+//!   exit **without reaping** (`ainkrad_sys::wait_exited`), so the dead leader stays a zombie
+//!   and its pid, which is also its process group id, cannot be recycled while the host lives:
+//!   no signal of ours can reach an unrelated process that got the same number (review H1).
+//!   The host reaps it once, when it ends ([`Pty::reap`]). Signals after a known exit are
+//!   refused anyway. Closing escalates HUP → TERM → KILL ([`hang_up`]).
 //! - Resizing sets the PTY's window size; the kernel sends the foreground group `SIGWINCH`.
 
 use std::collections::BTreeMap;
@@ -152,7 +155,7 @@ impl Pty {
                 }
             }
         }
-        let mut child = pair.slave.spawn_command(cmd).map_err(io_err)?;
+        let child = pair.slave.spawn_command(cmd).map_err(io_err)?;
         // The master sees EOF only once every slave fd is closed: ours goes now.
         drop(pair.slave);
         let pid = child
@@ -160,15 +163,19 @@ impl Pty {
             .ok_or_else(|| io::Error::other("the child has no pid"))?;
         let (tx, exit) = watch::channel(None);
         std::thread::spawn(move || {
-            let status = child.wait();
-            let e = match status {
-                Ok(s) if s.signal().is_some() => Exit {
-                    code: None,
-                    signal: s.signal().map(str::to_owned),
-                },
-                Ok(s) => Exit {
-                    code: i32::try_from(s.exit_code()).ok(),
+            // Held, never waited on through portable-pty: that would reap it (see the module).
+            let _child = child;
+            let e = match ainkrad_sys::wait_exited(pid) {
+                Ok(ainkrad_sys::Ended::Code(c)) => Exit {
+                    code: Some(c),
                     signal: None,
+                },
+                Ok(ainkrad_sys::Ended::Signal(n)) => Exit {
+                    code: None,
+                    signal: Some(
+                        ainkrad_sys::signal_name(n)
+                            .map_or_else(|| format!("signal {n}"), |s| format!("SIG{s}")),
+                    ),
                 },
                 Err(e) => Exit {
                     code: None,
@@ -198,7 +205,14 @@ impl Pty {
         self.master.resize(pty_size(size)).map_err(io_err)
     }
 
-    /// `name` (`"INT"`) to the child's process group; `Ok(false)` once it is gone.
+    /// Reaps the exited child, freeing its pid and group id: only once its exit was seen, and
+    /// only when nothing will signal its group again (the host's end).
+    pub fn reap(&self) {
+        let _ = ainkrad_sys::reap(self.pid);
+    }
+
+    /// `name` (`"INT"`) to the child's process group; `Ok(false)` once it is gone. The caller
+    /// refuses this after the exit is known; the zombie leader keeps the group id ours anyway.
     pub fn signal(&self, name: &str) -> io::Result<bool> {
         let n = ainkrad_sys::signal_number(name)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unknown signal"))?;
@@ -207,9 +221,13 @@ impl Pty {
 }
 
 /// Ends the child: HUP, then TERM after `grace`, then KILL after another `grace`, each to its
-/// process group, until `exit` reports it waited for. Once it is reaped the rest of the group
-/// is killed (its id cannot be reused while a member lives).
+/// process group, until `exit` reports it ended; then the rest of the group is killed. Safe
+/// because the leader is not reaped yet: its zombie holds the group id.
 pub async fn hang_up(pid: u32, grace: Duration, mut exit: watch::Receiver<Option<Exit>>) {
+    // Already over: nothing to signal, and no final sweep (review H1).
+    if exit.borrow().is_some() {
+        return;
+    }
     for sig in ["HUP", "TERM", "KILL"] {
         if exit.borrow().is_some() {
             break;

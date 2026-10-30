@@ -82,6 +82,12 @@ fn exit_of(terminal: &str, e: &Exit) -> TerminalExit {
     }
 }
 
+/// The decoded length of standard base64 (what credit counts).
+pub fn b64_len(data: &str) -> u64 {
+    let pad = data.bytes().rev().take_while(|b| *b == b'=').count();
+    (data.len() / 4 * 3).saturating_sub(pad) as u64
+}
+
 /// What the Core is told about a host.
 pub fn info_of(h: &HostInfo) -> TerminalInfo {
     TerminalInfo {
@@ -254,7 +260,8 @@ impl PtyDriver {
                 m = rd.recv() => match m {
                     Ok(Some(FromHost::Out { seq: s, data })) => {
                         let Ok(bytes) = STANDARD.decode(data) else { continue };
-                        let end = s + bytes.len() as u64;
+                        // A same-uid host is still input: a wrapping offset is dropped (L9).
+                        let Some(end) = s.checked_add(bytes.len() as u64) else { continue };
                         if end > next {
                             let from = usize::try_from(next.saturating_sub(s)).unwrap_or(0);
                             flow.push(&bytes[from.min(bytes.len())..], std::time::Instant::now());
@@ -262,10 +269,17 @@ impl PtyDriver {
                         }
                     }
                     Ok(Some(FromHost::Snapshot { seq: s, data })) => {
-                        send(Body::Control(Control::Snapshot(Snapshot { seq: s, data })));
                         next = s;
                         asked = false;
-                        flow.resynced();
+                        // A snapshot costs credit (review M2): with none left, it waits for a
+                        // fresh one once credit returns.
+                        if flow.credit() == 0 {
+                            flow.cut();
+                        } else {
+                            flow.spend(b64_len(&data));
+                            send(Body::Control(Control::Snapshot(Snapshot { seq: s, data })));
+                            flow.resynced();
+                        }
                     }
                     Ok(Some(FromHost::Exit { exit })) => exited = Some(exit),
                     Ok(Some(_)) => {}
@@ -303,7 +317,7 @@ impl PtyDriver {
                         data: STANDARD.encode(b),
                     })),
                     Emit::Resync => {
-                        if !asked {
+                        if !asked && flow.credit() > 0 {
                             asked = wr.send(&ToHost::Snapshot).await.is_ok();
                         }
                         break;

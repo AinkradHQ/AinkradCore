@@ -6,13 +6,13 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
-use crate::host::{random_hex, record_path, socket_path};
+use crate::host::{owned_dir, random_hex, record_path, socket_path};
 use crate::pty::Spec;
-use crate::wire::{FromHost, HOST_PROTOCOL, HostInfo, HostRecord, ToHost, valid_id};
+use crate::wire::{FromHost, HOST_PROTOCOL, HostInfo, HostRecord, ToHost, read_line, valid_id};
 
 /// How long a host may take to answer its socket, or to start.
 const CONNECT: Duration = Duration::from_secs(2);
@@ -25,7 +25,10 @@ pub fn new_id() -> io::Result<String> {
 }
 
 /// The reading half of a host connection.
-pub struct HostReader(Lines<BufReader<OwnedReadHalf>>);
+pub struct HostReader {
+    r: BufReader<OwnedReadHalf>,
+    buf: Vec<u8>,
+}
 
 /// The writing half of a host connection.
 pub struct HostWriter(OwnedWriteHalf);
@@ -34,7 +37,7 @@ impl HostReader {
     /// The next message; `None` when the host closed the connection (or ended).
     pub async fn recv(&mut self) -> io::Result<Option<FromHost>> {
         loop {
-            let Some(line) = self.0.next_line().await? else {
+            let Some(line) = read_line(&mut self.r, &mut self.buf).await? else {
                 return Ok(None);
             };
             match serde_json::from_str::<FromHost>(&line) {
@@ -55,7 +58,10 @@ impl HostWriter {
 }
 
 /// Connects to host `id` in `dir` and reads its hello. A host of a newer protocol major is
-/// refused; an older one is spoken to as it is (it skips what it does not know).
+/// refused; an older one is spoken to as it is (it skips what it does not know). The
+/// directory must be ours, private and not a symlink, and the peer must be our own uid
+/// (review L2): a socket planted by someone else is never fed keystrokes. A socket nobody
+/// listens on fails with `NotFound` or `ConnectionRefused`; only those mean it is dead.
 pub async fn connect(dir: &Path, id: &str) -> io::Result<(HostInfo, HostReader, HostWriter)> {
     if !valid_id(id) {
         return Err(io::Error::new(
@@ -63,11 +69,24 @@ pub async fn connect(dir: &Path, id: &str) -> io::Result<(HostInfo, HostReader, 
             "bad terminal id",
         ));
     }
+    owned_dir(dir, true)?;
     let stream = tokio::time::timeout(CONNECT, UnixStream::connect(socket_path(dir, id)))
         .await
         .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
+    if !stream
+        .peer_cred()
+        .is_ok_and(|c| c.uid() == ainkrad_sys::getuid())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the terminal socket is served by another user",
+        ));
+    }
     let (rd, wr) = stream.into_split();
-    let mut reader = HostReader(BufReader::new(rd).lines());
+    let mut reader = HostReader {
+        r: BufReader::new(rd),
+        buf: Vec::new(),
+    };
     let hello = tokio::time::timeout(CONNECT, reader.recv())
         .await
         .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
@@ -131,8 +150,9 @@ pub async fn launch(bin: &Path, dir: &Path, id: &str, spec: &Spec) -> io::Result
 }
 
 /// Every host in `dir` that is still the process its record names (pid and boot answer on
-/// its socket), for re-adoption. A record whose host does not answer, or answers as another
-/// process, is stale: it and its socket are removed.
+/// its socket), for re-adoption. Files are removed only for a host that is provably gone: its
+/// socket is missing or refuses the connection (review M1). A host that is slow to answer,
+/// speaks a newer protocol, or answers as another process is left alone and not listed.
 pub async fn scan(dir: &Path) -> Vec<HostInfo> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -150,15 +170,20 @@ pub async fn scan(dir: &Path) -> Vec<HostInfo> {
         let record: Option<HostRecord> = std::fs::read(record_path(dir, &id))
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok());
-        let answer = connect(dir, &id).await.ok();
-        match (record, answer) {
-            (Some(r), Some((info, _, _))) if info.pid == r.pid && info.boot == r.boot => {
+        match (record, connect(dir, &id).await) {
+            (Some(r), Ok((info, _, _))) if info.pid == r.pid && info.boot == r.boot => {
                 live.push(info);
             }
-            _ => {
+            (_, Err(e))
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                ) =>
+            {
                 let _ = std::fs::remove_file(record_path(dir, &id));
                 let _ = std::fs::remove_file(socket_path(dir, &id));
             }
+            _ => {}
         }
     }
     live.sort_by(|a, b| a.id.cmp(&b.id));

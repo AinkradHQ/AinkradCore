@@ -603,7 +603,15 @@ mod pty {
         )
         .await;
         let (mut bytes, mut snapshot) = (0u64, None);
+        let mut granted = false;
         while snapshot.is_none() {
+            // The window is spent and the flood keeps coming: no snapshot goes without credit
+            // (it costs credit too); one more grant brings it.
+            if bytes == STREAM_WINDOW && !granted {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                core.send(1, Body::Credit(Credit { bytes: 4096 })).await;
+                granted = true;
+            }
             let f = core.recv().await;
             match f.body().unwrap().unwrap() {
                 Body::Output(Output { data }) => {
@@ -613,11 +621,15 @@ mod pty {
                 _ => {}
             }
         }
-        assert!(bytes <= STREAM_WINDOW, "{bytes} past the window");
+        assert!(bytes <= STREAM_WINDOW + 4096, "{bytes} past the credit");
         assert!(snapshot.unwrap().seq > bytes);
-        core.send(1, Body::Credit(Credit { bytes: 4096 })).await;
+        // More credit: the stream carries on (output, or another snapshot under the flood).
+        core.send(1, Body::Credit(Credit { bytes: 65536 })).await;
         let mut more = String::new();
-        until(&mut core, 1, &mut more, |o, _| !o.is_empty()).await;
+        until(&mut core, 1, &mut more, |o, b| {
+            !o.is_empty() || matches!(b, Body::Control(Control::Snapshot(_)))
+        })
+        .await;
         core.send(
             3,
             Body::Command(Command::PtyClose(PtyClose {

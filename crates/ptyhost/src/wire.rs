@@ -9,13 +9,42 @@
 //! - Output is `out` with the byte offset of its first byte; a client that attaches at a point
 //!   the host no longer holds gets `snapshot` first.
 
+use std::io;
+
 use ainkrad_proto::v2::{Size, TerminalState};
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt};
 
 use crate::pty::Exit;
 
 /// The host protocol version this build speaks.
 pub const HOST_PROTOCOL: u32 = 1;
+
+/// The longest line either side reads (a 1 MiB ring as base64 and its framing, with room):
+/// a longer one ends the connection instead of growing a buffer without bound.
+pub const MAX_LINE: usize = 4 << 20;
+
+/// The next line of `r` without its newline, `None` at EOF; `InvalidData` past [`MAX_LINE`]
+/// or for a line that is not UTF-8.
+pub async fn read_line<R: AsyncBufRead + Unpin>(
+    r: &mut R,
+    buf: &mut Vec<u8>,
+) -> io::Result<Option<String>> {
+    buf.clear();
+    let limit = u64::try_from(MAX_LINE).unwrap_or(u64::MAX) + 1;
+    let n = (&mut *r).take(limit).read_until(b'\n', buf).await?;
+    if n == 0 {
+        return Ok(None);
+    }
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+    } else if buf.len() > MAX_LINE {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "line too long"));
+    }
+    String::from_utf8(std::mem::take(buf))
+        .map(Some)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
 
 /// What a host says about itself and its terminal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +164,25 @@ mod tests {
             panic!()
         };
         assert_eq!(info.pid, 9);
+    }
+
+    #[tokio::test]
+    async fn a_line_past_the_limit_ends_the_read() {
+        let mut long = vec![b'x'; MAX_LINE + 10];
+        long.push(b'\n');
+        let mut r = tokio::io::BufReader::new(&long[..]);
+        let mut buf = Vec::new();
+        assert!(read_line(&mut r, &mut buf).await.is_err());
+        let mut r = tokio::io::BufReader::new(&b"a\nb"[..]);
+        assert_eq!(
+            read_line(&mut r, &mut buf).await.unwrap().as_deref(),
+            Some("a")
+        );
+        assert_eq!(
+            read_line(&mut r, &mut buf).await.unwrap().as_deref(),
+            Some("b")
+        );
+        assert_eq!(read_line(&mut r, &mut buf).await.unwrap(), None);
     }
 
     #[test]

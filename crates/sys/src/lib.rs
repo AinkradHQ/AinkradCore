@@ -13,6 +13,8 @@ pub const INVENTORY: &[(&str, &str)] = &[
     ("setsid", "libc::setsid: no arguments, no memory"),
     ("killpg", "libc::kill with a negative pid: integers only"),
     ("getuid", "libc::getuid: no arguments, cannot fail"),
+    ("wait_exited", "libc::waitid into a zeroed siginfo_t we own"),
+    ("reap", "libc::waitpid with a null status pointer"),
 ];
 
 /// Makes the calling process the leader of a new session and process group, with no
@@ -58,6 +60,68 @@ pub fn getuid() -> u32 {
     unsafe { libc::getuid() }
 }
 
+/// How a waited-for child ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ended {
+    /// `exit(code)`.
+    Code(i32),
+    /// Killed by this signal (a core dump included).
+    Signal(i32),
+}
+
+/// Blocks until child `pid` has exited and reports how, **without reaping it**
+/// (`waitid(P_PID, pid, WEXITED | WNOWAIT)`). The child stays a zombie, so its pid, and the
+/// process group it led, cannot be reused until [`reap`]: a signal to that group can never
+/// reach an unrelated process that later got the same number.
+#[allow(unsafe_code)]
+pub fn wait_exited(pid: u32) -> io::Result<Ended> {
+    let id = libc::id_t::from(pid);
+    loop {
+        // SAFETY: an all-zero `siginfo_t` is a valid value of this plain C struct; `waitid`
+        // writes into it through the pointer, which lives for the call.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // SAFETY: integer arguments and a pointer to the `siginfo_t` above, which we own and
+        // which outlives the call.
+        let r = unsafe { libc::waitid(libc::P_PID, id, &mut info, libc::WEXITED | libc::WNOWAIT) };
+        if r == -1 {
+            let e = io::Error::last_os_error();
+            if e.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(e);
+        }
+        // SAFETY: `waitid` succeeded for a child that exited, so the kernel filled the
+        // child-status fields `si_status` reads (Linux and macOS both define the accessor).
+        let status = unsafe { info.si_status() };
+        return Ok(match info.si_code {
+            libc::CLD_EXITED => Ended::Code(status),
+            _ => Ended::Signal(status),
+        });
+    }
+}
+
+/// Reaps child `pid` (one that [`wait_exited`] reported), freeing its pid. `Ok(false)` if it
+/// was not a child of ours to reap (ECHILD).
+#[allow(unsafe_code)]
+pub fn reap(pid: u32) -> io::Result<bool> {
+    let Ok(pid) = i32::try_from(pid) else {
+        return Err(io::Error::from(io::ErrorKind::InvalidInput));
+    };
+    loop {
+        // SAFETY: integer arguments; a null status pointer is allowed and means "do not report".
+        let r = unsafe { libc::waitpid(pid, std::ptr::null_mut(), 0) };
+        if r == pid {
+            return Ok(true);
+        }
+        let e = io::Error::last_os_error();
+        match e.raw_os_error() {
+            Some(libc::EINTR) => continue,
+            Some(libc::ECHILD) => return Ok(false),
+            _ => return Err(e),
+        }
+    }
+}
+
 /// The number of a signal named without `SIG` (`"TERM"`), if it is one we deliver.
 pub fn signal_number(name: &str) -> Option<i32> {
     Some(match name {
@@ -76,6 +140,15 @@ pub fn signal_number(name: &str) -> Option<i32> {
     })
 }
 
+/// The name (without `SIG`) of a signal number, for the ones [`signal_number`] knows.
+pub fn signal_name(n: i32) -> Option<&'static str> {
+    [
+        "HUP", "INT", "QUIT", "TERM", "KILL", "USR1", "USR2", "CONT", "STOP", "TSTP", "WINCH",
+    ]
+    .into_iter()
+    .find(|name| signal_number(name) == Some(n))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,7 +158,14 @@ mod tests {
     fn every_unsafe_block_is_in_the_inventory() {
         let src = include_str!("lib.rs");
         let blocks = src.matches(concat!("unsafe", " {")).count();
-        assert_eq!(blocks, INVENTORY.len(), "add the new block to INVENTORY");
+        let any = src.matches(concat!("unsafe", "{")).count()
+            + src.matches(concat!("unsafe", " fn")).count()
+            + src.matches(concat!("unsafe", " impl")).count();
+        assert_eq!(any, 0, "only plain unsafe blocks, each in INVENTORY");
+        let safety = src.matches(concat!("// SAFE", "TY:")).count();
+        assert_eq!(blocks, safety, "every block has a SAFETY comment");
+        // Each inventoried function holds at least one block.
+        assert!(blocks >= INVENTORY.len(), "add the new block to INVENTORY");
         for (name, _) in INVENTORY {
             assert!(src.contains(&format!("pub fn {name}(")), "{name}");
         }
@@ -98,6 +178,49 @@ mod tests {
         assert!(killpg(u32::MAX, 0).is_err());
         // A group that does not exist (pids are below this on both OSes).
         assert!(!killpg(99_999_999, 0).unwrap());
+    }
+
+    /// The exit is seen and the child stays a zombie (pid held) until it is reaped; this is
+    /// what keeps a later signal to its group from reaching a recycled pid (review H1).
+    // The children are reaped by `reap`, which is what is under test.
+    #[allow(clippy::zombie_processes)]
+    #[test]
+    fn an_exit_is_observed_without_reaping() {
+        let child = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 7"])
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        assert_eq!(wait_exited(pid).unwrap(), Ended::Code(7));
+        assert_eq!(wait_exited(pid).unwrap(), Ended::Code(7), "still there");
+        let stat = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&stat.stdout)
+                .trim_start()
+                .starts_with('Z')
+        );
+        assert!(reap(pid).unwrap());
+        assert!(!reap(pid).unwrap(), "gone after the reap");
+        let killed = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let _ = killpg_or_kill(killed.id());
+        assert_eq!(
+            wait_exited(killed.id()).unwrap(),
+            Ended::Signal(libc::SIGKILL)
+        );
+        assert!(reap(killed.id()).unwrap());
+    }
+
+    fn killpg_or_kill(pid: u32) -> std::io::Result<()> {
+        std::process::Command::new("/bin/kill")
+            .args(["-KILL", &pid.to_string()])
+            .status()
+            .map(drop)
     }
 
     #[test]

@@ -191,6 +191,10 @@ pub enum Emit {
 /// - **Drop-to-snapshot.** Unsent bytes are capped at `backlog`; past it they are dropped and
 ///   [`Emit::Resync`] is returned once. A slow reader costs a snapshot, never unbounded memory,
 ///   and never slows the producer.
+/// - **A snapshot costs credit too** (review M2): it is sent only while credit is above zero
+///   and takes its decoded length off it, down to zero at most (one snapshot may overdraw the
+///   window, so a screen larger than the window still goes). The receiver grants it back as
+///   it reads, like output. Both ends apply [`Outflow::spend`]'s rule.
 #[derive(Debug)]
 pub struct Outflow {
     credit: u64,
@@ -224,6 +228,18 @@ impl Outflow {
         }
         self.since.get_or_insert(now);
         self.pending.extend_from_slice(bytes);
+    }
+
+    /// A snapshot of `bytes` went: credit drops by as much, to zero at most.
+    pub fn spend(&mut self, bytes: u64) {
+        self.credit = self.credit.saturating_sub(bytes);
+    }
+
+    /// Drops what waits and asks for a snapshot (`Resync`), as if the reader fell behind.
+    pub fn cut(&mut self) {
+        self.pending = Vec::new();
+        self.since = None;
+        self.behind = true;
     }
 
     /// The reader allows `bytes` more.

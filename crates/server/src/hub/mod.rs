@@ -34,8 +34,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, Close, Command, Credit, DriverInfo, ErrorCode, Frame, RunnerHello, STREAM_WINDOW,
-    StreamError, StreamState,
+    Body, Close, Command, Control, Credit, DriverInfo, ErrorCode, Frame, OP_PTY_ATTACH,
+    OP_PTY_OPEN, RunnerHello, STREAM_WINDOW, StreamError, StreamState,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -89,6 +89,9 @@ struct Pending {
     sent: Vec<Frame>,
     received: u64,
     credit: u64,
+    /// A `pty.open`/`pty.attach` stream: it may carry one `opened` and credited `snapshot`s.
+    terminal: bool,
+    opened: bool,
 }
 
 impl Pending {
@@ -178,9 +181,14 @@ impl Dispatched {
     /// The next frame; `None` after the last. Reading `output` grants the runner as much credit.
     pub async fn next(&mut self) -> Option<Body> {
         let body = self.rx.recv().await?;
-        if let Body::Output(o) = &body {
+        let read = match &body {
+            Body::Output(o) => Some(&o.data),
+            Body::Control(Control::Snapshot(s)) => Some(&s.data),
+            _ => None,
+        };
+        if let Some(data) = read {
             self.hub
-                .grant(&self.runner, self.stream, b64_len(&o.data).unwrap_or(0));
+                .grant(&self.runner, self.stream, b64_len(data).unwrap_or(0));
         }
         Some(body)
     }
@@ -248,11 +256,14 @@ impl Hub {
         }
         let stream = self.streams.fetch_add(2, Ordering::Relaxed);
         let (to, rx) = mpsc::unbounded_channel();
+        let terminal = matches!(command.op(), OP_PTY_OPEN | OP_PTY_ATTACH);
         let mut p = Pending {
             to,
             sent: Vec::new(),
             received: 0,
             credit: STREAM_WINDOW,
+            terminal,
+            opened: false,
         };
         let frame = p.frame(stream, Body::Command(command));
         let conn = r.conn.as_ref().expect("filtered above");
@@ -457,10 +468,31 @@ impl Hub {
                     ))
                 }
             },
-            // A terminal's `opened` and `snapshot` (E2-01) go to its dispatcher as they come.
-            Body::Control(c) => {
-                let _ = p.to.send(Body::Control(c));
+            // A terminal stream's one `opened`, and its `snapshot`s under credit (E2-01, review
+            // M2: a snapshot costs credit like output, and may overdraw it once to zero). Any
+            // other control on a command stream fails it, so nothing reaches the dispatcher
+            // unmetered.
+            Body::Control(Control::Opened(o)) if p.terminal && !p.opened => {
+                p.opened = true;
+                let _ = p.to.send(Body::Control(Control::Opened(o)));
                 return;
+            }
+            Body::Control(Control::Snapshot(s)) if p.terminal && p.credit > 0 => {
+                match b64_len(&s.data) {
+                    Some(n) => {
+                        p.credit = p.credit.saturating_sub(n);
+                        let _ = p.to.send(Body::Control(Control::Snapshot(s)));
+                        return;
+                    }
+                    None => Body::Error(err(ErrorCode::BadFrame, "a snapshot that is not base64")),
+                }
+            }
+            Body::Control(_) => {
+                tracing::warn!(device, stream, "a control frame this stream does not take");
+                Body::Error(err(
+                    ErrorCode::BadFrame,
+                    "the runner sent a control frame this stream does not take",
+                ))
             }
             last @ (Body::Result(_) | Body::Error(_)) => last,
             // Credit and heartbeats on a stream: nothing to do for a command.

@@ -117,7 +117,8 @@ running are killed. It offers only `noop` unless --enable-exec is given: `exec.r
 Core run any program as this runner's user (bounded in time and output, with an empty
 environment), so turn it on only where that is wanted. --enable-pty offers terminals: a shell
 as this runner's user, each held by a detached ainkrad-ptyhost (found next to this binary, or
-at $AINKRAD_PTYHOST) that outlives the runner; their sockets are in <dir>/terminals.
+at $AINKRAD_PTYHOST) that outlives the runner; their sockets are in <dir>/terminals. A
+runner started as root gives root shells.
 Exit status: 0 stopped (SIGTERM, Ctrl-C); 1 an error that retrying cannot fix (state, URL, TLS);
 2 usage; 6 rejected by the Core: this runner was revoked (close 4001), or the Core refused it
 as an unknown or revoked device (auth_failed) 3 dials in a row; pair it again. Network errors,

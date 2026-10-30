@@ -20,14 +20,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use ainkrad_proto::v2::{Lifecycle, SIGNALS, Size, TerminalState};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
-use crate::pty::{Exit, Pty, Spec, hang_up};
+use crate::pty::{Exit, Pty, Spawned, Spec, hang_up};
 use crate::screen::{Ring, Screen};
-use crate::wire::{FromHost, HOST_PROTOCOL, HostInfo, HostRecord, ToHost, valid_id};
+use crate::wire::{FromHost, HOST_PROTOCOL, HostInfo, HostRecord, ToHost, read_line, valid_id};
 
 /// How the host runs.
 pub struct HostConfig {
@@ -77,12 +77,33 @@ pub fn random_hex() -> io::Result<String> {
 }
 
 /// A `0700` directory for terminal sockets (created if missing).
+/// Refuses a symlink in its place, and one owned by another user.
 pub fn private_dir(dir: &Path) -> io::Result<()> {
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(dir)?;
+    owned_dir(dir, false)?;
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+}
+
+/// Whether `dir` is a real directory (not a symlink) owned by this user, and, when `private`,
+/// open to nobody else (no group or other bits): what the runner requires before it trusts a
+/// socket in it (review L2).
+pub fn owned_dir(dir: &Path, private: bool) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::symlink_metadata(dir)?;
+    let refuse = |why: &str| io::Error::new(io::ErrorKind::PermissionDenied, why.to_owned());
+    if !m.file_type().is_dir() {
+        return Err(refuse("the terminal directory is not a directory"));
+    }
+    if m.uid() != ainkrad_sys::getuid() {
+        return Err(refuse("the terminal directory belongs to another user"));
+    }
+    if private && m.mode() & 0o077 != 0 {
+        return Err(refuse("the terminal directory is open to other users"));
+    }
+    Ok(())
 }
 
 enum Event {
@@ -217,6 +238,10 @@ impl State {
                     self.send(client, refuse("bad size"));
                 }
             }
+            // After the exit nothing is signalled (review H1).
+            ToHost::Signal { .. } if self.exit.is_some() => {
+                self.send(client, refuse("the terminal has exited"));
+            }
             ToHost::Signal { signal } => {
                 if !SIGNALS.contains(&signal.as_str()) || self.pty.signal(&signal).is_err() {
                     self.send(client, refuse("unknown signal"));
@@ -224,7 +249,7 @@ impl State {
             }
             ToHost::Snapshot => self.send(client, self.snapshot()),
             ToHost::Close { grace_ms } => {
-                if !self.closing {
+                if !self.closing && self.exit.is_none() {
                     self.closing = true;
                     let grace = Duration::from_millis(grace_ms.clamp(GRACE.0, GRACE.1));
                     tokio::spawn(hang_up(self.pty.pid, grace, self.exit_rx.clone()));
@@ -291,8 +316,8 @@ fn serve_client(
         }
     });
     tokio::spawn(async move {
-        let mut lines = BufReader::new(rd).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
+        let (mut rd, mut buf) = (BufReader::new(rd), Vec::new());
+        while let Ok(Some(line)) = read_line(&mut rd, &mut buf).await {
             match serde_json::from_str::<ToHost>(&line) {
                 Ok(m) => {
                     if events.send(Event::Msg(id, m)).is_err() {
@@ -308,24 +333,44 @@ fn serve_client(
     Some(tx)
 }
 
-/// Runs the terminal `spec` as host `cfg` until a client acks its exit. `ready` is called once
-/// the socket and record are in place (the binary prints `ready` for the runner then).
-pub async fn run(
-    cfg: HostConfig,
-    spec: Spec,
-    screen: Box<dyn Screen>,
-    ready: impl FnOnce(&HostInfo),
-) -> io::Result<()> {
+/// Checks `cfg` and makes its directory: before the child is spawned.
+pub fn prepare(cfg: &HostConfig) -> io::Result<()> {
     if !valid_id(&cfg.id) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "bad terminal id",
         ));
     }
-    private_dir(&cfg.dir)?;
+    private_dir(&cfg.dir)
+}
+
+/// Runs the terminal `spec` as host `cfg` until a client acks its exit. `ready` is called once
+/// the socket and record are in place (the binary prints `ready` for the runner then).
+///
+/// The binary spawns the child itself, with [`prepare`] and `Pty::spawn`, before any runtime
+/// thread exists (the fork in a multi-threaded process is what review L1 warns of), then calls
+/// [`serve`]; this is the same for an in-process host (tests).
+pub async fn run(
+    cfg: HostConfig,
+    spec: Spec,
+    screen: Box<dyn Screen>,
+    ready: impl FnOnce(&HostInfo),
+) -> io::Result<()> {
+    prepare(&cfg)?;
+    let spawned = Pty::spawn(&spec)?;
+    serve(cfg, spawned, spec.size, screen, ready).await
+}
+
+/// [`run`] for a child already spawned.
+pub async fn serve(
+    cfg: HostConfig,
+    spawned: Spawned,
+    size: Size,
+    screen: Box<dyn Screen>,
+    ready: impl FnOnce(&HostInfo),
+) -> io::Result<()> {
     let sock = socket_path(&cfg.dir, &cfg.id);
     let record = record_path(&cfg.dir, &cfg.id);
-    let spawned = Pty::spawn(&spec)?;
     let _ = std::fs::remove_file(&sock);
     let listener = UnixListener::bind(&sock)?;
     std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o600))?;
@@ -360,7 +405,7 @@ pub async fn run(
         pid,
         boot: random_hex()?,
         started: now_ms(),
-        size: spec.size,
+        size,
         state: TerminalState::Created
             .next(Lifecycle::Spawned)
             .unwrap_or(TerminalState::Running),
@@ -447,5 +492,7 @@ pub async fn run(
     }
     let _ = std::fs::remove_file(&record);
     let _ = std::fs::remove_file(&sock);
+    // Nothing signals the group any more: the zombie leader can go.
+    st.pty.reap();
     Ok(())
 }

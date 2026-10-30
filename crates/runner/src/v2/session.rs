@@ -54,11 +54,16 @@ struct Held {
     inbox: Option<mpsc::UnboundedSender<Body>>,
 }
 
-/// The decoded length of an `output` frame's base64.
-fn output_len(f: &Frame) -> Option<u64> {
-    let data = f.payload.get("data")?.as_str()?;
-    let pad = data.bytes().rev().take_while(|b| *b == b'=').count();
-    Some((data.len() / 4 * 3).saturating_sub(pad) as u64)
+/// The credit a frame used: an `output`'s bytes, or a `snapshot`'s (review M2); `None` for a
+/// frame credit does not count.
+fn credited(f: &Frame) -> Option<u64> {
+    let counted = match f.kind {
+        FrameKind::Output => true,
+        FrameKind::Control => f.payload.get("type").and_then(|t| t.as_str()) == Some("snapshot"),
+        _ => false,
+    };
+    let data = f.payload.get("data")?.as_str().filter(|_| counted)?;
+    Some(super::pty::b64_len(data))
 }
 
 impl Held {
@@ -68,16 +73,16 @@ impl Held {
         f
     }
 
-    /// The Core granted `bytes` of credit: it read that much output, so every frame up to the
-    /// last output frame those bytes cover was received and need not be kept for a resend.
+    /// The Core granted `bytes` of credit: it read that much output (snapshots included), so
+    /// every frame up to the last credited frame those bytes cover was received and need not
+    /// be kept for a resend.
     fn ack(&mut self, bytes: u64) {
         self.acked = self.acked.saturating_add(bytes);
         let (mut budget, mut cut, mut spent) = (self.acked, 0, 0);
         for (i, f) in self.sent.iter().enumerate() {
-            if f.kind != FrameKind::Output {
+            let Some(n) = credited(f) else {
                 continue;
-            }
-            let n = output_len(f).unwrap_or(u64::MAX);
+            };
             if n > budget {
                 break;
             }
@@ -439,5 +444,17 @@ mod tests {
         h.ack(31);
         assert!(h.sent.is_empty());
         assert_eq!(h.acked, 0);
+        // A snapshot is credited like output (review M2): acked, it goes.
+        h.frame(
+            7,
+            Body::Control(Control::Snapshot(ainkrad_proto::v2::Snapshot {
+                seq: 9,
+                data: "AAAAAAAAAAAA".to_owned(),
+            })),
+        );
+        h.ack(8);
+        assert_eq!(h.sent.len(), 1);
+        h.ack(1);
+        assert!(h.sent.is_empty());
     }
 }
