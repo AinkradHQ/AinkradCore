@@ -4,6 +4,7 @@
 //! `--secrets name:VAR,…` leases each broker secret to the session's runner at each start.
 
 use std::io::Write;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -55,6 +56,8 @@ pub async fn agent(
     c: &mut Client,
     words: &[&str],
     secrets_flag: Option<&str>,
+    after: Option<i64>,
+    follow: bool,
     json: bool,
     out: &mut impl Write,
 ) -> Result<(), Error> {
@@ -100,13 +103,40 @@ pub async fn agent(
             }
             Ok(())
         }
+        ["tail", id] => {
+            let id = sid(id)?;
+            let mut next = after.unwrap_or(0).max(0) as u64;
+            loop {
+                let t: Value = c.get(&format!("/api/v1/agent-sessions/{id}/transcript"), &format!("after={next}&limit=1000")).await?;
+                let entries = t["entries"].as_array().ok_or_else(|| Error::Protocol("transcript entries are not an array".into()))?;
+                for entry in entries {
+                    let seq = entry["seq"].as_u64().ok_or_else(|| Error::Protocol("transcript entry without seq".into()))?;
+                    if seq != next + 1 { return Err(Error::Protocol(format!("transcript gap: expected {}, got {seq}", next + 1))); }
+                    if json { print(out, entry)?; } else { print(out, format_args!("{seq}\t{}", entry["body"]))?; }
+                    next = seq;
+                }
+                let state = t["state"].as_str().unwrap_or("");
+                if !follow || matches!(state, "ended" | "lost") { return Ok(()); }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+        ["send", id, message @ ..] => {
+            let body = json!({"text": message.join(" ")});
+            let res = c.call("POST", &format!("/api/v1/agent-sessions/{}/messages", sid(id)?), "", Some(&body)).await?;
+            shown(out, parse(&res)?)
+        }
+        [verb @ ("approve" | "deny"), id, request, reason @ ..] => {
+            let body = json!({"approved": *verb == "approve", "reply": (!reason.is_empty()).then(|| reason.join(" "))});
+            let res = c.call("POST", &format!("/api/v1/agent-sessions/{}/approvals/{request}", sid(id)?), "", Some(&body)).await?;
+            shown(out, parse(&res)?)
+        }
         [verb @ ("cancel" | "kill"), id] => {
             let path = format!("/api/v1/agent-sessions/{}/{verb}", sid(id)?);
             let res = c.call("POST", &path, "", None).await?;
             shown(out, parse(&res)?)
         }
         _ => Err(Error::Usage(
-            "agent ls | run <runner-id> <harness> [prompt…] | show <id> | cancel <id> | kill <id>"
+            "agent ls | run <runner-id> <harness> [prompt…] | show <id> | tail <id> | send <id> <message…> | approve/deny <id> <request> | cancel/kill <id>"
                 .into(),
         )),
     }
