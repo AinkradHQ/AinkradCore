@@ -6,6 +6,319 @@ public import struct Foundation.Date
 extension Components {
     /// Types generated from the `#/components/schemas` section of the OpenAPI document.
     public enum Schemas {
+        /// - Remark: Generated from `#/components/schemas/AgentDecision`.
+        public struct AgentDecision: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AgentDecision/approved`.
+            public var approved: Swift.Bool
+            /// Told to the agent; a denial's reason.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentDecision/reply`.
+            public var reply: Swift.String?
+            /// Creates a new `AgentDecision`.
+            ///
+            /// - Parameters:
+            ///   - approved:
+            ///   - reply: Told to the agent; a denial's reason.
+            public init(
+                approved: Swift.Bool,
+                reply: Swift.String? = nil
+            ) {
+                self.approved = approved
+                self.reply = reply
+            }
+            public enum CodingKeys: String, CodingKey {
+                case approved
+                case reply
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/AgentMessage`.
+        public struct AgentMessage: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AgentMessage/text`.
+            public var text: Swift.String
+            /// Creates a new `AgentMessage`.
+            ///
+            /// - Parameters:
+            ///   - text:
+            public init(text: Swift.String) {
+                self.text = text
+            }
+            public enum CodingKeys: String, CodingKey {
+                case text
+            }
+        }
+        /// A secret for the session: the broker's secret `name`, delivered under `var`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AgentSecret`.
+        public struct AgentSecret: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AgentSecret/name`.
+            public var name: Swift.String
+            /// `[A-Z_][A-Z0-9_]*`, not `PATH`, `HOME` or a loader's: the value (`env` delivery), the
+            /// path of a 0600 file holding it (`file`), or of an askpass helper (`askpass`).
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSecret/var`.
+            public var _var: Swift.String
+            /// Creates a new `AgentSecret`.
+            ///
+            /// - Parameters:
+            ///   - name:
+            ///   - _var: `[A-Z_][A-Z0-9_]*`, not `PATH`, `HOME` or a loader's: the value (`env` delivery), the
+            public init(
+                name: Swift.String,
+                _var: Swift.String
+            ) {
+                self.name = name
+                self._var = _var
+            }
+            public enum CodingKeys: String, CodingKey {
+                case name
+                case _var = "var"
+            }
+        }
+        /// An agent session: a harness on a runner.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AgentSession`.
+        public struct AgentSession: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AgentSession/created_at`.
+            public var createdAt: Components.Schemas.Timestamp
+            /// - Remark: Generated from `#/components/schemas/AgentSession/created_by`.
+            public var createdBy: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AgentSession/ended_at`.
+            public var endedAt: Components.Schemas.Timestamp?
+            /// - Remark: Generated from `#/components/schemas/AgentSession/harness`.
+            public var harness: Swift.String
+            /// The harness's own session id, what a resume continues.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/harness_session`.
+            public var harnessSession: Swift.String?
+            /// `as_…`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/id`.
+            public var id: Swift.String
+            /// Its row: page `listAgentSessions` with `before`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/index`.
+            public var index: Swift.Int64?
+            /// The newest transcript `seq` stored.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/last_seq`.
+            public var lastSeq: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/AgentSession/model`.
+            public var model: Swift.String?
+            /// Once over: `{"kind": "succeeded" | "failed" | "cancelled" | "token_cap" | "stalled" |
+            /// "lost", "reason": …}`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/outcome`.
+            public var outcome: OpenAPIRuntime.OpenAPIObjectContainer?
+            /// How many times it was resumed.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/resumes`.
+            public var resumes: Swift.Int64?
+            /// The runner's device id, `d_…`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/runner`.
+            public var runner: Swift.String
+            /// The secrets it is leased at each start, by name.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/secrets`.
+            public var secrets: [Swift.String]?
+            /// `starting`, `running`, `interrupted` (its runner restarted; it is resumed), `ended`,
+            /// `lost`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/state`.
+            public var state: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AgentSession/updated_at`.
+            public var updatedAt: Components.Schemas.Timestamp
+            /// - Remark: Generated from `#/components/schemas/AgentSession/usage`.
+            public var usage: Components.Schemas.AgentUsage?
+            /// Creates a new `AgentSession`.
+            ///
+            /// - Parameters:
+            ///   - createdAt:
+            ///   - createdBy:
+            ///   - endedAt:
+            ///   - harness:
+            ///   - harnessSession: The harness's own session id, what a resume continues.
+            ///   - id: `as_…`.
+            ///   - index: Its row: page `listAgentSessions` with `before`.
+            ///   - lastSeq: The newest transcript `seq` stored.
+            ///   - model:
+            ///   - outcome: Once over: `{"kind": "succeeded" | "failed" | "cancelled" | "token_cap" | "stalled" |
+            ///   - resumes: How many times it was resumed.
+            ///   - runner: The runner's device id, `d_…`.
+            ///   - secrets: The secrets it is leased at each start, by name.
+            ///   - state: `starting`, `running`, `interrupted` (its runner restarted; it is resumed), `ended`,
+            ///   - updatedAt:
+            ///   - usage:
+            public init(
+                createdAt: Components.Schemas.Timestamp,
+                createdBy: Swift.String,
+                endedAt: Components.Schemas.Timestamp? = nil,
+                harness: Swift.String,
+                harnessSession: Swift.String? = nil,
+                id: Swift.String,
+                index: Swift.Int64? = nil,
+                lastSeq: Swift.Int64,
+                model: Swift.String? = nil,
+                outcome: OpenAPIRuntime.OpenAPIObjectContainer? = nil,
+                resumes: Swift.Int64? = nil,
+                runner: Swift.String,
+                secrets: [Swift.String]? = nil,
+                state: Swift.String,
+                updatedAt: Components.Schemas.Timestamp,
+                usage: Components.Schemas.AgentUsage? = nil
+            ) {
+                self.createdAt = createdAt
+                self.createdBy = createdBy
+                self.endedAt = endedAt
+                self.harness = harness
+                self.harnessSession = harnessSession
+                self.id = id
+                self.index = index
+                self.lastSeq = lastSeq
+                self.model = model
+                self.outcome = outcome
+                self.resumes = resumes
+                self.runner = runner
+                self.secrets = secrets
+                self.state = state
+                self.updatedAt = updatedAt
+                self.usage = usage
+            }
+            public enum CodingKeys: String, CodingKey {
+                case createdAt = "created_at"
+                case createdBy = "created_by"
+                case endedAt = "ended_at"
+                case harness
+                case harnessSession = "harness_session"
+                case id
+                case index
+                case lastSeq = "last_seq"
+                case model
+                case outcome
+                case resumes
+                case runner
+                case secrets
+                case state
+                case updatedAt = "updated_at"
+                case usage
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/AgentTranscript`.
+        public struct AgentTranscript: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AgentTranscript/entries`.
+            public var entries: [Components.Schemas.AgentTranscriptEntry]
+            /// - Remark: Generated from `#/components/schemas/AgentTranscript/last_seq`.
+            public var lastSeq: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/AgentTranscript/session`.
+            public var session: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AgentTranscript/state`.
+            public var state: Swift.String
+            /// Creates a new `AgentTranscript`.
+            ///
+            /// - Parameters:
+            ///   - entries:
+            ///   - lastSeq:
+            ///   - session:
+            ///   - state:
+            public init(
+                entries: [Components.Schemas.AgentTranscriptEntry],
+                lastSeq: Swift.Int64,
+                session: Swift.String,
+                state: Swift.String
+            ) {
+                self.entries = entries
+                self.lastSeq = lastSeq
+                self.session = session
+                self.state = state
+            }
+            public enum CodingKeys: String, CodingKey {
+                case entries
+                case lastSeq = "last_seq"
+                case session
+                case state
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/AgentTranscriptEntry`.
+        public struct AgentTranscriptEntry: Codable, Hashable, Sendable {
+            /// Unix milliseconds, on the runner.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentTranscriptEntry/at_ms`.
+            public var atMs: Swift.Int64
+            /// A harness event, or the session's own (`started`, `message`, `approval_request`,
+            /// `approval_decided`, `interrupted`, `gap`, `ended`), redacted.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentTranscriptEntry/body`.
+            public var body: OpenAPIRuntime.OpenAPIObjectContainer
+            /// From 1, by one: replay from any `seq` with `after`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentTranscriptEntry/seq`.
+            public var seq: Swift.Int64
+            /// Creates a new `AgentTranscriptEntry`.
+            ///
+            /// - Parameters:
+            ///   - atMs: Unix milliseconds, on the runner.
+            ///   - body: A harness event, or the session's own (`started`, `message`, `approval_request`,
+            ///   - seq: From 1, by one: replay from any `seq` with `after`.
+            public init(
+                atMs: Swift.Int64,
+                body: OpenAPIRuntime.OpenAPIObjectContainer,
+                seq: Swift.Int64
+            ) {
+                self.atMs = atMs
+                self.body = body
+                self.seq = seq
+            }
+            public enum CodingKeys: String, CodingKey {
+                case atMs = "at_ms"
+                case body
+                case seq
+            }
+        }
+        /// Tokens used, as the harness reported them.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AgentUsage`.
+        public struct AgentUsage: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AgentUsage/cache_read`.
+            public var cacheRead: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/AgentUsage/cache_write`.
+            public var cacheWrite: Swift.Int64
+            /// Millionths of a US dollar, when the harness says.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentUsage/cost_usd_micros`.
+            public var costUsdMicros: Swift.Int64?
+            /// - Remark: Generated from `#/components/schemas/AgentUsage/input`.
+            public var input: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/AgentUsage/output`.
+            public var output: Swift.Int64
+            /// Creates a new `AgentUsage`.
+            ///
+            /// - Parameters:
+            ///   - cacheRead:
+            ///   - cacheWrite:
+            ///   - costUsdMicros: Millionths of a US dollar, when the harness says.
+            ///   - input:
+            ///   - output:
+            public init(
+                cacheRead: Swift.Int64,
+                cacheWrite: Swift.Int64,
+                costUsdMicros: Swift.Int64? = nil,
+                input: Swift.Int64,
+                output: Swift.Int64
+            ) {
+                self.cacheRead = cacheRead
+                self.cacheWrite = cacheWrite
+                self.costUsdMicros = costUsdMicros
+                self.input = input
+                self.output = output
+            }
+            public enum CodingKeys: String, CodingKey {
+                case cacheRead = "cache_read"
+                case cacheWrite = "cache_write"
+                case costUsdMicros = "cost_usd_micros"
+                case input
+                case output
+            }
+        }
         /// The contract a server speaks: `/api/<major>` and its additions so far.
         ///
         /// - Remark: Generated from `#/components/schemas/ApiVersion`.
@@ -1090,6 +1403,72 @@ extension Components {
                 case name
             }
         }
+        /// A session to start. No `Debug`: the prompt is the caller's.
+        ///
+        /// - Remark: Generated from `#/components/schemas/NewAgentSession`.
+        public struct NewAgentSession: Codable, Hashable, Sendable {
+            /// `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes).
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewAgentSession/harness`.
+            public var harness: Swift.String
+            /// - Remark: Generated from `#/components/schemas/NewAgentSession/model`.
+            public var model: Swift.String?
+            /// `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewAgentSession/policy`.
+            public var policy: OpenAPIRuntime.OpenAPIObjectContainer?
+            /// - Remark: Generated from `#/components/schemas/NewAgentSession/prompt`.
+            public var prompt: Swift.String?
+            /// The runner's device id, `d_…`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewAgentSession/runner`.
+            public var runner: Swift.String
+            /// At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewAgentSession/secrets`.
+            public var secrets: [Components.Schemas.AgentSecret]?
+            /// The repo and worktree to work in (`{"repo_url", "base_branch", "branch", …}`); absent, a
+            /// scratch dir.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewAgentSession/workspace`.
+            public var workspace: OpenAPIRuntime.OpenAPIObjectContainer?
+            /// Creates a new `NewAgentSession`.
+            ///
+            /// - Parameters:
+            ///   - harness: `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes).
+            ///   - model:
+            ///   - policy: `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`.
+            ///   - prompt:
+            ///   - runner: The runner's device id, `d_…`.
+            ///   - secrets: At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).
+            ///   - workspace: The repo and worktree to work in (`{"repo_url", "base_branch", "branch", …}`); absent, a
+            public init(
+                harness: Swift.String,
+                model: Swift.String? = nil,
+                policy: OpenAPIRuntime.OpenAPIObjectContainer? = nil,
+                prompt: Swift.String? = nil,
+                runner: Swift.String,
+                secrets: [Components.Schemas.AgentSecret]? = nil,
+                workspace: OpenAPIRuntime.OpenAPIObjectContainer? = nil
+            ) {
+                self.harness = harness
+                self.model = model
+                self.policy = policy
+                self.prompt = prompt
+                self.runner = runner
+                self.secrets = secrets
+                self.workspace = workspace
+            }
+            public enum CodingKeys: String, CodingKey {
+                case harness
+                case model
+                case policy
+                case prompt
+                case runner
+                case secrets
+                case workspace
+            }
+        }
         /// A lease to grant.
         ///
         /// - Remark: Generated from `#/components/schemas/NewLease`.
@@ -1215,6 +1594,83 @@ extension Components {
                 case name
                 case runners
                 case value
+            }
+        }
+        /// `createTerminal`'s body.
+        ///
+        /// - Remark: Generated from `#/components/schemas/NewTerminal`.
+        public struct NewTerminal: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/NewTerminal/args`.
+            public var args: [Swift.String]?
+            /// An absolute directory; absent, the user's home.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewTerminal/cwd`.
+            public var cwd: Swift.String?
+            /// Variables set as given; the rest of the environment is the runner's allow-list.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewTerminal/env`.
+            public struct EnvPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: [String: Swift.String]
+                /// Creates a new `EnvPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: [String: Swift.String] = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// Variables set as given; the rest of the environment is the runner's allow-list.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewTerminal/env`.
+            public var env: Components.Schemas.NewTerminal.EnvPayload?
+            /// Absent: the user's login shell.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewTerminal/program`.
+            public var program: Swift.String?
+            /// The runner's device id, `d_…`; it must advertise the `pty` driver.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewTerminal/runner`.
+            public var runner: Swift.String
+            /// - Remark: Generated from `#/components/schemas/NewTerminal/size`.
+            public var size: Components.Schemas.TerminalSize
+            /// Creates a new `NewTerminal`.
+            ///
+            /// - Parameters:
+            ///   - args:
+            ///   - cwd: An absolute directory; absent, the user's home.
+            ///   - env: Variables set as given; the rest of the environment is the runner's allow-list.
+            ///   - program: Absent: the user's login shell.
+            ///   - runner: The runner's device id, `d_…`; it must advertise the `pty` driver.
+            ///   - size:
+            public init(
+                args: [Swift.String]? = nil,
+                cwd: Swift.String? = nil,
+                env: Components.Schemas.NewTerminal.EnvPayload? = nil,
+                program: Swift.String? = nil,
+                runner: Swift.String,
+                size: Components.Schemas.TerminalSize
+            ) {
+                self.args = args
+                self.cwd = cwd
+                self.env = env
+                self.program = program
+                self.runner = runner
+                self.size = size
+            }
+            public enum CodingKeys: String, CodingKey {
+                case args
+                case cwd
+                case env
+                case program
+                case runner
+                case size
             }
         }
         /// The no-op's answer.
@@ -1790,7 +2246,7 @@ extension Components {
         ///
         /// - Remark: Generated from `#/components/schemas/RunnerDriver`.
         public struct RunnerDriver: Codable, Hashable, Sendable {
-            /// How many of its commands run at once.
+            /// How many of its commands run at once (`agent`: sessions).
             ///
             /// - Remark: Generated from `#/components/schemas/RunnerDriver/capacity`.
             public var capacity: Swift.Int32?
@@ -1802,25 +2258,53 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/RunnerDriver/name`.
             public var name: Swift.String?
+            /// `agent`: how many sessions each harness may run at once (E2-08.1); absent, no split.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerDriver/slots`.
+            public struct SlotsPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: [String: Swift.Int32]
+                /// Creates a new `SlotsPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: [String: Swift.Int32] = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// `agent`: how many sessions each harness may run at once (E2-08.1); absent, no split.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerDriver/slots`.
+            public var slots: Components.Schemas.RunnerDriver.SlotsPayload?
             /// Creates a new `RunnerDriver`.
             ///
             /// - Parameters:
-            ///   - capacity: How many of its commands run at once.
+            ///   - capacity: How many of its commands run at once (`agent`: sessions).
             ///   - commands: The command ops it takes: `noop`, `exec.run`.
             ///   - name: `exec` now; `pty`, `harness` later.
+            ///   - slots: `agent`: how many sessions each harness may run at once (E2-08.1); absent, no split.
             public init(
                 capacity: Swift.Int32? = nil,
                 commands: [Swift.String]? = nil,
-                name: Swift.String? = nil
+                name: Swift.String? = nil,
+                slots: Components.Schemas.RunnerDriver.SlotsPayload? = nil
             ) {
                 self.capacity = capacity
                 self.commands = commands
                 self.name = name
+                self.slots = slots
             }
             public enum CodingKeys: String, CodingKey {
                 case capacity
                 case commands
                 case name
+                case slots
             }
         }
         /// What a delete answers.
@@ -2326,6 +2810,195 @@ extension Components {
                     "assertion",
                     "challenge",
                     "stepup_sig"
+                ])
+            }
+        }
+        /// A terminal on a runner.
+        ///
+        /// - Remark: Generated from `#/components/schemas/Terminal`.
+        public struct Terminal: Codable, Hashable, Sendable {
+            /// Clients attached now.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Terminal/attached`.
+            public var attached: Swift.Int32?
+            /// - Remark: Generated from `#/components/schemas/Terminal/created_at`.
+            public var createdAt: Components.Schemas.Timestamp?
+            /// Once it exited: its code, absent when a signal ended it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Terminal/exit_code`.
+            public var exitCode: Swift.Int32?
+            /// The signal that ended it, if one did.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Terminal/exit_signal`.
+            public var exitSignal: Swift.String?
+            /// `t_…`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Terminal/id`.
+            public var id: Swift.String
+            /// The device that opened it, `d_…`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Terminal/opened_by`.
+            public var openedBy: Swift.String?
+            /// The runner's device id, `d_…`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Terminal/runner`.
+            public var runner: Swift.String
+            /// Output bytes so far: where an attach resumes.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Terminal/seq`.
+            public var seq: Swift.Int64?
+            /// - Remark: Generated from `#/components/schemas/Terminal/size`.
+            public var size: Components.Schemas.TerminalSize?
+            /// - Remark: Generated from `#/components/schemas/Terminal/status`.
+            public var status: Components.Schemas.TerminalStatus
+            /// Creates a new `Terminal`.
+            ///
+            /// - Parameters:
+            ///   - attached: Clients attached now.
+            ///   - createdAt:
+            ///   - exitCode: Once it exited: its code, absent when a signal ended it.
+            ///   - exitSignal: The signal that ended it, if one did.
+            ///   - id: `t_…`.
+            ///   - openedBy: The device that opened it, `d_…`.
+            ///   - runner: The runner's device id, `d_…`.
+            ///   - seq: Output bytes so far: where an attach resumes.
+            ///   - size:
+            ///   - status:
+            public init(
+                attached: Swift.Int32? = nil,
+                createdAt: Components.Schemas.Timestamp? = nil,
+                exitCode: Swift.Int32? = nil,
+                exitSignal: Swift.String? = nil,
+                id: Swift.String,
+                openedBy: Swift.String? = nil,
+                runner: Swift.String,
+                seq: Swift.Int64? = nil,
+                size: Components.Schemas.TerminalSize? = nil,
+                status: Components.Schemas.TerminalStatus
+            ) {
+                self.attached = attached
+                self.createdAt = createdAt
+                self.exitCode = exitCode
+                self.exitSignal = exitSignal
+                self.id = id
+                self.openedBy = openedBy
+                self.runner = runner
+                self.seq = seq
+                self.size = size
+                self.status = status
+            }
+            public enum CodingKeys: String, CodingKey {
+                case attached
+                case createdAt = "created_at"
+                case exitCode = "exit_code"
+                case exitSignal = "exit_signal"
+                case id
+                case openedBy = "opened_by"
+                case runner
+                case seq
+                case size
+                case status
+            }
+        }
+        /// `signalTerminal`'s body.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TerminalSignal`.
+        public struct TerminalSignal: Codable, Hashable, Sendable {
+            /// `HUP`, `INT`, `QUIT`, `TERM`, `KILL`, `USR1`, `USR2`, `CONT`, `STOP`, `TSTP` or `WINCH`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TerminalSignal/signal`.
+            public var signal: Swift.String
+            /// Creates a new `TerminalSignal`.
+            ///
+            /// - Parameters:
+            ///   - signal: `HUP`, `INT`, `QUIT`, `TERM`, `KILL`, `USR1`, `USR2`, `CONT`, `STOP`, `TSTP` or `WINCH`.
+            public init(signal: Swift.String) {
+                self.signal = signal
+            }
+            public enum CodingKeys: String, CodingKey {
+                case signal
+            }
+        }
+        /// A terminal's size in cells, each 1 to 1000.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TerminalSize`.
+        public struct TerminalSize: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TerminalSize/cols`.
+            public var cols: Swift.Int32
+            /// - Remark: Generated from `#/components/schemas/TerminalSize/rows`.
+            public var rows: Swift.Int32
+            /// Creates a new `TerminalSize`.
+            ///
+            /// - Parameters:
+            ///   - cols:
+            ///   - rows:
+            public init(
+                cols: Swift.Int32,
+                rows: Swift.Int32
+            ) {
+                self.cols = cols
+                self.rows = rows
+            }
+            public enum CodingKeys: String, CodingKey {
+                case cols
+                case rows
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/TerminalStatus`.
+        public struct TerminalStatus: Codable, Hashable, Sendable {
+            /// Where a terminal is in its life.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TerminalStatus/value1`.
+            @frozen public enum Value1Payload: String, Codable, Hashable, Sendable, CaseIterable {
+                case created = "created"
+                case running = "running"
+                case exited = "exited"
+                case reaped = "reaped"
+            }
+            /// Where a terminal is in its life.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TerminalStatus/value1`.
+            public var value1: Components.Schemas.TerminalStatus.Value1Payload?
+            /// - Remark: Generated from `#/components/schemas/TerminalStatus/value2`.
+            public var value2: Swift.String?
+            /// Creates a new `TerminalStatus`.
+            ///
+            /// - Parameters:
+            ///   - value1: Where a terminal is in its life.
+            ///   - value2:
+            public init(
+                value1: Components.Schemas.TerminalStatus.Value1Payload? = nil,
+                value2: Swift.String? = nil
+            ) {
+                self.value1 = value1
+                self.value2 = value2
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                var errors: [any Swift.Error] = []
+                do {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                } catch {
+                    errors.append(error)
+                }
+                do {
+                    self.value2 = try decoder.decodeFromSingleValueContainer()
+                } catch {
+                    errors.append(error)
+                }
+                try Swift.DecodingError.verifyAtLeastOneSchemaIsNotNil(
+                    [
+                        self.value1,
+                        self.value2
+                    ],
+                    type: Self.self,
+                    codingPath: decoder.codingPath,
+                    errors: errors
+                )
+            }
+            public func encode(to encoder: any Swift.Encoder) throws {
+                try encoder.encodeFirstNonNilValueToSingleValueContainer([
+                    self.value1,
+                    self.value2
                 ])
             }
         }
