@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_proto::redact::Redactor;
-use ainkrad_proto::runner::{Outcome, RunToken, Tokens};
+use ainkrad_proto::runner::{Outcome, RunToken, Tokens, Workspace};
 use ainkrad_proto::v2::{
     AGENT_DRIVER, AGENT_OPS, AgentDecide, AgentEvents, AgentRead, AgentStart, AgentState,
     AgentStop, DriverInfo, ErrorCode, StreamError, TranscriptEntry,
@@ -119,6 +119,14 @@ trait Harness: Send + Sync {
     fn run_secrets(&self, job: &Job) -> Vec<(String, String)>;
     fn control(&self, run: i64, control: Control);
     fn session_env(&self, run: i64, env: Option<Vec<(String, String)>>);
+    fn prepare_agent_workspace<'a>(
+        &'a self,
+        session: &'a str,
+        generation: i64,
+        workspace: &'a Workspace,
+        helper: Option<&'a std::path::Path>,
+    ) -> Fut<'a, Result<PathBuf, String>>;
+    fn cleanup_agent_workspace<'a>(&'a self, session: &'a str, generation: i64) -> Fut<'a, ()>;
 }
 
 impl<E: Executor> Harness for E {
@@ -145,6 +153,20 @@ impl<E: Executor> Harness for E {
     }
     fn session_env(&self, run: i64, env: Option<Vec<(String, String)>>) {
         Executor::session_env(self, run, env);
+    }
+    fn prepare_agent_workspace<'a>(
+        &'a self,
+        session: &'a str,
+        generation: i64,
+        workspace: &'a Workspace,
+        helper: Option<&'a std::path::Path>,
+    ) -> Fut<'a, Result<PathBuf, String>> {
+        Box::pin(Executor::prepare_agent_workspace(
+            self, session, generation, workspace, helper,
+        ))
+    }
+    fn cleanup_agent_workspace<'a>(&'a self, session: &'a str, generation: i64) -> Fut<'a, ()> {
+        Box::pin(Executor::cleanup_agent_workspace(self, session, generation))
     }
 }
 
@@ -174,7 +196,7 @@ struct Live {
     /// Tool calls waiting on a decision, by request id.
     approvals: HashMap<String, crate::Reply>,
     /// The task working it, while it runs.
-    task: Option<tokio::task::AbortHandle>,
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 
 pub struct AgentDriver {
@@ -208,6 +230,7 @@ impl AgentDriver {
         secrets::sweep(&config.secrets_dir)?;
         secrets::private_dir(&config.dir)?;
         let sessions = reload(&config);
+        executor.recover_agent_workspaces(&sessions.keys().cloned().collect::<Vec<_>>());
         Ok(Self {
             config,
             harness: Arc::new(executor),
@@ -336,7 +359,7 @@ impl AgentDriver {
         let me = Arc::clone(self);
         let session = req.session.clone();
         let task = tokio::spawn(async move { me.work(req, run, resumed).await });
-        live.task = Some(task.abort_handle());
+        live.task = Some(task);
         let answer = events(&session, live, live.meta.last_seq);
         drop(all);
         self.changed.notify_waiters();
@@ -366,18 +389,50 @@ impl AgentDriver {
             prompt: req.prompt.clone(),
             repos: vec![],
         };
+        let workspace_prepared = req.workspace.is_some();
         let mut redactor = Redactor::new();
         for (name, value) in self.harness.secrets().await {
             redactor.known(&name, &value);
         }
         // Held to the end of this task: dropping it (the end, a kill's abort) removes the files.
-        let delivered = match self.deliver(&req, &mut redactor).await {
+        let mut delivered = match self.deliver(&req, &mut redactor).await {
             Ok(d) => d,
-            Err(why) => return self.end(&session, failed(why, "secrets")),
+            Err(why) => {
+                if workspace_prepared {
+                    self.harness.cleanup_agent_workspace(&session, run).await;
+                }
+                return self.end(&session, failed(why, "secrets"));
+            }
         };
         self.with(&session, |live, _, _| live.redactor = redactor.clone());
+        let hosts = std::env::var("CITADEL_GIT_HOSTS")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let helper = match delivered.git_helper(&hosts) {
+            Ok(h) => h,
+            Err(_) => {
+                return self.end(
+                    &session,
+                    failed("git credential setup failed".into(), "secrets"),
+                );
+            }
+        };
+        if let Some(workspace) = req.workspace.as_ref()
+            && let Err(why) = self
+                .harness
+                .prepare_agent_workspace(&session, run, workspace, helper.as_deref())
+                .await
+        {
+            self.harness.cleanup_agent_workspace(&session, run).await;
+            return self.end(&session, failed(redactor.text(&why), "workspace"));
+        }
         let mut env = delivered.env.clone();
         if let Err(why) = self.sandbox.prepare(&req, &mut env) {
+            if workspace_prepared {
+                self.harness.cleanup_agent_workspace(&session, run).await;
+            }
             return self.end(&session, failed(why, "sandbox"));
         }
         self.harness.session_env(run, Some(env));
@@ -385,6 +440,9 @@ impl AgentDriver {
             Ok(id) => id,
             Err(why) => {
                 self.harness.session_env(run, None);
+                if workspace_prepared {
+                    self.harness.cleanup_agent_workspace(&session, run).await;
+                }
                 let why = redactor.text(&why);
                 return self.end(&session, failed(why, "start"));
             }
@@ -416,6 +474,7 @@ impl AgentDriver {
             self.report(&session, r);
         }
         self.harness.session_env(run, None);
+        self.harness.cleanup_agent_workspace(&session, run).await;
         drop(delivered);
         self.end(&session, outcome);
     }
@@ -564,7 +623,7 @@ impl AgentDriver {
 
     /// Aborts run `run` of the session (its harness is killed with it, and its secret files
     /// removed): ended as cancelled. A later run of the session is left alone.
-    fn kill(&self, session: &str, run: i64) {
+    fn kill(self: &Arc<Self>, session: &str, run: i64) {
         let task = {
             let mut all = self.sessions.lock().unwrap();
             match all.get_mut(session) {
@@ -572,16 +631,22 @@ impl AgentDriver {
                 _ => return,
             }
         };
-        if let Some(task) = task {
-            task.abort();
-        }
-        self.harness.session_env(run, None);
-        self.end(
-            session,
-            Outcome::Cancelled {
-                reason: "killed".to_owned(),
-            },
-        );
+        let me = Arc::clone(self);
+        let session = session.to_owned();
+        tokio::spawn(async move {
+            if let Some(task) = task {
+                task.abort();
+                let _ = task.await;
+            }
+            me.harness.session_env(run, None);
+            me.harness.cleanup_agent_workspace(&session, run).await;
+            me.end(
+                &session,
+                Outcome::Cancelled {
+                    reason: "killed".to_owned(),
+                },
+            );
+        });
     }
 
     fn running(

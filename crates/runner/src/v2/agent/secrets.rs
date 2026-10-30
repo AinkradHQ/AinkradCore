@@ -47,6 +47,61 @@ pub struct Delivered {
     pub env: Vec<(String, String)>,
 }
 
+impl Delivered {
+    /// Convert the broker askpass into a credential helper scoped to runner-configured hosts.
+    pub fn git_helper(&mut self, hosts: &[String]) -> io::Result<Option<PathBuf>> {
+        let Some(askpass) = self
+            .env
+            .iter()
+            .find(|(k, _)| k == "GIT_ASKPASS")
+            .map(|(_, v)| v.clone())
+        else {
+            return Ok(None);
+        };
+        let Some(dir) = &self.dir else {
+            return Ok(None);
+        };
+        if askpass.contains('\'') {
+            return Err(io::Error::other("invalid askpass path"));
+        }
+        let hosts: Vec<_> = hosts
+            .iter()
+            .filter(|h| {
+                !h.is_empty()
+                    && h.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b".-:[]".contains(&b))
+            })
+            .collect();
+        let cases = hosts
+            .iter()
+            .map(|h| format!("'https:{h}'"))
+            .collect::<Vec<_>>()
+            .join("|");
+        let cases = if cases.is_empty() {
+            "'never:allowed'".to_owned()
+        } else {
+            cases
+        };
+        let script = format!(
+            "#!/bin/sh\n[ \"$1\" = get ] || exit 0\nprotocol= host=\nwhile IFS='=' read -r key value; do\n case \"$key\" in protocol) protocol=$value;; host) host=$value;; esac\ndone\ncase \"$protocol:$host\" in {cases}) ;; *) exit 0;; esac\nprintf 'username=x-access-token\\npassword='\n'{askpass}' \"Password for 'https://$host': \"\nprintf '\\n'\n"
+        );
+        let helper = dir.join("git-credential");
+        write_new(&helper, script.as_bytes(), 0o700)?;
+        self.env.retain(|(k, _)| k != "GIT_ASKPASS");
+        self.env.extend([
+            ("GIT_CONFIG_COUNT".into(), "2".into()),
+            ("GIT_CONFIG_KEY_0".into(), "credential.helper".into()),
+            ("GIT_CONFIG_VALUE_0".into(), String::new()),
+            ("GIT_CONFIG_KEY_1".into(), "credential.helper".into()),
+            (
+                "GIT_CONFIG_VALUE_1".into(),
+                format!("! '{}'", path_str(&helper)?),
+            ),
+        ]);
+        Ok(Some(helper))
+    }
+}
+
 impl Drop for Delivered {
     fn drop(&mut self) {
         if let Some(dir) = &self.dir

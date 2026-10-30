@@ -1,11 +1,13 @@
 //! The PTY host end to end (E2-02, E2-03): the real `ainkrad-ptyhost` binary, started the way
 //! the runner starts it, spoken to over its socket.
 
+mod support;
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
+use support::{ChildGuard, TestDir};
 
 use ainkrad_proto::v2::Size;
 use ainkrad_ptyhost::client::{HostReader, HostWriter, connect, launch, new_id, scan};
@@ -20,10 +22,10 @@ const BIN: &str = env!("CARGO_BIN_EXE_ainkrad-ptyhost");
 const SIZE: Size = Size { rows: 24, cols: 80 };
 
 /// A short private directory (socket paths are limited to 104 bytes on macOS).
-fn tmp() -> PathBuf {
+fn tmp() -> TestDir {
     let d = PathBuf::from(format!("/tmp/aph-{}", &random_hex().unwrap()[..8]));
     std::fs::create_dir_all(&d).unwrap();
-    d
+    TestDir(d)
 }
 
 fn spec(program: &str, args: &[&str]) -> Spec {
@@ -48,6 +50,7 @@ fn sh(script: &str) -> Spec {
 async fn start(dir: &Path, spec: &Spec) -> (String, HostReader, HostWriter) {
     let id = new_id().unwrap();
     let info = launch(Path::new(BIN), dir, &id, spec).await.unwrap();
+    support::register(dir, info.pid, info.child);
     assert_eq!(info.id, id);
     let (_, r, mut w) = connect(dir, &id).await.unwrap();
     w.send(&ToHost::Attach { seq: 0 }).await.unwrap();
@@ -244,10 +247,12 @@ async fn hosts_survive_their_runner_and_are_re_adopted() {
         ));
     }
     script.push_str("exec sleep 300");
-    let mut runner = Command::new("/bin/sh")
-        .args(["-c", &script])
-        .spawn()
-        .unwrap();
+    let mut runner = ChildGuard(
+        Command::new("/bin/sh")
+            .args(["-c", &script])
+            .spawn()
+            .unwrap(),
+    );
     let deadline = Instant::now() + Duration::from_secs(20);
     for id in &ids {
         while !std::fs::read_to_string(dir.join(format!("{id}.out")))
@@ -298,7 +303,9 @@ async fn in_process(dir: &Path, s: Spec, tweak: impl FnOnce(&mut HostConfig)) ->
     let mut cfg = HostConfig::new(dir.to_path_buf(), id.clone());
     tweak(&mut cfg);
     let (tx, rx) = tokio::sync::oneshot::channel();
-    tokio::spawn(run(cfg, s, Box::new(Raw::new(4096)), move |_| {
+    let register_dir = dir.to_owned();
+    tokio::spawn(run(cfg, s, Box::new(Raw::new(4096)), move |info| {
+        support::register(&register_dir, 0, info.child);
         let _ = tx.send(());
     }));
     rx.await.unwrap();
@@ -309,7 +316,8 @@ async fn in_process(dir: &Path, s: Spec, tweak: impl FnOnce(&mut HostConfig)) ->
 /// nothing, not even the hello.
 #[tokio::test]
 async fn another_uid_is_refused() {
-    let dir = tmp().join("t");
+    let root = tmp();
+    let dir = root.join("t");
     let other = ainkrad_sys::getuid().wrapping_add(1);
     let id = in_process(&dir, sh("sleep 3"), |c| c.allow_uid = other).await;
     let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;

@@ -57,7 +57,7 @@ async fn two_repos(stage: &Stage, o: &Org, key: &str) -> Two {
             id: 0,
             project_id: project,
             name: name.to_owned(),
-            url: url.display().to_string(),
+            url: stage.repo_url(&url),
             default_branch: "main".to_owned(),
             position: 0,
             primary: false,

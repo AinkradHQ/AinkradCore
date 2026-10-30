@@ -90,6 +90,9 @@ pub fn quick() -> HubConfig {
         handshake: Duration::from_secs(2),
         // The fakes and the real runner dial plain loopback (`--allow-plain-runner`).
         allow_plain_loopback: true,
+        // Real runners report the host's real load, which a busy test machine must not turn
+        // into `busy`; the load test sets its own threshold.
+        max_host_load: 1e9,
         ..HubConfig::default()
     }
 }
@@ -197,6 +200,8 @@ pub struct Fake {
     /// What `hello` claims for resume (E1-11.4).
     pub boot: Option<String>,
     pub streams: Vec<StreamState>,
+    /// Load to advertise in `hello` (E2-15.2).
+    pub load: Option<HostLoad>,
 }
 
 pub fn exec_driver(commands: &[&str], capacity: u32) -> DriverInfo {
@@ -225,6 +230,7 @@ impl Fake {
             seq: 0,
             boot: None,
             streams: Vec::new(),
+            load: None,
         }
     }
 
@@ -267,6 +273,7 @@ impl Fake {
             boot: self.boot.clone(),
             streams: self.streams.clone(),
             terminals: vec![],
+            load: self.load,
         };
         self.send(CONTROL_STREAM, Body::Control(Control::Hello(hello)))
             .await;
@@ -289,6 +296,12 @@ impl Fake {
             Some(Body::Control(Control::Welcome(w))) => w,
             other => panic!("expected welcome, got {other:?}"),
         }
+    }
+
+    /// Sends a heartbeat frame on the control stream with `load`.
+    pub async fn heartbeat(&mut self, load: Option<HostLoad>) {
+        self.send(CONTROL_STREAM, Body::Heartbeat(Heartbeat { load }))
+            .await;
     }
 
     /// The next frame that is not a heartbeat.
@@ -321,7 +334,12 @@ impl Fake {
             match msg {
                 Some(Ok(Message::Close(Some(c)))) => return c.code.into(),
                 Some(Ok(Message::Text(_))) => {
-                    let beat = serde_json::to_string(&Frame::new(0, 0, Body::Heartbeat)).unwrap();
+                    let beat = serde_json::to_string(&Frame::new(
+                        0,
+                        0,
+                        Body::Heartbeat(Heartbeat::default()),
+                    ))
+                    .unwrap();
                     let _ = self.ws.send(Message::Text(beat.into())).await;
                 }
                 Some(Ok(_)) => {}

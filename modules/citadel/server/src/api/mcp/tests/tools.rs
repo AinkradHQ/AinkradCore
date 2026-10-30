@@ -458,7 +458,7 @@ async fn get_issue_warns_when_the_repo_is_implicit() {
             id: 0,
             project_id: project,
             name: name.to_owned(),
-            url: format!("/srv/{name}.git"),
+            url: format!("https://example.test/{name}.git"),
             default_branch: "main".to_owned(),
             position: 0,
             primary: false,

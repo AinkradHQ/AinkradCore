@@ -78,6 +78,7 @@ src/main/kotlin/ainkrad/client/models/Rename.kt
 src/main/kotlin/ainkrad/client/models/RotateSecret.kt
 src/main/kotlin/ainkrad/client/models/Runner.kt
 src/main/kotlin/ainkrad/client/models/RunnerDriver.kt
+src/main/kotlin/ainkrad/client/models/RunnerHostLoad.kt
 src/main/kotlin/ainkrad/client/models/SecretDeleted.kt
 src/main/kotlin/ainkrad/client/models/SecretInfo.kt
 src/main/kotlin/ainkrad/client/models/SessionGrant.kt

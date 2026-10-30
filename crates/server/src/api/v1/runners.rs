@@ -58,6 +58,8 @@ pub struct Runner {
     pub capacity: Option<u32>,
     /// Commands in flight.
     pub load: Option<u32>,
+    /// The host's load as its runner last reported it (E2-15.2), if it has.
+    pub host_load: Option<RunnerHostLoad>,
     /// Its `ainkrad-runner` version, once connected.
     pub version: Option<String>,
 }
@@ -86,6 +88,10 @@ fn of(d: gov::Device, live: Option<&RunnerState>) -> Runner {
         ),
         capacity: live.and_then(|s| n(s.capacity)),
         load: n(live.map_or(0, |s| s.load)),
+        host_load: live.and_then(|s| s.host_load).map(|l| RunnerHostLoad {
+            avg1: l.avg1,
+            cores: l.cores,
+        }),
         version: live.map(|s| s.version.clone()).filter(|v| !v.is_empty()),
     }
 }
@@ -94,6 +100,15 @@ fn of(d: gov::Device, live: Option<&RunnerState>) -> Runner {
 /// claimant is not a runner yet).
 fn listed(d: &gov::Device) -> bool {
     d.kind == "runner" && d.usable()
+}
+
+/// The host's load as last reported by a runner (E2-15.2), if any.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RunnerHostLoad {
+    /// The one-minute load average.
+    pub avg1: f64,
+    /// How many CPUs the runner sees.
+    pub cores: u32,
 }
 
 #[utoipa::path(get, path = "/api/v1/runners", operation_id = "listRunners", tag = "runners",
