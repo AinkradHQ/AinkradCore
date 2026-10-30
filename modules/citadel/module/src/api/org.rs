@@ -1,63 +1,23 @@
-//! Companies, departments, teams and agents (read). Bodies are JSON values shaped as the
-//! monolith's `Company`, `Department`, `Team` and `Agent`; their OpenAPI schemas are merged
-//! into the Core contract in the contract slice.
+//! Companies, departments, teams and agents (read), typed: the responses are the contract's
+//! `model` types, each route is documented for the Core contract (`spec`), and each takes
+//! [`Acting`] so a client working in one company never reaches another's data (`scope`).
+//! A refused write maps through `error::refused`.
 
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY};
 use axum::Json;
 use axum::extract::{Path, State};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use utoipa::ToSchema;
 
-use crate::domain::org::{
-    Agent, AgentId, Company, CompanyId, CompanyKind, Department, DepartmentId, Team, TeamId,
-};
+use super::error::{found, refused};
+use super::model::{Agent, Company, Deleted, Department, Team};
+use super::scope::Acting;
+use super::types::CompanyKind;
+use crate::domain::org::{AgentId, CompanyId, CompanyKind as Kind, DepartmentId, TeamId};
 use crate::store::org::{self, service};
 
-fn company_json(c: &Company) -> Value {
-    json!({
-        "id": c.id.0, "name": c.name, "kind": c.kind.as_str(), "color": c.profile.color,
-        "description": c.profile.description, "industries": c.profile.industries,
-        "website": c.profile.website, "timezone": c.profile.timezone,
-        "work_start": c.profile.work_start, "work_end": c.profile.work_end,
-        "work_days": c.profile.work_days, "logo_sha256": c.profile.logo_sha256,
-    })
-}
-
-fn department_json(d: &Department) -> Value {
-    json!({
-        "id": d.id.0, "company_id": d.company_id.0, "name": d.name, "about": d.about,
-        "head_agent_id": d.head_agent_id.map(|a| a.0),
-    })
-}
-
-fn team_json(t: &Team) -> Value {
-    json!({"id": t.id.0, "department_id": t.department_id.0, "name": t.name})
-}
-
-fn agent_json(a: &Agent) -> Value {
-    json!({
-        "id": a.id.0, "company_id": a.company_id.0, "name": a.name, "role": a.role,
-        "org_role": a.org_role.as_str(), "reports_to": a.reports_to.map(|r| r.0),
-        "harness": a.harness.as_str(), "model": a.model, "runner_tags": a.runner_tags,
-        "status": a.status.as_str(), "description": a.profile.description,
-        "figure_version": a.figure_version, "palette_id": a.palette_id,
-        "avatar_sha256": a.avatar_sha256, "paused_at": a.paused_at, "created_at": a.created_at,
-    })
-}
-
-/// A write refused by a constraint is a 409, a missing name a 400; anything else is internal.
-fn refused(e: sqlx::Error) -> ApiError {
-    match e {
-        sqlx::Error::Protocol(why) => ApiError::bad_request(why),
-        e if service::is_constraint(&e) => {
-            ApiError::conflict("the change breaks a rule (a duplicate name or a missing parent)")
-        }
-        e => e.into(),
-    }
-}
-
-fn kind(text: Option<&str>) -> Result<Option<CompanyKind>, ApiError> {
+fn kind(text: Option<&str>) -> Result<Option<Kind>, ApiError> {
     text.map(|t| {
         t.parse()
             .map_err(|_| ApiError::bad_request("kind is `own` or `client`"))
@@ -65,155 +25,212 @@ fn kind(text: Option<&str>) -> Result<Option<CompanyKind>, ApiError> {
     .transpose()
 }
 
-pub async fn list_companies(State(app): State<App>) -> ApiResult<Vec<Value>> {
+#[utoipa::path(get, path = "/companies", operation_id = "listCompanies", tag = "org",
+    responses((status = 200, description = "Every company, own or client (only the one named \
+        in `X-Citadel-Company`, when it is sent): the company switcher", body = Vec<Company>)))]
+pub async fn list_companies(State(app): State<App>, acting: Acting) -> ApiResult<Vec<Company>> {
     let all = org::list_companies(&app.pool).await?;
-    Ok(Json(all.iter().map(company_json).collect()))
+    let own = all.into_iter().filter(|c| acting.sees(Some(c.id.0)));
+    Ok(Json(own.map(Into::into).collect()))
 }
 
-pub async fn get_company(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Value> {
-    match org::get_company(&app.pool, CompanyId(id)).await? {
-        Some(c) => Ok(Json(company_json(&c))),
-        None => Err(ApiError::not_found("no such company")),
-    }
+#[utoipa::path(get, path = "/companies/{id}", operation_id = "getCompany", tag = "org",
+    params(("id" = i64, Path, description = "Company id")),
+    responses((status = 200, description = "The company", body = Company)))]
+pub async fn get_company(
+    State(app): State<App>,
+    _: Acting,
+    Path(id): Path<i64>,
+) -> ApiResult<Company> {
+    let c = found(org::get_company(&app.pool, CompanyId(id)).await?, "company")?;
+    Ok(Json(c.into()))
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct NewCompany {
-    name: String,
-    kind: Option<String>,
+    pub name: String,
+    /// `own` (the default) or `client`; anything else is a 400.
+    #[schema(value_type = Option<CompanyKind>)]
+    pub kind: Option<String>,
 }
 
-pub async fn create_company(State(app): State<App>, Json(n): Json<NewCompany>) -> ApiResult<Value> {
-    let kind = kind(n.kind.as_deref())?.unwrap_or(CompanyKind::Own);
+#[utoipa::path(post, path = "/companies", operation_id = "createCompany", tag = "org",
+    request_body = NewCompany,
+    responses((status = 200, description = "The new company (audited as `citadel.company.created`)",
+        body = Company)))]
+pub async fn create_company(
+    State(app): State<App>,
+    Json(n): Json<NewCompany>,
+) -> ApiResult<Company> {
+    let kind = kind(n.kind.as_deref())?.unwrap_or(Kind::Own);
     let c = service::add_company(&app.pool, &n.name, kind, BY)
         .await
         .map_err(refused)?;
-    Ok(Json(company_json(&c)))
+    Ok(Json(c.into()))
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CompanyChange {
-    name: Option<String>,
-    kind: Option<String>,
+    pub name: Option<String>,
+    #[schema(value_type = Option<CompanyKind>)]
+    pub kind: Option<String>,
 }
 
+#[utoipa::path(put, path = "/companies/{id}", operation_id = "updateCompany", tag = "org",
+    params(("id" = i64, Path, description = "Company id")), request_body = CompanyChange,
+    responses((status = 200, description = "The company as changed (audited as \
+        `citadel.company.updated`)", body = Company)))]
 pub async fn update_company(
     State(app): State<App>,
+    _: Acting,
     Path(id): Path<i64>,
     Json(c): Json<CompanyChange>,
-) -> ApiResult<Value> {
+) -> ApiResult<Company> {
     let kind = kind(c.kind.as_deref())?;
-    match service::change_company(&app.pool, CompanyId(id), c.name.as_deref(), kind, BY)
+    let c = service::change_company(&app.pool, CompanyId(id), c.name.as_deref(), kind, BY)
         .await
-        .map_err(refused)?
-    {
-        Some(c) => Ok(Json(company_json(&c))),
-        None => Err(ApiError::not_found("no such company")),
-    }
+        .map_err(refused)?;
+    Ok(Json(found(c, "company")?.into()))
 }
 
-#[derive(Deserialize)]
-pub struct Named {
-    name: String,
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct NameBody {
+    pub name: String,
 }
 
+#[utoipa::path(get, path = "/companies/{id}/departments", operation_id = "listDepartments",
+    tag = "org", params(("id" = i64, Path, description = "Company id")),
+    responses((status = 200, description = "Its departments", body = Vec<Department>)))]
 pub async fn list_departments(
     State(app): State<App>,
+    _: Acting,
     Path(company): Path<i64>,
-) -> ApiResult<Vec<Value>> {
+) -> ApiResult<Vec<Department>> {
     let all = org::list_departments(&app.pool, CompanyId(company)).await?;
-    Ok(Json(all.iter().map(department_json).collect()))
+    Ok(Json(all.into_iter().map(Into::into).collect()))
 }
 
+#[utoipa::path(post, path = "/companies/{id}/departments", operation_id = "createDepartment",
+    tag = "org", params(("id" = i64, Path, description = "Company id")), request_body = NameBody,
+    responses((status = 200, description = "The new department (audited as \
+        `citadel.department.added`)", body = Department)))]
 pub async fn add_department(
     State(app): State<App>,
+    _: Acting,
     Path(company): Path<i64>,
-    Json(n): Json<Named>,
-) -> ApiResult<Value> {
+    Json(n): Json<NameBody>,
+) -> ApiResult<Department> {
     let d = service::add_department(&app.pool, CompanyId(company), &n.name, BY)
         .await
         .map_err(refused)?;
-    Ok(Json(department_json(&d)))
+    Ok(Json(d.into()))
 }
 
+#[utoipa::path(put, path = "/departments/{id}", operation_id = "updateDepartment", tag = "org",
+    params(("id" = i64, Path, description = "Department id")), request_body = NameBody,
+    responses((status = 200, description = "The department as renamed", body = Department)))]
 pub async fn rename_department(
     State(app): State<App>,
+    _: Acting,
     Path(id): Path<i64>,
-    Json(n): Json<Named>,
-) -> ApiResult<Value> {
-    match service::rename_department(&app.pool, DepartmentId(id), &n.name, BY)
+    Json(n): Json<NameBody>,
+) -> ApiResult<Department> {
+    let d = service::rename_department(&app.pool, DepartmentId(id), &n.name, BY)
         .await
-        .map_err(refused)?
-    {
-        Some(d) => Ok(Json(department_json(&d))),
-        None => Err(ApiError::not_found("no such department")),
-    }
+        .map_err(refused)?;
+    Ok(Json(found(d, "department")?.into()))
 }
 
-pub async fn remove_department(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Value> {
-    match service::remove_department(&app.pool, DepartmentId(id), BY)
+#[utoipa::path(delete, path = "/departments/{id}", operation_id = "deleteDepartment",
+    tag = "org", params(("id" = i64, Path, description = "Department id")),
+    responses((status = 200, description = "Deleted, with its teams; needs a step-up",
+        body = Deleted)))]
+pub async fn remove_department(
+    State(app): State<App>,
+    _: Acting,
+    Path(id): Path<i64>,
+) -> ApiResult<Deleted> {
+    let gone = service::remove_department(&app.pool, DepartmentId(id), BY)
         .await
-        .map_err(refused)?
-    {
-        true => Ok(Json(json!({"deleted": id}))),
-        false => Err(ApiError::not_found("no such department")),
-    }
+        .map_err(refused)?;
+    found(gone.then_some(()), "department")?;
+    Ok(Json(Deleted { deleted: id }))
 }
 
+#[utoipa::path(get, path = "/departments/{id}/teams", operation_id = "listTeams", tag = "org",
+    params(("id" = i64, Path, description = "Department id")),
+    responses((status = 200, description = "Its teams", body = Vec<Team>)))]
 pub async fn list_teams(
     State(app): State<App>,
+    _: Acting,
     Path(department): Path<i64>,
-) -> ApiResult<Vec<Value>> {
+) -> ApiResult<Vec<Team>> {
     let all = org::list_teams(&app.pool, DepartmentId(department)).await?;
-    Ok(Json(all.iter().map(team_json).collect()))
+    Ok(Json(all.into_iter().map(Into::into).collect()))
 }
 
+#[utoipa::path(post, path = "/departments/{id}/teams", operation_id = "createTeam", tag = "org",
+    params(("id" = i64, Path, description = "Department id")), request_body = NameBody,
+    responses((status = 200, description = "The new team (audited as `citadel.team.added`)",
+        body = Team)))]
 pub async fn add_team(
     State(app): State<App>,
+    _: Acting,
     Path(department): Path<i64>,
-    Json(n): Json<Named>,
-) -> ApiResult<Value> {
+    Json(n): Json<NameBody>,
+) -> ApiResult<Team> {
     let t = service::add_team(&app.pool, DepartmentId(department), &n.name, BY)
         .await
         .map_err(refused)?;
-    Ok(Json(team_json(&t)))
+    Ok(Json(t.into()))
 }
 
+#[utoipa::path(put, path = "/teams/{id}", operation_id = "updateTeam", tag = "org",
+    params(("id" = i64, Path, description = "Team id")), request_body = NameBody,
+    responses((status = 200, description = "The team as renamed", body = Team)))]
 pub async fn rename_team(
     State(app): State<App>,
+    _: Acting,
     Path(id): Path<i64>,
-    Json(n): Json<Named>,
-) -> ApiResult<Value> {
-    match service::rename_team(&app.pool, TeamId(id), &n.name, BY)
+    Json(n): Json<NameBody>,
+) -> ApiResult<Team> {
+    let t = service::rename_team(&app.pool, TeamId(id), &n.name, BY)
         .await
-        .map_err(refused)?
-    {
-        Some(t) => Ok(Json(team_json(&t))),
-        None => Err(ApiError::not_found("no such team")),
-    }
+        .map_err(refused)?;
+    Ok(Json(found(t, "team")?.into()))
 }
 
-pub async fn remove_team(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Value> {
-    match service::remove_team(&app.pool, TeamId(id), BY)
+#[utoipa::path(delete, path = "/teams/{id}", operation_id = "deleteTeam", tag = "org",
+    params(("id" = i64, Path, description = "Team id")),
+    responses((status = 200, description = "Deleted; needs a step-up", body = Deleted)))]
+pub async fn remove_team(
+    State(app): State<App>,
+    _: Acting,
+    Path(id): Path<i64>,
+) -> ApiResult<Deleted> {
+    let gone = service::remove_team(&app.pool, TeamId(id), BY)
         .await
-        .map_err(refused)?
-    {
-        true => Ok(Json(json!({"deleted": id}))),
-        false => Err(ApiError::not_found("no such team")),
-    }
+        .map_err(refused)?;
+    found(gone.then_some(()), "team")?;
+    Ok(Json(Deleted { deleted: id }))
 }
 
+#[utoipa::path(get, path = "/companies/{id}/agents", operation_id = "listAgents", tag = "org",
+    params(("id" = i64, Path, description = "Company id")),
+    responses((status = 200, description = "Its agents", body = Vec<Agent>)))]
 pub async fn list_agents(
     State(app): State<App>,
+    _: Acting,
     Path(company): Path<i64>,
-) -> ApiResult<Vec<Value>> {
+) -> ApiResult<Vec<Agent>> {
     let all = org::list_agents(&app.pool, CompanyId(company)).await?;
-    Ok(Json(all.iter().map(agent_json).collect()))
+    Ok(Json(all.into_iter().map(Into::into).collect()))
 }
 
-pub async fn get_agent(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Value> {
-    match org::get_agent(&app.pool, AgentId(id)).await? {
-        Some(a) => Ok(Json(agent_json(&a))),
-        None => Err(ApiError::not_found("no such agent")),
-    }
+#[utoipa::path(get, path = "/agents/{id}", operation_id = "getAgent", tag = "org",
+    params(("id" = i64, Path, description = "Agent id")),
+    responses((status = 200, description = "The agent", body = Agent)))]
+pub async fn get_agent(State(app): State<App>, _: Acting, Path(id): Path<i64>) -> ApiResult<Agent> {
+    let a = found(org::get_agent(&app.pool, AgentId(id)).await?, "agent")?;
+    Ok(Json(a.into()))
 }

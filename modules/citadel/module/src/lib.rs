@@ -8,7 +8,7 @@
 //! platform: the domain model, the baseline schema, the org repository and its first routes.
 
 use ainkrad_core_server::api::App;
-use ainkrad_core_server::module::Module;
+use ainkrad_core_server::module::{Module, ModuleSetting};
 use ainkrad_core_server::store::Migration;
 use axum::Router;
 
@@ -16,6 +16,7 @@ pub mod api;
 pub mod domain;
 pub mod kinds;
 pub mod migrations;
+pub mod settings;
 pub mod store;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
@@ -45,10 +46,25 @@ impl Module for Citadel {
         kinds::AUDIT_ACTIONS
     }
 
-    // ponytail: one scope for every route (`Module::scope`); a phone that only reads needs
-    // per-route scopes, which is a Core change (see the slice plan, open question 1).
+    // Deny by default: a route that is not in `api::scopes::ROUTE_SCOPES` needs `admin`.
     fn scope(&self) -> &'static str {
         "admin"
+    }
+
+    fn route_scopes(&self) -> &'static [(&'static str, &'static str, &'static str)] {
+        api::scopes::ROUTE_SCOPES
+    }
+
+    fn openapi(&self) -> serde_json::Value {
+        api::spec::document()
+    }
+
+    fn query_names(&self) -> &'static [&'static str] {
+        api::QUERY
+    }
+
+    fn settings(&self) -> &'static [ModuleSetting] {
+        settings::SETTINGS
     }
 
     fn destructive(&self) -> &'static [(&'static str, &'static str)] {

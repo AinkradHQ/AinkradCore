@@ -1,0 +1,197 @@
+//! Citadel's tunables, declared to the Core (`Module::settings`) and read through
+//! [`ModuleSettings`] (`ainkrad_core_server::store::modsettings`): stored in the Core's settings
+//! table as `module.citadel.<name>`, audited like any setting.
+//!
+//! The monolith's registry mixed platform and Citadel keys and let a value be set per company or
+//! project. The Core's settings are server-wide, so these are too: one value for the module. A
+//! per-company or per-project override (the monolith's `SC`/`SCP` scopes) is a later change to the
+//! Core store, not a Citadel one; every name, default and bound below is the monolith's.
+//! The run engine's and the accounts' keys come with their slices; a slice that reads a new
+//! tunable appends its line (append-only).
+
+use ainkrad_core_server::module::{Module, ModuleSetting};
+use ainkrad_core_server::store::modsettings::ModuleSettings;
+use sqlx::SqlitePool;
+
+use crate::Citadel;
+use crate::domain::gov::{KNOWLEDGE_BUDGET_BYTES, SKILL_BUDGET_BYTES};
+
+const DAY: i64 = 86_400;
+const YEAR: i64 = 365 * DAY;
+
+const fn s(
+    name: &'static str,
+    default: i64,
+    min: i64,
+    max: i64,
+    description: &'static str,
+) -> ModuleSetting {
+    ModuleSetting {
+        name,
+        default,
+        min,
+        max,
+        description,
+    }
+}
+
+pub const SETTINGS: &[ModuleSetting] = &[
+    s(
+        "knowledge.budget_bytes",
+        KNOWLEDGE_BUDGET_BYTES as i64,
+        0,
+        256 * 1024,
+        "The most of its project's knowledge a run is given.",
+    ),
+    s(
+        "skills.budget_bytes",
+        SKILL_BUDGET_BYTES as i64,
+        0,
+        512 * 1024,
+        "The most of its skills' bodies a run is given.",
+    ),
+    s(
+        "skills.max_bytes",
+        64 * 1024,
+        1,
+        512 * 1024,
+        "The largest skill body the admin may publish.",
+    ),
+    s(
+        "sprint.velocity_window",
+        3,
+        1,
+        20,
+        "Closed sprints a sprint review compares its velocity against.",
+    ),
+    s(
+        "approval.deadline.sprint_commit",
+        0,
+        0,
+        YEAR,
+        "How long a sprint commit approval waits before it expires; 0 waits until decided.",
+    ),
+    s(
+        "approval.deadline.pr_merge",
+        0,
+        0,
+        YEAR,
+        "How long a PR merge approval waits before it expires; 0 waits until decided.",
+    ),
+    s(
+        "approval.deadline.budget_overrun",
+        0,
+        0,
+        YEAR,
+        "How long a budget overrun approval waits before it expires; 0 waits until decided.",
+    ),
+    s(
+        "approval.deadline.hire_agent",
+        0,
+        0,
+        YEAR,
+        "How long a hire approval waits before it expires; 0 waits until decided.",
+    ),
+    s(
+        "approval.deadline.permission_escalation",
+        900,
+        1,
+        7 * DAY,
+        "How long an escalated tool call waits for a reviewer before the runner denies it.",
+    ),
+    s(
+        "approval.deadline.plan_approval",
+        0,
+        0,
+        YEAR,
+        "How long a requirement's plan approval waits before it expires; 0 waits until decided.",
+    ),
+    s(
+        "approval.deadline.workflow_push",
+        0,
+        0,
+        YEAR,
+        "How long a workflow push approval waits for a human to push; 0 waits until decided.",
+    ),
+    s(
+        "approval.issue_allow_secs",
+        DAY,
+        60,
+        30 * DAY,
+        "How long \"allow for this issue\" on a permission escalation lets the same call through.",
+    ),
+    s(
+        "budget.warn_percent",
+        80,
+        1,
+        100,
+        "A new budget's warning threshold when none is given.",
+    ),
+    s(
+        "artifact.max_file_bytes",
+        10_000_000,
+        1_000,
+        12_000_000,
+        "The largest file an agent may publish as an artifact.",
+    ),
+    s(
+        "artifact.company_quota_bytes",
+        2_000_000_000,
+        1_000_000,
+        1_000_000_000_000,
+        "The most artifact bytes one company may hold.",
+    ),
+    s(
+        "profile.budget_bytes",
+        4096,
+        0,
+        64 * 1024,
+        "The most of its project's profile a run is given in its instructions.",
+    ),
+    s(
+        "avatar.max_bytes",
+        512 * 1024,
+        1024,
+        8 * 1024 * 1024,
+        "The largest image the admin may upload as an agent's avatar or a company's logo.",
+    ),
+    s(
+        "flow.window_secs",
+        30 * DAY,
+        DAY,
+        YEAR,
+        "The window a project's throughput and cycle and lead times are measured over.",
+    ),
+];
+
+/// Citadel's settings handle.
+pub fn handle() -> ModuleSettings {
+    ModuleSettings::of(&Citadel as &dyn Module)
+}
+
+/// `name`'s value: the stored one, else the default. `name` must be one of [`SETTINGS`]; an
+/// unknown name is a programming error and reads as an error here (never a silent default).
+pub async fn value(pool: &SqlitePool, name: &str) -> Result<i64, sqlx::Error> {
+    handle()
+        .get(pool, name)
+        .await
+        .map_err(|e| sqlx::Error::Protocol(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_declared_settings_are_legal_and_unique() {
+        let modules: [std::sync::Arc<dyn Module>; 1] = [std::sync::Arc::new(Citadel)];
+        let _ = ainkrad_core_server::module::mount(&modules);
+    }
+
+    #[tokio::test]
+    async fn a_default_is_read_and_an_undeclared_name_is_an_error() {
+        let db = crate::testing::db().await;
+        assert_eq!(value(&db.pool, "sprint.velocity_window").await.unwrap(), 3);
+        assert!(value(&db.pool, "run.token_cap").await.is_err());
+    }
+}

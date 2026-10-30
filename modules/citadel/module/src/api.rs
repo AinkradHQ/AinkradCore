@@ -9,7 +9,29 @@ use ainkrad_core_server::api::App;
 use axum::Router;
 use axum::routing::{get, put};
 
+mod error;
+pub mod model;
 mod org;
+pub mod scope;
+pub mod scopes;
+pub mod spec;
+pub mod types;
+
+/// Query names the module's routes take besides the Core's (`Module::query_names`): the
+/// monolith's filter names. Appended by the slices that add a filter.
+pub const QUERY: &[&str] = &[
+    "pending",
+    "since",
+    "requirement",
+    "issue",
+    "agent",
+    "live",
+    "state",
+    "bucket",
+    "until",
+    "harness",
+    "model",
+];
 
 /// The routes that need a live step-up (`Module::destructive`).
 pub const DESTRUCTIVE: &[(&str, &str)] =
