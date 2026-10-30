@@ -68,6 +68,8 @@ pub struct App {
     /// The master key (`keys/master.key`) for the secrets broker (E2-07); without it the broker
     /// stores and redeems nothing (503 `secrets_unavailable`).
     pub secrets: Option<Arc<crate::ops::secretbox::SecretBox>>,
+    /// Agent sessions' supervisors (E2-08, `crate::agents`).
+    pub agents: Arc<crate::agents::Agents>,
 }
 
 /// Resolves once serve is stopping (`App::closing`).
@@ -98,6 +100,7 @@ impl App {
             hub: Arc::new(crate::hub::Hub::new(crate::hub::HubConfig::default())),
             passkeys: None,
             secrets: None,
+            agents: Arc::default(),
         }
     }
 }

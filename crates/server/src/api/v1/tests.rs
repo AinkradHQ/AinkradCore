@@ -24,6 +24,7 @@ use crate::scheduler::Clock;
 use crate::store::connect;
 
 mod abuse;
+mod agents;
 mod audit_growth;
 mod devices;
 mod events;

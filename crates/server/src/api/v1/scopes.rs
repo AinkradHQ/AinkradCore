@@ -7,6 +7,7 @@
 //! - `read`: what the device itself shows (its own identity and push token, events, settings).
 //! - `admin`: devices, pairing, setting changes, the audit log.
 //! - `agent`: sending a runner a command (`POST /api/v1/runners/{id}/noop`).
+//! - Agent sessions (E2-08): `agent`; deciding a tool call `approve`.
 //! - Secrets (E2-07): managing them and granting a lease is `admin` (and destructive); the one
 //!   route a `runner` device may call is redeeming a lease granted to it.
 //! - A module's routes need the module's own `Module::scope` (`admin` unless it says otherwise).
@@ -64,6 +65,19 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("DELETE", "/api/v1/secrets/{id}", "admin"),
     ("POST", "/api/v1/secrets/{id}/leases", "admin"),
     ("POST", "/api/v1/secret-leases/redeem", "runner"),
+    ("GET", "/api/v1/agent-sessions", "agent"),
+    ("POST", "/api/v1/agent-sessions", "agent"),
+    ("GET", "/api/v1/agent-sessions/{id}", "agent"),
+    ("GET", "/api/v1/agent-sessions/{id}/transcript", "agent"),
+    ("POST", "/api/v1/agent-sessions/{id}/messages", "agent"),
+    (
+        "POST",
+        "/api/v1/agent-sessions/{id}/approvals/{request}",
+        "approve",
+    ),
+    ("POST", "/api/v1/agent-sessions/{id}/cancel", "agent"),
+    ("POST", "/api/v1/agent-sessions/{id}/kill", "agent"),
+    ("POST", "/api/v1/agent-sessions/{id}/resume", "agent"),
 ];
 
 /// `(method, path template)` of every route that needs a live elevation (spec §8): device
@@ -90,6 +104,13 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("PUT", "/api/v1/secrets/{id}"),
     ("DELETE", "/api/v1/secrets/{id}"),
     ("POST", "/api/v1/secrets/{id}/leases"),
+    // Agent sessions (E2-08): starting one, telling it what to do and resuming it run code on
+    // a runner and lease it secrets; cancelling and killing stop someone's work.
+    ("POST", "/api/v1/agent-sessions"),
+    ("POST", "/api/v1/agent-sessions/{id}/messages"),
+    ("POST", "/api/v1/agent-sessions/{id}/cancel"),
+    ("POST", "/api/v1/agent-sessions/{id}/kill"),
+    ("POST", "/api/v1/agent-sessions/{id}/resume"),
 ];
 
 /// Whether `path` fits `template` segment by segment.

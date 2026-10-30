@@ -163,6 +163,28 @@ impl Classifier for Silent {
     }
 }
 
+/// The platform's own pushes (E2-08.4): an agent's tool call waiting on a decision (to devices
+/// with `approve`), and an agent session over (`agent`). Ids only, as every push.
+pub struct Platform;
+
+impl Classifier for Platform {
+    fn notification(&self, e: &StoredEvent) -> Option<Notification> {
+        let p = &e.payload.0;
+        let session = p["session"].as_str()?;
+        match e.kind.as_str() {
+            "agent.approval_requested" => {
+                let data = json!({"session_id": session, "approval_id": p["request"].as_str()?});
+                Some(Notification {
+                    collapse: Some(format!("approval:{session}")),
+                    ..Notification::new("approval_needed", "approve", "Approval needed", "", data)
+                })
+            }
+            "agent.ended" => Some(Notification::agent_finished(session)),
+            _ => None,
+        }
+    }
+}
+
 /// Tails the event log and pushes what needs the admin.
 pub struct Pusher {
     pub pool: SqlitePool,

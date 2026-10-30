@@ -24,6 +24,7 @@ use utoipa::IntoParams;
 use super::App;
 use super::limit::Limiter;
 
+mod agents;
 mod audit;
 mod devices;
 pub mod events;
@@ -181,6 +182,26 @@ pub fn router(app: App) -> Router {
         )
         .route("/api/v1/secrets/{id}/leases", post(secrets::lease))
         .route("/api/v1/secret-leases/redeem", post(secrets::redeem))
+        .route(
+            "/api/v1/agent-sessions",
+            get(agents::list).post(agents::create),
+        )
+        .route("/api/v1/agent-sessions/{id}", get(agents::get))
+        .route(
+            "/api/v1/agent-sessions/{id}/transcript",
+            get(agents::transcript),
+        )
+        .route(
+            "/api/v1/agent-sessions/{id}/messages",
+            post(agents::message),
+        )
+        .route(
+            "/api/v1/agent-sessions/{id}/approvals/{request}",
+            post(agents::decide),
+        )
+        .route("/api/v1/agent-sessions/{id}/cancel", post(agents::cancel))
+        .route("/api/v1/agent-sessions/{id}/kill", post(agents::kill))
+        .route("/api/v1/agent-sessions/{id}/resume", post(agents::resume))
         // Modules sit inside the same gate: they never authenticate for themselves.
         .merge(crate::module::mount(&app.modules))
         // Refused writes, authenticated (`trace`).

@@ -50,7 +50,11 @@
 ///    `notify.token_pruned` audit actions, the `notify.delivery` event kind (scope `admin`).
 /// 13: the secrets broker (E2-07): `listSecrets`, `createSecret`, `rotateSecret`, `deleteSecret`,
 ///    `leaseSecret`, `redeemSecretLease` (scope `runner`), the `secret.*` audit actions.
-pub const API_MINOR: u32 = 13;
+/// 14: agent sessions (E2-08): `createAgentSession`, `listAgentSessions`, `getAgentSession`,
+///    `getAgentTranscript`, `sendAgentMessage`, `decideAgentApproval` (scope `approve`),
+///    `cancelAgentSession`, `killAgentSession`, `resumeAgentSession`; the `agent.*` event kinds
+///    (scope `agent`, approvals `approve`) and audit actions; `RunnerDriver.slots`.
+pub const API_MINOR: u32 = 14;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
