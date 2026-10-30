@@ -86,6 +86,8 @@ pub fn quick() -> HubConfig {
     HubConfig {
         heartbeat: Duration::from_secs(1),
         handshake: Duration::from_secs(2),
+        // The fakes and the real runner dial plain loopback (`--allow-plain-runner`).
+        allow_plain_loopback: true,
         ..HubConfig::default()
     }
 }

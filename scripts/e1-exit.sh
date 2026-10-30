@@ -69,7 +69,7 @@ consecutive() {
 
 serve() { # serve <log>: the Core in the background on $PORT
   rm -f "$SOCK"
-  "$SRV" serve --config "$HOME_DIR/config.toml" --listen "loopback:$PORT" 2>>"$1" >/dev/null &
+  "$SRV" serve --config "$HOME_DIR/config.toml" --listen "loopback:$PORT" --allow-plain-runner 2>>"$1" >/dev/null &
   CORE=$!; PIDS+=("$CORE")
   wait_for 30 test -S "$SOCK" && wait_for 30 curl -fsS "$URL/healthz"
 }

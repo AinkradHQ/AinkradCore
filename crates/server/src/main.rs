@@ -28,7 +28,7 @@ const USAGE: &str = "usage:
                  [--hostname <dns-name> --acme-contact <email>
                  [--acme-directory <url>] [--acme-http01]]
                  [--trusted-proxy <addr|cidr>[,…]]
-                 [--passkeys] [--allow-origin <origin>[,…]]
+                 [--passkeys] [--allow-origin <origin>[,…]] [--allow-plain-runner]
                  [--iroh [--iroh-relay <https-url>[,…]] [--iroh-bind <addr:port>[,…]]]
                  [--apns-key <file.p8> --apns-key-id <id> --apns-team-id <id>
                  --apns-topic <bundle-id>] [--log-format text|json]
@@ -39,6 +39,7 @@ const USAGE: &str = "usage:
   ainkrad-core-server --help
   ainkrad-core-server device list <db>
   ainkrad-core-server device revoke <db> <device-id>
+  ainkrad-core-server identity rotate <db>
 
 serve listens on a Unix socket next to the database (<db dir>/core.sock, 0600) by default and
 serves the app at /api/v1 (signed requests from a paired device) and the modules mounted
@@ -59,6 +60,9 @@ reconnect, and checkpoints the database. Limits and intervals are settings (`set
 read when serve starts. With the four --apns-* flags, what a module's push rules pick is pushed
 to the app's devices through APNs; without them it is only logged. The platform alone pushes
 nothing. --log-format json writes JSON lines; both formats are redacted (E1-13.4).
+Runners connect over TLS, end to end to the Core (a TLS-terminating proxy in front breaks their
+channel-bound proof), or over the Unix socket as the Core's own user; --allow-plain-runner also
+lets them in over plain HTTP from loopback TCP (development and tests only).
 --iroh (E2-19; off unless given) also serves the same API over iroh, for a Core behind NAT: QUIC with
 hole punching, through the relays named by --iroh-relay (your own `iroh-relay`; none means direct
 connections only, and no third-party relay is ever used), on the UDP addresses of --iroh-bind. iroh
@@ -68,6 +72,9 @@ openapi prints the client API's contract (api/openapi.json; `make contract`).
 device list shows every device (id, kind, name, status, fingerprint); device revoke stops one at
 once (its open sockets close within 2 s); the row stays listed. A device enrolls only by
 pairing (bootstrap for the first): there are no keys to hand out.
+identity rotate starts a planned rotation of the Core identity key (never for a stolen key: use
+recover --revoke-runners): a new key beside the current one, which keeps signing for 7 days while
+serve sends every runner the statement; the first start after that switches keys.
 backup <db> <dest> is a raw, unencrypted local snapshot (VACUUM INTO); restore [--force] <src>
 <db> swaps such a snapshot over a stopped database in place. The encrypted, signed backups and
 the fresh-home restore are under Operations.";
@@ -155,6 +162,7 @@ async fn main() -> ExitCode {
             }
         }
         ["device", "revoke", db, id] => revoke_device(Path::new(db), id).await,
+        ["identity", "rotate", db] => rotate_identity(Path::new(db)),
         _ => {
             eprintln!("{}", usage());
             return ExitCode::from(2);
@@ -200,6 +208,27 @@ async fn list_devices(db: &Path) -> Result_ {
     Ok(())
 }
 
+/// `identity rotate`: a planned rotation of the Core identity key (handshake spec §13).
+fn rotate_identity(db: &Path) -> Result_ {
+    use ainkrad_core_server::auth::identity::{Identity, WINDOW};
+    // ponytail: not an audit row yet. A new audit action changes the contract
+    // (`x-audit-actions`) and the generated clients; the statement file is the record until
+    // that lands with the next contract change.
+    let r = Identity::rotate(state_dir(db), SystemClock.unix())?;
+    eprintln!(
+        "rotation to {} started; the current key {} signs for at least {} more days.\n\
+         Restart serve now so runners receive the statement: the window counts from that \
+         start, and the first start {} days after it (and not before {}) switches to the new key. \
+         Native clients and runners offline for the whole window pair again.",
+        r.new_fp,
+        r.old_fp,
+        WINDOW / 86_400,
+        WINDOW / 86_400,
+        r.not_before
+    );
+    Ok(())
+}
+
 async fn revoke_device(db: &Path, id: &str) -> Result_ {
     let pool = store::connect(db).await?;
     let now = SystemClock.now();
@@ -237,6 +266,8 @@ struct Serve {
     passkeys: bool,
     /// `--allow-origin`: browser origins let through beside the Core's own.
     origins: Vec<String>,
+    /// `--allow-plain-runner`: runners over plain HTTP from loopback TCP (RH2).
+    plain_runner: bool,
     /// `--iroh`: the opt-in iroh listener (E2-19). Off by default.
     iroh: bool,
     iroh_relays: Vec<String>,
@@ -257,6 +288,7 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
         log_json: false,
         passkeys: false,
         origins: Vec::new(),
+        plain_runner: false,
         iroh: false,
         iroh_relays: Vec::new(),
         iroh_bind: Vec::new(),
@@ -270,6 +302,10 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
         }
         if *flag == "--passkeys" {
             s.passkeys = true;
+            continue;
+        }
+        if *flag == "--allow-plain-runner" {
+            s.plain_runner = true;
             continue;
         }
         if *flag == "--iroh" {
@@ -551,8 +587,26 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
         state_dir(db),
     )?);
     tracing::info!(core_fp = identity.fp, "Core identity");
+    if let Some(r) = &identity.rotation {
+        // This serve announces the statement: the window counts from the first one that does.
+        ainkrad_core_server::auth::Identity::announce(state_dir(db), SystemClock.unix())?;
+        tracing::warn!(
+            new_fp = r.new_fp,
+            "Core identity rotation pending: runners get the statement; the new key takes over at \
+             the first start a full window after the first announcement"
+        );
+    }
     let mut app = App::new(pool, Arc::new(SystemClock), host, identity);
     app.limits = limits;
+    if flags.plain_runner {
+        tracing::warn!("runners may connect over plain HTTP from loopback (--allow-plain-runner)");
+        app.hub = Arc::new(ainkrad_core_server::hub::Hub::new(
+            ainkrad_core_server::hub::HubConfig {
+                allow_plain_loopback: true,
+                ..Default::default()
+            },
+        ));
+    }
     let master = ainkrad_core_server::ops::config::Home(state_dir(db).to_path_buf()).master_key();
     app.secrets = ainkrad_core_server::ops::secretbox::SecretBox::for_serve(&master).map(Arc::new);
     if let Some(list) = flags.trusted_proxies {
