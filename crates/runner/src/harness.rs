@@ -479,7 +479,6 @@ impl Executor for HarnessExecutor {
 }
 
 mod account;
-mod cli;
 mod files;
 mod inbox;
 mod policy;

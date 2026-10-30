@@ -98,12 +98,20 @@ struct W {
     host: Fake,
 }
 
+async fn set(app: &App, name: &str, value: &str) {
+    citadel_module::settings::handle()
+        .set(&app.pool, name, value, AuditActor::System, &app.clock.now())
+        .await
+        .unwrap();
+}
+
 async fn world() -> W {
     let fx = fx().await;
     let runner = enroll(&fx.app, "vm", &["runner"], false).await;
     engine::set_engine(&fx.app.pool, true, &fx.dev.id, &fx.app.clock.now())
         .await
         .unwrap();
+    set(&fx.app, "mcp.enabled", "1").await;
     W {
         fx,
         host: Fake(runner.id),
@@ -475,13 +483,14 @@ async fn no_tool_decides_an_approval_or_touches_a_secret_or_a_run() {
         let (failed, text) = answer(&reply);
         assert!(failed && text.contains("no such tool"), "{name:?}: {reply}");
     }
-    assert!(
+    // Many junk names, one audit row: they cannot grow the trail.
+    assert_eq!(
         count(
             app,
             "SELECT count(*) FROM audit_events WHERE action = 'citadel.mcp.unknown_tool'"
         )
-        .await
-            >= 15
+        .await,
+        1
     );
     // Asking is allowed, deciding is not: the approval stays pending and only the asker reads it.
     let (_, r) = rpc(
@@ -599,7 +608,8 @@ async fn a_launch_mints_a_fresh_token_for_the_runs_own_session_only() {
         sa.owner_ref.as_deref(),
         Some(format!("run:{}", a.run.id.0).as_str())
     );
-    // Off by default: nothing is minted, nothing is delivered.
+    // Off: nothing is minted, nothing is delivered.
+    set(app, "mcp.enabled", "0").await;
     assert!(Citadel.credentials(app, &sa).await.unwrap().is_empty());
     citadel_module::settings::handle()
         .set(
@@ -735,7 +745,8 @@ async fn guessing_is_locked_out_and_a_valid_token_is_rate_limited_and_capped() {
         StatusCode::TOO_MANY_REQUESTS
     );
     app.limits = Arc::new(Limits::default());
-    // A source that keeps guessing is locked out, right token or not.
+    // A source that keeps guessing is locked out, but a valid token never is: a junk flood
+    // cannot switch MCP off for the other runs behind the same address.
     for _ in 0..20 {
         assert_eq!(
             rpc(&app, Some("cit_run_guess"), list()).await.0,
@@ -743,9 +754,49 @@ async fn guessing_is_locked_out_and_a_valid_token_is_rate_limited_and_capped() {
         );
     }
     assert_eq!(
-        rpc(&app, Some(&t), list()).await.0,
+        rpc(&app, Some("cit_run_guess"), list()).await.0,
         StatusCode::TOO_MANY_REQUESTS
     );
+    assert_eq!(rpc(&app, Some(&t), list()).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn unknown_tool_names_count_against_the_cap_and_audit_once() {
+    let w = world().await;
+    let a = w.co("A", "AAA").await;
+    let t = w.token(a.run.id).await;
+    let app = &w.fx.app;
+    set(app, "mcp.max_calls_per_run", "3").await;
+    for _ in 0..3 {
+        let (_, r) = rpc(app, Some(&t), tool("nope", json!({}))).await;
+        assert!(answer(&r).1.contains("no such tool"));
+    }
+    let (_, r) = rpc(app, Some(&t), tool("get_issue", json!({}))).await;
+    let (failed, text) = answer(&r);
+    assert!(failed && text.contains("tool calls"), "{text}");
+    let (_, r) = rpc(app, Some(&t), tool("nope", json!({}))).await;
+    assert!(answer(&r).1.contains("tool calls"));
+    assert_eq!(
+        count(
+            app,
+            "SELECT count(*) FROM audit_events WHERE action = 'citadel.mcp.unknown_tool'"
+        )
+        .await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn turning_mcp_off_stops_tokens_already_issued() {
+    let w = world().await;
+    let a = w.co("A", "AAA").await;
+    let t = w.token(a.run.id).await;
+    let app = &w.fx.app;
+    assert_eq!(rpc(app, Some(&t), list()).await.0, StatusCode::OK);
+    set(app, "mcp.enabled", "0").await;
+    assert_eq!(rpc(app, Some(&t), list()).await.0, StatusCode::UNAUTHORIZED);
+    set(app, "mcp.enabled", "1").await;
+    assert_eq!(rpc(app, Some(&t), list()).await.0, StatusCode::OK);
 }
 
 /// The exemption from the signature covers one route of this module and nothing else: the list

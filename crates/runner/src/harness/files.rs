@@ -17,10 +17,6 @@ pub(super) struct RunFiles {
     pub dir: PathBuf,
     pub mcp_config: Option<PathBuf>,
     pub instructions: Option<PathBuf>,
-    /// The dir holding the `citadel` CLI (E15.18), for the front of the harness's `PATH`.
-    pub bin: Option<PathBuf>,
-    /// The run's token for the CLI (`CITADEL_RUN_TOKEN_FILE`).
-    pub token: Option<PathBuf>,
 }
 
 impl Drop for RunFiles {
@@ -87,8 +83,6 @@ impl RunFiles {
             dir,
             mcp_config: None,
             instructions: None,
-            bin: None,
-            token: None,
         };
         if let Some((url, token)) = mcp {
             let token = token.expose();
@@ -105,19 +99,10 @@ impl RunFiles {
             let path = files.dir.join("mcp.json");
             private_file(&path, config.to_string().as_bytes())?;
             files.mcp_config = Some(path);
-            // The `citadel` CLI (E15.18) and the token it reads.
-            let token_file = files.dir.join("token");
-            private_file(&token_file, token.as_bytes())?;
-            files.token = Some(token_file);
-            files.bin = Some(super::cli::install(root, url)?);
+            // No `citadel` CLI and no second copy of the token on disk: the Core has no CLI
+            // route, so the agent uses MCP only (the CLI returns with S10).
         }
-        // A run with the CLI is told when to use it, after its own instructions.
-        let told = match (instructions, &files.bin) {
-            (Some(text), Some(_)) => Some(format!("{}{}", text.trim_end(), super::cli::SKILL)),
-            (None, Some(_)) => Some(super::cli::SKILL.trim_start().to_owned()),
-            (text, None) => text.map(str::to_owned),
-        };
-        if let Some(text) = told {
+        if let Some(text) = instructions {
             let path = files.dir.join("instructions.md");
             private_file(&path, text.as_bytes())?;
             files.instructions = Some(path);
@@ -166,39 +151,22 @@ mod tests {
         let config = files.mcp_config.clone().unwrap();
         assert_eq!(mode(&config), 0o600);
         assert_eq!(mode(files.instructions.as_ref().unwrap()), 0o600);
-        let told = std::fs::read_to_string(files.instructions.as_ref().unwrap()).unwrap();
-        assert!(
-            told.starts_with("# Skill") && told.contains("citadel batch"),
-            "{told}"
-        );
-        // The CLI: runnable by the runner's user only, the token in its own 0600 file.
-        let cli = files.bin.as_ref().unwrap().join("citadel");
-        assert_eq!(mode(&cli), 0o700);
-        assert_eq!(mode(&files.dir.join("token")), 0o600);
+        // Instructions are the run's own, with no CLI text appended; the token is only in the
+        // MCP config, never in a second file.
         assert_eq!(
-            std::fs::read_to_string(files.dir.join("token")).unwrap(),
-            "cit_run_secret"
+            std::fs::read_to_string(files.instructions.as_ref().unwrap()).unwrap(),
+            "# Skill"
         );
-        assert!(
-            !std::fs::read_to_string(&cli)
-                .unwrap()
-                .contains("cit_run_secret")
-        );
+        assert!(!files.dir.join("token").exists(), "no second copy of the token");
+        assert!(!root.join("bin").exists(), "no CLI is installed");
         assert!(
             std::fs::read_to_string(&config)
                 .unwrap()
                 .contains("Bearer cit_run_secret")
         );
-        assert_eq!(
-            files.token.as_deref(),
-            Some(files.dir.join("token").as_path())
-        );
-        // One script per runner, outside the run's dir: kept when the run's files go.
-        assert_eq!(cli, root.join("bin/citadel"));
         let dir = files.dir.clone();
         drop(files);
         assert!(!dir.exists(), "removed with the token in it");
-        assert!(root.join("bin/citadel").exists());
         assert!(RunFiles::write(&root, "run-1", "pi", mcp, None).is_err());
         assert!(!root.join("run-1").join("mcp.json").exists());
         let _ = std::fs::remove_dir_all(&root);

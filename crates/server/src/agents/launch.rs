@@ -23,8 +23,15 @@ async fn leases(app: &App, s: &Session) -> Result<(i64, Vec<SecretGrant>), Refus
             var: secret.var.clone(),
         });
     }
-    // What the owning module mints for this start (the run token): held in memory for the
-    // runner to redeem once, sent as a lease like any other, never stored.
+    Ok((expires, out))
+}
+
+/// What the owning module mints for this start (the run token): held in memory for the
+/// runner to redeem once, sent as a lease like any other, never stored. Minted afresh for
+/// every attempt and never cached: the runner may have spent the last attempt's single-use
+/// lease before the answer was lost, and resending it would fail the session.
+async fn minted(app: &App, s: &Session) -> Result<Vec<SecretGrant>, Refusal> {
+    let mut out = Vec::new();
     if let Some(module) = s
         .owner_module
         .as_deref()
@@ -50,11 +57,10 @@ async fn leases(app: &App, s: &Session) -> Result<(i64, Vec<SecretGrant>), Refus
             if !app.agents.stash(&lease, held, now) {
                 return Err(busy("too many credentials await redemption"));
             }
-            expires = expires.min(until);
             out.push(SecretGrant { lease, var: c.var });
         }
     }
-    Ok((expires, out))
+    Ok(out)
 }
 
 /// The `agent.start` of `s`, continuing the harness's own session when `resume`.
@@ -83,7 +89,7 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
         return Err(Refusal::Runner(StreamError::new(ErrorCode::Offline, why)));
     }
     let cached = { app.agents.leases.lock().unwrap().get(&s.id).cloned() };
-    let secrets = match cached {
+    let mut secrets = match cached {
         Some((until, grants)) if until > app.clock.unix() => grants,
         _ => match leases(app, s).await {
             Ok((until, grants)) => {
@@ -100,6 +106,13 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
             }
         },
     };
+    match minted(app, s).await {
+        Ok(grants) => secrets.extend(grants),
+        Err(e) => {
+            fail(app, s, &format!("minting its credentials: {}", describe(&e))).await;
+            return Err(e);
+        }
+    }
     let wait = app.agents.config.answer;
     let proof = app.agents.elevated.lock().unwrap().get(&s.id).copied();
     match ask(

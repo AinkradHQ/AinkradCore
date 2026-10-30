@@ -71,6 +71,18 @@ async fn serve(State(app): State<App>, req: Request) -> Response {
 
 /// `Module::verify_token`: the run scope of a live token, else nothing (the gate answers one 401).
 pub async fn verify(app: &App, token: &str) -> Option<TokenGrant> {
+    // `mcp.enabled` is a kill switch: off refuses every token already issued, at once.
+    match crate::settings::value(&app.pool, "mcp.enabled").await {
+        Ok(0) => {
+            tracing::warn!(why = "mcp is off", "run token refused");
+            return None;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!(why = %e, "run token refused");
+            return None;
+        }
+    }
     match authorize_run_token(&app.pool, token, &app.clock.now()).await {
         Ok(scope) => Some(TokenGrant {
             key: format!("run:{}", scope.run_id.0),

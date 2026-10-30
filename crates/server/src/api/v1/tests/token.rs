@@ -218,14 +218,17 @@ async fn browsers_cookies_queries_and_big_bodies_are_refused() {
 }
 
 #[tokio::test]
-async fn a_source_that_keeps_guessing_is_locked_out_even_with_the_right_token() {
+async fn a_source_that_keeps_guessing_is_locked_out_but_a_valid_token_never_is() {
     let (_fx, app) = app().await;
     for _ in 0..20 {
         let (s, _, _) = text(&app, call(Method::POST, ECHO, Some("tok_bad"), "")).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
     }
-    let (s, _, _) = text(&app, call(Method::POST, ECHO, Some(GOOD), "")).await;
+    let (s, _, _) = text(&app, call(Method::POST, ECHO, Some("tok_bad"), "")).await;
     assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "locked for the source");
+    // A junk flood must not switch the route off for the runs behind the same address.
+    let (s, _, _) = text(&app, call(Method::POST, ECHO, Some(GOOD), "")).await;
+    assert_eq!(s, StatusCode::OK, "a valid token is never locked out");
     // The signed API's own lockout key is not the token one.
     let locked = crate::store::gov::locked_until(&app.pool, &["ip:local"], app.clock.unix())
         .await
