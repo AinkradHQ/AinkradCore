@@ -80,10 +80,9 @@ pub async fn connect(State(app): State<App>, req: Request) -> Response {
     };
     // Subscribed before the upgrade, so a revocation in between is not missed.
     let revoked = crate::auth::until_revoked(
-        app.pool.clone(),
+        app.live.devices(&app.pool, crate::auth::BACKSTOP),
         app.auth.subscribe(),
         device.id.clone(),
-        crate::auth::BACKSTOP,
     );
     ws.max_message_size(MAX_MESSAGE)
         .on_upgrade(move |socket| serve(app, socket, device, binding, revoked))

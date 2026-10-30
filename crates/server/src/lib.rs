@@ -2,6 +2,7 @@ pub mod api;
 pub mod auth;
 pub mod gateway;
 pub mod hub;
+pub mod live;
 pub mod module;
 pub mod ops;
 pub mod push;
