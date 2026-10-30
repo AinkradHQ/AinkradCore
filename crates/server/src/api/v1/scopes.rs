@@ -115,6 +115,9 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     // Opening or attaching a terminal is a shell on the runner (spec §8, E2-01).
     ("POST", "/api/v1/terminals"),
     ("GET", "/api/v1/terminals/{id}/ws"),
+    // Signalling or closing one acts on a live shell, so it needs the same step-up.
+    ("POST", "/api/v1/terminals/{id}/signal"),
+    ("DELETE", "/api/v1/terminals/{id}"),
     // Agent sessions (E2-08): starting one, telling it what to do and resuming it run code on
     // a runner and lease it secrets; cancelling and killing stop someone's work.
     ("POST", "/api/v1/agent-sessions"),

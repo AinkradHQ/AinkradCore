@@ -8,6 +8,7 @@
 use std::collections::VecDeque;
 
 use ainkrad_proto::v2::Size;
+use ainkrad_term::{Limits, ScreenSink, Size as TermSize, Terminal as TermTerminal};
 
 /// A screen/scrollback sink fed with PTY bytes (E2-04 implements it on an emulator).
 pub trait Screen: Send {
@@ -17,6 +18,44 @@ pub trait Screen: Send {
     fn resize(&mut self, size: Size);
     /// Bytes a fresh terminal view replays to show the screen as it is now.
     fn snapshot(&self) -> Vec<u8>;
+}
+
+/// The E2-04 screen implementation used by the detached host.  The host keeps its transport
+/// ring for byte-offset replay; this sink owns the VT state and produces a complete snapshot for
+/// stale attaches, including alternate-screen applications.
+pub struct Terminal {
+    inner: TermTerminal,
+}
+
+impl Terminal {
+    pub fn new(size: Size) -> Self {
+        Self {
+            inner: TermTerminal::new(
+                TermSize {
+                    rows: size.rows,
+                    cols: size.cols,
+                },
+                Limits::default(),
+            ),
+        }
+    }
+}
+
+impl Screen for Terminal {
+    fn feed(&mut self, bytes: &[u8]) {
+        self.inner.feed(bytes);
+    }
+
+    fn resize(&mut self, size: Size) {
+        self.inner.resize(TermSize {
+            rows: size.rows,
+            cols: size.cols,
+        });
+    }
+
+    fn snapshot(&self) -> Vec<u8> {
+        self.inner.snapshot(0).bytes
+    }
 }
 
 /// The stand-in screen: replays the last `cap` output bytes.

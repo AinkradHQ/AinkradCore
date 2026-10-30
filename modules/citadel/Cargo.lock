@@ -132,6 +132,7 @@ dependencies = [
 name = "ainkrad-harness"
 version = "0.1.0"
 dependencies = [
+ "ainkrad-sys",
  "getrandom 0.4.3",
  "reqwest 0.12.28",
  "serde",
@@ -165,6 +166,7 @@ version = "0.1.0"
 dependencies = [
  "ainkrad-proto",
  "ainkrad-sys",
+ "ainkrad-term",
  "base64 0.22.1",
  "portable-pty",
  "serde",
@@ -198,6 +200,13 @@ name = "ainkrad-sys"
 version = "0.1.0"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "ainkrad-term"
+version = "0.1.0"
+dependencies = [
+ "vt100",
 ]
 
 [[package]]
@@ -5091,6 +5100,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
+name = "unicode-width"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
+
+[[package]]
 name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5183,6 +5198,27 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vt100"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb05cdd19ae8707bf6a0a269972c07e6358103a7079faec749dec318a5b3dc23"
+dependencies = [
+ "itoa",
+ "unicode-width",
+ "vte",
+]
+
+[[package]]
+name = "vte"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
+dependencies = [
+ "arrayvec",
+ "memchr",
+]
 
 [[package]]
 name = "walkdir"

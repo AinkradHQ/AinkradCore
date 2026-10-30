@@ -287,9 +287,10 @@ impl Outflow {
         Some(Emit::Out(out))
     }
 
-    /// When to poll next: the end of the coalescing window, if bytes wait.
+    /// When to poll next: the end of the coalescing window, if bytes wait and credit lets them
+    /// go (with none, only a `grant` can change anything; a past deadline would busy-loop).
     pub fn deadline(&self) -> Option<Instant> {
-        self.since.map(|s| s + COALESCE)
+        self.since.filter(|_| self.credit > 0).map(|s| s + COALESCE)
     }
 }
 
@@ -358,6 +359,7 @@ mod tests {
         };
         assert_eq!(b.len(), 10, "only the credit left");
         assert_eq!(f.poll(t0 + COALESCE * 2), None, "no credit");
+        assert_eq!(f.deadline(), None, "no credit, nothing to wake for");
         f.grant(1000);
         assert_eq!(f.poll(t0 + COALESCE * 2), Some(Emit::Out(vec![1; 90])));
     }
