@@ -6511,6 +6511,10 @@
               "null"
             ]
           },
+          "host_load": {
+            "$ref": "#/components/schemas/RunnerHostLoad",
+            "description": "The host's load as its runner last reported it (E2-15.2), if it has."
+          },
           "id": {
             "description": "The runner's device id, `d_…`.",
             "type": "string"
@@ -6597,6 +6601,27 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "RunnerHostLoad": {
+        "description": "The host's load as last reported by a runner (E2-15.2), if any.",
+        "properties": {
+          "avg1": {
+            "description": "The one-minute load average.",
+            "format": "double",
+            "type": "number"
+          },
+          "cores": {
+            "description": "How many CPUs the runner sees.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "avg1",
+          "cores"
+        ],
         "type": "object"
       },
       "Sandbox": {
@@ -8218,7 +8243,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.15.0"
+    "version": "1.16.0"
   },
   "openapi": "3.1.0",
   "paths": {

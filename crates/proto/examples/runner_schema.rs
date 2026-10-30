@@ -19,6 +19,8 @@ fn main() {
         generator.subschema_for::<v2::Output>(),
         generator.subschema_for::<v2::Credit>(),
         generator.subschema_for::<v2::Close>(),
+        generator.subschema_for::<v2::Heartbeat>(),
+        generator.subschema_for::<v2::HostLoad>(),
     ];
     let mut defs = generator.take_definitions(true);
     defs.insert(
@@ -26,7 +28,7 @@ fn main() {
         json!({
             "description": "A v2 Frame's payload by kind: control Control, command Command, \
                 result Reply, error StreamError, output Output, credit Credit, close Close, \
-                heartbeat none.",
+                heartbeat Heartbeat.",
             "anyOf": payloads,
         }),
     );

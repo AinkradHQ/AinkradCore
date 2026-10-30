@@ -80,7 +80,8 @@ pub struct Frame {
     pub stream_id: u64,
     pub kind: FrameKind,
     pub seq: u64,
-    /// The body for `kind` (`Body`; schema `V2Payload`); absent for `heartbeat`.
+    /// The body for `kind` (`Body`; schema `V2Payload`); absent for `heartbeat` when its payload
+    /// is the default `Heartbeat`.
     #[serde(default, skip_serializing_if = "Value::is_null")]
     #[schemars(with = "Option<Value>")]
     pub payload: Value,
@@ -102,6 +103,24 @@ pub enum FrameKind {
     Unknown,
 }
 
+/// The host's load when a heartbeat was sent (E2-15.2): its one-minute load average and its
+/// CPU count, so the hub can apply load-based back-pressure and report it through the API.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct HostLoad {
+    /// The one-minute load average.
+    pub avg1: f64,
+    /// How many CPUs the runner sees.
+    pub cores: u32,
+}
+
+/// A runner's heartbeat: carries `load` when the runner measured one.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Heartbeat {
+    /// The host's load when the heartbeat was sent; absent when the runner has no measure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load: Option<HostLoad>,
+}
+
 /// A frame's payload, typed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Body {
@@ -112,7 +131,7 @@ pub enum Body {
     Output(Output),
     Credit(Credit),
     Close(Close),
-    Heartbeat,
+    Heartbeat(Heartbeat),
 }
 
 impl Frame {
@@ -126,7 +145,7 @@ impl Frame {
             Body::Output(b) => (FrameKind::Output, json(serde_json::to_value(b))),
             Body::Credit(b) => (FrameKind::Credit, json(serde_json::to_value(b))),
             Body::Close(b) => (FrameKind::Close, json(serde_json::to_value(b))),
-            Body::Heartbeat => (FrameKind::Heartbeat, Value::Null),
+            Body::Heartbeat(b) => (FrameKind::Heartbeat, json(serde_json::to_value(b))),
         };
         Self {
             stream_id,
@@ -156,7 +175,11 @@ impl Frame {
             } else {
                 de(p)?
             }),
-            FrameKind::Heartbeat => Body::Heartbeat,
+            FrameKind::Heartbeat => Body::Heartbeat(if p.is_null() {
+                Heartbeat::default()
+            } else {
+                de(p)?
+            }),
             FrameKind::Unknown => return Ok(None),
         }))
     }
@@ -220,6 +243,10 @@ pub struct RunnerHello {
     /// streams (a runner or Core restart) can `pty.attach` again.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub terminals: Vec<TerminalInfo>,
+    /// The host's load when the hello was sent (E2-15.2): the one-minute average and CPU count,
+    /// so the hub can apply load-based back-pressure before any heartbeat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load: Option<HostLoad>,
 }
 
 /// Resume by `seq` (E1-11.4): how many of the peer's frames one side received on a stream.
