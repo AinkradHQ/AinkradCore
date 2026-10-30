@@ -17,6 +17,9 @@
 //! - **Capacity** (E2-08.1): a create is refused `runner_busy` when the runner's `agent`
 //!   driver, or the harness's slot on it, is full (the runner refuses it too).
 
+mod launch;
+use launch::launch;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -63,6 +66,7 @@ pub struct Agents {
     pub config: AgentsConfig,
     supervised: Mutex<HashSet<String>>,
     elevated: Mutex<HashMap<String, Elevated>>,
+    leases: Mutex<HashMap<String, (i64, Vec<SecretGrant>)>>,
 }
 
 /// Why the service refused, as the API maps it.
@@ -129,46 +133,6 @@ pub async fn admit(app: &App, runner: &str, harness: &str) -> Result<(), Refusal
     Ok(())
 }
 
-/// Leases each of the session's secrets to its runner for one start.
-async fn leases(app: &App, s: &Session) -> Result<Vec<SecretGrant>, Refusal> {
-    let mut out = Vec::with_capacity(s.secrets.len());
-    for secret in &s.secrets {
-        let (lease, _) = crate::store::secrets::lease(
-            &app.pool,
-            &secret.name,
-            &s.runner,
-            None,
-            &s.created_by,
-            AuditActor::System,
-            &app.clock.now(),
-            app.clock.unix(),
-        )
-        .await?;
-        out.push(SecretGrant {
-            lease,
-            var: secret.var.clone(),
-        });
-    }
-    Ok(out)
-}
-
-/// The `agent.start` of `s`, continuing the harness's own session when `resume`.
-fn start_command(s: &Session, secrets: Vec<SecretGrant>, resume: bool) -> Command {
-    Command::AgentStart(AgentStart {
-        session: s.id.clone(),
-        harness: s.harness.clone(),
-        model: s.model.clone(),
-        prompt: s.prompt.clone(),
-        workspace: s
-            .workspace
-            .clone()
-            .and_then(|w| serde_json::from_value(w).ok()),
-        policy: serde_json::from_value(s.policy.clone()).unwrap_or_default(),
-        resume: resume.then(|| s.harness_session.clone()).flatten(),
-        secrets,
-    })
-}
-
 /// Sends `command` to the session's runner and waits (at most `wait`) for its answer.
 pub async fn ask(
     app: &App,
@@ -211,46 +175,6 @@ fn other_kind(b: &Body) -> &'static str {
         Body::Result(_) => "result",
         Body::Error(_) => "error",
         _ => "frame",
-    }
-}
-
-/// Starts (or resumes) `s` on its runner with fresh leases; its state moves to `running`.
-/// A refusal that retrying cannot fix ends the session as failed.
-async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), Refusal> {
-    // No lease for a runner that cannot redeem it now: they would only pile up to the cap.
-    if !app.hub.online(&s.runner) {
-        let why = "the runner is not connected";
-        return Err(Refusal::Runner(StreamError::new(ErrorCode::Offline, why)));
-    }
-    let secrets = match leases(app, s).await {
-        Ok(l) => l,
-        Err(e) => {
-            fail(app, s, &format!("leasing its secrets: {}", describe(&e))).await;
-            return Err(e);
-        }
-    };
-    let wait = app.agents.config.answer;
-    let proof = app.agents.elevated.lock().unwrap().get(&s.id).copied();
-    match ask(
-        app,
-        &s.runner,
-        start_command(s, secrets, resume),
-        wait,
-        proof,
-    )
-    .await
-    {
-        Ok(ev) => {
-            let why = if resume { "resumed" } else { "started" };
-            store::set_state(&app.pool, &s.id, "running", why, resume, &app.clock.now()).await?;
-            store::apply(&app.pool, &s.id, &ev, &app.clock.now()).await?;
-            Ok(())
-        }
-        Err(e) if matches!(e.code, ErrorCode::Busy | ErrorCode::InvalidArgs) => {
-            fail(app, s, &e.message).await;
-            Err(e.into())
-        }
-        Err(e) => Err(e.into()),
     }
 }
 
@@ -368,6 +292,12 @@ async fn run(app: &App, id: &str) {
                 tokio::time::sleep(cfg.retry).await;
             }
             Err(e) => {
+                let since = *away.get_or_insert_with(tokio::time::Instant::now);
+                if since.elapsed() >= cfg.lost_after {
+                    fail(app, &s, "bounded agent retries exhausted").await;
+                    app.agents.leases.lock().unwrap().remove(id);
+                    return;
+                }
                 tracing::warn!(session = id, why = describe(&e), "supervising a session");
                 tokio::time::sleep(cfg.retry).await;
             }
@@ -468,6 +398,7 @@ impl Agents {
             config,
             supervised: Mutex::default(),
             elevated: Mutex::default(),
+            leases: Mutex::default(),
         })
     }
 }

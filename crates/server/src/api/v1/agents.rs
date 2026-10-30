@@ -259,11 +259,19 @@ pub async fn create(
     let policy = b.policy.unwrap_or_else(|| {
         serde_json::to_value(ainkrad_proto::runner::Policy::default()).expect("a policy serializes")
     });
-    if !workspace_ok
-        || serde_json::from_value::<ainkrad_proto::runner::Policy>(policy.clone()).is_err()
-    {
+    let parsed_policy = serde_json::from_value::<ainkrad_proto::runner::Policy>(policy.clone());
+    if !workspace_ok || parsed_policy.is_err() {
         return Err(ApiError::bad_request(
             "workspace or policy does not have its shape",
+        ));
+    }
+    if ainkrad_proto::runner::has_destructive_allow(parsed_policy.as_ref().unwrap())
+        && !me.device.scopes.iter().any(|scope| scope == "admin")
+    {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden_scope",
+            "approval bypasses require the admin scope",
         ));
     }
     agents::admit(&app, &b.runner, &b.harness).await?;
