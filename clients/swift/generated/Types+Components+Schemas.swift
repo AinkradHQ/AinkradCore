@@ -931,6 +931,7 @@ extension Components {
             }
         }
         /// A granted lease: hand `lease` to the runner, which redeems it once before `expires_at`.
+        /// No `Debug` (review L4): a log line must never print a live lease.
         ///
         /// - Remark: Generated from `#/components/schemas/LeaseGrant`.
         public struct LeaseGrant: Codable, Hashable, Sendable {
@@ -1625,7 +1626,7 @@ extension Components {
                 case token
             }
         }
-        /// A lease to redeem.
+        /// A lease to redeem. No `Debug` (review L4).
         ///
         /// - Remark: Generated from `#/components/schemas/RedeemLease`.
         public struct RedeemLease: Codable, Hashable, Sendable {
