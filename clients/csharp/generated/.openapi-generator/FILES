@@ -11,6 +11,7 @@ src/Ainkrad.Client/Api/EventsApi.cs
 src/Ainkrad.Client/Api/HandshakeApi.cs
 src/Ainkrad.Client/Api/PairingApi.cs
 src/Ainkrad.Client/Api/RunnersApi.cs
+src/Ainkrad.Client/Api/SecretsApi.cs
 src/Ainkrad.Client/Api/SettingsApi.cs
 src/Ainkrad.Client/Client/ApiClient.cs
 src/Ainkrad.Client/Client/ApiException.cs
@@ -51,10 +52,14 @@ src/Ainkrad.Client/Model/Handshake.cs
 src/Ainkrad.Client/Model/HandshakeBody.cs
 src/Ainkrad.Client/Model/HandshakeProof.cs
 src/Ainkrad.Client/Model/LatestEvent.cs
+src/Ainkrad.Client/Model/LeaseGrant.cs
+src/Ainkrad.Client/Model/LeasedSecret.cs
 src/Ainkrad.Client/Model/Lockout.cs
 src/Ainkrad.Client/Model/Me.cs
 src/Ainkrad.Client/Model/Named.cs
+src/Ainkrad.Client/Model/NewLease.cs
 src/Ainkrad.Client/Model/NewPairingBody.cs
+src/Ainkrad.Client/Model/NewSecret.cs
 src/Ainkrad.Client/Model/NoopResult.cs
 src/Ainkrad.Client/Model/PageEvent.cs
 src/Ainkrad.Client/Model/PairStatus.cs
@@ -65,9 +70,13 @@ src/Ainkrad.Client/Model/PasskeyOptionsBody.cs
 src/Ainkrad.Client/Model/PasskeyRegistrationOptions.cs
 src/Ainkrad.Client/Model/PastRetention.cs
 src/Ainkrad.Client/Model/PushToken.cs
+src/Ainkrad.Client/Model/RedeemLease.cs
 src/Ainkrad.Client/Model/Rename.cs
+src/Ainkrad.Client/Model/RotateSecret.cs
 src/Ainkrad.Client/Model/Runner.cs
 src/Ainkrad.Client/Model/RunnerDriver.cs
+src/Ainkrad.Client/Model/SecretDeleted.cs
+src/Ainkrad.Client/Model/SecretInfo.cs
 src/Ainkrad.Client/Model/SessionGrant.cs
 src/Ainkrad.Client/Model/SessionRequest.cs
 src/Ainkrad.Client/Model/SetScopes.cs

@@ -47,6 +47,11 @@ pub(crate) async fn archive_home(
     let plain = home.backups().join(format!(".{kind}-{}.db", random_hex()?));
     let made = async {
         snapshot(home, &plain).await?;
+        // An export holds the master key in clear, so it never holds the sealed secrets (E2-07):
+        // only the encrypted backup carries them.
+        if kind == "export" {
+            strip_secrets(&plain).await?;
+        }
         let master = home.master_key();
         let identity = home.identity();
         let mut files = vec![
@@ -69,6 +74,28 @@ pub(crate) async fn archive_home(
     .await;
     let _ = fs::remove_file(&plain);
     made
+}
+
+/// Wipes the secrets broker's rows from a snapshot, free pages included (`secure_delete`, then
+/// `VACUUM`), so neither a sealed value nor a lease survives in the file.
+async fn strip_secrets(db: &Path) -> Result_ {
+    use sqlx::Connection;
+    let mut conn =
+        sqlx::SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(db)).await?;
+    let present: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name = 'core_secrets'")
+            .fetch_one(&mut conn)
+            .await?;
+    if present > 0 {
+        sqlx::raw_sql(
+            "PRAGMA secure_delete = ON; DELETE FROM core_secret_leases; DELETE FROM core_secrets; \
+             VACUUM;",
+        )
+        .execute(&mut conn)
+        .await?;
+    }
+    conn.close().await?;
+    Ok(())
 }
 
 pub async fn backup(config: &Config, local_only: bool) -> Result_ {
