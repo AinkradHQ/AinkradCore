@@ -37,6 +37,7 @@ const USAGE: &str = "usage:
   ainkrad-core-server --help
   ainkrad-core-server device list <db>
   ainkrad-core-server device revoke <db> <device-id>
+  ainkrad-core-server identity rotate <db>
 
 serve listens on a Unix socket next to the database (<db dir>/core.sock, 0600) by default and
 serves the app at /api/v1 (signed requests from a paired device) and the modules mounted
@@ -64,6 +65,9 @@ openapi prints the client API's contract (api/openapi.json; `make contract`).
 device list shows every device (id, kind, name, status, fingerprint); device revoke stops one at
 once (its open sockets close within 2 s); the row stays listed. A device enrolls only by
 pairing (bootstrap for the first): there are no keys to hand out.
+identity rotate starts a planned rotation of the Core identity key (never for a stolen key: use
+recover --revoke-runners): a new key beside the current one, which keeps signing for 7 days while
+serve sends every runner the statement; the first start after that switches keys.
 backup <db> <dest> is a raw, unencrypted local snapshot (VACUUM INTO); restore [--force] <src>
 <db> swaps such a snapshot over a stopped database in place. The encrypted, signed backups and
 the fresh-home restore are under Operations.";
@@ -150,6 +154,7 @@ async fn main() -> ExitCode {
             }
         }
         ["device", "revoke", db, id] => revoke_device(Path::new(db), id).await,
+        ["identity", "rotate", db] => rotate_identity(Path::new(db)),
         _ => {
             eprintln!("{}", usage());
             return ExitCode::from(2);
@@ -192,6 +197,25 @@ async fn list_devices(db: &Path) -> Result_ {
                 .unwrap_or_default(),
         );
     }
+    Ok(())
+}
+
+/// `identity rotate`: a planned rotation of the Core identity key (handshake spec §13).
+fn rotate_identity(db: &Path) -> Result_ {
+    use ainkrad_core_server::auth::identity::{Identity, WINDOW};
+    // ponytail: not an audit row yet. A new audit action changes the contract
+    // (`x-audit-actions`) and the generated clients; the statement file is the record until
+    // that lands with the next contract change.
+    let r = Identity::rotate(state_dir(db), SystemClock.unix())?;
+    eprintln!(
+        "rotation to {} started; the current key {} signs for {} more days.\n\
+         Restart serve now so runners receive the statement; the first start from {} on \
+         switches to the new key. Native clients and runners offline for the whole window pair again.",
+        r.new_fp,
+        r.old_fp,
+        WINDOW / 86_400,
+        r.not_before
+    );
     Ok(())
 }
 

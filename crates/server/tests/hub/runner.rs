@@ -224,3 +224,94 @@ async fn a_second_core_is_refused_before_anything_is_signed_for_it() {
     assert_eq!(fails, 0, "no credentials reached the second Core");
     let _ = std::fs::remove_dir_all(&st.0);
 }
+
+/// Handshake spec §13 rotation and security review RH7, end to end with the real runner: in the
+/// window the Core still presents its old key and sends the statement, and the runner records
+/// the new key beside its pin; once the Core has switched, the runner connects, runs the no-op
+/// and moves its pin, and the old key is refused from then on.
+#[tokio::test]
+async fn a_rotated_core_keeps_its_runners() {
+    use ainkrad_core_server::auth::Identity;
+    use ainkrad_core_server::gateway::Listen;
+    use ainkrad_core_server::scheduler::{Clock, SystemClock};
+    let dir = std::env::temp_dir().join(format!("core-hub-rotate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let now = SystemClock.unix();
+    let old = Identity::load_at(&dir, now).unwrap();
+    let r = Identity::rotate(&dir, now).unwrap();
+    let tcp = || Listen::Tcp("127.0.0.1:0".to_owned());
+    let a = Core::start_on("rotate-a", quick(), tcp(), Some(&dir), None).await;
+    assert_eq!(
+        a.app.auth.identity.fp, old.fp,
+        "the old key signs in the window"
+    );
+    assert_eq!(a.app.auth.identity.rotation.as_ref(), Some(&r));
+    let st = state("rotate");
+    let base_a = format!("http://{}", a.host);
+    let e = paired(&a, &base_a, None, &st).await;
+    let key = Arc::new(Key::load(&st.key()).unwrap());
+    let enrolment = Arc::new(Mutex::new(Enrolment::load(&st.enrolment()).unwrap()));
+    let connect = |base: &str, save: Option<std::path::PathBuf>| {
+        let client = Client::new(base, None).unwrap();
+        let (key, enrolment) = (Arc::clone(&key), Arc::clone(&enrolment));
+        tokio::spawn(
+            async move { connect_once(&client, key, enrolment, save, driver(), None).await },
+        )
+    };
+    let first = connect(&base_a, Some(st.enrolment()));
+    for _ in 0..250 {
+        if enrolment.lock().unwrap().next_fp.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let announced = enrolment.lock().unwrap().clone();
+    assert_eq!(announced.core_fp, old.fp, "the pin stays in the window");
+    assert_eq!(announced.next_fp.as_deref(), Some(r.new_fp.as_str()));
+    assert_eq!(
+        Enrolment::load(&st.enrolment()).unwrap(),
+        announced,
+        "saved"
+    );
+    first.abort();
+
+    // The window is over: the next start of the Core is the new key.
+    Identity::load_at(&dir, r.not_before).unwrap();
+    let b = Core::start_on("rotate-b", quick(), tcp(), Some(&dir), None).await;
+    assert_eq!(b.app.auth.identity.fp, r.new_fp);
+    assert!(b.app.auth.identity.rotation.is_none());
+    let _second = connect(&format!("http://{}", b.host), Some(st.enrolment()));
+    for _ in 0..250 {
+        if b.app.hub.online(&e.device_id) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    b.app
+        .hub
+        .noop(&e.device_id)
+        .await
+        .expect("the no-op ran on the new key");
+    let moved = enrolment.lock().unwrap().clone();
+    assert_eq!(
+        (moved.core_fp.as_str(), moved.next_fp.as_deref()),
+        (r.new_fp.as_str(), None)
+    );
+    assert_eq!(Enrolment::load(&st.enrolment()).unwrap(), moved, "saved");
+
+    // The old key (still held by the first Core) is no longer accepted.
+    let client = Client::new(&base_a, None).unwrap();
+    let err = connect_once(
+        &client,
+        Arc::clone(&key),
+        Arc::clone(&enrolment),
+        None,
+        driver(),
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(err.mismatch(), "{err}");
+    let _ = std::fs::remove_dir_all(&st.0);
+}

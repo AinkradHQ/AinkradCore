@@ -75,6 +75,19 @@ pub(super) async fn run(
         Ok(()) => None,
         Err(()) => Some(End::Gone),
     };
+    // A pending identity rotation goes to every runner, on every connection of its window, so
+    // one that was offline when it started still learns the next key (security review RH7).
+    if let (None, Some(r)) = (&end, &app.auth.identity.rotation) {
+        control_seq += 1;
+        let frame = Frame::new(
+            CONTROL_STREAM,
+            control_seq,
+            Body::Control(Control::Rotation(r.clone())),
+        );
+        if send(&mut socket, frame).await.is_err() {
+            end = Some(End::Gone);
+        }
+    }
     let mut closing = app.closing.subscribe();
     let mut beat = tokio::time::interval(cfg.heartbeat);
     beat.reset();
