@@ -403,7 +403,7 @@ pub async fn sweep(app: &App) {
         else {
             continue;
         };
-        let done = sqlx::query("UPDATE core_terminals SET status='reaped',exit_code=?,exit_signal=?,last_activity=? WHERE id=? AND status='running'")
+        let done = sqlx::query("UPDATE core_terminals SET status='reaped',exit_code=?,exit_signal=?,last_activity=? WHERE id=? AND status IN ('running','exited')")
             .bind(x.exit_code)
             .bind(x.signal)
             .bind(app.clock.unix())

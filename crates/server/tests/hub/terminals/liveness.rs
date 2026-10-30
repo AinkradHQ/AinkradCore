@@ -202,7 +202,14 @@ async fn an_idle_terminal_with_nobody_attached_is_closed() {
     assert_eq!(fx.status(o, &orphan).await, "running");
 
     set(&fx, Setting::TerminalIdleSecs, "1").await;
-    ainkrad_core_server::api::v1::sweep_terminals(&fx.core.app).await;
+    // A pass that cannot reach the runner (busy, offline) leaves the row for the next one.
+    for _ in 0..20 {
+        ainkrad_core_server::api::v1::sweep_terminals(&fx.core.app).await;
+        if fx.status(o, &orphan).await != "running" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
     assert_eq!(fx.status(o, &orphan).await, "-", "the orphan was closed");
     assert_eq!(
         fx.count("SELECT count(*) FROM core_terminals WHERE status='reaped'")
