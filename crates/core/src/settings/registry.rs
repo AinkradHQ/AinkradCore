@@ -26,4 +26,19 @@ registry! {
          pairing, approval and a scope change: a synced passkey is only as strong as its Apple or \
          Google account (threat model T-PK-3). Devices that hold it already keep it. Read at \
          each of those.";
+    SecretsMode "secrets.mode" Count 0, 0, 2, SO,
+        "The secrets broker (E2-07) and gate G-SEC: 0 (the default) is off, refusing every store, \
+         rotation, lease and redemption; 1 takes throwaway credentials only, refusing a value \
+         shaped like a real one (a provider key, a GitHub token, a Bearer credential, a PEM block); \
+         2 takes real credentials, and is set only once the external security review (G-SEC) has \
+         closed. Listing and deleting always work. Read at each use.";
+    SecretsMaxBytes "secrets.max_bytes" Bytes 8_192, 1, 65_536, SO,
+        "The largest secret value the broker stores; read at each store and rotation.";
+    SecretsMaxCount "secrets.max_count" Count 64, 1, 1_024, SO,
+        "How many secrets the broker holds at most; read at each store.";
+    SecretsLeaseSecs "secrets.lease_secs" Seconds 120, 10, 900, SO,
+        "The longest (and the default) lifetime of a secret lease, from grant to redemption; read \
+         at each grant.";
+    SecretsMaxLeases "secrets.max_leases" Count 64, 1, 1_024, SO,
+        "How many unredeemed, unexpired secret leases may exist at once; read at each grant.";
 }

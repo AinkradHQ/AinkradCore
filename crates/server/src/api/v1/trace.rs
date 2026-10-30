@@ -151,6 +151,9 @@ pub const AGGREGATED: &[(&str, &str)] = &[
     ("PATCH", "/api/v1/devices/{id}"),
     ("PUT", "/api/v1/devices/{id}/scopes"),
     ("DELETE", "/api/v1/devices/{id}"),
+    // A runner's only route (E2-07, review M1): a stolen runner key must not grow the log per
+    // request. A redemption that succeeds is audited as `secret.redeemed`.
+    ("POST", "/api/v1/secret-leases/redeem"),
 ];
 
 /// Audits each refused write as `api.refused`, but counts a 429 and the [`AGGREGATED`] routes'.

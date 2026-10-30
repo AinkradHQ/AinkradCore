@@ -92,7 +92,9 @@ fn claim_as(uid: u32, gid: u32, sock: &str, host: &str, body: &str) -> (String, 
     (code.to_owned(), body.to_owned())
 }
 
-#[tokio::test]
+// Multi-thread: `claim_as` blocks on `curl` while the gateway task must keep serving, which a
+// single-threaded runtime cannot do (the test would hang).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs root to run a peer as another uid: scripts/peer-uid-test.sh"]
 async fn another_uid_on_the_admin_socket_cannot_claim_a_bootstrap_pairing() {
     let scratch = Scratch::new();

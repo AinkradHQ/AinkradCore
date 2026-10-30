@@ -14,6 +14,7 @@ pub mod net;
 pub mod pair;
 pub mod proto;
 pub mod runners;
+pub mod secrets;
 pub mod stepup;
 
 /// Why a command failed; each kind has its own exit code (`code`).

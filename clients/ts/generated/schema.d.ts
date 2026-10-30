@@ -325,6 +325,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/secret-leases/redeem": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["redeemSecretLease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listSecrets"];
+        put?: never;
+        post: operations["createSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/secrets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["rotateSecret"];
+        post?: never;
+        delete: operations["deleteSecret"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/secrets/{id}/leases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["leaseSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings": {
         parameters: {
             query?: never;
@@ -814,6 +878,25 @@ export interface components {
              */
             seq: number;
         };
+        /**
+         * @description A granted lease: hand `lease` to the runner, which redeems it once before `expires_at`.
+         *     No `Debug` (review L4): a log line must never print a live lease.
+         */
+        LeaseGrant: {
+            expires_at: components["schemas"]["Timestamp"];
+            /** @description `l_…`; only its runner can redeem it. */
+            lease: string;
+        };
+        /** @description A redeemed secret, for the runner only. No `Debug`. */
+        LeasedSecret: {
+            delivery: string;
+            /** @description Drop it by then, or at the session's end. */
+            expires_at: components["schemas"]["Timestamp"];
+            name: string;
+            value: string;
+            /** Format: int64 */
+            version: number;
+        };
         /** @description A key that is locked now. */
         Lockout: {
             /** @description `ip:<address>`, `ipdev:<address>:<device>` or `stepup:<device>`. */
@@ -836,6 +919,16 @@ export interface components {
             id: string;
             name: string;
         };
+        /** @description A lease to grant. */
+        NewLease: {
+            /** @description The runner's device id, `d_…`; it must be in the secret's scope. */
+            runner: string;
+            /**
+             * Format: int64
+             * @description Its lifetime; default and most `secrets.lease_secs`.
+             */
+            ttl_secs?: number | null;
+        };
         NewPairingBody: {
             /** @description `device`, `runner`, or `passkey` (a browser, E1-08; only when the Core has passkeys). */
             kind: string;
@@ -843,6 +936,16 @@ export interface components {
             name: string;
             /** @description What it may do: within the approver's own scopes; a runner gets exactly `runner`. */
             scopes: string[];
+        };
+        /** @description A new secret. Deliberately no `Debug`. */
+        NewSecret: {
+            /** @description `env` (the default), `file` or `askpass`. */
+            delivery?: string | null;
+            name: string;
+            /** @description Runner device ids it may be leased to; default none. */
+            runners?: string[] | null;
+            /** @description UTF-8 text, at most `secrets.max_bytes`; written, never read back. */
+            value: string;
         };
         /** @description The no-op's answer. */
         NoopResult: {
@@ -942,10 +1045,20 @@ export interface components {
             /** @description The device token, hex, as the app got it from APNs. */
             token: string;
         };
+        /** @description A lease to redeem. No `Debug` (review L4). */
+        RedeemLease: {
+            lease: string;
+        };
         /** @description A device's new name. */
         Rename: {
             /** @description 1 to 64 characters, no control characters; trimmed. */
             name: string;
+        };
+        /** @description A rotation: the new value, and optionally a new scope or delivery. No `Debug`. */
+        RotateSecret: {
+            delivery?: string | null;
+            runners?: string[] | null;
+            value: string;
         };
         /** @description A paired runner and its live state. */
         Runner: {
@@ -984,6 +1097,35 @@ export interface components {
             commands?: string[] | null;
             /** @description `exec` now; `pty`, `harness` later. */
             name?: string | null;
+        };
+        /** @description What a delete answers. */
+        SecretDeleted: {
+            deleted: boolean;
+        };
+        /** @description A secret, never its value. */
+        SecretInfo: {
+            created_at: components["schemas"]["Timestamp"];
+            /** @description How a runner hands it to a session: `env`, `file` or `askpass`. */
+            delivery: string;
+            /** @description The master key it is sealed under. */
+            key_id: string;
+            /** @description `[a-z][a-z0-9_.-]{0,63}`. */
+            name: string;
+            /** @description The device that stored it, `d_…`. */
+            owner: string;
+            /** @description The runner devices it may be leased to (its scope); empty: none. */
+            runners: string[];
+            /**
+             * Format: int64
+             * @description The value's length in bytes.
+             */
+            size: number;
+            updated_at: components["schemas"]["Timestamp"];
+            /**
+             * Format: int64
+             * @description 1 when stored, one more per rotation.
+             */
+            version: number;
         };
         SessionGrant: {
             /** @description Until when the session is elevated (E1-09); null when it is not. */
@@ -1890,6 +2032,193 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NoopResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    redeemSecretLease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemLease"];
+            };
+        };
+        responses: {
+            /** @description The lease's runner (and only it) gets the value, once (audited as `secret.redeemed`). 404 for a lease that is not this runner's or no longer in scope, 410 `lease_expired` when spent or expired, 409 `secrets_disabled` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeasedSecret"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listSecrets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every secret, by name, without its value */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretInfo"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewSecret"];
+            };
+        };
+        responses: {
+            /** @description Stored, sealed (audited as `secret.created`). 409 `secrets_disabled` (gate G-SEC, `secrets.mode` 0), `real_secret_refused` (mode 1 and a value shaped like a real credential), `conflict` or `limit_reached`; 400 `too_large`; 503 `secrets_unavailable` (no master key) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    rotateSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The secret's name */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RotateSecret"];
+            };
+        };
+        responses: {
+            /** @description A new version (audited as `secret.rotated`); the refusals of `createSecret` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The secret's name */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted with its leases (audited as `secret.deleted`); works whatever `secrets.mode` is */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretDeleted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    leaseSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The secret's name */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewLease"];
+            };
+        };
+        responses: {
+            /** @description A lease for one runner in the secret's scope, one redemption, `ttl_secs` at most (audited as `secret.leased`). 409 `secrets_disabled` or `limit_reached`; 400 when the runner is not in scope */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaseGrant"];
                 };
             };
             400: components["responses"]["BadRequest"];

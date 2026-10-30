@@ -76,6 +76,24 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/runners/{id}/noop`.
     /// - Remark: Generated from `#/paths//api/v1/runners/{id}/noop/post(runNoop)`.
     func runNoop(_ input: Operations.RunNoop.Input) async throws -> Operations.RunNoop.Output
+    /// - Remark: HTTP `POST /api/v1/secret-leases/redeem`.
+    /// - Remark: Generated from `#/paths//api/v1/secret-leases/redeem/post(redeemSecretLease)`.
+    func redeemSecretLease(_ input: Operations.RedeemSecretLease.Input) async throws -> Operations.RedeemSecretLease.Output
+    /// - Remark: HTTP `GET /api/v1/secrets`.
+    /// - Remark: Generated from `#/paths//api/v1/secrets/get(listSecrets)`.
+    func listSecrets(_ input: Operations.ListSecrets.Input) async throws -> Operations.ListSecrets.Output
+    /// - Remark: HTTP `POST /api/v1/secrets`.
+    /// - Remark: Generated from `#/paths//api/v1/secrets/post(createSecret)`.
+    func createSecret(_ input: Operations.CreateSecret.Input) async throws -> Operations.CreateSecret.Output
+    /// - Remark: HTTP `PUT /api/v1/secrets/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/secrets/{id}/put(rotateSecret)`.
+    func rotateSecret(_ input: Operations.RotateSecret.Input) async throws -> Operations.RotateSecret.Output
+    /// - Remark: HTTP `DELETE /api/v1/secrets/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/secrets/{id}/delete(deleteSecret)`.
+    func deleteSecret(_ input: Operations.DeleteSecret.Input) async throws -> Operations.DeleteSecret.Output
+    /// - Remark: HTTP `POST /api/v1/secrets/{id}/leases`.
+    /// - Remark: Generated from `#/paths//api/v1/secrets/{id}/leases/post(leaseSecret)`.
+    func leaseSecret(_ input: Operations.LeaseSecret.Input) async throws -> Operations.LeaseSecret.Output
     /// - Remark: HTTP `GET /api/v1/settings`.
     /// - Remark: Generated from `#/paths//api/v1/settings/get(listServerSettings)`.
     func listServerSettings(_ input: Operations.ListServerSettings.Input) async throws -> Operations.ListServerSettings.Output
@@ -342,6 +360,70 @@ extension APIProtocol {
         try await runNoop(Operations.RunNoop.Input(
             path: path,
             headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/secret-leases/redeem`.
+    /// - Remark: Generated from `#/paths//api/v1/secret-leases/redeem/post(redeemSecretLease)`.
+    public func redeemSecretLease(
+        headers: Operations.RedeemSecretLease.Input.Headers = .init(),
+        body: Operations.RedeemSecretLease.Input.Body
+    ) async throws -> Operations.RedeemSecretLease.Output {
+        try await redeemSecretLease(Operations.RedeemSecretLease.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/secrets`.
+    /// - Remark: Generated from `#/paths//api/v1/secrets/get(listSecrets)`.
+    public func listSecrets(headers: Operations.ListSecrets.Input.Headers = .init()) async throws -> Operations.ListSecrets.Output {
+        try await listSecrets(Operations.ListSecrets.Input(headers: headers))
+    }
+    /// - Remark: HTTP `POST /api/v1/secrets`.
+    /// - Remark: Generated from `#/paths//api/v1/secrets/post(createSecret)`.
+    public func createSecret(
+        headers: Operations.CreateSecret.Input.Headers = .init(),
+        body: Operations.CreateSecret.Input.Body
+    ) async throws -> Operations.CreateSecret.Output {
+        try await createSecret(Operations.CreateSecret.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `PUT /api/v1/secrets/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/secrets/{id}/put(rotateSecret)`.
+    public func rotateSecret(
+        path: Operations.RotateSecret.Input.Path,
+        headers: Operations.RotateSecret.Input.Headers = .init(),
+        body: Operations.RotateSecret.Input.Body
+    ) async throws -> Operations.RotateSecret.Output {
+        try await rotateSecret(Operations.RotateSecret.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `DELETE /api/v1/secrets/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/secrets/{id}/delete(deleteSecret)`.
+    public func deleteSecret(
+        path: Operations.DeleteSecret.Input.Path,
+        headers: Operations.DeleteSecret.Input.Headers = .init()
+    ) async throws -> Operations.DeleteSecret.Output {
+        try await deleteSecret(Operations.DeleteSecret.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/secrets/{id}/leases`.
+    /// - Remark: Generated from `#/paths//api/v1/secrets/{id}/leases/post(leaseSecret)`.
+    public func leaseSecret(
+        path: Operations.LeaseSecret.Input.Path,
+        headers: Operations.LeaseSecret.Input.Headers = .init(),
+        body: Operations.LeaseSecret.Input.Body
+    ) async throws -> Operations.LeaseSecret.Output {
+        try await leaseSecret(Operations.LeaseSecret.Input(
+            path: path,
+            headers: headers,
+            body: body
         ))
     }
     /// - Remark: HTTP `GET /api/v1/settings`.

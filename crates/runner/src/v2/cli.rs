@@ -109,13 +109,16 @@ pub async fn pair_main(args: &[&str]) -> ExitCode {
 }
 
 pub const CONNECT_USAGE: &str = "usage:
-  ainkrad-runner connect [--state <dir>] [--ca <pem>] [--enable-exec]
+  ainkrad-runner connect [--state <dir>] [--ca <pem>] [--enable-exec] [--enable-pty]
 
 Serves the Core it paired with (`ainkrad-runner pair`) over protocol v2, reconnecting with a
 jittered backoff and resuming commands in flight. Stops on SIGTERM or Ctrl-C; commands still
 running are killed. It offers only `noop` unless --enable-exec is given: `exec.run` lets the
 Core run any program as this runner's user (bounded in time and output, with an empty
-environment), so turn it on only where that is wanted.
+environment), so turn it on only where that is wanted. --enable-pty offers terminals: a shell
+as this runner's user, each held by a detached ainkrad-ptyhost (found next to this binary, or
+at $AINKRAD_PTYHOST) that outlives the runner; their sockets are in <dir>/terminals. A
+runner started as root gives root shells.
 Exit status: 0 stopped (SIGTERM, Ctrl-C); 1 an error that retrying cannot fix (state, URL, TLS);
 2 usage; 6 rejected by the Core: this runner was revoked (close 4001), or the Core refused it
 as an unknown or revoked device (auth_failed) 3 dials in a row; pair it again. Network errors,
@@ -126,10 +129,11 @@ pub const EXIT_REJECTED: u8 = 6;
 
 pub async fn connect_main(args: &[&str]) -> ExitCode {
     let run_enabled = args.contains(&"--enable-exec");
+    let pty_enabled = args.contains(&"--enable-pty");
     let args: Vec<&str> = args
         .iter()
         .copied()
-        .filter(|a| *a != "--enable-exec")
+        .filter(|a| !matches!(*a, "--enable-exec" | "--enable-pty"))
         .collect();
     let args = args.as_slice();
     if !args.len().is_multiple_of(2) || args.chunks(2).any(|f| !matches!(f[0], "--state" | "--ca"))
@@ -167,7 +171,13 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         }
         stop.send_replace(true);
     });
-    match super::daemon::from_state(&state, exec, tls, stopping).await {
+    let pty = pty_enabled.then(|| {
+        Arc::new(super::PtyDriver::new(super::PtyConfig {
+            enabled: true,
+            ..super::PtyConfig::new(state.0.join("terminals"))
+        }))
+    });
+    match super::daemon::from_state(&state, exec, pty, tls, stopping).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e @ super::client::LinkError::Rejected(_)) => {
             eprintln!("ainkrad-runner: {e}");

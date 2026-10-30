@@ -36,10 +36,12 @@ mod pairing;
 pub mod passkey;
 mod runners;
 pub mod scopes;
+mod secrets;
 pub mod session;
 mod settings;
 pub mod spec;
 mod stepup;
+mod terminals;
 pub mod ticket;
 mod trace;
 pub use trace::{ApiError, ApiResult};
@@ -156,6 +158,16 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/runners", get(runners::list))
         .route("/api/v1/runners/{id}", get(runners::get))
         .route("/api/v1/runners/{id}/noop", post(runners::noop))
+        .route(
+            "/api/v1/terminals",
+            post(terminals::create).get(terminals::list),
+        )
+        .route(
+            "/api/v1/terminals/{id}",
+            get(terminals::get).delete(terminals::close),
+        )
+        .route("/api/v1/terminals/{id}/signal", post(terminals::signal))
+        .route("/api/v1/terminals/{id}/ws", get(terminals::attach))
         .route("/api/v1/me", get(me::me))
         .route("/api/v1/auth/step-up/challenge", post(stepup::challenge))
         .route("/api/v1/auth/step-up", post(stepup::step_up))
@@ -173,6 +185,13 @@ pub fn router(app: App) -> Router {
             "/api/v1/settings/{scope}/{key}/history",
             get(settings::history),
         )
+        .route("/api/v1/secrets", get(secrets::list).post(secrets::create))
+        .route(
+            "/api/v1/secrets/{id}",
+            put(secrets::rotate).delete(secrets::delete),
+        )
+        .route("/api/v1/secrets/{id}/leases", post(secrets::lease))
+        .route("/api/v1/secret-leases/redeem", post(secrets::redeem))
         // Modules sit inside the same gate: they never authenticate for themselves.
         .merge(crate::module::mount(&app.modules))
         // Refused writes, authenticated (`trace`).
