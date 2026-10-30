@@ -89,7 +89,7 @@ pub struct HarnessExecutor {
     pub approval_timeout: Duration,
     /// Per-issue git worktrees under `work_root`; git's config under `<config_root>/git`.
     pub workspaces: Workspaces,
-    agent_workspaces: Mutex<HashMap<String, PathBuf>>,
+    agent_workspaces: Mutex<HashMap<(String, i64), PathBuf>>,
     /// The token cap of a job that carries none (an older server).
     pub default_token_cap: u64,
     /// How often a run's usage so far is reported.
@@ -264,7 +264,7 @@ impl HarnessExecutor {
                 .agent_workspaces
                 .lock()
                 .expect("agent workspaces")
-                .get(&job.context_ref)
+                .get(&(job.context_ref.clone(), job.run))
                 .cloned()
                 .unwrap_or_else(|| self.work_root.join(format!("run-{}", job.run))),
             _ => self.work_root.join(format!("run-{}", job.run)),
@@ -310,7 +310,7 @@ impl Executor for HarnessExecutor {
                     .agent_workspaces
                     .lock()
                     .expect("agent workspaces")
-                    .contains_key(&job.context_ref)
+                    .contains_key(&(job.context_ref.clone(), job.run))
                 {
                     return Err("agent workspace was not prepared".to_owned());
                 }
@@ -398,7 +398,9 @@ impl Executor for HarnessExecutor {
     async fn prepare_agent_workspace(
         &self,
         session: &str,
+        generation: i64,
         workspace: &ainkrad_proto::runner::Workspace,
+        helper: Option<&Path>,
     ) -> Result<PathBuf, String> {
         let mut requests = vec![SessionWorkspace {
             repo: workspace.repo.clone(),
@@ -412,22 +414,29 @@ impl Executor for HarnessExecutor {
             branch: w.branch.clone(),
             name: w.name.clone(),
         }));
-        let path = self.workspaces.prepare_session(session, &requests).await?;
+        let path = self
+            .workspaces
+            .prepare_session(session, generation, &requests, helper)
+            .await?;
         self.agent_workspaces
             .lock()
             .expect("agent workspaces")
-            .insert(session.to_owned(), path.clone());
+            .insert((session.to_owned(), generation), path.clone());
         Ok(path)
     }
 
-    async fn cleanup_agent_workspace(&self, session: &str) {
+    async fn cleanup_agent_workspace(&self, session: &str, generation: i64) {
         self.agent_workspaces
             .lock()
             .expect("agent workspaces")
-            .remove(session);
-        if let Err(why) = self.workspaces.cleanup_session(session).await {
+            .remove(&(session.to_owned(), generation));
+        if let Err(why) = self.workspaces.cleanup_session(session, generation).await {
             tracing::warn!(session, %why, "agent workspace cleanup failed");
         }
+    }
+
+    fn recover_agent_workspaces(&self, adopted: &[String]) {
+        self.workspaces.recover_sessions(adopted);
     }
 
     fn control(&self, run: i64, control: crate::Control) {

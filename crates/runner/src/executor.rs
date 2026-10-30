@@ -189,17 +189,25 @@ pub trait Executor: Send + Sync + 'static {
     fn prepare_agent_workspace(
         &self,
         session: &str,
+        generation: i64,
         workspace: &Workspace,
+        helper: Option<&std::path::Path>,
     ) -> impl Future<Output = Result<PathBuf, String>> + Send {
-        let _ = (session, workspace);
+        let _ = (session, generation, workspace, helper);
         async { Err("this runner has no git workspace service".to_owned()) }
     }
 
     /// Removes all worktrees owned by an agent session.
-    fn cleanup_agent_workspace(&self, session: &str) -> impl Future<Output = ()> + Send {
-        let _ = session;
+    fn cleanup_agent_workspace(
+        &self,
+        session: &str,
+        generation: i64,
+    ) -> impl Future<Output = ()> + Send {
+        let _ = (session, generation);
         async {}
     }
+
+    fn recover_agent_workspaces(&self, _adopted: &[String]) {}
 
     /// The issues whose worktrees it holds (E3.7), listed in every `Ready`.
     fn workspaces(&self) -> Vec<i64> {

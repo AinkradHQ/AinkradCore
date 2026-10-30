@@ -57,11 +57,16 @@ fn workspaces_never_carry_credentials_or_options() {
         "https://github.com/AinkradHQ/AinkradCitadel.git",
         "git@github.com:AinkradHQ/AinkradCitadel.git",
         "ssh://git@github.com/AinkradHQ/AinkradCitadel.git",
-        "/srv/git/citadel.git",
     ] {
         assert_eq!(ws(ok, "citadel/CIT-12").problem(), None, "{ok}");
     }
     for bad in [
+        "/srv/git/citadel.git",
+        "relative/repo",
+        "http://example.com/r",
+        "git://example.com/r",
+        "https://example.com/r?token=secret",
+        "ssh://u:pw@example.com/r",
         "file:///srv/git/citadel.git",
         "ext::sh -c touch /tmp/pwned",
         "https://x-access-token:ghp_secret@github.com/a/b.git",

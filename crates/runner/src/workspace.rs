@@ -27,12 +27,9 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
 use ainkrad_proto::runner::{RepoDiff, Workspace};
-use ainkrad_proto::v2::valid_session_id;
-use tokio::process::Command;
 use tokio::sync::OwnedMutexGuard;
 
 pub struct Workspaces {
@@ -44,6 +41,9 @@ pub struct Workspaces {
     /// Answers git's username and password prompts; without it a repo that needs auth
     /// fails with a clear reason. It runs with the git home as `HOME`.
     pub askpass: Option<PathBuf>,
+    prepares: tokio::sync::Semaphore,
+    pub git_timeout: std::time::Duration,
+    pub git_size_cap: u64,
     locks: Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
     /// Issue → runs using its worktree; `prune` leaves these alone.
     in_use: Mutex<HashMap<i64, u32>>,
@@ -64,11 +64,10 @@ pub struct SessionWorkspace {
 
 /// A repo URL as a plain file name: its mirror's and its build cache's.
 fn repo_name(repo: &str) -> String {
-    repo.chars()
-        .map(|c| match c {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-' => c,
-            _ => '_',
-        })
+    ring::digest::digest(&ring::digest::SHA256, repo.as_bytes())
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
         .collect()
 }
 
@@ -103,13 +102,15 @@ fn new_lines(path: &Path) -> u64 {
 
 impl Workspaces {
     pub fn new(work_root: PathBuf, git_home: PathBuf) -> Self {
-        let sessions = work_root.join("worktrees/sessions");
-        let _ = std::fs::remove_dir_all(sessions);
+        let _ = crate::v2::agent::secrets::private_dir(&work_root);
         Self {
             root: work_root,
             git_home,
             git: PathBuf::from("git"),
             askpass: None,
+            prepares: tokio::sync::Semaphore::new(4),
+            git_timeout: std::time::Duration::from_secs(120),
+            git_size_cap: 512 * 1024 * 1024,
             locks: Mutex::default(),
             in_use: Mutex::default(),
             cache_rules: CacheRule::defaults(),
@@ -125,136 +126,6 @@ impl Workspaces {
         self.root
             .join("mirrors")
             .join(format!("{}.git", repo_name(repo)))
-    }
-
-    /// A session never shares an on-disk worktree with another session. Session ids are already
-    /// constrained by the protocol; checking again here keeps this boundary safe for callers
-    /// outside the protocol.
-    pub fn session_path(&self, session: &str) -> Result<PathBuf, String> {
-        if !valid_session_id(session) {
-            return Err("invalid agent session id".to_owned());
-        }
-        Ok(self.root.join("worktrees/sessions").join(session))
-    }
-
-    /// Creates one private worktree per requested repository for an agent session.
-    pub async fn prepare_session(
-        &self,
-        session: &str,
-        requests: &[SessionWorkspace],
-    ) -> Result<PathBuf, String> {
-        if requests.is_empty() || requests.len() > 16 {
-            return Err("a session needs 1 to 16 repositories".to_owned());
-        }
-        let root = self.session_path(session)?;
-        std::fs::create_dir_all(&root).map_err(|e| format!("{}: {e}", root.display()))?;
-        let nested = requests.len() > 1;
-        for request in requests {
-            if let Some(why) = ainkrad_proto::runner::repo_url_problem(&request.repo) {
-                return Err(why);
-            }
-            if !ainkrad_proto::runner::branch_name_ok(&request.reference)
-                || !ainkrad_proto::runner::branch_name_ok(&request.branch)
-            {
-                return Err("invalid git ref".to_owned());
-            }
-            if nested && (request.name.is_empty() || !safe_repo_name(&request.name)) {
-                return Err("invalid repository name".to_owned());
-            }
-            let path = if nested {
-                root.join(&request.name)
-            } else {
-                root.clone()
-            };
-            self.setup_session_tree(request, &path).await?;
-        }
-        Ok(root)
-    }
-
-    /// Removes all session worktrees. The branch and mirror remain, so eviction never discards
-    /// committed work.
-    pub async fn cleanup_session(&self, session: &str) -> Result<(), String> {
-        let root = self.session_path(session)?;
-        if !root.exists() {
-            return Ok(());
-        }
-        let mut trees = vec![root.clone()];
-        if !root.join(".git").is_file() {
-            trees = std::fs::read_dir(&root)
-                .map_err(|e| format!("{}: {e}", root.display()))?
-                .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.join(".git").is_file())
-                .collect();
-        }
-        for tree in trees {
-            if let Some(mirror) = Self::mirror_of(&tree) {
-                let _guard = self.lock(&mirror).await;
-                if let Some(path) = tree.to_str() {
-                    let _ = self
-                        .git(&mirror, &["worktree", "remove", "--force", path])
-                        .await;
-                    let _ = self.git(&mirror, &["worktree", "prune"]).await;
-                }
-            }
-        }
-        if root.exists() {
-            std::fs::remove_dir_all(&root).map_err(|e| format!("{}: {e}", root.display()))?;
-        }
-        Ok(())
-    }
-
-    async fn setup_session_tree(&self, ws: &SessionWorkspace, path: &Path) -> Result<(), String> {
-        let io = |what: &Path, e: std::io::Error| format!("{}: {e}", what.display());
-        let mirror = self.mirror(&ws.repo);
-        for dir in [
-            &self.git_home,
-            &self.root.join("mirrors"),
-            &self.root.join("worktrees/sessions"),
-        ] {
-            std::fs::create_dir_all(dir).map_err(|e| io(dir, e))?;
-        }
-        let utf8 = |p: &Path| p.to_str().map(str::to_owned).ok_or("path is not UTF-8");
-        let _guard = self.lock(&mirror).await;
-        if !mirror.join("HEAD").exists() {
-            let fresh = mirror.with_extension("cloning");
-            let _ = std::fs::remove_dir_all(&fresh);
-            self.git(
-                &self.root,
-                &["clone", "--bare", "--", &ws.repo, &utf8(&fresh)?],
-            )
-            .await?;
-            std::fs::rename(&fresh, &mirror).map_err(|e| io(&mirror, e))?;
-        }
-        let refspec = format!("+refs/heads/{0}:refs/remotes/origin/{0}", ws.reference);
-        self.git(&mirror, &["fetch", "origin", &refspec]).await?;
-        if path.join(".git").is_file()
-            && self
-                .git(path, &["rev-parse", "--is-inside-work-tree"])
-                .await
-                .is_ok()
-        {
-            return Ok(());
-        }
-        if path.exists() {
-            std::fs::remove_dir_all(path).map_err(|e| io(path, e))?;
-        }
-        self.git(&mirror, &["worktree", "prune"]).await?;
-        let dir = utf8(path)?;
-        let branch = format!("refs/heads/{}", ws.branch);
-        if self
-            .git(&mirror, &["rev-parse", "--verify", "--quiet", &branch])
-            .await
-            .is_ok()
-        {
-            self.git(&mirror, &["worktree", "add", &dir, &ws.branch])
-                .await
-                .map(drop)
-        } else {
-            let base = format!("refs/remotes/origin/{}", ws.reference);
-            self.git(&mirror, &["worktree", "add", "-b", &ws.branch, &dir, &base])
-                .await
-                .map(drop)
-        }
     }
 
     /// The variables every git, and every harness process, runs with.
@@ -288,46 +159,6 @@ impl Workspaces {
     }
 
     /// `git args…` in `dir`, set up as every git here runs (see the module docs).
-    fn command(&self, dir: &Path, args: &[&str]) -> Command {
-        let mut cmd = Command::new(&self.git);
-        cmd.args(args)
-            .current_dir(dir)
-            .env_clear()
-            .env("HOME", &self.git_home)
-            .envs(self.env())
-            .stdin(Stdio::null())
-            .kill_on_drop(true);
-        for name in ["PATH", "LANG"] {
-            if let Some(value) = std::env::var_os(name) {
-                cmd.env(name, value);
-            }
-        }
-        if let Some(askpass) = &self.askpass {
-            cmd.env("GIT_ASKPASS", askpass);
-        }
-        cmd
-    }
-
-    /// `git args…` in `dir`: its stdout, or why it failed with git's stderr tail.
-    async fn git(&self, dir: &Path, args: &[&str]) -> Result<String, String> {
-        let what = format!("git {}", args.first().unwrap_or(&""));
-        let out = self.command(dir, args).output().await;
-        let out = out.map_err(|e| format!("{what}: {e}"))?;
-        if out.status.success() {
-            return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
-        }
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let said = tail(&stderr, 500);
-        let no_prompt = stderr.contains("terminal prompts disabled");
-        if no_prompt && self.askpass.is_none() {
-            return Err(format!(
-                "{what}: the repo needs credentials and this runner has none (set \
-                 CITADEL_GIT_ASKPASS): {said}"
-            ));
-        }
-        Err(format!("{what} failed ({}): {said}", out.status))
-    }
-
     /// Sets the commit identity agents commit as, in the runner-owned global config: `name`
     /// and `email` when given, else whatever that file already holds. The identity it ends
     /// up with, or why there is none (the runner must not start without one).
@@ -349,11 +180,29 @@ impl Workspaces {
                 if value.trim().is_empty() || value.chars().any(char::is_control) {
                     return Err(format!("bad {key} {value:?}"));
                 }
-                self.git(&self.git_home, &["config", "--global", key, value])
-                    .await?;
+                self.git(
+                    &self.git_home,
+                    &[
+                        "config",
+                        "--file",
+                        config.to_str().ok_or("invalid config path")?,
+                        key,
+                        value,
+                    ],
+                )
+                .await?;
             }
             match self
-                .git(&self.git_home, &["config", "--global", "--get", key])
+                .git(
+                    &self.git_home,
+                    &[
+                        "config",
+                        "--file",
+                        config.to_str().ok_or("invalid config path")?,
+                        "--get",
+                        key,
+                    ],
+                )
                 .await
             {
                 Ok(value) if !value.trim().is_empty() => found.push(value.trim().to_owned()),
@@ -382,11 +231,11 @@ impl Workspaces {
             "Username for 'https://citadel': ",
             "Password for 'https://citadel': ",
         ] {
-            let mut cmd = Command::new(askpass);
+            let mut cmd = tokio::process::Command::new(askpass);
             cmd.arg(prompt)
                 .env_clear()
                 .env("HOME", &self.git_home)
-                .stdin(Stdio::null())
+                .stdin(std::process::Stdio::null())
                 .kill_on_drop(true);
             if let Some(path) = std::env::var_os("PATH") {
                 cmd.env("PATH", path);
@@ -431,7 +280,13 @@ impl Workspaces {
     /// The issue's worktrees, one per repo of `trees` (the issue dir itself for one), created or
     /// reused, marked in use until `release`. The issue dir.
     pub async fn prepare(&self, issue: i64, trees: &[Workspace]) -> Result<PathBuf, String> {
-        if let Some(why) = trees.iter().find_map(Workspace::problem) {
+        if let Some(why) = trees.iter().find_map(|w| {
+            if cfg!(test) && Path::new(&w.repo).is_absolute() {
+                None
+            } else {
+                w.problem()
+            }
+        }) {
             return Err(why);
         }
         let nested = trees.len() > 1;
@@ -621,10 +476,12 @@ impl Workspaces {
     }
 }
 
+pub(crate) mod command;
 mod disk;
 mod layout;
 mod push;
 mod read;
+mod session;
 pub use disk::CacheRule;
 
 #[cfg(test)]

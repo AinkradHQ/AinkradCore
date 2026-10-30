@@ -3,17 +3,36 @@
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command as Std;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
-
 use super::*;
 
 /// A fresh dir by its real path (`/var` is `/private/var` on macOS).
-pub(crate) fn scratch(name: &str) -> PathBuf {
+pub(crate) struct TestDir(pub(crate) PathBuf);
+impl AsRef<std::ffi::OsStr> for TestDir {
+    fn as_ref(&self) -> &std::ffi::OsStr {
+        self.0.as_os_str()
+    }
+}
+impl std::ops::Deref for TestDir {
+    type Target = PathBuf;
+    fn deref(&self) -> &PathBuf {
+        &self.0
+    }
+}
+impl AsRef<Path> for TestDir {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+pub(crate) fn scratch(name: &str) -> TestDir {
     let dir = std::env::temp_dir().join(format!("citadel-ws-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    dir.canonicalize().unwrap()
+    TestDir(dir.canonicalize().unwrap())
 }
 
 /// `git args…` in `dir` for the test's own setup, with no user or system config.
@@ -63,17 +82,6 @@ pub(crate) fn ws(repo: &str, n: i64) -> Workspace {
 
 fn workspaces(dir: &Path) -> Workspaces {
     Workspaces::new(dir.join("work"), dir.join("git-home"))
-}
-
-#[test]
-fn a_new_runner_reaps_session_worktrees_after_a_crash() {
-    let dir = scratch("reap");
-    let stale = dir.join("work/worktrees/sessions/as_stale");
-    std::fs::create_dir_all(&stale).unwrap();
-    assert!(stale.exists());
-    let _ = workspaces(&dir);
-    assert!(!stale.exists());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A second run of an issue gets its worktree back as it was left; a deleted one is rebuilt
@@ -322,78 +330,10 @@ async fn git_errors_surface_with_their_stderr() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An HTTP server that answers every request `401 Basic`, keeping the requests' text.
-async fn auth_wall() -> (String, Arc<Mutex<String>>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}/private.git", listener.local_addr().unwrap());
-    let seen = Arc::new(Mutex::new(String::new()));
-    let log = seen.clone();
-    tokio::spawn(async move {
-        loop {
-            let (mut conn, _) = listener.accept().await.unwrap();
-            let mut buf = vec![0u8; 8192];
-            let n = conn.read(&mut buf).await.unwrap_or(0);
-            log.lock()
-                .unwrap()
-                .push_str(&String::from_utf8_lossy(&buf[..n]));
-            let reply = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"r\"\r\n\
-                         Content-Length: 0\r\nConnection: close\r\n\r\n";
-            let _ = conn.write_all(reply.as_bytes()).await;
-        }
-    });
-    (url, seen)
-}
-
 fn script(path: &Path, body: &str) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-}
-
-/// A repo that needs auth: without an askpass the run fails saying so; with one, the
-/// credentials travel by the askpass and the HTTP header only, never in git's argv.
-#[tokio::test]
-async fn credentials_come_from_the_askpass_and_never_from_argv() {
-    let dir = scratch("auth");
-    let (url, seen) = auth_wall().await;
-    let mut w = workspaces(&dir);
-    let argv = dir.join("argv.log");
-    let shim = dir.join("git-shim");
-    script(
-        &shim,
-        &format!(
-            "printf '%s\\n' \"$@\" >> {}\nexec git \"$@\"",
-            argv.display()
-        ),
-    );
-    w.git = shim;
-
-    let why = w.prepare(1, &[ws(&url, 1)]).await.unwrap_err();
-    assert!(
-        why.contains("needs credentials and this runner has none"),
-        "{why}"
-    );
-
-    let askpass = dir.join("askpass");
-    script(
-        &askpass,
-        "case \"$1\" in Username*) echo citadel ;; *) echo s3cr3t ;; esac",
-    );
-    w.askpass = Some(askpass);
-    let why = w.prepare(1, &[ws(&url, 1)]).await.unwrap_err();
-    assert!(why.contains("Authentication failed"), "{why}");
-    // base64("citadel:s3cr3t")
-    let requests = seen.lock().unwrap().clone();
-    assert!(
-        requests.contains("Basic Y2l0YWRlbDpzM2NyM3Q="),
-        "{requests}"
-    );
-    let argv = std::fs::read_to_string(&argv).unwrap();
-    assert!(argv.contains(&url), "{argv}");
-    assert!(
-        !argv.contains("s3cr3t") && !argv.contains("citadel@"),
-        "{argv}"
-    );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// No identity, no start; once set, an agent's commit in its worktree carries it, read from
@@ -516,37 +456,6 @@ async fn a_second_repo_nests_both_worktrees_and_keeps_the_work() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
-async fn agent_sessions_get_private_worktrees_and_cleanup() {
-    let dir = scratch("sessions");
-    let repo = origin(&dir);
-    let w = workspaces(&dir);
-    let request = |session: &str| SessionWorkspace {
-        repo: repo.clone(),
-        reference: "main".to_owned(),
-        branch: format!("agent/{session}"),
-        name: String::new(),
-    };
-    let first = w
-        .prepare_session("as_first", &[request("first")])
-        .await
-        .unwrap();
-    let second = w
-        .prepare_session("as_second", &[request("second")])
-        .await
-        .unwrap();
-    assert_ne!(first, second);
-    assert!(first.join(".git").is_file());
-    assert!(second.join(".git").is_file());
-    std::fs::write(first.join("private.txt"), "one").unwrap();
-    assert!(!second.join("private.txt").exists());
-    w.cleanup_session("as_first").await.unwrap();
-    assert!(!first.exists());
-    assert!(second.join(".git").is_file());
-    w.cleanup_session("as_second").await.unwrap();
-    assert!(!second.exists());
-}
-
 #[test]
 fn session_and_git_inputs_reject_traversal_and_special_transports() {
     assert!(ainkrad_proto::runner::repo_url_problem("file:///tmp/repo").is_some());
@@ -562,3 +471,5 @@ fn session_and_git_inputs_reject_traversal_and_special_transports() {
 mod layout;
 
 mod read;
+
+mod security;
