@@ -275,6 +275,7 @@ pub async fn update(
     Path(id): Path<i64>,
     Json(b): Json<RepoBody>,
 ) -> ApiResult<Repo> {
+    check_body(&b)?;
     let current = repo(&app, id).await?;
     let stack = b.stack.clone();
     let r = stored(current.project_id, id, b)?;
