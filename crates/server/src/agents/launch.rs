@@ -26,21 +26,30 @@ async fn leases(app: &App, s: &Session) -> Result<(i64, Vec<SecretGrant>), Refus
     Ok((expires, out))
 }
 
-/// The `agent.start` of `s`, continuing the harness's own session when `resume`.
-fn start_command(s: &Session, secrets: Vec<SecretGrant>, resume: bool) -> Command {
-    Command::AgentStart(AgentStart {
+/// The `agent.start` of `s`, continuing the harness's own session when `resume`. A workspace or
+/// policy that does not parse is refused, never replaced by a default (a weaker policy).
+fn start_command(s: &Session, secrets: Vec<SecretGrant>, resume: bool) -> Result<Command, Refusal> {
+    let bad = || {
+        Refusal::Runner(StreamError::new(
+            ErrorCode::InvalidArgs,
+            "the session's workspace or policy does not have its shape",
+        ))
+    };
+    let workspace = match &s.workspace {
+        Some(w) => Some(serde_json::from_value(w.clone()).map_err(|_| bad())?),
+        None => None,
+    };
+    let policy = serde_json::from_value(s.policy.clone()).map_err(|_| bad())?;
+    Ok(Command::AgentStart(AgentStart {
         session: s.id.clone(),
         harness: s.harness.clone(),
         model: s.model.clone(),
         prompt: s.prompt.clone(),
-        workspace: s
-            .workspace
-            .clone()
-            .and_then(|w| serde_json::from_value(w).ok()),
-        policy: serde_json::from_value(s.policy.clone()).unwrap_or_default(),
+        workspace,
+        policy,
         resume: resume.then(|| s.harness_session.clone()).flatten(),
         secrets,
-    })
+    }))
 }
 
 /// Starts (or resumes) `s` on its runner with fresh leases; its state moves to `running`.
@@ -50,6 +59,10 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
     if !app.hub.online(&s.runner) {
         let why = "the runner is not connected";
         return Err(Refusal::Runner(StreamError::new(ErrorCode::Offline, why)));
+    }
+    if let Err(e) = start_command(s, Vec::new(), resume) {
+        fail(app, s, &describe(&e)).await;
+        return Err(e);
     }
     let cached = { app.agents.leases.lock().unwrap().get(&s.id).cloned() };
     let secrets = match cached {
@@ -74,7 +87,7 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
     match ask(
         app,
         &s.runner,
-        start_command(s, secrets.clone(), resume),
+        start_command(s, secrets.clone(), resume)?,
         wait,
         proof,
     )

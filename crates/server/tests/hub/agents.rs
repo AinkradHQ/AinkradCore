@@ -237,7 +237,7 @@ pub(super) async fn secret(core: &Core, name: &str, runners: &[String], delivery
 }
 
 async fn session(core: &Core, runner: &str, secrets: &[SessionSecret]) -> String {
-    let policy = json!({});
+    let policy = json!({"mode": "ask"});
     let new = NewSession {
         runner,
         harness: "fake",

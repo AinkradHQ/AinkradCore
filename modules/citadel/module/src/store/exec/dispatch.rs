@@ -16,6 +16,7 @@
 
 use std::future::Future;
 
+use ainkrad_core_server::agents::ModuleAgents;
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::store::agents as sessions;
 use ainkrad_proto::v2::{AgentDecide, AgentSend, AgentStop, Command, ErrorCode};
@@ -83,6 +84,11 @@ pub trait Host: Send + Sync {
     ) -> impl Future<Output = Result<(), String>> + Send;
 }
 
+/// The module's handle on the Core's agent sessions: its id comes from the module itself.
+fn agents() -> ModuleAgents {
+    ModuleAgents::of(&crate::Citadel)
+}
+
 /// The Core's agent-session service.
 pub struct Platform;
 
@@ -107,7 +113,7 @@ impl Host for Platform {
     }
 
     async fn start(&self, app: &App, spec: &StartSpec) -> Result<String, StartFailure> {
-        use ainkrad_core_server::agents::{Refusal, create_for_module, describe};
+        use ainkrad_core_server::agents::{Refusal, describe};
         let new = sessions::NewSession {
             runner: &spec.runner,
             harness: &spec.harness,
@@ -118,7 +124,7 @@ impl Host for Platform {
             secrets: &[],
             created_by: &spec.by_device,
         };
-        match create_for_module(app, crate::MODULE, &new).await {
+        match agents().create(app, &new).await {
             Ok(s) => Ok(s.id),
             Err(Refusal::Runner(e)) if matches!(e.code, ErrorCode::Busy | ErrorCode::Offline) => {
                 Err(StartFailure::Busy(e.message))
@@ -128,11 +134,7 @@ impl Host for Platform {
     }
 
     async fn instruct(&self, app: &App, session: &str, what: Instruction) -> Result<(), String> {
-        use ainkrad_core_server::agents::{describe, instruct_module};
-        let s = sessions::get(&app.pool, session)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or("no such session")?;
+        use ainkrad_core_server::agents::describe;
         let id = session.to_owned();
         let command = match what {
             Instruction::Stop { kill } => Command::AgentStop(AgentStop { session: id, kill }),
@@ -148,7 +150,8 @@ impl Host for Platform {
                 reply,
             }),
         };
-        instruct_module(app, crate::MODULE, &s, command)
+        agents()
+            .instruct(app, session, command)
             .await
             .map_err(|e| describe(&e))
     }
@@ -222,11 +225,41 @@ pub async fn dispatch_next<H: Host>(app: &App, host: &H, now: &str) -> Result<Op
             .bind(run.id.0)
             .execute(&app.pool)
             .await?;
+            // The run may be over already (cancelled while the session was starting): nothing
+            // may keep working unaccounted, so the session is killed now and its usage counted.
+            let now_run = get_run(&app.pool, run.id)
+                .await?
+                .ok_or(Error::RowNotFound)?;
+            if now_run.state.is_terminal() {
+                if let Err(why) = host
+                    .instruct(app, &session, Instruction::Stop { kill: true })
+                    .await
+                {
+                    tracing::warn!(
+                        run = run.id.0,
+                        why,
+                        "stopping a session of an ended run failed; the sweeper retries"
+                    );
+                }
+                if let Some(s) = sessions::get(&app.pool, &session).await? {
+                    super::reconcile::record_usage(
+                        &app.pool,
+                        &now_run,
+                        &s,
+                        now,
+                        &mut Default::default(),
+                    )
+                    .await?;
+                }
+            }
         }
         Err(StartFailure::Busy(why)) => give_back(&app.pool, &run, &why, now).await?,
         Err(StartFailure::Failed(why)) => {
             let fail = RunEvent::Fail {
-                reason: format!("start failed: {why}"),
+                reason: format!(
+                    "start failed: {}",
+                    ainkrad_proto::redact::Redactor::new().text(&why)
+                ),
                 fingerprint: None,
             };
             transition_run(&app.pool, run.id, SYSTEM, &fail, now)
