@@ -13,7 +13,7 @@ use crate::keystore::{self, Keystore};
 use crate::net::{Endpoint, Net};
 use crate::pair::{Credential, Pairing};
 use crate::stepup::{self, Passphrase};
-use crate::{EXIT_CODES, Error, devices, events, pair, runners, secrets};
+use crate::{EXIT_CODES, Error, agents, devices, events, pair, runners, secrets};
 
 pub const USAGE: &str =
     "usage: ainkradctl [--socket <path> | --url <http(s)://host:port>] [--host <name>]
@@ -59,6 +59,12 @@ pub const USAGE: &str =
       The Core's secrets (scope admin): set and rotate read the value from stdin (never
       the command line); there is no get, a value never comes back to a client. A secret
       is leased only to the runners listed (default none).
+  agent ls  |  show <id>
+  agent run <runner-id> <harness> [prompt...]* [--secrets <name>:<VAR>,...]
+  agent cancel <id>*  |  agent kill <id>*
+      Agent sessions on runners (scope agent): run starts one (the runner must offer
+      agents: ainkrad-runner connect --enable-agents); --secrets leases each named secret
+      to that runner for the session, delivered under VAR; show prints its transcript.
   events tail [--after <seq>] [--no-follow]
       Events after <seq> (default: from now), one JSON object per line (every kind this
       device may see, runner.connected/.disconnected/.degraded included); follows the live
@@ -74,7 +80,7 @@ signed or sent before the Core signs a fresh nonce with that key (POST /handshak
 admin socket answers to the Core's own host name).
 ";
 
-const VALUED: [&str; 13] = [
+const VALUED: [&str; 14] = [
     "--socket",
     "--url",
     "--host",
@@ -88,6 +94,7 @@ const VALUED: [&str; 13] = [
     "--stepup-passphrase-file",
     "--runners",
     "--delivery",
+    "--secrets",
 ];
 const SWITCHES: [&str; 4] = ["--json", "--no-follow", "--help", "--no-stepup"];
 
@@ -243,6 +250,10 @@ pub async fn run(args: &[String], out: &mut impl Write) -> Result<(), Error> {
             });
             let delivery = a.value("--delivery");
             secrets::secret(&mut a.client()?, rest, runners, delivery, json, out).await
+        }
+        ["agent", rest @ ..] => {
+            let secrets = a.value("--secrets");
+            agents::agent(&mut a.client()?, rest, secrets, json, out).await
         }
         ["events", "tail"] => {
             let mut c = a.client()?;
