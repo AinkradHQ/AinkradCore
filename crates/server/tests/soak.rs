@@ -149,7 +149,10 @@ async fn ten_thousand_a_minute_to_twenty_clients_one_stalled() {
     let service = router(app.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();
     tokio::spawn(async move { axum::serve(listener, service).await });
 
-    let start = events::last_event_seq(&pool).await.unwrap();
+    // Cursors count the readers' own view (E1-04.3): the enrolments' audit rows are hidden
+    // from a `read` device, so its numbers start at its view's head, not the global seq.
+    let view = events::view::View::of(&["read".to_owned()]);
+    let start = events::view::head(&pool, view).await.unwrap().0;
     let done = Arc::new(AtomicBool::new(false));
     let head = Arc::new(AtomicI64::new(start));
 
@@ -202,16 +205,14 @@ async fn ten_thousand_a_minute_to_twenty_clients_one_stalled() {
                 tick.tick().await;
                 let due = per_min * began.elapsed().as_millis() as u64 / 60_000;
                 let mut tx = begin_write(&pool).await.unwrap();
-                let mut seq = 0;
                 while sent < due {
                     let p = json!({"n": sent, "filler": filler});
-                    seq = events::append(&mut tx, "soak.tick", &p).await.unwrap();
+                    events::append(&mut tx, "soak.tick", &p).await.unwrap();
                     sent += 1;
                 }
                 tx.commit().await.unwrap();
-                if seq > 0 {
-                    head.store(seq, Ordering::Relaxed);
-                }
+                // Every tick is in the readers' view: its head in their numbers.
+                head.store(start + sent as i64, Ordering::Relaxed);
             }
             done.store(true, Ordering::Relaxed);
             sent

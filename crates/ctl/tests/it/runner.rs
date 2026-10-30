@@ -29,7 +29,14 @@ pub fn loopback_core(name: &str) -> (Core, String) {
 pub fn loopback_core_at(name: &str, port: u16, public: u16) -> Core {
     let dir = std::env::temp_dir().join(format!("ctl-{name}-{}", std::process::id()));
     let host = format!("127.0.0.1:{public}");
-    let listen = s(&["--listen", &format!("loopback:{port}"), "--host", &host]);
+    // The runner dials plain loopback, allowed only by the flag (security review RH2).
+    let listen = s(&[
+        "--listen",
+        &format!("loopback:{port}"),
+        "--host",
+        &host,
+        "--allow-plain-runner",
+    ]);
     Core::start_with(
         dir.clone(),
         dir.join("admin.sock"),

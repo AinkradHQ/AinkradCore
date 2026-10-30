@@ -350,3 +350,20 @@ fn the_runner_auth_vectors_hold() {
         "domain separated"
     );
 }
+
+/// Security review RH2: without `--allow-plain-runner`, a signed runner on plain loopback TCP is
+/// refused before the upgrade (400), so its proof would have no channel binding.
+#[tokio::test]
+async fn plain_loopback_is_refused_without_the_flag() {
+    let hub = ainkrad_core_server::hub::HubConfig {
+        allow_plain_loopback: false,
+        ..quick()
+    };
+    let core = Core::start("plainoff", hub).await;
+    let dev = core.runner().await;
+    let tcp = tokio::net::TcpStream::connect(("127.0.0.1", core.port))
+        .await
+        .unwrap();
+    let refused = upgrade(Box::new(tcp), &core.host, Some(&dev)).await.err();
+    assert_eq!(refused.map(|(status, _)| status), Some(400));
+}

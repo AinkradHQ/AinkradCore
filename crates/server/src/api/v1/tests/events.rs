@@ -363,3 +363,63 @@ async fn many_idle_sockets_never_starve_the_pool() {
         );
     }
 }
+
+/// E1-19: idle sockets cost no event reads. Between events the head does not move and no socket
+/// reads its page; one event is then read once per socket and reaches every socket that may see
+/// it within the budget, and a `read`-only socket never gets an admin-only `audit` event.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_sockets_read_nothing_and_an_event_still_reaches_every_scoped_socket() {
+    use std::sync::atomic::Ordering;
+    let fx = fx().await;
+    let app = serve(&fx, quick()).await;
+    const N: usize = 30;
+    let mut admins = vec![];
+    let mut readers = vec![];
+    for n in 0..N {
+        if n % 2 == 0 {
+            let dev = fx.enroll(&format!("a{n}"), &ALL).await;
+            admins.push(connect(&app, &dev, None).await.expect("connected"));
+        } else {
+            let dev = fx.enroll(&format!("r{n}"), &["read"]).await;
+            readers.push(connect(&app, &dev, None).await.expect("connected"));
+        }
+    }
+    // Settle: the enrolments' audit events reach the admin sockets and are read.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    for ws in &mut admins {
+        while tokio::time::timeout(Duration::from_millis(20), ws.next())
+            .await
+            .is_ok()
+        {}
+    }
+    let before = app.live.reads.load(Ordering::Relaxed);
+    // 50 head polls at `quick()`'s 20 ms, no new event.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let idle = app.live.reads.load(Ordering::Relaxed) - before;
+    assert_eq!(idle, 0, "{N} idle sockets read {idle} pages in 1 s");
+
+    // An admin-only audit row, then an event every socket may see.
+    audited(&fx.app.pool, "device.renamed").await;
+    emitted(&fx.app.pool, 7).await;
+    let started = std::time::Instant::now();
+    for ws in &mut admins {
+        let got = next(ws).await;
+        assert_eq!(got["kind"], "audit", "{got}");
+        assert_eq!(next(ws).await["payload"], json!({"n": 7}));
+    }
+    for ws in &mut readers {
+        let got = next(ws).await;
+        assert_eq!(got["kind"], "ops.line", "the audit row is hidden: {got}");
+        assert_eq!(got["payload"], json!({"n": 7}));
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "delivered in {:?}",
+        started.elapsed()
+    );
+    let spent = app.live.reads.load(Ordering::Relaxed) - before;
+    assert!(
+        spent <= 3 * N as u64,
+        "{spent} page reads for two events on {N} sockets"
+    );
+}
