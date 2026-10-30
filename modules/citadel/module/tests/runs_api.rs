@@ -225,3 +225,22 @@ async fn a_client_working_in_one_company_never_reaches_another_companys_runs() {
         .unwrap();
     assert_eq!(state, "claimed", "the other company's run was not touched");
 }
+
+#[tokio::test]
+async fn a_manual_wake_cannot_name_another_companys_issue() {
+    let fx = fx().await;
+    let a = seed(&fx.app.pool, "A", "ENG", ProjectMode::Scrum).await;
+    let b = seed(&fx.app.pool, "B", "BEE", ProjectMode::Scrum).await;
+    let path = format!("/agents/{}/wake", a.agent);
+    let (status, _) = post(&fx, &path, json!({"reason": "x", "issue_id": b.issue})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = post(&fx, &path, json!({"reason": "x", "issue_id": 99999})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let wakes: i64 = sqlx::query_scalar("SELECT count(*) FROM citadel_wake_requests")
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(wakes, 0);
+    let (status, _) = post(&fx, &path, json!({"reason": "x", "issue_id": a.issue})).await;
+    assert_eq!(status, StatusCode::OK);
+}

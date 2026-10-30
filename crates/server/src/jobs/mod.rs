@@ -13,13 +13,14 @@
 //! - **Bounded retries**: a failed attempt waits out an exponential backoff, and the run is
 //!   `dead` after `max_attempts`, a crash-looping handler included.
 //! - **Visible**: every attempt's end is an audit row (`job.ran`, `job.failed`), which is also an
-//!   event on the stream.
+//!   event on the stream; a run that called [`Run::idle`] and succeeded writes none.
 //!
 //! Time comes from the [`Clock`](crate::scheduler::Clock), so tests drive it with a fake one.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::Value;
 
@@ -70,6 +71,20 @@ pub struct Run {
     pub due_at: String,
     /// What the wake carried; `{}` for a scheduled run.
     pub payload: Value,
+    idle: Arc<AtomicBool>,
+}
+
+impl Run {
+    /// Says this run found nothing to do: a run that succeeds having called it writes no
+    /// `job.ran` audit row (a frequent poll would otherwise fill the audit chain, which cannot
+    /// be pruned). A failure is always audited.
+    pub fn idle(&self) {
+        self.idle.store(true, Ordering::SeqCst);
+    }
+
+    pub(crate) fn was_idle(&self) -> bool {
+        self.idle.load(Ordering::SeqCst)
+    }
 }
 
 pub type Done<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;

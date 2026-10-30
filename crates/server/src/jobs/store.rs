@@ -382,6 +382,7 @@ fn claimed(row: &sqlx::sqlite::SqliteRow) -> Result<Claimed, Error> {
             attempt: row.try_get::<i64, _>("attempt")? as u32,
             due_at: row.try_get("due_at")?,
             payload: serde_json::from_str(&payload).unwrap_or(Value::Null),
+            idle: Default::default(),
         },
         job_id: row.try_get("job_id")?,
         max_attempts: row.try_get::<i64, _>("max_attempts")? as u32,
@@ -450,7 +451,7 @@ pub async fn finish(
     .execute(&mut *tx)
     .await?
     .rows_affected();
-    if moved == 1 {
+    if moved == 1 && !(status == "ok" && c.run.was_idle()) {
         let shown = if status == "queued" { "retry" } else { status };
         settle(&mut tx, c, shown, error.as_deref()).await?;
     }
