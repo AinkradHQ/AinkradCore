@@ -1143,3 +1143,93 @@ async fn no_token_is_issued_for_a_run_that_has_not_started() {
         Err(AuthError::RunNotLive)
     ));
 }
+
+#[tokio::test]
+async fn cache_tokens_count_at_a_fraction_against_the_runs_own_cap() {
+    let w = world().await;
+    let run = w.running().await;
+    // 12M tokens of context re-read would be six caps in full; at a tenth it is 1.2M, under 2M.
+    let cache = Tokens {
+        input: 1_000,
+        output: 1_000,
+        cache_read: 12_000_000,
+        ..Tokens::default()
+    };
+    w.report(&run, AgentState::Running, vec![], cache, None)
+        .await;
+    w.reconcile().await;
+    assert_eq!(w.run(run.id).await.state, RunState::Running);
+    let more = Tokens {
+        cache_read: 30_000_000,
+        ..cache
+    };
+    w.report(&run, AgentState::Running, vec![], more, None)
+        .await;
+    w.reconcile().await;
+    assert_eq!(
+        w.run(run.id).await.terminal_reason.as_deref(),
+        Some("token_cap")
+    );
+}
+
+// --- the engine's authorisation is its device's -------------------------------------------------
+
+#[tokio::test]
+async fn a_revoked_device_takes_the_engines_authorisation_with_it() {
+    let w = world().await;
+    w.wake("assign:1").await;
+    ainkrad_core_server::store::gov::revoke_device(
+        &w.app().pool,
+        &w.fx.dev.id,
+        AuditActor::System,
+        None,
+        &w.now(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        engine::engine_device(&w.app().pool)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        w.dispatch().await.is_none(),
+        "a revoked device's switch starts nothing"
+    );
+    assert!(w.host.started.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_device_that_lost_admin_takes_the_engines_authorisation_with_it() {
+    let w = world().await;
+    let weak = enroll(w.app(), "old admin", &["read"], true).await;
+    engine::set_engine(&w.app().pool, true, &weak.id, &w.now())
+        .await
+        .unwrap();
+    assert!(
+        engine::engine_device(&w.app().pool)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    w.wake("assign:1").await;
+    assert!(w.dispatch().await.is_none());
+}
+
+#[tokio::test]
+async fn the_platform_scheduler_accepts_the_engines_jobs() {
+    use ainkrad_core_server::module::Module;
+    let fx = fx().await;
+    let modules: Vec<std::sync::Arc<dyn Module>> =
+        vec![std::sync::Arc::new(citadel_module::Citadel)];
+    ainkrad_core_server::jobs::register(&fx.app.pool, &fx.app.clock.now(), &modules)
+        .await
+        .unwrap();
+    let names: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM core_jobs WHERE owner = 'citadel' ORDER BY name")
+            .fetch_all(&fx.app.pool)
+            .await
+            .unwrap();
+    assert_eq!(names, ["dispatch", "reconcile", "timers"]);
+}

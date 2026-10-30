@@ -188,10 +188,19 @@ pub async fn run_company(pool: &SqlitePool, id: RunId) -> Result<Option<i64>, Er
 
 /// The engine's standing authorisation: `Some(device)` while the operator has it enabled (that
 /// device, which stepped up to enable it, is the accountable creator of the engine's sessions).
+///
+/// The authorisation is the device's: once it is revoked (or locked, or loses `admin`) the engine
+/// starts nothing, whatever the switch says.
 pub async fn engine_device(pool: &SqlitePool) -> Result<Option<String>, Error> {
-    sqlx::query_scalar("SELECT by_device FROM citadel_engine WHERE id = 1 AND enabled = 1")
-        .fetch_optional(pool)
-        .await
+    let by: Option<String> =
+        sqlx::query_scalar("SELECT by_device FROM citadel_engine WHERE id = 1 AND enabled = 1")
+            .fetch_optional(pool)
+            .await?;
+    let Some(id) = by else { return Ok(None) };
+    let live = ainkrad_core_server::store::gov::get_device(pool, &id)
+        .await?
+        .is_some_and(|d| d.usable() && d.scopes.iter().any(|s| s == "admin"));
+    Ok(live.then_some(id))
 }
 
 /// The audit actor of the engine's own steps.

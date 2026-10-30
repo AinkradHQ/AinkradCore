@@ -198,6 +198,15 @@ pub const SETTINGS: &[ModuleSetting] = &[
         "The most tokens one run may use before the engine stops it (budgets can stop it sooner).",
     ),
     s(
+        "run.cache_weight_divisor",
+        10,
+        1,
+        100,
+        "How much a run's cache reads and writes count against run.token_cap, as a divisor: 10 \
+         counts a tenth, so the cap tracks the work a run does rather than the context it re-reads; \
+         1 counts every token in full. Budgets and the issue cap always count in full.",
+    ),
+    s(
         "issue.token_cap",
         0,
         0,

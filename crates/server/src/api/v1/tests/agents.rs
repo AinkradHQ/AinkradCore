@@ -384,3 +384,80 @@ async fn a_module_drives_only_its_own_live_sessions() {
     let over = store::get(&fx.app.pool, &owned.id).await.unwrap().unwrap();
     assert!(why(instruct_module(&fx.app, "citadel", &over, stop(&over)).await).contains("over"));
 }
+
+/// A client's write on a session a module drives would bypass the module's own audit and
+/// approvals: every client write route refuses it, and the transcript is an `admin` read.
+#[tokio::test]
+async fn a_client_cannot_drive_or_read_a_session_a_module_owns() {
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let policy = json!({});
+    let new = NewSession {
+        runner: &vm.id,
+        harness: "claude",
+        model: None,
+        prompt: None,
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: &fx.dev.id,
+    };
+    let owned = store::create_owned(
+        &fx.app.pool,
+        &new,
+        Some("citadel"),
+        ainkrad_core::audit::AuditActor::System,
+        NOW,
+    )
+    .await
+    .unwrap();
+    let base = format!("/api/v1/agent-sessions/{}", owned.id);
+    for (path, body) in [
+        ("messages", json!({"text": "hi"})),
+        ("cancel", Value::Null),
+        ("kill", Value::Null),
+        ("resume", Value::Null),
+        ("approvals/req-1", json!({"approved": true})),
+    ] {
+        let r = call(&fx, &fx.dev, Method::POST, &format!("{base}/{path}"), body).await;
+        assert_eq!(
+            (r.0, r.1["code"].as_str()),
+            (StatusCode::CONFLICT, Some("module_owned")),
+            "{path}"
+        );
+    }
+    // The transcript: an `agent` device is refused, the admin reads it.
+    let agent = super::stepup::plain(&fx, "agent-only", &["agent", "read"], true).await;
+    let r = call(
+        &fx,
+        &agent,
+        Method::GET,
+        &format!("{base}/transcript"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("forbidden_scope"))
+    );
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::GET,
+        &format!("{base}/transcript"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(r.0, StatusCode::OK, "{r:?}");
+    // A client's own session is untouched by the rule.
+    let own = stored(&fx, &vm.id).await;
+    let r = call(
+        &fx,
+        &agent,
+        Method::GET,
+        &format!("/api/v1/agent-sessions/{}/transcript", own.id),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(r.0, StatusCode::OK, "{r:?}");
+}

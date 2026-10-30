@@ -221,7 +221,11 @@ async fn over_cap(pool: &SqlitePool, r: &Run, now: &str) -> Result<Option<String
     {
         return Ok(Some(format!("budget {} is exhausted", s.budget.id.0)));
     }
-    if r.usage.total() >= crate::settings::value(pool, "run.token_cap").await? {
+    // The run's own cap counts cache reads and writes at a fraction, so a long run is capped by
+    // the work it does rather than the context it re-reads; budgets and the issue's cap count all.
+    let divisor = crate::settings::value(pool, "run.cache_weight_divisor").await?;
+    let weighted = r.usage.input_tokens + r.usage.output_tokens + r.usage.cache_tokens / divisor;
+    if weighted >= crate::settings::value(pool, "run.token_cap").await? {
         return Ok(Some("the run's token cap".to_owned()));
     }
     let cap = crate::settings::value(pool, "issue.token_cap").await?;

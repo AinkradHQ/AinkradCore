@@ -76,6 +76,8 @@ impl JobHandler for Timers {
 }
 
 /// `Module::jobs`: a missed pass is skipped (the next is seconds away), a failed one retried.
+// ponytail: the Core audits every job run (`job.ran`), so these cadences cost about 14k audit rows a
+// day; a quiet flag for jobs that did nothing, or `jobs::wake` from the writers, is the upgrade.
 pub fn jobs() -> Vec<Job> {
     let job = |name, every, handler: Arc<dyn JobHandler>| Job {
         missed: Missed::Skip,
@@ -85,8 +87,8 @@ pub fn jobs() -> Vec<Job> {
         ..Job::new(name, Schedule::Every(every), handler)
     };
     vec![
-        job("dispatch", 2, Arc::new(Dispatch)),
-        job("reconcile", 3, Arc::new(Reconcile)),
-        job("timers", 30, Arc::new(Timers)),
+        job("dispatch", 10, Arc::new(Dispatch)),
+        job("reconcile", 15, Arc::new(Reconcile)),
+        job("timers", 60, Arc::new(Timers)),
     ]
 }
