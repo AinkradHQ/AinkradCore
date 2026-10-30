@@ -131,10 +131,14 @@ as an unknown or revoked device (auth_failed) 3 dials in a row; pair it again. N
 /// `connect`'s exit status when the Core rejects this runner (as ctl's for a revoked device).
 pub const EXIT_REJECTED: u8 = 6;
 
+fn agents_enabled(args: &[&str]) -> bool {
+    args.contains(&"--enable-agents")
+}
+
 pub async fn connect_main(args: &[&str]) -> ExitCode {
     let run_enabled = args.contains(&"--enable-exec");
     let pty_enabled = args.contains(&"--enable-pty");
-    let agents_enabled = args.contains(&"--enable-agents");
+    let agents_enabled = agents_enabled(args);
     let args: Vec<&str> = args
         .iter()
         .copied()
@@ -209,6 +213,10 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
 /// Delivered secrets go to `$XDG_RUNTIME_DIR` (a tmpfs on most Linux hosts), in a dir named
 /// for this state dir so two runners never sweep each other's; else `<state>/secrets`.
 ///
+/// Agents are opt-in and unconfined until E2-09: this is a loud safety boundary, not sandboxing.
+/// Until E2-09, no real credentials may be delivered; the Core's `secrets.mode` gate remains
+/// authoritative and the Core refuses sessions when no runner advertises this driver.
+/// Secret files require a runtime filesystem (tmpfs/ramdisk); persistent fallback is refused.
 /// As the v1 runner does: the work root is outside the home and under no harness instruction
 /// file (`check_roots`), and each harness's version is probed; only an installed one the
 /// compat matrix does not refuse gets a slot, so any other is refused at `agent.start`.
@@ -223,7 +231,7 @@ async fn agents(state: &std::path::Path) -> Result<super::agent::AgentDriver, St
                 .collect();
             PathBuf::from(run).join(format!("ainkrad-runner-{tag}"))
         }
-        None => state.join("secrets"),
+        None => return Err("agent secrets require XDG_RUNTIME_DIR on a tmpfs/ramdisk".to_owned()),
     };
     let tag = ring::digest::digest(&ring::digest::SHA256, state.as_os_str().as_encoded_bytes());
     let tag: String = tag.as_ref()[..6]
@@ -247,4 +255,15 @@ async fn agents(state: &std::path::Path) -> Result<super::agent::AgentDriver, St
         return Err("no harness is installed in a version the compat matrix takes".to_owned());
     }
     super::agent::AgentDriver::new(config, executor).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::agents_enabled;
+
+    #[test]
+    fn agents_are_off_by_default() {
+        assert!(!agents_enabled(&["--state", "/tmp/runner"]));
+        assert!(agents_enabled(&["--enable-agents"]));
+    }
 }

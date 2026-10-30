@@ -51,6 +51,9 @@ pub const MAX_WAIT: Duration = Duration::from_secs(25);
 
 /// Entries one `agent.read` answers with at most (the rest on the next).
 const READ_BATCH: usize = 256;
+const MAX_ENTRY_BYTES: usize = 256 * 1024;
+const MAX_BATCH_BYTES: usize = 1024 * 1024;
+const MAX_TRANSCRIPT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// How the driver is set up.
 #[derive(Debug, Clone)]
@@ -613,6 +616,9 @@ fn failed(reason: String, step: &str) -> Outcome {
 /// Appends `body` (redacted) as the session's next entry, on disk too.
 fn push(cfg: &AgentConfig, session: &str, live: &mut Live, mut body: Value) {
     live.redactor.json(&mut body);
+    if body.to_string().len() > MAX_ENTRY_BYTES {
+        body = json!({"type": "truncated"});
+    }
     live.meta.last_seq += 1;
     let entry = TranscriptEntry {
         seq: live.meta.last_seq,
@@ -621,7 +627,13 @@ fn push(cfg: &AgentConfig, session: &str, live: &mut Live, mut body: Value) {
     };
     let path = cfg.dir.join(session).join("transcript.jsonl");
     let line = serde_json::to_string(&entry).expect("an entry serializes") + "\n";
-    let written = secrets::private_file(&path, true).and_then(|mut f| f.write_all(line.as_bytes()));
+    let written = std::fs::metadata(&path)
+        .ok()
+        .filter(|m| m.len() >= MAX_TRANSCRIPT_BYTES)
+        .map_or_else(
+            || secrets::private_file(&path, true).and_then(|mut f| f.write_all(line.as_bytes())),
+            |_| Ok(()),
+        );
     if let Err(e) = written {
         tracing::error!(session, error = %e, "appending to a transcript failed");
     }
@@ -663,13 +675,20 @@ fn events(session: &str, live: &Live, after: u64) -> AgentEvents {
             body: json!({"type": "gap", "from": after + 1, "to": first - 1}),
         });
     }
-    entries.extend(
-        live.entries
-            .iter()
-            .filter(|e| e.seq > after)
-            .take(READ_BATCH)
-            .cloned(),
-    );
+    let mut bytes: usize = 0;
+    for entry in live
+        .entries
+        .iter()
+        .filter(|e| e.seq > after)
+        .take(READ_BATCH)
+    {
+        let size = serde_json::to_vec(entry).map_or(0, |v| v.len());
+        if !entries.is_empty() && bytes.saturating_add(size) > MAX_BATCH_BYTES {
+            break;
+        }
+        bytes = bytes.saturating_add(size);
+        entries.push(entry.clone());
+    }
     AgentEvents {
         session: session.to_owned(),
         state: live.meta.state,
