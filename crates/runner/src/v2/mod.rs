@@ -23,6 +23,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 
+pub mod agent;
 pub mod cli;
 pub mod client;
 pub mod daemon;

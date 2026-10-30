@@ -109,13 +109,15 @@ pub async fn pair_main(args: &[&str]) -> ExitCode {
 }
 
 pub const CONNECT_USAGE: &str = "usage:
-  ainkrad-runner connect [--state <dir>] [--ca <pem>] [--enable-exec]
+  ainkrad-runner connect [--state <dir>] [--ca <pem>] [--enable-exec] [--enable-agents]
 
 Serves the Core it paired with (`ainkrad-runner pair`) over protocol v2, reconnecting with a
 jittered backoff and resuming commands in flight. Stops on SIGTERM or Ctrl-C; commands still
 running are killed. It offers only `noop` unless --enable-exec is given: `exec.run` lets the
 Core run any program as this runner's user (bounded in time and output, with an empty
-environment), so turn it on only where that is wanted.
+environment), so turn it on only where that is wanted. --enable-agents offers agent sessions
+(the harnesses on PATH, as this runner's user, unconfined until E2-09): transcripts in
+<dir>/agents, delivered secrets in $XDG_RUNTIME_DIR (else <dir>/secrets), emptied at start.
 Exit status: 0 stopped (SIGTERM, Ctrl-C); 1 an error that retrying cannot fix (state, URL, TLS);
 2 usage; 6 rejected by the Core: this runner was revoked (close 4001), or the Core refused it
 as an unknown or revoked device (auth_failed) 3 dials in a row; pair it again. Network errors,
@@ -126,10 +128,11 @@ pub const EXIT_REJECTED: u8 = 6;
 
 pub async fn connect_main(args: &[&str]) -> ExitCode {
     let run_enabled = args.contains(&"--enable-exec");
+    let agents_enabled = args.contains(&"--enable-agents");
     let args: Vec<&str> = args
         .iter()
         .copied()
-        .filter(|a| *a != "--enable-exec")
+        .filter(|a| !matches!(*a, "--enable-exec" | "--enable-agents"))
         .collect();
     let args = args.as_slice();
     if !args.len().is_multiple_of(2) || args.chunks(2).any(|f| !matches!(f[0], "--state" | "--ca"))
@@ -167,7 +170,14 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         }
         stop.send_replace(true);
     });
-    match super::daemon::from_state(&state, exec, tls, stopping).await {
+    let agents = match agents_enabled.then(|| agents(&state.0)).transpose() {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("ainkrad-runner: agents: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match super::daemon::from_state(&state, exec, agents, tls, stopping).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e @ super::client::LinkError::Rejected(_)) => {
             eprintln!("ainkrad-runner: {e}");
@@ -178,4 +188,26 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The agent driver over `<state>/agents`, driving the real harnesses (`HarnessExecutor`).
+/// Delivered secrets go to `$XDG_RUNTIME_DIR` (a tmpfs on most Linux hosts), in a dir named
+/// for this state dir so two runners never sweep each other's; else `<state>/secrets`.
+fn agents(state: &std::path::Path) -> std::io::Result<super::agent::AgentDriver> {
+    let secrets = match std::env::var_os("XDG_RUNTIME_DIR") {
+        Some(run) => {
+            let tag =
+                ring::digest::digest(&ring::digest::SHA256, state.as_os_str().as_encoded_bytes());
+            let tag: String = tag.as_ref()[..6]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            PathBuf::from(run).join(format!("ainkrad-runner-{tag}"))
+        }
+        None => state.join("secrets"),
+    };
+    let executor =
+        crate::HarnessExecutor::new(state.join("agents-work"), state.join("agents-config"));
+    let config = super::agent::AgentConfig::new(state.join("agents"), secrets);
+    super::agent::AgentDriver::new(config, executor)
 }

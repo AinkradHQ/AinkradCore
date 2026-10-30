@@ -59,6 +59,8 @@ pub struct Daemon {
     /// Where a rotated pin is saved.
     pub save: Option<PathBuf>,
     pub exec: Arc<ExecDriver>,
+    /// Agent sessions (`--enable-agents`), if offered.
+    pub agents: Option<Arc<super::agent::AgentDriver>>,
     pub tls: Option<Arc<rustls::ClientConfig>>,
     pub backoff: Backoff,
 }
@@ -67,6 +69,9 @@ impl Daemon {
     /// Runs until `stop` turns true (`Ok`) or a configuration error (`Err`).
     pub async fn run(self, mut stop: watch::Receiver<bool>) -> Result<(), LinkError> {
         let mut session = Session::new(Arc::clone(&self.exec));
+        if let Some(agents) = &self.agents {
+            session = session.with_agents(Arc::clone(agents));
+        }
         let mut delay = self.backoff.min;
         let mut refused = 0;
         loop {
@@ -142,18 +147,34 @@ impl Daemon {
 pub async fn from_state(
     state: &key::State,
     exec: Arc<ExecDriver>,
+    agents: Option<super::agent::AgentDriver>,
     tls: Option<Arc<rustls::ClientConfig>>,
     stop: watch::Receiver<bool>,
 ) -> Result<(), LinkError> {
     let config = |e: std::io::Error| LinkError::Config(e.to_string());
     let enrolment = Enrolment::load(&state.enrolment()).map_err(config)?;
-    let key = Key::load(&state.key()).map_err(config)?;
+    let key = Arc::new(Key::load(&state.key()).map_err(config)?);
+    let enrolment = Arc::new(Mutex::new(enrolment));
+    let url = enrolment.lock().unwrap().url.clone();
+    // Leases are redeemed with this runner's own signed requests (E2-07.2).
+    let agents = agents.map(|a| {
+        let client = Client::new(&url, tls.clone()).map(Arc::new);
+        Arc::new(match client {
+            Ok(c) => a.with_redeem(super::agent::secrets::http_redeem(
+                c,
+                Arc::clone(&key),
+                Arc::clone(&enrolment),
+            )),
+            Err(_) => a,
+        })
+    });
     let daemon = Daemon {
-        client: Client::new(&enrolment.url, tls.clone())?,
-        key: Arc::new(key),
-        enrolment: Arc::new(Mutex::new(enrolment)),
+        client: Client::new(&url, tls.clone())?,
+        key,
+        enrolment,
         save: Some(state.enrolment()),
         exec,
+        agents,
         tls,
         backoff: Backoff::default(),
     };
@@ -216,6 +237,7 @@ mod tests {
             enrolment: Arc::new(Mutex::new(enrolment)),
             save: None,
             exec: Arc::new(super::super::exec::tests::driver(1)),
+            agents: None,
             tls: None,
             backoff: Backoff {
                 min: Duration::from_millis(10),

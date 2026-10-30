@@ -11,6 +11,8 @@
 //!   (a restarted Core) forgets every stream the same way.
 //! - The Core's `close` after a stream's last frame means it has it: the stream is forgotten.
 //!   A `close` while the command runs cancels it.
+//! - An `agent.*` command is a request about a session the agent driver owns (`agent`), not
+//!   the session itself: forgetting its stream (a Core restart) leaves the harness running.
 //! - Heartbeats go out at the Core's pace (`welcome.heartbeat_ms`); a Core silent for three is
 //!   a dead connection, ended so the daemon redials.
 
@@ -29,6 +31,7 @@ use tokio::time::Instant;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 
+use super::agent::AgentDriver;
 use super::{ExecDriver, Link, handshake, key, lost, rotate, send};
 
 /// The pace when the Core names none.
@@ -54,6 +57,8 @@ impl Held {
 
 pub struct Session {
     exec: Arc<ExecDriver>,
+    /// Agent sessions (`--enable-agents`), if offered.
+    agent: Option<Arc<AgentDriver>>,
     boot: String,
     core_boot: Option<String>,
     streams: HashMap<u64, Held>,
@@ -66,12 +71,19 @@ impl Session {
         let (done_tx, done_rx) = mpsc::unbounded_channel();
         Self {
             exec,
+            agent: None,
             boot: format!("b_{}", key::b64(&key::random::<16>())),
             core_boot: None,
             streams: HashMap::new(),
             done_tx,
             done_rx,
         }
+    }
+
+    /// Offers the `agent` driver too.
+    pub fn with_agents(mut self, agent: Arc<AgentDriver>) -> Self {
+        self.agent = Some(agent);
+        self
     }
 
     /// Forgets `stream`, cancelling its command if it still runs (dropping the sender does).
@@ -100,7 +112,9 @@ impl Session {
             .collect();
         held.sort_by_key(|s| s.stream_id);
         let hello = RunnerHello {
-            drivers: vec![self.exec.info()],
+            drivers: std::iter::once(self.exec.info())
+                .chain(self.agent.as_ref().map(|a| a.info()))
+                .collect(),
             boot: Some(self.boot.clone()),
             streams: held,
             ..RunnerHello::default()
@@ -267,10 +281,44 @@ impl Session {
                 });
                 None
             }
+            Command::AgentStart(_)
+            | Command::AgentRead(_)
+            | Command::AgentSend(_)
+            | Command::AgentDecide(_)
+            | Command::AgentStop(_) => self.start_agent(stream, command),
             Command::Unknown => Some(Body::Error(StreamError::new(
                 ErrorCode::UnsupportedCommand,
                 "no driver of this runner takes that command",
             ))),
         }
+    }
+}
+
+impl Session {
+    /// An `agent.*` command, answered by a task: the session it names lives in the driver.
+    fn start_agent(&self, stream: u64, command: Command) -> Option<Body> {
+        let Some(agent) = self.agent.as_ref() else {
+            return Some(Body::Error(StreamError::new(
+                ErrorCode::UnsupportedCommand,
+                "agents are off on this runner (ainkrad-runner connect --enable-agents)",
+            )));
+        };
+        let (agent, done) = (Arc::clone(agent), self.done_tx.clone());
+        tokio::spawn(async move {
+            let answer = match command {
+                Command::AgentStart(req) => agent.start(req).map(Reply::AgentStart),
+                Command::AgentRead(req) => agent.read(&req).await.map(Reply::AgentRead),
+                Command::AgentSend(req) => agent.send(&req.session, req.text).map(Reply::AgentSend),
+                Command::AgentDecide(req) => agent.decide(req).map(Reply::AgentDecide),
+                Command::AgentStop(req) => agent.stop(req).map(Reply::AgentStop),
+                _ => return,
+            };
+            let body = match answer {
+                Ok(reply) => Body::Result(reply),
+                Err(e) => Body::Error(e),
+            };
+            let _ = done.send((stream, body));
+        });
+        None
     }
 }
