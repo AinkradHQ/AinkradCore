@@ -46,7 +46,7 @@ ok valid_schedule daily; ok valid_schedule '*-*-* 03:00:00'; no valid_schedule '
 [ "$(mask short)" = '********' ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: mask short" >&2; }
 
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
-mkdir "$t/bin"; for n in ainkrad-core-server ainkradctl ainkrad-runner ainkrad-ptyhost; do printf '#!/bin/sh\n' >"$t/bin/$n"; done
+mkdir "$t/bin"; for n in ainkrad-core-server ainkradctl ainkrad-runner ainkrad-ptyhost ainkrad-core-citadel; do printf '#!/bin/sh\n' >"$t/bin/$n"; done
 SECRET=planted$(date +%s)secretvalue
 answers() {
   cat <<EOF
@@ -95,12 +95,30 @@ for want in 'write /etc/ainkrad/core.env' 'AINKRAD_HOSTNAME=core.example.com' 'a
 done
 grep -qF "$SECRET" "$t/out" && { fail=$((fail + 1)); echo "FAIL: the secret key was printed" >&2; } || pass=$((pass + 1))
 [ "$(ls -la /etc 2>/dev/null | wc -l)" = "$before" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: /etc changed" >&2; }
+# Citadel is off unless asked for: nothing of it is installed, and the removal of a stale drop-in is printed.
+grep -qE 'write .*citadel\.conf|--enable-module|install .*ainkrad-core-citadel' "$t/out" && { fail=$((fail + 1)); echo "FAIL: citadel wired without ENABLE_CITADEL" >&2; } || pass=$((pass + 1))
+grep -qF 'Citadel module: off' "$t/out" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: dry run lacks the citadel-off line" >&2; }
+# ENABLE_CITADEL=yes: the composed binary, and a drop-in whose ExecStart carries --enable-module citadel.
+{ answers; echo ENABLE_CITADEL=yes; } >"$t/citadel"
+if bash "$HERE/../install.sh" --config "$t/citadel" --dry-run >"$t/outc" 2>&1; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: citadel dry run exited non-zero:" >&2; tail -n 20 "$t/outc" >&2; fi
+for want in 'ainkrad-core-citadel sha256' 'Citadel module: on' '/ainkrad-core-citadel /usr/local/bin/ainkrad-core-citadel' \
+  'write /etc/systemd/system/ainkrad-core.service.d/citadel.conf' \
+  'ExecStart=/usr/local/bin/ainkrad-core-citadel serve --config /var/lib/ainkrad/core/config.toml --enable-module citadel $AINKRAD_SERVE_ARGS'; do
+  grep -qF -- "$want" "$t/outc" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: citadel dry run lacks: $want" >&2; }
+done
+# A bad value is refused; the self-test and the uninstall know the module.
+{ answers; echo ENABLE_CITADEL=maybe; } >"$t/citadelbad"
+bash "$HERE/../install.sh" --config "$t/citadelbad" --dry-run >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: ENABLE_CITADEL=maybe accepted" >&2; } || pass=$((pass + 1))
+ok valid_yesno yes; no valid_yesno maybe; [ "$(default_of ENABLE_CITADEL)" = no ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: ENABLE_CITADEL default" >&2; }
+grep -q 'citadel_selftest' "$HERE/../install.sh" && grep -qF '/modules/citadel/v1/companies' "$HERE/../install.sh" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: self-test lacks the citadel check" >&2; }
 # Unattended with keys missing: refused, naming them.
 sed '/^BACKUP_RECIPIENT=/d; /^ACME_CONTACT=/d' "$t/answers" >"$t/short"
 if bash "$HERE/../install.sh" --config "$t/short" --dry-run >"$t/out2" 2>&1; then fail=$((fail + 1)); echo "FAIL: missing keys accepted" >&2
 else grep -q 'missing in .*ACME_CONTACT, BACKUP_RECIPIENT' "$t/out2" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: missing keys message: $(tail -n1 "$t/out2")" >&2; }; fi
 # --uninstall --dry-run never names backup.env for removal.
 bash "$HERE/../install.sh" --uninstall --purge --dry-run </dev/null >"$t/out3" 2>&1 || true
+grep -q 'ainkrad-core.service.d' "$t/out3" && grep -q 'ainkrad-core-citadel' "$t/out3" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: uninstall leaves the citadel drop-in/binary" >&2; }
 grep '^+ ' "$t/out3" | grep -q backup.env && { fail=$((fail + 1)); echo "FAIL: uninstall touches backup.env" >&2; } || pass=$((pass + 1))
 
 # RUNNER_PTY / RUNNER_PAIR_CODE without RUNNER=yes are refused.

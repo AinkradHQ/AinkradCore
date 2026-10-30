@@ -25,6 +25,21 @@ fn cut(s: &str, max: usize) -> &str {
     }
 }
 
+/// A prompt is at most this many bytes (the Core refuses one over 64 KiB): the issue body alone
+/// can be 16K characters of any width.
+const PROMPT_MAX: usize = 60 * 1024;
+
+fn capped(mut s: String) -> String {
+    if s.len() > PROMPT_MAX {
+        let mut end = PROMPT_MAX;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
+    }
+    s
+}
+
 /// The brief of a run of `agent` on `issue`, woken because of `reason`.
 pub(super) async fn brief(
     conn: &mut SqliteConnection,
@@ -78,7 +93,7 @@ pub(super) async fn brief(
     let mut policy = json!(Policy::default());
     policy["mode"] = json!(mode);
     Ok(Brief {
-        prompt,
+        prompt: capped(prompt),
         workspace,
         policy,
     })

@@ -310,6 +310,11 @@ pub async fn end(
     outcome: &Value,
     now: &str,
 ) -> Result<bool, sqlx::Error> {
+    // What the runner or the Core says about the end is shown to `read` devices (a module's run
+    // list): a harness error may echo a value, so the key shapes are redacted as in a transcript.
+    let mut outcome = outcome.clone();
+    ainkrad_proto::redact::Redactor::new().json(&mut outcome);
+    let outcome = &outcome;
     let mut tx = super::begin_write(pool).await?;
     let changed = sqlx::query(
         "UPDATE core_agent_sessions SET state = ?, outcome = ?, updated_at = ?, ended_at = ? \

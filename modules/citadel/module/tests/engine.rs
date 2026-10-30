@@ -31,6 +31,8 @@ struct Fake {
     runners: Vec<String>,
     busy: AtomicBool,
     refuse: AtomicBool,
+    /// An admin's cancel lands while the session is starting (and it has already spent tokens).
+    cancel_during_start: AtomicBool,
     started: Mutex<Vec<StartSpec>>,
     told: Mutex<Vec<(String, Instruction)>>,
 }
@@ -64,6 +66,29 @@ impl Host for Fake {
         )
         .await
         .unwrap();
+        if self.cancel_during_start.load(Ordering::SeqCst) {
+            let ev = AgentEvents {
+                session: s.id.clone(),
+                state: AgentState::Running,
+                last_seq: 0,
+                entries: vec![],
+                harness_session: None,
+                usage: Some(tokens(100, 50)),
+                outcome: None,
+            };
+            sessions::apply(&app.pool, &s.id, &ev, &app.clock.now())
+                .await
+                .unwrap();
+            let run: i64 =
+                sqlx::query_scalar("SELECT id FROM citadel_runs WHERE state = 'claimed'")
+                    .fetch_one(&app.pool)
+                    .await
+                    .unwrap();
+            let by = "d_00000000000000000000000000";
+            engine::stop_run(app, self, RunId(run), false, by, &app.clock.now())
+                .await
+                .unwrap();
+        }
         Ok(s.id)
     }
 
@@ -1232,4 +1257,137 @@ async fn the_platform_scheduler_accepts_the_engines_jobs() {
             .await
             .unwrap();
     assert_eq!(names, ["dispatch", "reconcile", "timers"]);
+}
+
+/// L1: an admin's cancel that lands while the session starts must not leave it running, with its
+/// spend counted nowhere: the session is killed as soon as it is recorded, and its tokens count.
+#[tokio::test]
+async fn a_cancel_during_session_start_kills_the_session_and_counts_its_spend() {
+    let w = world().await;
+    w.host.cancel_during_start.store(true, Ordering::SeqCst);
+    w.wake("assign:1").await;
+    let run = w.dispatch().await.expect("the run");
+    assert_eq!(run.state, RunState::Cancelled);
+    let sid = run.session_id.clone().expect("the session is on the run");
+    let stopped = w
+        .host
+        .told
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(s, what)| *s == sid && matches!(what, Instruction::Stop { kill: true }));
+    assert!(stopped, "the session of a run already over is killed");
+    assert!(!w.session(&run).await.live());
+    let spent = count(
+        &w,
+        "SELECT coalesce(sum(input_tokens), 0) FROM citadel_cost_events",
+    )
+    .await;
+    assert_eq!(spent, 100, "what it spent before the kill is on the ledger");
+}
+
+/// R1: an engine with nothing to do writes no `job.ran` audit rows (about 15.8k a day otherwise).
+#[tokio::test]
+async fn an_idle_engine_writes_no_audit_rows() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicI64;
+
+    use ainkrad_core::audit::AuditFilter;
+    use ainkrad_core_server::jobs::{Config, Engine, register};
+    use ainkrad_core_server::module::Module;
+    use ainkrad_core_server::scheduler::{Clock, iso_of_unix};
+
+    struct Manual(AtomicI64);
+    impl Clock for Manual {
+        fn now(&self) -> String {
+            iso_of_unix(self.0.load(Ordering::SeqCst))
+        }
+    }
+    let fx = fx().await;
+    citadel_module::engine::attach(&fx.app);
+    let clock = Arc::new(Manual(AtomicI64::new(1_800_000_000)));
+    let modules: Vec<Arc<dyn Module>> = vec![Arc::new(citadel_module::Citadel)];
+    register(&fx.app.pool, &clock.now(), &modules)
+        .await
+        .unwrap();
+    let jobs = Engine::new(
+        fx.app.pool.clone(),
+        clock.clone(),
+        &modules,
+        Config::default(),
+    );
+    for _ in 0..5 {
+        clock.0.fetch_add(60, Ordering::SeqCst);
+        jobs.tick().await.unwrap();
+    }
+    let done: i64 = sqlx::query_scalar("SELECT count(*) FROM core_job_runs WHERE status = 'ok'")
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
+    assert!(done >= 5, "the jobs ran ({done} runs)");
+    let rows =
+        ainkrad_core_server::store::audit::list(&fx.app.pool, &AuditFilter::default(), None, 100)
+            .await
+            .unwrap();
+    let ran = rows.iter().filter(|e| e.action == "job.ran").count();
+    assert_eq!(ran, 0, "nothing happened, nothing is audited");
+}
+
+/// C1: a wake never carries another company's issue into an agent's session.
+#[tokio::test]
+async fn a_wake_for_another_companys_issue_is_refused() {
+    let w = world().await;
+    let other = seed(&w.app().pool, "B", "BEE", ProjectMode::Scrum).await;
+    let mut cross = w.wake_for("cross:1");
+    cross.issue_id = Some(IssueId(other.issue));
+    let refused = engine::enqueue_wake(&w.app().pool, &cross).await;
+    assert!(refused.is_err(), "{refused:?}");
+    let mut missing = w.wake_for("missing:1");
+    missing.issue_id = Some(IssueId(9999));
+    assert!(engine::enqueue_wake(&w.app().pool, &missing).await.is_err());
+    assert_eq!(
+        count(&w, "SELECT count(*) FROM citadel_wake_requests").await,
+        0
+    );
+    w.wake("own:1").await;
+    assert_eq!(
+        count(&w, "SELECT count(*) FROM citadel_wake_requests").await,
+        1
+    );
+}
+
+/// M2: the platform handle drives only the sessions the module owns; a client's session or
+/// another module's is refused whatever the caller names.
+#[tokio::test]
+async fn the_engine_cannot_drive_a_session_it_does_not_own() {
+    use ainkrad_core_server::agents::ModuleAgents;
+    use ainkrad_proto::v2::{AgentStop, Command};
+    let w = world().await;
+    let policy = serde_json::json!({"mode": "ask"});
+    let runner = w.host.runners[0].clone();
+    let new = new_session(&runner, &policy, &w.fx.dev.id);
+    let clients = sessions::create(&w.app().pool, &new, AuditActor::System, &w.now())
+        .await
+        .unwrap();
+    let theirs = sessions::create_owned(
+        &w.app().pool,
+        &new,
+        Some("other"),
+        AuditActor::System,
+        &w.now(),
+    )
+    .await
+    .unwrap();
+    let stop = |id: &str| {
+        Command::AgentStop(AgentStop {
+            session: id.to_owned(),
+            kill: true,
+        })
+    };
+    for id in [&clients.id, &theirs.id] {
+        let refused = ModuleAgents::of(&citadel_module::Citadel)
+            .instruct(w.app(), id, stop(id))
+            .await;
+        assert!(refused.is_err(), "{id}: {refused:?}");
+    }
 }

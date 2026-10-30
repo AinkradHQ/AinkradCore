@@ -34,6 +34,7 @@ use serde_json::{Value, json};
 use crate::api::App;
 use crate::api::v1::Caller;
 use crate::hub::Elevated;
+use crate::module::Module;
 use crate::store::agents::{self as store, Session};
 
 /// How the supervisors pace themselves.
@@ -249,84 +250,189 @@ pub fn authorize_for_tests(app: &App, session: &str) {
         .insert(session.to_owned(), Elevated::for_tests());
 }
 
-/// Creates a session for `module`, owned by it, and starts it: the run engine's way in. There is
-/// no client request, so there is no step-up to hold: the module stands for the operator who
-/// enabled it, and `new.created_by` names that device (audited `agent.created`, by the system).
-/// The session is marked as the module's, so only [`instruct_module`] of the same module may drive it.
-pub async fn create_for_module(
-    app: &App,
-    module: &'static str,
-    new: &store::NewSession<'_>,
-) -> Result<Session, Refusal> {
-    create_for_module_ref(app, module, new, None).await
+pub(crate) const MAX_PROMPT: usize = 64 * 1024;
+pub(crate) const MAX_SECRETS: usize = 16;
+
+/// Why [`validate_new`] refused a session.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Invalid {
+    /// The request is malformed (a 400).
+    Bad(&'static str),
+    /// It names something only an `admin` device may (a 403).
+    Forbidden(&'static str),
 }
 
-/// [`create_for_module`] with `owner_ref`, the module's own pointer to the session (`run:12`),
-/// which `Module::credentials` reads back at every launch. Never a credential.
-pub async fn create_for_module_ref(
-    app: &App,
-    module: &'static str,
-    new: &store::NewSession<'_>,
-    owner_ref: Option<&str>,
-) -> Result<Session, Refusal> {
-    admit(app, new.runner, new.harness).await?;
-    let s = store::create_owned_ref(
-        &app.pool,
-        new,
-        Some(module),
-        owner_ref,
-        AuditActor::System,
-        &app.clock.now(),
-    )
-    .await?;
-    app.agents
-        .elevated
-        .lock()
-        .unwrap()
-        .insert(s.id.clone(), app.hub.module_elevation());
-    start(app, &s).await?;
-    Ok(s)
+fn harness_ok(h: &str) -> bool {
+    (1..=32).contains(&h.len())
+        && h.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
 }
 
-/// Stops, messages or answers a tool request of a session `module` owns, and stores the answer.
-/// Refused for a session the module does not own (a client's, another module's), for one that is
-/// over, and for any command but `agent.stop`, `agent.send` and `agent.decide`.
-pub async fn instruct_module(
-    app: &App,
-    module: &'static str,
-    s: &Session,
-    command: Command,
-) -> Result<(), Refusal> {
-    let invalid = |why: &str| Refusal::Runner(StreamError::new(ErrorCode::InvalidArgs, why));
-    if s.owner_module.as_deref() != Some(module) {
-        return Err(invalid("the session is not this module's"));
+/// The checks every new session passes, whoever creates it (the client route and a module): ids,
+/// sizes, secret names, the shape of the workspace and policy, and the `admin` gate for named
+/// secrets and approval bypasses. `admin`: whether the creating device holds the admin scope.
+pub fn validate_new(new: &store::NewSession<'_>, admin: bool) -> Result<(), Invalid> {
+    use ainkrad_proto::runner::{Policy, Workspace, has_destructive_allow};
+    if !crate::auth::crypto::is_id(new.runner, "d_") {
+        return Err(Invalid::Bad("runner is a runner's device id, d_…"));
     }
-    if !s.live() {
-        return Err(invalid("the session is over"));
+    if !harness_ok(new.harness) {
+        return Err(Invalid::Bad("harness is [a-z0-9_-]{1,32}"));
     }
-    let session = match &command {
-        Command::AgentStop(c) => &c.session,
-        Command::AgentSend(c) => &c.session,
-        Command::AgentDecide(c) => &c.session,
-        _ => {
-            return Err(invalid(
-                "a module may only stop, message or answer a session",
-            ));
-        }
+    if new.prompt.is_some_and(|p| p.len() > MAX_PROMPT) || new.model.is_some_and(|m| m.len() > 128)
+    {
+        return Err(Invalid::Bad("the prompt (64 KiB) or model is too long"));
+    }
+    if new.secrets.len() > MAX_SECRETS
+        || new.secrets.iter().any(|s| {
+            !crate::store::secrets::valid_name(&s.name)
+                || !ainkrad_proto::v2::valid_secret_var(&s.var)
+        })
+    {
+        return Err(Invalid::Bad(
+            "at most 16 secrets, each a secret's name and a variable [A-Z_][A-Z0-9_]* the runner \
+             does not set itself",
+        ));
+    }
+    if !new.secrets.is_empty() && !admin {
+        return Err(Invalid::Forbidden(
+            "naming broker secrets requires the admin scope",
+        ));
+    }
+    let workspace_ok = new.workspace.is_none_or(|w| {
+        serde_json::from_value::<Workspace>(w.clone())
+            .is_ok_and(|workspace| workspace.problem().is_none())
+    });
+    let policy = serde_json::from_value::<Policy>(new.policy.clone());
+    let Some(policy) = policy.ok().filter(|_| workspace_ok) else {
+        return Err(Invalid::Bad("workspace or policy does not have its shape"));
     };
-    if *session != s.id {
-        return Err(invalid("the command is about another session"));
+    if has_destructive_allow(&policy) && !admin {
+        return Err(Invalid::Forbidden(
+            "approval bypasses require the admin scope",
+        ));
     }
-    let ev = ask(
-        app,
-        &s.runner,
-        command,
-        app.agents.config.answer,
-        Some(app.hub.module_elevation()),
-    )
-    .await?;
-    store::apply(&app.pool, &s.id, &ev, &app.clock.now()).await?;
     Ok(())
+}
+
+fn invalid_args(why: &str) -> Refusal {
+    Refusal::Runner(StreamError::new(ErrorCode::InvalidArgs, why))
+}
+
+/// What a mounted module holds to create and drive its own agent sessions: no client is in hand
+/// when a run starts, retries or is cut at its cap, so the module stands for the operator who
+/// enabled it. The module's id comes from the [`Module`] itself (never a string or a `Session`
+/// the caller asserts), and every call re-reads the session row, so a module can only ever
+/// create sessions marked as its own and drive the ones that are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModuleAgents {
+    module: &'static str,
+}
+
+impl ModuleAgents {
+    /// The handle of `module`.
+    ///
+    /// # Panics
+    ///
+    /// On an illegal module id (`module::mount` refuses it too).
+    pub fn of(module: &dyn Module) -> Self {
+        assert!(crate::module::valid_id(module.id()), "illegal module id");
+        Self {
+            module: module.id(),
+        }
+    }
+
+    /// A handle for a module id, for tests of the ownership rules.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn named(module: &'static str) -> Self {
+        Self { module }
+    }
+
+    /// Creates a session owned by the module and starts it. It passes the same checks as the
+    /// client route ([`validate_new`]): naming broker secrets needs `new.created_by` to be a
+    /// usable device with the admin scope, a `sandboxed` mode needs the sandbox flag, and a
+    /// workspace or policy that does not parse is refused. Audited `agent.created`, by the system.
+    pub async fn create(&self, app: &App, new: &store::NewSession<'_>) -> Result<Session, Refusal> {
+        self.create_ref(app, new, None).await
+    }
+
+    /// [`create`](Self::create) with `owner_ref`, the module's own pointer to the session
+    /// (`run:12`), which `Module::credentials` reads back at every launch. Never a credential.
+    pub async fn create_ref(
+        &self,
+        app: &App,
+        new: &store::NewSession<'_>,
+        owner_ref: Option<&str>,
+    ) -> Result<Session, Refusal> {
+        let admin = crate::store::gov::get_device(&app.pool, new.created_by)
+            .await?
+            .is_some_and(|d| d.usable() && d.scopes.iter().any(|s| s == "admin"));
+        validate_new(new, admin).map_err(|e| match e {
+            Invalid::Bad(why) | Invalid::Forbidden(why) => invalid_args(why),
+        })?;
+        let sandbox_without_flag = serde_json::from_value::<ainkrad_proto::runner::Policy>(
+            new.policy.clone(),
+        )
+        .is_ok_and(|p| p.mode == ainkrad_proto::runner::PermissionMode::Sandboxed && !p.sandboxed);
+        if sandbox_without_flag {
+            return Err(invalid_args("a sandboxed mode needs the sandbox flag"));
+        }
+        admit(app, new.runner, new.harness).await?;
+        let s = store::create_owned_ref(
+            &app.pool,
+            new,
+            Some(self.module),
+            owner_ref,
+            AuditActor::System,
+            &app.clock.now(),
+        )
+        .await?;
+        app.agents
+            .elevated
+            .lock()
+            .unwrap()
+            .insert(s.id.clone(), app.hub.module_elevation());
+        start(app, &s).await?;
+        Ok(s)
+    }
+
+    /// Stops, messages or answers a tool request of the live session `id` the module owns, and
+    /// stores the answer. Refused for a session the module does not own (a client's, another
+    /// module's), for one that is over, and for any command but `agent.stop`, `agent.send` and
+    /// `agent.decide` naming that session.
+    pub async fn instruct(&self, app: &App, id: &str, command: Command) -> Result<(), Refusal> {
+        let invalid = invalid_args;
+        let s = store::get(&app.pool, id)
+            .await?
+            .filter(|s| s.owner_module.as_deref() == Some(self.module))
+            .ok_or_else(|| invalid("the session is not this module's"))?;
+        if !s.live() {
+            return Err(invalid("the session is over"));
+        }
+        let session = match &command {
+            Command::AgentStop(c) => &c.session,
+            Command::AgentSend(c) => &c.session,
+            Command::AgentDecide(c) => &c.session,
+            _ => {
+                return Err(invalid(
+                    "a module may only stop, message or answer a session",
+                ));
+            }
+        };
+        if *session != s.id {
+            return Err(invalid("the command is about another session"));
+        }
+        let ev = ask(
+            app,
+            &s.runner,
+            command,
+            app.agents.config.answer,
+            Some(app.hub.module_elevation()),
+        )
+        .await?;
+        store::apply(&app.pool, &s.id, &ev, &app.clock.now()).await?;
+        Ok(())
+    }
 }
 
 /// Starts supervising `id`, unless this process already does.
