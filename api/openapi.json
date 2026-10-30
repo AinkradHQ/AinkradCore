@@ -176,6 +176,10 @@
           "device.renamed",
           "device.revoked",
           "device.scopes_changed",
+          "job.failed",
+          "job.missed",
+          "job.ran",
+          "notify.token_pruned",
           "pairing.approved",
           "pairing.burned",
           "pairing.claimed",
@@ -513,12 +517,14 @@
         "type": "object",
         "x-event-kinds": [
           "audit",
+          "notify.delivery",
           "runner.connected",
           "runner.degraded",
           "runner.disconnected"
         ],
         "x-event-scopes": {
           "audit": "admin",
+          "notify.delivery": "admin",
           "runner.connected": "read",
           "runner.degraded": "read",
           "runner.disconnected": "read"
@@ -1568,7 +1574,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.11.0"
+    "version": "1.12.0"
   },
   "openapi": "3.1.0",
   "paths": {

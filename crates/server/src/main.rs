@@ -412,20 +412,21 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
     // Read once: a change to these takes effect at the next start (E15.17).
     let [tick, push_every] = ainkrad_core_server::scheduler::loop_intervals(&pool).await?;
     let limits = Arc::new(ainkrad_core_server::api::v1::Limits::from_settings(&pool).await?);
-    let notifier: Arc<dyn push::Notifier> = match &flags.apns {
+    let apns = match &flags.apns {
         Some([key, key_id, team, topic]) => {
             let pem = std::fs::read_to_string(key)
                 .map_err(|e| format!("reading the APNs key {key}: {e}"))?;
-            Arc::new(push::apns::ApnsNotifier::new(&pem, key_id, team, topic)?)
+            Some(push::apns::ApnsNotifier::new(&pem, key_id, team, topic)?)
         }
-        None => Arc::new(push::LogNotifier),
+        None => None,
     };
-    let pusher = push::Pusher {
-        pool: pool.clone(),
-        notifier,
-        classifier: Arc::new(push::Silent),
-        every: push_every,
-    };
+    let pusher = push::Pusher::new(
+        pool.clone(),
+        push::providers(apns),
+        Arc::new(push::Silent),
+        push_every,
+        Arc::new(SystemClock),
+    );
     let host = flags.host.clone().unwrap_or_else(|| listen.default_host());
     let mut gateway = gateway::Gateway::bind(listen.clone(), gateway::Limits::default()).await?;
     // On TCP the host still gets a Unix socket, for `bootstrap`'s first device (§7.3).
@@ -441,6 +442,21 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
     // Dropping `stop` ends both loops.
     let (stop, mut stopped) = tokio::sync::watch::channel(());
     let mut stopped_push = stopped.clone();
+    let mut stopped_jobs = stopped.clone();
+    // No module is mounted yet (E2-13); the jobs of those that are come from `Module::jobs`.
+    let modules: Arc<[Arc<dyn ainkrad_core_server::module::Module>]> = Arc::from([]);
+    ainkrad_core_server::jobs::register(&pool, &SystemClock.now(), &modules).await?;
+    let engine = ainkrad_core_server::jobs::Engine::new(
+        pool.clone(),
+        Arc::new(SystemClock),
+        &modules,
+        Default::default(),
+    );
+    let working = tokio::spawn(async move {
+        engine
+            .run(async { drop(stopped_jobs.changed().await) })
+            .await
+    });
     let pushing = tokio::spawn(async move {
         pusher
             .run(async { drop(stopped_push.changed().await) })
@@ -491,6 +507,7 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
     }
     drop(stop);
     ticking.await?;
+    working.await?;
     pushing.await?;
     // Folds the WAL back into the database file, so a stopped server leaves one file.
     sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")

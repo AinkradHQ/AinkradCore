@@ -21,7 +21,11 @@ use crate::store::{audit, connect};
 #[derive(Default)]
 struct Recorder(Mutex<Vec<(DeviceKeyId, Notification)>>);
 
-impl Notifier for Recorder {
+impl PushProvider for Recorder {
+    fn name(&self) -> &'static str {
+        "apns"
+    }
+
     fn send<'a>(&'a self, to: &'a PushTarget, n: &'a Notification) -> Sent<'a> {
         self.0.lock().unwrap().push((to.device, n.clone()));
         Box::pin(async { Ok(()) })
@@ -45,6 +49,8 @@ impl Classifier for Alerts {
             title: action.to_owned(),
             body: String::new(),
             data: json!({"seq": e.seq}),
+            scope: "read",
+            collapse: None,
         })
     }
 }
@@ -100,11 +106,16 @@ async fn pushes_what_the_classifier_picks_to_live_devices_once() {
         .unwrap();
 
     let recorder = Arc::new(Recorder::default());
-    let pusher = |classifier: Arc<dyn Classifier>| Pusher {
-        pool: pool.clone(),
-        notifier: recorder.clone(),
-        classifier,
-        every: Duration::from_secs(1),
+    let pusher = |classifier: Arc<dyn Classifier>| {
+        let clock = Arc::new(crate::scheduler::SystemClock);
+        let providers: Vec<Arc<dyn PushProvider>> = vec![recorder.clone()];
+        Pusher::new(
+            pool.clone(),
+            providers,
+            classifier,
+            Duration::from_secs(1),
+            clock,
+        )
     };
     let alerts = pusher(Arc::new(Alerts));
     audit::append_one(&pool, &audited("alert.before"))
@@ -144,7 +155,7 @@ async fn pushes_what_the_classifier_picks_to_live_devices_once() {
 }
 
 /// A throwaway P-256 key as Apple's `.p8` file would hold it, and its public key.
-fn p8() -> (String, Vec<u8>) {
+pub(super) fn p8() -> (String, Vec<u8>) {
     use base64::Engine;
     let rng = SystemRandom::new();
     let der = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
@@ -200,9 +211,14 @@ fn the_apns_request_carries_a_valid_es256_token_and_goes_to_the_right_gateway() 
         title: "Approval needed".to_owned(),
         body: "A pr merge waits on you".to_owned(),
         data: json!({"approval_id": 3, "seq": 9}),
+        scope: "approve",
+        collapse: Some("approval".to_owned()),
     };
     let mut to = PushTarget {
         device: DeviceKeyId(1),
+        device_id: "d_x".to_owned(),
+        scopes: vec!["approve".to_owned()],
+        provider: "apns".to_owned(),
         token: "ab".repeat(32),
         sandbox: false,
     };
@@ -214,6 +230,7 @@ fn the_apns_request_carries_a_valid_es256_token_and_goes_to_the_right_gateway() 
     );
     let h = req.headers();
     assert_eq!(h["apns-topic"], "com.ainkrad.app");
+    assert_eq!(h["apns-collapse-id"], "approval");
     assert_eq!(h["apns-push-type"], "alert");
     assert!(
         h["authorization"]
@@ -223,7 +240,7 @@ fn the_apns_request_carries_a_valid_es256_token_and_goes_to_the_right_gateway() 
     );
     let body: Value = serde_json::from_slice(req.body().unwrap().as_bytes().unwrap()).unwrap();
     assert_eq!(body["aps"]["alert"]["title"], "Approval needed");
-    assert_eq!(body["citadel"]["data"]["approval_id"], 3);
+    assert_eq!(body["ainkrad"]["data"]["approval_id"], 3);
     to.sandbox = true;
     let req = apns.request(&to, &n, 2_000_000).unwrap();
     assert_eq!(req.url().host_str(), Some("api.sandbox.push.apple.com"));
