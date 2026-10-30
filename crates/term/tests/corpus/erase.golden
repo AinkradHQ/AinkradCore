@@ -1,0 +1,11 @@
+6 20
+size 6x20 alt=false cursor=5,14 hidden=false modes=\e>\e[?1l\e[?2004l
+pen \e[m
+-- scrollback 0
+-- screen
+|
+|
+|
+|
+|\e[10Cklmnopqrst
+|abcdefghijklmn

@@ -1,18 +1,32 @@
-# Hardened systemd unit for ainkrad-runner (E1-12.2), serving an Ainkrad Core over protocol v2
-# (`ainkrad-runner connect`, E1-11). Install with deploy/install-linux.sh.
+# Hardened systemd unit for ainkrad-runner (E1-12.2, E2-15), serving an Ainkrad Core over protocol v2
+# (`ainkrad-runner connect`, E1-11). Install with deploy/install-linux.sh. The same unit serves a runner on the
+# Core's own host and on a remote Linux host: it only dials out and listens on nothing.
 #
 # Layout:
-#   binary        /usr/local/bin/ainkrad-runner
+#   binary        /usr/local/bin/ainkrad-runner, and /usr/local/bin/ainkrad-ptyhost beside it (terminals)
 #   enrolment     /var/lib/ainkrad-runner/core/{device.p8,enrolment.json} (0600), made once by
 #                   sudo -u ainkrad-runner ainkrad-runner pair https://<core> --code <CODE> \
 #                     --state /var/lib/ainkrad-runner/core
 #                 (it pins the Core's identity; compare the SAS it prints with the approver's)
 #   config        /etc/ainkrad-runner/runner.env  (RUNNER_ARGS; optional), e.g.
 #                   RUNNER_ARGS=--ca /etc/ainkrad-runner/ca.pem   (a test Core's CA only)
-#                 `exec.run` stays off unless RUNNER_ARGS has --enable-exec: it lets the Core run any
-#                 program as this user.
+#                 Security posture of the two drivers; BOTH are OFF unless named here, and
+#                 deploy/install-linux.sh writes only what you ask it to:
+#                   --enable-pty   terminals: the Core (a client with `terminal` scope and a live step-up)
+#                                  gets an interactive shell as this unprivileged user, inside this unit's
+#                                  sandbox below (read-only system, no capabilities, no home, no /dev).
+#                   --enable-exec  `exec.run`: the Core can run any program as this user (bounded in time and
+#                                  output, empty environment). Turn it on only where that is wanted.
+#                 A shell can do anything the user and the sandbox allow, so enable pty only on a host
+#                 whose Core you trust as you trust a login there.
 #   HOME          /var/lib/ainkrad-runner
 #   work root     /var/lib/ainkrad-runner-work (TMPDIR; a sibling of HOME, not under it)
+# Terminals outlive the runner: each is held by a detached `ainkrad-ptyhost` (its own session; the runner
+# re-adopts them on start, state in /var/lib/ainkrad-runner/core/terminals). So a restart, an upgrade or a crash
+# of the runner must not kill them: KillMode=process stops only the runner. The price: `systemctl stop` leaves the
+# hosts running (systemd logs "remains running after unit stopped"); end them with
+# `systemctl kill --kill-whom=all ainkrad-runner` (scripts/install.sh --uninstall does). Tested by
+# scripts/runner-survive-test.sh.
 # ($RUNNER_ARGS is split on whitespace by systemd: no values containing spaces.)
 
 [Unit]
@@ -33,8 +47,14 @@ Environment=HOME=/var/lib/ainkrad-runner
 Environment=TMPDIR=/var/lib/ainkrad-runner-work
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/local/bin/ainkrad-runner connect --state /var/lib/ainkrad-runner/core $RUNNER_ARGS
-# SIGTERM stops it; commands still running are killed.
+# SIGTERM stops the runner; commands it still runs are killed, terminal hosts are NOT (see the header).
+KillMode=process
 TimeoutStopSec=30
+LimitCORE=0
+# On a shared host (the Core's own VM) a heavy build must not starve the Core.
+Nice=5
+CPUWeight=50
+IOWeight=50
 Restart=on-failure
 # Exit 6: the Core rejected this runner (revoked, or unknown to it). Restarting cannot help; it
 # stays stopped until it is paired again.
@@ -56,6 +76,8 @@ ReadWritePaths=/var/lib/ainkrad-runner-work
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
+# /dev/pts (terminals) stays usable: PrivateDevices gives a private devpts, DevicePolicy=closed allows it.
+DevicePolicy=closed
 ProtectProc=invisible
 ProcSubset=pid
 ProtectKernelTunables=yes

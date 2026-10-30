@@ -35,8 +35,15 @@ BACKUP_SCHEDULE=daily
 # The age PUBLIC key (age1...). Make the identity OFFLINE: `age-keygen -o core-backup.key` on another machine.
 BACKUP_RECIPIENT=age1<public key>
 
-# A paired runner on this host too (installed, not started; exec stays OFF).
+# A runner on this host too, with its own hardened unit. exec.run stays OFF (add --enable-exec to RUNNER_ARGS in
+# /etc/ainkrad-runner/runner.env yourself if you want it). RUNNER_PTY=yes offers terminals: a shell as the
+# unprivileged ainkrad-runner user, inside the unit's sandbox; the terminal hosts outlive runner restarts.
+# RUNNER_PAIR_CODE (ABCDE-FGHJK, from `ainkradctl device add <name> --kind runner` on an approved device; it expires
+# and works once) pairs and starts it now; empty: pair later by hand (the install prints how). A staging Core's
+# certificate is not trusted by the runner: with ACME_ENV=staging the code is not used, pair by hand with --ca.
 RUNNER=no
+RUNNER_PTY=no
+RUNNER_PAIR_CODE=
 
 # Run scripts/host/harden.sh (firewall 22/80/443, key-only SSH, no core dumps/swap, unattended upgrades).
 HARDEN=no

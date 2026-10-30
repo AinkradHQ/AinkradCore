@@ -4,13 +4,15 @@
 <dict>
 	<key>Label</key>
 	<string>io.ainkrad.runner</string>
-	<!-- __HOME__, __RUNNER_URL__ and __KEY_FILE__ are filled in by deploy/launchd/install.sh. -->
+	<!-- Protocol v2 (E2-15). __HOME__ is filled in by deploy/launchd/install.sh, which also appends
+	     --enable-pty to ProgramArguments when asked. Terminals (pty) and exec.run are OFF unless a flag says so:
+	     a terminal is a shell as THIS user, with everything this user can reach (no sandbox on this agent). -->
 	<key>ProgramArguments</key>
 	<array>
 		<string>__HOME__/.local/bin/ainkrad-runner</string>
-		<string>__RUNNER_URL__</string>
-		<string>--key-file</string>
-		<string>__KEY_FILE__</string>
+		<string>connect</string>
+		<string>--state</string>
+		<string>__HOME__/.ainkrad-runner/core</string>
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
@@ -26,6 +28,11 @@
 	<true/>
 	<key>ThrottleInterval</key>
 	<integer>30</integer>
+	<!-- Terminals outlive the runner: each is a detached ainkrad-ptyhost (its own session). Without this launchd
+	     kills every process left in the job's group when the runner exits (stop, upgrade, crash) and with it
+	     every terminal. -->
+	<key>AbandonProcessGroup</key>
+	<true/>
 	<key>ProcessType</key>
 	<string>Background</string>
 	<key>Nice</key>

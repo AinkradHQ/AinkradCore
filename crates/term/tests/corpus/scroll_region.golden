@@ -1,0 +1,13 @@
+8 20
+size 8x20 alt=false cursor=7,11 hidden=false modes=\e>\e[?1l\e[?2004l
+pen \e[m
+-- scrollback 0
+-- screen
+|top line
+|
+|scrolled 4
+|\e[10Cscrolled 5
+|
+|scrolled 6
+|
+|bottom line
