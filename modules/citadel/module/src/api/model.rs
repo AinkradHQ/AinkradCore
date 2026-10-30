@@ -9,6 +9,11 @@ use utoipa::ToSchema;
 
 use super::types::*;
 
+pub mod governance;
+pub mod org_admin;
+pub mod planning;
+pub mod work;
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Company {
     pub id: i64,
