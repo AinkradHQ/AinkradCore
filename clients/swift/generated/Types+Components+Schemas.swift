@@ -1596,18 +1596,12 @@ extension Components {
                 case value
             }
         }
-        /// `createTerminal`'s body.
-        ///
         /// - Remark: Generated from `#/components/schemas/NewTerminal`.
         public struct NewTerminal: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/NewTerminal/args`.
             public var args: [Swift.String]?
-            /// An absolute directory; absent, the user's home.
-            ///
             /// - Remark: Generated from `#/components/schemas/NewTerminal/cwd`.
             public var cwd: Swift.String?
-            /// Variables set as given; the rest of the environment is the runner's allow-list.
-            ///
             /// - Remark: Generated from `#/components/schemas/NewTerminal/env`.
             public struct EnvPayload: Codable, Hashable, Sendable {
                 /// A container of undocumented properties.
@@ -1626,16 +1620,10 @@ extension Components {
                     try encoder.encodeAdditionalProperties(additionalProperties)
                 }
             }
-            /// Variables set as given; the rest of the environment is the runner's allow-list.
-            ///
             /// - Remark: Generated from `#/components/schemas/NewTerminal/env`.
             public var env: Components.Schemas.NewTerminal.EnvPayload?
-            /// Absent: the user's login shell.
-            ///
             /// - Remark: Generated from `#/components/schemas/NewTerminal/program`.
             public var program: Swift.String?
-            /// The runner's device id, `d_…`; it must advertise the `pty` driver.
-            ///
             /// - Remark: Generated from `#/components/schemas/NewTerminal/runner`.
             public var runner: Swift.String
             /// - Remark: Generated from `#/components/schemas/NewTerminal/size`.
@@ -1644,10 +1632,10 @@ extension Components {
             ///
             /// - Parameters:
             ///   - args:
-            ///   - cwd: An absolute directory; absent, the user's home.
-            ///   - env: Variables set as given; the rest of the environment is the runner's allow-list.
-            ///   - program: Absent: the user's login shell.
-            ///   - runner: The runner's device id, `d_…`; it must advertise the `pty` driver.
+            ///   - cwd:
+            ///   - env:
+            ///   - program:
+            ///   - runner:
             ///   - size:
             public init(
                 args: [Swift.String]? = nil,
@@ -2850,38 +2838,22 @@ extension Components {
                 ])
             }
         }
-        /// A terminal on a runner.
-        ///
         /// - Remark: Generated from `#/components/schemas/Terminal`.
         public struct Terminal: Codable, Hashable, Sendable {
-            /// Clients attached now.
-            ///
             /// - Remark: Generated from `#/components/schemas/Terminal/attached`.
             public var attached: Swift.Int32?
             /// - Remark: Generated from `#/components/schemas/Terminal/created_at`.
             public var createdAt: Components.Schemas.Timestamp?
-            /// Once it exited: its code, absent when a signal ended it.
-            ///
             /// - Remark: Generated from `#/components/schemas/Terminal/exit_code`.
             public var exitCode: Swift.Int32?
-            /// The signal that ended it, if one did.
-            ///
             /// - Remark: Generated from `#/components/schemas/Terminal/exit_signal`.
             public var exitSignal: Swift.String?
-            /// `t_…`.
-            ///
             /// - Remark: Generated from `#/components/schemas/Terminal/id`.
             public var id: Swift.String
-            /// The device that opened it, `d_…`.
-            ///
             /// - Remark: Generated from `#/components/schemas/Terminal/opened_by`.
             public var openedBy: Swift.String?
-            /// The runner's device id, `d_…`.
-            ///
             /// - Remark: Generated from `#/components/schemas/Terminal/runner`.
             public var runner: Swift.String
-            /// Output bytes so far: where an attach resumes.
-            ///
             /// - Remark: Generated from `#/components/schemas/Terminal/seq`.
             public var seq: Swift.Int64?
             /// - Remark: Generated from `#/components/schemas/Terminal/size`.
@@ -2891,14 +2863,14 @@ extension Components {
             /// Creates a new `Terminal`.
             ///
             /// - Parameters:
-            ///   - attached: Clients attached now.
+            ///   - attached:
             ///   - createdAt:
-            ///   - exitCode: Once it exited: its code, absent when a signal ended it.
-            ///   - exitSignal: The signal that ended it, if one did.
-            ///   - id: `t_…`.
-            ///   - openedBy: The device that opened it, `d_…`.
-            ///   - runner: The runner's device id, `d_…`.
-            ///   - seq: Output bytes so far: where an attach resumes.
+            ///   - exitCode:
+            ///   - exitSignal:
+            ///   - id:
+            ///   - openedBy:
+            ///   - runner:
+            ///   - seq:
             ///   - size:
             ///   - status:
             public init(
@@ -2937,18 +2909,14 @@ extension Components {
                 case status
             }
         }
-        /// `signalTerminal`'s body.
-        ///
         /// - Remark: Generated from `#/components/schemas/TerminalSignal`.
         public struct TerminalSignal: Codable, Hashable, Sendable {
-            /// `HUP`, `INT`, `QUIT`, `TERM`, `KILL`, `USR1`, `USR2`, `CONT`, `STOP`, `TSTP` or `WINCH`.
-            ///
             /// - Remark: Generated from `#/components/schemas/TerminalSignal/signal`.
             public var signal: Swift.String
             /// Creates a new `TerminalSignal`.
             ///
             /// - Parameters:
-            ///   - signal: `HUP`, `INT`, `QUIT`, `TERM`, `KILL`, `USR1`, `USR2`, `CONT`, `STOP`, `TSTP` or `WINCH`.
+            ///   - signal:
             public init(signal: Swift.String) {
                 self.signal = signal
             }
@@ -2956,8 +2924,6 @@ extension Components {
                 case signal
             }
         }
-        /// A terminal's size in cells, each 1 to 1000.
-        ///
         /// - Remark: Generated from `#/components/schemas/TerminalSize`.
         public struct TerminalSize: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/TerminalSize/cols`.
@@ -2983,8 +2949,6 @@ extension Components {
         }
         /// - Remark: Generated from `#/components/schemas/TerminalStatus`.
         public struct TerminalStatus: Codable, Hashable, Sendable {
-            /// Where a terminal is in its life.
-            ///
             /// - Remark: Generated from `#/components/schemas/TerminalStatus/value1`.
             @frozen public enum Value1Payload: String, Codable, Hashable, Sendable, CaseIterable {
                 case created = "created"
@@ -2992,8 +2956,6 @@ extension Components {
                 case exited = "exited"
                 case reaped = "reaped"
             }
-            /// Where a terminal is in its life.
-            ///
             /// - Remark: Generated from `#/components/schemas/TerminalStatus/value1`.
             public var value1: Components.Schemas.TerminalStatus.Value1Payload?
             /// - Remark: Generated from `#/components/schemas/TerminalStatus/value2`.
@@ -3001,7 +2963,7 @@ extension Components {
             /// Creates a new `TerminalStatus`.
             ///
             /// - Parameters:
-            ///   - value1: Where a terminal is in its life.
+            ///   - value1:
             ///   - value2:
             public init(
                 value1: Components.Schemas.TerminalStatus.Value1Payload? = nil,

@@ -40,12 +40,11 @@ import io.ktor.http.ParametersBuilder
         * GET /api/v1/terminals/{id}/ws
         * 
         * 
-         * @param id The terminal, &#x60;t_…&#x60; 
-         * @param after Resume output at this byte offset (&#x60;Terminal.seq&#x60; of an earlier attach); absent or older than the runner keeps: a &#x60;snapshot&#x60; first (optional)
-         * @param secWebSocketProtocol A browser: &#x60;ainkrad.v1, ainkrad-ticket.&lt;ticket&gt;&#x60;, as for streamEvents (optional)
+         * @param id  
+         * @param after  (optional)
          * @return void
         */
-        open suspend fun attachTerminal(id: kotlin.String, after: kotlin.Long?, secWebSocketProtocol: kotlin.String?): HttpResponse<Unit> {
+        open suspend fun attachTerminal(id: kotlin.String, after: kotlin.Long?): HttpResponse<Unit> {
 
             val localVariableAuthNames = listOf<String>("device_signature")
 
@@ -56,7 +55,6 @@ import io.ktor.http.ParametersBuilder
             after?.apply { localVariableQuery["after"] = listOf("$after") }
 
             val localVariableHeaders = mutableMapOf<String, String>()
-            secWebSocketProtocol?.apply { localVariableHeaders["Sec-WebSocket-Protocol"] = this.toString() }
 
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.GET,
@@ -77,7 +75,7 @@ import io.ktor.http.ParametersBuilder
         * DELETE /api/v1/terminals/{id}
         * 
         * 
-         * @param id The terminal, &#x60;t_…&#x60; 
+         * @param id  
          * @return Terminal
         */
             @Suppress("UNCHECKED_CAST")
@@ -144,7 +142,7 @@ import io.ktor.http.ParametersBuilder
         * GET /api/v1/terminals/{id}
         * 
         * 
-         * @param id The terminal, &#x60;t_…&#x60; 
+         * @param id  
          * @return Terminal
         */
             @Suppress("UNCHECKED_CAST")
@@ -211,7 +209,7 @@ import io.ktor.http.ParametersBuilder
         * POST /api/v1/terminals/{id}/signal
         * 
         * 
-         * @param id The terminal, &#x60;t_…&#x60; 
+         * @param id  
          * @param terminalSignal  
          * @return void
         */

@@ -391,12 +391,47 @@ async fn terminals_need_their_scope_and_a_live_step_up() {
         forbidden("step_up_required")
     );
     step_up(&fx, &mac).await;
-    // Past the gate: the terminal service answers (501 until E2-05).
+    // Past the gate: the terminal service validates the runner before dispatch.
     let r = post(&fx, &mac, "/api/v1/terminals", open.clone()).await;
-    assert_eq!(r.0, StatusCode::NOT_IMPLEMENTED, "{r:?}");
+    assert_eq!(r.0, StatusCode::NOT_FOUND, "{r:?}");
     fx.clock.advance(301);
     assert_eq!(
         code(&post(&fx, &mac, "/api/v1/terminals", open).await),
         forbidden("step_up_required")
     );
+}
+
+#[tokio::test]
+async fn another_device_cannot_read_a_terminal_by_id() {
+    let fx = fx().await;
+    let other = fx.enroll("other", &["read", "terminal"]).await;
+    sqlx::query(
+        "INSERT INTO core_terminals
+         (user_id,id,runner,status,rows,cols,output_seq,opened_by,created_at,last_activity)
+         VALUES (1,?,?,?,?,?,?,?,?,?)",
+    )
+    .bind("t_private")
+    .bind(&fx.dev.id)
+    .bind("running")
+    .bind(24_i64)
+    .bind(80_i64)
+    .bind(0_i64)
+    .bind(&fx.dev.id)
+    .bind(NOW)
+    .bind(fx.clock.unix())
+    .execute(&fx.app.pool)
+    .await
+    .unwrap();
+
+    let response = send(
+        &fx.app,
+        req(
+            Method::GET,
+            "/api/v1/terminals/t_private",
+            Some(&other),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(response.0, StatusCode::NOT_FOUND, "{response:?}");
 }

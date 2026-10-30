@@ -262,6 +262,15 @@ impl PtyDriver {
             );
             tokio::select! {
                 _ = &mut cancel => {
+                    // A signal sent just before the detach (a one-shot `signal` call) must
+                    // still reach the host: the select picked the cancel first by chance.
+                    while let Ok(b) = inbox.try_recv() {
+                        if let Body::Control(Control::Signal(s)) = b
+                            && SIGNALS.contains(&s.signal.as_str())
+                        {
+                            let _ = wr.send(&ToHost::Signal { signal: s.signal }).await;
+                        }
+                    }
                     return Body::Error(err(ErrorCode::Cancelled, "detached; the terminal keeps running"));
                 }
                 m = rd.recv() => match m {

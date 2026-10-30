@@ -10728,11 +10728,6 @@ public struct Client: APIProtocol {
                     name: "after",
                     value: input.query.after
                 )
-                try converter.setHeaderFieldAsURI(
-                    in: &request.headerFields,
-                    name: "Sec-WebSocket-Protocol",
-                    value: input.headers.secWebSocketProtocol
-                )
                 converter.setAcceptHeader(
                     in: &request.headerFields,
                     contentTypes: input.headers.accept

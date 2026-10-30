@@ -21,15 +21,14 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual
 
 /**
- * `signalTerminal`'s body.
+ * 
  *
- * @param signal `HUP`, `INT`, `QUIT`, `TERM`, `KILL`, `USR1`, `USR2`, `CONT`, `STOP`, `TSTP` or `WINCH`.
+ * @param signal 
  */
 @Serializable
 
 data class TerminalSignal (
 
-    /* `HUP`, `INT`, `QUIT`, `TERM`, `KILL`, `USR1`, `USR2`, `CONT`, `STOP`, `TSTP` or `WINCH`. */
     @SerialName(value = "signal")
     val signal: kotlin.String
 

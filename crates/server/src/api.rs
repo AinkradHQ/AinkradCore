@@ -72,6 +72,8 @@ pub struct App {
     pub secrets: Option<Arc<crate::ops::secretbox::SecretBox>>,
     /// Agent sessions' supervisors (E2-08, `crate::agents`).
     pub agents: Arc<crate::agents::Agents>,
+    /// The terminal service's in-memory state (`v1::terminals`).
+    pub terminals: Arc<v1::Rooms>,
 }
 
 /// Resolves once serve is stopping (`App::closing`).
@@ -104,6 +106,7 @@ impl App {
             live: Arc::default(),
             secrets: None,
             agents: Arc::default(),
+            terminals: Arc::default(),
         }
     }
 }

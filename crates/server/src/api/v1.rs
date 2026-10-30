@@ -47,6 +47,7 @@ mod stepup;
 mod terminals;
 pub mod ticket;
 mod trace;
+pub use terminals::Rooms;
 pub use trace::{ApiError, ApiResult};
 pub mod types;
 pub mod websession;
