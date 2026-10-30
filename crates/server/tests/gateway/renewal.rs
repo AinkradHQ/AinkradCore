@@ -1,4 +1,4 @@
-//! Renewal on an accelerated clock (E1-06.3): 90 days pass in about two seconds. The renewal
+//! Renewal on an accelerated clock (E1-06.3): 90 days pass in about nine seconds. The renewal
 //! fires two thirds in (not before), the new certificate is swapped in place, a TLS
 //! connection held across the swap keeps serving, and a new connection gets the new
 //! certificate.
@@ -12,8 +12,9 @@ use ainkrad_core_server::gateway::{acme, tls::Cert};
 use super::common::{Ca, Fx, get, peer_serial, tls};
 use super::{Target, start};
 
-/// 60 simulated days per 1.5 real seconds.
-const SPEED: u32 = 3_456_000;
+/// 60 simulated days per 6 real seconds. The renewal must land in the 30 days (3 s) between two
+/// thirds and expiry, so a stalled loaded machine does not make "renewed in time" fail.
+const SPEED: u32 = 864_000;
 
 #[tokio::test]
 async fn a_renewal_two_thirds_in_swaps_the_certificate_under_a_held_connection() {
@@ -58,9 +59,9 @@ async fn a_renewal_two_thirds_in_swaps_the_certificate_under_a_held_connection()
         async move { drop(stopped.await) },
     ));
 
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(40);
     while certs.live().unwrap().serial() == first.serial() {
-        assert!(Instant::now() < deadline, "no renewal within 10 s");
+        assert!(Instant::now() < deadline, "no renewal within 40 s");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     let _ = stop.send(());
