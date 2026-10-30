@@ -8,7 +8,10 @@
 #   sudo scripts/install.sh --check [--backup local|bucket]   self-test an existing install
 #   sudo scripts/install.sh --uninstall [--purge]   stop, disable, remove units and binaries; --purge also deletes
 #        the Core's data after you type its host name. Never touches backup.env or the bucket.
-# Options: --binary <dir> (ainkrad-core-server [, ainkradctl, ainkrad-runner]) overrides BINARY_DIR.
+# Options: --binary <dir> (ainkrad-core-server [, ainkradctl, ainkrad-runner, ainkrad-ptyhost]) overrides BINARY_DIR.
+# A runner on this host (RUNNER=yes) is installed with its own hardened unit; RUNNER_PTY=yes offers terminals (a
+# shell as the unprivileged runner user, inside the unit's sandbox), RUNNER_PAIR_CODE pairs and starts it.
+# A runner on another Linux host: deploy/install-linux.sh. On a Mac: deploy/launchd/install.sh (or the package).
 # SC2015: `test && pass || fail` is meant (pass never fails).
 # shellcheck disable=SC2015
 set -euo pipefail
@@ -51,7 +54,7 @@ ask() {
     else read -r -p "$key${def:+ [$def]}: " v </dev/tty; fi
     v=${v:-$def}
     case $key in BINARY_DIR) [ "$v" = build ] && { A_BUILD=yes; return; } ;; esac
-    if [ -z "$v" ]; then case $key in PUBLIC_IP | ALLOW_ORIGINS | SSH_FROM | BACKUP_PREFIX) printf -v "A_$key" ''; return ;; esac; fi
+    if [ -z "$v" ]; then case $key in PUBLIC_IP | ALLOW_ORIGINS | SSH_FROM | BACKUP_PREFIX | RUNNER_PAIR_CODE) printf -v "A_$key" ''; return ;; esac; fi
     rc=0; "$(validator_of "$key")" "$v" || rc=$?
     [ "$rc" = 0 ] && { printf -v "A_$key" '%s' "$v"; return; }
     if [ "$rc" = 2 ] && [ "$key" = BACKUP_RECIPIENT ]; then
@@ -89,7 +92,11 @@ The backup encryption key: make it OFFLINE, on a machine other than this host:
   It prints 'Public key: age1...'. Paste only that here. Keep core-backup.key offline (a password manager or
   paper): without it no backup can be restored, and with it anyone can read them."
   ask BACKUP_RECIPIENT "The age recipient (public key, age1...)."
-  ask RUNNER "Also install a runner on this host (yes/no)? It is installed, not started; exec stays OFF unless you add --enable-exec."
+  ask RUNNER "Also install a runner on this host (yes/no)? exec.run stays OFF unless you add --enable-exec to RUNNER_ARGS in /etc/ainkrad-runner/runner.env."
+  if [ "$A_RUNNER" = yes ]; then
+    ask RUNNER_PTY "Offer terminals on that runner (yes/no)? A client with the terminal scope and a live step-up gets a shell as the unprivileged ainkrad-runner user, inside the unit's sandbox."
+    ask RUNNER_PAIR_CODE "A pairing code (ABCDE-FGHJK) from 'ainkradctl device add <name> --kind runner' on an approved device, to pair and start it now; empty: pair later."
+  fi
   ask HARDEN "Run scripts/host/harden.sh: firewall to 22/80/443 only, key-only SSH, no core dumps or swap, unattended security updates (yes/no)."
   [ "$A_HARDEN" = no ] || ask SSH_FROM "Allow new SSH only from these IPv4 CIDRs (comma-separated; empty = from anywhere). IPv6 SSH is not filtered by harden.sh."
   ask BOOTSTRAP "Pair your first device now (needs you at your machine within 5 minutes) or later (instructions printed)."
@@ -103,7 +110,7 @@ review() {
     eval "v=\${A_$k:-}"
     case $k in BACKUP_SECRET_KEY | BACKUP_ACCESS_KEY) [ -z "$v" ] || v=$(mask "$v") ;; esac
     case $k in BACKUP_ENDPOINT | BACKUP_REGION | BACKUP_BUCKET | BACKUP_PREFIX | BACKUP_ACCESS_KEY | BACKUP_SECRET_KEY)
-      [ "$A_BACKUP" = bucket ] || continue ;; esac
+      [ "$A_BACKUP" = bucket ] || continue ;; RUNNER_PTY | RUNNER_PAIR_CODE) [ "$A_RUNNER" = yes ] || continue ;; esac
     printf '  %-18s %s\n' "$k" "${v:-<empty>}"
   done
 }
@@ -150,11 +157,11 @@ stage_binaries() {
   local src n
   if [ "${A_BUILD:-no}" = yes ]; then
     command -v cargo >/dev/null || die "BUILD=yes needs cargo on this host"
-    run nice -n 19 cargo build --release --manifest-path "$ROOT/Cargo.toml" -p ainkrad-core-server -p ainkrad-ctl -p ainkrad-runner
+    run nice -n 19 cargo build --release --manifest-path "$ROOT/Cargo.toml" -p ainkrad-core-server -p ainkrad-ctl -p ainkrad-runner -p ainkrad-ptyhost
     src=$ROOT/target/release
   else src=$A_BINARY_DIR; fi
   STAGE=$(mktemp -d); trap 'rm -rf "$STAGE"' EXIT
-  for n in ainkrad-core-server ainkradctl ainkrad-runner; do
+  for n in ainkrad-core-server ainkradctl ainkrad-runner ainkrad-ptyhost; do
     if [ -f "$src/$n" ]; then cp "$src/$n" "$STAGE/$n"; chmod 0755 "$STAGE/$n"; say "  $n sha256 $(sha "$STAGE/$n")"
     elif [ "$n" = ainkrad-core-server ] && [ "$DRY" = 0 ]; then die "no $n in $src"
     else say "  $n: not in $src${n:+ (skipped)}"; fi
@@ -268,13 +275,40 @@ health() { # healthz on this host, by name (no hairpin NAT); a staging certifica
 extras() {
   if [ -f "$STAGE/ainkradctl" ]; then step "ainkradctl"; run install -m 0755 "$STAGE/ainkradctl" "$BIN/ainkradctl"; fi
   [ "$A_RUNNER" = yes ] || return 0
-  step "Runner on this host (installed, NOT started; exec stays OFF)"
+  step "Runner on this host (terminals $([ "$A_RUNNER_PTY" = yes ] && echo ON || echo off); exec.run OFF)"
   [ -f "$STAGE/ainkrad-runner" ] || { warn "no ainkrad-runner binary: runner skipped"; return 0; }
-  local dry=(); [ "$DRY" = 1 ] && dry=(--dry-run)
-  bash "$ROOT/deploy/install-linux.sh" --binary "$STAGE/ainkrad-runner" ${dry[@]+"${dry[@]}"}
-  say "  Pair it once your first device is paired: on that device \`ainkradctl device add $(hostname -s 2>/dev/null || echo runner) --kind runner\`, then here:
-    sudo -u ainkrad-runner $BIN/ainkrad-runner pair https://$A_HOSTNAME --code <CODE> --state /var/lib/ainkrad-runner/core
-  compare the SAS, approve it, then: systemctl enable --now ainkrad-runner"
+  local a=(--binary "$STAGE/ainkrad-runner") code=${A_RUNNER_PAIR_CODE:-}
+  [ "$DRY" = 1 ] && a+=(--dry-run)
+  if [ "$A_RUNNER_PTY" = yes ]; then
+    [ -f "$STAGE/ainkrad-ptyhost" ] || die "RUNNER_PTY=yes but no ainkrad-ptyhost binary beside the others"
+    a+=(--pty)
+  fi
+  [ -f "$STAGE/ainkrad-ptyhost" ] && a+=(--ptyhost "$STAGE/ainkrad-ptyhost")
+  if [ -n "$code" ]; then
+    if [ "$A_ACME_ENV" = staging ]; then
+      warn "the Core serves a staging certificate the runner does not trust: pair by hand with --ca (below)"; code=''
+    else a+=(--pair "https://$A_HOSTNAME" --code "$code"); fi
+  fi
+  bash "$ROOT/deploy/install-linux.sh" "${a[@]}" || { warn "runner install/pairing did not complete; pair it by hand (below)"; code=''; }
+  [ -n "$code" ] || say "  Pair it once your first device is paired: on that device \`ainkradctl device add $(hostname -s 2>/dev/null || echo runner) --kind runner\`, then here:
+    sudo $ROOT/deploy/install-linux.sh --binary $BIN/ainkrad-runner$([ "$A_RUNNER_PTY" = yes ] && echo ' --pty') --pair https://$A_HOSTNAME --code <CODE>
+  compare the SAS it prints with the approver's, approve it; the runner then starts. (--ca <pem> for a staging Core.)"
+}
+
+runner_selftest() { # runner checks, when its unit is installed; t() comes from selftest
+  [ -e "$UNITS/ainkrad-runner.service" ] || return 0
+  local args; args=$(sed -n 's/^RUNNER_ARGS=//p' /etc/ainkrad-runner/runner.env 2>/dev/null | tail -n1)
+  [ "$(systemctl show -p KillMode --value ainkrad-runner 2>/dev/null)" = process ] &&
+    t PASS "runner unit: KillMode=process (terminal hosts survive a runner restart)" || t FAIL "runner unit: KillMode is not process (a restart would kill every terminal)"
+  case " $args " in
+    *" --enable-pty "*)
+      [ -x "$BIN/ainkrad-ptyhost" ] && t PASS "runner terminals ON, $BIN/ainkrad-ptyhost present" || t FAIL "runner terminals ON but $BIN/ainkrad-ptyhost is missing" ;;
+    *) say "        runner terminals: off" ;;
+  esac
+  case " $args " in *" --enable-exec "*) say "        NOTE: runner exec.run is ON (the Core can run any program as ainkrad-runner)" ;; *) say "        runner exec.run: off" ;; esac
+  if [ -e /var/lib/ainkrad-runner/core/enrolment.json ]; then
+    [ "$(systemctl is-active ainkrad-runner 2>/dev/null)" = active ] && t PASS "ainkrad-runner.service active (paired)" || t FAIL "paired but ainkrad-runner.service is not active"
+  else say "        runner not paired yet: see the pairing instructions of the install"; fi
 }
 
 selftest() { # PASS/FAIL lines; returns 1 on any FAIL
@@ -287,6 +321,7 @@ selftest() { # PASS/FAIL lines; returns 1 on any FAIL
   [ -n "$cert" ] && [ -s "$CORE_HOME/tls/cert.pem" ] && t PASS "certificate in $CORE_HOME/tls: $cert" || t FAIL "no certificate served"
   case $cert in *STAGING*) say "        (staging: not trusted by browsers; switch with ACME_ENV=production)" ;; esac
   systemctl is-enabled ainkrad-backup.timer >/dev/null 2>&1 && t PASS "backup timer: $(systemctl show -p NextElapseUSecRealtime --value ainkrad-backup.timer)" || t FAIL "ainkrad-backup.timer not enabled"
+  runner_selftest
   case ${1:-no} in
     local)
       out=$(runuser -u ainkrad -- bash -c "set -a; . $ETC/core.env; set +a; exec $BIN/ainkrad-core-server backup --config $CORE_HOME/config.toml --local-only" 2>&1) &&
@@ -336,11 +371,13 @@ uninstall() {
   for u in ainkrad-backup.timer ainkrad-backup.service ainkrad-runner.service ainkrad-core.service; do
     run systemctl disable --now "$u" 2>/dev/null || true
   done
+  # KillMode=process: stopping the runner leaves its terminal hosts running on purpose; removing it ends them.
+  run systemctl kill --kill-whom=all ainkrad-runner.service 2>/dev/null || true
   run rm -rf "$UNITS/ainkrad-core.service" "$UNITS/ainkrad-runner.service" "$UNITS/ainkrad-backup.service" \
     "$UNITS/ainkrad-backup.timer" "$UNITS/ainkrad-backup.timer.d" "$UNITS/ainkrad-backup.service.d"
   run systemctl daemon-reload
   run systemctl reset-failed 2>/dev/null || true
-  run rm -f "$BIN/ainkrad-core-server" "$BIN/ainkradctl" "$BIN/ainkrad-runner"
+  run rm -f "$BIN/ainkrad-core-server" "$BIN/ainkradctl" "$BIN/ainkrad-runner" "$BIN/ainkrad-ptyhost"
   if [ "$PURGE" = 1 ]; then
     name=$(env_get AINKRAD_HOSTNAME); name=${name:-purge}
     say "  --purge deletes $CORE_HOME (database, keys, certificates), the runner's state and $ETC/core.env. Type '$name' to confirm:"
@@ -365,8 +402,8 @@ main() {
       --purge) PURGE=1; shift ;;
       --check) MODE=check; shift ;;
       --backup) CHECK_BACKUP=${2:?}; valid_selftest "$CHECK_BACKUP" || die "--backup local|bucket"; shift 2 ;;
-      -h | --help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-      *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+      -h | --help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+      *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
     esac
   done
   case $MODE in
