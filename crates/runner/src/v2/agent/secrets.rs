@@ -15,7 +15,7 @@
 use std::fs::{DirBuilder, File, OpenOptions};
 use std::future::Future;
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -61,6 +61,23 @@ impl Drop for Delivered {
 /// A directory only this user can enter (created, or narrowed if it exists).
 pub fn private_dir(dir: &Path) -> io::Result<()> {
     DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    let metadata = std::fs::symlink_metadata(dir)?;
+    let uid = std::process::Command::new("/usr/bin/id")
+        .arg("-u")
+        .output()?;
+    let current_uid = String::from_utf8_lossy(&uid.stdout)
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| io::Error::other("cannot determine runner uid"))?;
+    if !metadata.is_dir() || metadata.uid() != current_uid {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "private directory is not owned by this user: {}",
+                dir.display()
+            ),
+        ));
+    }
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
 }
 
@@ -94,7 +111,63 @@ fn write_new(path: &Path, value: &[u8], mode: u32) -> io::Result<()> {
         .mode(mode)
         .open(path)?;
     f.write_all(value)?;
-    f.sync_all()
+    Ok(())
+}
+
+/// Fail closed for file/askpass secrets: an environment variable naming a runtime dir
+/// is not evidence that its backing filesystem is volatile.
+pub fn verify_memory_fs(root: &Path) -> io::Result<()> {
+    let mut existing = root;
+    while !existing.exists() {
+        existing = existing
+            .parent()
+            .ok_or_else(|| io::Error::other("no runtime mount"))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let out = std::process::Command::new("stat")
+            .args(["-f", "-c", "%T"])
+            .arg(existing)
+            .output()?;
+        if out.status.success() && out.stdout == b"tmpfs\n" {
+            return Ok(());
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // hdiutil, rather than a volume's user-selected name, proves RAM backing.
+        let mount = std::process::Command::new("/bin/df")
+            .arg(existing)
+            .output()?;
+        let text = String::from_utf8_lossy(&mount.stdout);
+        let device = text
+            .lines()
+            .nth(1)
+            .and_then(|l| l.split_whitespace().next())
+            .unwrap_or("");
+        let info = std::process::Command::new("/usr/bin/hdiutil")
+            .arg("info")
+            .output()?;
+        let info = String::from_utf8_lossy(&info.stdout);
+        if !device.is_empty()
+            && info
+                .split("================================================")
+                .any(|section| {
+                    section
+                        .lines()
+                        .any(|l| l.starts_with("image-path") && l.contains("ram://"))
+                        && section
+                            .lines()
+                            .any(|l| l.split_whitespace().next() == Some(device))
+                })
+        {
+            return Ok(());
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        "secret files require a verified tmpfs/ramdisk",
+    ))
 }
 
 /// Delivers `leased` (variable, secret) for `session` under `root/<session>`.
@@ -104,6 +177,9 @@ pub fn deliver(root: &Path, session: &str, leased: Vec<(String, Leased)>) -> io:
             dir: None,
             env: vec![],
         });
+    }
+    if leased.iter().any(|(_, s)| s.delivery != "env") {
+        verify_memory_fs(root)?;
     }
     let dir = root.join(session);
     // A dir left by an earlier run of the session goes first: create_new below must not fail.
@@ -195,4 +271,37 @@ pub fn http_redeem(client: Arc<Client>, key: Arc<Key>, enrolment: Arc<Mutex<Enro
             })
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_runtime_variable_is_not_proof_of_tmpfs() {
+        // The checkout filesystem is persistent on both test hosts.
+        assert!(verify_memory_fs(Path::new(".")).is_err());
+        let leased = Leased {
+            name: "fake".into(),
+            delivery: "file".into(),
+            value: Zeroizing::new("canary-value".into()),
+        };
+        assert!(
+            deliver(
+                Path::new("."),
+                "must-not-create",
+                vec![("TOKEN_FILE".into(), leased)]
+            )
+            .is_err()
+        );
+        assert!(!Path::new("must-not-create").exists());
+    }
+    #[test]
+    fn a_symlink_cannot_be_a_private_directory() {
+        let root = std::env::temp_dir().join(format!("private-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("target")).unwrap();
+        std::os::unix::fs::symlink(root.join("target"), root.join("link")).unwrap();
+        assert!(private_dir(&root.join("link")).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

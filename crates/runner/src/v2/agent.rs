@@ -101,7 +101,12 @@ impl Sandbox for Unconfined {
     fn name(&self) -> &'static str {
         "none"
     }
-    fn prepare(&self, _: &AgentStart, _: &mut Vec<(String, String)>) -> Result<(), String> {
+    fn prepare(&self, start: &AgentStart, _: &mut Vec<(String, String)>) -> Result<(), String> {
+        if start.policy.sandboxed
+            || start.policy.mode == ainkrad_proto::runner::PermissionMode::Sandboxed
+        {
+            return Err("isolation requested without an installed sandbox".into());
+        }
         Ok(())
     }
 }
@@ -199,6 +204,7 @@ impl AgentDriver {
     /// The driver over `config.dir`: delivered secrets a crashed process left are removed
     /// first, then every session is reloaded (running ones as `interrupted`).
     pub fn new<E: Executor>(config: AgentConfig, executor: E) -> std::io::Result<Self> {
+        reap_orphans(&config.dir);
         secrets::sweep(&config.secrets_dir)?;
         secrets::private_dir(&config.dir)?;
         let sessions = reload(&config);
@@ -369,6 +375,7 @@ impl AgentDriver {
             Ok(d) => d,
             Err(why) => return self.end(&session, failed(why, "secrets")),
         };
+        self.with(&session, |live, _, _| live.redactor = redactor.clone());
         let mut env = delivered.env.clone();
         if let Err(why) = self.sandbox.prepare(&req, &mut env) {
             return self.end(&session, failed(why, "sandbox"));
@@ -602,6 +609,31 @@ impl AgentDriver {
     }
 }
 
+/// A SIGKILLed runner cannot run `Proc::drop`; reap the process groups recorded by its
+/// children before deleting their secret directories. Pgid files are removed by normal drops,
+/// so a file here is evidence of an orphan from a dead runner.
+fn reap_orphans(dir: &std::path::Path) {
+    let Ok(sessions) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for session in sessions.flatten() {
+        let path = session.path().join("pgid");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(pgid) = text.split(':').next().unwrap_or("").parse::<u32>() else {
+            let _ = std::fs::remove_file(path);
+            continue;
+        };
+        if pgid > 1 && ainkrad_harness::process_identity(pgid).is_ok_and(|id| id == text) {
+            let _ = std::process::Command::new("/bin/kill")
+                .args(["-KILL", "--", &format!("-{pgid}")])
+                .status();
+        }
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 fn no_session() -> StreamError {
     refuse(ErrorCode::InvalidArgs, ainkrad_proto::v2::NO_SESSION)
 }
@@ -615,7 +647,7 @@ fn failed(reason: String, step: &str) -> Outcome {
 
 /// Appends `body` (redacted) as the session's next entry, on disk too.
 fn push(cfg: &AgentConfig, session: &str, live: &mut Live, mut body: Value) {
-    live.redactor.json(&mut body);
+    live.redactor.stream_json(&mut body);
     if body.to_string().len() > MAX_ENTRY_BYTES {
         body = json!({"type": "truncated"});
     }

@@ -20,7 +20,9 @@ pub(crate) struct Proc {
     child: Child,
     /// The child's process group, which it leads: its own children inherit it, so a kill of
     /// the group reaches a build or a shell job the agent started.
-    pgid: u32,
+    pub(crate) pgid: u32,
+    budget: Option<JoinHandle<()>>,
+    pgid_file: Option<std::path::PathBuf>,
     stdin: Option<ChildStdin>,
     /// `None` once handed to `drain`.
     lines: Option<Lines<BufReader<ChildStdout>>>,
@@ -39,23 +41,45 @@ pub(crate) fn command(
     spec: &Spec,
     set: &[(&str, &OsStr)],
 ) -> Command {
-    let mut cmd = Command::new(program);
+    let mut cmd = if spec.env.iter().any(|(n, _)| n == "AINKRAD_SANDBOX") {
+        crate::sandbox::command(program, args, spec)
+    } else {
+        let mut c = Command::new(program);
+        c.args(args);
+        c
+    };
     let dir = spec.process_dir.as_ref().unwrap_or(&spec.cwd);
-    cmd.args(args).current_dir(dir).env_clear();
+    cmd.current_dir(dir).env_clear();
     for name in &spec.env_allow {
         if let Some(value) = std::env::var_os(name) {
             cmd.env(name, value);
         }
     }
-    cmd.envs(spec.env.iter().map(|(name, value)| (name, value)));
+    cmd.envs(spec.env.iter().filter_map(|(name, value)| {
+        (!name.starts_with("AINKRAD_SANDBOX_")).then_some((name, value))
+    }));
     for (name, value) in set {
         cmd.env(name, value);
+    }
+    if spec.env.iter().any(|(n, _)| n == "AINKRAD_SANDBOX") {
+        crate::sandbox::configure_budget(&mut cmd, spec);
     }
     cmd
 }
 
+pub(crate) fn sandbox_pgid_file(spec: &Spec) -> Option<std::path::PathBuf> {
+    spec.env
+        .iter()
+        .find(|(n, _)| n == "AINKRAD_SANDBOX_PGID_FILE")
+        .map(|(_, v)| v.into())
+}
+
 impl Proc {
-    pub(crate) fn spawn(mut cmd: Command) -> io::Result<Self> {
+    pub(crate) fn spawn_with_pgid_file(
+        mut cmd: Command,
+        pgid_file: Option<std::path::PathBuf>,
+    ) -> io::Result<Self> {
+        let budget = crate::sandbox::Budget::take(&mut cmd);
         let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -64,6 +88,19 @@ impl Proc {
             .kill_on_drop(true)
             .spawn()?;
         let pgid = child.id().ok_or_else(|| io::Error::other("no pid"))?;
+        if let Some(path) = &pgid_file {
+            let persist = || -> io::Result<()> {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(path, crate::sandbox::identity(pgid)?)
+            };
+            if let Err(error) = persist() {
+                kill_group(pgid);
+                let _ = child.start_kill();
+                return Err(error);
+            }
+        }
         let stdout = child
             .stdout
             .take()
@@ -85,6 +122,8 @@ impl Proc {
             stdin: child.stdin.take(),
             child,
             pgid,
+            budget: budget.map(|b| b.start(pgid)),
+            pgid_file,
             lines: Some(BufReader::new(stdout).lines()),
             stderr,
             stderr_reader,
@@ -184,11 +223,17 @@ impl Proc {
 impl Drop for Proc {
     fn drop(&mut self) {
         kill_group(self.pgid);
+        if let Some(budget) = self.budget.take() {
+            budget.abort();
+        }
+        if let Some(path) = &self.pgid_file {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
 /// SIGKILL to every process in group `pgid`. A group already empty is not an error.
-fn kill_group(pgid: u32) {
+pub(crate) fn kill_group(pgid: u32) {
     // ponytail: `kill(1)`, as `unsafe` (libc) is forbidden here.
     let _ = std::process::Command::new("/bin/kill")
         .args(["-KILL", "--", &format!("-{pgid}")])
@@ -248,7 +293,7 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_kills_the_whole_group() {
-        let proc = Proc::spawn(sh("sleep 600 & sleep 600")).unwrap();
+        let proc = Proc::spawn_with_pgid_file(sh("sleep 600 & sleep 600"), None).unwrap();
         let pgid = proc.pgid;
         assert!(group_has(pgid, 3).await, "the group never got its jobs");
         drop(proc);
@@ -260,7 +305,7 @@ mod tests {
 
     #[tokio::test]
     async fn kill_takes_the_whole_group() {
-        let proc = Proc::spawn(sh("sleep 600 & sleep 600")).unwrap();
+        let proc = Proc::spawn_with_pgid_file(sh("sleep 600 & sleep 600"), None).unwrap();
         let pgid = proc.pgid;
         assert!(group_has(pgid, 3).await, "the group never got its jobs");
         proc.kill().await;
@@ -275,9 +320,9 @@ mod tests {
         // The sleep is a background job, which a non-interactive POSIX shell (dash too) starts
         // with SIGINT ignored, so the group's INT reaches only the shell, which then runs its
         // trap. A foreground sleep would die of the INT and take dash down before the trap.
-        let mut proc = Proc::spawn(sh(
+        let mut proc = Proc::spawn_with_pgid_file(sh(
             r#"sleep 600 & pid=$!; trap 'echo got-int; kill $pid; exit 0' INT; echo ready; wait $pid"#,
-        ))
+        ), None)
         .unwrap();
         assert_eq!(proc.line().await.as_deref(), Some("ready"));
         proc.interrupt().await.unwrap();

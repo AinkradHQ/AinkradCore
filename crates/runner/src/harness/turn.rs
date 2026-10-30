@@ -46,7 +46,9 @@ impl HarnessExecutor {
         }
         // A new session, unless the server named one to continue (E15.5); on a warm server
         // of this agent's when one is idle (E15.6).
-        let warm = H::LONG_LIVED && limits.warm_max > 0 && job.resume_session.is_none();
+        let isolated = spec.env.iter().any(|(n, _)| n == "AINKRAD_SANDBOX");
+        let warm =
+            !isolated && H::LONG_LIVED && limits.warm_max > 0 && job.resume_session.is_none();
         // A server kept warm outlives this run's worktree: it works from the work root (E15.9).
         let spec = Spec {
             process_dir: warm.then(|| self.work_root.clone()),
