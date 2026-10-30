@@ -256,6 +256,7 @@ async fn session(core: &Core, runner: &str, secrets: &[SessionSecret]) -> String
     )
     .await
     .unwrap();
+    service::authorize_for_tests(&core.app, &s.id);
     service::start(&core.app, &s)
         .await
         .unwrap_or_else(|e| panic!("{}", service::describe(&e)));
@@ -560,9 +561,15 @@ async fn a_decision_from_the_core_unblocks_the_waiting_harness() {
         approved: true,
         reply: None,
     });
-    service::ask(&core.app, &r.id, decide, Duration::from_secs(5))
-        .await
-        .unwrap();
+    service::ask(
+        &core.app,
+        &r.id,
+        decide,
+        Duration::from_secs(5),
+        Some(ainkrad_core_server::hub::Elevated::for_tests()),
+    )
+    .await
+    .unwrap();
     let (s, t) = finished(&core, &id).await;
     assert_eq!(s.outcome.as_ref().unwrap()["kind"], "succeeded");
     assert!(

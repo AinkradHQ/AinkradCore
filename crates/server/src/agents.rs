@@ -17,7 +17,7 @@
 //! - **Capacity** (E2-08.1): a create is refused `runner_busy` when the runner's `agent`
 //!   driver, or the harness's slot on it, is full (the runner refuses it too).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -29,6 +29,8 @@ use ainkrad_proto::v2::{
 use serde_json::{Value, json};
 
 use crate::api::App;
+use crate::api::v1::Caller;
+use crate::hub::Elevated;
 use crate::store::agents::{self as store, Session};
 
 /// How the supervisors pace themselves.
@@ -60,6 +62,7 @@ impl Default for AgentsConfig {
 pub struct Agents {
     pub config: AgentsConfig,
     supervised: Mutex<HashSet<String>>,
+    elevated: Mutex<HashMap<String, Elevated>>,
 }
 
 /// Why the service refused, as the API maps it.
@@ -172,8 +175,19 @@ pub async fn ask(
     runner: &str,
     command: Command,
     wait: Duration,
+    proof: Option<Elevated>,
 ) -> Result<AgentEvents, StreamError> {
-    let sent = app.hub.dispatch(runner, command)?;
+    let sent = if command.op() == ainkrad_proto::v2::OP_AGENT_READ {
+        app.hub.dispatch_agent_read(runner, command)?
+    } else {
+        app.hub.dispatch_elevated(
+            runner,
+            command,
+            proof.ok_or_else(|| {
+                StreamError::new(ErrorCode::InvalidArgs, "agent elevation missing")
+            })?,
+        )?
+    };
     let answer = tokio::time::timeout(wait, sent.outcome())
         .await
         .map_err(|_| StreamError::new(ErrorCode::Lost, "the runner did not answer in time"))??;
@@ -216,7 +230,16 @@ async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), Refusal> {
         }
     };
     let wait = app.agents.config.answer;
-    match ask(app, &s.runner, start_command(s, secrets, resume), wait).await {
+    let proof = app.agents.elevated.lock().unwrap().get(&s.id).copied();
+    match ask(
+        app,
+        &s.runner,
+        start_command(s, secrets, resume),
+        wait,
+        proof,
+    )
+    .await
+    {
         Ok(ev) => {
             let why = if resume { "resumed" } else { "started" };
             store::set_state(&app.pool, &s.id, "running", why, resume, &app.clock.now()).await?;
@@ -264,6 +287,26 @@ pub async fn start(app: &App, s: &Session) -> Result<(), Refusal> {
     }
 }
 
+/// Called only by the already-gated create route. The proof is retained for the supervisor's
+/// reconnect/start path: resuming the same session continues the original elevated create.
+pub fn authorize_create(app: &App, caller: &Caller, session: &str) {
+    debug_assert!(caller.device.scopes.iter().any(|s| s == "agent"));
+    app.agents
+        .elevated
+        .lock()
+        .unwrap()
+        .insert(session.to_owned(), app.hub.agent_elevation(caller));
+}
+
+#[cfg(feature = "test-support")]
+pub fn authorize_for_tests(app: &App, session: &str) {
+    app.agents
+        .elevated
+        .lock()
+        .unwrap()
+        .insert(session.to_owned(), Elevated::for_tests());
+}
+
 /// Starts supervising `id`, unless this process already does.
 pub fn supervise(app: &App, id: &str) {
     if !app.agents.supervised.lock().unwrap().insert(id.to_owned()) {
@@ -284,6 +327,11 @@ pub fn supervise(app: &App, id: &str) {
 pub async fn resume_all(app: &App) -> Result<usize, sqlx::Error> {
     let live = store::live(&app.pool).await?;
     for s in &live {
+        app.agents
+            .elevated
+            .lock()
+            .unwrap()
+            .insert(s.id.clone(), app.hub.continue_agent_elevation());
         supervise(app, &s.id);
     }
     Ok(live.len())
@@ -337,7 +385,7 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
         after,
         wait_ms: Some(wait),
     });
-    let ev = match ask(app, &s.runner, req, cfg.read_wait + cfg.answer).await {
+    let ev = match ask(app, &s.runner, req, cfg.read_wait + cfg.answer, None).await {
         Ok(ev) => ev,
         Err(e)
             if e.code == ErrorCode::InvalidArgs && e.message == ainkrad_proto::v2::NO_SESSION =>
@@ -356,9 +404,18 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
             session: s.id.clone(),
             kill: true,
         });
-        let _ = ask(app, &s.runner, stop, cfg.answer).await;
+        let proof = app.agents.elevated.lock().unwrap().get(&s.id).copied();
         let why = format!("the transcript reached {} entries", store::MAX_TRANSCRIPT);
-        fail(app, s, &why).await;
+        match ask(app, &s.runner, stop, cfg.answer, proof).await {
+            Ok(_) => fail(app, s, &why).await,
+            Err(e) => {
+                let outcome = json!({
+                    "kind": "lost",
+                    "reason": format!("kill pending after transcript ceiling: {}", e.message)
+                });
+                let _ = store::end(&app.pool, &s.id, "lost", &outcome, &app.clock.now()).await;
+            }
+        }
         return Ok(());
     }
     if held < ev.last_seq {
@@ -378,7 +435,7 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
                 after: held,
                 wait_ms: None,
             });
-            let _ = ask(app, &s.runner, ack, cfg.answer).await;
+            let _ = ask(app, &s.runner, ack, cfg.answer, None).await;
         }
         AgentState::Interrupted => {
             let why = "the runner restarted";
@@ -410,6 +467,7 @@ impl Agents {
         Arc::new(Self {
             config,
             supervised: Mutex::default(),
+            elevated: Mutex::default(),
         })
     }
 }

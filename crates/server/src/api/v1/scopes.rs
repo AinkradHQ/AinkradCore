@@ -121,6 +121,8 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/agent-sessions/{id}/cancel"),
     ("POST", "/api/v1/agent-sessions/{id}/kill"),
     ("POST", "/api/v1/agent-sessions/{id}/resume"),
+    // Approval can execute a tool; a live step-up is required even for the approve scope.
+    ("POST", "/api/v1/agent-sessions/{id}/approvals/{request}"),
 ];
 
 /// Whether `path` fits `template` segment by segment.

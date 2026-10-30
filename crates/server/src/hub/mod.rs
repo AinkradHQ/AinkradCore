@@ -35,8 +35,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, Close, Command, Control, Credit, DriverInfo, ErrorCode, Frame, OP_PTY_ATTACH,
-    OP_PTY_OPEN, RunnerHello, STREAM_WINDOW, StreamError, StreamState,
+    Body, Close, Command, Control, Credit, DriverInfo, ErrorCode, Frame, OP_AGENT_READ,
+    OP_PTY_ATTACH, OP_PTY_OPEN, RunnerHello, STREAM_WINDOW, StreamError, StreamState,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -47,7 +47,7 @@ pub mod connect;
 /// [`Hub::dispatch_elevated`] takes. Nothing outside the crate can make one, so no module can
 /// send anything but `noop` (`exec.run`, `pty.*`) without the gate (security review RH5). No
 /// route sends those yet; the one that does mints this after its destructive check.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Elevated(());
 
 impl Elevated {
@@ -289,6 +289,20 @@ impl Hub {
         }
     }
 
+    /// Mint the agent capability after the API gate has verified both route scope and step-up.
+    /// Keeping this constructor here prevents callers from manufacturing an elevated token.
+    pub(crate) fn agent_elevation(&self, caller: &crate::api::v1::Caller) -> Elevated {
+        debug_assert!(caller.device.scopes.iter().any(|s| s == "agent"));
+        Elevated(())
+    }
+
+    /// Continue the elevated create for a live, persisted session after a Core restart. The
+    /// session row is written only after the gated create route succeeds; this is not a route
+    /// entry point and cannot elevate a new caller.
+    pub(crate) fn continue_agent_elevation(&self) -> Elevated {
+        Elevated(())
+    }
+
     /// Sends `command` to `runner`: `offline`, `unsupported_command` (not advertised) and
     /// `busy` (in-flight cap or a full send queue) are answered here, before anything is sent.
     /// Deny by default (security review RH5, re-review M1): only `noop` goes through here. Every
@@ -316,6 +330,22 @@ impl Hub {
         command: Command,
         _proof: Elevated,
     ) -> Result<Dispatched, StreamError> {
+        self.send_command(runner, command)
+    }
+
+    /// The sole non-code agent operation. Transcript reads do not need elevation, but are
+    /// still restricted to the agent driver and cannot be smuggled through plain dispatch.
+    pub fn dispatch_agent_read(
+        self: &Arc<Self>,
+        runner: &str,
+        command: Command,
+    ) -> Result<Dispatched, StreamError> {
+        if command.op() != OP_AGENT_READ {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "only agent.read uses the read path",
+            ));
+        }
         self.send_command(runner, command)
     }
 

@@ -2538,6 +2538,7 @@
         "tags": [
           "agents"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "approve"
       }
     },

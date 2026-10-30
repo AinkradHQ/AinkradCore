@@ -246,6 +246,13 @@ pub async fn create(
              does not set itself",
         ));
     }
+    if !secrets.is_empty() && !me.device.scopes.iter().any(|scope| scope == "admin") {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden_scope",
+            "naming broker secrets requires the admin scope",
+        ));
+    }
     let workspace_ok = b.workspace.as_ref().is_none_or(|w| {
         serde_json::from_value::<ainkrad_proto::runner::Workspace>(w.clone()).is_ok()
     });
@@ -271,6 +278,7 @@ pub async fn create(
         created_by: &me.device.id,
     };
     let s = store::create(&app.pool, &new, BY, &app.clock.now()).await?;
+    agents::authorize_create(&app, &me, &s.id);
     agents::start(&app, &s).await?;
     Ok(Json(one(&app, &s.id).await?.into()))
 }
@@ -323,7 +331,7 @@ pub async fn transcript(
 }
 
 /// Sends `command` about `s` to its runner (answer within the service's wait).
-async fn tell(app: &App, s: &Session, command: Command) -> Result<(), ApiError> {
+async fn tell(app: &App, s: &Session, command: Command, caller: &Caller) -> Result<(), ApiError> {
     if !s.live() {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
@@ -331,9 +339,15 @@ async fn tell(app: &App, s: &Session, command: Command) -> Result<(), ApiError> 
             "the session is over",
         ));
     }
-    let ev = agents::ask(app, &s.runner, command, app.agents.config.answer)
-        .await
-        .map_err(|e| super::runners::failed(&e))?;
+    let ev = agents::ask(
+        app,
+        &s.runner,
+        command,
+        app.agents.config.answer,
+        Some(app.hub.agent_elevation(caller)),
+    )
+    .await
+    .map_err(|e| super::runners::failed(&e))?;
     store::apply(&app.pool, &s.id, &ev, &app.clock.now()).await?;
     Ok(())
 }
@@ -364,6 +378,7 @@ pub async fn message(
             session: s.id.clone(),
             text: b.text,
         }),
+        &me,
     )
     .await?;
     let details = json!({"bytes": bytes});
@@ -412,7 +427,7 @@ pub async fn decide(
         approved: b.approved,
         reply: b.reply,
     });
-    tell(&app, &s, cmd).await?;
+    tell(&app, &s, cmd, &me).await?;
     let details = json!({"request": request, "approved": b.approved});
     let kind = Some("agent.approval_decided");
     store::action(
@@ -437,6 +452,7 @@ async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSe
             session: s.id.clone(),
             kill,
         }),
+        &me,
     )
     .await?;
     let action = if kill {

@@ -24,6 +24,7 @@ use super::events;
 /// session is ended). ponytail: a ceiling, not a rotation; per-session retention when a real
 /// transcript gets near it.
 pub const MAX_TRANSCRIPT: u64 = 200_000;
+const MAX_ENTRY_BYTES: usize = 256 * 1024;
 
 /// A secret a session is leased at each start: by name, delivered under `var`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -323,7 +324,10 @@ pub async fn apply(
         if e.seq <= last {
             continue; // held already: a resend
         }
-        if e.seq != last + 1 || last >= MAX_TRANSCRIPT {
+        let gap = e.body["type"] == "gap"
+            && e.body["from"].as_u64() == Some(last + 1)
+            && e.seq >= e.body["to"].as_u64().unwrap_or(e.seq);
+        if (!gap && e.seq != last + 1) || last >= MAX_TRANSCRIPT {
             break; // a hole: the rest waits for the next read, from `last`
         }
         insert(&mut tx, id, e).await?;
@@ -373,6 +377,9 @@ async fn insert(
     // The runner redacted it with the session's secrets; the key shapes once more here.
     let mut body = e.body.clone();
     ainkrad_proto::redact::Redactor::new().json(&mut body);
+    if body.to_string().len() > MAX_ENTRY_BYTES {
+        body = json!({"type": "truncated", "original_seq": e.seq});
+    }
     sqlx::query(
         "INSERT OR IGNORE INTO core_agent_transcript (session, seq, at, body) VALUES (?, ?, ?, ?)",
     )

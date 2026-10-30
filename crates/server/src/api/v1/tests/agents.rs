@@ -11,6 +11,29 @@ use crate::store::agents::{self as store, NewSession, SessionSecret};
 
 const PROMPT: &str = "a private prompt 3c9f";
 
+#[tokio::test]
+async fn naming_a_secret_requires_admin_even_with_agent_step_up() {
+    let fx = fx().await;
+    let agent = super::stepup::plain(&fx, "agent-only", &["agent", "read"], true).await;
+    assert_eq!(super::stepup::step_up(&fx, &agent).await.0, StatusCode::OK);
+    let r = call(
+        &fx,
+        &agent,
+        Method::POST,
+        "/api/v1/agent-sessions",
+        json!({
+            "runner": "d_00000000000000000000000000",
+            "harness": "claude",
+            "secrets": [{"name": "git.token", "var": "GIT_TOKEN"}]
+        }),
+    )
+    .await;
+    assert_eq!(
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("forbidden_scope"))
+    );
+}
+
 async fn call(fx: &Fx, dev: &TestDevice, m: Method, uri: &str, body: Value) -> (StatusCode, Value) {
     let body = (!body.is_null()).then_some(body);
     send(&fx.app, req(m, uri, Some(dev), body)).await
