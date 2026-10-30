@@ -10,8 +10,8 @@ mod proof;
 mod resume;
 mod routing;
 mod runner;
-mod terminals;
 mod sandbox;
+mod terminals;
 
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
