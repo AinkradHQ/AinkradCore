@@ -38,6 +38,236 @@
       ],
       "type": "object"
     },
+    "AgentDecide": {
+      "properties": {
+        "approved": {
+          "type": "boolean"
+        },
+        "reply": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request": {
+          "description": "The `id` of the transcript's `approval_request`.",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "request",
+        "approved"
+      ],
+      "type": "object"
+    },
+    "AgentEvents": {
+      "description": "Runner to Core: a session's state, and (for `agent.read`) its entries after `after`.",
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/TranscriptEntry"
+          },
+          "type": "array"
+        },
+        "harness_session": {
+          "description": "The harness's own session id, once known: what a resume continues.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_seq": {
+          "description": "The newest `seq` the session has.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Outcome"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Once `ended`."
+        },
+        "session": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/AgentState"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tokens"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "session",
+        "state",
+        "last_seq"
+      ],
+      "type": "object"
+    },
+    "AgentRead": {
+      "description": "Core to runner: the transcript after `after`.",
+      "properties": {
+        "after": {
+          "description": "The last `seq` the Core holds (0 for none): entries above it are sent, those at or below\nit may be dropped by the runner.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "session": {
+          "type": "string"
+        },
+        "wait_ms": {
+          "description": "How long to wait for a first entry; absent or 0 answers at once.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session",
+        "after"
+      ],
+      "type": "object"
+    },
+    "AgentSend": {
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "text"
+      ],
+      "type": "object"
+    },
+    "AgentStart": {
+      "description": "Core to runner: run `harness` in session `session`.",
+      "properties": {
+        "harness": {
+          "type": "string"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policy": {
+          "$ref": "#/$defs/Policy",
+          "default": {
+            "allow": [],
+            "mode": "ask",
+            "sandboxed": false
+          }
+        },
+        "prompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resume": {
+          "description": "The harness's own session to continue (`AgentEvents::harness_session`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "secrets": {
+          "description": "Leases the runner redeems for this session, once each. Never logged.",
+          "items": {
+            "$ref": "#/$defs/SecretGrant"
+          },
+          "type": "array"
+        },
+        "session": {
+          "description": "The Core's id, `as_…`.",
+          "type": "string"
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Workspace"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The repo and worktree to work in; absent, a scratch dir of the session's own."
+        }
+      },
+      "required": [
+        "session",
+        "harness"
+      ],
+      "type": "object"
+    },
+    "AgentState": {
+      "description": "Where a session is, as its runner sees it.",
+      "oneOf": [
+        {
+          "enum": [
+            "running"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "ended",
+          "description": "Its harness ended (`outcome`).",
+          "type": "string"
+        },
+        {
+          "const": "interrupted",
+          "description": "Its harness went with a runner restart; the transcript is kept. The Core resumes it.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A state from a newer runner. Never sent.",
+          "type": "string"
+        }
+      ]
+    },
+    "AgentStop": {
+      "properties": {
+        "kill": {
+          "default": false,
+          "description": "Kill the harness now; otherwise let its tool call in flight finish, then end it.",
+          "type": "boolean"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "type": "object"
+    },
     "Captured": {
       "description": "One output pipe: redacted UTF-8 (lossy), cut at the limit with a marker.",
       "properties": {
@@ -134,6 +364,71 @@
           "properties": {
             "op": {
               "const": "pty.close",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentStart",
+          "properties": {
+            "op": {
+              "const": "agent.start",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentRead",
+          "properties": {
+            "op": {
+              "const": "agent.read",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentSend",
+          "properties": {
+            "op": {
+              "const": "agent.send",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentDecide",
+          "properties": {
+            "op": {
+              "const": "agent.decide",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentStop",
+          "properties": {
+            "op": {
+              "const": "agent.stop",
               "type": "string"
             }
           },
@@ -431,10 +726,10 @@
       "type": "object"
     },
     "DriverInfo": {
-      "description": "A driver a runner offers (`exec` now; `pty`, `harness` later).",
+      "description": "A driver a runner offers (`exec`, `agent`; `pty` later).",
       "properties": {
         "capacity": {
-          "description": "How many of its commands run at once; one more is answered `busy`.",
+          "description": "How many of its commands run at once; one more is answered `busy`. For `agent`: how\nmany sessions.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
@@ -448,6 +743,24 @@
         },
         "name": {
           "type": "string"
+        },
+        "slots": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "description": "Per kind within the driver (`agent`: per harness), how many run at once; together at\nmost `capacity`. Empty: no split.",
+          "type": "object"
+        },
+        "streams": {
+          "description": "How many of its commands may be in flight at once, when that is not `capacity` (a\ndriver whose work outlives its commands, like `agent`): the hub counts these per\ndriver. Absent: `capacity`, counted with every other driver's.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [
@@ -1006,6 +1319,72 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/AgentEvents",
+          "description": "Every `agent.*` op answers with the session's state (`agent.read` with its entries).",
+          "properties": {
+            "op": {
+              "const": "agent.start",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentEvents",
+          "properties": {
+            "op": {
+              "const": "agent.read",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentEvents",
+          "properties": {
+            "op": {
+              "const": "agent.send",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentEvents",
+          "properties": {
+            "op": {
+              "const": "agent.decide",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentEvents",
+          "properties": {
+            "op": {
+              "const": "agent.stop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An op from a newer runner. Never sent.",
           "properties": {
             "op": {
@@ -1360,6 +1739,24 @@
       ],
       "type": "object"
     },
+    "SecretGrant": {
+      "description": "One secret for a session: its lease, and the variable it is delivered under.",
+      "properties": {
+        "lease": {
+          "description": "`l_…`, redeemable once, by this runner only.",
+          "type": "string"
+        },
+        "var": {
+          "description": "The environment variable: the value itself (`env`), the file's path (`file`), or the\naskpass helper's path (`askpass`, also set as `GIT_ASKPASS`). `[A-Z_][A-Z0-9_]*`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "lease",
+        "var"
+      ],
+      "type": "object"
+    },
     "SignalReq": {
       "description": "`control` `signal`: deliver one of [`SIGNALS`] to the terminal's process group.",
       "properties": {
@@ -1622,6 +2019,31 @@
         "output",
         "cache_read",
         "cache_write"
+      ],
+      "type": "object"
+    },
+    "TranscriptEntry": {
+      "description": "One transcript entry: redacted by the runner before it is kept.",
+      "properties": {
+        "at": {
+          "description": "Unix milliseconds.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "body": {
+          "description": "The harness event, or the driver's own (`approval_request`, `gap`, `ended`, …)."
+        },
+        "seq": {
+          "description": "From 1, by one, per session.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "at",
+        "body"
       ],
       "type": "object"
     },

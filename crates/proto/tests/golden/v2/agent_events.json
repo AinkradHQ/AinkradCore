@@ -1,0 +1,1 @@
+{"stream_id":7,"kind":"result","seq":0,"payload":{"entries":[{"at":1761730000000,"body":{"outcome":{"kind":"succeeded"},"type":"ended"},"seq":4}],"harness_session":"h-1","last_seq":4,"op":"agent.read","outcome":{"kind":"succeeded"},"session":"as_a","state":"ended","usage":{"cache_read":0,"cache_write":0,"input":10,"output":20}}}

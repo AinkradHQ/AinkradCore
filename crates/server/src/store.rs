@@ -13,6 +13,7 @@ use sqlx::sqlite::{
 use sqlx::{AssertSqlSafe, Transaction};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+pub mod agents;
 pub mod audit;
 mod backup;
 pub mod events;

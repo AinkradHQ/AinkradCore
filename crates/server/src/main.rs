@@ -539,7 +539,7 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
     let pusher = push::Pusher::new(
         pool.clone(),
         push::providers(apns),
-        Arc::new(push::Silent),
+        Arc::new(push::Platform),
         push_every,
         Arc::new(SystemClock),
     );
@@ -609,6 +609,9 @@ async fn serve(db: &Path, flags: Serve) -> Result<(), Box<dyn std::error::Error>
     }
     let master = ainkrad_core_server::ops::config::Home(state_dir(db).to_path_buf()).master_key();
     app.secrets = ainkrad_core_server::ops::secretbox::SecretBox::for_serve(&master).map(Arc::new);
+    // Every agent session not over is supervised again: its runner re-claims it (E2-08.5).
+    let supervised = ainkrad_core_server::agents::resume_all(&app).await?;
+    tracing::info!(supervised, "agent sessions");
     if let Some(list) = flags.trusted_proxies {
         app.trusted_proxies = list.into();
     }

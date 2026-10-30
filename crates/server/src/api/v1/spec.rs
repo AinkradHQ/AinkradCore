@@ -32,8 +32,8 @@ use crate::module::Module;
 use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{
-    audit, devices, events, handshake, lockouts, me, pair, pairing, passkey, runners, secrets,
-    session, settings, stepup, terminals, ticket, types, websession,
+    agents, audit, devices, events, handshake, lockouts, me, pair, pairing, passkey, runners,
+    secrets, session, settings, stepup, terminals, ticket, types, websession,
 };
 
 #[derive(OpenApi)]
@@ -92,6 +92,15 @@ use super::{
         secrets::delete,
         secrets::lease,
         secrets::redeem,
+        agents::create,
+        agents::list,
+        agents::get,
+        agents::transcript,
+        agents::message,
+        agents::decide,
+        agents::cancel,
+        agents::kill,
+        agents::resume,
     ),
     components(schemas(types::ErrorBody, events::Event))
 )]
@@ -487,6 +496,13 @@ mod tests {
         assert_eq!(
             s["Event"]["x-event-kinds"],
             json!([
+                "agent.approval_decided",
+                "agent.approval_requested",
+                "agent.created",
+                "agent.ended",
+                "agent.message",
+                "agent.state",
+                "agent.transcript",
                 "audit",
                 "notify.delivery",
                 "runner.connected",
@@ -503,7 +519,10 @@ mod tests {
         // A module's kinds default to its route scope (`admin`); runner presence is `read`.
         assert_eq!(
             s["Event"]["x-event-scopes"],
-            json!({"audit": "admin", "notify.delivery": "admin", "runner.connected": "read",
+            json!({"agent.approval_decided": "approve", "agent.approval_requested": "approve",
+                "agent.created": "agent", "agent.ended": "agent", "agent.message": "agent",
+                "agent.state": "agent", "agent.transcript": "agent",
+                "audit": "admin", "notify.delivery": "admin", "runner.connected": "read",
                 "runner.degraded": "read", "runner.disconnected": "read",
                 "terminal.attached": "terminal", "terminal.closed": "terminal",
                 "terminal.detached": "terminal", "terminal.exited": "terminal",
@@ -515,6 +534,13 @@ mod tests {
         assert_eq!(
             plain["components"]["schemas"]["Event"]["x-event-kinds"],
             json!([
+                "agent.approval_decided",
+                "agent.approval_requested",
+                "agent.created",
+                "agent.ended",
+                "agent.message",
+                "agent.state",
+                "agent.transcript",
                 "audit",
                 "notify.delivery",
                 "runner.connected",

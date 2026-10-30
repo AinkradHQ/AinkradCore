@@ -29,6 +29,18 @@ async fn the_noop_runs_end_to_end_and_only_advertised_commands_reach_the_runner(
     // Security review RH5: exec.run without a step-up proof is refused before anything else.
     let unelevated = hub.dispatch(&dev.id, exec.clone()).err().expect("no proof");
     assert_eq!(unelevated.code, ErrorCode::InvalidArgs);
+    let agent_read = hub
+        .dispatch(
+            &dev.id,
+            Command::AgentRead(AgentRead {
+                session: "as_plain".to_owned(),
+                after: 0,
+                wait_ms: None,
+            }),
+        )
+        .err()
+        .expect("agent operations need the agent path");
+    assert_eq!(agent_read.code, ErrorCode::InvalidArgs);
     // Re-review M1: deny by default; a shell (`pty.open`) or typing into one (`pty.attach`) is
     // code on the runner too.
     let shell = Command::PtyOpen(PtyOpen {
@@ -205,6 +217,7 @@ async fn terminal_streams_take_only_metered_snapshots_and_one_opened() {
         name: DRIVER_PTY.to_owned(),
         commands: vec![OP_PTY_OPEN.to_owned(), OP_PTY_ATTACH.to_owned()],
         capacity: 4,
+        ..DriverInfo::default()
     };
     let mut fake = Fake::welcomed(&core, &dev, vec![exec_driver(&[OP_NOOP], 4), pty]).await;
     let hub = Arc::clone(&core.app.hub);

@@ -6,6 +6,7 @@ api/openapi.yaml
 appveyor.yml
 git_push.sh
 src/Ainkrad.Client/Ainkrad.Client.csproj
+src/Ainkrad.Client/Api/AgentsApi.cs
 src/Ainkrad.Client/Api/DevicesApi.cs
 src/Ainkrad.Client/Api/EventsApi.cs
 src/Ainkrad.Client/Api/HandshakeApi.cs
@@ -13,6 +14,7 @@ src/Ainkrad.Client/Api/PairingApi.cs
 src/Ainkrad.Client/Api/RunnersApi.cs
 src/Ainkrad.Client/Api/SecretsApi.cs
 src/Ainkrad.Client/Api/SettingsApi.cs
+src/Ainkrad.Client/Api/TerminalsApi.cs
 src/Ainkrad.Client/Client/ApiClient.cs
 src/Ainkrad.Client/Client/ApiException.cs
 src/Ainkrad.Client/Client/ApiResponse.cs
@@ -31,6 +33,13 @@ src/Ainkrad.Client/Client/RequestOptions.cs
 src/Ainkrad.Client/Client/RetryConfiguration.cs
 src/Ainkrad.Client/Client/WebRequestPathBuilder.cs
 src/Ainkrad.Client/Model/AbstractOpenAPISchema.cs
+src/Ainkrad.Client/Model/AgentDecision.cs
+src/Ainkrad.Client/Model/AgentMessage.cs
+src/Ainkrad.Client/Model/AgentSecret.cs
+src/Ainkrad.Client/Model/AgentSession.cs
+src/Ainkrad.Client/Model/AgentTranscript.cs
+src/Ainkrad.Client/Model/AgentTranscriptEntry.cs
+src/Ainkrad.Client/Model/AgentUsage.cs
 src/Ainkrad.Client/Model/ApiVersion.cs
 src/Ainkrad.Client/Model/ApproveBody.cs
 src/Ainkrad.Client/Model/AuditEntry.cs
@@ -57,9 +66,11 @@ src/Ainkrad.Client/Model/LeasedSecret.cs
 src/Ainkrad.Client/Model/Lockout.cs
 src/Ainkrad.Client/Model/Me.cs
 src/Ainkrad.Client/Model/Named.cs
+src/Ainkrad.Client/Model/NewAgentSession.cs
 src/Ainkrad.Client/Model/NewLease.cs
 src/Ainkrad.Client/Model/NewPairingBody.cs
 src/Ainkrad.Client/Model/NewSecret.cs
+src/Ainkrad.Client/Model/NewTerminal.cs
 src/Ainkrad.Client/Model/NoopResult.cs
 src/Ainkrad.Client/Model/PageEvent.cs
 src/Ainkrad.Client/Model/PairStatus.cs
@@ -86,6 +97,10 @@ src/Ainkrad.Client/Model/SettingChange.cs
 src/Ainkrad.Client/Model/SettingScope.cs
 src/Ainkrad.Client/Model/SettingUnit.cs
 src/Ainkrad.Client/Model/StepUpRequest.cs
+src/Ainkrad.Client/Model/Terminal.cs
+src/Ainkrad.Client/Model/TerminalSignal.cs
+src/Ainkrad.Client/Model/TerminalSize.cs
+src/Ainkrad.Client/Model/TerminalStatus.cs
 src/Ainkrad.Client/Model/Versions.cs
 src/Ainkrad.Client/Model/WebOptions.cs
 src/Ainkrad.Client/Model/WebOptionsRequest.cs
