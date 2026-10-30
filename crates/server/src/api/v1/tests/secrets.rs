@@ -446,3 +446,28 @@ fn nothing_that_carries_a_value_or_a_lease_is_debug() {
     assert!(!Probe::<store::Redeemed>::IS);
     assert!(!Probe::<store::NewValue<'static>>::IS);
 }
+
+/// Review L5 (with E2-08, where the Core grants leases itself): one runner holds at most a
+/// quarter of `secrets.max_leases`; another runner in scope still gets its own.
+#[tokio::test]
+async fn one_runner_cannot_hold_every_live_lease() {
+    let (fx, vm) = broker().await;
+    let other = runner(&fx, "vm2").await;
+    let made = create(&fx, "git.token", V1, &[vm.id.as_str(), other.id.as_str()]).await;
+    assert_eq!(made.0, StatusCode::OK, "{}", made.1);
+    set(&fx, Key::SecretsMaxLeases, 8).await;
+    for _ in 0..2 {
+        assert_eq!(
+            lease(&fx, "git.token", &vm.id, None).await.0,
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        code(&lease(&fx, "git.token", &vm.id, None).await),
+        (StatusCode::CONFLICT, "limit_reached")
+    );
+    assert_eq!(
+        lease(&fx, "git.token", &other.id, None).await.0,
+        StatusCode::OK
+    );
+}
