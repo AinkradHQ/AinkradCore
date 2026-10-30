@@ -52,10 +52,26 @@ impl Workspace {
 /// credentials in an http(s) URL (they belong in the runner's GIT_ASKPASS, never in a URL
 /// that logs and process lists keep).
 pub fn repo_url_problem(url: &str) -> Option<String> {
-    if url.is_empty() || url.starts_with('-') || url.chars().any(char::is_control) {
+    if url.is_empty()
+        || url.len() > 2048
+        || url.starts_with('-')
+        || url.chars().any(char::is_control)
+    {
         return Some(format!("bad repo URL {url:?}"));
     }
     let lower = url.to_ascii_lowercase();
+    if lower.starts_with("file:") || lower.starts_with("ext::") {
+        return Some("file and ext transports are not allowed".to_owned());
+    }
+    if !lower.contains("://") {
+        let path = std::path::Path::new(url);
+        if path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Some("repo paths may not contain ..".to_owned());
+        }
+    }
     let authority = ["https://", "http://"]
         .iter()
         .find_map(|scheme| lower.strip_prefix(scheme))
@@ -68,8 +84,15 @@ pub fn repo_url_problem(url: &str) -> Option<String> {
 /// A plain branch name: `[A-Za-z0-9._/-]`, not starting with `-` or `/`, no `..`.
 pub fn branch_name_ok(name: &str) -> bool {
     !name.is_empty()
+        && name.len() <= 256
         && !name.starts_with(['-', '/'])
         && !name.contains("..")
+        && !name.contains("//")
+        && !name.contains("@{")
+        && !name.ends_with(['/', '.'])
+        && !name
+            .split('/')
+            .any(|part| part.is_empty() || part.ends_with(".lock"))
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"._/-".contains(&b))

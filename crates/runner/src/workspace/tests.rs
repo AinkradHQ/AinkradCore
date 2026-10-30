@@ -65,6 +65,17 @@ fn workspaces(dir: &Path) -> Workspaces {
     Workspaces::new(dir.join("work"), dir.join("git-home"))
 }
 
+#[test]
+fn a_new_runner_reaps_session_worktrees_after_a_crash() {
+    let dir = scratch("reap");
+    let stale = dir.join("work/worktrees/sessions/as_stale");
+    std::fs::create_dir_all(&stale).unwrap();
+    assert!(stale.exists());
+    let _ = workspaces(&dir);
+    assert!(!stale.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A second run of an issue gets its worktree back as it was left; a deleted one is rebuilt
 /// on the issue's branch, so its commits survive.
 #[tokio::test]
@@ -503,6 +514,49 @@ async fn a_second_repo_nests_both_worktrees_and_keeps_the_work() {
     assert!(!path.exists());
     assert!(w.held().is_empty());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn agent_sessions_get_private_worktrees_and_cleanup() {
+    let dir = scratch("sessions");
+    let repo = origin(&dir);
+    let w = workspaces(&dir);
+    let request = |session: &str| SessionWorkspace {
+        repo: repo.clone(),
+        reference: "main".to_owned(),
+        branch: format!("agent/{session}"),
+        name: String::new(),
+    };
+    let first = w
+        .prepare_session("as_first", &[request("first")])
+        .await
+        .unwrap();
+    let second = w
+        .prepare_session("as_second", &[request("second")])
+        .await
+        .unwrap();
+    assert_ne!(first, second);
+    assert!(first.join(".git").is_file());
+    assert!(second.join(".git").is_file());
+    std::fs::write(first.join("private.txt"), "one").unwrap();
+    assert!(!second.join("private.txt").exists());
+    w.cleanup_session("as_first").await.unwrap();
+    assert!(!first.exists());
+    assert!(second.join(".git").is_file());
+    w.cleanup_session("as_second").await.unwrap();
+    assert!(!second.exists());
+}
+
+#[test]
+fn session_and_git_inputs_reject_traversal_and_special_transports() {
+    assert!(ainkrad_proto::runner::repo_url_problem("file:///tmp/repo").is_some());
+    assert!(ainkrad_proto::runner::repo_url_problem("ext::sh -c evil").is_some());
+    assert!(ainkrad_proto::runner::repo_url_problem("../outside").is_some());
+    assert!(!ainkrad_proto::runner::branch_name_ok("--upload-pack=evil"));
+    assert!(!ainkrad_proto::runner::branch_name_ok("refs/heads/../main"));
+    assert!(!ainkrad_proto::runner::branch_name_ok(
+        "refs/heads/main@{0}"
+    ));
 }
 
 mod layout;

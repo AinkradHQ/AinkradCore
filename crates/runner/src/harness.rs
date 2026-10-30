@@ -43,7 +43,7 @@ use ainkrad_proto::runner::{
 use serde_json::json;
 use tokio::sync::mpsc;
 
-use crate::workspace::Workspaces;
+use crate::workspace::{SessionWorkspace, Workspaces};
 use crate::{Executor, Job, Report};
 
 /// The harnesses this runner drives, with the model a job without one gets (the cheapest).
@@ -89,6 +89,7 @@ pub struct HarnessExecutor {
     pub approval_timeout: Duration,
     /// Per-issue git worktrees under `work_root`; git's config under `<config_root>/git`.
     pub workspaces: Workspaces,
+    agent_workspaces: Mutex<HashMap<String, PathBuf>>,
     /// The token cap of a job that carries none (an older server).
     pub default_token_cap: u64,
     /// How often a run's usage so far is reported.
@@ -138,6 +139,7 @@ impl HarnessExecutor {
             secret_env,
             harness_env: vec![],
             workspaces: Workspaces::new(work_root.clone(), config_root.join("git")),
+            agent_workspaces: Mutex::default(),
             credentials_dir: config_root.join("credentials"),
             work_root,
             config_root,
@@ -258,6 +260,13 @@ impl HarnessExecutor {
     fn cwd(&self, job: &Job) -> PathBuf {
         match (&job.workspace, job.issue) {
             (Some(_), Some(issue)) => self.workspaces.path(issue),
+            (Some(_), None) => self
+                .agent_workspaces
+                .lock()
+                .expect("agent workspaces")
+                .get(&job.context_ref)
+                .cloned()
+                .unwrap_or_else(|| self.work_root.join(format!("run-{}", job.run))),
             _ => self.work_root.join(format!("run-{}", job.run)),
         }
     }
@@ -295,6 +304,16 @@ impl Executor for HarnessExecutor {
             (Some(_), Some(issue)) => {
                 let path = self.workspaces.prepare(issue, &job.trees()).await;
                 path.map_err(|e| format!("workspace: {e}"))?;
+            }
+            (Some(_), None) => {
+                if !self
+                    .agent_workspaces
+                    .lock()
+                    .expect("agent workspaces")
+                    .contains_key(&job.context_ref)
+                {
+                    return Err("agent workspace was not prepared".to_owned());
+                }
             }
             _ => {
                 let dir = self.cwd(job);
@@ -374,6 +393,41 @@ impl Executor for HarnessExecutor {
 
     fn workspaces(&self) -> Vec<i64> {
         self.workspaces.held()
+    }
+
+    async fn prepare_agent_workspace(
+        &self,
+        session: &str,
+        workspace: &ainkrad_proto::runner::Workspace,
+    ) -> Result<PathBuf, String> {
+        let mut requests = vec![SessionWorkspace {
+            repo: workspace.repo.clone(),
+            reference: workspace.base.clone(),
+            branch: workspace.branch.clone(),
+            name: workspace.name.clone(),
+        }];
+        requests.extend(workspace.also.iter().map(|w| SessionWorkspace {
+            repo: w.repo.clone(),
+            reference: w.base.clone(),
+            branch: w.branch.clone(),
+            name: w.name.clone(),
+        }));
+        let path = self.workspaces.prepare_session(session, &requests).await?;
+        self.agent_workspaces
+            .lock()
+            .expect("agent workspaces")
+            .insert(session.to_owned(), path.clone());
+        Ok(path)
+    }
+
+    async fn cleanup_agent_workspace(&self, session: &str) {
+        self.agent_workspaces
+            .lock()
+            .expect("agent workspaces")
+            .remove(session);
+        if let Err(why) = self.workspaces.cleanup_session(session).await {
+            tracing::warn!(session, %why, "agent workspace cleanup failed");
+        }
     }
 
     fn control(&self, run: i64, control: crate::Control) {

@@ -2,6 +2,7 @@
 //! one in tests.
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -182,6 +183,22 @@ pub trait Executor: Send + Sync + 'static {
     /// never another run's. Ignored by an executor that spawns nothing.
     fn session_env(&self, run: i64, env: Option<Vec<(String, String)>>) {
         let _ = (run, env);
+    }
+
+    /// Allocates a private git worktree for an agent session.
+    fn prepare_agent_workspace(
+        &self,
+        session: &str,
+        workspace: &Workspace,
+    ) -> impl Future<Output = Result<PathBuf, String>> + Send {
+        let _ = (session, workspace);
+        async { Err("this runner has no git workspace service".to_owned()) }
+    }
+
+    /// Removes all worktrees owned by an agent session.
+    fn cleanup_agent_workspace(&self, session: &str) -> impl Future<Output = ()> + Send {
+        let _ = session;
+        async {}
     }
 
     /// The issues whose worktrees it holds (E3.7), listed in every `Ready`.

@@ -31,6 +31,7 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
 use ainkrad_proto::runner::{RepoDiff, Workspace};
+use ainkrad_proto::v2::valid_session_id;
 use tokio::process::Command;
 use tokio::sync::OwnedMutexGuard;
 
@@ -51,6 +52,16 @@ pub struct Workspaces {
     pub cache_rules: Vec<CacheRule>,
 }
 
+/// A platform workspace request. The caller supplies the branch naming policy; the runner
+/// supplies only the private session directory and git credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionWorkspace {
+    pub repo: String,
+    pub reference: String,
+    pub branch: String,
+    pub name: String,
+}
+
 /// A repo URL as a plain file name: its mirror's and its build cache's.
 fn repo_name(repo: &str) -> String {
     repo.chars()
@@ -59,6 +70,14 @@ fn repo_name(repo: &str) -> String {
             _ => '_',
         })
         .collect()
+}
+
+fn safe_repo_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('.')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 }
 
 /// The last `max` bytes of `text`, trimmed.
@@ -84,6 +103,8 @@ fn new_lines(path: &Path) -> u64 {
 
 impl Workspaces {
     pub fn new(work_root: PathBuf, git_home: PathBuf) -> Self {
+        let sessions = work_root.join("worktrees/sessions");
+        let _ = std::fs::remove_dir_all(sessions);
         Self {
             root: work_root,
             git_home,
@@ -104,6 +125,136 @@ impl Workspaces {
         self.root
             .join("mirrors")
             .join(format!("{}.git", repo_name(repo)))
+    }
+
+    /// A session never shares an on-disk worktree with another session. Session ids are already
+    /// constrained by the protocol; checking again here keeps this boundary safe for callers
+    /// outside the protocol.
+    pub fn session_path(&self, session: &str) -> Result<PathBuf, String> {
+        if !valid_session_id(session) {
+            return Err("invalid agent session id".to_owned());
+        }
+        Ok(self.root.join("worktrees/sessions").join(session))
+    }
+
+    /// Creates one private worktree per requested repository for an agent session.
+    pub async fn prepare_session(
+        &self,
+        session: &str,
+        requests: &[SessionWorkspace],
+    ) -> Result<PathBuf, String> {
+        if requests.is_empty() || requests.len() > 16 {
+            return Err("a session needs 1 to 16 repositories".to_owned());
+        }
+        let root = self.session_path(session)?;
+        std::fs::create_dir_all(&root).map_err(|e| format!("{}: {e}", root.display()))?;
+        let nested = requests.len() > 1;
+        for request in requests {
+            if let Some(why) = ainkrad_proto::runner::repo_url_problem(&request.repo) {
+                return Err(why);
+            }
+            if !ainkrad_proto::runner::branch_name_ok(&request.reference)
+                || !ainkrad_proto::runner::branch_name_ok(&request.branch)
+            {
+                return Err("invalid git ref".to_owned());
+            }
+            if nested && (request.name.is_empty() || !safe_repo_name(&request.name)) {
+                return Err("invalid repository name".to_owned());
+            }
+            let path = if nested {
+                root.join(&request.name)
+            } else {
+                root.clone()
+            };
+            self.setup_session_tree(request, &path).await?;
+        }
+        Ok(root)
+    }
+
+    /// Removes all session worktrees. The branch and mirror remain, so eviction never discards
+    /// committed work.
+    pub async fn cleanup_session(&self, session: &str) -> Result<(), String> {
+        let root = self.session_path(session)?;
+        if !root.exists() {
+            return Ok(());
+        }
+        let mut trees = vec![root.clone()];
+        if !root.join(".git").is_file() {
+            trees = std::fs::read_dir(&root)
+                .map_err(|e| format!("{}: {e}", root.display()))?
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.join(".git").is_file())
+                .collect();
+        }
+        for tree in trees {
+            if let Some(mirror) = Self::mirror_of(&tree) {
+                let _guard = self.lock(&mirror).await;
+                if let Some(path) = tree.to_str() {
+                    let _ = self
+                        .git(&mirror, &["worktree", "remove", "--force", path])
+                        .await;
+                    let _ = self.git(&mirror, &["worktree", "prune"]).await;
+                }
+            }
+        }
+        if root.exists() {
+            std::fs::remove_dir_all(&root).map_err(|e| format!("{}: {e}", root.display()))?;
+        }
+        Ok(())
+    }
+
+    async fn setup_session_tree(&self, ws: &SessionWorkspace, path: &Path) -> Result<(), String> {
+        let io = |what: &Path, e: std::io::Error| format!("{}: {e}", what.display());
+        let mirror = self.mirror(&ws.repo);
+        for dir in [
+            &self.git_home,
+            &self.root.join("mirrors"),
+            &self.root.join("worktrees/sessions"),
+        ] {
+            std::fs::create_dir_all(dir).map_err(|e| io(dir, e))?;
+        }
+        let utf8 = |p: &Path| p.to_str().map(str::to_owned).ok_or("path is not UTF-8");
+        let _guard = self.lock(&mirror).await;
+        if !mirror.join("HEAD").exists() {
+            let fresh = mirror.with_extension("cloning");
+            let _ = std::fs::remove_dir_all(&fresh);
+            self.git(
+                &self.root,
+                &["clone", "--bare", "--", &ws.repo, &utf8(&fresh)?],
+            )
+            .await?;
+            std::fs::rename(&fresh, &mirror).map_err(|e| io(&mirror, e))?;
+        }
+        let refspec = format!("+refs/heads/{0}:refs/remotes/origin/{0}", ws.reference);
+        self.git(&mirror, &["fetch", "origin", &refspec]).await?;
+        if path.join(".git").is_file()
+            && self
+                .git(path, &["rev-parse", "--is-inside-work-tree"])
+                .await
+                .is_ok()
+        {
+            return Ok(());
+        }
+        if path.exists() {
+            std::fs::remove_dir_all(path).map_err(|e| io(path, e))?;
+        }
+        self.git(&mirror, &["worktree", "prune"]).await?;
+        let dir = utf8(path)?;
+        let branch = format!("refs/heads/{}", ws.branch);
+        if self
+            .git(&mirror, &["rev-parse", "--verify", "--quiet", &branch])
+            .await
+            .is_ok()
+        {
+            self.git(&mirror, &["worktree", "add", &dir, &ws.branch])
+                .await
+                .map(drop)
+        } else {
+            let base = format!("refs/remotes/origin/{}", ws.reference);
+            self.git(&mirror, &["worktree", "add", "-b", &ws.branch, &dir, &base])
+                .await
+                .map(drop)
+        }
     }
 
     /// The variables every git, and every harness process, runs with.
