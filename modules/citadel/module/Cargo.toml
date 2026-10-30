@@ -15,10 +15,15 @@ test-support = []
 # The platform the module is built on (it never depends the other way: `dependency_direction`).
 ainkrad-core = { path = "../../../crates/core" }
 ainkrad-core-server = { path = "../../../crates/server" }
+ainkrad-proto = { path = "../../../crates/proto" }
 axum = { version = "0.8.9", features = ["ws"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+utoipa = "6.0.0"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "json"] }
+sha2 = "0.10.9"
+tokio = { version = "1.54.0", features = ["fs"] }
+tracing = "0.1.44"
 
 [dev-dependencies]
 ainkrad-core-server = { path = "../../../crates/server", features = ["test-support"] }
