@@ -104,12 +104,25 @@ pub struct Agent {
     pub paused_at: Option<Timestamp>,
     /// When it was hired.
     pub hired_at: Timestamp,
+    /// What its figure shows now. Until the run engine is ported it follows the agent's status
+    /// and its open questions and approvals only (never `working`, `thinking`, `loading`,
+    /// `confused` or `success`).
+    pub figure_state: Option<org_admin::FigureState>,
+    /// The chain preset it uses in place of its own fallbacks (API minor 18); absent when it
+    /// has none. (`run_token_cap`, `issue_token_cap` and `queued_wakes` come with the run
+    /// engine.)
+    pub chain_preset_id: Option<i64>,
 }
 
 impl From<org::Agent> for Agent {
     fn from(a: org::Agent) -> Self {
         Self {
             hired_at: ts(&a.created_at),
+            figure_state: Some(org_admin::FigureState::of(
+                a.status,
+                &crate::store::org::avatars::Activity::default(),
+            )),
+            chain_preset_id: None,
             paused_at: match a.status {
                 org::AgentStatus::Paused => opt_ts(a.paused_at.as_deref()),
                 _ => None,

@@ -11,10 +11,14 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 use super::error::{found, refused};
+use super::model::org_admin::{NewDepartment, serde_with_none};
 use super::model::{Agent, Company, Deleted, Department, Team};
+use super::org_admin::{agent_out, agent_out_all, failed, org_refused};
 use super::scope::Acting;
 use super::types::CompanyKind;
-use crate::domain::org::{AgentId, CompanyId, CompanyKind as Kind, DepartmentId, TeamId};
+use crate::domain::org::{
+    AgentId, CompanyId, CompanyKind as Kind, CompanyProfile, DepartmentId, TeamId,
+};
 use crate::store::org::{self, service};
 
 fn kind(text: Option<&str>) -> Result<Option<Kind>, ApiError> {
@@ -52,6 +56,17 @@ pub struct NewCompany {
     /// `own` (the default) or `client`; anything else is a 400.
     #[schema(value_type = Option<CompanyKind>)]
     pub kind: Option<String>,
+    /// The profile fields (API minor 17) are optional; a field out of shape is a 400.
+    pub color: Option<String>,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub industries: Vec<String>,
+    pub website: Option<String>,
+    pub timezone: Option<String>,
+    pub work_start: Option<u16>,
+    pub work_end: Option<u16>,
+    pub work_days: Option<u8>,
 }
 
 #[utoipa::path(post, path = "/companies", operation_id = "createCompany", tag = "org",
@@ -64,9 +79,20 @@ pub async fn create_company(
     Json(n): Json<NewCompany>,
 ) -> ApiResult<Company> {
     let kind = kind(n.kind.as_deref())?.unwrap_or(Kind::Own);
-    let c = service::add_company(&app.pool, &n.name, kind, BY)
+    let profile = CompanyProfile {
+        color: n.color,
+        description: n.description,
+        industries: n.industries,
+        website: n.website,
+        timezone: n.timezone,
+        work_start: n.work_start,
+        work_end: n.work_end,
+        work_days: n.work_days,
+        logo_sha256: None,
+    };
+    let c = org::add_company_with(&app.pool, &n.name, kind, &profile, BY)
         .await
-        .map_err(refused)?;
+        .map_err(failed)?;
     Ok(Json(c.into()))
 }
 
@@ -75,6 +101,27 @@ pub struct CompanyChange {
     pub name: Option<String>,
     #[schema(value_type = Option<CompanyKind>)]
     pub kind: Option<String>,
+    /// The profile fields (API minor 17): absent stays, `null` clears an optional one.
+    #[serde(default, with = "serde_with_none")]
+    #[schema(value_type = Option<String>)]
+    pub color: Option<Option<String>>,
+    pub description: Option<String>,
+    pub industries: Option<Vec<String>>,
+    #[serde(default, with = "serde_with_none")]
+    #[schema(value_type = Option<String>)]
+    pub website: Option<Option<String>>,
+    #[serde(default, with = "serde_with_none")]
+    #[schema(value_type = Option<String>)]
+    pub timezone: Option<Option<String>>,
+    #[serde(default, with = "serde_with_none")]
+    #[schema(value_type = Option<u16>)]
+    pub work_start: Option<Option<u16>>,
+    #[serde(default, with = "serde_with_none")]
+    #[schema(value_type = Option<u16>)]
+    pub work_end: Option<Option<u16>>,
+    #[serde(default, with = "serde_with_none")]
+    #[schema(value_type = Option<u8>)]
+    pub work_days: Option<Option<u8>>,
 }
 
 #[utoipa::path(put, path = "/companies/{id}", operation_id = "updateCompany", tag = "org",
@@ -88,10 +135,34 @@ pub async fn update_company(
     Json(c): Json<CompanyChange>,
 ) -> ApiResult<Company> {
     let kind = kind(c.kind.as_deref())?;
-    let c = service::change_company(&app.pool, CompanyId(id), c.name.as_deref(), kind, BY)
+    let mut co = found(org::get_company(&app.pool, CompanyId(id)).await?, "company")?;
+    if let Some(name) = c.name {
+        co.name = name;
+    }
+    co.kind = kind.unwrap_or(co.kind);
+    let p = &mut co.profile;
+    if let Some(v) = c.color {
+        p.color = v;
+    }
+    if let Some(v) = c.website {
+        p.website = v;
+    }
+    if let Some(v) = c.timezone {
+        p.timezone = v;
+    }
+    p.description = c.description.unwrap_or_else(|| p.description.clone());
+    p.industries = c.industries.unwrap_or_else(|| p.industries.clone());
+    p.work_start = c.work_start.unwrap_or(p.work_start);
+    p.work_end = c.work_end.unwrap_or(p.work_end);
+    p.work_days = c.work_days.unwrap_or(p.work_days);
+    if !org::edit_company(&app.pool, &co, BY)
         .await
-        .map_err(refused)?;
-    Ok(Json(found(c, "company")?.into()))
+        .map_err(failed)?
+    {
+        return Err(ApiError::not_found("no such company"));
+    }
+    let now = found(org::get_company(&app.pool, CompanyId(id)).await?, "company")?;
+    Ok(Json(now.into()))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -112,18 +183,19 @@ pub async fn list_departments(
 }
 
 #[utoipa::path(post, path = "/companies/{id}/departments", operation_id = "createDepartment",
-    tag = "org", params(("id" = i64, Path, description = "Company id")), request_body = NameBody,
+    tag = "org", params(("id" = i64, Path, description = "Company id")), request_body = NewDepartment,
     responses((status = 200, description = "The new department (audited as \
         `citadel.department.added`)", body = Department)))]
 pub async fn add_department(
     State(app): State<App>,
     _: Acting,
     Path(company): Path<i64>,
-    Json(n): Json<NameBody>,
+    Json(n): Json<NewDepartment>,
 ) -> ApiResult<Department> {
-    let d = service::add_department(&app.pool, CompanyId(company), &n.name, BY)
+    let head = n.head_agent_id.map(AgentId);
+    let d = org::create_department_with(&app.pool, CompanyId(company), &n.name, &n.about, head, BY)
         .await
-        .map_err(refused)?;
+        .map_err(org_refused)?;
     Ok(Json(d.into()))
 }
 
@@ -224,8 +296,12 @@ pub async fn list_agents(
     _: Acting,
     Path(company): Path<i64>,
 ) -> ApiResult<Vec<Agent>> {
-    let all = org::list_agents(&app.pool, CompanyId(company)).await?;
-    Ok(Json(all.into_iter().map(Into::into).collect()))
+    // The monolith's 404 for a company that is not there.
+    found(
+        org::get_company(&app.pool, CompanyId(company)).await?,
+        "company",
+    )?;
+    Ok(Json(agent_out_all(&app, CompanyId(company)).await?))
 }
 
 #[utoipa::path(get, path = "/agents/{id}", operation_id = "getAgent", tag = "org",
@@ -233,5 +309,5 @@ pub async fn list_agents(
     responses((status = 200, description = "The agent", body = Agent)))]
 pub async fn get_agent(State(app): State<App>, _: Acting, Path(id): Path<i64>) -> ApiResult<Agent> {
     let a = found(org::get_agent(&app.pool, AgentId(id)).await?, "agent")?;
-    Ok(Json(a.into()))
+    agent_out(&app, a).await.map(Json)
 }
