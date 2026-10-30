@@ -1,14 +1,14 @@
 //! What budgets do (E7.2, #15), all from the spend counters:
 //!
-//! - Admission (`admit_in`, called by dispatch, S7): a run is not started while any hard-stop
+//! - Admission (`admit_in`, called by dispatch): a run is not started while any hard-stop
 //!   budget that applies to it has nothing left; each such budget gets one `budget_overrun`
 //!   approval per period, requested by the blocked agent. Approving it raises that period's
 //!   budget by the tokens the decider gives (`raise_in`); rejecting it leaves the budget
 //!   exhausted until the next period.
 //! - Warning (`warn_in`, after each cost event): a budget whose spend reaches `warn_at_percent`
-//!   of its cap appends `budget.warning`, once per period. The monolith also woke the product
-//!   owner of the spending issue's team; that wake needs the wake queue (S7) and is not here.
-//! - The mid-run cap (`exec::run_token_cap`, S7) is the least left of the same standings.
+//!   of its cap appends `budget.warning`, once per period, and wakes the product owner of the
+//!   spending issue's team.
+//! - The mid-run cap (`exec::reconcile`) stops a run when any of the same standings runs out.
 
 use super::*;
 use crate::domain::gov::{Approval, ApprovalKind, NewApproval};
@@ -53,7 +53,6 @@ pub async fn standings<'e>(
 /// Whether a run of `agent` (of `company`) on `issue` may start at `now`: no hard-stop budget
 /// that applies is exhausted. Each exhausted one gets a `budget_overrun` approval for its
 /// period unless it has one already (whatever its status), with `budget.exhausted` appended.
-#[allow(dead_code)] // S7: dispatch admits a run through the budget guard
 pub(crate) async fn admit_in(
     conn: &mut SqliteConnection,
     agent: AgentId,
@@ -129,9 +128,7 @@ pub(crate) async fn admit_in(
 /// After a cost event by `agent` on `issue` at `now`: every budget that applies and reached
 /// its warning threshold this period without a warning yet gets one (`budget.warning`).
 /// Returns the budgets warned.
-// S7: the monolith also enqueued an `escalation` wake for the product owner (`product_owner` in
-// the details) with key `budget:<id>:<period>:warning`; it needs the wake queue.
-#[allow(dead_code)] // S7: the run engine calls the guard after a run
+// The product owner of the spending issue's team is woken once per budget and period.
 pub(crate) async fn warn_in(
     conn: &mut SqliteConnection,
     agent: AgentId,
@@ -185,6 +182,20 @@ pub(crate) async fn warn_in(
         let company = company.map(CompanyId);
         let by = AuditActor::System;
         append_budget_event(conn, s.budget.id, company, by, "budget.warning", details).await?;
+        if let Some(po) = po {
+            let wake = crate::store::exec::NewWakeRequest {
+                agent_id: AgentId(po),
+                issue_id: issue,
+                source: crate::domain::work::WakeSource::Escalation,
+                reason: format!(
+                    "a budget reached {}% of its cap ({} of {} tokens)",
+                    s.budget.warn_at_percent, s.spent, s.budget.token_cap
+                ),
+                idempotency_key: format!("budget:{}:{}:warning", s.budget.id.0, s.period_key),
+                not_before: None,
+            };
+            crate::store::exec::enqueue_in(conn, &wake, 1).await?;
+        }
         warned.push(s.budget.id);
     }
     Ok(warned)

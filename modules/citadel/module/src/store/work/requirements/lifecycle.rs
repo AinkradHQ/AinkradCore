@@ -197,6 +197,7 @@ macro_rules! plan_held {
         )
     };
 }
+pub(crate) use plan_held;
 
 /// Why `agent`'s work on `issue` waits on the issue's requirement's plan (plan-first,
 /// `plan_held!`), in words; `None` when it does not.

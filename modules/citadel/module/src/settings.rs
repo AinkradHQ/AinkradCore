@@ -190,6 +190,48 @@ pub const SETTINGS: &[ModuleSetting] = &[
         7 * DAY,
         "How long an account stays cooling after repeated provider drops.",
     ),
+    s(
+        "run.token_cap",
+        2_000_000,
+        1_000,
+        100_000_000,
+        "The most tokens one run may use before the engine stops it (budgets can stop it sooner).",
+    ),
+    s(
+        "issue.token_cap",
+        0,
+        0,
+        1_000_000_000,
+        "The most tokens all the runs of one issue may use together; 0 sets no cap.",
+    ),
+    s(
+        "wake.max_attempts",
+        3,
+        1,
+        20,
+        "Attempts a wake gets before a failed run stops being retried.",
+    ),
+    s(
+        "wake.retry_backoff_max_secs",
+        600,
+        30,
+        DAY,
+        "The longest wait before a failed run is retried.",
+    ),
+    s(
+        "run.token_ttl_secs",
+        4 * 3600,
+        60,
+        DAY,
+        "How long a run's token for its agent's callbacks lives (it is revoked when the run ends).",
+    ),
+    s(
+        "wake.timer_batch",
+        50,
+        1,
+        1_000,
+        "The most timer wakes one pass of the timer job queues.",
+    ),
 ];
 
 /// Citadel's settings handle.
@@ -202,6 +244,14 @@ pub fn handle() -> ModuleSettings {
 pub async fn value(pool: &SqlitePool, name: &str) -> Result<i64, sqlx::Error> {
     handle()
         .get(pool, name)
+        .await
+        .map_err(|e| sqlx::Error::Configuration(e.to_string().into()))
+}
+
+/// [`value`] inside the caller's transaction.
+pub async fn value_in(conn: &mut sqlx::SqliteConnection, name: &str) -> Result<i64, sqlx::Error> {
+    handle()
+        .get_in(conn, name)
         .await
         .map_err(|e| sqlx::Error::Configuration(e.to_string().into()))
 }
@@ -220,6 +270,7 @@ mod tests {
     async fn a_default_is_read_and_an_undeclared_name_is_an_error() {
         let db = crate::testing::db().await;
         assert_eq!(value(&db.pool, "sprint.velocity_window").await.unwrap(), 3);
-        assert!(value(&db.pool, "run.token_cap").await.is_err());
+        assert_eq!(value(&db.pool, "run.token_cap").await.unwrap(), 2_000_000);
+        assert!(value(&db.pool, "run.nonsense").await.is_err());
     }
 }

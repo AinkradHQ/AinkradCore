@@ -9,8 +9,9 @@ use serde_json::json;
 use sqlx::SqliteConnection;
 
 use super::checkout::{append_issue_event, issue_in};
-use super::kanban::wip_full;
+use super::kanban::{wake_freed_in, wip_full};
 use super::*;
+use crate::store::exec::{NewWakeRequest, enqueue_in};
 
 /// Why an issue transition was not applied.
 #[derive(Debug)]
@@ -265,9 +266,11 @@ pub async fn delete_issue(
         .await
         .map(affected)?;
     unblock_free(&mut tx, parked, actor).await?;
-    // S7: a started top-level issue leaving a full kanban column wakes the next `todo` issue's
-    // agent here (`wake_freed_in`, keyed `wip:issue:<id>:deleted`); the wake queue is the run engine's.
-    let _ = gone;
+    // A started top-level issue leaving a full kanban column wakes the next `todo` issue's agent.
+    if let Some(i) = gone.filter(|i| i.parent_id.is_none() && i.state == IssueState::InProgress) {
+        let key = format!("wip:issue:{}:deleted", i.id.0);
+        wake_freed_in(&mut tx, i.project_id, key).await?;
+    }
     tx.commit().await?;
     Ok(deleted)
 }
@@ -275,7 +278,7 @@ pub async fn delete_issue(
 /// Hands the issue to `next` (a `Reassign` by `actor`) inside the caller's `BEGIN
 /// IMMEDIATE` transaction, waking an agent with `source`; `None` when the issue is gone or
 /// closed and so has no next actor to change.
-#[allow(dead_code)] // S7: the admin controls reassign through the run engine
+#[allow(dead_code)] // `terminate_agent` (the admin's controls) is not ported yet
 pub(crate) async fn reassign_in(
     conn: &mut SqliteConnection,
     id: IssueId,
@@ -369,10 +372,27 @@ async fn transition_in(
     .fetch_one(&mut *conn)
     .await?;
     let action = format!("issue.{}", step.state.as_str());
-    append_issue_event(conn, &updated, actor, &action, None, details).await?;
-    // S7: the wake queue is the run engine's. Here a leaving `in_progress` top-level issue wakes
-    // the next `todo` issue's agent (`wake_freed_in`, key `wip:issue:<id>:audit:<seq>`), and an
-    // agent next actor (`step.wake`, `source`) is enqueued with key `issue:<id>:audit:<seq>`.
-    let _ = (step.wake, source);
+    let seq = append_issue_event(conn, &updated, actor, &action, None, details).await?;
+    // A leaving `in_progress` top-level issue frees a kanban slot: the next `todo` issue's agent is
+    // woken. An agent next actor is woken in the same transaction, so the change and its wake
+    // commit or roll back together.
+    if current.parent_id.is_none()
+        && current.state == IssueState::InProgress
+        && step.state != IssueState::InProgress
+    {
+        let key = format!("wip:issue:{}:audit:{seq}", current.id.0);
+        wake_freed_in(conn, current.project_id, key).await?;
+    }
+    if let Some(agent_id) = step.wake {
+        let wake = NewWakeRequest {
+            agent_id,
+            issue_id: Some(current.id),
+            source,
+            reason: format!("issue {} {}", current.id.0, transition.name()),
+            idempotency_key: format!("issue:{}:audit:{seq}", current.id.0),
+            not_before: None,
+        };
+        enqueue_in(conn, &wake, 1).await?;
+    }
     Ok(updated)
 }

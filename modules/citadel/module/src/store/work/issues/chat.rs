@@ -10,7 +10,9 @@ use sqlx::SqliteConnection;
 
 use super::checkout::append_issue_event;
 use super::*;
+use crate::domain::work::WakeSource;
 use crate::store::audit::{self, Event};
+use crate::store::exec::{NewWakeRequest, enqueue_in};
 
 /// Creates the issue as `actor` and appends `issue.created`, in one transaction, with
 /// `create_issue`'s rules.
@@ -71,7 +73,6 @@ pub async fn create_epic_by(
 }
 
 /// The most of a comment its wake's reason quotes, in chars.
-#[allow(dead_code)] // S7: the run engine quotes a comment into a wake
 const QUOTE_MAX: usize = 300;
 
 /// The agent a person's comment on `i` wakes, when nobody names one: the first agent of the
@@ -140,7 +141,6 @@ async fn mentioned(
 }
 
 /// `body` on one line, cut to `QUOTE_MAX` chars with an ellipsis.
-#[allow(dead_code)] // S7: the run engine quotes a comment into a wake
 fn quote(body: &str) -> String {
     let line = body.split_whitespace().collect::<Vec<_>>().join(" ");
     match line.char_indices().nth(QUOTE_MAX) {
@@ -234,7 +234,17 @@ pub(crate) async fn post_comment_in(
         (Some(a), _) | (None, Some(a)) => Some(a),
         (None, None) => chat_agent(conn, &i, body).await?,
     };
-    // S7: when no question was answered, the agent woken gets a `comment` wake (reason: the
-    // comment quoted by `quote`, key `comment:<id>`) on the run engine's queue.
+    // When no question was answered, the agent woken gets a `comment` wake quoting the comment.
+    if let (None, Some(agent_id)) = (asker, woke) {
+        let wake = NewWakeRequest {
+            agent_id,
+            issue_id: Some(issue),
+            source: WakeSource::Comment,
+            reason: format!("comment: \"{}\"", quote(body)),
+            idempotency_key: format!("comment:{id}"),
+            not_before: None,
+        };
+        enqueue_in(conn, &wake, 1).await?;
+    }
     Ok(Some((id, woke)))
 }

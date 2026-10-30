@@ -1478,6 +1478,8 @@
           "citadel.department.added",
           "citadel.department.deleted",
           "citadel.department.updated",
+          "citadel.engine.disabled",
+          "citadel.engine.enabled",
           "citadel.epic.created",
           "citadel.epic.updated",
           "citadel.intake.routed",
@@ -1576,16 +1578,22 @@
           "citadel.run.allowed_by_rule",
           "citadel.run.cancelled",
           "citadel.run.claimed",
+          "citadel.run.decided",
           "citadel.run.failed",
           "citadel.run.fallback",
           "citadel.run.first_token_slow",
+          "citadel.run.killed",
           "citadel.run.messaged",
           "citadel.run.provider_dropped",
           "citadel.run.retried",
+          "citadel.run.runner_lost",
           "citadel.run.running",
           "citadel.run.started",
+          "citadel.run.succeeded",
+          "citadel.run.timed_out",
           "citadel.run.token_cap",
           "citadel.run.token_issued",
+          "citadel.run.token_revoked",
           "citadel.run.transcripts_pruned",
           "citadel.runner.back",
           "citadel.runner.disk_full",
@@ -2910,6 +2918,28 @@
             "description": "Until when this session may call routes marked `x-ainkrad-destructive`."
           }
         },
+        "type": "object"
+      },
+      "EngineBody": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "EngineState": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
         "type": "object"
       },
       "Environment": {
@@ -7030,6 +7060,133 @@
         ],
         "type": "object"
       },
+      "RunMessage": {
+        "properties": {
+          "text": {
+            "description": "1 byte to 16 KiB.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "RunOut": {
+        "properties": {
+          "agent_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "cache_tokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "cost_usd_micros": {
+            "description": "Millionths of a dollar; absent while unpriced (never 0).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ended_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "input_tokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "issue_id": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "output_tokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "queued_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "session_id": {
+            "description": "The agent session (`as_...`) that is its harness.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "state": {
+            "description": "`queued`, `claimed`, `running`, `succeeded`, `failed`, `cancelled`, `timed_out` or `runner_lost`.",
+            "type": "string"
+          },
+          "terminal_reason": {
+            "description": "Set exactly when the run is over.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "agent_id",
+          "state",
+          "harness",
+          "input_tokens",
+          "output_tokens",
+          "cache_tokens",
+          "queued_at"
+        ],
+        "type": "object"
+      },
+      "RunTranscript": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptEntry"
+            },
+            "type": "array"
+          },
+          "last_seq": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "run": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "state": {
+            "description": "The session's state.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "state",
+          "last_seq",
+          "entries"
+        ],
+        "type": "object"
+      },
       "Runner": {
         "description": "A paired runner and its live state.",
         "properties": {
@@ -8226,6 +8383,28 @@
         "format": "date-time",
         "type": "string"
       },
+      "TranscriptEntry": {
+        "properties": {
+          "at_ms": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "body": {
+            "type": "object"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "at_ms",
+          "body"
+        ],
+        "type": "object"
+      },
       "Transition": {
         "description": "A step of the issue state machine (`domain::work::machine`), as the admin.",
         "discriminator": {
@@ -8633,6 +8812,42 @@
         "required": [
           "server",
           "api"
+        ],
+        "type": "object"
+      },
+      "WakeBody": {
+        "properties": {
+          "issue_id": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Why, for the agent: 1 to 500 characters.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WakeOut": {
+        "properties": {
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "status": {
+            "description": "`pending`, `coalesced` (folded into a pending wake of the same agent and issue), or `dropped`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
         ],
         "type": "object"
       },
@@ -13309,6 +13524,71 @@
         "x-ainkrad-scope": "admin"
       }
     },
+    "/modules/citadel/v1/agents/{id}/wake": {
+      "post": {
+        "operationId": "citadelWakeAgent",
+        "parameters": [
+          {
+            "description": "Agent id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WakeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WakeOut"
+                }
+              }
+            },
+            "description": "The wake is queued; the engine starts the run when it is allowed to (the engine on, budgets, a free runner)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/modules/citadel/v1/approvals/{id}/decide": {
       "post": {
         "operationId": "citadelDecideApproval",
@@ -13407,7 +13687,7 @@
                 }
               }
             },
-            "description": "A decided `pr_merge` or `workflow_push`; needs a step-up"
+            "description": "A decided `pr_merge`, `workflow_push` or `permission_escalation`; needs a step-up"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -16004,6 +16284,99 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/citadel/v1/engine": {
+      "get": {
+        "operationId": "citadelGetEngine",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineState"
+                }
+              }
+            },
+            "description": "Whether the engine may start runs on its own"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "post": {
+        "operationId": "citadelSetEngine",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineState"
+                }
+              }
+            },
+            "description": "On, the engine starts sessions without a client in hand, as the device that stepped up to say so (audited as `engine.enabled`); off, no new run starts and the live ones go on"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -20408,6 +20781,401 @@
         },
         "tags": [
           "org"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/citadel/v1/runs": {
+      "get": {
+        "operationId": "citadelListRuns",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "agent",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "issue",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Only runs that are not over.",
+            "in": "query",
+            "name": "live",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Runs with an id below this; absent, from the newest.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RunOut"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Runs, newest first (at most `limit`, 50 by default, 200 at most), only those of the company in `X-Citadel-Company` when it is sent"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/citadel/v1/runs/{id}": {
+      "get": {
+        "operationId": "citadelGetRun",
+        "parameters": [
+          {
+            "description": "Run id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunOut"
+                }
+              }
+            },
+            "description": "The run"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/citadel/v1/runs/{id}/cancel": {
+      "post": {
+        "operationId": "citadelCancelRun",
+        "parameters": [
+          {
+            "description": "Run id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunOut"
+                }
+              }
+            },
+            "description": "Its harness finishes the tool call in flight and stops; the run ends `cancelled` once the runner has acknowledged (audited as `run.cancelled`). 409 `run_not_live` when it is over, 502 `runner_failed` when the runner is away (the request is kept)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/citadel/v1/runs/{id}/kill": {
+      "post": {
+        "operationId": "citadelKillRun",
+        "parameters": [
+          {
+            "description": "Run id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunOut"
+                }
+              }
+            },
+            "description": "Its harness is killed now (audited as `run.killed`)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/citadel/v1/runs/{id}/message": {
+      "post": {
+        "operationId": "citadelMessageRun",
+        "parameters": [
+          {
+            "description": "Run id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunMessage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunOut"
+                }
+              }
+            },
+            "description": "Given to the harness as its next turn (audited as `run.messaged`, its length only). 409 `run_not_live` unless the run is running"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/citadel/v1/runs/{id}/transcript": {
+      "get": {
+        "operationId": "citadelGetRunTranscript",
+        "parameters": [
+          {
+            "description": "Run id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunTranscript"
+                }
+              }
+            },
+            "description": "The session's entries with `seq` above `after`, oldest first, at most `limit` (500 by default, 1000 at most), redacted by the platform; an empty transcript for a run with no session yet"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
         ],
         "x-ainkrad-scope": "admin"
       }

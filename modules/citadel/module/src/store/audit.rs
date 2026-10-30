@@ -60,6 +60,11 @@ impl<'a> Event<'a> {
 
 /// Appends `e` on `conn` (pass `&mut *tx` inside a write transaction).
 pub async fn append(conn: &mut SqliteConnection, e: Event<'_>) -> Result<(), Error> {
+    append_seq(conn, e).await.map(drop)
+}
+
+/// [`append`], returning the row's sequence number (a wake's idempotency key names it).
+pub async fn append_seq(conn: &mut SqliteConnection, e: Event<'_>) -> Result<i64, Error> {
     let mut details = match e.details {
         Value::Object(o) => o,
         other => [("value".to_owned(), other)].into_iter().collect(),
@@ -89,5 +94,5 @@ pub async fn append(conn: &mut SqliteConnection, e: Event<'_>) -> Result<(), Err
         }),
         details: Value::Object(details).to_string(),
     };
-    audit::append(conn, &event).await.map(drop)
+    audit::append(conn, &event).await.map(|row| row.seq.0)
 }
