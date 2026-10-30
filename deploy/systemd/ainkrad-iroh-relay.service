@@ -1,0 +1,68 @@
+# Hardened systemd unit for a self-hosted iroh relay (E2-19). Optional: only a Core that serves
+# `--iroh` and sits behind NAT needs it.
+#
+# Install on the relay host (as root):
+#   cargo install iroh-relay --version 1.4.1 --locked --features server --root /usr/local
+#   useradd --system --home /var/lib/ainkrad-relay --shell /usr/sbin/nologin ainkrad-relay
+#   install -d -m 0750 -o root -g ainkrad-relay /etc/ainkrad-relay
+#   install -m 0640 -g ainkrad-relay deploy/iroh-relay/relay.toml /etc/ainkrad-relay/relay.toml
+#   edit /etc/ainkrad-relay/relay.toml: the <...> placeholders
+#   install -m 0644 deploy/systemd/ainkrad-iroh-relay.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now ainkrad-iroh-relay
+# Ports: TCP 80 and 443; UDP 7842 only with enable_quic_addr_discovery (deploy/iroh-relay/firewall.sh).
+# Point the Core at it: `serve --iroh --iroh-relay https://<relay-hostname>`.
+
+[Unit]
+Description=Ainkrad iroh relay
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=exec
+User=ainkrad-relay
+Group=ainkrad-relay
+ExecStart=/usr/local/bin/iroh-relay --config-path /etc/ainkrad-relay/relay.toml
+Restart=on-failure
+RestartSec=2s
+LimitCORE=0
+LimitNOFILE=65536
+
+StateDirectory=ainkrad-relay
+StateDirectoryMode=0700
+UMask=0077
+
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ainkrad-relay
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+DevicePolicy=closed
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+
+NoNewPrivileges=yes
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+
+RestrictAddressFamilies=AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
