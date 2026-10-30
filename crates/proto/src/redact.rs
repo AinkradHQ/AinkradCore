@@ -94,6 +94,8 @@ const MIN_KNOWN: usize = 8;
 pub struct Redactor {
     /// (name, value), longest value first, so a secret containing another goes whole.
     known: Vec<(String, String)>,
+    /// Expected continuations of prefixes withheld at the preceding stream boundary.
+    pending: Vec<(String, String)>,
 }
 
 impl Redactor {
@@ -108,6 +110,32 @@ impl Redactor {
             return;
         }
         self.known.push((name.to_owned(), value.to_owned()));
+        let json = serde_json::to_string(value).expect("string JSON");
+        let hexed = hex(value);
+        let b64 = base64(value);
+        let percent = percent(value);
+        for encoded in [
+            hexed.clone(),
+            hexed.to_uppercase(),
+            b64.clone(),
+            b64.trim_end_matches('=').to_owned(),
+            b64.trim_end_matches('=')
+                .replace('+', "-")
+                .replace('/', "_"),
+            percent.clone(),
+            lower_percent_escapes(&percent),
+            value.bytes().map(|b| format!("%{b:02X}")).collect(),
+            value.bytes().map(|b| format!("%{b:02x}")).collect(),
+            value
+                .encode_utf16()
+                .map(|b| format!("\\u{b:04x}"))
+                .collect(),
+            json[1..json.len() - 1].to_owned(),
+        ] {
+            if !self.known.iter().any(|(_, v)| v == &encoded) {
+                self.known.push((name.to_owned(), encoded));
+            }
+        }
         self.known.sort_by_key(|(_, v)| std::cmp::Reverse(v.len()));
     }
 
@@ -120,6 +148,72 @@ impl Redactor {
             }
         }
         shapes(&out)
+    }
+
+    /// Redaction for streamed content; ambiguous secret edges are withheld.
+    pub fn stream_text(&mut self, text: &str) -> String {
+        let mut consumed = 0;
+        let mut continued = Vec::new();
+        let mut marker = None;
+        for (name, remaining) in std::mem::take(&mut self.pending) {
+            if text.starts_with(&remaining) {
+                consumed = consumed.max(remaining.len());
+                marker = Some(name);
+            } else if !text.is_empty() && remaining.starts_with(text) {
+                consumed = text.len();
+                marker = Some(name.clone());
+                continued.push((name, remaining[text.len()..].to_owned()));
+            }
+        }
+        self.pending = continued;
+        let rest = &text[consumed..];
+        let mut tail = 0;
+        let mut tail_name = "secret";
+        // Match original bytes, never rendered markers. A fabricated "[redacted:"
+        // cannot disable boundary filtering. Only a preceding withheld prefix authorizes
+        // masking the next event's beginning, so ordinary labels stay intact.
+        for (name, value) in &self.known {
+            for n in (1..value.len().min(rest.len() + 1)).rev() {
+                if value.is_char_boundary(n) && rest.ends_with(&value[..n]) {
+                    self.pending.push((name.clone(), value[n..].to_owned()));
+                    if n > tail {
+                        tail = n;
+                        tail_name = name;
+                    }
+                    break;
+                }
+            }
+        }
+        let mut out = marker.map_or_else(String::new, |name| format!("[redacted:{name}]"));
+        out.push_str(&self.text(&rest[..rest.len() - tail]));
+        if tail > 0 {
+            out.push_str(&format!("[redacted:{tail_name}]"));
+        }
+        out
+    }
+
+    /// Stream fields, while retaining protocol keys and discriminators.
+    pub fn stream_json(&mut self, value: &mut Value) {
+        self.json(value);
+        match value {
+            Value::Object(map) => {
+                for (key, value) in map {
+                    if matches!(key.as_str(), "text" | "output" | "delta" | "reason") {
+                        if let Value::String(s) = value {
+                            *s = self.stream_text(s);
+                        }
+                    } else {
+                        self.stream_json(value);
+                    }
+                }
+            }
+            Value::Array(a) => {
+                for v in a {
+                    self.stream_json(v);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Redacts every string in `value`, object keys included.
@@ -137,6 +231,65 @@ impl Redactor {
             _ => {}
         }
     }
+}
+
+fn hex(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn base64(value: &str) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = value.as_bytes();
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let n = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+fn lower_percent_escapes(value: &str) -> String {
+    let mut bytes = value.as_bytes().to_vec();
+    let mut i = 0;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'%' {
+            bytes[i + 1].make_ascii_lowercase();
+            bytes[i + 2].make_ascii_lowercase();
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    String::from_utf8(bytes).expect("percent encoding is ASCII")
+}
+
+fn percent(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 /// The marker every redaction leaves.

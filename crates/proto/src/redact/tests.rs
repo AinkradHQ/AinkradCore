@@ -54,6 +54,16 @@ fn known_secrets_go_by_name_longest_first() {
 }
 
 #[test]
+fn known_values_are_redacted_when_encoded_or_split() {
+    let mut r = Redactor::new();
+    r.known("session", "split-secret-41");
+    assert!(!r.text("c3BsaXQtc2VjcmV0LTQx").contains("c3BsaXQ"));
+    assert!(!r.text("73706c69742d7365637265742d3431").contains("73706c"));
+    assert!(!r.stream_text("split-").contains("split-secret"));
+    assert!(!r.stream_text("secret-41").contains("secret-41"));
+}
+
+#[test]
 fn json_strings_and_keys_are_redacted() {
     let mut r = Redactor::new();
     r.known("run_token", "tok-123456789");
@@ -96,4 +106,58 @@ fn text_files_are_redacted_and_counted_and_others_are_not_scanned() {
     let png = b"\x89PNG hunter2-correct-horse".to_vec();
     assert_eq!(r.file("shot.png", png.clone()), (png, None));
     assert!(!is_text("noext") && is_text("a.yml") && !is_text("a.pdf"));
+}
+
+#[test]
+fn every_split_of_plain_and_encoded_values_is_withheld() {
+    let value = "canary-password/with+bytes\\\"";
+    let mut r = Redactor::new();
+    r.known("canary", value);
+    let json = serde_json::to_string(value).unwrap();
+    for representation in [
+        value.to_owned(),
+        base64(value),
+        hex(value),
+        percent(value),
+        json[1..json.len() - 1].to_owned(),
+    ] {
+        assert!(!r.text(&representation).contains(&representation));
+        for split in 1..representation.len() {
+            if !representation.is_char_boundary(split) {
+                continue;
+            }
+            let out =
+                r.stream_text(&representation[..split]) + &r.stream_text(&representation[split..]);
+            assert!(
+                !out.contains(&representation),
+                "split {split} reconstructed a secret"
+            );
+            assert!(out.contains("[redacted:canary]"));
+        }
+    }
+}
+
+#[test]
+fn a_secret_cannot_override_the_sandbox_manifest_or_a_loader() {
+    for name in [
+        "AINKRAD_SANDBOX_TMP",
+        "AINKRAD_GUARD_PATHS",
+        "BASH_ENV",
+        "ENV",
+        "NODE_OPTIONS",
+        "PYTHONPATH",
+    ] {
+        assert!(!crate::v2::valid_secret_var(name), "accepted {name}");
+    }
+}
+
+#[test]
+fn fabricated_redaction_markers_do_not_disable_stream_filtering() {
+    let mut r = Redactor::new();
+    r.known("canary", "canary-password");
+    assert!(!r.stream_text("[redacted:fake]canary-").ends_with("canary-"));
+    assert!(
+        !r.stream_text("password[redacted:fake]")
+            .starts_with("password")
+    );
 }
