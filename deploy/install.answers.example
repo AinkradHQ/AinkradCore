@@ -1,0 +1,48 @@
+# Answers for `sudo scripts/install.sh --config <file>` (unattended). KEY=VALUE, one per line; '#' comments.
+# The file is parsed, never executed. Keep your filled-in copy OUTSIDE the repo, chmod 600, and delete it after
+# the install if it holds BACKUP_SECRET_KEY. Every value below is a placeholder.
+
+# Binaries: a directory holding ainkrad-core-server (and optionally ainkradctl, ainkrad-runner), or BUILD=yes
+# to `cargo build --release` from this checkout (needs cargo on the host).
+BINARY_DIR=/path/to/binaries
+BUILD=no
+
+# The DNS name clients use; its A/AAAA record must point at this host. PUBLIC_IP overrides the lookup of this
+# host's public address (leave empty to look it up; behind NAT the interface address is not the public one).
+HOSTNAME=core.example.com
+PUBLIC_IP=
+
+# Let's Encrypt account email; staging (test certificates) or production; tls-alpn-01 (:443 only) or http-01 (:80).
+ACME_CONTACT=ops@example.com
+ACME_ENV=staging
+ACME_CHALLENGE=tls-alpn-01
+
+# Passkeys for the web client, and the extra browser origins allowed (comma-separated https:// origins, or empty).
+PASSKEYS=no
+ALLOW_ORIGINS=
+
+# Backups. BACKUP=bucket (write /etc/ainkrad/backup.env from the keys below), keep (an existing backup.env stays
+# as it is), or local (encrypted snapshots in the home only). The bucket is always addressed path-style.
+BACKUP=bucket
+BACKUP_ENDPOINT=https://s3.example.com
+BACKUP_REGION=<region>
+BACKUP_BUCKET=<bucket>
+BACKUP_PREFIX=core/
+BACKUP_ACCESS_KEY=<access key id>
+BACKUP_SECRET_KEY=<secret key>
+# systemd OnCalendar expression, e.g. daily, hourly, *-*-* 03:00:00.
+BACKUP_SCHEDULE=daily
+# The age PUBLIC key (age1...). Make the identity OFFLINE: `age-keygen -o core-backup.key` on another machine.
+BACKUP_RECIPIENT=age1<public key>
+
+# A paired runner on this host too (installed, not started; exec stays OFF).
+RUNNER=no
+
+# Run scripts/host/harden.sh (firewall 22/80/443, key-only SSH, no core dumps/swap, unattended upgrades).
+HARDEN=no
+# Restrict new SSH connections to these CIDRs (comma-separated; empty = from anywhere). Needs HARDEN=yes.
+SSH_FROM=
+
+# After start: run `bootstrap` now (needs a terminal) or only print how; self-test backup: no, local, bucket.
+BOOTSTRAP=later
+SELFTEST_BACKUP=local
