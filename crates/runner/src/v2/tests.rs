@@ -683,15 +683,32 @@ mod pty {
         assert!(hello.terminals.is_empty(), "reaped: {hello:?}");
     }
 
+    /// Kills the terminal hosts started under `dir` (and with them their children) when the
+    /// test ends, pass or fail.
+    struct Reap(std::path::PathBuf);
+
+    impl Drop for Reap {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("pkill")
+                .args(["-f", &format!("serve --dir {}", self.0.display())])
+                .status();
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// E2-01.4 on the wire: with no credit from the Core, a flood sends at most the window and
     /// is cut to a snapshot rather than buffered without bound; credit lets output flow again.
     #[tokio::test]
     async fn output_respects_credit_and_a_flood_becomes_a_snapshot() {
         let dir = tmp();
+        let _reap = Reap(dir.clone());
         let (mut core, _) = Core::start_pty(driver(&dir, true)).await;
         core.send(
             1,
-            open("while :; do echo 0123456789abcdefghijklmnopqrstuvwxyz; done"),
+            // A finite flood, several times the bridge's backlog: it overflows however slowly the
+            // machine writes it, since nothing drains without credit. The `sleep` keeps the
+            // terminal (and its snapshot) alive until the test closes it.
+            open("yes 0123456789abcdefghijklmnopqrstuvwxyz | head -c 4000000; sleep 60"),
         )
         .await;
         let (mut bytes, mut snapshot) = (0u64, None);
@@ -705,6 +722,10 @@ mod pty {
                 granted = true;
             }
             let f = core.recv().await;
+            if matches!(f.body(), Ok(Some(Body::Heartbeat))) {
+                core.send(CONTROL_STREAM, Body::Heartbeat).await;
+                continue;
+            }
             match f.body().unwrap().unwrap() {
                 Body::Output(Output { data }) => {
                     bytes += STANDARD.decode(data).unwrap().len() as u64
