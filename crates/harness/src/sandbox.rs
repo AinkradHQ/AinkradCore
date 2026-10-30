@@ -7,8 +7,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 mod budget;
-pub(crate) use budget::Budget;
+pub(crate) mod tree;
 pub(crate) use budget::configure as configure_budget;
+pub(crate) use budget::{Budget, Watch};
 
 fn env<'a>(spec: &'a Spec, key: &str) -> &'a OsStr {
     spec.env
@@ -37,7 +38,7 @@ const TOOLS: &[&str] = &[
     "/opt/homebrew",
 ];
 
-pub(crate) fn profile(spec: &Spec) -> String {
+pub(crate) fn profile(spec: &Spec, program: &OsStr) -> String {
     let quote = |p: &Path| {
         p.to_string_lossy()
             .replace('\\', "\\\\")
@@ -58,12 +59,78 @@ pub(crate) fn profile(spec: &Spec) -> String {
     for p in [&spec.instructions, &spec.mcp_config].into_iter().flatten() {
         s.push_str(&format!("(allow file-read* (literal \"{}\"))\n", quote(p)));
     }
+    for dir in program_dirs(program, spec) {
+        s.push_str(&format!(
+            "(allow file-read* (subpath \"{}\"))\n",
+            quote(&dir)
+        ));
+    }
     s.push_str("(allow file-read* (literal \"/dev/null\") (literal \"/dev/urandom\") (literal \"/dev/random\"))\n(allow file-write* (literal \"/dev/null\"))\n");
     // No keychain mach services and no home/state grants, including metadata lookups.
+    // Network policy (`AINKRAD_SANDBOX_NETWORK`, set per session by the runner):
+    //  - `deny`: nothing at all.
+    //  - default `allow`: agents must reach their model API and package hosts, so outbound
+    //    HTTPS and DNS stay open. It is NOT `network*`: that also covers AF_UNIX connects,
+    //    which would let a same-uid agent reach ptyhost, docker or ssh-agent sockets. Only
+    //    TCP/443, DNS and loopback IP are granted; unix sockets other than the DNS resolver
+    //    are not, and plain-HTTP/link-local hosts (cloud metadata, port 80) are not reachable.
+    //    Residual: loopback services on this host are reachable (a harness may run a local
+    //    HTTP API); Seatbelt cannot separate those from the internet.
     if env(spec, "AINKRAD_SANDBOX_NETWORK") != "deny" {
-        s.push_str("(allow network*)\n");
+        s.push_str(concat!(
+            "(allow network-outbound (remote tcp \"*:443\") (remote udp \"*:53\") (remote tcp \"*:53\") (remote ip \"localhost:*\"))\n",
+            "(allow network-bind (local ip \"localhost:*\"))\n",
+            "(allow network-inbound (local ip \"localhost:*\"))\n",
+            "(allow network-outbound (literal \"/private/var/run/mDNSResponder\"))\n",
+            "(allow mach-lookup (global-name \"com.apple.dnssd.service\") (global-name \"com.apple.SystemConfiguration.DNSConfiguration\"))\n",
+        ));
     }
     s
+}
+
+/// Where the harness executable lives, read-only, when that is outside the toolchain paths:
+/// the directory the name resolves to and the one its symlink points into (an `nvm` or
+/// `~/.local` install). Never `/`, a home directory or its parent, which would expose
+/// `~/.ssh`.
+fn program_dirs(program: &OsStr, spec: &Spec) -> Vec<PathBuf> {
+    let path = Path::new(program);
+    let found = if path.is_absolute() {
+        Some(path.to_path_buf())
+    } else if path.components().count() == 1 {
+        let search = spec
+            .env
+            .iter()
+            .find(|(n, _)| n == "PATH")
+            .map(|(_, v)| v.clone());
+        let search = search
+            .or_else(|| std::env::var_os("PATH"))
+            .unwrap_or_default();
+        std::env::split_paths(&search)
+            .map(|d| d.join(path))
+            .find(|p| p.is_file())
+    } else {
+        None
+    };
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut dirs = Vec::new();
+    for file in found
+        .into_iter()
+        .flat_map(|f| [f.canonicalize().ok(), Some(f)])
+        .flatten()
+    {
+        let Some(dir) = file.parent().map(Path::to_path_buf) else {
+            continue;
+        };
+        let broad = dir.parent().is_none()
+            || Some(&dir) == home.as_ref()
+            || home.as_ref().is_some_and(|h| h.starts_with(&dir))
+            || TOOLS.iter().any(|t| dir.starts_with(t))
+            || writable(spec).iter().any(|w| dir.starts_with(w));
+        if !broad && dir.is_dir() && !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs
 }
 
 pub(crate) fn command(program: &OsStr, args: &[String], spec: &Spec) -> Command {
@@ -101,7 +168,7 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
         // The profile contains paths, never values. Passing it directly also prevents a
         // prior agent from planting a profile-file symlink in its writable private tmp.
         c = Command::new("/usr/bin/sandbox-exec");
-        c.arg("-p").arg(profile(spec));
+        c.arg("-p").arg(profile(spec, program));
     } else {
         c = Command::new("/usr/bin/bwrap");
         c.args([
@@ -114,8 +181,20 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
             "/proc",
             "--dev",
             "/dev",
+            // `--dev` gives an unsized /dev/shm tmpfs that counts against no limit.
+            "--size",
+            "16777216",
+            "--tmpfs",
+            "/dev/shm",
             "--dir",
             "/tmp",
+            // A detached tty (TIOCSTI), no capabilities, and no nested user namespace: a
+            // nested `unshare -U` would restart the per-user process count.
+            "--new-session",
+            "--cap-drop",
+            "ALL",
+            "--disable-userns",
+            "--unshare-cgroup-try",
         ]);
         for p in TOOLS.iter().filter(|p| Path::new(p).exists()) {
             c.args(["--ro-bind", p, p]);
@@ -133,6 +212,9 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
         }
         for p in writable(spec) {
             c.arg("--bind").arg(&p).arg(&p);
+        }
+        for p in program_dirs(program, spec) {
+            c.arg("--ro-bind").arg(&p).arg(&p);
         }
         for p in [&spec.instructions, &spec.mcp_config].into_iter().flatten() {
             c.arg("--ro-bind").arg(p).arg(p);
@@ -196,6 +278,19 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
     Ok(c)
 }
 
+/// Kills the group a restart record names. Safe on a recycled pid: it signals when the leader
+/// still matches the record's start time, or when any process still has that group id (a pgid
+/// cannot be reused while a member lives), so a leader that exited leaving a member is reaped.
+pub fn reap_group(record: &str) -> bool {
+    let Ok(pgid) = record.split(':').next().unwrap_or("").parse::<u32>() else {
+        return false;
+    };
+    if pgid <= 1 || !(identity(pgid).is_ok_and(|id| id == record) || tree::group_alive(pgid)) {
+        return false;
+    }
+    ainkrad_sys::killpg(pgid, 9).unwrap_or(false)
+}
+
 /// A restart record includes kernel-reported start time, uid and pgid. A recycled pid
 /// must never authorize signalling an unrelated group. Linux's start tick has full precision.
 pub fn identity(pid: u32) -> io::Result<String> {
@@ -223,3 +318,6 @@ pub fn identity(pid: u32) -> io::Result<String> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod orphan_tests;

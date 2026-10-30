@@ -2,6 +2,7 @@
 //! excess; the host-side watchdog also kills a session exceeding aggregate RSS or disk.
 //! Sampling (100 ms) permits overshoot, so these are process-level budgets, not quotas
 //! suitable for mutually hostile tenants. VM/filesystem quotas remain E8.
+use super::tree::{self, Tracker};
 use super::*;
 use std::time::Duration;
 use tokio::task::JoinHandle;
@@ -68,75 +69,80 @@ impl Budget {
             processes,
         })
     }
-    pub(crate) fn start(self, pgid: u32) -> JoinHandle<()> {
-        tokio::spawn(async move {
+    pub(crate) fn start(self, pgid: u32) -> Watch {
+        let tracker = Tracker::new(pgid);
+        let t = tracker.clone();
+        let handle = tokio::spawn(async move {
             let mut cpu_seen = std::collections::HashMap::<u32, f64>::new();
             loop {
                 tokio::time::sleep(Duration::from_millis(100)).await;
-                let Ok(ps) = Command::new("/bin/ps")
-                    .args(["-A", "-o", "pgid=,pid=,rss=,time="])
-                    .output()
-                    .await
-                else {
-                    super::super::proc::kill_group(pgid);
+                let Ok(Ok(snap)) = tokio::task::spawn_blocking(tree::snapshot).await else {
+                    t.kill(); // cannot see the tree: fail closed
                     return;
                 };
-                if !ps.status.success() {
-                    super::super::proc::kill_group(pgid);
+                let members = t.members(&snap);
+                if members.is_empty() {
                     return;
                 }
-                let mut rss = 0_u64;
-                let mut count = 0;
-                for l in String::from_utf8_lossy(&ps.stdout).lines() {
-                    let mut cols = l.split_whitespace();
-                    if cols.next().and_then(|s| s.parse::<u32>().ok()) == Some(pgid) {
-                        count += 1;
-                        let pid = cols.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-                        rss += cols.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-                        let time = cpu_seconds(cols.next().unwrap_or("0"));
-                        let prior = cpu_seen.entry(pid).or_default();
-                        *prior = prior.max(time);
-                    }
+                let rss: u64 = members.iter().map(|p| p.rss_kb).sum();
+                for p in &members {
+                    let prior = cpu_seen.entry(p.pid).or_default();
+                    *prior = prior.max(p.cpu_s);
                 }
-                if count == 0 {
-                    return;
-                }
-                let mut disk = 0;
-                for path in &self.paths {
-                    let Ok(du) = Command::new("/usr/bin/du")
-                        .arg("-sk")
-                        .arg(path)
-                        .output()
-                        .await
-                    else {
-                        super::super::proc::kill_group(pgid);
-                        return;
-                    };
-                    if !du.status.success() {
-                        super::super::proc::kill_group(pgid);
-                        return;
-                    }
-                    disk += String::from_utf8_lossy(&du.stdout)
-                        .split_whitespace()
-                        .next()
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(u64::MAX / 8);
-                }
+                let count = members.len() as u64;
+                let paths = self.paths.clone();
+                let disk = tokio::task::spawn_blocking(move || {
+                    paths.iter().map(|p| disk_kb(p)).sum::<u64>()
+                })
+                .await
+                .unwrap_or(u64::MAX);
                 if count > self.processes
                     || rss > self.memory
                     || disk > self.disk
                     || cpu_seen.values().sum::<f64>() >= self.cpu as f64
                 {
-                    tracing::warn!(pgid, "session exceeded aggregate CPU/memory/disk budget");
-                    super::super::proc::kill_group(pgid);
+                    tracing::warn!(
+                        pgid,
+                        "session exceeded aggregate CPU/memory/disk/process budget"
+                    );
+                    t.kill();
                     return;
                 }
             }
-        })
+        });
+        Watch { handle, tracker }
     }
 }
 
-fn cpu_seconds(text: &str) -> f64 {
+/// The running watchdog; dropping the session stops it and kills every process it saw.
+pub(crate) struct Watch {
+    handle: JoinHandle<()>,
+    tracker: Tracker,
+}
+impl Watch {
+    pub(crate) fn stop(&self) {
+        self.tracker.kill();
+        self.handle.abort();
+    }
+}
+
+/// Allocated kilobytes under `path`, walked in-process (no fork, so it works when the host
+/// cannot spawn). A file that vanishes mid-walk is skipped. Symlinks are not followed.
+fn disk_kb(path: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return 0;
+    };
+    let mut total = meta.blocks() / 2;
+    if meta.is_dir()
+        && let Ok(entries) = std::fs::read_dir(path)
+    {
+        total += entries.flatten().map(|e| disk_kb(&e.path())).sum::<u64>();
+    }
+    total
+}
+
+pub(super) fn cpu_seconds(text: &str) -> f64 {
     let (days, rest) = text
         .split_once('-')
         .map_or((0.0, text), |(d, r)| (d.parse::<f64>().unwrap_or(0.0), r));

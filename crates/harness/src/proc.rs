@@ -21,7 +21,9 @@ pub(crate) struct Proc {
     /// The child's process group, which it leads: its own children inherit it, so a kill of
     /// the group reaches a build or a shell job the agent started.
     pub(crate) pgid: u32,
-    budget: Option<JoinHandle<()>>,
+    budget: Option<crate::sandbox::Watch>,
+    /// macOS dead-man (no parent-death signal there): kills the tree if the runner dies.
+    supervisor: Option<std::process::Child>,
     pgid_file: Option<std::path::PathBuf>,
     stdin: Option<ChildStdin>,
     /// `None` once handed to `drain`.
@@ -101,6 +103,14 @@ impl Proc {
                 return Err(error);
             }
         }
+        // Linux has `--die-with-parent`; macOS needs a supervisor outside the sandbox.
+        let supervisor = (cfg!(target_os = "macos") && budget.is_some())
+            .then(|| crate::sandbox::tree::supervise(pgid, std::process::id()))
+            .transpose()
+            .map_err(|e| {
+                kill_group(pgid);
+                e
+            })?;
         let stdout = child
             .stdout
             .take()
@@ -122,6 +132,7 @@ impl Proc {
             stdin: child.stdin.take(),
             child,
             pgid,
+            supervisor,
             budget: budget.map(|b| b.start(pgid)),
             pgid_file,
             lines: Some(BufReader::new(stdout).lines()),
@@ -224,7 +235,11 @@ impl Drop for Proc {
     fn drop(&mut self) {
         kill_group(self.pgid);
         if let Some(budget) = self.budget.take() {
-            budget.abort();
+            budget.stop();
+        }
+        if let Some(mut s) = self.supervisor.take() {
+            let _ = s.kill();
+            let _ = s.wait();
         }
         if let Some(path) = &self.pgid_file {
             let _ = std::fs::remove_file(path);
@@ -234,12 +249,8 @@ impl Drop for Proc {
 
 /// SIGKILL to every process in group `pgid`. A group already empty is not an error.
 pub(crate) fn kill_group(pgid: u32) {
-    // ponytail: `kill(1)`, as `unsafe` (libc) is forbidden here.
-    let _ = std::process::Command::new("/bin/kill")
-        .args(["-KILL", "--", &format!("-{pgid}")])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    // A syscall, not a forked `/bin/kill`: it must work when the host cannot fork.
+    let _ = ainkrad_sys::killpg(pgid, 9);
 }
 
 #[cfg(test)]

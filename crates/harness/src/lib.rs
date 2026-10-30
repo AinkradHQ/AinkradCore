@@ -24,6 +24,7 @@ pub mod opencode;
 mod proc;
 mod sandbox;
 pub use sandbox::identity as process_identity;
+pub use sandbox::reap_group;
 
 pub use classify::{DROPPED, ErrorClass, PROTOCOL, classify};
 pub use meter::{Meter, tokens, weighted_tokens};

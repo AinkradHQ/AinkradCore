@@ -89,6 +89,8 @@ const PEM_END: &str = "-----END ";
 /// Values shorter than this are not treated as known secrets: redacting every `1` or `true`
 /// would wreck a transcript and protect nothing.
 const MIN_KNOWN: usize = 8;
+/// The shortest secret prefix held back at a stream boundary.
+const MIN_EDGE: usize = 4;
 
 #[derive(Debug, Clone, Default)]
 pub struct Redactor {
@@ -173,7 +175,9 @@ impl Redactor {
         // cannot disable boundary filtering. Only a preceding withheld prefix authorizes
         // masking the next event's beginning, so ordinary labels stay intact.
         for (name, value) in &self.known {
-            for n in (1..value.len().min(rest.len() + 1)).rev() {
+            // A shorter edge (one stray character) would mangle ordinary text that merely ends
+            // like a secret begins; 4+ bytes is a real prefix.
+            for n in (MIN_EDGE..value.len().min(rest.len() + 1)).rev() {
                 if value.is_char_boundary(n) && rest.ends_with(&value[..n]) {
                     self.pending.push((name.clone(), value[n..].to_owned()));
                     if n > tail {

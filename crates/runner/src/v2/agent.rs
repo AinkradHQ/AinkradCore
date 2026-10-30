@@ -621,15 +621,7 @@ fn reap_orphans(dir: &std::path::Path) {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let Ok(pgid) = text.split(':').next().unwrap_or("").parse::<u32>() else {
-            let _ = std::fs::remove_file(path);
-            continue;
-        };
-        if pgid > 1 && ainkrad_harness::process_identity(pgid).is_ok_and(|id| id == text) {
-            let _ = std::process::Command::new("/bin/kill")
-                .args(["-KILL", "--", &format!("-{pgid}")])
-                .status();
-        }
+        ainkrad_harness::reap_group(&text);
         let _ = std::fs::remove_file(path);
     }
 }

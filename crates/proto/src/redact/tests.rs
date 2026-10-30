@@ -161,3 +161,15 @@ fn fabricated_redaction_markers_do_not_disable_stream_filtering() {
             .starts_with("password")
     );
 }
+
+#[test]
+fn text_ending_in_a_secrets_first_characters_is_not_mangled() {
+    let mut r = Redactor::new();
+    r.known("tok", "sk-live-0123456789");
+    // A message that happens to end with the secret's first letter or two stays intact.
+    assert_eq!(r.stream_text("what is this"), "what is this");
+    assert_eq!(r.stream_text("grass is s"), "grass is s");
+    assert_eq!(r.stream_text("ends with sk"), "ends with sk");
+    // A real prefix is still withheld.
+    assert!(!r.stream_text("x sk-l").contains("sk-l"));
+}

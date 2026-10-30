@@ -2,7 +2,7 @@ use super::*;
 use crate::proc::Proc;
 use std::time::Duration;
 
-fn fixture(name: &str) -> (PathBuf, Spec) {
+pub(super) fn fixture(name: &str) -> (PathBuf, Spec) {
     let root = std::env::temp_dir().join(format!("sandbox-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     for dir in ["home/.ssh", "work", "tmp", "state/other", "config"] {
@@ -34,7 +34,7 @@ fn fixture(name: &str) -> (PathBuf, Spec) {
     (root, spec)
 }
 
-fn mechanism_available() -> bool {
+pub(super) fn mechanism_available() -> bool {
     if cfg!(target_os = "macos") {
         return true;
     } // ignored owner test must fail, never skip
@@ -43,7 +43,7 @@ fn mechanism_available() -> bool {
         .output();
     if !probe.is_ok_and(|o| o.status.success()) {
         assert!(
-            std::env::var_os("AINKRAD_REQUIRE_SANDBOX").is_none(),
+            std::env::var_os("AINKRAD_REQUIRE_SANDBOX").is_none_or(|v| v.is_empty()),
             "required bubblewrap/user namespaces cannot run"
         );
         // Bypass libtest's success-output capture: a skipped enforcement probe must
@@ -58,7 +58,7 @@ fn mechanism_available() -> bool {
     true
 }
 
-async fn run(spec: &Spec, program: &str, script: &str) -> (Option<i32>, String) {
+pub(super) async fn run(spec: &Spec, program: &str, script: &str) -> (Option<i32>, String) {
     let args = vec!["-c".into(), script.into()];
     let mut cmd = crate::proc::command(OsStr::new(program), &args, spec, &[]);
     cmd.env("PATH", "/usr/bin:/bin");
@@ -70,9 +70,49 @@ async fn run(spec: &Spec, program: &str, script: &str) -> (Option<i32>, String) 
 }
 
 #[test]
+fn macos_profile_has_no_blanket_network_and_no_unix_sockets() {
+    let (root, spec) = fixture("netprofile");
+    let mut allow = spec.clone();
+    allow.env.retain(|(n, _)| n != "AINKRAD_SANDBOX_NETWORK");
+    let text = profile(&allow, OsStr::new("/bin/true"));
+    assert!(
+        !text.contains("network*"),
+        "a blanket grant covers AF_UNIX sockets"
+    );
+    assert!(text.contains("(remote tcp \"*:443\")"));
+    assert!(!text.contains("remote tcp \"*:80\"") && !text.contains("169.254"));
+    // The only unix socket granted is the DNS resolver's.
+    assert_eq!(text.matches("(allow network-outbound (literal").count(), 1);
+    assert!(!text.contains("docker") && !text.contains("ssh-agent"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_harness_install_dir_is_granted_read_only_but_never_a_home_or_root() {
+    let (root, spec) = fixture("progdir");
+    std::fs::create_dir_all(root.join("tools")).unwrap();
+    std::fs::write(root.join("tools/stub"), "#!/bin/bash\n").unwrap();
+    let dirs = program_dirs(root.join("tools/stub").as_os_str(), &spec);
+    assert_eq!(dirs, [root.join("tools")]);
+    assert!(
+        program_dirs(OsStr::new("/bin/bash"), &spec).is_empty(),
+        "toolchain path"
+    );
+    assert!(
+        program_dirs(OsStr::new("/stub"), &spec).is_empty(),
+        "root dir"
+    );
+    assert!(
+        program_dirs(spec.cwd.join("x").as_os_str(), &spec).is_empty(),
+        "own worktree"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn profile_has_only_explicit_grants_and_no_keychain_service() {
     let (root, spec) = fixture("profile");
-    let text = profile(&spec);
+    let text = profile(&spec, OsStr::new("/bin/true"));
     assert!(text.starts_with("(version 1)\n(deny default)"));
     for dir in ["work", "config", "tmp"] {
         assert!(text.contains(root.join(dir).to_str().unwrap()));
@@ -84,7 +124,7 @@ fn profile_has_only_explicit_grants_and_no_keychain_service() {
     let mut allow = spec.clone();
     allow.env.retain(|(n, _)| n != "AINKRAD_SANDBOX_NETWORK");
     assert!(
-        profile(&allow).contains("(allow network*)"),
+        profile(&allow, OsStr::new("/bin/true")).contains("(allow network-outbound (remote tcp"),
         "network defaults to allow"
     );
     let _ = std::fs::remove_dir_all(root);
@@ -261,5 +301,80 @@ async fn an_invalid_manifest_cannot_spawn_an_agent() {
     );
     assert!(Proc::spawn_with_pgid_file(cmd, None).is_err());
     assert!(!root.join("work/escaped").exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "OWNER: run scripts/sandbox-macos-test.sh"
+)]
+async fn sockets_nested_userns_shm_and_the_harness_binary() {
+    if !mechanism_available() {
+        return;
+    }
+    let (root, spec) = fixture("sockets");
+    // A same-uid unix socket on the host (ptyhost, docker, ssh-agent in real life).
+    let sock = root.join("state/host.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    let connect = format!(
+        "import socket,sys\ns=socket.socket(socket.AF_UNIX)\ntry: s.connect({:?})\nexcept OSError: sys.exit(0)\nsys.exit(99)",
+        sock
+    );
+    let (code, err) = run(&spec, "/usr/bin/python3", &connect).await;
+    assert_eq!(code, Some(0), "a host unix socket was reachable: {err}");
+    // The control proves the socket accepts a plain connection.
+    assert!(std::os::unix::net::UnixStream::connect(&sock).is_ok());
+    // The harness binary, outside the toolchain paths, runs and is read-only.
+    std::fs::create_dir_all(root.join("tools")).unwrap();
+    let stub = root.join("tools/stub");
+    std::fs::write(
+        &stub,
+        "#!/bin/bash\necho ok > ran\n! echo x > \"$(dirname \"$0\")/w\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let cmd = crate::proc::command(stub.as_os_str(), &[], &spec, &[]);
+    let mut child = Proc::spawn_with_pgid_file(cmd, None).unwrap();
+    let code = tokio::time::timeout(Duration::from_secs(30), child.wait())
+        .await
+        .unwrap();
+    assert_eq!(code, Some(0), "stub: {}", child.stderr_tail());
+    assert!(root.join("work/ran").exists() && !root.join("tools/w").exists());
+    #[cfg(target_os = "linux")]
+    {
+        // Abstract sockets live in the network namespace: hidden by `deny`, and the
+        // documented residual of `allow` (the host network).
+        let name = format!("ainkrad-test-{}", std::process::id());
+        let l = {
+            use std::os::linux::net::SocketAddrExt;
+            let addr = std::os::unix::net::SocketAddr::from_abstract_name(&name).unwrap();
+            std::os::unix::net::UnixListener::bind_addr(&addr).unwrap()
+        };
+        let abstract_connect = format!(
+            "import socket,sys\ns=socket.socket(socket.AF_UNIX)\ntry: s.connect('\\0{name}')\nexcept OSError: sys.exit(0)\nsys.exit(99)"
+        );
+        let (code, err) = run(&spec, "/usr/bin/python3", &abstract_connect).await;
+        assert_eq!(code, Some(0), "deny reached an abstract socket: {err}");
+        let mut allow = spec.clone();
+        allow.env.retain(|(n, _)| n != "AINKRAD_SANDBOX_NETWORK");
+        let (code, _) = run(&allow, "/usr/bin/python3", &abstract_connect).await;
+        assert_eq!(
+            code,
+            Some(99),
+            "residual changed: update the documented policy"
+        );
+        drop(l);
+        // No nested user namespace (it would reset the process cap), and a sized /dev/shm.
+        let (code, err) = run(&spec, "/bin/bash", "! /usr/bin/unshare -U /bin/true").await;
+        assert_eq!(code, Some(0), "nested userns allowed: {err}");
+        let (code, err) = run(
+            &spec,
+            "/bin/bash",
+            "! head -c 67108864 /dev/zero > /dev/shm/big",
+        )
+        .await;
+        assert_eq!(code, Some(0), "/dev/shm unbounded: {err}");
+    }
     let _ = std::fs::remove_dir_all(root);
 }
