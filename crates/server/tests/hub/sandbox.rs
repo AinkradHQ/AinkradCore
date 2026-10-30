@@ -1,0 +1,127 @@
+//! Lost start answers must reuse the original grants instead of exhausting the lease cap.
+use super::*;
+use ainkrad_core::audit::AuditActor;
+use ainkrad_core_server::agents as service;
+use ainkrad_core_server::store::agents::{self as sessions, NewSession, SessionSecret};
+use ainkrad_proto::v2::*;
+
+#[tokio::test]
+async fn retried_starts_reuse_the_same_lease() {
+    let mut core = Core::start(
+        "sandbox-retry",
+        ainkrad_core_server::hub::HubConfig {
+            heartbeat: Duration::from_secs(10),
+            ..quick()
+        },
+    )
+    .await;
+    core.app.agents = service::Agents::new(service::AgentsConfig {
+        answer: Duration::from_millis(50),
+        retry: Duration::from_millis(25),
+        lost_after: Duration::from_secs(2),
+        ..service::AgentsConfig::default()
+    });
+    let runner = core.runner().await;
+    let driver = DriverInfo {
+        name: AGENT_DRIVER.into(),
+        commands: AGENT_OPS.iter().map(|s| (*s).into()).collect(),
+        capacity: 2,
+        streams: Some(32),
+        ..DriverInfo::default()
+    };
+    let mut fake = Fake::welcomed(&core, &runner, vec![driver]).await;
+    agents::throwaway_mode(&core).await;
+    agents::secret(&core, "test.retry", std::slice::from_ref(&runner.id), "env").await;
+    let secrets = [SessionSecret {
+        name: "test.retry".into(),
+        var: "TOKEN".into(),
+    }];
+    let policy = serde_json::json!({});
+    let session = sessions::create(
+        &core.app.pool,
+        &NewSession {
+            runner: &runner.id,
+            harness: "fake",
+            model: None,
+            prompt: Some("go"),
+            workspace: None,
+            policy: &policy,
+            secrets: &secrets,
+            created_by: &runner.id,
+        },
+        AuditActor::System,
+        &core.app.clock.now(),
+    )
+    .await
+    .unwrap();
+    service::authorize_for_tests(&core.app, &session.id);
+    service::start(&core.app, &session).await.unwrap();
+    let mut leases = Vec::new();
+    for _ in 0..3 {
+        loop {
+            if let Some(Body::Command(Command::AgentStart(start))) =
+                fake.next().await.body().unwrap()
+            {
+                leases.push(start.secrets[0].lease.clone());
+                break;
+            }
+        }
+    }
+    assert!(
+        leases.iter().all(|l| l == &leases[0]),
+        "retries minted fresh grants"
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM core_secret_leases")
+        .fetch_one(&core.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "retries exhausted lease accounting");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let state = sessions::get(&core.app.pool, &session.id)
+                .await
+                .unwrap()
+                .unwrap();
+            if state.state == "lost" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("unanswered starts retried without a bound");
+    core.app.closing.send_replace(true);
+}
+
+#[tokio::test]
+async fn an_agent_cannot_select_approval_bypasses() {
+    use ainkrad_core_server::api::v1::{Caller, create_agent_for_tests as create};
+    use axum::{Extension, body::Bytes, extract::State, response::IntoResponse};
+    let core = Core::start("sandbox-policy", quick()).await;
+    let device = core.device("device", &["agent"]).await;
+    let runner = core.runner().await;
+    let caller = Caller {
+        device: ainkrad_core_server::store::gov::get_device(&core.app.pool, &device.id)
+            .await
+            .unwrap()
+            .unwrap(),
+        session: String::new(),
+    };
+    for allow in [
+        serde_json::json!(["Bash"]),
+        serde_json::json!(["Bash:curl"]),
+        serde_json::json!(["unknown-alias"]),
+    ] {
+        let body = serde_json::json!({"runner": runner.id, "harness": "fake", "policy": {"mode":"ask", "allow":allow}});
+        let result = create(
+            State(core.app.clone()),
+            Extension(caller.clone()),
+            Bytes::from(serde_json::to_vec(&body).unwrap()),
+        )
+        .await;
+        assert_eq!(
+            result.unwrap_err().into_response().status(),
+            axum::http::StatusCode::FORBIDDEN
+        );
+    }
+}

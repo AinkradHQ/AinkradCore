@@ -358,7 +358,12 @@ async fn ready_moves_backlog_to_todo_without_a_wake() {
     assert_eq!(ready.state, IssueState::Todo);
     assert_eq!(ready.next_actor, Some(NextActor::Agent(dev)));
     assert_eq!(actions(pool, i.id).await, ["issue.todo"]);
-    // "Nobody woken" (`SELECT count(*) FROM wake_requests` is 0) is S7's: see the test below.
+    // Nobody is woken: a `ready` transition leaves the agent next actor as it was.
+    let woken: i64 = sqlx::query_scalar("SELECT count(*) FROM citadel_wake_requests")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(woken, 0);
     let again = transition_issue(pool, i.id, &IssueTransition::Ready, by).await;
     assert!(
         matches!(again, Err(IssueTransitionError::Illegal(_))),
@@ -468,10 +473,4 @@ async fn estimates_are_audited_and_only_for_open_issues() {
     );
     let gone = estimate_issue(pool, IssueId(999), Some(1), by).await;
     assert!(matches!(gone, Err(SprintError::NotFound)), "{gone:?}");
-}
-
-#[tokio::test]
-#[ignore = "S7: needs the wake queue (wake_requests)"]
-async fn ready_wakes_nobody() {
-    unimplemented!("S7: SELECT count(*) FROM wake_requests is 0 after a `ready` transition");
 }

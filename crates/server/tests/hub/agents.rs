@@ -47,6 +47,8 @@ type RunEnv = std::collections::HashMap<i64, Vec<(String, String)>>;
 struct Script {
     script: String,
     env: Arc<Mutex<RunEnv>>,
+    /// The `RunToken` each run was handed.
+    tokens: Arc<Mutex<Vec<String>>>,
 }
 
 fn script(s: &str) -> Script {
@@ -61,7 +63,8 @@ impl Executor for Script {
         Ok(Some(format!("h-{}", job.context_ref)))
     }
 
-    async fn run(&self, job: &Job, _: RunToken, reports: mpsc::Sender<Report>) -> Outcome {
+    async fn run(&self, job: &Job, token: RunToken, reports: mpsc::Sender<Report>) -> Outcome {
+        self.tokens.lock().unwrap().push(token.expose().to_owned());
         let env = self
             .env
             .lock()
@@ -201,7 +204,7 @@ async fn finished(core: &Core, id: &str) -> (sessions::Session, Vec<Value>) {
     panic!("session {id} did not end: {:?}", state_of(core, id).await);
 }
 
-async fn throwaway_mode(core: &Core) {
+pub(super) async fn throwaway_mode(core: &Core) {
     let now = core.app.clock.now();
     ainkrad_core_server::store::settings::set(
         &core.app.pool,
@@ -215,7 +218,7 @@ async fn throwaway_mode(core: &Core) {
     .unwrap();
 }
 
-async fn secret(core: &Core, name: &str, runners: &[String], delivery: &str) {
+pub(super) async fn secret(core: &Core, name: &str, runners: &[String], delivery: &str) {
     let sealer = core.app.secrets.as_deref().unwrap();
     let new = NewValue {
         value: VALUE,
@@ -578,6 +581,99 @@ async fn a_decision_from_the_core_unblocks_the_waiting_harness() {
         "{t:?}"
     );
     assert!(t.iter().any(|b| b["type"] == "approval_decided"));
+    r.halt().await;
+    let _ = std::fs::remove_dir_all(&st.0);
+}
+
+/// A module that mints one credential per launch, as Citadel's run token.
+struct Minter;
+
+const MINTED: &str = "cit_run_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+impl ainkrad_core_server::module::Module for Minter {
+    fn id(&self) -> &'static str {
+        "tmod"
+    }
+
+    fn routes(&self) -> axum::Router<ainkrad_core_server::api::App> {
+        axum::Router::new()
+    }
+
+    fn credentials<'a>(
+        &'a self,
+        _: &'a ainkrad_core_server::api::App,
+        s: &'a sessions::Session,
+    ) -> ainkrad_core_server::module::BoxFut<
+        'a,
+        Result<Vec<ainkrad_core_server::module::Credential>, String>,
+    > {
+        Box::pin(async move {
+            assert_eq!(s.owner_ref.as_deref(), Some("run:1"));
+            Ok(vec![ainkrad_core_server::module::Credential {
+                var: "CITADEL_RUN_TOKEN".to_owned(),
+                value: ainkrad_core_server::module::Zeroizing::new(MINTED.to_owned()),
+            }])
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_module_credential_reaches_the_runner_as_its_run_token_and_nowhere_else() {
+    let core = Core::start("agents-cred", hub_quick()).await;
+    let base = format!("http://{}", core.host);
+    let st = state("cred");
+    let e = paired(&core, &base, None, &st).await;
+    let exec = script("echo \"env=[$CITADEL_RUN_TOKEN]\"");
+    let tokens = exec.tokens.clone();
+    let r = run_runner(&core, &base, &st, exec).await;
+    let mut app = core.app.clone();
+    app.modules = Arc::from([Arc::new(Minter) as Arc<dyn ainkrad_core_server::module::Module>]);
+    let policy = json!({});
+    let new = NewSession {
+        runner: &e.device_id,
+        harness: "fake",
+        model: None,
+        prompt: Some("go"),
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: &e.device_id,
+    };
+    let s = service::create_for_module_ref(&app, "tmod", &new, Some("run:1"))
+        .await
+        .unwrap_or_else(|e| panic!("{}", service::describe(&e)));
+    let (done, transcript) = finished(&core, &s.id).await;
+    assert_eq!(done.outcome.as_ref().unwrap()["kind"], "succeeded");
+    assert_eq!(done.owner_ref.as_deref(), Some("run:1"));
+    // The driver was handed it as the run's token (for the harness's MCP config) ...
+    assert_eq!(*tokens.lock().unwrap(), [MINTED]);
+    // ... and it is not in the harness's environment.
+    let line = transcript.iter().find(|b| b["type"] == "line").unwrap();
+    assert_eq!(line["text"], "env=[]");
+    // Nowhere the Core keeps text, and no lease id either.
+    let all = everything(&core).await;
+    assert!(
+        !all.contains(MINTED),
+        "the credential leaked into the Core's records"
+    );
+    assert!(
+        !all.contains("\"l_"),
+        "a lease id leaked into the Core's records"
+    );
+    let redeemed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE action = 'secret.redeemed' \
+         AND json_extract(details, '$.name') = 'citadel_run_token'",
+    )
+    .fetch_one(&core.app.pool)
+    .await
+    .unwrap();
+    assert_eq!(redeemed, 1);
+    // Nothing waits to be redeemed any more, and the table holds no secret.
+    let sealed: i64 = sqlx::query_scalar("SELECT count(*) FROM core_secrets")
+        .fetch_one(&core.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(sealed, 0, "an ephemeral credential is never stored");
     r.halt().await;
     let _ = std::fs::remove_dir_all(&st.0);
 }

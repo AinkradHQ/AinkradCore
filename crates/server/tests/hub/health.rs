@@ -143,7 +143,12 @@ async fn a_silent_runner_is_degraded_then_dropped() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert!(!hub.online(&dev.id));
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    for _ in 0..60 {
+        if kinds(&core).await.len() == 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     assert_eq!(
         kinds(&core).await,
         ["runner.connected", "runner.degraded", "runner.disconnected"]

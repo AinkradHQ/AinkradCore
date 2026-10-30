@@ -3,6 +3,7 @@
 pub mod accounts;
 pub mod artifacts;
 pub mod audit;
+pub mod exec;
 pub mod forge;
 pub mod gov;
 pub mod linear;

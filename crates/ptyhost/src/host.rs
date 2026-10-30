@@ -50,7 +50,9 @@ impl HostConfig {
             dir,
             id,
             allow_uid: ainkrad_sys::getuid(),
-            ring: 1 << 20,
+            // The per-terminal replay budget is finite and matches the protocol's 8 MiB
+            // scrollback default. The VT screen itself has independent bounded history.
+            ring: 8 << 20,
             client_queue: 1024,
         }
     }

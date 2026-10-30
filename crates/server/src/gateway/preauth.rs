@@ -9,7 +9,9 @@
 //!   (`http01_router`);
 //! - `/healthz`: `ok`, nothing else;
 //! - `/runner/v2/connect`: the runner hub, which verifies the signed request and the runner's
-//!   channel-bound proof itself (`hub::connect`).
+//!   channel-bound proof itself (`hub::connect`);
+//! - the declared token routes of the mounted modules, `/token/<module>/v1/…`, behind their own
+//!   gate (`token`, E2-13 S8): a bearer token the module checks, never a signature.
 //!
 //! They still pass the shared checks (Host, no Origin, no Authorization, a canonical path, no
 //! query string) and take at most a 16 KiB body (413). Every other request runs the client
@@ -73,6 +75,19 @@ pub async fn gate(State(app): State<App>, req: Request, next: Next) -> Response 
 }
 
 async fn gated(app: App, req: Request, next: Next) -> Response {
+    // A declared token route has its own gate (`token`); an undeclared path under the prefix is
+    // the plain 401.
+    if req.uri().path().starts_with(super::token::PREFIX) {
+        return match super::token::resolve(&app.modules, req.method(), req.uri().path()) {
+            Some((module, route)) => {
+                let module = module.clone();
+                super::token::gate(State(app), module, route, req, next).await
+            }
+            // The plain 401 of any unsigned unknown path, whatever else the request carries, so
+            // a declared route cannot be told from an undeclared one.
+            None => refused().await,
+        };
+    }
     if !allowed(req.uri().path()) {
         return crate::api::v1::gate::client_gate(State(app), req, next).await;
     }

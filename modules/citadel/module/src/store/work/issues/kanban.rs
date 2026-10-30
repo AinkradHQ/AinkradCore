@@ -14,7 +14,9 @@ use ainkrad_core::audit::AuditActor;
 use sqlx::SqliteConnection;
 
 use super::*;
+use crate::domain::work::WakeSource;
 use crate::store::audit::{self, Event};
+use crate::store::exec::{NewWakeRequest, enqueue_in};
 
 /// The project's mode and company; `None` when there is no such project.
 pub(super) async fn project_mode(
@@ -53,8 +55,47 @@ pub(super) async fn wip_full(
     .await
 }
 
-// S7: `wake_freed_in` (wake the next `todo` issue's agent when a full `in_progress` column frees a
-// slot) enqueues on the run engine's wake queue; it comes with that slice.
+/// Wakes the agent of the oldest held-back `todo` issue of kanban `project`, keyed `key`, when its
+/// `in_progress` column has just dropped below its limit: it held its limit of issues until one
+/// left, so that `todo` issue could not start. One wake per freed slot; inside the caller's
+/// `BEGIN IMMEDIATE` transaction, after the issue left.
+pub(super) async fn wake_freed_in(
+    conn: &mut SqliteConnection,
+    project: ProjectId,
+    key: String,
+) -> Result<(), Error> {
+    let freed: Option<u32> = sqlx::query_scalar(
+        "SELECT w.max_issues FROM citadel_wip_limits w JOIN citadel_projects p ON p.id = w.project_id \
+         WHERE w.project_id = ?1 AND w.state = 'in_progress' AND p.mode = 'kanban' \
+         AND w.max_issues - 1 = (SELECT count(*) FROM citadel_issues WHERE project_id = ?1 \
+             AND state = 'in_progress' AND parent_id IS NULL)",
+    )
+    .bind(project.0)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some(limit) = freed else {
+        return Ok(());
+    };
+    let held: Option<(i64, i64)> = sqlx::query_as(
+        "SELECT id, next_agent_id FROM citadel_issues WHERE project_id = ? AND state = 'todo' \
+         AND parent_id IS NULL AND next_agent_id IS NOT NULL ORDER BY id LIMIT 1",
+    )
+    .bind(project.0)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some((issue, agent)) = held else {
+        return Ok(());
+    };
+    let wake = NewWakeRequest {
+        agent_id: AgentId(agent),
+        issue_id: Some(IssueId(issue)),
+        source: WakeSource::Assignment,
+        reason: format!("the in_progress column has room again (WIP limit {limit})"),
+        idempotency_key: key,
+        not_before: None,
+    };
+    enqueue_in(conn, &wake, 1).await.map(drop)
+}
 
 /// Sets (or with `None` removes) the most top-level issues the kanban project's `state`
 /// column may hold, and appends `project.wip_limit_set` by `actor`. A missing project is

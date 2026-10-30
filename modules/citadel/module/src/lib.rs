@@ -8,15 +8,20 @@
 //! platform: the domain model, the baseline schema, the org repository and its first routes.
 
 use ainkrad_core_server::api::App;
-use ainkrad_core_server::module::{Module, ModuleSetting};
+use ainkrad_core_server::module::{
+    BoxFut, Credential, Module, ModuleSetting, TokenGrant, TokenRoute,
+};
 use ainkrad_core_server::store::Migration;
+use ainkrad_core_server::store::agents::Session;
 use axum::Router;
 
 pub mod admin;
 pub mod api;
 pub mod domain;
+pub mod engine;
 pub mod forge;
 pub mod kinds;
+pub mod mcp;
 pub mod migrations;
 pub mod notifications;
 pub mod profile;
@@ -25,9 +30,12 @@ pub mod store;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 
+/// The module's id: the route prefix, the table prefix and the owner of the sessions its engine starts.
+pub const MODULE: &str = "citadel";
+
 /// The Citadel module: hand it to `module::mount` and `migrate::migrate_modules`. `default()`
-/// declares no jobs; `with_forge` adds the forge and Linear pollers (S6), which need the store
-/// and the broker's key.
+/// declares no forge jobs; `with_forge` adds the forge and Linear pollers (S6), which need the
+/// store and the broker's key.
 #[derive(Default, Clone)]
 pub struct Citadel {
     forge: Option<std::sync::Arc<forge::Runtime>>,
@@ -41,7 +49,7 @@ impl Citadel {
 
 impl Module for Citadel {
     fn id(&self) -> &'static str {
-        "citadel"
+        MODULE
     }
 
     fn routes(&self) -> Router<App> {
@@ -86,6 +94,34 @@ impl Module for Citadel {
     }
 
     fn jobs(&self) -> Vec<ainkrad_core_server::jobs::Job> {
-        self.forge.as_ref().map_or_else(Vec::new, |f| f.jobs())
+        let mut jobs = engine::jobs();
+        if let Some(f) = &self.forge {
+            jobs.extend(f.jobs());
+        }
+        jobs
+    }
+
+    fn token_routes(&self) -> &'static [TokenRoute] {
+        mcp::ROUTES
+    }
+
+    fn token_handler(
+        &self,
+        method: &str,
+        template: &str,
+    ) -> Option<axum::routing::MethodRouter<App>> {
+        mcp::handler(method, template)
+    }
+
+    fn verify_token<'a>(&'a self, app: &'a App, token: &'a str) -> BoxFut<'a, Option<TokenGrant>> {
+        Box::pin(mcp::verify(app, token))
+    }
+
+    fn credentials<'a>(
+        &'a self,
+        app: &'a App,
+        session: &'a Session,
+    ) -> BoxFut<'a, Result<Vec<Credential>, String>> {
+        Box::pin(mcp::credentials(app, session))
     }
 }

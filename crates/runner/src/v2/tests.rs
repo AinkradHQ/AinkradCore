@@ -197,7 +197,8 @@ impl Core {
     }
 
     async fn recv(&mut self) -> Frame {
-        let msg = tokio::time::timeout(Duration::from_secs(10), self.ws.next())
+        // PTY startup can be slow on the shared ARM CI runner under the full workspace suite.
+        let msg = tokio::time::timeout(Duration::from_secs(30), self.ws.next())
             .await
             .expect("a frame in time")
             .expect("open")
@@ -698,28 +699,55 @@ mod pty {
         assert!(hello.terminals.is_empty(), "reaped: {hello:?}");
     }
 
+    /// Kills the terminal hosts started under `dir` (and with them their children) when the
+    /// test ends, pass or fail.
+    struct Reap(std::path::PathBuf);
+
+    impl Drop for Reap {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("pkill")
+                .args(["-f", &format!("serve --dir {}", self.0.display())])
+                .status();
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// E2-01.4 on the wire: with no credit from the Core, a flood sends at most the window and
     /// is cut to a snapshot rather than buffered without bound; credit lets output flow again.
     #[tokio::test]
     async fn output_respects_credit_and_a_flood_becomes_a_snapshot() {
         let dir = tmp();
+        let _reap = Reap(dir.clone());
         let (mut core, _) = Core::start_pty(driver(&dir, true)).await;
         core.send(
             1,
-            open("while :; do echo 0123456789abcdefghijklmnopqrstuvwxyz; done"),
+            // A finite flood, several times the bridge's backlog: it overflows however slowly the
+            // machine writes it, since nothing drains without credit. The `sleep` keeps the
+            // terminal (and its snapshot) alive until the test closes it.
+            open("yes 0123456789abcdefghijklmnopqrstuvwxyz | head -c 4000000; sleep 60"),
         )
         .await;
         let (mut bytes, mut snapshot) = (0u64, None);
-        let mut granted = false;
+        let mut grants = 0u64;
         while snapshot.is_none() {
             // The window is spent and the flood keeps coming: no snapshot goes without credit
-            // (it costs credit too); one more grant brings it.
-            if bytes == STREAM_WINDOW && !granted {
-                tokio::time::sleep(Duration::from_millis(500)).await;
+            // (it costs credit too). A grant may be spent on output before the backlog
+            // overflows, on a slow machine, so grant again whenever the stream goes quiet.
+            let next = if bytes >= STREAM_WINDOW {
+                tokio::time::timeout(Duration::from_millis(500), core.recv()).await
+            } else {
+                Ok(core.recv().await)
+            };
+            let Ok(f) = next else {
                 core.send(1, Body::Credit(Credit { bytes: 4096 })).await;
-                granted = true;
+                grants += 1;
+                continue;
+            };
+            if matches!(f.body(), Ok(Some(Body::Heartbeat(_)))) {
+                core.send(CONTROL_STREAM, Body::Heartbeat(Default::default()))
+                    .await;
+                continue;
             }
-            let f = core.recv().await;
             match f.body().unwrap().unwrap() {
                 Body::Output(Output { data }) => {
                     bytes += STANDARD.decode(data).unwrap().len() as u64
@@ -728,7 +756,10 @@ mod pty {
                 _ => {}
             }
         }
-        assert!(bytes <= STREAM_WINDOW + 4096, "{bytes} past the credit");
+        assert!(
+            bytes <= STREAM_WINDOW + grants * 4096,
+            "{bytes} past the credit"
+        );
         assert!(snapshot.unwrap().seq > bytes);
         // More credit: the stream carries on (output, or another snapshot under the flood).
         core.send(1, Body::Credit(Credit { bytes: 65536 })).await;

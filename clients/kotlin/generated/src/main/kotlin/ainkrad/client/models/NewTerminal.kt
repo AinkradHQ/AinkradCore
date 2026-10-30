@@ -22,20 +22,19 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual
 
 /**
- * `createTerminal`'s body.
+ * 
  *
- * @param runner The runner's device id, `d_…`; it must advertise the `pty` driver.
+ * @param runner 
  * @param propertySize 
  * @param args 
- * @param cwd An absolute directory; absent, the user's home.
- * @param env Variables set as given; the rest of the environment is the runner's allow-list.
- * @param program Absent: the user's login shell.
+ * @param cwd 
+ * @param env 
+ * @param program 
  */
 @Serializable
 
 data class NewTerminal (
 
-    /* The runner's device id, `d_…`; it must advertise the `pty` driver. */
     @SerialName(value = "runner")
     val runner: kotlin.String,
 
@@ -45,15 +44,12 @@ data class NewTerminal (
     @SerialName(value = "args")
     val args: kotlin.collections.List<kotlin.String>? = null,
 
-    /* An absolute directory; absent, the user's home. */
     @SerialName(value = "cwd")
     val cwd: kotlin.String? = null,
 
-    /* Variables set as given; the rest of the environment is the runner's allow-list. */
     @SerialName(value = "env")
     val env: kotlin.collections.Map<kotlin.String, kotlin.String>? = null,
 
-    /* Absent: the user's login shell. */
     @SerialName(value = "program")
     val program: kotlin.String? = null
 

@@ -46,6 +46,14 @@ pub fn mcp_url(server: &str) -> Option<String> {
     Some(format!("{scheme}://{authority}/mcp/v1"))
 }
 
+/// The Core's MCP server for a runner's server URL (`wss://h/runner/v2/connect`): the Citadel
+/// module's token route `https://h/token/citadel/v1/mcp` (`ws://` → `http://`, loopback only).
+/// `mcp_url` stays the monolith's `/mcp/v1`, which its reference tests still use.
+pub fn core_mcp_url(server: &str) -> Option<String> {
+    let url = mcp_url(server)?;
+    Some(url.replace("/mcp/v1", "/token/citadel/v1/mcp"))
+}
+
 /// Writes one 0600 file, refusing to follow or reuse anything already there.
 fn private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
     let mut file = OpenOptions::new()
@@ -134,6 +142,10 @@ mod tests {
         assert_eq!(
             url("ws://127.0.0.1:7700/runner/v1/connect").as_deref(),
             Some("http://127.0.0.1:7700/mcp/v1")
+        );
+        assert_eq!(
+            core_mcp_url("wss://core.lan/runner/v2/connect").as_deref(),
+            Some("https://core.lan/token/citadel/v1/mcp")
         );
         assert_eq!(url("http://x/runner"), None);
         assert_eq!(url("ws:///runner"), None);

@@ -213,9 +213,8 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
 /// Delivered secrets go to `$XDG_RUNTIME_DIR` (a tmpfs on most Linux hosts), in a dir named
 /// for this state dir so two runners never sweep each other's; else `<state>/secrets`.
 ///
-/// Agents are opt-in and unconfined until E2-09: this is a loud safety boundary, not sandboxing.
-/// Until E2-09, no real credentials may be delivered; the Core's `secrets.mode` gate remains
-/// authoritative and the Core refuses sessions when no runner advertises this driver.
+/// Agents are opt-in and always process-isolated. The Core's `secrets.mode` gate remains
+/// authoritative; unavailable isolation refuses the start instead of falling back.
 /// Secret files require a runtime filesystem (tmpfs/ramdisk); persistent fallback is refused.
 /// As the v1 runner does: the work root is outside the home and under no harness instruction
 /// file (`check_roots`), and each harness's version is probed; only an installed one the
@@ -231,7 +230,7 @@ async fn agents(state: &std::path::Path) -> Result<super::agent::AgentDriver, St
                 .collect();
             PathBuf::from(run).join(format!("ainkrad-runner-{tag}"))
         }
-        None => return Err("agent secrets require XDG_RUNTIME_DIR on a tmpfs/ramdisk".to_owned()),
+        None => state.join("secrets"),
     };
     let tag = ring::digest::digest(&ring::digest::SHA256, state.as_os_str().as_encoded_bytes());
     let tag: String = tag.as_ref()[..6]
@@ -244,7 +243,7 @@ async fn agents(state: &std::path::Path) -> Result<super::agent::AgentDriver, St
         .map(PathBuf::from)
         .unwrap_or_default();
     executor.check_roots(&home)?;
-    let mut config = super::agent::AgentConfig::new(state.join("agents"), secrets);
+    let mut config = super::agent::AgentConfig::new(state.join("agents"), secrets.clone());
     for (name, version) in executor.probe(Duration::from_secs(10)).await {
         let verdict = ainkrad_harness::compat::check(&name, Some(&version), &Default::default());
         if !verdict.refused {
@@ -254,7 +253,14 @@ async fn agents(state: &std::path::Path) -> Result<super::agent::AgentDriver, St
     if config.slots.is_empty() {
         return Err("no harness is installed in a version the compat matrix takes".to_owned());
     }
-    super::agent::AgentDriver::new(config, executor).map_err(|e| e.to_string())
+    super::agent::AgentDriver::new(config, executor)
+        .map(|d| {
+            d.with_sandbox(Arc::new(super::sandbox::ProcessSandbox::new(
+                state.to_path_buf(),
+                secrets,
+            )))
+        })
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

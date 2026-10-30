@@ -98,6 +98,9 @@ pub struct Auth {
     pub challenge_limit: Limiter,
     /// Authentication failures per address, in memory (`AddressFailures`).
     pub failures: AddressFailures,
+    /// Token-route failures per address (`gateway::token`): apart from `failures`, so a harness
+    /// guessing tokens cannot lock its own host out of the signed API.
+    pub token_failures: AddressFailures,
     /// The global wrong-claim budget (`PairBudget`).
     pub pair_budget: PairBudget,
     /// Failed step-up proofs per device (`stepup`).
@@ -124,6 +127,7 @@ impl Auth {
             revoked: broadcast::channel(64).0,
             challenge_limit: Limiter::new(30, 0.5),
             failures: AddressFailures::default(),
+            token_failures: AddressFailures::default(),
             pair_budget: PairBudget::default(),
             stepup_failures: StepUpFailures::default(),
             refusals: refusals::Refusals::default(),

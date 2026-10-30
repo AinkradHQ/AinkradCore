@@ -143,7 +143,12 @@ impl HarnessExecutor {
         reports: &mpsc::Sender<Report>,
         meter: &mut Meter,
     ) -> Outcome {
-        let mcp = self.mcp_url.as_deref().map(|url| (url, token));
+        // A session that was handed no token (no MCP) gets no MCP config.
+        let mcp = self
+            .mcp_url
+            .as_deref()
+            .filter(|_| !token.expose().is_empty())
+            .map(|url| (url, token));
         let private = self.work_root.join("private");
         let instructions = job.instructions.as_deref();
         // Removed when this future ends or is dropped (a cancelled run).
@@ -179,10 +184,15 @@ impl HarnessExecutor {
         if let (Some(_), Some(issue)) = (&job.workspace, job.issue) {
             env.extend(self.workspaces.cache_env(issue, &job.trees()));
         }
-        if job.account.is_some() {
-            // The account's login or token only, never the runner's own.
-            env_allow.retain(|name| !self.secret_env.contains(name));
-        }
+        // An account's login or token only, never the runner's own; and an isolated agent
+        // session never gets the runner's keys either (it can send them anywhere the
+        // network policy allows): a session's key must be a leased secret.
+        let isolated = env.iter().any(|(n, _)| n == "AINKRAD_SANDBOX");
+        env_allow = allowed_env(
+            env_allow,
+            &self.secret_env,
+            job.account.is_some() || isolated,
+        );
         if let Some(c) = credential {
             env.push((c.var, c.value.into()));
         }
@@ -233,5 +243,27 @@ impl HarnessExecutor {
                 "harness_start",
             ),
         }
+    }
+}
+
+/// The runner variables a harness may inherit: without its own secrets when the run has an
+/// account or is isolated.
+fn allowed_env(mut allow: Vec<String>, secret: &[String], strip_secrets: bool) -> Vec<String> {
+    if strip_secrets {
+        allow.retain(|name| !secret.contains(name));
+    }
+    allow
+}
+
+#[cfg(test)]
+mod allowed_env_tests {
+    use super::allowed_env;
+
+    #[test]
+    fn an_isolated_run_never_inherits_the_runners_keys() {
+        let allow = vec!["PATH".to_owned(), "ANTHROPIC_API_KEY".to_owned()];
+        let secret = vec!["ANTHROPIC_API_KEY".to_owned()];
+        assert_eq!(allowed_env(allow.clone(), &secret, true), ["PATH"]);
+        assert_eq!(allowed_env(allow, &secret, false).len(), 2);
     }
 }

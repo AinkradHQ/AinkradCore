@@ -239,11 +239,20 @@ async fn the_poller_runs_as_the_schedulers_job_and_a_failed_pass_stores_no_secre
     let r = rig().await;
     let citadel = citadel_module::Citadel::with_forge(r.rt.clone());
     let jobs = citadel.jobs();
+    let forge_job = jobs.iter().position(|j| j.name == "forge_poll").unwrap();
     let names: Vec<_> = jobs.iter().map(|j| j.name).collect();
-    assert_eq!(names, ["forge_poll", "linear_sync"]);
     assert!(
-        citadel_module::Citadel::default().jobs().is_empty(),
-        "no runtime, no jobs"
+        names.contains(&"forge_poll") && names.contains(&"linear_sync"),
+        "{names:?}"
+    );
+    let bare: Vec<_> = citadel_module::Citadel::default()
+        .jobs()
+        .iter()
+        .map(|j| j.name)
+        .collect();
+    assert!(
+        !bare.contains(&"forge_poll"),
+        "no runtime, no forge jobs: {bare:?}"
     );
     r.requested("aaaa1111").await;
     let run = Run {
@@ -255,7 +264,7 @@ async fn the_poller_runs_as_the_schedulers_job_and_a_failed_pass_stores_no_secre
         due_at: NOW.into(),
         payload: json!({}),
     };
-    jobs[0].handler.run(&run).await.unwrap();
+    jobs[forge_job].handler.run(&run).await.unwrap();
     assert_eq!(r.pr().await.phase, PrPhase::Open);
     let used: i64 =
         sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE action = 'secret.used'")

@@ -1,13 +1,13 @@
 CARGO ?= cargo
 
-.PHONY: check-env install-test perf test-web e1-exit e1-exit-faults soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel release-dry release-repro release-test fuzz-smoke audit-fuzz
+.PHONY: check-env install-test perf test-web e1-exit e1-exit-faults e2-exit e2-exit-faults e2-soak soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel release-dry release-repro release-test fuzz-smoke audit-fuzz
 build: lint ; $(CARGO) build --workspace
 test: lint ; $(CARGO) test --workspace
 lint: format-check check-env ; $(CARGO) clippy --workspace --all-targets -- -D warnings
 # No environment-specific values in the repo (hosts, IPs, namespaces, emails); the selftest proves the guard.
 check-env: ; scripts/no-env-values.sh && scripts/no-env-values.sh --selftest
 # The guided installer (scripts/install.sh): shellcheck, validator unit tests and a --dry-run; no root needed.
-install-test: ; shellcheck -x scripts/install.sh scripts/install/*.sh scripts/no-env-values.sh scripts/e1-exit-remote.sh scripts/host/harden.sh deploy/install-linux.sh deploy/launchd/install.sh scripts/release/mac-package.sh scripts/runner-survive-test.sh && scripts/install/test.sh
+install-test: ; shellcheck -x scripts/install.sh scripts/install/*.sh scripts/no-env-values.sh scripts/e1-exit-remote.sh scripts/e2-exit.sh scripts/host/harden.sh deploy/install-linux.sh deploy/launchd/install.sh scripts/release/mac-package.sh scripts/runner-survive-test.sh && scripts/install/test.sh
 format: ; $(CARGO) fmt --all
 format-check: ; $(CARGO) fmt --all --check
 # The contract (E10.1, E1-05.1): api/openapi.json, events.schema.json, runner.schema.json; `make test` fails while openapi.json is stale.
@@ -42,6 +42,12 @@ test-web: ; $(CARGO) test -p ainkrad-core-server --test web_passkey -- --ignored
 # certificate, read-only database, stalled events client), one at a time. Neither is part of `test`.
 e1-exit: ; $(CARGO) build -p ainkrad-core-server -p ainkrad-ctl -p ainkrad-runner && scripts/e1-exit.sh
 e1-exit-faults: ; $(CARGO) test -p ainkrad-ctl --test it fault -- --ignored --test-threads=1 --nocapture
+# The E2 exit gate (E2-17): the real Core, runner (pty, agents), ptyhost and ainkradctl, no UI; a PASS/FAIL table and a report in
+# target/e2-exit/. Needs the terminal service. `make e2-exit-faults` runs one fault scenario at a time (not part of `test`);
+# `make e2-soak` is the idle soak (5 terminals + 2 agents; E2_SOAK_SECS=7200 is the merge gate, 86400 the 24 h run).
+e2-exit: ; $(CARGO) build -p ainkrad-core-server -p ainkrad-ctl -p ainkrad-runner -p ainkrad-ptyhost && $(CARGO) build -p ainkrad-term --example render && scripts/e2-exit.sh
+e2-exit-faults: ; $(CARGO) build -p ainkrad-core-server -p ainkrad-ctl -p ainkrad-runner -p ainkrad-ptyhost && $(CARGO) build -p ainkrad-term --example render && $(CARGO) test -p ainkrad-ctl --test it e2x:: -- --ignored --test-threads=1 --nocapture
+e2-soak: ; $(CARGO) build -p ainkrad-core-server -p ainkrad-ctl -p ainkrad-runner -p ainkrad-ptyhost && $(CARGO) build -p ainkrad-term --example render && E2_SOAK_SECS=$${E2_SOAK_SECS:-7200} scripts/e2-exit.sh soak
 # Event bus soak (E1-04.5): 10k events/min to 20 clients, one stalled, for an hour; flat memory and
 # only the stalled client closed. Not part of `test`. `CORE_SOAK_SECS=300 make soak` for five minutes.
 soak: ; CORE_SOAK_SECS=$${CORE_SOAK_SECS:-3600} $(CARGO) test -p ainkrad-core-server --test soak -- --ignored --nocapture

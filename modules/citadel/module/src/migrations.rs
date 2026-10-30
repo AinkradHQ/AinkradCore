@@ -18,8 +18,20 @@ pub static MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 3,
-        name: "citadel_0003_forge_secrets",
-        up: include_str!("../migrations/0003_citadel_0003_forge_secrets.up.sql"),
-        down: include_str!("../migrations/0003_citadel_0003_forge_secrets.down.sql"),
+        name: "citadel_0003_runs",
+        up: include_str!("../migrations/0003_citadel_0003_runs.up.sql"),
+        down: include_str!("../migrations/0003_citadel_0003_runs.down.sql"),
+    },
+    Migration {
+        version: 4,
+        name: "citadel_0004_mcp",
+        up: include_str!("../migrations/0004_citadel_0004_mcp.up.sql"),
+        down: include_str!("../migrations/0004_citadel_0004_mcp.down.sql"),
+    },
+    Migration {
+        version: 5,
+        name: "citadel_0005_forge_secrets",
+        up: include_str!("../migrations/0005_citadel_0005_forge_secrets.up.sql"),
+        down: include_str!("../migrations/0005_citadel_0005_forge_secrets.down.sql"),
     },
 ];

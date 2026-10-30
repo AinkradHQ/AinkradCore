@@ -8,7 +8,7 @@ use ainkrad_core_server::store::migrate;
 use citadel_module::Citadel;
 use citadel_module::testing::db;
 
-const TABLES: usize = 53;
+const TABLES: usize = 56;
 
 #[tokio::test]
 async fn the_baseline_creates_only_citadel_objects_and_seeds_the_palettes() {

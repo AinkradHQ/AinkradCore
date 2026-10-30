@@ -26,6 +26,7 @@ mod idle;
 pub mod p2p;
 pub mod preauth;
 pub mod tls;
+pub mod token;
 
 pub use conn::Limits;
 

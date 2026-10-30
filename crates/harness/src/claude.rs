@@ -353,7 +353,7 @@ impl Decoder {
 impl Claude {
     async fn spawn(spec: &Spec, resume: Option<&str>) -> io::Result<Self> {
         let mut claude = Self {
-            proc: Proc::spawn(command(spec, resume))?,
+            proc: Proc::spawn_with_pgid_file(command(spec, resume), proc::sandbox_pgid_file(spec))?,
             decoder: Decoder::default(),
             queued: VecDeque::new(),
             next_id: 0,

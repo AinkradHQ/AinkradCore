@@ -25,6 +25,8 @@ use super::App;
 use super::limit::Limiter;
 
 mod agents;
+#[cfg(feature = "test-support")]
+pub use agents::create as create_agent_for_tests;
 mod audit;
 mod devices;
 pub mod events;
@@ -45,6 +47,7 @@ mod stepup;
 mod terminals;
 pub mod ticket;
 mod trace;
+pub use terminals::Rooms;
 pub use trace::{ApiError, ApiResult};
 pub mod types;
 pub mod websession;

@@ -106,7 +106,10 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
             (6, "audit_device_ref"),
             (7, "jobs_push_tokens"),
             (8, "secrets"),
-            (9, "agent_sessions")
+            (9, "agent_sessions"),
+            (10, "agent_session_owner"),
+            (11, "terminals"),
+            (12, "agent_session_owner_ref")
         ]
     );
     let sum: Vec<u8> =

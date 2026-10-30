@@ -33,6 +33,7 @@ mod exec;
 pub mod key;
 pub mod pair;
 pub mod pty;
+mod sandbox;
 mod session;
 pub use exec::{ExecConfig, ExecDriver};
 pub use pty::{PtyConfig, PtyDriver};

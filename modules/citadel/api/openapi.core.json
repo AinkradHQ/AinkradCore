@@ -1478,6 +1478,8 @@
           "citadel.department.added",
           "citadel.department.deleted",
           "citadel.department.updated",
+          "citadel.engine.disabled",
+          "citadel.engine.enabled",
           "citadel.epic.created",
           "citadel.epic.updated",
           "citadel.forge.host_added",
@@ -1537,6 +1539,15 @@
           "citadel.linear.pushed",
           "citadel.linear.state_refused",
           "citadel.loop_breaker.tripped",
+          "citadel.mcp.comment",
+          "citadel.mcp.create_subtask",
+          "citadel.mcp.get_approval",
+          "citadel.mcp.get_context",
+          "citadel.mcp.get_issue",
+          "citadel.mcp.report_blocker",
+          "citadel.mcp.request_approval",
+          "citadel.mcp.transition",
+          "citadel.mcp.unknown_tool",
           "citadel.member.capacity_set",
           "citadel.plan.applied",
           "citadel.pr.branch_deleted",
@@ -1590,16 +1601,22 @@
           "citadel.run.allowed_by_rule",
           "citadel.run.cancelled",
           "citadel.run.claimed",
+          "citadel.run.decided",
           "citadel.run.failed",
           "citadel.run.fallback",
           "citadel.run.first_token_slow",
+          "citadel.run.killed",
           "citadel.run.messaged",
           "citadel.run.provider_dropped",
           "citadel.run.retried",
+          "citadel.run.runner_lost",
           "citadel.run.running",
           "citadel.run.started",
+          "citadel.run.succeeded",
+          "citadel.run.timed_out",
           "citadel.run.token_cap",
           "citadel.run.token_issued",
+          "citadel.run.token_revoked",
           "citadel.run.transcripts_pruned",
           "citadel.runner.back",
           "citadel.runner.disk_full",
@@ -1647,7 +1664,13 @@
           "secret.rotated",
           "secret.used",
           "setting.reset",
-          "setting.set"
+          "setting.set",
+          "terminal.attached",
+          "terminal.closed",
+          "terminal.detached",
+          "terminal.exited",
+          "terminal.opened",
+          "terminal.signalled"
         ]
       },
       "AuditPage": {
@@ -2925,6 +2948,28 @@
             "description": "Until when this session may call routes marked `x-ainkrad-destructive`."
           }
         },
+        "type": "object"
+      },
+      "EngineBody": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "EngineState": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
         "type": "object"
       },
       "Environment": {
@@ -4853,7 +4898,6 @@
         "type": "object"
       },
       "NewTerminal": {
-        "description": "`createTerminal`'s body.",
         "properties": {
           "args": {
             "items": {
@@ -4865,7 +4909,6 @@
             ]
           },
           "cwd": {
-            "description": "An absolute directory; absent, the user's home.",
             "type": [
               "string",
               "null"
@@ -4875,7 +4918,6 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Variables set as given; the rest of the environment is the runner's allow-list.",
             "propertyNames": {
               "type": "string"
             },
@@ -4885,14 +4927,12 @@
             ]
           },
           "program": {
-            "description": "Absent: the user's login shell.",
             "type": [
               "string",
               "null"
             ]
           },
           "runner": {
-            "description": "The runner's device id, `d_…`; it must advertise the `pty` driver.",
             "type": "string"
           },
           "size": {
@@ -7132,6 +7172,133 @@
         ],
         "type": "object"
       },
+      "RunMessage": {
+        "properties": {
+          "text": {
+            "description": "1 byte to 16 KiB.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "RunOut": {
+        "properties": {
+          "agent_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "cache_tokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "cost_usd_micros": {
+            "description": "Millionths of a dollar; absent while unpriced (never 0).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ended_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "input_tokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "issue_id": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "output_tokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "queued_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "session_id": {
+            "description": "The agent session (`as_...`) that is its harness.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "state": {
+            "description": "`queued`, `claimed`, `running`, `succeeded`, `failed`, `cancelled`, `timed_out` or `runner_lost`.",
+            "type": "string"
+          },
+          "terminal_reason": {
+            "description": "Set exactly when the run is over.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "agent_id",
+          "state",
+          "harness",
+          "input_tokens",
+          "output_tokens",
+          "cache_tokens",
+          "queued_at"
+        ],
+        "type": "object"
+      },
+      "RunTranscript": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptEntry"
+            },
+            "type": "array"
+          },
+          "last_seq": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "run": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "state": {
+            "description": "The session's state.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "state",
+          "last_seq",
+          "entries"
+        ],
+        "type": "object"
+      },
       "Runner": {
         "description": "A paired runner and its live state.",
         "properties": {
@@ -7960,10 +8127,8 @@
         "type": "object"
       },
       "Terminal": {
-        "description": "A terminal on a runner.",
         "properties": {
           "attached": {
-            "description": "Clients attached now.",
             "format": "int32",
             "minimum": 0,
             "type": [
@@ -7975,7 +8140,6 @@
             "$ref": "#/components/schemas/Timestamp"
           },
           "exit_code": {
-            "description": "Once it exited: its code, absent when a signal ended it.",
             "format": "int32",
             "type": [
               "integer",
@@ -7983,29 +8147,24 @@
             ]
           },
           "exit_signal": {
-            "description": "The signal that ended it, if one did.",
             "type": [
               "string",
               "null"
             ]
           },
           "id": {
-            "description": "`t_…`.",
             "type": "string"
           },
           "opened_by": {
-            "description": "The device that opened it, `d_…`.",
             "type": [
               "string",
               "null"
             ]
           },
           "runner": {
-            "description": "The runner's device id, `d_…`.",
             "type": "string"
           },
           "seq": {
-            "description": "Output bytes so far: where an attach resumes.",
             "format": "int64",
             "minimum": 0,
             "type": [
@@ -8028,10 +8187,8 @@
         "type": "object"
       },
       "TerminalSignal": {
-        "description": "`signalTerminal`'s body.",
         "properties": {
           "signal": {
-            "description": "`HUP`, `INT`, `QUIT`, `TERM`, `KILL`, `USR1`, `USR2`, `CONT`, `STOP`, `TSTP` or `WINCH`.",
             "type": "string"
           }
         },
@@ -8041,7 +8198,6 @@
         "type": "object"
       },
       "TerminalSize": {
-        "description": "A terminal's size in cells, each 1 to 1000.",
         "properties": {
           "cols": {
             "format": "int32",
@@ -8063,7 +8219,6 @@
       "TerminalStatus": {
         "anyOf": [
           {
-            "description": "Where a terminal is in its life.",
             "enum": [
               "created",
               "running",
@@ -8327,6 +8482,28 @@
         "description": "RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a\nclient's date parser never meets a second one (E0.4).",
         "format": "date-time",
         "type": "string"
+      },
+      "TranscriptEntry": {
+        "properties": {
+          "at_ms": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "body": {
+            "type": "object"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "at_ms",
+          "body"
+        ],
+        "type": "object"
       },
       "Transition": {
         "description": "A step of the issue state machine (`domain::work::machine`), as the admin.",
@@ -8738,6 +8915,42 @@
         ],
         "type": "object"
       },
+      "WakeBody": {
+        "properties": {
+          "issue_id": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Why, for the agent: 1 to 500 characters.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WakeOut": {
+        "properties": {
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "status": {
+            "description": "`pending`, `coalesced` (folded into a pending wake of the same agent and issue), or `dropped`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "type": "object"
+      },
       "WebOptions": {
         "properties": {
           "expires_in": {
@@ -8930,7 +9143,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.16.0"
+    "version": "1.17.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -11427,7 +11640,7 @@
                 }
               }
             },
-            "description": "Every terminal the Core knows of, live or exited and not yet reaped"
+            "description": "The caller's own terminals"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -11477,7 +11690,7 @@
                 }
               }
             },
-            "description": "The terminal is open on its runner (audited and `terminal.opened`). 409 `runner_offline` or `unsupported_command` (no `pty` driver), 503 `runner_busy`, 501 `not_implemented` before the terminal service"
+            "description": "The terminal was opened"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -11513,7 +11726,6 @@
         "operationId": "closeTerminal",
         "parameters": [
           {
-            "description": "The terminal, `t_…`",
             "in": "path",
             "name": "id",
             "required": true,
@@ -11531,7 +11743,7 @@
                 }
               }
             },
-            "description": "Hung up (HUP, then TERM, then KILL to its process group) and reaped; its exit. Audited and `terminal.closed`"
+            "description": "The terminal was closed"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -11558,13 +11770,13 @@
         "tags": [
           "terminals"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "terminal"
       },
       "get": {
         "operationId": "getTerminal",
         "parameters": [
           {
-            "description": "The terminal, `t_…`",
             "in": "path",
             "name": "id",
             "required": true,
@@ -11617,7 +11829,6 @@
         "operationId": "signalTerminal",
         "parameters": [
           {
-            "description": "The terminal, `t_…`",
             "in": "path",
             "name": "id",
             "required": true,
@@ -11638,7 +11849,7 @@
         },
         "responses": {
           "204": {
-            "description": "Delivered to the terminal's process group"
+            "description": "The signal was delivered"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -11665,6 +11876,7 @@
         "tags": [
           "terminals"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "terminal"
       }
     },
@@ -11673,7 +11885,6 @@
         "operationId": "attachTerminal",
         "parameters": [
           {
-            "description": "The terminal, `t_…`",
             "in": "path",
             "name": "id",
             "required": true,
@@ -11682,31 +11893,19 @@
             }
           },
           {
-            "description": "Resume output at this byte offset (`Terminal.seq` of an earlier attach); absent or older than the runner keeps: a `snapshot` first",
             "in": "query",
             "name": "after",
             "required": false,
             "schema": {
               "format": "int64",
+              "minimum": 0,
               "type": "integer"
-            }
-          },
-          {
-            "description": "A browser: `ainkrad.v1, ainkrad-ticket.<ticket>`, as for streamEvents",
-            "in": "header",
-            "name": "Sec-WebSocket-Protocol",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
             }
           }
         ],
         "responses": {
           "101": {
-            "description": "Switching to a WebSocket that carries the runner protocol's terminal frames (`Frame` in runner.schema.json, stream 0): the server sends `control` `opened`, `output` (out), `control` `snapshot`, `result` (exit); the client sends `output` (in), `control` `resize` and `signal`, and `credit` (it starts with 65536 bytes of output and grants more as it renders). Closing the socket detaches; the terminal keeps running. Input and resize follow the arbitration rules (every attached client sees output; the most recent typist sets the size). A client that falls behind is cut to a fresh snapshot. Closed with 4001 (device revoked), 4003 (scopes changed)"
+            "description": "Terminal WebSocket"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -13411,6 +13610,71 @@
         "x-ainkrad-scope": "admin"
       }
     },
+    "/modules/citadel/v1/agents/{id}/wake": {
+      "post": {
+        "operationId": "citadelWakeAgent",
+        "parameters": [
+          {
+            "description": "Agent id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WakeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WakeOut"
+                }
+              }
+            },
+            "description": "The wake is queued; the engine starts the run when it is allowed to (the engine on, budgets, a free runner)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/modules/citadel/v1/approvals/{id}/decide": {
       "post": {
         "operationId": "citadelDecideApproval",
@@ -13509,7 +13773,7 @@
                 }
               }
             },
-            "description": "A decided `pr_merge` or `workflow_push`; needs a step-up"
+            "description": "A decided `pr_merge`, `workflow_push` or `permission_escalation`; needs a step-up"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -16106,6 +16370,99 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/citadel/v1/engine": {
+      "get": {
+        "operationId": "citadelGetEngine",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineState"
+                }
+              }
+            },
+            "description": "Whether the engine may start runs on its own"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "post": {
+        "operationId": "citadelSetEngine",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineState"
+                }
+              }
+            },
+            "description": "On, the engine starts sessions without a client in hand, as the device that stepped up to say so (audited as `engine.enabled`); off, no new run starts and the live ones go on"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -20828,6 +21185,401 @@
         },
         "tags": [
           "org"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/citadel/v1/runs": {
+      "get": {
+        "operationId": "citadelListRuns",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "agent",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "issue",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Only runs that are not over.",
+            "in": "query",
+            "name": "live",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Runs with an id below this; absent, from the newest.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RunOut"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Runs, newest first (at most `limit`, 50 by default, 200 at most), only those of the company in `X-Citadel-Company` when it is sent"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/citadel/v1/runs/{id}": {
+      "get": {
+        "operationId": "citadelGetRun",
+        "parameters": [
+          {
+            "description": "Run id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunOut"
+                }
+              }
+            },
+            "description": "The run"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/citadel/v1/runs/{id}/cancel": {
+      "post": {
+        "operationId": "citadelCancelRun",
+        "parameters": [
+          {
+            "description": "Run id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunOut"
+                }
+              }
+            },
+            "description": "Its harness finishes the tool call in flight and stops; the run ends `cancelled` once the runner has acknowledged (audited as `run.cancelled`). 409 `run_not_live` when it is over, 502 `runner_failed` when the runner is away (the request is kept)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/citadel/v1/runs/{id}/kill": {
+      "post": {
+        "operationId": "citadelKillRun",
+        "parameters": [
+          {
+            "description": "Run id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunOut"
+                }
+              }
+            },
+            "description": "Its harness is killed now (audited as `run.killed`)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/citadel/v1/runs/{id}/message": {
+      "post": {
+        "operationId": "citadelMessageRun",
+        "parameters": [
+          {
+            "description": "Run id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunMessage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunOut"
+                }
+              }
+            },
+            "description": "Given to the harness as its next turn (audited as `run.messaged`, its length only). 409 `run_not_live` unless the run is running"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/citadel/v1/runs/{id}/transcript": {
+      "get": {
+        "operationId": "citadelGetRunTranscript",
+        "parameters": [
+          {
+            "description": "Run id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunTranscript"
+                }
+              }
+            },
+            "description": "The session's entries with `seq` above `after`, oldest first, at most `limit` (500 by default, 1000 at most), redacted by the platform; an empty transcript for a run with no session yet"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
         ],
         "x-ainkrad-scope": "admin"
       }
