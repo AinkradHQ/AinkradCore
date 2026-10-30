@@ -2,9 +2,9 @@
 # The E1 exit gate, REMOTE mode (E1-14.5): the six steps of plan §4 run from this machine with ainkradctl against a
 # public Core installed on a Linux host (deploy/install-core-linux.sh) with a FRESH home (no device yet), and a runner
 # installed there (deploy/install-linux.sh) but not paired. THROWAWAY CREDENTIALS ONLY.
-#   E1_SSH=ubuntu@<host> E1_SSH_KEY=<key> E1_CORE=<dns name> E1_SIGNER=<backup signer fp> \
+#   E1_SSH=<user>@<host> E1_SSH_KEY=<key> E1_CORE=<dns name> E1_SIGNER=<backup signer fp> \
 #   E1_IDENTITY=<age identity file, on this machine> [E1_CA=<roots.pem>, a staging ACME root] \
-#   [E1_OCI_NS=<namespace> E1_OCI_BUCKET=<bucket>] scripts/e1-exit-remote.sh
+#   E1_OCI_NS=<namespace> E1_OCI_BUCKET=<bucket> scripts/e1-exit-remote.sh
 #   1 bootstrap on the host (`sudo -u ainkrad … bootstrap`); this machine claims it through the admin socket, relayed
 #     over SSH as the service user (the socket admits only its uid)
 #   2 a second device approved by the first; the host's runner paired (`ainkrad-runner pair`) and approved by the second
@@ -22,7 +22,8 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BIN=${E1_BIN:-$ROOT/target/debug}
 SRV=$BIN/ainkrad-core-server CTL=$BIN/ainkradctl
 : "${E1_SSH:?}" "${E1_SSH_KEY:?}" "${E1_CORE:?}" "${E1_SIGNER:?}" "${E1_IDENTITY:?}"
-NS=${E1_OCI_NS:-axvsrwtenhtg} BUCKET=${E1_OCI_BUCKET:-ainkrad-core-backups}
+NS=${E1_OCI_NS:?set E1_OCI_NS to the Object Storage namespace of the bucket (step 6 fetches the backup with the OCI CLI)}
+BUCKET=${E1_OCI_BUCKET:?set E1_OCI_BUCKET to the name of the backup bucket}
 HOME_R=/var/lib/ainkrad/core RSTATE=/var/lib/ainkrad-runner/core
 URL=https://$E1_CORE
 W=$(mktemp -d /tmp/e1r.XXXXXX); chmod 700 "$W"
