@@ -165,7 +165,8 @@ pub struct Hub {
     streams: AtomicU64,
 }
 
-/// A dispatched command's frames: `output`, then one `result` or `error` (`lost` included).
+/// A dispatched command's frames: `output` (and a terminal's `control`), then one `result` or
+/// `error` (`lost` included).
 pub struct Dispatched {
     pub stream: u64,
     runner: String,
@@ -188,7 +189,7 @@ impl Dispatched {
     pub async fn outcome(mut self) -> Result<Body, StreamError> {
         while let Some(body) = self.next().await {
             match body {
-                Body::Output(_) => continue,
+                Body::Output(_) | Body::Control(_) => continue,
                 Body::Error(e) => return Err(e),
                 last => return Ok(last),
             }
@@ -456,8 +457,13 @@ impl Hub {
                     ))
                 }
             },
+            // A terminal's `opened` and `snapshot` (E2-01) go to its dispatcher as they come.
+            Body::Control(c) => {
+                let _ = p.to.send(Body::Control(c));
+                return;
+            }
             last @ (Body::Result(_) | Body::Error(_)) => last,
-            // Credit, heartbeats on a stream, control: nothing to do for a command.
+            // Credit and heartbeats on a stream: nothing to do for a command.
             _ => return,
         };
         let mut p = r.inflight.remove(&stream).expect("present");

@@ -7,6 +7,7 @@
 //! - `read`: what the device itself shows (its own identity and push token, events, settings).
 //! - `admin`: devices, pairing, setting changes, the audit log.
 //! - `agent`: sending a runner a command (`POST /api/v1/runners/{id}/noop`).
+//! - `terminal`: opening, attaching, signalling and closing a terminal (listing is `read`).
 //! - A module's routes need the module's own `Module::scope` (`admin` unless it says otherwise).
 //! - A `runner` device holds only `runner`, which no `/api/v1` route takes: it can call nothing
 //!   here (the runner hub is E1-11).
@@ -56,6 +57,12 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/runners", "read"),
     ("GET", "/api/v1/runners/{id}", "read"),
     ("POST", "/api/v1/runners/{id}/noop", "agent"),
+    ("GET", "/api/v1/terminals", "read"),
+    ("GET", "/api/v1/terminals/{id}", "read"),
+    ("POST", "/api/v1/terminals", "terminal"),
+    ("GET", "/api/v1/terminals/{id}/ws", "terminal"),
+    ("POST", "/api/v1/terminals/{id}/signal", "terminal"),
+    ("DELETE", "/api/v1/terminals/{id}", "terminal"),
 ];
 
 /// `(method, path template)` of every route that needs a live elevation (spec §8): device
@@ -77,6 +84,9 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("PUT", "/api/v1/settings/{scope}/{key}"),
     ("DELETE", "/api/v1/settings/{scope}/{key}"),
     ("POST", "/api/v1/auth/lockouts/clear"),
+    // Opening or attaching a terminal is a shell on the runner (spec §8, E2-01).
+    ("POST", "/api/v1/terminals"),
+    ("GET", "/api/v1/terminals/{id}/ws"),
 ];
 
 /// Whether `path` fits `template` segment by segment.

@@ -59,6 +59,11 @@
     "audit",
     "runner.connected",
     "runner.degraded",
-    "runner.disconnected"
+    "runner.disconnected",
+    "terminal.attached",
+    "terminal.closed",
+    "terminal.detached",
+    "terminal.exited",
+    "terminal.opened"
   ]
 }

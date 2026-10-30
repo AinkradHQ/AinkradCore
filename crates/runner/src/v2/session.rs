@@ -267,7 +267,11 @@ impl Session {
                 });
                 None
             }
-            Command::Unknown => Some(Body::Error(StreamError::new(
+            // The `pty` driver is not in this runner yet (E2-02, E2-03).
+            Command::PtyOpen(_)
+            | Command::PtyAttach(_)
+            | Command::PtyClose(_)
+            | Command::Unknown => Some(Body::Error(StreamError::new(
                 ErrorCode::UnsupportedCommand,
                 "no driver of this runner takes that command",
             ))),

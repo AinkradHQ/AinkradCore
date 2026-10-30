@@ -260,7 +260,7 @@ async fn unknown_or_misplaced_commands_are_refused_and_unknown_kinds_skipped() {
     // A newer kind and a newer command op, as a newer Core would send them.
     let raw = [
         r#"{"stream_id":7,"kind":"resize","seq":9,"payload":{"cols":80}}"#,
-        r#"{"stream_id":9,"kind":"command","seq":10,"payload":{"op":"pty.open"}}"#,
+        r#"{"stream_id":9,"kind":"command","seq":10,"payload":{"op":"vm.boot"}}"#,
     ];
     for text in raw {
         core.ws.send(Message::Text(text.into())).await.unwrap();
