@@ -392,6 +392,7 @@ mod tests {
             s["Event"]["x-event-kinds"],
             json!([
                 "audit",
+                "notify.delivery",
                 "runner.connected",
                 "runner.degraded",
                 "runner.disconnected",
@@ -401,7 +402,7 @@ mod tests {
         // A module's kinds default to its route scope (`admin`); runner presence is `read`.
         assert_eq!(
             s["Event"]["x-event-scopes"],
-            json!({"audit": "admin", "runner.connected": "read", "runner.degraded": "read",
+            json!({"audit": "admin", "notify.delivery": "admin", "runner.connected": "read", "runner.degraded": "read",
                 "runner.disconnected": "read", "toy.line": "admin"})
         );
         let actions = s["AuditEntry"]["x-audit-actions"].as_array().unwrap();
@@ -411,6 +412,7 @@ mod tests {
             plain["components"]["schemas"]["Event"]["x-event-kinds"],
             json!([
                 "audit",
+                "notify.delivery",
                 "runner.connected",
                 "runner.degraded",
                 "runner.disconnected"

@@ -57,6 +57,7 @@
   "title": "Ainkrad event stream",
   "x-event-kinds": [
     "audit",
+    "notify.delivery",
     "runner.connected",
     "runner.degraded",
     "runner.disconnected"

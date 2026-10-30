@@ -176,6 +176,10 @@
           "device.renamed",
           "device.revoked",
           "device.scopes_changed",
+          "job.failed",
+          "job.missed",
+          "job.ran",
+          "notify.token_pruned",
           "pairing.approved",
           "pairing.burned",
           "pairing.claimed",
@@ -518,12 +522,14 @@
         "type": "object",
         "x-event-kinds": [
           "audit",
+          "notify.delivery",
           "runner.connected",
           "runner.degraded",
           "runner.disconnected"
         ],
         "x-event-scopes": {
           "audit": "admin",
+          "notify.delivery": "admin",
           "runner.connected": "read",
           "runner.degraded": "read",
           "runner.disconnected": "read"
@@ -734,7 +740,7 @@
         "type": "object"
       },
       "LeaseGrant": {
-        "description": "A granted lease: hand `lease` to the runner, which redeems it once before `expires_at`.",
+        "description": "A granted lease: hand `lease` to the runner, which redeems it once before `expires_at`.\nNo `Debug` (review L4): a log line must never print a live lease.",
         "properties": {
           "expires_at": {
             "$ref": "#/components/schemas/Timestamp"
@@ -1192,7 +1198,7 @@
         "type": "object"
       },
       "RedeemLease": {
-        "description": "A lease to redeem.",
+        "description": "A lease to redeem. No `Debug` (review L4).",
         "properties": {
           "lease": {
             "type": "string"
@@ -1782,7 +1788,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.12.0"
+    "version": "1.13.0"
   },
   "openapi": "3.1.0",
   "paths": {
