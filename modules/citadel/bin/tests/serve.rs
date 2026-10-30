@@ -1,6 +1,6 @@
 //! The composed Core (`ainkrad-core-citadel serve`), booted for real on a temp dir: Citadel is
 //! mounted only on `--enable-module citadel`, behind the Core's gate (scope and step-up enforced
-//! by the real server, not a router in the test), and a plain `serve` serves 404 for the module.
+//! by the real server, not a router in the test), and a plain `serve` serves nothing for the module.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -149,7 +149,7 @@ async fn enabled_citadel_is_served_behind_scope_and_step_up() {
     let (status, body) = s.call(&s.phone, "POST", COMPANIES, Some(new.clone())).await;
     assert_eq!(
         (status, &body["code"]),
-        (403, &json!("forbidden")),
+        (403, &json!("forbidden_scope")),
         "{body}"
     );
     let (status, body) = s.call(&s.admin, "POST", COMPANIES, Some(new)).await;
@@ -190,8 +190,14 @@ async fn enabled_citadel_is_served_behind_scope_and_step_up() {
 #[tokio::test]
 async fn a_plain_serve_mounts_nothing() {
     let s = boot("off", &[]).await;
+    // Not mounted: the gate denies a route nothing declares (deny by default), so even a full
+    // admin is refused before any handler (the same call is a 200 with `--enable-module citadel`).
     let (status, body) = s.call(&s.admin, "GET", COMPANIES, None).await;
-    assert_eq!(status, 404, "{body}");
+    assert_eq!(
+        (status, &body["code"]),
+        (403, &json!("forbidden_scope")),
+        "{body}"
+    );
 }
 
 #[tokio::test]
