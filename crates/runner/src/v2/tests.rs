@@ -181,6 +181,7 @@ impl Core {
     }
 
     async fn recv(&mut self) -> Frame {
+        // PTY startup can be slow on the shared ARM CI runner under the full workspace suite.
         let msg = tokio::time::timeout(Duration::from_secs(30), self.ws.next())
             .await
             .expect("a frame in time")
