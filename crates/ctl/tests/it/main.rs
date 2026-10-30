@@ -3,8 +3,8 @@
 
 mod common;
 mod contract;
-mod fake;
 mod e2x;
+mod fake;
 mod faults;
 mod faults_edge;
 mod flow;
