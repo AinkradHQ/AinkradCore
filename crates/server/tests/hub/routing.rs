@@ -8,6 +8,8 @@ use ainkrad_core_server::hub::Elevated;
 use ainkrad_core_server::store::gov;
 use ainkrad_proto::v2::*;
 
+use ainkrad_core_server::hub::HubConfig;
+
 use super::{Core, Fake, exec_driver, quick};
 
 #[tokio::test]
@@ -86,7 +88,14 @@ async fn the_noop_runs_end_to_end_and_only_advertised_commands_reach_the_runner(
 /// work again once a heartbeat reports it back under.
 #[tokio::test]
 async fn a_loaded_host_refuses_new_commands_until_its_load_drops() {
-    let core = Core::start("hostload", quick()).await;
+    let core = Core::start(
+        "hostload",
+        HubConfig {
+            max_host_load: 4.0,
+            ..quick()
+        },
+    )
+    .await;
     let dev = core.runner().await;
     let hot = HostLoad {
         avg1: 20.0,

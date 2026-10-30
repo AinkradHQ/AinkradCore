@@ -89,6 +89,9 @@ pub fn quick() -> HubConfig {
         handshake: Duration::from_secs(2),
         // The fakes and the real runner dial plain loopback (`--allow-plain-runner`).
         allow_plain_loopback: true,
+        // Real runners report the host's real load, which a busy test machine must not turn
+        // into `busy`; the load test sets its own threshold.
+        max_host_load: 1e9,
         ..HubConfig::default()
     }
 }
