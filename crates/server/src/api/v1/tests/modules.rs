@@ -133,7 +133,7 @@ impl Module for Scoped {
             ("DELETE", "/items/{id}", "read"),
             ("GET", "/items/export", "admin"),
             ("GET", "/a/{x}/b", "read"),
-            ("GET", "/a/b/{y}", "read"),
+            ("GET", "/a/b/{y}", "admin"),
         ]
     }
 
@@ -185,7 +185,7 @@ async fn a_read_only_device_reaches_only_the_module_routes_that_declare_read() {
         status(&fx, &phone, get_.clone(), &format!("{b}/items/export")).await,
         no
     );
-    // Two equally specific templates that disagree on nothing here are a tie: module default.
+    // Two equally specific templates that disagree are a tie: the stricter scope (`admin`).
     assert_eq!(
         status(&fx, &phone, get_.clone(), &format!("{b}/a/b/b")).await,
         no
@@ -547,4 +547,118 @@ fn a_declared_runner_scope_is_never_honoured() {
     assert_eq!(module_scope(&Runnerish, "GET", "/bad"), "admin");
     assert_eq!(module_scope(&Runnerish, "GET", "/odd"), "admin");
     assert!(std::panic::catch_unwind(|| crate::module::validate(&Runnerish)).is_err());
+}
+
+/// F4: a tie takes the stricter scope, even when the module-wide scope is lower than both.
+#[test]
+fn a_tie_resolves_to_the_stricter_scope_not_the_module_scope() {
+    struct Low;
+    impl Module for Low {
+        fn id(&self) -> &'static str {
+            "low"
+        }
+        fn routes(&self) -> Router<App> {
+            Router::new()
+        }
+        fn scope(&self) -> &'static str {
+            "read"
+        }
+        fn route_scopes(&self) -> &'static [(&'static str, &'static str, &'static str)] {
+            &[
+                ("GET", "/a/{x}/b", "admin"),
+                ("GET", "/a/q/{y}", "read"),
+                ("GET", "/c/{x}/d", "approve"),
+                ("GET", "/c/e/{y}", "agent"),
+            ]
+        }
+    }
+    use super::super::scopes::module_scope;
+    assert_eq!(module_scope(&Low, "GET", "/a/q/b"), "admin");
+    assert_eq!(module_scope(&Low, "GET", "/a/q/zzz"), "read");
+    // Different scopes of the same rank cannot be compared: `admin`.
+    assert_eq!(module_scope(&Low, "GET", "/c/e/d"), "admin");
+}
+
+/// F5: HEAD is the GET it is served by (scope and step-up); a method no module route takes
+/// needs `admin`.
+#[tokio::test]
+async fn head_gets_the_scope_and_step_up_of_its_get() {
+    struct Ws;
+    impl Module for Ws {
+        fn id(&self) -> &'static str {
+            "ws"
+        }
+        fn routes(&self) -> Router<App> {
+            Router::new().route("/open", get(|| async { "ok" }))
+        }
+        fn route_scopes(&self) -> &'static [(&'static str, &'static str, &'static str)] {
+            &[("GET", "/open", "read")]
+        }
+        fn destructive(&self) -> &'static [(&'static str, &'static str)] {
+            &[("GET", "/open")]
+        }
+    }
+    use super::super::scopes::{module_destructive, module_scope};
+    assert_eq!(module_scope(&Ws, "HEAD", "/open"), "read");
+    assert!(module_destructive(&Ws, "HEAD", "/open"));
+    assert_eq!(module_scope(&Ws, "OPTIONS", "/open"), "admin");
+    let mut fx = fx().await;
+    fx.app.modules = Arc::from([Arc::new(Ws) as Arc<dyn Module>]);
+    // Not elevated: a destructive GET is refused for HEAD as for GET.
+    let mac = super::stepup::plain(&fx, "mac", &super::ALL, true).await;
+    for m in [Method::GET, Method::HEAD] {
+        let (s, _) = send(
+            &fx.app,
+            req(m.clone(), "/modules/ws/v1/open", Some(&mac), None),
+        )
+        .await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{m}");
+    }
+}
+
+/// F2: a `destructive` or route-scope entry that matches no documented route stops the server
+/// at start (a typo must never leave a route without its step-up); so do malformed entries.
+#[test]
+fn a_destructive_entry_that_matches_no_route_is_refused_at_mount() {
+    struct Typo(
+        &'static [(&'static str, &'static str)],
+        &'static [(&'static str, &'static str, &'static str)],
+    );
+    impl Module for Typo {
+        fn id(&self) -> &'static str {
+            "ty"
+        }
+        fn routes(&self) -> Router<App> {
+            Router::new()
+        }
+        fn openapi(&self) -> serde_json::Value {
+            toy_doc()
+        }
+        fn destructive(&self) -> &'static [(&'static str, &'static str)] {
+            self.0
+        }
+        fn route_scopes(&self) -> &'static [(&'static str, &'static str, &'static str)] {
+            self.1
+        }
+    }
+    let refused = |m: Typo| std::panic::catch_unwind(|| crate::module::validate(&m)).is_err();
+    assert!(!refused(Typo(
+        &[("DELETE", "/items/{id}")],
+        &[("GET", "/items", "read")]
+    )));
+    for bad in [
+        &[("DELETE", "/item/{id}")][..],
+        &[("DELETE", "/items/{x}")],
+        &[("POST", "/items/{id}")],
+        &[("TRACE", "/items")],
+        &[("DELETE", "items/{id}")],
+        &[("DELETE", "/items/../x")],
+        &[("DELETE", "/items/{id}"), ("DELETE", "/items/{id}")],
+    ] {
+        assert!(refused(Typo(bad, &[])), "{bad:?}");
+    }
+    assert!(
+        refused(Typo(&[], &[("GET", "/itemz", "read")])),
+        "a dead route scope"
+    );
 }

@@ -85,7 +85,7 @@ pub trait Module: Send + Sync + 'static {
     /// Per-route scopes: `(method, path template, scope)`, templates relative to
     /// `/modules/<id>/v1` as in `destructive`. A route listed here needs that scope instead of
     /// [`scope`](Self::scope); one that is not listed keeps `scope()`. When several templates fit
-    /// a path the one with the most literal segments wins, and a tie falls back to `scope()`.
+    /// a path the one with the most literal segments wins, and two equally specific templates that disagree resolve to the stricter scope. `HEAD` takes its `GET`'s scope and step-up.
     /// `runner` is never allowed on a module route (the runner hub is not a module route): a
     /// route that declares it needs `admin`. Checked by `valid_route_scopes` at `mount`.
     fn route_scopes(&self) -> &'static [(&'static str, &'static str, &'static str)] {
@@ -141,6 +141,19 @@ pub(crate) fn route_scope_ok(scope: &str) -> bool {
     scope != "runner" && crate::store::gov::SCOPES.contains(&scope)
 }
 
+/// Whether `template` is a legal module route template: absolute, no `..`/`.`/empty segments,
+/// no query, fragment or backslash, and `{name}` only as a whole segment.
+fn legal_template(template: &str) -> bool {
+    template.starts_with('/')
+        && !template.contains(['?', '#', '\\'])
+        && template.split('/').skip(1).all(|s| {
+            !s.is_empty()
+                && s != "."
+                && s != ".."
+                && (!s.contains(['{', '}']) || (s.starts_with('{') && s.ends_with('}')))
+        })
+}
+
 /// Refuses (panics on) a module whose declared scopes, routes or settings are malformed. A
 /// declaration error must stop the server at start, not weaken a gate at the first request.
 pub(crate) fn validate(m: &dyn Module) {
@@ -157,14 +170,7 @@ pub(crate) fn validate(m: &dyn Module) {
             "module {id}: bad method {method:?}"
         );
         assert!(
-            template.starts_with('/')
-                && !template.contains(['?', '#', '\\'])
-                && template.split('/').skip(1).all(|s| {
-                    !s.is_empty()
-                        && s != "."
-                        && s != ".."
-                        && (!s.contains(['{', '}']) || (s.starts_with('{') && s.ends_with('}')))
-                }),
+            legal_template(template),
             "module {id}: bad route template {template:?}"
         );
         assert!(
@@ -190,6 +196,45 @@ pub(crate) fn validate(m: &dyn Module) {
             valid_id(q) && !secret.iter().any(|w| q.contains(w)),
             "module {id}: query name {q:?} is not allowed"
         );
+    }
+    let mut step_up = HashSet::new();
+    for (method, template) in m.destructive() {
+        assert!(
+            matches!(*method, "GET" | "POST" | "PUT" | "PATCH" | "DELETE"),
+            "module {id}: bad destructive method {method:?}"
+        );
+        assert!(
+            legal_template(template),
+            "module {id}: bad destructive template {template:?}"
+        );
+        assert!(
+            step_up.insert((*method, *template)),
+            "module {id}: destructive {method} {template} declared twice"
+        );
+    }
+    // Against the module's real routes: a typo must stop the server at start, never silently
+    // leave a route without its step-up (or a scope entry dead). Checked when the module
+    // documents its routes (`openapi`).
+    let doc = m.openapi();
+    if let Some(paths) = doc["paths"].as_object() {
+        let has = |method: &str, template: &str| {
+            paths.get(template).is_some_and(|item| {
+                item.as_object()
+                    .is_some_and(|o| o.keys().any(|k| k.eq_ignore_ascii_case(method)))
+            })
+        };
+        for (method, template) in m.destructive() {
+            assert!(
+                has(method, template),
+                "module {id}: destructive {method} {template} matches no documented route"
+            );
+        }
+        for (method, template, _) in m.route_scopes() {
+            assert!(
+                has(method, template),
+                "module {id}: route scope {method} {template} matches no documented route"
+            );
+        }
     }
     let mut names = HashSet::new();
     for s in m.settings() {

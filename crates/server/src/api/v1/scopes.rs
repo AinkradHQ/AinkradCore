@@ -158,12 +158,51 @@ fn literals(template: &str) -> usize {
     template.split('/').filter(|s| !s.starts_with('{')).count()
 }
 
+/// How strict a scope is, for resolving a tie: `read` < the others < `admin`.
+fn rank(scope: &str) -> u8 {
+    match scope {
+        "read" => 0,
+        "admin" => 2,
+        _ => 1,
+    }
+}
+
+/// The stricter of two scopes; two different ones of the same rank (`approve` and `agent`) are
+/// not comparable, so they become `admin`.
+fn stricter(a: &'static str, b: &'static str) -> &'static str {
+    match (a == b, rank(a).cmp(&rank(b))) {
+        (true, _) => a,
+        (_, std::cmp::Ordering::Greater) => a,
+        (_, std::cmp::Ordering::Less) => b,
+        _ => "admin",
+    }
+}
+
+/// A module's request method as its tables see it: `HEAD` is the `GET` it is served by, so it
+/// needs that route's scope and step-up. `None` for a method no module route takes.
+fn module_method(method: &str) -> Option<&str> {
+    match method {
+        m if m.eq_ignore_ascii_case("HEAD") => Some("GET"),
+        m if ["GET", "POST", "PUT", "PATCH", "DELETE"]
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case(m)) =>
+        {
+            Some(m)
+        }
+        _ => None,
+    }
+}
+
 /// The scope `m` needs for `method` on `sub` (relative to its prefix; a contract template or a
 /// real path): its own `route_scopes` entry that fits, the most specific, else `Module::scope`.
-/// A tie between two different templates, or an entry whose scope is not allowed on a module
-/// route, is not guessed: the first falls back to the module-wide scope, the second to `admin`.
+/// Two equally specific templates that disagree resolve to the stricter scope; an entry whose
+/// scope is not allowed on a module route is `admin`. `HEAD` is `GET`; a method no module route
+/// takes (`OPTIONS`, `TRACE`) needs `admin`.
 pub fn module_scope(m: &dyn Module, method: &str, sub: &str) -> &'static str {
-    let mut best: Option<(usize, &'static str, bool)> = None;
+    let Some(method) = module_method(method) else {
+        return "admin";
+    };
+    let mut best: Option<(usize, &'static str)> = None;
     for (mm, t, scope) in m.route_scopes() {
         if !mm.eq_ignore_ascii_case(method) || !fits(t, sub) {
             continue;
@@ -175,19 +214,20 @@ pub fn module_scope(m: &dyn Module, method: &str, sub: &str) -> &'static str {
             "admin"
         };
         best = match best {
-            Some((b, _, _)) if b > n => best,
-            Some((b, s, _)) if b == n => Some((b, s, true)),
-            _ => Some((n, scope, false)),
+            Some((b, _)) if b > n => best,
+            Some((b, s)) if b == n => Some((b, stricter(s, scope))),
+            _ => Some((n, scope)),
         };
     }
-    match best {
-        Some((_, scope, false)) => scope,
-        _ => m.scope(),
-    }
+    best.map_or_else(|| m.scope(), |(_, scope)| scope)
 }
 
-/// Whether `m` declares `method` on `sub` destructive (`Module::destructive`).
+/// Whether `m` declares `method` on `sub` destructive (`Module::destructive`); `HEAD` is `GET`,
+/// and a method no module route takes counts as destructive (it needs `admin` anyway).
 pub fn module_destructive(m: &dyn Module, method: &str, sub: &str) -> bool {
+    let Some(method) = module_method(method) else {
+        return true;
+    };
     m.destructive()
         .iter()
         .any(|(mm, t)| mm.eq_ignore_ascii_case(method) && fits(t, sub))
