@@ -131,7 +131,7 @@ pub(crate) fn refusal(
     app: &App,
     uri: &Uri,
     headers: &HeaderMap,
-    query_ok: fn(&str) -> bool,
+    query_ok: impl Fn(&str) -> bool,
 ) -> Option<(StatusCode, &'static str, &'static str)> {
     // HTTP/2 carries the host as the `:authority`, which hyper puts in the URI.
     let host = match headers.get(header::HOST) {

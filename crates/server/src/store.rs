@@ -19,6 +19,7 @@ pub mod events;
 pub mod gov;
 pub mod kinds;
 pub mod migrate;
+pub mod modsettings;
 pub mod redact;
 pub mod settings;
 

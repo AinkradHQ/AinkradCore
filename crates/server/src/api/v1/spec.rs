@@ -139,7 +139,9 @@ pub fn event_scopes(
 /// [`json`] with `modules`' event kinds and audit actions listed too.
 pub fn json_for(modules: &[Arc<dyn Module>]) -> String {
     let mut spec = serde_json::to_value(ApiDoc::openapi()).expect("spec serialises");
+    merge_modules(&mut spec, modules);
     normalise(&mut spec);
+    module_extensions(&mut spec, modules);
     let [kinds, actions] = registered(modules);
     spec["components"]["schemas"]["Event"]["x-event-kinds"] = json!(kinds);
     spec["components"]["schemas"]["Event"]["x-event-scopes"] = json!(event_scopes(modules));
@@ -149,6 +151,94 @@ pub fn json_for(modules: &[Arc<dyn Module>]) -> String {
     let mut text = serde_json::to_string_pretty(&spec).expect("spec serialises");
     text.push('\n');
     text
+}
+
+/// Merges each module's OpenAPI paths and schemas (`Module::openapi`) into `spec`, before
+/// `normalise`: its paths move under `/modules/<id>/v1`, so it cannot describe (or shadow) a
+/// platform path or another module's; what it wrote under `x-ainkrad-*` and `security` is
+/// dropped (the Core sets them, `module_extensions`); an operation id or schema name that is
+/// already taken stops the contract.
+///
+/// # Panics
+///
+/// On a clash or a malformed document: a programming error that must not ship a contract.
+fn merge_modules(spec: &mut Value, modules: &[Arc<dyn Module>]) {
+    let mut ids: std::collections::HashSet<String> = spec["paths"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .flat_map(|(_, item)| item.as_object().into_iter().flatten())
+        .filter_map(|(_, op)| op["operationId"].as_str().map(str::to_owned))
+        .collect();
+    for m in modules {
+        let doc = m.openapi();
+        if doc.is_null() {
+            continue;
+        }
+        let id = m.id();
+        for (path, item) in doc["paths"].as_object().into_iter().flatten() {
+            assert!(
+                path.starts_with('/') && !path.contains("..") && !path.contains("//"),
+                "module {id}: bad path {path:?}"
+            );
+            let mut item = item.clone();
+            for (method, op) in item.as_object_mut().into_iter().flatten() {
+                let Some(op) = op.as_object_mut() else {
+                    continue;
+                };
+                op.retain(|k, _| !k.starts_with("x-ainkrad-") && k != "security");
+                if let Some(op_id) = op.get("operationId").and_then(Value::as_str) {
+                    assert!(
+                        ids.insert(op_id.to_owned()),
+                        "module {id}: operationId {op_id:?} ({method} {path}) is taken"
+                    );
+                }
+            }
+            let full = format!("/modules/{id}/v1{path}");
+            assert!(
+                spec["paths"].get(&full).is_none(),
+                "module {id}: path {full} is taken"
+            );
+            spec["paths"][&full] = item;
+        }
+        for (name, schema) in doc["components"]["schemas"]
+            .as_object()
+            .into_iter()
+            .flatten()
+        {
+            let taken = spec["components"]["schemas"].get(name);
+            assert!(
+                taken.is_none_or(|t| t == schema),
+                "module {id}: schema {name:?} is taken by another definition"
+            );
+            spec["components"]["schemas"][name] = schema.clone();
+        }
+    }
+}
+
+/// `x-ainkrad-scope` and `x-ainkrad-destructive` on every module operation, from the module's
+/// own tables (`scopes::module_scope`, `module_destructive`): what the gate enforces.
+fn module_extensions(spec: &mut Value, modules: &[Arc<dyn Module>]) {
+    for (path, item) in spec["paths"].as_object_mut().into_iter().flatten() {
+        let Some(rest) = path.strip_prefix("/modules/") else {
+            continue;
+        };
+        let Some((id, sub)) = rest.split_once("/v1") else {
+            continue;
+        };
+        let Some(m) = modules.iter().find(|m| m.id() == id) else {
+            continue;
+        };
+        for (method, op) in item.as_object_mut().into_iter().flatten() {
+            if !op.is_object() {
+                continue;
+            }
+            op["x-ainkrad-scope"] = json!(super::scopes::module_scope(m.as_ref(), method, sub));
+            if super::scopes::module_destructive(m.as_ref(), method, sub) {
+                op["x-ainkrad-destructive"] = json!(true);
+            }
+        }
+    }
 }
 
 pub fn normalise(spec: &mut Value) {
