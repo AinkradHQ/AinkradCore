@@ -930,6 +930,79 @@ extension Components {
                 case seq
             }
         }
+        /// A granted lease: hand `lease` to the runner, which redeems it once before `expires_at`.
+        /// No `Debug` (review L4): a log line must never print a live lease.
+        ///
+        /// - Remark: Generated from `#/components/schemas/LeaseGrant`.
+        public struct LeaseGrant: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/LeaseGrant/expires_at`.
+            public var expiresAt: Components.Schemas.Timestamp
+            /// `l_…`; only its runner can redeem it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/LeaseGrant/lease`.
+            public var lease: Swift.String
+            /// Creates a new `LeaseGrant`.
+            ///
+            /// - Parameters:
+            ///   - expiresAt:
+            ///   - lease: `l_…`; only its runner can redeem it.
+            public init(
+                expiresAt: Components.Schemas.Timestamp,
+                lease: Swift.String
+            ) {
+                self.expiresAt = expiresAt
+                self.lease = lease
+            }
+            public enum CodingKeys: String, CodingKey {
+                case expiresAt = "expires_at"
+                case lease
+            }
+        }
+        /// A redeemed secret, for the runner only. No `Debug`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/LeasedSecret`.
+        public struct LeasedSecret: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/LeasedSecret/delivery`.
+            public var delivery: Swift.String
+            /// Drop it by then, or at the session's end.
+            ///
+            /// - Remark: Generated from `#/components/schemas/LeasedSecret/expires_at`.
+            public var expiresAt: Components.Schemas.Timestamp
+            /// - Remark: Generated from `#/components/schemas/LeasedSecret/name`.
+            public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/LeasedSecret/value`.
+            public var value: Swift.String
+            /// - Remark: Generated from `#/components/schemas/LeasedSecret/version`.
+            public var version: Swift.Int64
+            /// Creates a new `LeasedSecret`.
+            ///
+            /// - Parameters:
+            ///   - delivery:
+            ///   - expiresAt: Drop it by then, or at the session's end.
+            ///   - name:
+            ///   - value:
+            ///   - version:
+            public init(
+                delivery: Swift.String,
+                expiresAt: Components.Schemas.Timestamp,
+                name: Swift.String,
+                value: Swift.String,
+                version: Swift.Int64
+            ) {
+                self.delivery = delivery
+                self.expiresAt = expiresAt
+                self.name = name
+                self.value = value
+                self.version = version
+            }
+            public enum CodingKeys: String, CodingKey {
+                case delivery
+                case expiresAt = "expires_at"
+                case name
+                case value
+                case version
+            }
+        }
         /// A key that is locked now.
         ///
         /// - Remark: Generated from `#/components/schemas/Lockout`.
@@ -1017,6 +1090,35 @@ extension Components {
                 case name
             }
         }
+        /// A lease to grant.
+        ///
+        /// - Remark: Generated from `#/components/schemas/NewLease`.
+        public struct NewLease: Codable, Hashable, Sendable {
+            /// The runner's device id, `d_…`; it must be in the secret's scope.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewLease/runner`.
+            public var runner: Swift.String
+            /// Its lifetime; default and most `secrets.lease_secs`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewLease/ttl_secs`.
+            public var ttlSecs: Swift.Int64?
+            /// Creates a new `NewLease`.
+            ///
+            /// - Parameters:
+            ///   - runner: The runner's device id, `d_…`; it must be in the secret's scope.
+            ///   - ttlSecs: Its lifetime; default and most `secrets.lease_secs`.
+            public init(
+                runner: Swift.String,
+                ttlSecs: Swift.Int64? = nil
+            ) {
+                self.runner = runner
+                self.ttlSecs = ttlSecs
+            }
+            public enum CodingKeys: String, CodingKey {
+                case runner
+                case ttlSecs = "ttl_secs"
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/NewPairingBody`.
         public struct NewPairingBody: Codable, Hashable, Sendable {
             /// `device`, `runner`, or `passkey` (a browser, E1-08; only when the Core has passkeys).
@@ -1070,6 +1172,49 @@ extension Components {
                     "name",
                     "scopes"
                 ])
+            }
+        }
+        /// A new secret. Deliberately no `Debug`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/NewSecret`.
+        public struct NewSecret: Codable, Hashable, Sendable {
+            /// `env` (the default), `file` or `askpass`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewSecret/delivery`.
+            public var delivery: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/NewSecret/name`.
+            public var name: Swift.String
+            /// Runner device ids it may be leased to; default none.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewSecret/runners`.
+            public var runners: [Swift.String]?
+            /// UTF-8 text, at most `secrets.max_bytes`; written, never read back.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewSecret/value`.
+            public var value: Swift.String
+            /// Creates a new `NewSecret`.
+            ///
+            /// - Parameters:
+            ///   - delivery: `env` (the default), `file` or `askpass`.
+            ///   - name:
+            ///   - runners: Runner device ids it may be leased to; default none.
+            ///   - value: UTF-8 text, at most `secrets.max_bytes`; written, never read back.
+            public init(
+                delivery: Swift.String? = nil,
+                name: Swift.String,
+                runners: [Swift.String]? = nil,
+                value: Swift.String
+            ) {
+                self.delivery = delivery
+                self.name = name
+                self.runners = runners
+                self.value = value
+            }
+            public enum CodingKeys: String, CodingKey {
+                case delivery
+                case name
+                case runners
+                case value
             }
         }
         /// The no-op's answer.
@@ -1481,6 +1626,23 @@ extension Components {
                 case token
             }
         }
+        /// A lease to redeem. No `Debug` (review L4).
+        ///
+        /// - Remark: Generated from `#/components/schemas/RedeemLease`.
+        public struct RedeemLease: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RedeemLease/lease`.
+            public var lease: Swift.String
+            /// Creates a new `RedeemLease`.
+            ///
+            /// - Parameters:
+            ///   - lease:
+            public init(lease: Swift.String) {
+                self.lease = lease
+            }
+            public enum CodingKeys: String, CodingKey {
+                case lease
+            }
+        }
         /// A device's new name.
         ///
         /// - Remark: Generated from `#/components/schemas/Rename`.
@@ -1508,6 +1670,37 @@ extension Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "name"
                 ])
+            }
+        }
+        /// A rotation: the new value, and optionally a new scope or delivery. No `Debug`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RotateSecret`.
+        public struct RotateSecret: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RotateSecret/delivery`.
+            public var delivery: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RotateSecret/runners`.
+            public var runners: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/RotateSecret/value`.
+            public var value: Swift.String
+            /// Creates a new `RotateSecret`.
+            ///
+            /// - Parameters:
+            ///   - delivery:
+            ///   - runners:
+            ///   - value:
+            public init(
+                delivery: Swift.String? = nil,
+                runners: [Swift.String]? = nil,
+                value: Swift.String
+            ) {
+                self.delivery = delivery
+                self.runners = runners
+                self.value = value
+            }
+            public enum CodingKeys: String, CodingKey {
+                case delivery
+                case runners
+                case value
             }
         }
         /// A paired runner and its live state.
@@ -1628,6 +1821,104 @@ extension Components {
                 case capacity
                 case commands
                 case name
+            }
+        }
+        /// What a delete answers.
+        ///
+        /// - Remark: Generated from `#/components/schemas/SecretDeleted`.
+        public struct SecretDeleted: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SecretDeleted/deleted`.
+            public var deleted: Swift.Bool
+            /// Creates a new `SecretDeleted`.
+            ///
+            /// - Parameters:
+            ///   - deleted:
+            public init(deleted: Swift.Bool) {
+                self.deleted = deleted
+            }
+            public enum CodingKeys: String, CodingKey {
+                case deleted
+            }
+        }
+        /// A secret, never its value.
+        ///
+        /// - Remark: Generated from `#/components/schemas/SecretInfo`.
+        public struct SecretInfo: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SecretInfo/created_at`.
+            public var createdAt: Components.Schemas.Timestamp
+            /// How a runner hands it to a session: `env`, `file` or `askpass`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretInfo/delivery`.
+            public var delivery: Swift.String
+            /// The master key it is sealed under.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretInfo/key_id`.
+            public var keyId: Swift.String
+            /// `[a-z][a-z0-9_.-]{0,63}`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretInfo/name`.
+            public var name: Swift.String
+            /// The device that stored it, `d_…`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretInfo/owner`.
+            public var owner: Swift.String
+            /// The runner devices it may be leased to (its scope); empty: none.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretInfo/runners`.
+            public var runners: [Swift.String]
+            /// The value's length in bytes.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretInfo/size`.
+            public var size: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/SecretInfo/updated_at`.
+            public var updatedAt: Components.Schemas.Timestamp
+            /// 1 when stored, one more per rotation.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretInfo/version`.
+            public var version: Swift.Int64
+            /// Creates a new `SecretInfo`.
+            ///
+            /// - Parameters:
+            ///   - createdAt:
+            ///   - delivery: How a runner hands it to a session: `env`, `file` or `askpass`.
+            ///   - keyId: The master key it is sealed under.
+            ///   - name: `[a-z][a-z0-9_.-]{0,63}`.
+            ///   - owner: The device that stored it, `d_…`.
+            ///   - runners: The runner devices it may be leased to (its scope); empty: none.
+            ///   - size: The value's length in bytes.
+            ///   - updatedAt:
+            ///   - version: 1 when stored, one more per rotation.
+            public init(
+                createdAt: Components.Schemas.Timestamp,
+                delivery: Swift.String,
+                keyId: Swift.String,
+                name: Swift.String,
+                owner: Swift.String,
+                runners: [Swift.String],
+                size: Swift.Int64,
+                updatedAt: Components.Schemas.Timestamp,
+                version: Swift.Int64
+            ) {
+                self.createdAt = createdAt
+                self.delivery = delivery
+                self.keyId = keyId
+                self.name = name
+                self.owner = owner
+                self.runners = runners
+                self.size = size
+                self.updatedAt = updatedAt
+                self.version = version
+            }
+            public enum CodingKeys: String, CodingKey {
+                case createdAt = "created_at"
+                case delivery
+                case keyId = "key_id"
+                case name
+                case owner
+                case runners
+                case size
+                case updatedAt = "updated_at"
+                case version
             }
         }
         /// - Remark: Generated from `#/components/schemas/SessionGrant`.

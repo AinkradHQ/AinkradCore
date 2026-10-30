@@ -36,6 +36,7 @@ mod pairing;
 pub mod passkey;
 mod runners;
 pub mod scopes;
+mod secrets;
 pub mod session;
 mod settings;
 pub mod spec;
@@ -184,6 +185,13 @@ pub fn router(app: App) -> Router {
             "/api/v1/settings/{scope}/{key}/history",
             get(settings::history),
         )
+        .route("/api/v1/secrets", get(secrets::list).post(secrets::create))
+        .route(
+            "/api/v1/secrets/{id}",
+            put(secrets::rotate).delete(secrets::delete),
+        )
+        .route("/api/v1/secrets/{id}/leases", post(secrets::lease))
+        .route("/api/v1/secret-leases/redeem", post(secrets::redeem))
         // Modules sit inside the same gate: they never authenticate for themselves.
         .merge(crate::module::mount(&app.modules))
         // Refused writes, authenticated (`trace`).

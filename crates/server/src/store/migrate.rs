@@ -79,6 +79,12 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../migrations/0007_jobs_push_tokens.up.sql"),
         down: include_str!("../../migrations/0007_jobs_push_tokens.down.sql"),
     },
+    Migration {
+        version: 8,
+        name: "secrets",
+        up: include_str!("../../migrations/0008_secrets.up.sql"),
+        down: include_str!("../../migrations/0008_secrets.down.sql"),
+    },
 ];
 
 #[derive(Debug)]

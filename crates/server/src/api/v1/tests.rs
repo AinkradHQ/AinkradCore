@@ -37,6 +37,7 @@ mod revocation;
 mod runners;
 mod scoped;
 mod scopes;
+mod secrets;
 mod sessions;
 mod settings;
 mod signed;

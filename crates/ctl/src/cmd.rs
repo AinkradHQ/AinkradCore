@@ -13,7 +13,7 @@ use crate::keystore::{self, Keystore};
 use crate::net::{Endpoint, Net};
 use crate::pair::{Credential, Pairing};
 use crate::stepup::{self, Passphrase};
-use crate::{EXIT_CODES, Error, devices, events, pair, runners};
+use crate::{EXIT_CODES, Error, devices, events, pair, runners, secrets};
 
 pub const USAGE: &str =
     "usage: ainkradctl [--socket <path> | --url <http(s)://host:port>] [--host <name>]
@@ -53,6 +53,12 @@ pub const USAGE: &str =
   run noop <runner-id>
       Sends the runner the no-op command through the Core and prints `ok <ms> ms`
       (scope agent; no step-up; audited as runner.command).
+  secret ls
+  secret set <name>* [--runners <runner-id>,...] [--delivery env|file|askpass]
+  secret rotate <name>* [--runners ...] [--delivery ...]  |  secret rm <name>*
+      The Core's secrets (scope admin): set and rotate read the value from stdin (never
+      the command line); there is no get, a value never comes back to a client. A secret
+      is leased only to the runners listed (default none).
   events tail [--after <seq>] [--no-follow]
       Events after <seq> (default: from now), one JSON object per line (every kind this
       device may see, runner.connected/.disconnected/.degraded included); follows the live
@@ -68,7 +74,7 @@ signed or sent before the Core signs a fresh nonce with that key (POST /handshak
 admin socket answers to the Core's own host name).
 ";
 
-const VALUED: [&str; 11] = [
+const VALUED: [&str; 13] = [
     "--socket",
     "--url",
     "--host",
@@ -80,6 +86,8 @@ const VALUED: [&str; 11] = [
     "--core-fp",
     "--wait",
     "--stepup-passphrase-file",
+    "--runners",
+    "--delivery",
 ];
 const SWITCHES: [&str; 4] = ["--json", "--no-follow", "--help", "--no-stepup"];
 
@@ -225,6 +233,17 @@ pub async fn run(args: &[String], out: &mut impl Write) -> Result<(), Error> {
         ["lockouts", rest @ ..] => devices::lockouts(&mut a.client()?, rest, json, out).await,
         ["runner", rest @ ..] => runners::runner(&mut a.client()?, rest, json, out).await,
         ["run", rest @ ..] => runners::run(&mut a.client()?, rest, json, out).await,
+        ["secret", rest @ ..] => {
+            let runners = a.value("--runners").map(|r| {
+                r.split(',')
+                    .map(str::trim)
+                    .filter(|r| !r.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            });
+            let delivery = a.value("--delivery");
+            secrets::secret(&mut a.client()?, rest, runners, delivery, json, out).await
+        }
         ["events", "tail"] => {
             let mut c = a.client()?;
             events::tail(&mut c, a.number("--after")?, !a.on("--no-follow"), out).await

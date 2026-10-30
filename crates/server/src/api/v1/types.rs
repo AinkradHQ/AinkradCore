@@ -48,7 +48,8 @@
 ///    stateless (still 32 bytes, 43 characters).
 /// 12: scheduler and notifications (E2-11/12): the `job.ran`, `job.failed`, `job.missed` and
 ///    `notify.token_pruned` audit actions, the `notify.delivery` event kind (scope `admin`).
-/// 13: taken by the secrets broker (E2-07).
+/// 13: the secrets broker (E2-07): `listSecrets`, `createSecret`, `rotateSecret`, `deleteSecret`,
+///    `leaseSecret`, `redeemSecretLease` (scope `runner`), the `secret.*` audit actions.
 /// 14: terminals (E2-01): `createTerminal`, `listTerminals`, `getTerminal`, `closeTerminal`,
 ///    `signalTerminal`, `attachTerminal` (501 until the terminal service, E2-05), the scope
 ///    `terminal` with step-up on create and attach, and the `terminal.*` event kinds.
