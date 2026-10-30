@@ -112,6 +112,24 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/settings/{scope}/{key}/history`.
     /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/{key}/history/get(settingHistory)`.
     func settingHistory(_ input: Operations.SettingHistory.Input) async throws -> Operations.SettingHistory.Output
+    /// - Remark: HTTP `GET /api/v1/terminals`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/get(listTerminals)`.
+    func listTerminals(_ input: Operations.ListTerminals.Input) async throws -> Operations.ListTerminals.Output
+    /// - Remark: HTTP `POST /api/v1/terminals`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/post(createTerminal)`.
+    func createTerminal(_ input: Operations.CreateTerminal.Input) async throws -> Operations.CreateTerminal.Output
+    /// - Remark: HTTP `GET /api/v1/terminals/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/get(getTerminal)`.
+    func getTerminal(_ input: Operations.GetTerminal.Input) async throws -> Operations.GetTerminal.Output
+    /// - Remark: HTTP `DELETE /api/v1/terminals/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/delete(closeTerminal)`.
+    func closeTerminal(_ input: Operations.CloseTerminal.Input) async throws -> Operations.CloseTerminal.Output
+    /// - Remark: HTTP `POST /api/v1/terminals/{id}/signal`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/signal/post(signalTerminal)`.
+    func signalTerminal(_ input: Operations.SignalTerminal.Input) async throws -> Operations.SignalTerminal.Output
+    /// - Remark: HTTP `GET /api/v1/terminals/{id}/ws`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/ws/get(attachTerminal)`.
+    func attachTerminal(_ input: Operations.AttachTerminal.Input) async throws -> Operations.AttachTerminal.Output
     /// - Remark: HTTP `POST /api/v1/ws-ticket`.
     /// - Remark: Generated from `#/paths//api/v1/ws-ticket/post(createWsTicket)`.
     func createWsTicket(_ input: Operations.CreateWsTicket.Input) async throws -> Operations.CreateWsTicket.Output
@@ -485,6 +503,70 @@ extension APIProtocol {
     ) async throws -> Operations.SettingHistory.Output {
         try await settingHistory(Operations.SettingHistory.Input(
             path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/terminals`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/get(listTerminals)`.
+    public func listTerminals(headers: Operations.ListTerminals.Input.Headers = .init()) async throws -> Operations.ListTerminals.Output {
+        try await listTerminals(Operations.ListTerminals.Input(headers: headers))
+    }
+    /// - Remark: HTTP `POST /api/v1/terminals`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/post(createTerminal)`.
+    public func createTerminal(
+        headers: Operations.CreateTerminal.Input.Headers = .init(),
+        body: Operations.CreateTerminal.Input.Body
+    ) async throws -> Operations.CreateTerminal.Output {
+        try await createTerminal(Operations.CreateTerminal.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/terminals/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/get(getTerminal)`.
+    public func getTerminal(
+        path: Operations.GetTerminal.Input.Path,
+        headers: Operations.GetTerminal.Input.Headers = .init()
+    ) async throws -> Operations.GetTerminal.Output {
+        try await getTerminal(Operations.GetTerminal.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `DELETE /api/v1/terminals/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/delete(closeTerminal)`.
+    public func closeTerminal(
+        path: Operations.CloseTerminal.Input.Path,
+        headers: Operations.CloseTerminal.Input.Headers = .init()
+    ) async throws -> Operations.CloseTerminal.Output {
+        try await closeTerminal(Operations.CloseTerminal.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/terminals/{id}/signal`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/signal/post(signalTerminal)`.
+    public func signalTerminal(
+        path: Operations.SignalTerminal.Input.Path,
+        headers: Operations.SignalTerminal.Input.Headers = .init(),
+        body: Operations.SignalTerminal.Input.Body
+    ) async throws -> Operations.SignalTerminal.Output {
+        try await signalTerminal(Operations.SignalTerminal.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/terminals/{id}/ws`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/ws/get(attachTerminal)`.
+    public func attachTerminal(
+        path: Operations.AttachTerminal.Input.Path,
+        query: Operations.AttachTerminal.Input.Query = .init(),
+        headers: Operations.AttachTerminal.Input.Headers = .init()
+    ) async throws -> Operations.AttachTerminal.Output {
+        try await attachTerminal(Operations.AttachTerminal.Input(
+            path: path,
+            query: query,
             headers: headers
         ))
     }

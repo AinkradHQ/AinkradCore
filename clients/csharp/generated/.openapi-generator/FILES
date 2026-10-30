@@ -13,6 +13,7 @@ src/Ainkrad.Client/Api/PairingApi.cs
 src/Ainkrad.Client/Api/RunnersApi.cs
 src/Ainkrad.Client/Api/SecretsApi.cs
 src/Ainkrad.Client/Api/SettingsApi.cs
+src/Ainkrad.Client/Api/TerminalsApi.cs
 src/Ainkrad.Client/Client/ApiClient.cs
 src/Ainkrad.Client/Client/ApiException.cs
 src/Ainkrad.Client/Client/ApiResponse.cs
@@ -60,6 +61,7 @@ src/Ainkrad.Client/Model/Named.cs
 src/Ainkrad.Client/Model/NewLease.cs
 src/Ainkrad.Client/Model/NewPairingBody.cs
 src/Ainkrad.Client/Model/NewSecret.cs
+src/Ainkrad.Client/Model/NewTerminal.cs
 src/Ainkrad.Client/Model/NoopResult.cs
 src/Ainkrad.Client/Model/PageEvent.cs
 src/Ainkrad.Client/Model/PairStatus.cs
@@ -86,6 +88,10 @@ src/Ainkrad.Client/Model/SettingChange.cs
 src/Ainkrad.Client/Model/SettingScope.cs
 src/Ainkrad.Client/Model/SettingUnit.cs
 src/Ainkrad.Client/Model/StepUpRequest.cs
+src/Ainkrad.Client/Model/Terminal.cs
+src/Ainkrad.Client/Model/TerminalSignal.cs
+src/Ainkrad.Client/Model/TerminalSize.cs
+src/Ainkrad.Client/Model/TerminalStatus.cs
 src/Ainkrad.Client/Model/Versions.cs
 src/Ainkrad.Client/Model/WebOptions.cs
 src/Ainkrad.Client/Model/WebOptionsRequest.cs

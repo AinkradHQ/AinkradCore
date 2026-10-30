@@ -13,6 +13,7 @@ src/main/kotlin/ainkrad/client/apis/PairingApi.kt
 src/main/kotlin/ainkrad/client/apis/RunnersApi.kt
 src/main/kotlin/ainkrad/client/apis/SecretsApi.kt
 src/main/kotlin/ainkrad/client/apis/SettingsApi.kt
+src/main/kotlin/ainkrad/client/apis/TerminalsApi.kt
 src/main/kotlin/ainkrad/client/auth/ApiKeyAuth.kt
 src/main/kotlin/ainkrad/client/auth/Authentication.kt
 src/main/kotlin/ainkrad/client/auth/HttpBasicAuth.kt
@@ -52,6 +53,7 @@ src/main/kotlin/ainkrad/client/models/Named.kt
 src/main/kotlin/ainkrad/client/models/NewLease.kt
 src/main/kotlin/ainkrad/client/models/NewPairingBody.kt
 src/main/kotlin/ainkrad/client/models/NewSecret.kt
+src/main/kotlin/ainkrad/client/models/NewTerminal.kt
 src/main/kotlin/ainkrad/client/models/NoopResult.kt
 src/main/kotlin/ainkrad/client/models/PageEvent.kt
 src/main/kotlin/ainkrad/client/models/PairStatus.kt
@@ -78,6 +80,10 @@ src/main/kotlin/ainkrad/client/models/SettingChange.kt
 src/main/kotlin/ainkrad/client/models/SettingScope.kt
 src/main/kotlin/ainkrad/client/models/SettingUnit.kt
 src/main/kotlin/ainkrad/client/models/StepUpRequest.kt
+src/main/kotlin/ainkrad/client/models/Terminal.kt
+src/main/kotlin/ainkrad/client/models/TerminalSignal.kt
+src/main/kotlin/ainkrad/client/models/TerminalSize.kt
+src/main/kotlin/ainkrad/client/models/TerminalStatus.kt
 src/main/kotlin/ainkrad/client/models/Versions.kt
 src/main/kotlin/ainkrad/client/models/WebOptions.kt
 src/main/kotlin/ainkrad/client/models/WebOptionsRequest.kt

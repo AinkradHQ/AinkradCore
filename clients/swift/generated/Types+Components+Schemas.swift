@@ -1217,6 +1217,71 @@ extension Components {
                 case value
             }
         }
+        /// - Remark: Generated from `#/components/schemas/NewTerminal`.
+        public struct NewTerminal: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/NewTerminal/args`.
+            public var args: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/NewTerminal/cwd`.
+            public var cwd: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/NewTerminal/env`.
+            public struct EnvPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: [String: Swift.String]
+                /// Creates a new `EnvPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: [String: Swift.String] = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/NewTerminal/env`.
+            public var env: Components.Schemas.NewTerminal.EnvPayload?
+            /// - Remark: Generated from `#/components/schemas/NewTerminal/program`.
+            public var program: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/NewTerminal/runner`.
+            public var runner: Swift.String
+            /// - Remark: Generated from `#/components/schemas/NewTerminal/size`.
+            public var size: Components.Schemas.TerminalSize
+            /// Creates a new `NewTerminal`.
+            ///
+            /// - Parameters:
+            ///   - args:
+            ///   - cwd:
+            ///   - env:
+            ///   - program:
+            ///   - runner:
+            ///   - size:
+            public init(
+                args: [Swift.String]? = nil,
+                cwd: Swift.String? = nil,
+                env: Components.Schemas.NewTerminal.EnvPayload? = nil,
+                program: Swift.String? = nil,
+                runner: Swift.String,
+                size: Components.Schemas.TerminalSize
+            ) {
+                self.args = args
+                self.cwd = cwd
+                self.env = env
+                self.program = program
+                self.runner = runner
+                self.size = size
+            }
+            public enum CodingKeys: String, CodingKey {
+                case args
+                case cwd
+                case env
+                case program
+                case runner
+                case size
+            }
+        }
         /// The no-op's answer.
         ///
         /// - Remark: Generated from `#/components/schemas/NoopResult`.
@@ -2326,6 +2391,169 @@ extension Components {
                     "assertion",
                     "challenge",
                     "stepup_sig"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/Terminal`.
+        public struct Terminal: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/Terminal/attached`.
+            public var attached: Swift.Int32?
+            /// - Remark: Generated from `#/components/schemas/Terminal/created_at`.
+            public var createdAt: Components.Schemas.Timestamp?
+            /// - Remark: Generated from `#/components/schemas/Terminal/exit_code`.
+            public var exitCode: Swift.Int32?
+            /// - Remark: Generated from `#/components/schemas/Terminal/exit_signal`.
+            public var exitSignal: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/Terminal/id`.
+            public var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Terminal/opened_by`.
+            public var openedBy: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/Terminal/runner`.
+            public var runner: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Terminal/seq`.
+            public var seq: Swift.Int64?
+            /// - Remark: Generated from `#/components/schemas/Terminal/size`.
+            public var size: Components.Schemas.TerminalSize?
+            /// - Remark: Generated from `#/components/schemas/Terminal/status`.
+            public var status: Components.Schemas.TerminalStatus
+            /// Creates a new `Terminal`.
+            ///
+            /// - Parameters:
+            ///   - attached:
+            ///   - createdAt:
+            ///   - exitCode:
+            ///   - exitSignal:
+            ///   - id:
+            ///   - openedBy:
+            ///   - runner:
+            ///   - seq:
+            ///   - size:
+            ///   - status:
+            public init(
+                attached: Swift.Int32? = nil,
+                createdAt: Components.Schemas.Timestamp? = nil,
+                exitCode: Swift.Int32? = nil,
+                exitSignal: Swift.String? = nil,
+                id: Swift.String,
+                openedBy: Swift.String? = nil,
+                runner: Swift.String,
+                seq: Swift.Int64? = nil,
+                size: Components.Schemas.TerminalSize? = nil,
+                status: Components.Schemas.TerminalStatus
+            ) {
+                self.attached = attached
+                self.createdAt = createdAt
+                self.exitCode = exitCode
+                self.exitSignal = exitSignal
+                self.id = id
+                self.openedBy = openedBy
+                self.runner = runner
+                self.seq = seq
+                self.size = size
+                self.status = status
+            }
+            public enum CodingKeys: String, CodingKey {
+                case attached
+                case createdAt = "created_at"
+                case exitCode = "exit_code"
+                case exitSignal = "exit_signal"
+                case id
+                case openedBy = "opened_by"
+                case runner
+                case seq
+                case size
+                case status
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/TerminalSignal`.
+        public struct TerminalSignal: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TerminalSignal/signal`.
+            public var signal: Swift.String
+            /// Creates a new `TerminalSignal`.
+            ///
+            /// - Parameters:
+            ///   - signal:
+            public init(signal: Swift.String) {
+                self.signal = signal
+            }
+            public enum CodingKeys: String, CodingKey {
+                case signal
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/TerminalSize`.
+        public struct TerminalSize: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TerminalSize/cols`.
+            public var cols: Swift.Int32
+            /// - Remark: Generated from `#/components/schemas/TerminalSize/rows`.
+            public var rows: Swift.Int32
+            /// Creates a new `TerminalSize`.
+            ///
+            /// - Parameters:
+            ///   - cols:
+            ///   - rows:
+            public init(
+                cols: Swift.Int32,
+                rows: Swift.Int32
+            ) {
+                self.cols = cols
+                self.rows = rows
+            }
+            public enum CodingKeys: String, CodingKey {
+                case cols
+                case rows
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/TerminalStatus`.
+        public struct TerminalStatus: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TerminalStatus/value1`.
+            @frozen public enum Value1Payload: String, Codable, Hashable, Sendable, CaseIterable {
+                case created = "created"
+                case running = "running"
+                case exited = "exited"
+                case reaped = "reaped"
+            }
+            /// - Remark: Generated from `#/components/schemas/TerminalStatus/value1`.
+            public var value1: Components.Schemas.TerminalStatus.Value1Payload?
+            /// - Remark: Generated from `#/components/schemas/TerminalStatus/value2`.
+            public var value2: Swift.String?
+            /// Creates a new `TerminalStatus`.
+            ///
+            /// - Parameters:
+            ///   - value1:
+            ///   - value2:
+            public init(
+                value1: Components.Schemas.TerminalStatus.Value1Payload? = nil,
+                value2: Swift.String? = nil
+            ) {
+                self.value1 = value1
+                self.value2 = value2
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                var errors: [any Swift.Error] = []
+                do {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                } catch {
+                    errors.append(error)
+                }
+                do {
+                    self.value2 = try decoder.decodeFromSingleValueContainer()
+                } catch {
+                    errors.append(error)
+                }
+                try Swift.DecodingError.verifyAtLeastOneSchemaIsNotNil(
+                    [
+                        self.value1,
+                        self.value2
+                    ],
+                    type: Self.self,
+                    codingPath: decoder.codingPath,
+                    errors: errors
+                )
+            }
+            public func encode(to encoder: any Swift.Encoder) throws {
+                try encoder.encodeFirstNonNilValueToSingleValueContainer([
+                    self.value1,
+                    self.value2
                 ])
             }
         }
