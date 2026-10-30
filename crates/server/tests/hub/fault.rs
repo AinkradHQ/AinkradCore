@@ -127,6 +127,7 @@ async fn a_cut_mid_stream_loses_nothing_and_answers_once() {
         enrolment: Arc::new(Mutex::new(Enrolment::load(&st.enrolment()).unwrap())),
         save: None,
         exec: Arc::new(ExecDriver::new(exec, Redactor::new())),
+        pty: None,
         agents: None,
         tls: None,
         backoff: Backoff {

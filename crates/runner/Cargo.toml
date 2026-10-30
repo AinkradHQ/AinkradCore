@@ -12,6 +12,8 @@ workspace = true
 base64 = "0.22.1"
 ainkrad-harness = { path = "../harness" }
 ainkrad-proto = { path = "../proto" }
+# Terminals (E2-02, E2-03): the host process and its client.
+ainkrad-ptyhost = { path = "../ptyhost" }
 futures-util = "0.3.34"
 # The connection proof and pairing (E1-11.3): P-256 keys, SHA-256, randomness; already under
 # rustls. HTTP to the Core's /handshake and /pair routes.

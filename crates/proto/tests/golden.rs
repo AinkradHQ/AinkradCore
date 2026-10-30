@@ -287,12 +287,148 @@ fn v2_frames_are_pinned() {
     );
 }
 
+/// E2-01: a terminal's frames (`out`, `in`, `resize`, `snapshot`, `exit`, `credit`), its ops, and
+/// a hello re-announcing terminals.
+#[test]
+fn v2_terminal_frames_are_pinned() {
+    let t = |name, stream, seq, body| check("v2", name, Frame::new(stream, seq, body));
+    let size = Size { rows: 24, cols: 80 };
+    t(
+        "pty_open",
+        7,
+        0,
+        Body::Command(Command::PtyOpen(PtyOpen {
+            program: None,
+            args: vec![],
+            cwd: Some("/home/example".to_owned()),
+            env: BTreeMap::from([("LANG".to_owned(), "en_US.UTF-8".to_owned())]),
+            env_pass: vec!["PATH".to_owned()],
+            size,
+        })),
+    );
+    t(
+        "pty_attach",
+        9,
+        0,
+        Body::Command(Command::PtyAttach(PtyAttach {
+            terminal: "t_AAECAwQFBgcICQoL".to_owned(),
+            seq: 4096,
+        })),
+    );
+    t(
+        "pty_close",
+        11,
+        0,
+        Body::Command(Command::PtyClose(PtyClose {
+            terminal: "t_AAECAwQFBgcICQoL".to_owned(),
+        })),
+    );
+    let info = TerminalInfo {
+        terminal: "t_AAECAwQFBgcICQoL".to_owned(),
+        state: TerminalState::Running,
+        size,
+        seq: 0,
+        pid: Some(4242),
+        exit: None,
+    };
+    t(
+        "pty_opened",
+        7,
+        0,
+        Body::Control(Control::Opened(info.clone())),
+    );
+    t(
+        "pty_out",
+        7,
+        1,
+        Body::Output(Output {
+            data: "JCAK".to_owned(),
+        }),
+    );
+    t(
+        "pty_in",
+        7,
+        1,
+        Body::Output(Output {
+            data: "bHMK".to_owned(),
+        }),
+    );
+    t(
+        "pty_resize",
+        7,
+        2,
+        Body::Control(Control::Resize(Size {
+            rows: 50,
+            cols: 132,
+        })),
+    );
+    t(
+        "pty_signal",
+        7,
+        3,
+        Body::Control(Control::Signal(SignalReq {
+            signal: "INT".to_owned(),
+        })),
+    );
+    t(
+        "pty_snapshot",
+        7,
+        2,
+        Body::Control(Control::Snapshot(Snapshot {
+            seq: 8192,
+            data: "G1tIG1sySg==".to_owned(),
+        })),
+    );
+    t("pty_credit", 7, 4, Body::Credit(Credit { bytes: 32768 }));
+    t(
+        "pty_exit",
+        7,
+        3,
+        Body::Result(Reply::PtyOpen(TerminalExit {
+            terminal: "t_AAECAwQFBgcICQoL".to_owned(),
+            exit_code: Some(0),
+            signal: None,
+        })),
+    );
+    t(
+        "hello_terminals",
+        CONTROL_STREAM,
+        0,
+        Body::Control(Control::Hello(RunnerHello {
+            protocol: PROTOCOL_VERSION.to_owned(),
+            runner_version: "0.1.0".to_owned(),
+            drivers: vec![DriverInfo {
+                name: DRIVER_PTY.to_owned(),
+                commands: vec![
+                    OP_PTY_OPEN.to_owned(),
+                    OP_PTY_ATTACH.to_owned(),
+                    OP_PTY_CLOSE.to_owned(),
+                ],
+                capacity: 32,
+                ..Default::default()
+            }],
+            boot: Some("b_runner".to_owned()),
+            terminals: vec![TerminalInfo {
+                state: TerminalState::Exited,
+                seq: 1234,
+                exit: Some(TerminalExit {
+                    terminal: "t_AAECAwQFBgcICQoL".to_owned(),
+                    exit_code: None,
+                    signal: Some("Hangup".to_owned()),
+                }),
+                ..info
+            }],
+            ..Default::default()
+        })),
+    );
+}
+
 /// The two-stage decode in every case a newer peer can produce.
 #[test]
 fn v2_reads_what_a_newer_peer_sends() {
     let frame = |s: &str| serde_json::from_str::<Frame>(s).unwrap();
     // An unknown kind decodes and is skipped.
-    let f = frame(r#"{"stream_id":7,"kind":"resize","seq":0,"payload":{"cols":80}}"#);
+    let f = frame(r#"{"stream_id":7,"kind":"zoom","seq":0,"payload":{"cols":80}}"#);
     assert_eq!(f.kind, FrameKind::Unknown);
     assert_eq!(f.body(), Ok(None));
     // Unknown fields, in the frame and in a payload, are ignored.
@@ -302,10 +438,10 @@ fn v2_reads_what_a_newer_peer_sends() {
     assert_eq!(f.body(), Ok(Some(Body::Command(Command::Noop))));
     // An unknown op, control type and error code each have a catch-all.
     let f =
-        frame(r#"{"stream_id":1,"kind":"command","seq":0,"payload":{"op":"pty.open","cols":80}}"#);
+        frame(r#"{"stream_id":1,"kind":"command","seq":0,"payload":{"op":"vm.boot","cols":80}}"#);
     assert_eq!(f.body(), Ok(Some(Body::Command(Command::Unknown))));
     let f =
-        frame(r#"{"stream_id":5,"kind":"control","seq":3,"payload":{"type":"resize","cols":80}}"#);
+        frame(r#"{"stream_id":5,"kind":"control","seq":3,"payload":{"type":"zoom","cols":80}}"#);
     assert_eq!(f.body(), Ok(Some(Body::Control(Control::Unknown))));
     let f =
         frame(r#"{"stream_id":1,"kind":"error","seq":0,"payload":{"code":"quota","message":"m"}}"#);

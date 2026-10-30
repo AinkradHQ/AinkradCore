@@ -33,7 +33,7 @@ use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{
     agents, audit, devices, events, handshake, lockouts, me, pair, pairing, passkey, runners,
-    secrets, session, settings, stepup, ticket, types, websession,
+    secrets, session, settings, stepup, terminals, ticket, types, websession,
 };
 
 #[derive(OpenApi)]
@@ -70,6 +70,12 @@ use super::{
         runners::list,
         runners::get,
         runners::noop,
+        terminals::create,
+        terminals::list,
+        terminals::get,
+        terminals::close,
+        terminals::signal,
+        terminals::attach,
         settings::list_server,
         settings::list,
         settings::get,
@@ -412,6 +418,11 @@ mod tests {
                 "runner.connected",
                 "runner.degraded",
                 "runner.disconnected",
+                "terminal.attached",
+                "terminal.closed",
+                "terminal.detached",
+                "terminal.exited",
+                "terminal.opened",
                 "toy.line"
             ])
         );
@@ -421,8 +432,11 @@ mod tests {
             json!({"agent.approval_decided": "approve", "agent.approval_requested": "approve",
                 "agent.created": "agent", "agent.ended": "agent", "agent.message": "agent",
                 "agent.state": "agent", "agent.transcript": "agent",
-                "audit": "admin", "notify.delivery": "admin", "runner.connected": "read", "runner.degraded": "read",
-                "runner.disconnected": "read", "toy.line": "admin"})
+                "audit": "admin", "notify.delivery": "admin", "runner.connected": "read",
+                "runner.degraded": "read", "runner.disconnected": "read",
+                "terminal.attached": "terminal", "terminal.closed": "terminal",
+                "terminal.detached": "terminal", "terminal.exited": "terminal",
+                "terminal.opened": "terminal", "toy.line": "admin"})
         );
         let actions = s["AuditEntry"]["x-audit-actions"].as_array().unwrap();
         assert!(actions.contains(&json!("toy.made")) && actions.contains(&json!("setting.set")));
@@ -441,7 +455,12 @@ mod tests {
                 "notify.delivery",
                 "runner.connected",
                 "runner.degraded",
-                "runner.disconnected"
+                "runner.disconnected",
+                "terminal.attached",
+                "terminal.closed",
+                "terminal.detached",
+                "terminal.exited",
+                "terminal.opened"
             ])
         );
     }

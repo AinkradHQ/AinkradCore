@@ -137,6 +137,7 @@ async fn run_runner(core: &Core, base: &str, st: &State, exec: Script) -> Runner
         enrolment,
         save: None,
         exec: driver(),
+        pty: None,
         agents: Some(Arc::new(agents)),
         tls: None,
         backoff: Backoff {

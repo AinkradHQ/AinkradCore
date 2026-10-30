@@ -10,6 +10,7 @@
 //! - Agent sessions (E2-08): `agent`; deciding a tool call `approve`.
 //! - Secrets (E2-07): managing them and granting a lease is `admin` (and destructive); the one
 //!   route a `runner` device may call is redeeming a lease granted to it.
+//! - `terminal`: opening, attaching, signalling and closing a terminal (listing is `read`).
 //! - A module's routes need the module's own `Module::scope` (`admin` unless it says otherwise).
 //! - A `runner` device holds only `runner`, which only `POST /api/v1/secret-leases/redeem`
 //!   takes: it can call nothing else here (the runner hub is E1-11).
@@ -65,6 +66,12 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("DELETE", "/api/v1/secrets/{id}", "admin"),
     ("POST", "/api/v1/secrets/{id}/leases", "admin"),
     ("POST", "/api/v1/secret-leases/redeem", "runner"),
+    ("GET", "/api/v1/terminals", "read"),
+    ("GET", "/api/v1/terminals/{id}", "read"),
+    ("POST", "/api/v1/terminals", "terminal"),
+    ("GET", "/api/v1/terminals/{id}/ws", "terminal"),
+    ("POST", "/api/v1/terminals/{id}/signal", "terminal"),
+    ("DELETE", "/api/v1/terminals/{id}", "terminal"),
     ("GET", "/api/v1/agent-sessions", "agent"),
     ("POST", "/api/v1/agent-sessions", "agent"),
     ("GET", "/api/v1/agent-sessions/{id}", "agent"),
@@ -104,6 +111,9 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("PUT", "/api/v1/secrets/{id}"),
     ("DELETE", "/api/v1/secrets/{id}"),
     ("POST", "/api/v1/secrets/{id}/leases"),
+    // Opening or attaching a terminal is a shell on the runner (spec §8, E2-01).
+    ("POST", "/api/v1/terminals"),
+    ("GET", "/api/v1/terminals/{id}/ws"),
     // Agent sessions (E2-08): starting one, telling it what to do and resuming it run code on
     // a runner and lease it secrets; cancelling and killing stop someone's work.
     ("POST", "/api/v1/agent-sessions"),

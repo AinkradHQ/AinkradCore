@@ -21,8 +21,10 @@ pub const PLATFORM: &str = "core";
 
 /// The platform's event kinds: `audit`, one per audit row, written by the `events_from_audit`
 /// trigger; and the runner hub's presence (`hub`): `runner.connected`, `runner.disconnected`,
-/// `runner.degraded` (silent past two heartbeats); and `notify.delivery`, one per push the
-/// notifications service tried (E2-12); and agent sessions' (`agent.*`, E2-08).
+/// `runner.degraded` (silent past two heartbeats); `notify.delivery`, one per push the
+/// notifications service tried (E2-12); and a terminal's life (E2-01), who and when, never its
+/// content: `terminal.opened`, `.attached`, `.detached`, `.exited`, `.closed`; and agent
+/// sessions' (`agent.*`, E2-08).
 pub const PLATFORM_EVENT_KINDS: &[&str] = &[
     "audit",
     "agent.approval_decided",
@@ -36,6 +38,11 @@ pub const PLATFORM_EVENT_KINDS: &[&str] = &[
     "runner.connected",
     "runner.degraded",
     "runner.disconnected",
+    "terminal.attached",
+    "terminal.closed",
+    "terminal.detached",
+    "terminal.exited",
+    "terminal.opened",
 ];
 
 /// The scopes an event kind may be visible to (a runner reads no event stream).
@@ -43,7 +50,8 @@ pub const VISIBLE: [&str; 5] = ["read", "approve", "terminal", "agent", "admin"]
 
 /// The scope each platform event kind is visible to: `audit` is the audit log, `admin` as
 /// `GET /api/v1/audit` is; runner presence (`runner.*`) is `read`, as `GET /api/v1/runners`
-/// is. A `runner` device sees neither: it reads no event stream at all.
+/// is; a terminal's (`terminal.*`) is `terminal`. A `runner` device sees none: it reads no
+/// event stream at all.
 pub fn platform_scope(kind: &str) -> &'static str {
     if kind.starts_with("agent.approval_") {
         // Whoever decides a tool call must hear of it (E2-08.4).
@@ -52,6 +60,8 @@ pub fn platform_scope(kind: &str) -> &'static str {
         "agent"
     } else if kind.starts_with("runner.") {
         "read"
+    } else if kind.starts_with("terminal.") {
+        "terminal"
     } else {
         "admin"
     }

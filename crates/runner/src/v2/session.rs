@@ -11,18 +11,22 @@
 //!   (a restarted Core) forgets every stream the same way.
 //! - The Core's `close` after a stream's last frame means it has it: the stream is forgotten.
 //!   A `close` while the command runs cancels it.
+//! - A terminal stream (`pty.open`, `pty.attach`) is long: the Core's `output`, `control` and
+//!   `credit` on it go to its bridge (`pty`), and its frames come back as they are made. Its
+//!   sent frames are kept only until the Core's credit shows it read them, so a terminal's
+//!   history is never held here (the host holds it, by byte `seq`).
 //! - An `agent.*` command is a request about a session the agent driver owns (`agent`), not
 //!   the session itself: forgetting its stream (a Core restart) leaves the harness running.
 //! - Heartbeats go out at the Core's pace (`welcome.heartbeat_ms`); a Core silent for three is
 //!   a dead connection, ended so the daemon redials.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, CONTROL_STREAM, Command, Control, ErrorCode, Frame, Reply, RunnerHello, StreamError,
-    StreamState,
+    Body, CONTROL_STREAM, Command, Control, ErrorCode, Frame, FrameKind, Reply, RunnerHello,
+    StreamError, StreamState,
 };
 use futures_util::StreamExt;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -32,6 +36,7 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 
 use super::agent::AgentDriver;
+use super::pty::{Op, PtyDriver};
 use super::{ExecDriver, Link, handshake, key, lost, rotate, send};
 
 /// The pace when the Core names none.
@@ -41,22 +46,62 @@ const HEARTBEAT: Duration = Duration::from_secs(15);
 struct Held {
     /// Core frames received: the next `seq` expected.
     received: u64,
-    /// Runner frames sent, numbered by position.
-    sent: Vec<Frame>,
+    /// Runner frames sent and not known to be received, from `seq` `base` on.
+    sent: VecDeque<Frame>,
+    base: u64,
+    /// Output bytes the Core's credit acknowledged and not yet matched to a dropped frame.
+    acked: u64,
     /// While the command runs.
     cancel: Option<oneshot::Sender<()>>,
+    /// A terminal stream's bridge: where the Core's frames on it go.
+    inbox: Option<mpsc::UnboundedSender<Body>>,
+}
+
+/// The credit a frame used: an `output`'s bytes, or a `snapshot`'s (review M2); `None` for a
+/// frame credit does not count.
+fn credited(f: &Frame) -> Option<u64> {
+    let counted = match f.kind {
+        FrameKind::Output => true,
+        FrameKind::Control => f.payload.get("type").and_then(|t| t.as_str()) == Some("snapshot"),
+        _ => false,
+    };
+    let data = f.payload.get("data")?.as_str().filter(|_| counted)?;
+    Some(super::pty::b64_len(data))
 }
 
 impl Held {
     fn frame(&mut self, stream: u64, body: Body) -> Frame {
-        let f = Frame::new(stream, self.sent.len() as u64, body);
-        self.sent.push(f.clone());
+        let f = Frame::new(stream, self.base + self.sent.len() as u64, body);
+        self.sent.push_back(f.clone());
         f
+    }
+
+    /// The Core granted `bytes` of credit: it read that much output (snapshots included), so
+    /// every frame up to the last credited frame those bytes cover was received and need not
+    /// be kept for a resend.
+    fn ack(&mut self, bytes: u64) {
+        self.acked = self.acked.saturating_add(bytes);
+        let (mut budget, mut cut, mut spent) = (self.acked, 0, 0);
+        for (i, f) in self.sent.iter().enumerate() {
+            let Some(n) = credited(f) else {
+                continue;
+            };
+            if n > budget {
+                break;
+            }
+            budget -= n;
+            spent += n;
+            cut = i + 1;
+        }
+        self.sent.drain(..cut);
+        self.base += cut as u64;
+        self.acked -= spent;
     }
 }
 
 pub struct Session {
     exec: Arc<ExecDriver>,
+    pty: Option<Arc<PtyDriver>>,
     /// Agent sessions (`--enable-agents`), if offered.
     agent: Option<Arc<AgentDriver>>,
     boot: String,
@@ -71,6 +116,7 @@ impl Session {
         let (done_tx, done_rx) = mpsc::unbounded_channel();
         Self {
             exec,
+            pty: None,
             agent: None,
             boot: format!("b_{}", key::b64(&key::random::<16>())),
             core_boot: None,
@@ -78,6 +124,12 @@ impl Session {
             done_tx,
             done_rx,
         }
+    }
+
+    /// Offers the `pty` driver too (when its config enables it).
+    pub fn with_pty(mut self, pty: Arc<PtyDriver>) -> Self {
+        self.pty = Some(pty);
+        self
     }
 
     /// Offers the `agent` driver too.
@@ -111,12 +163,18 @@ impl Session {
             })
             .collect();
         held.sort_by_key(|s| s.stream_id);
+        let (pty_info, terminals) = match &self.pty {
+            Some(p) => (p.info(), p.terminals().await),
+            None => (None, Vec::new()),
+        };
         let hello = RunnerHello {
             drivers: std::iter::once(self.exec.info())
+                .chain(pty_info)
                 .chain(self.agent.as_ref().map(|a| a.info()))
                 .collect(),
             boot: Some(self.boot.clone()),
             streams: held,
+            terminals,
             ..RunnerHello::default()
         };
         let (welcome, core_spki) = handshake(&mut sink, &mut source, link, hello).await?;
@@ -142,7 +200,12 @@ impl Session {
             self.forget(id);
         }
         for (id, h) in &self.streams {
-            for f in h.sent.iter().skip(listed[id] as usize) {
+            let skip = listed[id].saturating_sub(h.base);
+            for f in h
+                .sent
+                .iter()
+                .skip(usize::try_from(skip).unwrap_or(usize::MAX))
+            {
                 send(&mut sink, f.clone()).await?;
             }
         }
@@ -158,7 +221,10 @@ impl Session {
                 Some((stream, body)) = self.done_rx.recv() => {
                     // A stream forgotten meanwhile (the Core lost or cancelled it) is dropped.
                     if let Some(h) = self.streams.get_mut(&stream) {
-                        h.cancel = None;
+                        if matches!(body, Body::Result(_) | Body::Error(_)) {
+                            h.cancel = None;
+                            h.inbox = None;
+                        }
                         let f = h.frame(stream, body);
                         send(&mut sink, f).await?;
                     }
@@ -250,7 +316,19 @@ impl Session {
                 }
                 None
             }
-            // Heartbeats, credit, output (no driver takes input yet), unknown kinds.
+            // A terminal's input, resize, signal and credit go to its bridge.
+            Ok(Some(b @ (Body::Output(_) | Body::Control(_) | Body::Credit(_)))) => {
+                if let Some(h) = self.streams.get_mut(&stream) {
+                    if let Body::Credit(c) = &b {
+                        h.ack(c.bytes);
+                    }
+                    if let Some(inbox) = &h.inbox {
+                        let _ = inbox.send(b);
+                    }
+                }
+                None
+            }
+            // Heartbeats and unknown kinds.
             Ok(_) => None,
             Err(e) => {
                 let h = self.streams.entry(stream).or_default();
@@ -281,6 +359,9 @@ impl Session {
                 });
                 None
             }
+            Command::PtyOpen(_) | Command::PtyAttach(_) | Command::PtyClose(_) => {
+                self.start_pty(stream, command, h)
+            }
             Command::AgentStart(_)
             | Command::AgentRead(_)
             | Command::AgentSend(_)
@@ -291,6 +372,52 @@ impl Session {
                 "no driver of this runner takes that command",
             ))),
         }
+    }
+}
+
+impl Session {
+    /// Starts a `pty.*` command; `None` when a task answers later.
+    fn start_pty(&self, stream: u64, command: Command, h: &mut Held) -> Option<Body> {
+        let Some(pty) = self.pty.as_ref().filter(|p| p.info().is_some()) else {
+            return Some(Body::Error(StreamError::new(
+                ErrorCode::UnsupportedCommand,
+                "pty is off on this runner (ainkrad-runner connect --enable-pty)",
+            )));
+        };
+        let (pty, done) = (Arc::clone(pty), self.done_tx.clone());
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        h.cancel = Some(cancel_tx);
+        if let Command::PtyClose(req) = command {
+            tokio::spawn(async move {
+                let body = match pty.close(&req.terminal).await {
+                    Ok(exit) => Body::Result(Reply::PtyClose(exit)),
+                    Err(e) => Body::Error(e),
+                };
+                drop(cancel_rx);
+                let _ = done.send((stream, body));
+            });
+            return None;
+        }
+        let (inbox_tx, inbox) = mpsc::unbounded_channel();
+        h.inbox = Some(inbox_tx);
+        tokio::spawn(async move {
+            let (op, terminal, seq) = match command {
+                Command::PtyOpen(req) => match pty.open(&req).await {
+                    Ok(id) => (Op::Open, id, 0),
+                    Err(e) => {
+                        let _ = done.send((stream, Body::Error(e)));
+                        return;
+                    }
+                },
+                Command::PtyAttach(req) => (Op::Attach, req.terminal, req.seq),
+                _ => return,
+            };
+            let last = pty
+                .bridge(op, terminal, seq, stream, inbox, cancel_rx, done.clone())
+                .await;
+            let _ = done.send((stream, last));
+        });
+        None
     }
 }
 
@@ -320,5 +447,63 @@ impl Session {
             let _ = done.send((stream, body));
         });
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ainkrad_proto::v2::{Control, Output, Size, TerminalInfo, TerminalState};
+
+    use super::*;
+
+    /// A terminal stream keeps only what the Core's credit does not yet cover, and numbering
+    /// continues across what was dropped.
+    #[test]
+    fn credit_drops_the_frames_the_core_read() {
+        let mut h = Held::default();
+        let out = |n: usize| {
+            Body::Output(Output {
+                data: base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    vec![0; n],
+                ),
+            })
+        };
+        let opened = Body::Control(Control::Opened(TerminalInfo {
+            terminal: "t_a".to_owned(),
+            state: TerminalState::Running,
+            size: Size { rows: 1, cols: 1 },
+            seq: 0,
+            pid: None,
+            exit: None,
+        }));
+        h.frame(7, opened);
+        for n in [10, 20, 30] {
+            h.frame(7, out(n));
+        }
+        h.ack(15);
+        assert_eq!(
+            (h.base, h.sent.len()),
+            (2, 2),
+            "opened and the first output went"
+        );
+        h.ack(15);
+        assert_eq!((h.base, h.sent.len()), (3, 1));
+        assert_eq!(h.frame(7, out(1)).seq, 4);
+        h.ack(31);
+        assert!(h.sent.is_empty());
+        assert_eq!(h.acked, 0);
+        // A snapshot is credited like output (review M2): acked, it goes.
+        h.frame(
+            7,
+            Body::Control(Control::Snapshot(ainkrad_proto::v2::Snapshot {
+                seq: 9,
+                data: "AAAAAAAAAAAA".to_owned(),
+            })),
+        );
+        h.ack(8);
+        assert_eq!(h.sent.len(), 1);
+        h.ack(1);
+        assert!(h.sent.is_empty());
     }
 }

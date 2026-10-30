@@ -18,6 +18,12 @@ pub enum Command {
     Noop,
     #[serde(rename = "exec.run")]
     ExecRun(ExecRun),
+    #[serde(rename = "pty.open")]
+    PtyOpen(super::PtyOpen),
+    #[serde(rename = "pty.attach")]
+    PtyAttach(super::PtyAttach),
+    #[serde(rename = "pty.close")]
+    PtyClose(super::PtyClose),
     #[serde(rename = "agent.start")]
     AgentStart(super::AgentStart),
     #[serde(rename = "agent.read")]
@@ -39,6 +45,9 @@ impl Command {
         match self {
             Self::Noop => OP_NOOP,
             Self::ExecRun(_) => OP_EXEC_RUN,
+            Self::PtyOpen(_) => super::OP_PTY_OPEN,
+            Self::PtyAttach(_) => super::OP_PTY_ATTACH,
+            Self::PtyClose(_) => super::OP_PTY_CLOSE,
             Self::AgentStart(_) => super::OP_AGENT_START,
             Self::AgentRead(_) => super::OP_AGENT_READ,
             Self::AgentSend(_) => super::OP_AGENT_SEND,
@@ -91,6 +100,13 @@ pub enum Reply {
     Noop,
     #[serde(rename = "exec.run")]
     ExecRun(ExecResult),
+    /// A terminal's exit, on the stream of the op that saw it.
+    #[serde(rename = "pty.open")]
+    PtyOpen(super::TerminalExit),
+    #[serde(rename = "pty.attach")]
+    PtyAttach(super::TerminalExit),
+    #[serde(rename = "pty.close")]
+    PtyClose(super::TerminalExit),
     /// Every `agent.*` op answers with the session's state (`agent.read` with its entries).
     #[serde(rename = "agent.start")]
     AgentStart(super::AgentEvents),
