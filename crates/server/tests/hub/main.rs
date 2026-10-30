@@ -24,7 +24,6 @@ use ainkrad_core_server::hub::connect::PATH;
 use ainkrad_core_server::scheduler::{Clock, SystemClock};
 use ainkrad_core_server::store;
 use ainkrad_proto::v2::*;
-use ainkrad_runner::load::disable_for_tests;
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_tungstenite::WebSocketStream;

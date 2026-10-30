@@ -1,24 +1,11 @@
 //! The host's load, as a heartbeat reports it (AIN-55): the one-minute load average and the CPU
 //! count, so the server can give a loaded runner a longer lease.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use ainkrad_proto::runner::HostLoad;
-
-static DISABLE_LOAD: AtomicBool = AtomicBool::new(false);
-
-/// Called by test binaries so the real host load is not reported during parallel test runs
-/// (which would trip the hub's back-pressure). Safe to call multiple times.
-pub fn disable_for_tests() {
-    DISABLE_LOAD.store(true, Ordering::SeqCst);
-}
 
 /// The host's one-minute load average and CPU count; `None` where this platform gives no load
 /// average. Sampled on each heartbeat, from the heartbeat's own thread.
 pub fn host_load() -> Option<HostLoad> {
-    if DISABLE_LOAD.load(Ordering::SeqCst) {
-        return None;
-    }
     let cores = u32::try_from(std::thread::available_parallelism().ok()?.get()).ok()?;
     let avg1 = load_avg1()?;
     Some(HostLoad { avg1, cores })
