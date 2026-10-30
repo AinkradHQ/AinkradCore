@@ -5,10 +5,10 @@
 # Every key an answers file may hold, and the default of those that have one ('' = no default; ask/require).
 KEYS="BINARY_DIR BUILD HOSTNAME PUBLIC_IP ACME_CONTACT ACME_ENV ACME_CHALLENGE PASSKEYS ALLOW_ORIGINS BACKUP
 BACKUP_ENDPOINT BACKUP_REGION BACKUP_BUCKET BACKUP_PREFIX BACKUP_ACCESS_KEY BACKUP_SECRET_KEY BACKUP_SCHEDULE
-BACKUP_RECIPIENT RUNNER HARDEN SSH_FROM BOOTSTRAP SELFTEST_BACKUP"
+BACKUP_RECIPIENT RUNNER RUNNER_PTY RUNNER_PAIR_CODE HARDEN SSH_FROM BOOTSTRAP SELFTEST_BACKUP"
 default_of() {
   case $1 in
-    BUILD | PASSKEYS | RUNNER | HARDEN) echo no ;;
+    BUILD | PASSKEYS | RUNNER | RUNNER_PTY | HARDEN) echo no ;;
     ACME_ENV) echo staging ;;
     ACME_CHALLENGE) echo tls-alpn-01 ;;
     BACKUP_PREFIX) echo core/ ;;
@@ -76,6 +76,8 @@ valid_cidrs() {
   done
 }
 valid_schedule() { match "$1" '^[A-Za-z0-9*:,./~ -]{1,64}$'; }
+# A pairing code, ABCDE-FGHJK: 10 Crockford base32 characters (no I, L, O, U), the dash optional, any case; or empty.
+valid_pair_code() { [ -z "$1" ] || match "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')" '^[0-9A-HJKMNP-TV-Z]{5}-?[0-9A-HJKMNP-TV-Z]{5}$'; }
 valid_yesno() { case $1 in yes | no) true ;; *) false ;; esac; }
 valid_acme_env() { case $1 in staging | production) true ;; *) false ;; esac; }
 valid_challenge() { case $1 in tls-alpn-01 | http-01) true ;; *) false ;; esac; }
@@ -111,6 +113,8 @@ parse_answers() {
     case $val in \"*\") val=${val#\"}; val=${val%\"} ;; \'*\') val=${val#\'}; val=${val%\'} ;; esac
     printf -v "A_$key" '%s' "$val"
   done <"$file"
+  [ "${A_RUNNER_PTY:-no}" = no ] || [ "${A_RUNNER:-no}" = yes ] || { echo "RUNNER_PTY needs RUNNER=yes" >&2; bad=1; }
+  [ -z "${A_RUNNER_PAIR_CODE:-}" ] || [ "${A_RUNNER:-no}" = yes ] || { echo "RUNNER_PAIR_CODE needs RUNNER=yes" >&2; bad=1; }
   return "$bad"
 }
 # The keys still missing (no value, no default) given the choices made; one per line.
@@ -129,7 +133,8 @@ missing_keys() {
 # The validator for a key.
 validator_of() {
   case $1 in
-    BINARY_DIR) echo valid_dir ;; BUILD | PASSKEYS | RUNNER | HARDEN) echo valid_yesno ;;
+    BINARY_DIR) echo valid_dir ;; BUILD | PASSKEYS | RUNNER | RUNNER_PTY | HARDEN) echo valid_yesno ;;
+    RUNNER_PAIR_CODE) echo valid_pair_code ;;
     HOSTNAME) echo valid_hostname ;; PUBLIC_IP) echo valid_ip_or_empty ;; ACME_CONTACT) echo valid_email ;;
     ACME_ENV) echo valid_acme_env ;; ACME_CHALLENGE) echo valid_challenge ;; ALLOW_ORIGINS) echo valid_origins ;;
     BACKUP) echo valid_backup_mode ;; BACKUP_ENDPOINT) echo valid_https_url ;; BACKUP_REGION) echo valid_region ;;
@@ -148,7 +153,7 @@ check_answers() {
     case $k in BINARY_DIR) [ "${A_BUILD:-no}" = yes ] && continue ;; esac
     case $k in BACKUP_ENDPOINT | BACKUP_REGION | BACKUP_BUCKET | BACKUP_PREFIX | BACKUP_ACCESS_KEY | BACKUP_SECRET_KEY)
       [ "${A_BACKUP:-}" = bucket ] || continue ;; esac
-    [ -z "$v" ] && case $k in PUBLIC_IP | ALLOW_ORIGINS | SSH_FROM | BACKUP_PREFIX) continue ;; esac
+    [ -z "$v" ] && case $k in PUBLIC_IP | ALLOW_ORIGINS | SSH_FROM | BACKUP_PREFIX | RUNNER_PAIR_CODE) continue ;; esac
     [ -z "$v" ] && continue # reported by missing_keys
     rc=0; "$(validator_of "$k")" "$v" || rc=$?
     if [ "$rc" = 2 ] && [ "$k" = BACKUP_RECIPIENT ]; then
