@@ -13,6 +13,7 @@
 //! | `log_format` | `AINKRAD_LOG_FORMAT` | `text` or `json` (`serve --log-format`) |
 //! | `backup_recipient` | `AINKRAD_BACKUP_RECIPIENT` | the `age1…` public key backups are encrypted to |
 //! | `backup_keep_local` | `AINKRAD_BACKUP_KEEP_LOCAL` | encrypted snapshots kept in `<home>/backups` |
+//! | `modules` | `AINKRAD_MODULES` | module ids to mount (`serve --enable-module`); none by default. An id the binary does not carry stops the start |
 //!
 //! The bucket's endpoint and credentials are never in this file: they come only from the
 //! environment (`s3::Bucket::from_env`), on the VM from `/etc/ainkrad/backup.env`. The bucket's
@@ -38,6 +39,9 @@ pub struct Config {
     pub backup_recipient: String,
     #[serde(default = "default_keep_local")]
     pub backup_keep_local: u32,
+    /// Module ids, the same path as `serve --enable-module` (checked against the binary at start).
+    #[serde(default)]
+    pub modules: Vec<String>,
 }
 
 fn default_listen() -> String {
@@ -74,7 +78,10 @@ pub fn template(home: &Path) -> String {
          # make one with `ainkrad-core-server backup-keygen` on another machine.\n\
          backup_recipient = \"\"\n\
          # Encrypted snapshots kept in home/backups (the bucket keeps its own 35 days).\n\
-         backup_keep_local = 7\n"
+         backup_keep_local = 7\n\
+         # Modules to mount (like serve --enable-module), e.g. [\"citadel\"] on a composed binary. Off by default;\n\
+         # an id this binary does not carry stops the start.\n\
+         modules = []\n"
     )
 }
 
@@ -120,6 +127,14 @@ impl Config {
                 .parse()
                 .map_err(|_| format!("AINKRAD_BACKUP_KEEP_LOCAL={v:?} is not a count"))?;
         }
+        if let Some(v) = env("AINKRAD_MODULES") {
+            c.modules = v.split(',').map(|m| m.trim().to_owned()).collect();
+        }
+        if let Some(bad) = c.modules.iter().find(|m| !valid_module_id(m)) {
+            return Err(format!(
+                "modules: {bad:?} is not a module id (a-z, 0-9, - and _)"
+            ));
+        }
         if !["text", "json"].contains(&c.log_format.as_str()) {
             return Err(format!("log_format {:?}: text or json", c.log_format));
         }
@@ -160,9 +175,19 @@ impl Config {
             add("--acme-contact", &self.acme_contact);
         }
         add("--log-format", &self.log_format);
+        add("--enable-module", &self.modules.join(","));
         out.extend(given.iter().map(|f| (*f).to_owned()));
         out
     }
+}
+
+/// A module id: 1 to 32 of a-z, 0-9, `-`, `_`, starting with a letter or digit.
+fn valid_module_id(id: &str) -> bool {
+    (1..=32).contains(&id.len())
+        && id.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
 }
 
 /// A home's paths.
@@ -258,5 +283,36 @@ mod tests {
             c.serve_flags(&["--bind", "0.0.0.0:1"]),
             ["--log-format", "text", "--bind", "0.0.0.0:1"]
         );
+    }
+
+    #[test]
+    fn modules_are_off_by_default_and_checked() {
+        let text = template(Path::new("/h"));
+        let c = Config::parse(&text, |_| None).unwrap();
+        assert!(c.modules.is_empty());
+        assert!(!c.serve_flags(&[]).contains(&"--enable-module".to_owned()));
+        let on = Config::parse(
+            &text.replace("modules = []", "modules = [\"citadel\"]"),
+            |_| None,
+        )
+        .unwrap();
+        assert_eq!(on.modules, ["citadel"]);
+        assert_eq!(
+            on.serve_flags(&[]),
+            [
+                "--listen",
+                "unix:",
+                "--log-format",
+                "text",
+                "--enable-module",
+                "citadel"
+            ]
+        );
+        let env = |n: &str| (n == "AINKRAD_MODULES").then(|| "a,b-2".to_owned());
+        assert_eq!(Config::parse(&text, env).unwrap().modules, ["a", "b-2"]);
+        for bad in ["", "Citadel", "../x", "a b", "-x"] {
+            let t = text.replace("modules = []", &format!("modules = [{bad:?}]"));
+            assert!(Config::parse(&t, |_| None).is_err(), "{bad:?}");
+        }
     }
 }
