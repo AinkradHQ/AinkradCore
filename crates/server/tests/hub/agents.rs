@@ -696,16 +696,16 @@ async fn a_module_credential_reaches_the_runner_as_its_run_token_and_nowhere_els
 /// runner may already have redeemed the first attempt's single-use lease.
 #[tokio::test]
 async fn a_retried_start_mints_a_fresh_credential_instead_of_resending_a_spent_lease() {
-    let mut core = Core::start("agents-retry", hub_quick()).await;
-    core.app.agents = service::Agents::new(AgentsConfig {
-        answer: Duration::from_millis(600),
+    // The Core's answer times out before the runner's: the start is retried.
+    let quick = AgentsConfig {
+        answer: Duration::from_millis(1),
         ..quick()
-    });
+    };
+    let core = Core::start_agents("agents-retry", hub_quick(), quick).await;
     let base = format!("http://{}", core.host);
     let st = state("retry");
     let e = paired(&core, &base, None, &st).await;
     let exec = Script {
-        first_start: Duration::from_millis(1500),
         ..script("echo hi")
     };
     let r = run_runner(&core, &base, &st, exec).await;
@@ -727,7 +727,12 @@ async fn a_retried_start_mints_a_fresh_credential_instead_of_resending_a_spent_l
         .await
         .unwrap_or_else(|e| panic!("{}", service::describe(&e)));
     let (done, _) = finished(&core, &s.id).await;
-    assert_eq!(done.outcome.as_ref().unwrap()["kind"], "succeeded");
+    assert_eq!(
+        done.outcome.as_ref().unwrap()["kind"],
+        "succeeded",
+        "{:?}",
+        done.outcome
+    );
     let mints = MINTS.load(std::sync::atomic::Ordering::SeqCst) - before;
     assert!(
         mints >= 2,
