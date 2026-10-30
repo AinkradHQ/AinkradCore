@@ -689,6 +689,9 @@ async fn serve(
         );
         app.passkeys = Some(Arc::new(passkeys));
     }
+    tokio::spawn(ainkrad_core_server::api::v1::terminal_sweep_loop(
+        app.clone(),
+    ));
     let (closing, pool) = (Arc::clone(&app.closing), app.pool.clone());
     let server = gateway.serve(router(app), Arc::clone(&closing), gateway::SHUTDOWN_GRACE);
     tokio::pin!(server);

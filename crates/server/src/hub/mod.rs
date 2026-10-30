@@ -96,11 +96,10 @@ impl Default for HubConfig {
     }
 }
 
-/// Credit grants a stream remembers for a resume. Past it the two oldest merge into one at the
-/// newer `seq`: a runner reconnect after more than this many unacknowledged grants may be
-/// over-granted by the merged bytes (the hub then fails the stream if it truly overruns), but
-/// memory stays bounded. ponytail: the runner never acknowledges mid-connection; an ack frame
-/// would make this exact.
+/// Credit grants a stream remembers for a resume. Past it the two oldest merge into one that
+/// spans both `seq`s. A resume that falls inside a merged span cannot tell how much of it the
+/// runner got, so it resends the whole span and tolerates that much output past the credit
+/// (`Pending::slack`): memory stays bounded and the stream neither fails nor stalls.
 const CREDIT_KEEP: usize = 64;
 
 /// Frames queued per connection before `dispatch` answers `busy`.
@@ -122,9 +121,11 @@ struct Pending {
     /// once `opened` shows the runner has it) and the closing `close`. Terminal input and credit
     /// are never kept here.
     sent: Vec<Frame>,
-    /// Credit grants not yet known to be received, `(seq, bytes)`: sent once, resent on a resume
-    /// as one frame (see [`CREDIT_KEEP`]).
-    credits: Vec<(u64, u64)>,
+    /// Credit grants not yet known to be received, `(first seq, last seq, bytes)`: sent once,
+    /// resent on a resume as one frame (see [`CREDIT_KEEP`]).
+    credits: Vec<(u64, u64, u64)>,
+    /// Output the runner may send past `credit`: what a resume over-granted at most.
+    slack: u64,
     next_sent: u64,
     received: u64,
     credit: u64,
@@ -432,6 +433,7 @@ impl Hub {
             to,
             sent: Vec::new(),
             credits: Vec::new(),
+            slack: 0,
             next_sent: 0,
             received: 0,
             credit: STREAM_WINDOW,
@@ -556,11 +558,19 @@ impl Hub {
             // `got` is the runner's count of Core frames: the next `seq` it expects. Frames
             // below it were received; ephemeral ones (input) skip `sent`, so go by `seq`.
             p.sent.retain(|f| f.seq >= got);
-            p.credits.retain(|c| c.0 >= got);
+            p.credits.retain(|c| c.1 >= got);
+            // A span that began before `got` and ends at or after it may be partly received.
+            p.slack += p
+                .credits
+                .iter()
+                .filter(|c| c.0 < got)
+                .map(|c| c.2)
+                .sum::<u64>();
             let mut resend = p.sent.clone();
-            if let Some(last) = p.credits.last().map(|c| c.0) {
-                let bytes = p.credits.iter().map(|c| c.1).sum();
-                p.credits = vec![(last, bytes)];
+            if let Some(last) = p.credits.last().map(|c| c.1) {
+                let bytes = p.credits.iter().map(|c| c.2).sum();
+                // Resent as one frame, so it is one `seq` from here on.
+                p.credits = vec![(last, last, bytes)];
                 resend.push(Frame::new(*id, last, Body::Credit(Credit { bytes })));
             }
             resend.sort_by_key(|f| f.seq);
@@ -674,8 +684,10 @@ impl Hub {
         };
         let last = match body {
             Body::Output(o) => match b64_len(&o.data) {
-                Some(n) if n <= p.credit => {
-                    p.credit -= n;
+                Some(n) if n <= p.credit.saturating_add(p.slack) => {
+                    let from_credit = n.min(p.credit);
+                    p.credit -= from_credit;
+                    p.slack -= n - from_credit;
                     let _ = p.to.send(Body::Output(o));
                     return;
                 }
@@ -738,10 +750,11 @@ impl Hub {
         };
         p.credit += bytes;
         let frame = p.ephemeral(stream, Body::Credit(Credit { bytes }));
-        p.credits.push((frame.seq, bytes));
+        p.credits.push((frame.seq, frame.seq, bytes));
         if p.credits.len() > CREDIT_KEEP {
-            let (_, b) = p.credits.remove(0);
-            p.credits[0].1 += b;
+            let (lo, _, b) = p.credits.remove(0);
+            p.credits[0].0 = lo;
+            p.credits[0].2 += b;
         }
         if let Some(c) = &r.conn {
             // Remembered in `credits` either way: a resume delivers it.

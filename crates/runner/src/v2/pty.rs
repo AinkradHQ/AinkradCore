@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use ainkrad_proto::v2::{
     Body, Control, Credit, DRIVER_PTY, DriverInfo, Emit, ErrorCode, OP_PTY_ATTACH, OP_PTY_CLOSE,
-    OP_PTY_OPEN, Outflow, Output, PtyOpen, Reply, SIGNALS, STREAM_WINDOW, Snapshot, StreamError,
-    TerminalExit, TerminalInfo,
+    OP_PTY_OPEN, Outflow, Output, PtyOpen, Reply, SIGNAL_HOST_LOST, SIGNALS, STREAM_WINDOW,
+    Snapshot, StreamError, TerminalExit, TerminalInfo,
 };
 use ainkrad_ptyhost::client::{HostReader, HostWriter, connect, launch, new_id, scan};
 use ainkrad_ptyhost::pty::{Exit, Spec, environment};
@@ -80,6 +80,24 @@ fn exit_of(terminal: &str, e: &Exit) -> TerminalExit {
         exit_code: e.code,
         signal: e.signal.clone(),
     }
+}
+
+/// The final answer of a stream whose host process is gone (killed, crashed) without telling
+/// anyone how the child ended: the terminal is over, and the Core learns it.
+fn lost_exit(terminal: &str) -> TerminalExit {
+    TerminalExit {
+        terminal: terminal.to_owned(),
+        exit_code: None,
+        signal: Some(SIGNAL_HOST_LOST.to_owned()),
+    }
+}
+
+fn host_lost(op: Op, terminal: &str) -> Body {
+    let exit = lost_exit(terminal);
+    Body::Result(match op {
+        Op::Open => Reply::PtyOpen(exit),
+        Op::Attach => Reply::PtyAttach(exit),
+    })
 }
 
 /// The decoded length of standard base64 (what credit counts).
@@ -180,6 +198,15 @@ impl PtyDriver {
         Ok(id)
     }
 
+    /// Whether the host of `terminal` is gone for good: it does not answer and `scan` found
+    /// its record stale (and cleaned it) now or before. A host that merely fails to answer
+    /// still has its record, so it is not gone.
+    async fn host_gone(&self, terminal: &str) -> bool {
+        let live = scan(&self.config.dir).await;
+        !live.iter().any(|h| h.id == terminal)
+            && !ainkrad_ptyhost::host::record_path(&self.config.dir, terminal).exists()
+    }
+
     async fn connect(
         &self,
         terminal: &str,
@@ -192,7 +219,12 @@ impl PtyDriver {
     /// Hangs `terminal` up and answers its exit once the host reports it.
     pub async fn close(&self, terminal: &str) -> Result<TerminalExit, StreamError> {
         self.enabled()?;
-        let (info, mut rd, mut wr) = self.connect(terminal).await?;
+        let (info, mut rd, mut wr) = match self.connect(terminal).await {
+            Ok(c) => c,
+            // Nothing left to hang up: the terminal is over.
+            Err(_) if self.host_gone(terminal).await => return Ok(lost_exit(terminal)),
+            Err(e) => return Err(e),
+        };
         let lost = |e: std::io::Error| err(ErrorCode::Internal, e.to_string());
         // Attached, so an exit announced before this connection is sent to it too.
         wr.send(&ToHost::Attach { seq: info.seq })
@@ -234,6 +266,8 @@ impl PtyDriver {
     ) -> Body {
         let (info, mut rd, mut wr) = match self.connect(&terminal).await {
             Ok(c) => c,
+            // `scan` cleans a dead host's record: a terminal it no longer lists is gone.
+            Err(_) if self.host_gone(&terminal).await => return host_lost(op, &terminal),
             Err(e) => return Body::Error(e),
         };
         let send = |b: Body| drop(out.send((stream, b)));
@@ -303,7 +337,7 @@ impl PtyDriver {
                     Ok(None) | Err(_) => {
                         let gone = || Body::Error(err(ErrorCode::Internal, "the terminal host went away"));
                         let Ok((_, r, mut w)) = self.connect(&terminal).await else {
-                            return gone();
+                            return if self.host_gone(&terminal).await { host_lost(op, &terminal) } else { gone() };
                         };
                         if w.send(&ToHost::Attach { seq: next }).await.is_err() {
                             return gone();

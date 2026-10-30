@@ -8059,6 +8059,13 @@
               "null"
             ]
           },
+          "orphaned": {
+            "description": "Running with no client attached: it is closed once idle past `terminal.idle_secs`.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "runner": {
             "type": "string"
           },
@@ -9041,7 +9048,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.17.0"
+    "version": "1.18.0"
   },
   "openapi": "3.1.0",
   "paths": {

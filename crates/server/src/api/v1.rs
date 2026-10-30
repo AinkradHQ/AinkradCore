@@ -47,7 +47,10 @@ mod stepup;
 mod terminals;
 pub mod ticket;
 mod trace;
-pub use terminals::Rooms;
+pub use terminals::{
+    Rooms, reconcile as reconcile_terminals, sweep as sweep_terminals,
+    sweep_loop as terminal_sweep_loop,
+};
 pub use trace::{ApiError, ApiResult};
 pub mod types;
 pub mod websession;

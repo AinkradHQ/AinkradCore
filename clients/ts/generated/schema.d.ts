@@ -1556,6 +1556,8 @@ export interface components {
             exit_signal?: string | null;
             id: string;
             opened_by?: string | null;
+            /** @description Running with no client attached: it is closed once idle past `terminal.idle_secs`. */
+            orphaned?: boolean | null;
             runner: string;
             /** Format: int64 */
             seq?: number | null;
