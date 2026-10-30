@@ -50,7 +50,15 @@ fn prefixed(id: &str) -> String {
 
 /// The document as JSON, with prefixed operation ids.
 pub fn document() -> Value {
-    let mut doc = serde_json::to_value(ApiDoc::openapi()).expect("spec serialises");
+    let mut api = ApiDoc::openapi();
+    for other in [
+        super::org_admin::Doc::openapi(),
+        super::work::Doc::openapi(),
+        super::governance::Doc::openapi(),
+    ] {
+        api.merge(other);
+    }
+    let mut doc = serde_json::to_value(api).expect("spec serialises");
     for item in doc["paths"]
         .as_object_mut()
         .into_iter()

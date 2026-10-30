@@ -246,3 +246,34 @@ async fn a_read_only_device_reads_and_cannot_write() {
     ));
     let _ = SCOPES;
 }
+
+/// The structural guard: `Acting` runs before any `Path` or `Json` extractor, so every operation
+/// of the contract answers a malformed `X-Citadel-Company` with 400, unless a handler forgot it.
+/// A new route that fails here needs `_: Acting` as its first parameter after `State`.
+#[tokio::test]
+async fn every_operation_takes_the_company_scope() {
+    let fx = fx().await;
+    let spec: serde_json::Value =
+        serde_json::from_str(&ainkrad_core_server::api::v1::spec::json_for(&[
+            std::sync::Arc::new(citadel_module::Citadel),
+        ]))
+        .unwrap();
+    let mut seen = 0;
+    for (path, item) in spec["paths"].as_object().unwrap() {
+        let Some(rel) = path.strip_prefix("/modules/citadel/v1") else {
+            continue;
+        };
+        let uri = rel.replace("{id}", "1");
+        for m in item.as_object().unwrap().keys() {
+            let method: Method = m.to_uppercase().parse().unwrap();
+            let (s, body) = call_in(&fx, Some(&fx.dev), Some("abc"), method, &uri, None).await;
+            assert_eq!(
+                (s, &body["code"]),
+                (StatusCode::BAD_REQUEST, &json!("bad_request")),
+                "{m} {rel} does not take the company scope"
+            );
+            seen += 1;
+        }
+    }
+    assert!(seen >= 14, "{seen} operations");
+}

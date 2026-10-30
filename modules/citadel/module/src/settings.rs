@@ -170,12 +170,12 @@ pub fn handle() -> ModuleSettings {
 }
 
 /// `name`'s value: the stored one, else the default. `name` must be one of [`SETTINGS`]; an
-/// unknown name is a programming error and reads as an error here (never a silent default).
+/// unknown name is a programming error: an error here (a 500 through `error::refused`), never a silent default.
 pub async fn value(pool: &SqlitePool, name: &str) -> Result<i64, sqlx::Error> {
     handle()
         .get(pool, name)
         .await
-        .map_err(|e| sqlx::Error::Protocol(e.to_string()))
+        .map_err(|e| sqlx::Error::Configuration(e.to_string().into()))
 }
 
 #[cfg(test)]

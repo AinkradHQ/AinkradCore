@@ -146,8 +146,8 @@ pub(crate) fn route_scope_ok(scope: &str) -> bool {
 pub(crate) fn validate(m: &dyn Module) {
     let id = m.id();
     assert!(
-        crate::store::gov::SCOPES.contains(&m.scope()),
-        "module {id}: unknown scope {:?}",
+        route_scope_ok(m.scope()),
+        "module {id}: scope {:?}",
         m.scope()
     );
     let mut seen = HashSet::new();

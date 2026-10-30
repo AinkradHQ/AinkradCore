@@ -5,17 +5,22 @@
 //! Slice 1 (org): companies, departments, teams, agents (read). The rest of the monolith's
 //! `api/v1` follows in the slices of the port plan.
 
+use std::sync::LazyLock;
+
 use ainkrad_core_server::api::App;
 use axum::Router;
 use axum::routing::{get, put};
 
 mod error;
+pub mod governance;
 pub mod model;
 mod org;
+pub mod org_admin;
 pub mod scope;
 pub mod scopes;
 pub mod spec;
 pub mod types;
+pub mod work;
 
 /// Query names the module's routes take besides the Core's (`Module::query_names`): the
 /// monolith's filter names. Appended by the slices that add a filter.
@@ -33,12 +38,26 @@ pub const QUERY: &[&str] = &[
     "model",
 ];
 
-/// The routes that need a live step-up (`Module::destructive`).
-pub const DESTRUCTIVE: &[(&str, &str)] =
+/// The routes of slices 1 and 2 that need a live step-up.
+const DESTRUCTIVE_ORG: &[(&str, &str)] =
     &[("DELETE", "/departments/{id}"), ("DELETE", "/teams/{id}")];
+
+/// Every route that needs a live step-up (`Module::destructive`): the slices' lists together.
+pub static DESTRUCTIVE: LazyLock<Vec<(&str, &str)>> = LazyLock::new(|| {
+    [
+        DESTRUCTIVE_ORG,
+        org_admin::DESTRUCTIVE,
+        work::DESTRUCTIVE,
+        governance::DESTRUCTIVE,
+    ]
+    .concat()
+});
 
 pub fn routes() -> Router<App> {
     Router::new()
+        .merge(org_admin::routes())
+        .merge(work::routes())
+        .merge(governance::routes())
         .route(
             "/companies",
             get(org::list_companies).post(org::create_company),

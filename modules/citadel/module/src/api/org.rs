@@ -60,6 +60,7 @@ pub struct NewCompany {
         body = Company)))]
 pub async fn create_company(
     State(app): State<App>,
+    _: Acting,
     Json(n): Json<NewCompany>,
 ) -> ApiResult<Company> {
     let kind = kind(n.kind.as_deref())?.unwrap_or(Kind::Own);

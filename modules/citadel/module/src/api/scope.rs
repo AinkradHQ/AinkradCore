@@ -12,7 +12,7 @@
 //! The monolith ran this as a middleware over every route. A module's router has no state at
 //! build time (`Module::routes`), so it is an extractor here: **every handler that takes a path
 //! id or lists company data takes `Acting` first**. `tests/scope.rs` walks the contract and
-//! proves it for each route that names an id.
+//! sends every operation a malformed `X-Citadel-Company`: one that does not answer 400 forgot it.
 
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::ApiError;
@@ -120,7 +120,12 @@ async fn owner(app: &App, segment: &str, value: &str) -> Result<Option<i64>, sql
     if segment == "companies" {
         return Ok(Some(id));
     }
-    let Some((_, sql)) = OWNERS.iter().find(|(s, _)| *s == segment) else {
+    let rows = OWNERS
+        .iter()
+        .chain(super::org_admin::OWNERS)
+        .chain(super::work::OWNERS)
+        .chain(super::governance::OWNERS);
+    let Some((_, sql)) = rows.clone().find(|(s, _)| *s == segment) else {
         return Ok(None);
     };
     let company: Option<Option<i64>> = sqlx::query_scalar(*sql)

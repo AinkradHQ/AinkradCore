@@ -52,7 +52,7 @@ impl Module for Citadel {
     }
 
     fn route_scopes(&self) -> &'static [(&'static str, &'static str, &'static str)] {
-        api::scopes::ROUTE_SCOPES
+        api::scopes::ALL.as_slice()
     }
 
     fn openapi(&self) -> serde_json::Value {
@@ -68,6 +68,6 @@ impl Module for Citadel {
     }
 
     fn destructive(&self) -> &'static [(&'static str, &'static str)] {
-        api::DESTRUCTIVE
+        api::DESTRUCTIVE.as_slice()
     }
 }
