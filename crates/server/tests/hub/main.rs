@@ -24,6 +24,7 @@ use ainkrad_core_server::hub::connect::PATH;
 use ainkrad_core_server::scheduler::{Clock, SystemClock};
 use ainkrad_core_server::store;
 use ainkrad_proto::v2::*;
+use ainkrad_runner::load::disable_for_tests;
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_tungstenite::WebSocketStream;
@@ -49,9 +50,6 @@ impl std::io::Write for Log {
 }
 
 pub fn log() -> &'static Log {
-    // Tests run many real runners in parallel: don't let the host's real load trip
-    // the hub's back-pressure.
-    std::env::set_var("AINKRAD_TEST", "1");
     static LOG: OnceLock<Log> = OnceLock::new();
     LOG.get_or_init(|| {
         let log = Log::default();
