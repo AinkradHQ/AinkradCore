@@ -12,10 +12,12 @@ use ainkrad_core_server::module::{Module, ModuleSetting};
 use ainkrad_core_server::store::Migration;
 use axum::Router;
 
+pub mod admin;
 pub mod api;
 pub mod domain;
 pub mod kinds;
 pub mod migrations;
+pub mod notifications;
 pub mod profile;
 pub mod settings;
 pub mod store;
