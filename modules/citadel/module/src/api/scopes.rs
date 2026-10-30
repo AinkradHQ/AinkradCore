@@ -12,7 +12,7 @@
 
 use std::sync::LazyLock;
 
-use super::{accounts, governance, org_admin, planning, work};
+use super::{accounts, governance, org_admin, planning, runs, work};
 
 /// `(method, template, scope)`, templates relative to `/modules/citadel/v1`: slices 1 and 2's;
 /// each later slice lists its own in its seam file (`org_admin`, `work`, `governance`).
@@ -38,6 +38,7 @@ pub static ALL: LazyLock<Vec<(&str, &str, &str)>> = LazyLock::new(|| {
         planning::SCOPES,
         governance::SCOPES,
         accounts::SCOPES,
+        runs::SCOPES,
     ]
     .concat()
 });
@@ -51,6 +52,7 @@ pub fn is_admin_read(template: &str) -> bool {
         planning::ADMIN_READS,
         governance::ADMIN_READS,
         accounts::ADMIN_READS,
+        runs::ADMIN_READS,
     ]
     .iter()
     .any(|l| l.contains(&template))

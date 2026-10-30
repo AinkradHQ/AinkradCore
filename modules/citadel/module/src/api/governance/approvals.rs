@@ -79,8 +79,13 @@ pub async fn decide(
     decide_as_admin(&app, id, d).await
 }
 
+/// The kinds whose decision has an effect beyond bookkeeping: a PR merge, a workflow-file push, or
+/// a tool the harness may now run (`permission_escalation`).
 fn is_forge(k: ApprovalKind) -> bool {
-    matches!(k, ApprovalKind::PrMerge | ApprovalKind::WorkflowPush)
+    matches!(
+        k,
+        ApprovalKind::PrMerge | ApprovalKind::WorkflowPush | ApprovalKind::PermissionEscalation
+    )
 }
 
 /// `decide` takes every kind but a forge one, `decide-forge` only those: the forge kinds merge
@@ -92,10 +97,10 @@ async fn check_kind(app: &App, id: i64, forge: bool) -> Result<(), ApiError> {
     )?;
     match (forge, is_forge(a.kind)) {
         (false, true) => Err(ApiError::bad_request(
-            "a PR merge or workflow push goes through POST /approvals/{id}/decide-forge",
+            "a PR merge, workflow push or tool permission goes through POST /approvals/{id}/decide-forge",
         )),
         (true, false) => Err(ApiError::bad_request(
-            "decide-forge is for a PR merge or a workflow push only",
+            "decide-forge is for a PR merge, a workflow push or a tool permission only",
         )),
         _ => Ok(()),
     }
@@ -113,7 +118,7 @@ async fn decide_as_admin(app: &App, id: i64, d: Decision) -> ApiResult<Approval>
 #[utoipa::path(post, path = "/approvals/{id}/decide-forge", operation_id = "decideForgeApproval",
     tag = "approvals", params(("id" = i64, Path, description = "Approval id")),
     request_body = Decision,
-    responses((status = 200, description = "A decided `pr_merge` or `workflow_push`; needs a \
+    responses((status = 200, description = "A decided `pr_merge`, `workflow_push` or `permission_escalation`; needs a \
         step-up", body = Approval)))]
 pub async fn decide_forge(
     State(app): State<App>,

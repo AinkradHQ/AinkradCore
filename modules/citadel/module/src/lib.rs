@@ -15,6 +15,7 @@ use axum::Router;
 pub mod admin;
 pub mod api;
 pub mod domain;
+pub mod engine;
 pub mod kinds;
 pub mod migrations;
 pub mod notifications;
@@ -24,13 +25,16 @@ pub mod store;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 
+/// The module's id: the route prefix, the table prefix and the owner of the sessions its engine starts.
+pub const MODULE: &str = "citadel";
+
 /// The Citadel module: hand it to `module::mount` and `migrate::migrate_modules`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Citadel;
 
 impl Module for Citadel {
     fn id(&self) -> &'static str {
-        "citadel"
+        MODULE
     }
 
     fn routes(&self) -> Router<App> {
@@ -72,5 +76,9 @@ impl Module for Citadel {
 
     fn destructive(&self) -> &'static [(&'static str, &'static str)] {
         api::DESTRUCTIVE.as_slice()
+    }
+
+    fn jobs(&self) -> Vec<ainkrad_core_server::jobs::Job> {
+        engine::jobs()
     }
 }

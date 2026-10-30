@@ -57,6 +57,7 @@ pub fn document() -> Value {
         super::work::Doc::openapi(),
         super::planning::Doc::openapi(),
         super::governance::Doc::openapi(),
+        super::runs::Doc::openapi(),
     ] {
         api.merge(other);
     }

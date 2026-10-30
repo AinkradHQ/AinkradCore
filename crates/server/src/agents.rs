@@ -231,6 +231,74 @@ pub fn authorize_for_tests(app: &App, session: &str) {
         .insert(session.to_owned(), Elevated::for_tests());
 }
 
+/// Creates a session for `module`, owned by it, and starts it: the run engine's way in. There is
+/// no client request, so there is no step-up to hold: the module stands for the operator who
+/// enabled it, and `new.created_by` names that device (audited `agent.created`, by the system).
+/// The session is marked as the module's, so only [`instruct_module`] of the same module may drive it.
+pub async fn create_for_module(
+    app: &App,
+    module: &'static str,
+    new: &store::NewSession<'_>,
+) -> Result<Session, Refusal> {
+    admit(app, new.runner, new.harness).await?;
+    let s = store::create_owned(
+        &app.pool,
+        new,
+        Some(module),
+        AuditActor::System,
+        &app.clock.now(),
+    )
+    .await?;
+    app.agents
+        .elevated
+        .lock()
+        .unwrap()
+        .insert(s.id.clone(), app.hub.module_elevation());
+    start(app, &s).await?;
+    Ok(s)
+}
+
+/// Stops, messages or answers a tool request of a session `module` owns, and stores the answer.
+/// Refused for a session the module does not own (a client's, another module's), for one that is
+/// over, and for any command but `agent.stop`, `agent.send` and `agent.decide`.
+pub async fn instruct_module(
+    app: &App,
+    module: &'static str,
+    s: &Session,
+    command: Command,
+) -> Result<(), Refusal> {
+    let invalid = |why: &str| Refusal::Runner(StreamError::new(ErrorCode::InvalidArgs, why));
+    if s.owner_module.as_deref() != Some(module) {
+        return Err(invalid("the session is not this module's"));
+    }
+    if !s.live() {
+        return Err(invalid("the session is over"));
+    }
+    let session = match &command {
+        Command::AgentStop(c) => &c.session,
+        Command::AgentSend(c) => &c.session,
+        Command::AgentDecide(c) => &c.session,
+        _ => {
+            return Err(invalid(
+                "a module may only stop, message or answer a session",
+            ));
+        }
+    };
+    if *session != s.id {
+        return Err(invalid("the command is about another session"));
+    }
+    let ev = ask(
+        app,
+        &s.runner,
+        command,
+        app.agents.config.answer,
+        Some(app.hub.module_elevation()),
+    )
+    .await?;
+    store::apply(&app.pool, &s.id, &ev, &app.clock.now()).await?;
+    Ok(())
+}
+
 /// Starts supervising `id`, unless this process already does.
 pub fn supervise(app: &App, id: &str) {
     if !app.agents.supervised.lock().unwrap().insert(id.to_owned()) {

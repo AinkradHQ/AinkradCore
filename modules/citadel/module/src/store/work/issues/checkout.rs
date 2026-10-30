@@ -47,7 +47,6 @@ pub async fn release_issue(
 }
 
 /// Releases every issue `run` holds, inside the caller's transaction; the run is ending.
-#[allow(dead_code)] // S7: wakes release held-back issues
 pub(crate) async fn release_held_in(
     conn: &mut SqliteConnection,
     run_id: RunId,
@@ -105,7 +104,7 @@ pub(crate) async fn append_issue_event(
     action: &str,
     run_id: Option<RunId>,
     details: String,
-) -> Result<(), Error> {
+) -> Result<i64, Error> {
     let company_id: i64 =
         sqlx::query_scalar("SELECT company_id FROM citadel_projects WHERE id = ?")
             .bind(issue.project_id.0)
@@ -119,5 +118,5 @@ pub(crate) async fn append_issue_event(
     if let Some(run) = run_id {
         event = event.run(run.0);
     }
-    audit::append(conn, event).await
+    audit::append_seq(conn, event).await
 }
