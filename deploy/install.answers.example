@@ -40,7 +40,8 @@ RUNNER=no
 
 # Run scripts/host/harden.sh (firewall 22/80/443, key-only SSH, no core dumps/swap, unattended upgrades).
 HARDEN=no
-# Restrict new SSH connections to these CIDRs (comma-separated; empty = from anywhere). Needs HARDEN=yes.
+# Restrict new SSH connections to these IPv4 CIDRs (comma-separated; empty = from anywhere). Needs HARDEN=yes.
+# IPv6 SSH is not filtered by harden.sh (iptables only).
 SSH_FROM=
 
 # After start: run `bootstrap` now (needs a terminal) or only print how; self-test backup: no, local, bucket.

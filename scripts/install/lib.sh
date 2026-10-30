@@ -63,8 +63,8 @@ valid_origins() { # empty, or comma-separated https:// origins (no path)
     valid_https_url "$o" || return 1
   done
 }
-valid_cidr() { # a.b.c.d/n or an IPv6 network
-  python3 -c 'import ipaddress, sys; ipaddress.ip_network(sys.argv[1], strict=False)' "$1" 2>/dev/null &&
+valid_cidr() { # a.b.c.d/n only: harden.sh writes iptables (IPv4); an IPv6 network would abort it half-way
+  python3 -c 'import ipaddress, sys; ipaddress.IPv4Network(sys.argv[1], strict=False)' "$1" 2>/dev/null &&
     case $1 in */*) true ;; *) false ;; esac
 }
 valid_cidrs() {

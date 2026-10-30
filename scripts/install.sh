@@ -91,7 +91,7 @@ The backup encryption key: make it OFFLINE, on a machine other than this host:
   ask BACKUP_RECIPIENT "The age recipient (public key, age1...)."
   ask RUNNER "Also install a runner on this host (yes/no)? It is installed, not started; exec stays OFF unless you add --enable-exec."
   ask HARDEN "Run scripts/host/harden.sh: firewall to 22/80/443 only, key-only SSH, no core dumps or swap, unattended security updates (yes/no)."
-  [ "$A_HARDEN" = no ] || ask SSH_FROM "Allow new SSH only from these CIDRs (comma-separated; empty = from anywhere)."
+  [ "$A_HARDEN" = no ] || ask SSH_FROM "Allow new SSH only from these IPv4 CIDRs (comma-separated; empty = from anywhere). IPv6 SSH is not filtered by harden.sh."
   ask BOOTSTRAP "Pair your first device now (needs you at your machine within 5 minutes) or later (instructions printed)."
   ask SELFTEST_BACKUP "Test backup at the end: no, local (on this host), or bucket (one small object, which the bucket keeps until its expiry)."
 }
@@ -309,7 +309,7 @@ bootstrap() {
   On your machine, from a checkout of this repo, with ainkradctl:
     scripts/install/admin-relay.sh <you>@<this host> /tmp/ainkrad-admin.sock -- -i <your ssh key>
     ainkradctl --socket /tmp/ainkrad-admin.sock --host $A_HOSTNAME pair <code> --core-fp <core_fp>
-  Compare the SAS both sides print, type y here; then: ainkradctl --url https://$A_HOSTNAME health"
+  Compare the SAS both sides print, type y here; then: ainkradctl --url https://$A_HOSTNAME$([ "$A_ACME_ENV" = staging ] && echo ' --ca <Let'"'"'s Encrypt staging roots.pem>') health"
   [ "$A_BOOTSTRAP" = now ] && [ "$DRY" = 0 ] || return 0
   [ -t 0 ] || { warn "BOOTSTRAP=now needs a terminal: run the command above yourself"; return 0; }
   runuser -u ainkrad -- "$BIN/ainkrad-core-server" bootstrap "$CORE_HOME/core.db" "${SUDO_USER:-owner}" || warn "bootstrap did not complete; run it again as above"
@@ -317,7 +317,7 @@ bootstrap() {
 
 summary() {
   step "Summary"
-  say "  Exposed: TCP 443 (TLS 1.3, Let's Encrypt $A_ACME_ENV, $A_ACME_CHALLENGE)$([ "$A_ACME_CHALLENGE" = http-01 ] && echo ', TCP 80 (ACME HTTP-01)'); SSH :22${A_SSH_FROM:+ from $A_SSH_FROM only}.
+  say "  Exposed: TCP 443 (TLS 1.3, Let's Encrypt $A_ACME_ENV, $A_ACME_CHALLENGE)$([ "$A_ACME_CHALLENGE" = http-01 ] && echo ', TCP 80 (ACME HTTP-01)'); SSH :22${A_SSH_FROM:+ from $A_SSH_FROM only (IPv4; IPv6 SSH is not filtered by harden.sh)}.
   Not exposed: the admin socket ($CORE_HOME/admin.sock, the service user only)$([ "$A_RUNNER" = yes ] && echo '; the runner dials out, it listens on nothing').
   Backup signer fingerprint (restore needs it as --signer; record it OFFLINE with the age identity):
     ${SIGNER:-<shown here after a real run>}

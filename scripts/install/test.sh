@@ -37,7 +37,7 @@ rc 2 age_recipient "# secret: $S"
 rc 1 age_recipient "${R}q"; rc 1 age_recipient age1short; rc 1 age_recipient "age1$(printf 'b%.0s' $(seq 58))"; rc 1 age_recipient ''
 ok valid_origins ''; ok valid_origins https://app.example.com; ok valid_origins https://a.example.com,https://b.example.com:8443
 no valid_origins http://app.example.com; no valid_origins https://app.example.com/path; no valid_origins 'https://a.example.com, https://b.example.com'
-ok valid_cidrs 198.51.100.0/24; ok valid_cidrs 198.51.100.0/24,2001:db8::/32; ok valid_cidrs ''
+ok valid_cidrs 198.51.100.0/24; ok valid_cidrs 198.51.100.0/24,203.0.113.0/24; no valid_cidrs 2001:db8::/32; ok valid_cidrs ''
 no valid_cidrs 198.51.100.7; no valid_cidrs 300.1.1.0/24; no valid_cidrs 198.51.100.0/33
 ok ip_in_cidrs 198.51.100.7 203.0.113.0/24,198.51.100.0/24; no ip_in_cidrs 192.0.2.1 198.51.100.0/24
 ok valid_schedule daily; ok valid_schedule '*-*-* 03:00:00'; no valid_schedule 'daily; rm -rf /'; no valid_schedule "$(printf 'x\ny')"
