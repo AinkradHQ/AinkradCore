@@ -210,3 +210,23 @@ async fn an_unknown_module_stops_the_start() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("--enable-module nope"));
 }
+
+#[tokio::test]
+async fn an_unknown_module_in_the_config_stops_the_start() {
+    let dir = std::env::temp_dir().join(format!("core-citadel-cfg-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cfg = dir.join("config.toml");
+    std::fs::write(
+        &cfg,
+        format!("home = {:?}\nmodules = [\"nope\"]\n", dir.display().to_string()),
+    )
+    .unwrap();
+    let out = tokio::process::Command::new(BIN)
+        .args(["serve", "--config", cfg.to_str().unwrap()])
+        .output()
+        .await
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--enable-module nope"));
+}

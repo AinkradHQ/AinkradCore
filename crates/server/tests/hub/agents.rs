@@ -250,7 +250,7 @@ pub(super) async fn secret(core: &Core, name: &str, runners: &[String], delivery
 }
 
 async fn session(core: &Core, runner: &str, secrets: &[SessionSecret]) -> String {
-    let policy = json!({});
+    let policy = json!({"mode": "ask"});
     let new = NewSession {
         runner,
         harness: "fake",
@@ -642,7 +642,7 @@ async fn a_module_credential_reaches_the_runner_as_its_run_token_and_nowhere_els
     let r = run_runner(&core, &base, &st, exec).await;
     let mut app = core.app.clone();
     app.modules = Arc::from([Arc::new(Minter) as Arc<dyn ainkrad_core_server::module::Module>]);
-    let policy = json!({});
+    let policy = json!({"mode": "ask"});
     let new = NewSession {
         runner: &e.device_id,
         harness: "fake",
@@ -653,7 +653,8 @@ async fn a_module_credential_reaches_the_runner_as_its_run_token_and_nowhere_els
         secrets: &[],
         created_by: &e.device_id,
     };
-    let s = service::create_for_module_ref(&app, "tmod", &new, Some("run:1"))
+    let s = service::ModuleAgents::named("tmod")
+        .create_ref(&app, &new, Some("run:1"))
         .await
         .unwrap_or_else(|e| panic!("{}", service::describe(&e)));
     let (done, transcript) = finished(&core, &s.id).await;

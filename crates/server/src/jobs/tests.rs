@@ -45,6 +45,7 @@ impl Clock for Manual {
 struct Probe {
     seen: Mutex<Vec<Run>>,
     script: Mutex<VecDeque<Result<(), String>>>,
+    idle: std::sync::atomic::AtomicBool,
 }
 
 impl Probe {
@@ -61,6 +62,9 @@ impl Probe {
 impl JobHandler for Probe {
     fn run<'a>(&'a self, run: &'a Run) -> Done<'a> {
         self.seen.lock().unwrap().push(run.clone());
+        if self.idle.load(std::sync::atomic::Ordering::SeqCst) {
+            run.idle();
+        }
         let answer = self.script.lock().unwrap().pop_front().unwrap_or(Ok(()));
         Box::pin(async move { answer })
     }
@@ -186,6 +190,28 @@ async fn an_interval_and_a_cron_job_run_when_due_and_each_run_is_audited_and_an_
         .filter(|e| e.kind == "audit" && e.payload.0["action"] == "job.ran")
         .count();
     assert_eq!(ran, 3, "each run is an event too");
+    fx.done().await;
+}
+
+/// A poll that found nothing writes no audit row, so an idle engine does not grow the chain;
+/// the run is still recorded as done, and a failure is audited even when it called `idle`.
+#[tokio::test]
+async fn an_idle_run_writes_no_audit_row_but_a_failed_one_does() {
+    let fx = fx("idle").await;
+    fx.probe
+        .idle
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let engine = fx.start(vec![fx.job("poll", Schedule::Every(60))]).await;
+    for _ in 0..3 {
+        fx.clock.advance(60);
+        assert_eq!(engine.tick().await.unwrap(), 1);
+    }
+    assert_eq!(fx.runs().await.iter().filter(|r| r.0 == "ok").count(), 3);
+    assert!(fx.actions().await.is_empty(), "{:?}", fx.actions().await);
+    fx.probe.script(&[Err("boom"), Err("boom")]);
+    fx.clock.advance(60);
+    engine.tick().await.unwrap();
+    assert_eq!(fx.actions().await, ["job.failed"]);
     fx.done().await;
 }
 

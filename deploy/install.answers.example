@@ -35,6 +35,11 @@ BACKUP_SCHEDULE=daily
 # The age PUBLIC key (age1...). Make the identity OFFLINE: `age-keygen -o core-backup.key` on another machine.
 BACKUP_RECIPIENT=age1<public key>
 
+# The Citadel module (opt-in, off by default). yes needs the composed binary ainkrad-core-citadel in BINARY_DIR
+# (or BUILD=yes); the Core unit then starts it with --enable-module citadel (a systemd drop-in, written only for
+# yes). The binary runs the module's migrations itself. no: nothing of Citadel is installed or mounted.
+ENABLE_CITADEL=no
+
 # A runner on this host too, with its own hardened unit. exec.run stays OFF (add --enable-exec to RUNNER_ARGS in
 # /etc/ainkrad-runner/runner.env yourself if you want it). RUNNER_PTY=yes offers terminals: a shell as the
 # unprivileged ainkrad-runner user, inside the unit's sandbox; the terminal hosts outlive runner restarts.

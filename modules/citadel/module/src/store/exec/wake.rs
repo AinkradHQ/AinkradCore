@@ -135,6 +135,28 @@ pub(crate) async fn enqueue_in(
     if let Some(row) = existing {
         return wake_request(row);
     }
+    // A wake never carries another company's issue into an agent's session (its title, body and
+    // repo): the issue's project and the agent belong to one company.
+    if let Some(issue) = w.issue_id {
+        let same: Option<bool> = sqlx::query_scalar(
+            "SELECT p.company_id = a.company_id FROM citadel_issues i \
+             JOIN citadel_projects p ON p.id = i.project_id, citadel_agents a \
+             WHERE i.id = ? AND a.id = ?",
+        )
+        .bind(issue.0)
+        .bind(w.agent_id.0)
+        .fetch_optional(&mut *conn)
+        .await?;
+        match same {
+            Some(true) => {}
+            Some(false) => {
+                return Err(Error::InvalidArgument(
+                    "the issue belongs to another company than the agent".to_owned(),
+                ));
+            }
+            None => return Err(Error::InvalidArgument("no such issue or agent".to_owned())),
+        }
+    }
     // A terminated agent is woken for nothing: the wake is kept, `dropped`, as a record.
     let gone: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM citadel_agents WHERE id = ? AND status = 'terminated')",

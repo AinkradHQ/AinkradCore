@@ -92,6 +92,7 @@ The backup encryption key: make it OFFLINE, on a machine other than this host:
   It prints 'Public key: age1...'. Paste only that here. Keep core-backup.key offline (a password manager or
   paper): without it no backup can be restored, and with it anyone can read them."
   ask BACKUP_RECIPIENT "The age recipient (public key, age1...)."
+  ask ENABLE_CITADEL "Enable the Citadel module? (default no) Needs the composed binary ainkrad-core-citadel beside the others; the unit then starts it with --enable-module citadel, and the module's data and migrations are handled by that binary. Off: nothing of Citadel is installed or mounted."
   ask RUNNER "Also install a runner on this host (yes/no)? exec.run stays OFF unless you add --enable-exec to RUNNER_ARGS in /etc/ainkrad-runner/runner.env."
   if [ "$A_RUNNER" = yes ]; then
     ask RUNNER_PTY "Offer terminals on that runner (yes/no)? A client with the terminal scope and a live step-up gets a shell as the unprivileged ainkrad-runner user, inside the unit's sandbox."
@@ -154,11 +155,15 @@ checks() { # DNS -> this host's public IP; :443 (and :80) free
 
 stage_binaries() {
   step "Binaries"
-  local src n
+  local src n citadel_src=''
   if [ "${A_BUILD:-no}" = yes ]; then
     command -v cargo >/dev/null || die "BUILD=yes needs cargo on this host"
     run nice -n 19 cargo build --release --manifest-path "$ROOT/Cargo.toml" -p ainkrad-core-server -p ainkrad-ctl -p ainkrad-runner -p ainkrad-ptyhost
     src=$ROOT/target/release
+    if [ "$A_ENABLE_CITADEL" = yes ]; then # the composed binary is its own cargo workspace
+      run nice -n 19 cargo build --release --manifest-path "$ROOT/modules/citadel/Cargo.toml" -p ainkrad-core-citadel
+      citadel_src=$ROOT/modules/citadel/target/release
+    fi
   else src=$A_BINARY_DIR; fi
   STAGE=$(mktemp -d); trap 'rm -rf "$STAGE"' EXIT
   for n in ainkrad-core-server ainkradctl ainkrad-runner ainkrad-ptyhost; do
@@ -166,6 +171,15 @@ stage_binaries() {
     elif [ "$n" = ainkrad-core-server ] && [ "$DRY" = 0 ]; then die "no $n in $src"
     else say "  $n: not in $src${n:+ (skipped)}"; fi
   done
+  if [ "$A_ENABLE_CITADEL" = yes ]; then
+    src=${citadel_src:-$src}
+    if [ -f "$src/ainkrad-core-citadel" ]; then
+      cp "$src/ainkrad-core-citadel" "$STAGE/ainkrad-core-citadel"; chmod 0755 "$STAGE/ainkrad-core-citadel"
+      say "  ainkrad-core-citadel sha256 $(sha "$STAGE/ainkrad-core-citadel")"
+    elif [ "$DRY" = 0 ]; then die "ENABLE_CITADEL=yes but no ainkrad-core-citadel in $src"
+    else say "  ainkrad-core-citadel: not in $src (skipped)"; fi
+    [ "$DRY" = 1 ] || "$STAGE/ainkrad-core-citadel" --help | grep -q -- '--enable-module' || die "$src/ainkrad-core-citadel does not run here or lacks --enable-module"
+  fi
   [ "$DRY" = 1 ] || "$STAGE/ainkrad-core-server" --help | grep -q -- '--acme-directory' || die "$src/ainkrad-core-server does not run here (wrong architecture?)"
   if [ "$A_PASSKEYS" = yes ] && [ "$DRY" = 0 ] && ! "$STAGE/ainkrad-core-server" --help | grep -q -- '--passkeys'; then
     die "this ainkrad-core-server predates --passkeys: use a newer build or PASSKEYS=no"
@@ -216,6 +230,24 @@ AINKRAD_LOG_FORMAT=json
 AINKRAD_SERVE_ARGS=${args# }
 AINKRAD_BACKUP_RECIPIENT=$A_BACKUP_RECIPIENT
 AINKRAD_BACKUP_SIGNER=$SIGNER"
+}
+
+# The Citadel module (opt-in): the composed binary beside the plain one and a drop-in that makes the Core unit run
+# it with --enable-module citadel. Not chosen: the binary and the drop-in are removed, the plain unit runs as before.
+install_citadel() {
+  local d=$UNITS/ainkrad-core.service.d
+  if [ "$A_ENABLE_CITADEL" != yes ]; then
+    step "Citadel module: off (default)"
+    run rm -rf "$d/citadel.conf" "$BIN/ainkrad-core-citadel"
+    return 0
+  fi
+  step "Citadel module: on"
+  [ -f "$STAGE/ainkrad-core-citadel" ] || [ "$DRY" = 1 ] || die "no ainkrad-core-citadel staged"
+  run install -m 0755 "$STAGE/ainkrad-core-citadel" "$BIN/ainkrad-core-citadel"
+  run install -d -m 0755 "$d"
+  write_file "$d/citadel.conf" 0644 root:root "[Service]
+ExecStart=
+ExecStart=$BIN/ainkrad-core-citadel serve --config $CORE_HOME/config.toml --enable-module citadel \$AINKRAD_SERVE_ARGS"
 }
 
 install_backup() {
@@ -311,6 +343,27 @@ runner_selftest() { # runner checks, when its unit is installed; t() comes from 
   else say "        runner not paired yet: see the pairing instructions of the install"; fi
 }
 
+# Whether the Citadel module is mounted (the unit's drop-in AND the running process's flags agree), and that its
+# read route refuses an unsigned request with 401. A signed 403 forbidden_scope (a device without the scope) needs a
+# paired device: it is proven by the composed binary's own serve test, not here.
+citadel_selftest() {
+  local pid cmd code k=() want=no
+  pid=$(systemctl show -p MainPID --value ainkrad-core 2>/dev/null || true)
+  cmd=$(tr '\0' ' ' <"/proc/${pid:-0}/cmdline" 2>/dev/null || true)
+  [ -e "$UNITS/ainkrad-core.service.d/citadel.conf" ] && want=yes
+  case $cmd in
+    *"--enable-module citadel"*) [ "$want" = yes ] && t PASS "citadel module: mounted (ainkrad-core-citadel --enable-module citadel)" ||
+      t FAIL "citadel module mounted but not by the installer's drop-in" ;;
+    *) [ "$want" = no ] && say "        citadel module: not mounted (default)" ||
+      t FAIL "citadel module chosen but the running Core was not started with --enable-module citadel" ;;
+  esac
+  [ "${A_ACME_ENV:-}" = staging ] && k=(-k)
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 ${k[@]+"${k[@]}"} --resolve "$A_HOSTNAME:443:127.0.0.1" \
+    "https://$A_HOSTNAME/modules/citadel/v1/companies" 2>/dev/null || true)
+  [ "$code" = 401 ] && t PASS "citadel read route, unsigned: 401 (mounted or not, nothing is served without a signed device)" ||
+    t FAIL "citadel read route, unsigned: got ${code:-no answer}, want 401"
+}
+
 selftest() { # PASS/FAIL lines; returns 1 on any FAIL
   step "Self-test"
   local fail=0 out cert
@@ -322,6 +375,7 @@ selftest() { # PASS/FAIL lines; returns 1 on any FAIL
   case $cert in *STAGING*) say "        (staging: not trusted by browsers; switch with ACME_ENV=production)" ;; esac
   systemctl is-enabled ainkrad-backup.timer >/dev/null 2>&1 && t PASS "backup timer: $(systemctl show -p NextElapseUSecRealtime --value ainkrad-backup.timer)" || t FAIL "ainkrad-backup.timer not enabled"
   runner_selftest
+  citadel_selftest
   case ${1:-no} in
     local)
       out=$(runuser -u ainkrad -- bash -c "set -a; . $ETC/core.env; set +a; exec $BIN/ainkrad-core-server backup --config $CORE_HOME/config.toml --local-only" 2>&1) &&
@@ -374,10 +428,10 @@ uninstall() {
   # KillMode=process: stopping the runner leaves its terminal hosts running on purpose; removing it ends them.
   run systemctl kill --kill-whom=all ainkrad-runner.service 2>/dev/null || true
   run rm -rf "$UNITS/ainkrad-core.service" "$UNITS/ainkrad-runner.service" "$UNITS/ainkrad-backup.service" \
-    "$UNITS/ainkrad-backup.timer" "$UNITS/ainkrad-backup.timer.d" "$UNITS/ainkrad-backup.service.d"
+    "$UNITS/ainkrad-backup.timer" "$UNITS/ainkrad-backup.timer.d" "$UNITS/ainkrad-backup.service.d" "$UNITS/ainkrad-core.service.d"
   run systemctl daemon-reload
   run systemctl reset-failed 2>/dev/null || true
-  run rm -f "$BIN/ainkrad-core-server" "$BIN/ainkradctl" "$BIN/ainkrad-runner" "$BIN/ainkrad-ptyhost"
+  run rm -f "$BIN/ainkrad-core-server" "$BIN/ainkradctl" "$BIN/ainkrad-runner" "$BIN/ainkrad-ptyhost" "$BIN/ainkrad-core-citadel"
   if [ "$PURGE" = 1 ]; then
     name=$(env_get AINKRAD_HOSTNAME); name=${name:-purge}
     say "  --purge deletes $CORE_HOME (database, keys, certificates), the runner's state and $ETC/core.env. Type '$name' to confirm:"
@@ -433,6 +487,7 @@ main() {
   stage_binaries
   harden
   install_core
+  install_citadel
   install_backup
   start_core
   extras
