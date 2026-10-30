@@ -27,14 +27,12 @@ fn corpus_matches_goldens_and_survives_reattach() {
     let mut names: Vec<_> = fs::read_dir(&dir)
         .expect("corpus dir")
         .filter_map(|e| {
-            e.ok()?
-                .path()
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
+            let path = e.ok()?.path();
+            let stem = path.file_stem()?.to_string_lossy().into_owned();
+            (path.extension()? == "vt").then_some(stem)
         })
         .collect();
     names.sort();
-    names.dedup();
     assert!(names.len() >= 10, "corpus too small: {names:?}");
     let mut failed = Vec::new();
     for name in &names {
