@@ -1338,7 +1338,12 @@
           "secret.redeemed",
           "secret.rotated",
           "setting.reset",
-          "setting.set"
+          "setting.set",
+          "terminal.attached",
+          "terminal.closed",
+          "terminal.detached",
+          "terminal.exited",
+          "terminal.opened"
         ]
       },
       "AuditPage": {
@@ -4226,7 +4231,6 @@
         "type": "object"
       },
       "NewTerminal": {
-        "description": "`createTerminal`'s body.",
         "properties": {
           "args": {
             "items": {
@@ -4238,7 +4242,6 @@
             ]
           },
           "cwd": {
-            "description": "An absolute directory; absent, the user's home.",
             "type": [
               "string",
               "null"
@@ -4248,7 +4251,6 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Variables set as given; the rest of the environment is the runner's allow-list.",
             "propertyNames": {
               "type": "string"
             },
@@ -4258,14 +4260,12 @@
             ]
           },
           "program": {
-            "description": "Absent: the user's login shell.",
             "type": [
               "string",
               "null"
             ]
           },
           "runner": {
-            "description": "The runner's device id, `d_…`; it must advertise the `pty` driver.",
             "type": "string"
           },
           "size": {
@@ -7285,10 +7285,8 @@
         "type": "object"
       },
       "Terminal": {
-        "description": "A terminal on a runner.",
         "properties": {
           "attached": {
-            "description": "Clients attached now.",
             "format": "int32",
             "minimum": 0,
             "type": [
@@ -7300,7 +7298,6 @@
             "$ref": "#/components/schemas/Timestamp"
           },
           "exit_code": {
-            "description": "Once it exited: its code, absent when a signal ended it.",
             "format": "int32",
             "type": [
               "integer",
@@ -7308,29 +7305,24 @@
             ]
           },
           "exit_signal": {
-            "description": "The signal that ended it, if one did.",
             "type": [
               "string",
               "null"
             ]
           },
           "id": {
-            "description": "`t_…`.",
             "type": "string"
           },
           "opened_by": {
-            "description": "The device that opened it, `d_…`.",
             "type": [
               "string",
               "null"
             ]
           },
           "runner": {
-            "description": "The runner's device id, `d_…`.",
             "type": "string"
           },
           "seq": {
-            "description": "Output bytes so far: where an attach resumes.",
             "format": "int64",
             "minimum": 0,
             "type": [
@@ -7353,10 +7345,8 @@
         "type": "object"
       },
       "TerminalSignal": {
-        "description": "`signalTerminal`'s body.",
         "properties": {
           "signal": {
-            "description": "`HUP`, `INT`, `QUIT`, `TERM`, `KILL`, `USR1`, `USR2`, `CONT`, `STOP`, `TSTP` or `WINCH`.",
             "type": "string"
           }
         },
@@ -7366,7 +7356,6 @@
         "type": "object"
       },
       "TerminalSize": {
-        "description": "A terminal's size in cells, each 1 to 1000.",
         "properties": {
           "cols": {
             "format": "int32",
@@ -7388,7 +7377,6 @@
       "TerminalStatus": {
         "anyOf": [
           {
-            "description": "Where a terminal is in its life.",
             "enum": [
               "created",
               "running",
@@ -8218,7 +8206,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.15.0"
+    "version": "1.16.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -10715,7 +10703,7 @@
                 }
               }
             },
-            "description": "Every terminal the Core knows of, live or exited and not yet reaped"
+            "description": "Known terminals"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -10765,7 +10753,7 @@
                 }
               }
             },
-            "description": "The terminal is open on its runner (audited and `terminal.opened`). 409 `runner_offline` or `unsupported_command` (no `pty` driver), 503 `runner_busy`, 501 `not_implemented` before the terminal service"
+            "description": "The terminal was opened"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -10801,7 +10789,6 @@
         "operationId": "closeTerminal",
         "parameters": [
           {
-            "description": "The terminal, `t_…`",
             "in": "path",
             "name": "id",
             "required": true,
@@ -10819,7 +10806,7 @@
                 }
               }
             },
-            "description": "Hung up (HUP, then TERM, then KILL to its process group) and reaped; its exit. Audited and `terminal.closed`"
+            "description": "The terminal was closed"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -10852,7 +10839,6 @@
         "operationId": "getTerminal",
         "parameters": [
           {
-            "description": "The terminal, `t_…`",
             "in": "path",
             "name": "id",
             "required": true,
@@ -10905,7 +10891,6 @@
         "operationId": "signalTerminal",
         "parameters": [
           {
-            "description": "The terminal, `t_…`",
             "in": "path",
             "name": "id",
             "required": true,
@@ -10926,7 +10911,7 @@
         },
         "responses": {
           "204": {
-            "description": "Delivered to the terminal's process group"
+            "description": "The signal was delivered"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -10961,7 +10946,6 @@
         "operationId": "attachTerminal",
         "parameters": [
           {
-            "description": "The terminal, `t_…`",
             "in": "path",
             "name": "id",
             "required": true,
@@ -10970,31 +10954,19 @@
             }
           },
           {
-            "description": "Resume output at this byte offset (`Terminal.seq` of an earlier attach); absent or older than the runner keeps: a `snapshot` first",
             "in": "query",
             "name": "after",
             "required": false,
             "schema": {
               "format": "int64",
+              "minimum": 0,
               "type": "integer"
-            }
-          },
-          {
-            "description": "A browser: `ainkrad.v1, ainkrad-ticket.<ticket>`, as for streamEvents",
-            "in": "header",
-            "name": "Sec-WebSocket-Protocol",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
             }
           }
         ],
         "responses": {
           "101": {
-            "description": "Switching to a WebSocket that carries the runner protocol's terminal frames (`Frame` in runner.schema.json, stream 0): the server sends `control` `opened`, `output` (out), `control` `snapshot`, `result` (exit); the client sends `output` (in), `control` `resize` and `signal`, and `credit` (it starts with 65536 bytes of output and grants more as it renders). Closing the socket detaches; the terminal keeps running. Input and resize follow the arbitration rules (every attached client sees output; the most recent typist sets the size). A client that falls behind is cut to a fresh snapshot. Closed with 4001 (device revoked), 4003 (scopes changed)"
+            "description": "Terminal WebSocket"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
