@@ -13,6 +13,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 ainkrad-core-server = { path = "../crates/server" }
 ainkrad-proto = { path = "../crates/proto" }
+ainkrad-term = { path = "../crates/term" }
 axum = "0.8.9"
 serde_json = "1.0.154"
 
@@ -42,6 +43,13 @@ bench = false
 [[bin]]
 name = "spki_key"
 path = "fuzz_targets/spki_key.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "term_feed"
+path = "fuzz_targets/term_feed.rs"
 test = false
 doc = false
 bench = false

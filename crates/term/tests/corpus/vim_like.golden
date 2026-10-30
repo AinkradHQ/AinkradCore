@@ -1,0 +1,54 @@
+24 80
+size 24x80 alt=true cursor=2,7 hidden=false modes=\e=\e[?1h\e[?2004h
+pen \e[m
+-- scrollback 0
+-- primary screen, under the alt-screen: cursor=1,0
+|$ vim notes.txt
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+-- screen
+|line 1 of the file
+|line 2 of the file
+|line 3\e[31;1mX\e[mof the file
+|line 4 of the file
+|line 5 of the file
+|line 6 of the file
+|\e[34m~
+|\e[34m~
+|\e[34m~
+|\e[34m~
+|\e[34m~
+|\e[34m~
+|\e[34m~
+|\e[34m~
+|\e[34m~
+|\e[34m~
+|\e[34m~
+|\e[34m~
+|\e[34m~
+|\e[34m~
+|\e[34m~
+|
+|\e[7mnotes.txt [+]                                        3,7  All
+|-- INSERT --

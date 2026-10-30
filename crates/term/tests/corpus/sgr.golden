@@ -1,0 +1,11 @@
+6 40
+size 6x40 alt=false cursor=5,12 hidden=false modes=\e>\e[?1l\e[?2004l
+pen \e[m\e[31;1;4m
+-- scrollback 0
+-- screen
+|\e[1mbold\e[m \e[2mdim\e[m \e[3mitalic\e[m \e[4munder\e[m \e[7minverse\e[m 
+|\e[30m0\e[47m0\e[31m1\e[46m1\e[32m2\e[45m2\e[33m3\e[44m3\e[34m4\e[43m4\e[35m5\e[42m5\e[36m6\e[41m6\e[37m7\e[40m7
+|\e[90m0\e[100mb\e[91m1\e[101mb\e[92m2\e[102mb\e[93m3\e[103mb\e[94m4\e[104mb\e[95m5\e[105mb\e[96m6\e[106mb\e[97m7\e[107mb
+|\e[38;5;16m#\e[38;5;51m#\e[38;5;196m#\e[38;5;226m#\e[38;5;232m#\e[38;5;255m#
+|\e[38;2;255;128;0mtrue\e[48;2;0;0;255mcolour
+|\e[31;1;4mpen left set
