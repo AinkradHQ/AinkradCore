@@ -160,6 +160,9 @@ pub struct Enrolment {
     pub device_id: String,
     pub core_fp: String,
     pub rotation_seq: u64,
+    /// The key a verified rotation statement announced: accepted beside `core_fp` until the
+    /// Core first proves it on a connection, which makes it the pin (security review RH7).
+    pub next_fp: Option<String>,
 }
 
 impl Enrolment {
@@ -176,6 +179,7 @@ impl Enrolment {
             device_id: s("device_id")?,
             core_fp: s("core_fp")?,
             rotation_seq: v["rotation_seq"].as_u64().unwrap_or(0),
+            next_fp: v["next_fp"].as_str().map(str::to_owned),
         })
     }
 
@@ -185,13 +189,33 @@ impl Enrolment {
             "device_id": self.device_id,
             "core_fp": self.core_fp,
             "rotation_seq": self.rotation_seq,
+            "next_fp": self.next_fp,
         });
         write_private(path, (serde_json::to_string_pretty(&v)? + "\n").as_bytes())
     }
 
+    /// Whether `fp` is a Core key this runner accepts: the pin, or the announced next key.
+    pub fn accepts(&self, fp: &str) -> bool {
+        fp == self.core_fp || self.next_fp.as_deref() == Some(fp)
+    }
+
+    /// The Core proved `fp` on a connection: when it is the announced next key, it becomes the
+    /// pin and the old one is dropped. `true` when the pin moved.
+    pub fn proven(&mut self, fp: &str) -> bool {
+        if self.next_fp.as_deref() != Some(fp) {
+            return false;
+        }
+        self.core_fp = fp.to_owned();
+        self.next_fp = None;
+        true
+    }
+
     /// Applies a rotation statement received on a connection whose Core proved `core_spki`
     /// (handshake spec §13): only from the pinned key, signed by it, and newer than the last.
-    /// `true` when the pin moved.
+    /// The pin does not move yet: the new key is accepted beside it, and becomes the pin when
+    /// the Core first proves it (`proven`), from `not_before` on. A runner that reconnects
+    /// before the Core switches keys still finds the old one (security review RH7). `true`
+    /// when the next key was recorded.
     pub fn rotate(&mut self, r: &Rotation, core_spki: &[u8]) -> bool {
         let signed = unb64(&r.sig, 86).is_some_and(|s| verify(core_spki, &rotation_message(r), &s));
         let ok = signed
@@ -200,7 +224,7 @@ impl Enrolment {
             && r.seq > self.rotation_seq
             && r.new_fp.len() == 43;
         if ok {
-            self.core_fp = r.new_fp.clone();
+            self.next_fp = Some(r.new_fp.clone());
             self.rotation_seq = r.seq;
         }
         ok

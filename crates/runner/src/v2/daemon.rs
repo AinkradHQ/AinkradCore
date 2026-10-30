@@ -209,6 +209,7 @@ mod tests {
             device_id: "d_5v0v4qa7a8h2tb3219mtz5znvv".to_owned(),
             core_fp: FP.to_owned(),
             rotation_seq: 0,
+            next_fp: None,
         };
         Daemon {
             client: Client::new(url, None).unwrap(),

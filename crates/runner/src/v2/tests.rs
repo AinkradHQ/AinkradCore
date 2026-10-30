@@ -80,7 +80,18 @@ impl Core {
             device_id: "d_5v0v4qa7a8h2tb3219mtz5znvv".to_owned(),
             core_fp: key.fp(),
             rotation_seq: 0,
+            next_fp: None,
         }));
+        Self::hello_as(capacity, save, key, enrolment).await
+    }
+
+    /// [`Core::hello`] for a Core holding `key` and a runner with `enrolment`.
+    async fn hello_as(
+        capacity: u32,
+        save: Option<std::path::PathBuf>,
+        key: Key,
+        enrolment: Arc<std::sync::Mutex<Enrolment>>,
+    ) -> (Self, RunnerHello) {
         let runner_key = Arc::new(new_key());
         let runner_spki = runner_key.spki.clone();
         let link = Link {
@@ -312,10 +323,12 @@ async fn another_core_or_a_relayed_proof_is_refused_and_nothing_more_is_sent() {
     }
 }
 
-/// Handshake spec §17 test 29: a statement signed by the pinned key moves the pin (and saves
-/// it); one signed by another key, one for another pin, or an old one is ignored.
+/// Handshake spec §17 test 29 and security review RH7: a statement signed by the pinned key
+/// records the next key (and saves it) without moving the pin; one signed by another key, one
+/// for another pin, or an old one is ignored. The next key is then accepted beside the pin, and
+/// once the Core proves it, it is the pin and the old key is refused; a third key never is.
 #[tokio::test]
-async fn a_rotation_by_the_pinned_key_moves_the_pin_and_anything_else_is_ignored() {
+async fn a_rotation_is_accepted_beside_the_pin_until_the_core_proves_the_new_key() {
     let dir = std::env::temp_dir().join(format!("runner-rotate-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -333,10 +346,11 @@ async fn a_rotation_by_the_pinned_key_moves_the_pin_and_anything_else_is_ignored
     .await;
     let old = core.key.fp();
     let next = new_key();
+    let next_fp = fingerprint(&next.spki);
     let statement = |signer: &Key, old_fp: &str, seq| {
         let mut r = Rotation {
             old_fp: old_fp.to_owned(),
-            new_fp: fingerprint(&next.spki),
+            new_fp: next_fp.clone(),
             not_before: 1,
             seq,
             sig: String::new(),
@@ -352,25 +366,70 @@ async fn a_rotation_by_the_pinned_key_moves_the_pin_and_anything_else_is_ignored
     // A noop round trip: every frame before it was handled.
     core.send(1, Body::Command(Command::Noop)).await;
     core.answer(1).await;
-    assert_eq!(core.enrolment.lock().unwrap().core_fp, old, "ignored");
+    let e = core.enrolment.lock().unwrap().clone();
+    assert_eq!(
+        (e.core_fp.as_str(), e.next_fp),
+        (old.as_str(), None),
+        "ignored"
+    );
     assert!(!save.exists());
 
     core.send(CONTROL_STREAM, statement(&core.key, &old, 1))
         .await;
     core.send(3, Body::Command(Command::Noop)).await;
     core.answer(3).await;
-    let moved = core.enrolment.lock().unwrap().clone();
+    let announced = core.enrolment.lock().unwrap().clone();
     assert_eq!(
-        (moved.core_fp.as_str(), moved.rotation_seq),
-        (fingerprint(&next.spki).as_str(), 1)
+        announced.core_fp, old,
+        "the pin stays until the new key is proven"
     );
-    assert_eq!(Enrolment::load(&save).unwrap(), moved, "saved");
-    // Replayed, or signed by the old key after the move: the pin stays.
+    assert_eq!(
+        (announced.next_fp.as_deref(), announced.rotation_seq),
+        (Some(next_fp.as_str()), 1)
+    );
+    assert_eq!(Enrolment::load(&save).unwrap(), announced, "saved");
+    // Re-sent (as the Core does on every connection), or replayed: nothing changes.
     core.send(CONTROL_STREAM, statement(&core.key, &old, 1))
         .await;
     core.send(5, Body::Command(Command::Noop)).await;
     core.answer(5).await;
-    assert_eq!(core.enrolment.lock().unwrap().rotation_seq, 1);
+    assert_eq!(*core.enrolment.lock().unwrap(), announced);
+    let enrolment = Arc::clone(&core.enrolment);
+    let old_key = core.key;
+
+    // A third key is refused, the window notwithstanding.
+    let (mut third, hello) =
+        Core::hello_as(1, Some(save.clone()), new_key(), Arc::clone(&enrolment)).await;
+    third.answer_hello(&hello, Answer::Honest).await;
+    let refused = third.runner.await.unwrap().unwrap_err();
+    assert_eq!(refused.code, ErrorCode::CoreIdentityMismatch);
+
+    // The Core switched keys: it proves the next one, the runner signs for it and moves the pin.
+    let (mut switched, hello) =
+        Core::hello_as(1, Some(save.clone()), next, Arc::clone(&enrolment)).await;
+    switched.answer_hello(&hello, Answer::Honest).await;
+    let proof = switched.recv().await;
+    let Ok(Some(Body::Control(Control::Proof(p)))) = proof.body() else {
+        panic!("{proof:?}")
+    };
+    let message = runner_auth_message(&NO_CHANNEL_BINDING, &[3; 32], &next_fp);
+    assert!(key::verify(
+        &switched.runner_spki,
+        &message,
+        &unb64(&p.sig, 86).unwrap()
+    ));
+    let moved = enrolment.lock().unwrap().clone();
+    assert_eq!(
+        (moved.core_fp.as_str(), moved.next_fp.as_deref()),
+        (next_fp.as_str(), None)
+    );
+    assert_eq!(Enrolment::load(&save).unwrap(), moved, "saved");
+
+    // The old key is no longer accepted.
+    let (mut stale, hello) = Core::hello_as(1, None, old_key, enrolment).await;
+    stale.answer_hello(&hello, Answer::Honest).await;
+    let refused = stale.runner.await.unwrap().unwrap_err();
+    assert_eq!(refused.code, ErrorCode::CoreIdentityMismatch);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
