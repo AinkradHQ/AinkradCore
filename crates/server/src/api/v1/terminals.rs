@@ -36,6 +36,12 @@ const OPEN_WAIT: Duration = Duration::from_secs(15);
 const CLOSE_WAIT: Duration = Duration::from_secs(30);
 /// How long an exited terminal stays listed before it is reaped.
 const KEEP_EXITED: i64 = 3600;
+/// Attaches at once, per terminal and per device: each one holds a stream of the runner's
+/// shared pool, so uncapped they would starve `exec` and the cleanup `pty.close`.
+const MAX_ATTACH_PER_TERMINAL: u32 = 4;
+const MAX_ATTACH_PER_DEVICE: u32 = 8;
+/// An exited terminal is hung up (the host acked and freed) once it has been exited this long.
+const ACK_EXITED_AFTER: i64 = 60;
 /// How often the idle reaper looks (`sweep_loop`).
 const SWEEP_EVERY: Duration = Duration::from_secs(30);
 
@@ -50,9 +56,51 @@ pub struct Rooms {
     /// Per terminal: the client that typed last, and how many clients are attached.
     rooms: Mutex<HashMap<String, (Option<u64>, u32)>>,
     next_client: AtomicU64,
+    /// Attach slots in use, per terminal and per device (`reserve`).
+    slots: Mutex<(HashMap<String, u32>, HashMap<String, u32>)>,
+    /// Exited terminals whose host this Core already told to go (`ack_exited`).
+    acked: Mutex<std::collections::HashSet<String>>,
+}
+
+/// One attach slot; released on drop.
+pub struct AttachSlot {
+    rooms: std::sync::Arc<Rooms>,
+    terminal: String,
+    device: String,
+}
+
+impl Drop for AttachSlot {
+    fn drop(&mut self) {
+        let mut guard = self.rooms.slots.lock().unwrap();
+        let s = &mut *guard;
+        for (map, key) in [(&mut s.0, &self.terminal), (&mut s.1, &self.device)] {
+            if let Some(n) = map.get_mut(key) {
+                *n = n.saturating_sub(1);
+                if *n == 0 {
+                    map.remove(key);
+                }
+            }
+        }
+    }
 }
 
 impl Rooms {
+    /// A slot for one more attach of `terminal` by `device`, or `None` at either cap.
+    fn reserve(self: &std::sync::Arc<Self>, terminal: &str, device: &str) -> Option<AttachSlot> {
+        let mut s = self.slots.lock().unwrap();
+        if s.0.get(terminal).copied().unwrap_or(0) >= MAX_ATTACH_PER_TERMINAL
+            || s.1.get(device).copied().unwrap_or(0) >= MAX_ATTACH_PER_DEVICE
+        {
+            return None;
+        }
+        *s.0.entry(terminal.to_owned()).or_default() += 1;
+        *s.1.entry(device.to_owned()).or_default() += 1;
+        Some(AttachSlot {
+            rooms: self.clone(),
+            terminal: terminal.to_owned(),
+            device: device.to_owned(),
+        })
+    }
     fn join(&self, terminal: &str) -> u64 {
         self.rooms
             .lock()
@@ -329,7 +377,8 @@ async fn ended(app: &App, id: &str, code: Option<i32>, signal: Option<String>) {
 /// A runner connected (its `hello` lists the terminals it still holds): settle what the Core
 /// kept while it was away, so a Core or runner restart does not leave rows `running` for
 /// terminals that ended meanwhile. A row the runner no longer lists lost its host; a live one
-/// is watched again and counts as just active, so its clients get a window to reattach.
+/// is watched again and counts as just active, so its clients get a window to reattach. A row
+/// the runner does not list is watched too, and ends only if the runner reports its host gone.
 /// Only rows older than `before` are looked at: a terminal opened since the hello was taken
 /// is not in it.
 pub async fn reconcile(app: &App, runner: &str, listed: &[TerminalInfo], before: i64) {
@@ -343,11 +392,13 @@ pub async fn reconcile(app: &App, runner: &str, listed: &[TerminalInfo], before:
     };
     for id in ids {
         match listed.iter().find(|i| i.terminal == id) {
-            None => ended(app, &id, None, Some(SIGNAL_HOST_LOST.to_owned())).await,
             Some(TerminalInfo { exit: Some(x), .. }) => {
                 ended(app, &id, x.exit_code, x.signal.clone()).await
             }
-            Some(_) => {
+            // Unlisted is not lost: the hello leaves out a host that is merely slow or speaks
+            // a newer protocol. The runner decides: its attach answers `host_lost` only for a
+            // host that is provably gone (the monitor records that), and fails otherwise.
+            _ => {
                 touch(app, &id).await;
                 if let Ok(t) = row(app, &id).await {
                     ensure_monitor(app, &t);
@@ -368,6 +419,19 @@ async fn touch(app: &App, id: &str) {
 /// Closes every running terminal nobody has been attached to for `terminal.idle_secs`
 /// (0 turns it off). A runner that is offline is tried again at the next pass.
 pub async fn sweep(app: &App) {
+    ack_exited(app).await;
+    // A revoked device's terminals are closed: its streams already ended with the revoke, and
+    // a shell it left running must not outlive its access.
+    if let Ok(rows) = sqlx::query_as::<_, (String, String)>(
+        "SELECT t.id,t.runner FROM core_terminals t JOIN core_devices d ON d.id=t.opened_by WHERE t.status='running' AND d.revoked_at IS NOT NULL",
+    )
+    .fetch_all(&app.pool)
+    .await
+    {
+        for (id, runner) in rows {
+            hang_up(app, &id, &runner, "revoked").await;
+        }
+    }
     let Ok(idle) =
         crate::store::settings::value(&app.pool, Key::TerminalIdleSecs, Scope::Server).await
     else {
@@ -389,6 +453,64 @@ pub async fn sweep(app: &App) {
         if app.terminals.attached(&id) > 0 {
             continue;
         }
+        hang_up(app, &id, &runner, "idle").await;
+    }
+}
+
+/// Closes terminal `id` on its runner and records it reaped, with `reason` on the event. A
+/// runner that is offline or slow is tried again at the next pass.
+async fn hang_up(app: &App, id: &str, runner: &str, reason: &str) {
+    let close = Command::PtyClose(PtyClose {
+        terminal: id.to_owned(),
+    });
+    let Ok(d) = app
+        .hub
+        .dispatch_elevated(runner, close, app.hub.continue_terminal_elevation())
+    else {
+        return;
+    };
+    let Ok(Ok(Body::Result(Reply::PtyClose(x)))) =
+        tokio::time::timeout(CLOSE_WAIT, d.outcome()).await
+    else {
+        return;
+    };
+    let done = sqlx::query("UPDATE core_terminals SET status='reaped',exit_code=?,exit_signal=?,last_activity=? WHERE id=? AND status IN ('running','exited')")
+        .bind(x.exit_code)
+        .bind(x.signal)
+        .bind(app.clock.unix())
+        .bind(id)
+        .execute(&app.pool)
+        .await;
+    if done.is_ok_and(|r| r.rows_affected() == 1) {
+        let _ = event_with(app, "terminal.closed", id, "core", Some(reason)).await;
+    }
+}
+
+/// Tells the runner to hang up each terminal that exited while nobody was attached: the
+/// runner's close attaches, reads the exit and acks, so the host (about 20 MiB) is freed
+/// instead of lingering and counting against the runner's capacity. Once per terminal.
+async fn ack_exited(app: &App) {
+    let now = app.clock.unix();
+    let Ok(rows) = sqlx::query_as::<_, (String, String)>(
+        "SELECT id,runner FROM core_terminals WHERE status='exited' AND last_activity<? AND last_activity>=?",
+    )
+    .bind(now - ACK_EXITED_AFTER)
+    .bind(now - KEEP_EXITED)
+    .fetch_all(&app.pool)
+    .await
+    else {
+        return;
+    };
+    let ids: Vec<&String> = rows.iter().map(|r| &r.0).collect();
+    app.terminals
+        .acked
+        .lock()
+        .unwrap()
+        .retain(|a| ids.contains(&a));
+    for (id, runner) in rows {
+        if app.terminals.acked.lock().unwrap().contains(&id) {
+            continue;
+        }
         let close = Command::PtyClose(PtyClose {
             terminal: id.clone(),
         });
@@ -398,20 +520,10 @@ pub async fn sweep(app: &App) {
         else {
             continue;
         };
-        let Ok(Ok(Body::Result(Reply::PtyClose(x)))) =
+        if let Ok(Ok(Body::Result(Reply::PtyClose(_)))) =
             tokio::time::timeout(CLOSE_WAIT, d.outcome()).await
-        else {
-            continue;
-        };
-        let done = sqlx::query("UPDATE core_terminals SET status='reaped',exit_code=?,exit_signal=?,last_activity=? WHERE id=? AND status IN ('running','exited')")
-            .bind(x.exit_code)
-            .bind(x.signal)
-            .bind(app.clock.unix())
-            .bind(&id)
-            .execute(&app.pool)
-            .await;
-        if done.is_ok_and(|r| r.rows_affected() == 1) {
-            let _ = event_with(app, "terminal.closed", &id, "core", Some("idle")).await;
+        {
+            app.terminals.acked.lock().unwrap().insert(id);
         }
     }
 }
@@ -788,6 +900,14 @@ pub async fn attach(
         Ok(t) => t,
         Err(e) => return e.into_response(),
     };
+    let Some(slot) = app.terminals.reserve(&id, &me.device.id) else {
+        return ApiError::new(
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "too_many_attaches",
+            "too many clients are attached to this terminal or from this device",
+        )
+        .into_response();
+    };
     ensure_monitor(&app, &t);
     let d = match app.hub.dispatch_elevated(
         &t.runner,
@@ -839,6 +959,7 @@ pub async fn attach(
                 elevation,
                 revoked,
                 rescoped,
+                slot,
             )
         })
 }
@@ -853,6 +974,7 @@ async fn stream(
     elevation: i64,
     revoked: impl std::future::Future<Output = ()>,
     rescoped: impl std::future::Future<Output = ()>,
+    _slot: AttachSlot,
 ) {
     let client = app.terminals.join(&terminal);
     touch(&app, &terminal).await;
