@@ -445,10 +445,14 @@ async fn bursts_are_merged_and_each_device_has_a_ceiling() {
 #[test]
 fn the_ceiling_is_a_sliding_window_per_device() {
     let limiter = policy::Limiter::default();
-    assert!((0..10).all(|_| limiter.allow(1, 1000)));
-    assert!(!limiter.allow(1, 1059), "the eleventh in 60 s");
-    assert!(limiter.allow(2, 1059), "another device has its own");
-    assert!(limiter.allow(1, 1060), "the window moved on");
+    assert!((0..10).all(|_| limiter.allow(1, "", 1000)));
+    assert!(!limiter.allow(1, "", 1059), "the eleventh in 60 s");
+    assert!(limiter.allow(2, "", 1059), "another device has its own");
+    assert!(limiter.allow(1, "", 1060), "the window moved on");
+    assert!(
+        limiter.allow(1, "toy", 1059),
+        "a module has a budget of its own"
+    );
 }
 
 #[tokio::test]
