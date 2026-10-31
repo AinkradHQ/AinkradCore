@@ -7,7 +7,8 @@
 //!   entry is a 404, as if it were not there (`owner`);
 //! - lists that span companies keep only its own (`Acting::sees`).
 //!
-//! What belongs to no company stays reachable. Without the header the admin sees every company.
+//! What belongs to no company stays reachable. Without the header the company is the one
+//! the path's ids belong to (a path naming two companies is a 404); with no id the admin sees every company.
 //!
 //! The monolith ran this as a middleware over every route. A module's router has no state at
 //! build time (`Module::routes`), so it is an extractor here: **every handler that takes a path
@@ -152,18 +153,25 @@ impl FromRequestParts<App> for Acting {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, app: &App) -> Result<Self, ApiError> {
-        let Some(raw) = parts.headers.get(COMPANY_HEADER) else {
-            return Ok(Self(None));
+        // The header is a hint, not the boundary (F-06): the company a request works in is the
+        // one that owns what its path names. A header naming another one, or a path naming
+        // things of two companies, is refused as "not there".
+        let acting = match parts.headers.get(COMPANY_HEADER) {
+            None => None,
+            Some(raw) => {
+                let Some(acting) = raw.to_str().ok().and_then(|v| v.trim().parse::<i64>().ok())
+                else {
+                    return Err(ApiError::bad_request("X-Citadel-Company is a company id"));
+                };
+                if org::get_company(&app.pool, CompanyId(acting))
+                    .await?
+                    .is_none()
+                {
+                    return Err(ApiError::not_found(format!("no company {acting}")));
+                }
+                Some(acting)
+            }
         };
-        let Some(acting) = raw.to_str().ok().and_then(|v| v.trim().parse::<i64>().ok()) else {
-            return Err(ApiError::bad_request("X-Citadel-Company is a company id"));
-        };
-        if org::get_company(&app.pool, CompanyId(acting))
-            .await?
-            .is_none()
-        {
-            return Err(ApiError::not_found(format!("no company {acting}")));
-        }
         let template = parts
             .extensions
             .get::<MatchedPath>()
@@ -172,20 +180,22 @@ impl FromRequestParts<App> for Acting {
         // Nested under the module's prefix, the matched path may or may not carry it.
         let template = template.strip_prefix(PREFIX).unwrap_or(template);
         let path = path.strip_prefix(PREFIX).unwrap_or(path);
+        let mut current = acting;
         for (segment, value) in params(template, path) {
             if let Some(c) = owner(app, segment, value).await?
-                && c != acting
+                && *current.get_or_insert(c) != c
             {
                 let what = match segment {
                     "companies" => "company",
                     s => s.trim_end_matches('s'),
                 };
-                return Err(ApiError::not_found(format!(
-                    "no {what} {value} in company {acting}"
-                )));
+                return Err(ApiError::not_found(match acting {
+                    Some(a) => format!("no {what} {value} in company {a}"),
+                    None => format!("no {what} {value} in this company"),
+                }));
             }
         }
-        Ok(Self(Some(CompanyId(acting))))
+        Ok(Self(current.map(CompanyId)))
     }
 }
 

@@ -13,6 +13,7 @@ use ainkrad_core_server::module::{
 };
 use ainkrad_core_server::store::Migration;
 use ainkrad_core_server::store::agents::Session;
+use ainkrad_core_server::store::events::StoredEvent;
 use axum::Router;
 
 pub mod admin;
@@ -64,6 +65,32 @@ impl Module for Citadel {
         kinds::EVENT_KINDS
     }
 
+    fn notification_kinds(&self) -> &'static [(&'static str, &'static str)] {
+        notifications::KINDS
+    }
+
+    fn classify(&self, e: &StoredEvent) -> Option<ainkrad_core_server::push::Notification> {
+        ainkrad_core_server::push::Classifier::notification(&notifications::Citadel, e)
+    }
+
+    fn admin_commands(&self) -> &'static [&'static str] {
+        &["seed"]
+    }
+
+    fn admin<'a>(
+        &'a self,
+        name: &'a str,
+        pool: &'a sqlx::SqlitePool,
+        args: &'a [&'a str],
+    ) -> BoxFut<'a, Result<String, String>> {
+        Box::pin(async move {
+            match name {
+                "seed" => admin::seed_command(pool, args).await,
+                _ => Err("no such command".to_owned()),
+            }
+        })
+    }
+
     fn audit_actions(&self) -> &'static [&'static str] {
         kinds::AUDIT_ACTIONS
     }
@@ -93,6 +120,10 @@ impl Module for Citadel {
         api::DESTRUCTIVE.as_slice()
     }
 
+    fn non_destructive(&self) -> Option<&'static [(&'static str, &'static str)]> {
+        Some(api::writes::NON_DESTRUCTIVE)
+    }
+
     fn jobs(&self) -> Vec<ainkrad_core_server::jobs::Job> {
         let mut jobs = engine::jobs();
         if let Some(f) = &self.forge {
@@ -115,6 +146,11 @@ impl Module for Citadel {
 
     fn verify_token<'a>(&'a self, app: &'a App, token: &'a str) -> BoxFut<'a, Option<TokenGrant>> {
         Box::pin(mcp::verify(app, token))
+    }
+
+    // The run engine's jobs work on the Core's app (B-F1): without this no run ever starts.
+    fn attach(&self, app: &App) {
+        engine::attach(app);
     }
 
     fn credentials<'a>(

@@ -118,6 +118,39 @@ pub trait Module: Send + Sync + 'static {
         self.scope()
     }
 
+    /// The push kinds the module may raise, each `(<id>.<name>, scope)`: the scope a device
+    /// needs to be sent it (one of `read`, `approve`, `terminal`, `agent`, `admin`; never
+    /// `runner`). A push of any other kind is dropped (`push::modules`).
+    fn notification_kinds(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+
+    /// The push `e` calls for, if any; only the module's own events reach it. Ids only: the Core
+    /// confines it to a declared kind and scope and cleans it (`push::policy`).
+    fn classify(
+        &self,
+        _e: &crate::store::events::StoredEvent,
+    ) -> Option<crate::push::Notification> {
+        None
+    }
+
+    /// The admin subcommands the module adds to a composed binary, run as
+    /// `<binary> <module id> <name> <db> [args…]` (`cli`): names only, never a platform verb.
+    fn admin_commands(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Runs the admin command `name` on the migrated database `pool` of a stopped Core; the
+    /// output is printed. The CLI refuses a database a server is serving before it gets here.
+    fn admin<'a>(
+        &'a self,
+        _name: &'a str,
+        _pool: &'a sqlx::SqlitePool,
+        _args: &'a [&'a str],
+    ) -> BoxFut<'a, Result<String, String>> {
+        Box::pin(async { Err("no such command".to_owned()) })
+    }
+
     /// The audit actions the module records, each `<id>.<…>`.
     fn audit_actions(&self) -> &'static [&'static str] {
         &[]
@@ -168,11 +201,24 @@ pub trait Module: Send + Sync + 'static {
         &[]
     }
 
+    /// The module's writes (POST, PUT, PATCH, DELETE) that deliberately need no step-up. `None`
+    /// (the default) leaves the classification unchecked. `Some(list)` makes `mount` refuse the
+    /// module unless every documented write is in `destructive` XOR this list, so a new write
+    /// cannot default silently to "no step-up".
+    fn non_destructive(&self) -> Option<&'static [(&'static str, &'static str)]> {
+        None
+    }
+
     /// The scheduler jobs the module declares (E2-11), recorded at start by `jobs::register`
     /// and run by the `jobs::Engine`. None by default. A job's name is unique within the module.
     fn jobs(&self) -> Vec<crate::jobs::Job> {
         Vec::new()
     }
+
+    /// Called once by `serve`, after the app is fully built (hub, secrets, limits set) and before
+    /// it is mounted: hands the module the app its scheduler jobs and background work run on.
+    /// A job handler is given no `App`, so a module that needs one keeps this clone. Nothing by default.
+    fn attach(&self, _app: &App) {}
 
     /// The routes a bearer token reaches without a device signature, listed (deny by default:
     /// none). The Core builds the module's token router from this list and `token_handler`, so
@@ -241,6 +287,7 @@ pub(crate) fn validate(m: &dyn Module) {
         "module {id}: scope {:?}",
         m.scope()
     );
+    crate::push::modules::validate(m);
     let mut seen = HashSet::new();
     for (method, template, scope) in m.route_scopes() {
         assert!(
@@ -312,6 +359,36 @@ pub(crate) fn validate(m: &dyn Module) {
                 has(method, template),
                 "module {id}: route scope {method} {template} matches no documented route"
             );
+        }
+        if let Some(plain) = m.non_destructive() {
+            let listed = |list: &[(&str, &str)], method: &str, template: &str| {
+                list.iter()
+                    .any(|(m2, t2)| m2.eq_ignore_ascii_case(method) && *t2 == template)
+            };
+            for (method, template) in plain {
+                assert!(
+                    has(method, template),
+                    "module {id}: non-destructive {method} {template} matches no documented route"
+                );
+                assert!(
+                    !listed(m.destructive(), method, template),
+                    "module {id}: {method} {template} is both destructive and non-destructive"
+                );
+            }
+            for (template, item) in paths {
+                for method in item.as_object().into_iter().flat_map(|o| o.keys()) {
+                    let write = ["post", "put", "patch", "delete"]
+                        .iter()
+                        .any(|w| method.eq_ignore_ascii_case(w));
+                    assert!(
+                        !write
+                            || listed(m.destructive(), method, template)
+                            || listed(plain, method, template),
+                        "module {id}: write {method} {template} is not classified: add it to \
+                         destructive or non_destructive"
+                    );
+                }
+            }
         }
     }
     let mut token = HashSet::new();
@@ -433,5 +510,72 @@ mod tests {
     #[should_panic(expected = "duplicate module id")]
     fn duplicate_ids_are_refused() {
         mounted(&["ops", "ops"]);
+    }
+
+    /// A module that documents one POST and classifies `listed`.
+    struct Writes {
+        listed: &'static [(&'static str, &'static str)],
+        step_up: &'static [(&'static str, &'static str)],
+    }
+
+    impl Module for Writes {
+        fn id(&self) -> &'static str {
+            "writes"
+        }
+
+        fn routes(&self) -> Router<App> {
+            Router::new()
+        }
+
+        fn openapi(&self) -> serde_json::Value {
+            serde_json::json!({"paths": {"/a": {"post": {}, "get": {}}}})
+        }
+
+        fn destructive(&self) -> &'static [(&'static str, &'static str)] {
+            self.step_up
+        }
+
+        fn non_destructive(&self) -> Option<&'static [(&'static str, &'static str)]> {
+            Some(self.listed)
+        }
+    }
+
+    #[test]
+    fn a_classified_write_mounts() {
+        validate(&Writes {
+            listed: &[("POST", "/a")],
+            step_up: &[],
+        });
+        validate(&Writes {
+            listed: &[],
+            step_up: &[("POST", "/a")],
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "is not classified")]
+    fn an_unclassified_write_is_refused() {
+        validate(&Writes {
+            listed: &[],
+            step_up: &[],
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "both destructive and non-destructive")]
+    fn a_write_cannot_be_both() {
+        validate(&Writes {
+            listed: &[("POST", "/a")],
+            step_up: &[("POST", "/a")],
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "matches no documented route")]
+    fn a_dead_non_destructive_entry_is_refused() {
+        validate(&Writes {
+            listed: &[("POST", "/a"), ("PUT", "/b")],
+            step_up: &[],
+        });
     }
 }

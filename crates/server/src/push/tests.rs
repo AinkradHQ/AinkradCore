@@ -19,7 +19,7 @@ use crate::store::gov::{PushTarget, get_device, revoke_device, set_push_token};
 use crate::store::{audit, connect};
 
 #[derive(Default)]
-struct Recorder(Mutex<Vec<(DeviceKeyId, Notification)>>);
+pub(super) struct Recorder(Mutex<Vec<(DeviceKeyId, Notification)>>);
 
 impl PushProvider for Recorder {
     fn name(&self) -> &'static str {
@@ -33,7 +33,7 @@ impl PushProvider for Recorder {
 }
 
 impl Recorder {
-    fn take(&self) -> Vec<(DeviceKeyId, Notification)> {
+    pub(super) fn take(&self) -> Vec<(DeviceKeyId, Notification)> {
         std::mem::take(&mut *self.0.lock().unwrap())
     }
 }
