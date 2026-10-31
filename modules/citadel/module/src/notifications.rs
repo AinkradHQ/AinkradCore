@@ -72,7 +72,7 @@ mod tests {
             })),
             at: "2026-10-30T00:00:00.000Z".to_owned(),
         };
-        let n = Citadel.notification(&event).unwrap();
+        let n = Citadel::default().notification(&event).unwrap();
         assert_eq!(n.data, json!({"approval_id": 9}));
         assert!(!n.data.to_string().contains("must-not-leave"));
     }

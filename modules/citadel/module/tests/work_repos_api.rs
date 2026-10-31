@@ -26,7 +26,7 @@ async fn repos_round_trip_through_the_api() {
         &fx,
         &format!("/projects/{p}/repos"),
         json!({"name": "core", "url": "https://example.test/core.git",
-               "forge": {"kind": "github", "repo": "acme/core", "token_file": "/etc/t"},
+               "forge": {"kind": "github", "repo": "acme/core", "secret_name": "citadel.forge.token"},
                "commands": {"test": "cargo test"}}),
     )
     .await;
@@ -47,7 +47,7 @@ async fn repos_round_trip_through_the_api() {
         json!({"name": "local", "url": "/srv/x.git"}),
         json!({"name": "core", "url": "https://example.test/x.git"}),
         json!({"name": "x", "url": "https://u:p@h/x.git"}),
-        json!({"name": "x", "url": "https://example.test/x.git", "forge": {"kind": "svn", "repo": "a", "token_file": "/t"}}),
+        json!({"name": "x", "url": "https://example.test/x.git", "forge": {"kind": "svn", "repo": "a", "secret_name": "citadel.forge.token"}}),
     ] {
         let (status, body) = post(&fx, &format!("/projects/{p}/repos"), bad.clone()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {body}");

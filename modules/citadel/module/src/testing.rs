@@ -29,7 +29,7 @@ pub async fn db() -> Db {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let pool = connect(&dir.join("core.db")).await.unwrap();
-    let modules: Vec<Arc<dyn Module>> = vec![Arc::new(Citadel)];
+    let modules: Vec<Arc<dyn Module>> = vec![Arc::new(Citadel::default())];
     migrate::migrate_modules(&pool, &modules).await.unwrap();
     Db { pool, dir }
 }
