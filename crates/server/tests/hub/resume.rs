@@ -290,7 +290,9 @@ async fn a_terminal_resume_resends_missed_credit_once_and_never_typed_input() {
         assert_eq!(f.next().await.kind, FrameKind::Credit);
     }
     drop(f);
-    let mut f = as_process(Some((d.stream, 100))).await;
+    // Grants 205..=304 were sent; the oldest 37 merged into one span ending near seq 241, so a
+    // runner that received up to 220 is inside it.
+    let mut f = as_process(Some((d.stream, 220))).await;
     assert_eq!(f.next().await.kind, FrameKind::Credit);
     // 30 chunks are 90 KiB, more than the 64 KiB window the Core believes is open.
     for n in 0..30 {
@@ -299,7 +301,10 @@ async fn a_terminal_resume_resends_missed_credit_once_and_never_typed_input() {
         });
         f.send_frame(&Frame::new(d.stream, 400 + n, out)).await;
     }
+    // Nothing is read (and so no credit returned) until the Core has taken all of them.
+    tokio::time::sleep(Duration::from_millis(500)).await;
     for _ in 0..30 {
-        assert!(matches!(d.next().await, Some(Body::Output(_))));
+        let got = d.next().await;
+        assert!(matches!(got, Some(Body::Output(_))), "{got:?}");
     }
 }
