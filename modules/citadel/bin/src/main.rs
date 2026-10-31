@@ -11,5 +11,5 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    ainkrad_core_server::cli::run(vec![Arc::new(citadel_module::Citadel)]).await
+    ainkrad_core_server::cli::run(vec![Arc::new(citadel_module::Citadel::default())]).await
 }
