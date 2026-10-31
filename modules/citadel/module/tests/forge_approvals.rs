@@ -219,3 +219,82 @@ async fn a_tool_permission_is_decided_only_on_the_step_up_route() {
     assert_eq!(r.0, StatusCode::OK, "{r:?}");
     assert_eq!(status(&fx, id).await, "approved");
 }
+
+/// F-02: approving a hire, a sprint commit or a plan needs a step-up (`decide-forge`); `decide`
+/// still takes their rejection, so a phone can stop work without elevating.
+#[tokio::test]
+async fn approving_a_high_impact_kind_needs_the_step_up_route() {
+    let fx = fx().await;
+    let s = seed(&fx.app.pool, "A", "AAA").await;
+    let phone = enroll(&fx.app, "phone", &["read", "approve"], true).await;
+    for kind in [
+        ApprovalKind::HireAgent,
+        ApprovalKind::SprintCommit,
+        ApprovalKind::PlanApproval,
+    ] {
+        let id = ask(&fx, &s, kind, json!({})).await;
+        let plain = format!("/approvals/{id}/decide");
+        let forge = format!("/approvals/{id}/decide-forge");
+        // `decide` refuses an approval for everyone, the elevated admin too.
+        for dev in [&phone, &fx.dev] {
+            let r = call(
+                &fx,
+                Some(dev),
+                Method::POST,
+                &plain,
+                Some(json!({"approve": true})),
+            )
+            .await;
+            assert_eq!(r.0, StatusCode::BAD_REQUEST, "{kind:?}: {r:?}");
+        }
+        assert_eq!(status(&fx, id).await, "pending");
+        // An unelevated phone is refused on the step-up route, the elevated admin decides.
+        let yes = Some(json!({"approve": true}));
+        let r = call(&fx, Some(&phone), Method::POST, &forge, yes.clone()).await;
+        assert!(step_up_required(&r), "{kind:?}: {r:?}");
+        assert_eq!(status(&fx, id).await, "pending");
+        let r = call(&fx, Some(&fx.dev), Method::POST, &forge, yes).await;
+        assert_eq!(r.0, StatusCode::OK, "{kind:?}: {r:?}");
+        // A rejection needs no step-up.
+        let id = ask(&fx, &s, kind, json!({})).await;
+        let no = Some(json!({"approve": false}));
+        let r = call(
+            &fx,
+            Some(&phone),
+            Method::POST,
+            &format!("/approvals/{id}/decide"),
+            no,
+        )
+        .await;
+        assert_eq!(r.0, StatusCode::OK, "{kind:?}: {r:?}");
+        assert_eq!(status(&fx, id).await, "rejected");
+    }
+}
+
+/// F-01/F-03/F-04: the writes that widen an agent, change a model, price or project policy, or
+/// start runs in bulk are refused without a live step-up, before any handler runs.
+#[tokio::test]
+async fn audited_writes_need_a_live_step_up() {
+    let fx = fx().await;
+    let admin = enroll(&fx.app, "unelevated", &["read", "admin", "approve"], true).await;
+    for (m, uri) in [
+        (Method::PATCH, "/agents/1"),
+        (Method::POST, "/companies/1/templates/x"),
+        (Method::POST, "/companies/1/roles"),
+        (Method::PUT, "/roles/1"),
+        (Method::PUT, "/agents/1/chain"),
+        (Method::PUT, "/agents/1/fallbacks"),
+        (Method::PUT, "/agents/1/tiers"),
+        (Method::PUT, "/projects/1/tier-rules"),
+        (Method::PUT, "/chain-presets/1"),
+        (Method::POST, "/prices"),
+        (Method::POST, "/companies/1/budgets"),
+        (Method::POST, "/companies/1/projects"),
+        (Method::PUT, "/projects/1"),
+        (Method::POST, "/sprints/1/commit"),
+        (Method::POST, "/requirements/1/resume"),
+    ] {
+        let r = call(&fx, Some(&admin), m.clone(), uri, Some(json!({}))).await;
+        assert!(step_up_required(&r), "{m} {uri}: {r:?}");
+    }
+}

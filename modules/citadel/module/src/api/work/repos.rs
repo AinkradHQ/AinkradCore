@@ -159,7 +159,7 @@ pub(super) async fn check_body(app: &App, b: &RepoBody) -> Result<(), ApiError> 
             let hosts: Vec<String> = sqlx::query_scalar("SELECT host FROM citadel_forge_hosts")
                 .fetch_all(&app.pool)
                 .await
-                .map_err(|e| ApiError::from(e))?;
+                .map_err(ApiError::from)?;
             let policy = ainkrad_providers::guard::Policy::public().with_hosts(hosts);
             if let Err(why) = policy.check_url(&url) {
                 return bad(format!(

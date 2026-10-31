@@ -75,7 +75,7 @@ pub async fn decide(
             "a raise goes through POST /approvals/{id}/raise",
         ));
     }
-    check_kind(&app, id, false).await?;
+    check_kind(&app, id, false, d.approve).await?;
     decide_as_admin(&app, id, d).await
 }
 
@@ -88,9 +88,21 @@ fn is_forge(k: ApprovalKind) -> bool {
     )
 }
 
-/// `decide` takes every kind but a forge one, `decide-forge` only those: the forge kinds merge
-/// a PR or release a workflow-file push, so they are decided on the step-up route.
-async fn check_kind(app: &App, id: i64, forge: bool) -> Result<(), ApiError> {
+/// Approving these starts work (spend) or creates an agent that can run it: a sprint commit, a
+/// plan, a hire (F-01/F-02 of the route audit). Granularity: one step-up route for every kind
+/// whose APPROVAL has an effect (`decide-forge`), while `decide` stays open to the `approve`
+/// scope for what is bookkeeping only: a rejection of any non-forge kind (it only stops work) and
+/// a plain budget-overrun approval (a raise has its own route).
+fn is_high_impact(k: ApprovalKind) -> bool {
+    matches!(
+        k,
+        ApprovalKind::SprintCommit | ApprovalKind::HireAgent | ApprovalKind::PlanApproval
+    )
+}
+
+/// `decide` takes a rejection of every kind but a forge one, and an approval of a bookkeeping
+/// kind; `decide-forge` takes a forge kind or the approval of a high-impact one.
+async fn check_kind(app: &App, id: i64, forge: bool, approve: bool) -> Result<(), ApiError> {
     let a = found(
         gov::get_approval(&app.pool, ApprovalId(id)).await?,
         "approval",
@@ -99,8 +111,11 @@ async fn check_kind(app: &App, id: i64, forge: bool) -> Result<(), ApiError> {
         (false, true) => Err(ApiError::bad_request(
             "a PR merge, workflow push or tool permission goes through POST /approvals/{id}/decide-forge",
         )),
-        (true, false) => Err(ApiError::bad_request(
-            "decide-forge is for a PR merge, a workflow push or a tool permission only",
+        (false, false) if approve && is_high_impact(a.kind) => Err(ApiError::bad_request(
+            "approving a hire, sprint commit or plan goes through POST /approvals/{id}/decide-forge",
+        )),
+        (true, false) if !is_high_impact(a.kind) => Err(ApiError::bad_request(
+            "decide-forge is for a PR merge, a workflow push, a tool permission, a hire, a sprint commit or a plan only",
         )),
         _ => Ok(()),
     }
@@ -118,8 +133,8 @@ async fn decide_as_admin(app: &App, id: i64, d: Decision) -> ApiResult<Approval>
 #[utoipa::path(post, path = "/approvals/{id}/decide-forge", operation_id = "decideForgeApproval",
     tag = "approvals", params(("id" = i64, Path, description = "Approval id")),
     request_body = Decision,
-    responses((status = 200, description = "A decided `pr_merge`, `workflow_push` or `permission_escalation`; needs a \
-        step-up", body = Approval)))]
+    responses((status = 200, description = "A decided `pr_merge`, `workflow_push`, `permission_escalation`, or the approval of a \
+        `hire_agent`, `sprint_commit` or `plan_approval`; needs a step-up", body = Approval)))]
 pub async fn decide_forge(
     State(app): State<App>,
     _: Acting,
@@ -129,7 +144,7 @@ pub async fn decide_forge(
     if d.raise_tokens.is_some() {
         return Err(ApiError::bad_request("a forge decision takes no raise"));
     }
-    check_kind(&app, id, true).await?;
+    check_kind(&app, id, true, d.approve).await?;
     decide_as_admin(&app, id, d).await
 }
 

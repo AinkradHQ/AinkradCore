@@ -296,7 +296,7 @@ async fn a_hires_profile_seat_and_palette_apply_when_it_is_approved() {
         "applied on approval, not before"
     );
     assert!(seats(&fx, id).await.is_empty());
-    let decide = format!("/approvals/{}/decide", proposed["hire_approval_id"]);
+    let decide = format!("/approvals/{}/decide-forge", proposed["hire_approval_id"]);
     ok_post(&fx, &decide, json!({"approve": true})).await;
     let hired = ok(&fx, &format!("/agents/{id}")).await;
     assert_eq!(hired["status"], "active");
@@ -406,7 +406,7 @@ async fn approving_a_proposed_agent_hires_it() {
     let approval = proposed["hire_approval_id"].as_i64().unwrap();
     let decided = ok_post(
         &fx,
-        &format!("/approvals/{approval}/decide"),
+        &format!("/approvals/{approval}/decide-forge"),
         json!({"approve": true}),
     )
     .await;

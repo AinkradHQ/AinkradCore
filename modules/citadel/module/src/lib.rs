@@ -93,6 +93,10 @@ impl Module for Citadel {
         api::DESTRUCTIVE.as_slice()
     }
 
+    fn non_destructive(&self) -> Option<&'static [(&'static str, &'static str)]> {
+        Some(api::writes::NON_DESTRUCTIVE)
+    }
+
     fn jobs(&self) -> Vec<ainkrad_core_server::jobs::Job> {
         let mut jobs = engine::jobs();
         if let Some(f) = &self.forge {
@@ -115,6 +119,11 @@ impl Module for Citadel {
 
     fn verify_token<'a>(&'a self, app: &'a App, token: &'a str) -> BoxFut<'a, Option<TokenGrant>> {
         Box::pin(mcp::verify(app, token))
+    }
+
+    // The run engine's jobs work on the Core's app (B-F1): without this no run ever starts.
+    fn attach(&self, app: &App) {
+        engine::attach(app);
     }
 
     fn credentials<'a>(
