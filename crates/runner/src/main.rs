@@ -35,9 +35,8 @@ $HOME/.ainkrad-runner/<harness>, logged in once:
   codex   `CODEX_HOME=$HOME/.ainkrad-runner/codex codex login`
   opencode nothing for the free `opencode/*` models; others
           `XDG_DATA_HOME=$HOME/.ainkrad-runner/opencode/data opencode auth login`
-  agy     `HOME=$HOME/.ainkrad-runner/agy agy`; agy cannot ask before acting, so it runs
-          only when CITADEL_RUNNER_SANDBOXED=1 says this runner's workspaces are sandboxes
-          and the project's permission policy is sandboxed
+  agy     `HOME=$HOME/.ainkrad-runner/agy agy`; agy cannot ask before acting, and this
+          mode runs no harness in a sandbox, so agy is refused here (use `connect`)
 A run the server gives a provider account (`ainkrad-core-server account add`) uses that account's
 config dir $HOME/.ainkrad-runner/<config-dir> (default accounts/<label>; log it in there, as
 above) and, when the account names a credential file, the token in
@@ -49,7 +48,8 @@ loopback) with the run's token, from a 0600 config file in $TMPDIR/citadel-runs/
 removed when the run ends. Tool calls follow each project's permission policy (default: ask);
 the Citadel MCP tools always go ahead, as the token scopes them. One outside it waits for
 a reviewer's approval on the server, and is denied after 15 minutes without one. Projects
-whose runs must be sandboxed run only with CITADEL_RUNNER_SANDBOXED=1.
+whose runs must be sandboxed are refused: this mode runs harnesses unconfined, and no
+environment variable claims otherwise (CITADEL_RUNNER_SANDBOXED is ignored; use `connect`).
 At start each harness's `--version` is probed. A missing harness is not offered; one at a
 version this runner was not built for marks the runner unhealthy and is not offered either.
 Without --tags a Mac offers `macos`, plus `xcode` when `xcode-select -p` finds Xcode.
@@ -229,7 +229,13 @@ async fn main() -> ExitCode {
         home.join(".ainkrad-runner"),
     )
     .with_env(args.env);
-    executor.sandboxed = std::env::var("CITADEL_RUNNER_SANDBOXED").as_deref() == Ok("1");
+    // Never a claim from the environment: this mode runs no `ProcessSandbox`, so a flag saying
+    // "this host is a sandbox" would auto-approve unconfined agents (review A M1).
+    if std::env::var_os("CITADEL_RUNNER_SANDBOXED").is_some() {
+        eprintln!(
+            "ainkrad-runner: CITADEL_RUNNER_SANDBOXED is ignored; sandboxed runs are refused in this mode"
+        );
+    }
     executor.mcp_url = ainkrad_runner::core_mcp_url(&args.url);
     executor.workspaces.askpass = std::env::var_os("CITADEL_GIT_ASKPASS").map(PathBuf::from);
     if let Err(why) = executor.check_roots(&home) {

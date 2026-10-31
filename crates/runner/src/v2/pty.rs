@@ -48,6 +48,11 @@ pub struct PtyConfig {
     pub env: Vec<(OsString, OsString)>,
     /// Between HUP, TERM and KILL on close.
     pub grace: Duration,
+    /// The terminal sandbox (`termbox`): `Some(paths)` runs every shell with those paths
+    /// hidden, `None` (`--terminal-sandbox=off`) runs shells unsandboxed.
+    pub hide: Option<Vec<PathBuf>>,
+    /// With the sandbox: paths the shell may read but not write (the runner binary, launchers).
+    pub readonly: Vec<PathBuf>,
 }
 
 impl PtyConfig {
@@ -62,6 +67,9 @@ impl PtyConfig {
             env_allow: ["LC_ALL", "LC_CTYPE", "TZ"].map(str::to_owned).to_vec(),
             env: std::env::vars_os().collect(),
             grace: Duration::from_secs(2),
+            // On by default: a terminal is a shell as the runner's user.
+            hide: Some(Vec::new()),
+            readonly: Vec::new(),
         }
     }
 }
@@ -179,7 +187,7 @@ impl PtyDriver {
             let cap = self.config.capacity;
             return Err(err(ErrorCode::Busy, format!("pty is at capacity ({cap})")));
         }
-        let spec = Spec {
+        let mut spec = Spec {
             program: req.program.clone(),
             args: req.args.clone(),
             cwd: req.cwd.clone(),
@@ -191,6 +199,26 @@ impl PtyDriver {
             ),
             size: req.size,
         };
+        if let Some(hide) = &self.config.hide {
+            // The shell the host would start by default is named here, so the wrapper can run it.
+            let program = spec
+                .program
+                .take()
+                .or_else(|| spec.env.get("SHELL").cloned())
+                .unwrap_or_else(|| "/bin/sh".to_owned());
+            let cwd = spec
+                .cwd
+                .clone()
+                .or_else(|| spec.env.get("HOME").cloned())
+                .filter(|c| c.starts_with('/'))
+                .unwrap_or_else(|| "/".to_owned());
+            let (launcher, args) =
+                super::termbox::wrap(hide, &self.config.readonly, &program, &spec.args, &cwd)
+                    .map_err(|e| invalid(&e))?;
+            spec.program = Some(launcher);
+            spec.args = args;
+            spec.cwd.get_or_insert(cwd);
+        }
         let id = new_id().map_err(|e| err(ErrorCode::Internal, e.to_string()))?;
         launch(&self.config.host, &self.config.dir, &id, &spec)
             .await

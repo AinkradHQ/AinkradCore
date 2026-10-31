@@ -80,3 +80,10 @@ fn a_mac_offers_macos_and_xcode_when_it_has_it() {
     let has = xcode.is_ok_and(|o| o.status.success());
     assert_eq!(tags.contains(&"xcode".to_owned()), has, "{tags:?}");
 }
+
+/// No environment variable may claim the host is a sandbox (review A M1): launchd must not
+/// carry one into the runner.
+#[test]
+fn the_launchd_agent_passes_no_sandbox_claim() {
+    assert!(PASSED_ENV.iter().all(|n| !n.contains("SANDBOX")));
+}
