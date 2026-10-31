@@ -2852,6 +2852,10 @@ extension Components {
             public var id: Swift.String
             /// - Remark: Generated from `#/components/schemas/Terminal/opened_by`.
             public var openedBy: Swift.String?
+            /// Running with no client attached: it is closed once idle past `terminal.idle_secs`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Terminal/orphaned`.
+            public var orphaned: Swift.Bool?
             /// - Remark: Generated from `#/components/schemas/Terminal/runner`.
             public var runner: Swift.String
             /// - Remark: Generated from `#/components/schemas/Terminal/seq`.
@@ -2869,6 +2873,7 @@ extension Components {
             ///   - exitSignal:
             ///   - id:
             ///   - openedBy:
+            ///   - orphaned: Running with no client attached: it is closed once idle past `terminal.idle_secs`.
             ///   - runner:
             ///   - seq:
             ///   - size:
@@ -2880,6 +2885,7 @@ extension Components {
                 exitSignal: Swift.String? = nil,
                 id: Swift.String,
                 openedBy: Swift.String? = nil,
+                orphaned: Swift.Bool? = nil,
                 runner: Swift.String,
                 seq: Swift.Int64? = nil,
                 size: Components.Schemas.TerminalSize? = nil,
@@ -2891,6 +2897,7 @@ extension Components {
                 self.exitSignal = exitSignal
                 self.id = id
                 self.openedBy = openedBy
+                self.orphaned = orphaned
                 self.runner = runner
                 self.seq = seq
                 self.size = size
@@ -2903,6 +2910,7 @@ extension Components {
                 case exitSignal = "exit_signal"
                 case id
                 case openedBy = "opened_by"
+                case orphaned
                 case runner
                 case seq
                 case size
