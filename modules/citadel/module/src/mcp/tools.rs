@@ -49,6 +49,18 @@ async fn count(app: &App, scope: RunScope) -> Result<()> {
     })
 }
 
+/// Whether the run already has an `mcp.unknown_tool` row (a failed read counts as yes: no row).
+async fn unknown_audited(app: &App, scope: RunScope) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM audit_events WHERE action = 'citadel.mcp.unknown_tool' \
+         AND json_extract(details, '$.run_id') = ?)",
+    )
+    .bind(scope.run_id.0)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap_or(true)
+}
+
 /// Runs tool `name` for `scope` and audits the call as the run's agent, refused or not.
 pub(super) async fn call(
     app: &App,
@@ -57,10 +69,11 @@ pub(super) async fn call(
     args: &JsonObject,
 ) -> Result<Value> {
     let known = TOOLS.contains(&name);
-    let result = if !known {
-        Err(ToolError::Invalid("no such tool".to_owned()))
-    } else if let Err(e) = count(app, scope).await {
+    // Every name counts, an unknown one too: the cap bounds what a run can make the Core do.
+    let result = if let Err(e) = count(app, scope).await {
         Err(e)
+    } else if !known {
+        Err(ToolError::Invalid("no such tool".to_owned()))
     } else {
         match name {
             "get_issue" => read::get_issue(app, scope, args).await,
@@ -77,7 +90,12 @@ pub(super) async fn call(
     if let Err(ToolError::Failed(detail)) = &result {
         tracing::error!(tool = name, run = scope.run_id.0, %detail, "tool failed");
     }
-    // Only known names reach the audit; anything else an agent sends is `mcp.unknown_tool`.
+    // Only known names reach the audit; anything else an agent sends is `mcp.unknown_tool`,
+    // written once per run (the first), so a loop of junk names cannot grow the trail.
+    if !known && unknown_audited(app, scope).await {
+        tracing::warn!(run = scope.run_id.0, "unknown tool name (already audited)");
+        return result;
+    }
     let action = format!("mcp.{}", if known { name } else { "unknown_tool" });
     let mut event = Event::new(AuditActor::System, &action)
         .company(scope.company_id.0)

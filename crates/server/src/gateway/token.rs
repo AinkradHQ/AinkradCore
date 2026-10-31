@@ -151,33 +151,29 @@ pub async fn gate(
     let addr = address(&app, &parts);
     let key = format!("tok:{addr}");
     let now = app.clock.unix();
-    match gov::locked_until(&app.pool, &[&key], now).await {
-        Ok(Some(until)) => {
-            tracing::warn!(
-                addr,
-                module = module.id(),
-                "token request refused: locked out"
-            );
-            return too_many(std::time::Duration::from_secs((until - now).max(1) as u64));
-        }
-        Ok(None) => {}
-        Err(e) => return ApiError::from(e).into_response(),
-    }
     let started = tokio::time::Instant::now();
     let token = bearer(&parts.headers).map(str::to_owned);
     let grant = match &token {
         Some(t) => module.verify_token(&app, t).await,
         None => None,
     };
+    // The token is verified first and only a failure counts or is locked out: a valid token is
+    // never blocked, so a flood of junk from a shared address cannot switch the route off for
+    // the runs behind it.
     let Some(grant) = grant else {
         tracing::warn!(addr, module = module.id(), "token request refused");
-        let resp = if app.auth.token_failures.count(&addr, now) {
-            match gov::record_failure(&app.pool, &key, ADDRESS, now).await {
-                Ok(_) => auth_failed().into_response(),
-                Err(e) => ApiError::from(e).into_response(),
+        let resp = match gov::locked_until(&app.pool, &[&key], now).await {
+            Ok(Some(until)) => {
+                too_many(std::time::Duration::from_secs((until - now).max(1) as u64))
             }
-        } else {
-            too_many(std::time::Duration::from_secs(ADDRESS.lock as u64))
+            Err(e) => ApiError::from(e).into_response(),
+            Ok(None) if app.auth.token_failures.count(&addr, now) => {
+                match gov::record_failure(&app.pool, &key, ADDRESS, now).await {
+                    Ok(_) => auth_failed().into_response(),
+                    Err(e) => ApiError::from(e).into_response(),
+                }
+            }
+            Ok(None) => too_many(std::time::Duration::from_secs(ADDRESS.lock as u64)),
         };
         tokio::time::sleep_until(started + FAIL_FLOOR).await;
         return resp;
