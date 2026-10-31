@@ -8,7 +8,7 @@ use ainkrad_core_server::store::migrate;
 use citadel_module::Citadel;
 use citadel_module::testing::db;
 
-const TABLES: usize = 55;
+const TABLES: usize = 57;
 
 #[tokio::test]
 async fn the_baseline_creates_only_citadel_objects_and_seeds_the_palettes() {
@@ -51,7 +51,7 @@ async fn the_baseline_creates_only_citadel_objects_and_seeds_the_palettes() {
 #[tokio::test]
 async fn migrating_twice_changes_nothing_and_down_removes_every_citadel_object() {
     let db = db().await;
-    let modules: Vec<Arc<dyn Module>> = vec![Arc::new(Citadel)];
+    let modules: Vec<Arc<dyn Module>> = vec![Arc::new(Citadel::default())];
     migrate::migrate_modules(&db.pool, &modules).await.unwrap();
     migrate::undo(
         &db.pool,

@@ -74,7 +74,7 @@ mod tests {
         let mut gets = 0;
         for (path, item) in doc["paths"].as_object().unwrap() {
             for method in item.as_object().unwrap().keys() {
-                let scope = module_scope(&Citadel, method, path);
+                let scope = module_scope(&Citadel::default(), method, path);
                 if method == "get" {
                     gets += 1;
                     let admin = is_admin_read(path);

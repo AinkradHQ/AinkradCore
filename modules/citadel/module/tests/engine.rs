@@ -1284,7 +1284,7 @@ async fn the_platform_scheduler_accepts_the_engines_jobs() {
     use ainkrad_core_server::module::Module;
     let fx = fx().await;
     let modules: Vec<std::sync::Arc<dyn Module>> =
-        vec![std::sync::Arc::new(citadel_module::Citadel)];
+        vec![std::sync::Arc::new(citadel_module::Citadel::default())];
     ainkrad_core_server::jobs::register(&fx.app.pool, &fx.app.clock.now(), &modules)
         .await
         .unwrap();
@@ -1343,7 +1343,7 @@ async fn an_idle_engine_writes_no_audit_rows() {
     let fx = fx().await;
     citadel_module::engine::attach(&fx.app);
     let clock = Arc::new(Manual(AtomicI64::new(1_800_000_000)));
-    let modules: Vec<Arc<dyn Module>> = vec![Arc::new(citadel_module::Citadel)];
+    let modules: Vec<Arc<dyn Module>> = vec![Arc::new(citadel_module::Citadel::default())];
     register(&fx.app.pool, &clock.now(), &modules)
         .await
         .unwrap();
@@ -1422,7 +1422,7 @@ async fn the_engine_cannot_drive_a_session_it_does_not_own() {
         })
     };
     for id in [&clients.id, &theirs.id] {
-        let refused = ModuleAgents::of(&citadel_module::Citadel)
+        let refused = ModuleAgents::of(&citadel_module::Citadel::default())
             .instruct(w.app(), id, stop(id))
             .await;
         assert!(refused.is_err(), "{id}: {refused:?}");

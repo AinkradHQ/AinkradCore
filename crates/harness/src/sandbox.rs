@@ -37,6 +37,12 @@ const TOOLS: &[&str] = &[
     "/Library/Apple",
     "/opt/homebrew",
 ];
+/// macOS: the Command Line Tools / Xcode toolchain the `/usr/bin` shims forward to.
+const MAC_DEV_TOOLS: &[&str] = &[
+    "/Library/Developer/CommandLineTools",
+    "/Applications/Xcode.app/Contents/Developer",
+    "/private/var/select",
+];
 
 pub(crate) fn profile(spec: &Spec, program: &OsStr) -> String {
     let quote = |p: &Path| {
@@ -44,12 +50,51 @@ pub(crate) fn profile(spec: &Spec, program: &OsStr) -> String {
             .replace('\\', "\\\\")
             .replace('"', "\\\"")
     };
+    // `(deny default)` alone kills every process at launch (dyld, the shared cache and
+    // libSystem need file maps, mach services, sysctls and /dev nodes). `system.sb` is
+    // Apple's own base profile for exactly that; it grants no home, state or network.
     let mut s = String::from(
-        "(version 1)\n(deny default)\n(allow process-exec process-fork)\n(allow process-info* (target self))\n(allow signal (target self))\n(allow sysctl-read (sysctl-name \"hw.ncpu\") (sysctl-name \"hw.memsize\") (sysctl-name \"kern.osrelease\") (sysctl-name \"kern.ostype\"))\n(allow mach-lookup (global-name \"com.apple.system.logger\"))\n",
+        "(version 1)\n(deny default)\n(import \"system.sb\")\n(allow process-exec process-fork)\n(allow process-info* (target self))\n(allow signal (target self))\n(allow sysctl-read (sysctl-name \"hw.ncpu\") (sysctl-name \"hw.memsize\") (sysctl-name \"kern.osrelease\") (sysctl-name \"kern.ostype\"))\n(allow mach-lookup (global-name \"com.apple.system.logger\"))\n",
     );
-    for p in TOOLS {
-        s.push_str(&format!("(allow file-read* (subpath \"{p}\"))\n"));
+    // MAC_DEV_TOOLS is read-only too: the python3/git shims find the active developer dir.
+    for p in TOOLS.iter().chain(MAC_DEV_TOOLS) {
+        s.push_str(&format!(
+            "(allow file-read* file-map-executable (subpath \"{p}\"))\n"
+        ));
     }
+    // The /usr/bin developer shims (python3, git, make, ...) run xcode-select, which reads
+    // this one symlink (both spellings, /var being a link to /private/var) to find the
+    // developer dir, then stats its target (granted above). Nothing else in /var/db.
+    for p in [
+        "/private/var/db/xcode_select_link",
+        "/var/db/xcode_select_link",
+    ] {
+        s.push_str(&format!("(allow file-read* (literal \"{p}\"))\n"));
+    }
+    for p in ["/private/var", "/private/var/db", "/var", "/var/db"] {
+        s.push_str(&format!("(allow file-read-metadata (literal \"{p}\"))\n"));
+    }
+    // Explicit denies, before the session grants so a grant inside one of these trees (a
+    // worktree under the state dir) still wins. They also hold if system.sb ever widens.
+    let mut hidden = vec![PathBuf::from(env(spec, "AINKRAD_SANDBOX_STATE"))];
+    for home in [
+        std::env::var_os("HOME").map(PathBuf::from),
+        Some(PathBuf::from(env(spec, "HOME"))),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        hidden.extend([".ssh", ".gnupg", ".aws", "Library/Keychains"].map(|d| home.join(d)));
+    }
+    for p in hidden.iter().filter(|p| p.is_absolute()) {
+        s.push_str(&format!(
+            "(deny file-read* file-write* (subpath \"{}\"))\n",
+            quote(p)
+        ));
+    }
+    // Every unix socket (ptyhost, docker, ssh-agent) is denied; the DNS resolver's is
+    // granted again below when the network policy allows it.
+    s.push_str("(deny network-outbound (remote unix-socket))\n");
     for p in writable(spec) {
         s.push_str(&format!(
             "(allow file-read* file-write* (subpath \"{}\"))\n",
@@ -63,6 +108,26 @@ pub(crate) fn profile(spec: &Spec, program: &OsStr) -> String {
         s.push_str(&format!(
             "(allow file-read* (subpath \"{}\"))\n",
             quote(&dir)
+        ));
+    }
+    // Path resolution stats each ancestor of a grant: that reveals names, never data.
+    let mut ancestors: Vec<PathBuf> = writable(spec)
+        .into_iter()
+        .chain(program_dirs(program, spec))
+        .chain(
+            [&spec.instructions, &spec.mcp_config]
+                .into_iter()
+                .flatten()
+                .cloned(),
+        )
+        .flat_map(|p| p.ancestors().map(Path::to_path_buf).collect::<Vec<_>>())
+        .collect();
+    ancestors.sort();
+    ancestors.dedup();
+    for p in ancestors {
+        s.push_str(&format!(
+            "(allow file-read-metadata (literal \"{}\"))\n",
+            quote(&p)
         ));
     }
     s.push_str("(allow file-read* (literal \"/dev/null\") (literal \"/dev/urandom\") (literal \"/dev/random\"))\n(allow file-write* (literal \"/dev/null\"))\n");
