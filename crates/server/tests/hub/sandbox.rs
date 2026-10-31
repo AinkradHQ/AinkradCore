@@ -185,10 +185,6 @@ async fn a_revoked_or_descoped_creator_is_leased_no_secrets() {
             .await
             .unwrap()
     };
-    // The control: an active admin creator is leased (the start itself may time out).
-    let admin = core.device("device", &["admin"]).await;
-    let _ = service::start(&core.app, &session(admin.id.clone()).await).await;
-    assert_eq!(leases().await, 1, "an active admin creator was not leased");
     // De-scoped, then revoked: no further lease, and the session ends.
     let down = core.device("device", &["admin"]).await;
     let revoked = core.device("device", &["admin"]).await;
@@ -210,9 +206,13 @@ async fn a_revoked_or_descoped_creator_is_leased_no_secrets() {
         assert!(!ended.live(), "the session stayed live: {}", ended.state);
         assert_eq!(
             leases().await,
-            1,
+            0,
             "a creator that is not an admin was leased"
         );
     }
+    // The control: an active admin creator is leased (the start itself may time out).
+    let admin = core.device("device", &["admin"]).await;
+    let _ = service::start(&core.app, &session(admin.id.clone()).await).await;
+    assert_eq!(leases().await, 1, "an active admin creator was not leased");
     core.app.closing.send_replace(true);
 }
