@@ -6,6 +6,6 @@ use std::sync::Arc;
 use ainkrad_core_server::module::Module;
 
 fn main() {
-    let modules: Vec<Arc<dyn Module>> = vec![Arc::new(citadel_module::Citadel)];
+    let modules: Vec<Arc<dyn Module>> = vec![Arc::new(citadel_module::Citadel::default())];
     print!("{}", ainkrad_core_server::api::v1::spec::json_for(&modules));
 }
