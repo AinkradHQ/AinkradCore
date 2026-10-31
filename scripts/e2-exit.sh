@@ -295,7 +295,7 @@ fault_network_cut() { stream_fault network_cut2 cut; }
 fault_host_kill() {
   local t hp; t=$(new_term sh -c "sleep 100000"); hp=$(host_pid "$t")
   bg_attach a "$W/hostkill.bin" 30 "$t"; sleep 2; kill -9 "$hp"
-  wait_for 40 test "$(term_status "$t")" = exited || { EV="$t is '$(term_status "$t")' 40 s after its host was killed"; return 1; }
+  wait_for 40 eval '[ "$(term_status "$t")" = exited ]' || { EV="$t is '$(term_status "$t")' 40 s after its host was killed"; return 1; }
   pkill -f "term attach $t" 2>/dev/null || true
   alive "$RPID" || { EV="the runner died"; return 1; }
   EV="host $hp kill -9 with a client attached: $t reported exited, the runner stayed up"
