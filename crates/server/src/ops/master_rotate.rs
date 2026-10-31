@@ -139,7 +139,12 @@ pub async fn rotate(
         }
         // The current key is kept before anything else changes.
         let retired = keys.join(format!("master.{from}.key.retired"));
-        if !retired.exists() {
+        if retired.exists() {
+            // Never trust a file that is already there: it must be this very key, or the run
+            // stops before anything else is written (and before the switch could replace the
+            // only good copy).
+            load(&retired).map_err(|e| format!("the retired copy of the current key: {e}"))?;
+        } else {
             write_key(&retired, &*raw(&current_path)?)?;
         }
         let (target_path, resumed) = match pending.first() {
@@ -185,8 +190,10 @@ fn raw(path: &Path) -> io::Result<Zeroizing<[u8; 32]>> {
     Ok(Zeroizing::new(key))
 }
 
-/// Deletes the retired keys older than `older_than_days` that no secret names (their bytes
-/// zeroed first); returns their ids. A retired key a secret still names is kept.
+/// Deletes the retired keys older than `older_than_days` that no secret names; returns their
+/// ids. A retired key a secret still names is kept. The bytes are overwritten before the file
+/// is removed, but that is best effort only: a copy-on-write or flash filesystem (APFS, SSD
+/// wear levelling) may keep the old blocks, so purging is not secure erasure.
 pub async fn purge_retired(
     db: &Path,
     keys: &Path,
@@ -196,7 +203,7 @@ pub async fn purge_retired(
     let named = row_key_ids(&pool).await;
     pool.close().await;
     let named = named?;
-    let limit = Duration::from_secs(older_than_days * 86_400);
+    let limit = Duration::from_secs(older_than_days.saturating_mul(86_400));
     let mut gone = Vec::new();
     for (id, path, retired) in key_files(keys)? {
         let age = fs::metadata(&path)?

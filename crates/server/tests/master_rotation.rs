@@ -503,6 +503,18 @@ async fn a_missing_wrong_or_loose_key_is_refused_and_nothing_changes() {
     );
     std::fs::remove_file(&liar).unwrap();
 
+    // A retired copy of the current key that is not that key: refused, and the good state kept.
+    let current = h.master().key_id().to_owned();
+    let bad = h.keys().join(format!("master.{current}.key.retired"));
+    std::fs::write(&bad, [9u8; 32]).unwrap();
+    std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let names = h.names();
+    let e = go(&h, Stop::Never).await.unwrap_err();
+    assert!(e.contains("retired copy of the current key"), "{e}");
+    assert_eq!(h.names(), names, "no pending key written");
+    assert_eq!(std::fs::read(&bad).unwrap(), [9u8; 32], "left as it was");
+    std::fs::remove_file(&bad).unwrap();
+
     // No master key at all.
     std::fs::remove_file(h.keys().join("master.key")).unwrap();
     let e = go(&h, Stop::Never).await.unwrap_err();
@@ -534,6 +546,14 @@ async fn purge_removes_only_old_retired_keys_no_secret_names() {
             .unwrap()
     };
     set_old();
+    // A huge window must not overflow into purging everything.
+    assert!(
+        purge_retired(&h.db(), &h.keys(), u64::MAX)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(retired.exists());
     // Still named by a row: kept.
     sqlx::query("UPDATE core_secrets SET key_id = ?")
         .bind(&old_id)
@@ -737,4 +757,59 @@ async fn backups_across_a_rotation_restore_with_every_key_their_rows_name() {
     let pool = store::connect(&r3.join("core.db")).await.unwrap();
     assert!(rows(&pool).await.iter().all(|r| r.1 == new_id));
     pool.close().await;
+}
+
+#[tokio::test]
+async fn a_restore_whose_secrets_name_a_key_the_archive_lacks_fails_loudly() {
+    let d = dir("lostkey");
+    let h = home(&d.0.join("home"), 2, 1).await;
+    let (keygen, _) = run(&["backup-keygen"], &[]).unwrap();
+    let identity = d.0.join("identity.txt");
+    std::fs::write(&identity, &keygen).unwrap();
+    let recipient = keygen
+        .lines()
+        .find_map(|l| l.strip_prefix("# public key: "))
+        .unwrap()
+        .to_owned();
+    let old_id = h.master().key_id().to_owned();
+    go(&h, Stop::Never).await.unwrap();
+    let (_, err) = run(
+        &[
+            "secrets",
+            "purge-retired-keys",
+            s(&h.db()),
+            "--older-than-days",
+            "0",
+        ],
+        &[],
+    )
+    .unwrap();
+    assert!(err.contains(&old_id), "{err}");
+    // The database now names the purged key (an older database, or a rolled-back copy).
+    sqlx::query("UPDATE core_secrets SET key_id = ?")
+        .bind(&old_id)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    let file = backup(&h, &recipient);
+    h.pool.close().await;
+    let to = d.0.join("restored");
+    let e = run(
+        &[
+            "restore",
+            &file,
+            "--identity",
+            s(&identity),
+            "--signer",
+            &h.fp,
+            s(&to),
+        ],
+        &[],
+    )
+    .unwrap_err();
+    assert!(e.contains("restore refused") && e.contains(&old_id), "{e}");
+    assert!(
+        !to.join("core.db").exists(),
+        "the half-built home is removed"
+    );
 }

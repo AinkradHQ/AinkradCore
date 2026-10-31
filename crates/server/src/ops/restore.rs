@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use super::config::Home;
 use super::init::{fresh, lay_out, migrate, undo};
 use super::s3::Bucket;
+use super::secretbox::{SecretBox, key_files};
 use super::{Result_, archive, private_dir, random_hex};
 use crate::auth::Identity;
 use crate::store;
@@ -115,6 +116,7 @@ async fn build(
         }
         store::restore(&files.join("core.db"), &h.db(), false).await?;
         migrate(&h).await?;
+        unheld_keys(&h).await?;
         Ok::<_, Box<dyn std::error::Error>>((manifest, h, fp, master.is_some(), core_fp))
     }
     .await;
@@ -143,6 +145,32 @@ async fn build(
         ),
     }
     Ok(())
+}
+
+/// Fails when a secret in the restored database is sealed under a master key the restored home
+/// does not hold (the current key and the spares from the archive): such a secret could never
+/// be opened, so a restore that looks fine would hide a lost key (for example one purged before
+/// the backup). The caller removes the half-built home.
+async fn unheld_keys(h: &Home) -> Result_ {
+    let pool = store::connect(&h.db()).await?;
+    let named: Result<Vec<String>, _> =
+        sqlx::query_scalar("SELECT DISTINCT key_id FROM core_secrets")
+            .fetch_all(&pool)
+            .await;
+    pool.close().await;
+    let mut held = vec![SecretBox::from_file(&h.master_key())?.key_id().to_owned()];
+    held.extend(key_files(&h.keys())?.into_iter().map(|f| f.0));
+    let missing: Vec<String> = named?.into_iter().filter(|id| !held.contains(id)).collect();
+    match missing.is_empty() {
+        true => Ok(()),
+        false => Err(format!(
+            "restore refused: the database holds secrets sealed under master key(s) {} that the \
+             archive does not carry (a retired key purged before the backup?). Restore an \
+             archive that has them (keys/master.<id>.key.retired); nothing was written.",
+            missing.join(", ")
+        )
+        .into()),
+    }
 }
 
 fn report(m: &archive::Manifest, h: &Home, fp: &str, signer: &str, kept_master: bool) {
