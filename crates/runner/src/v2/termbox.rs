@@ -34,15 +34,38 @@ pub fn hidden_paths(state: &Path, extra: &[PathBuf]) -> Vec<PathBuf> {
 /// launcher lives (systemd user units, launchd agents). Otherwise the same uid could edit how
 /// the runner starts (for example adding `--terminal-sandbox=off`) and wait for a restart.
 pub fn readonly_paths(host: &Path) -> Vec<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
     let mut v: Vec<PathBuf> = std::env::current_exe().into_iter().collect();
     v.push(host.to_path_buf());
-    if let Some(h) = home {
-        v.push(h.join(".config/systemd/user"));
+    for d in launcher_dirs() {
+        // Created if missing, so the shell cannot plant a unit or agent in a dir that did not
+        // exist yet; read-only inside the sandbox from then on.
+        let _ = std::fs::create_dir_all(&d);
+        v.push(d);
+    }
+    v
+}
+
+/// Where a login-time launcher could be planted for the user.
+fn launcher_dirs() -> Vec<PathBuf> {
+    let Some(h) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Vec::new();
+    };
+    let mut v = vec![
+        h.join(".config/systemd/user"),
+        h.join(".local/share/systemd/user"),
+        h.join(".config/autostart"),
+    ];
+    if cfg!(target_os = "macos") {
         v.push(h.join("Library/LaunchAgents"));
     }
     v
 }
+
+/// Paths hidden when present, never created: a co-located Core's default state dir (its
+/// `admin.sock` and `core.sock` are bootstrap paths) and a relay's. A Core in another place is
+/// hidden with `--terminal-hide`, or better run as another user.
+pub const CORE_STATE_DIRS: &[&str] =
+    &["/var/lib/ainkrad", "/var/lib/ainkrad-relay", "/run/ainkrad"];
 
 /// Creates each hidden path that is missing (mode 0700, owned by the runner), so that it
 /// exists, and is therefore hidden, before any shell starts: the agents' work root is otherwise
@@ -50,6 +73,12 @@ pub fn readonly_paths(host: &Path) -> Vec<PathBuf> {
 pub fn prepare(hidden: &[PathBuf]) -> Result<(), String> {
     use std::os::unix::fs::DirBuilderExt;
     for p in hidden {
+        if std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(format!(
+                "{}: is a symlink; refusing to hide through it",
+                p.display()
+            ));
+        }
         if !p.exists() {
             std::fs::DirBuilder::new()
                 .recursive(true)
@@ -99,16 +128,26 @@ pub fn wrap(
         return Err("a terminal program must be an absolute path".to_owned());
     }
     prepare(hidden)?;
-    let hidden = canonical(hidden, true)?;
+    let mut hidden = canonical(hidden, true)?;
+    hidden.extend(canonical(
+        &CORE_STATE_DIRS
+            .iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>(),
+        false,
+    )?);
     let readonly = canonical(readonly, false)?;
     let mut out: Vec<String> = Vec::new();
     let launcher = if cfg!(target_os = "macos") {
         // Everything is allowed but the hidden paths (files and unix sockets alike), writes to
-        // the read-only ones, and other processes' task ports. Not denied: signalling and
-        // inspecting other processes, which Seatbelt cannot separate from the shell's own jobs
-        // (residual, see the security posture runbook).
-        let mut profile =
-            String::from("(version 1)\n(allow default)\n(deny mach-priv-task-port)\n");
+        // the read-only ones, inspecting other processes (so no `ps eww` of their environment),
+        // their task ports, the launch tools and launchd's XPC domain (no `launchctl submit`).
+        // Not denied: signalling other processes, which Seatbelt cannot separate from the
+        // shell's own jobs, and launching through a copied or scripted client of services
+        // other than launchd (residual, see the security posture runbook).
+        let mut profile = String::from(
+            "(version 1)\n(allow default)\n(deny mach-priv-task-port)\n(deny process-info* (target others))\n(deny process-exec (literal \"/bin/launchctl\") (literal \"/usr/bin/osascript\") (literal \"/usr/bin/open\") (literal \"/usr/bin/at\") (literal \"/usr/bin/crontab\"))\n(deny mach-lookup (global-name-prefix \"com.apple.xpc.launchd.domain\"))\n",
+        );
         for p in &hidden {
             let q = quote(p);
             profile.push_str(&format!(
@@ -138,7 +177,7 @@ pub fn wrap(
         );
         // The user's systemd and D-Bus sockets (`systemd-run --user` starts a process outside
         // this sandbox) live in the runtime dir.
-        let mut tmpfs = hidden;
+        let mut tmpfs = hidden.clone();
         if let Ok(uid) =
             std::fs::metadata("/proc/self").map(|m| std::os::unix::fs::MetadataExt::uid(&m))
         {
@@ -221,6 +260,25 @@ mod tests {
         assert_eq!(mode, 0o700);
         let canon = late.canonicalize().unwrap().to_string_lossy().into_owned();
         assert!(args.iter().any(|a| a.contains(&canon)), "{args:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_co_located_cores_default_state_is_hidden_without_a_flag() {
+        assert!(CORE_STATE_DIRS.contains(&"/var/lib/ainkrad"));
+        let (_, args) = wrap(&[], &[], "/bin/sh", &[], "/").unwrap();
+        if Path::new("/var/lib/ainkrad").exists() && cfg!(target_os = "linux") {
+            assert!(args.iter().any(|a| a == "/var/lib/ainkrad"), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn a_symlinked_hidden_path_is_refused() {
+        let base = std::env::temp_dir().join(format!("apr-tbl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::os::unix::fs::symlink("/tmp", base.join("link")).unwrap();
+        assert!(prepare(&[base.join("link")]).is_err());
         let _ = std::fs::remove_dir_all(&base);
     }
 }

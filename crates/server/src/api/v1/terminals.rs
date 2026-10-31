@@ -40,8 +40,11 @@ const KEEP_EXITED: i64 = 3600;
 /// shared pool, so uncapped they would starve `exec` and the cleanup `pty.close`.
 const MAX_ATTACH_PER_TERMINAL: u32 = 4;
 const MAX_ATTACH_PER_DEVICE: u32 = 8;
-/// An exited terminal is hung up (the host acked and freed) once it has been exited this long.
-const ACK_EXITED_AFTER: i64 = 900;
+/// An exited terminal nobody read is hung up (the host acked and freed) only this long after
+/// it exited: the hard cap on keeping its output, just inside the `KEEP_EXITED` life of the row
+/// (after which no client can attach anyway). A client that attaches earlier reads the exit and
+/// the runner acks the host itself; one that is attached now is never acked under.
+const ACK_EXITED_AFTER: i64 = KEEP_EXITED - 300;
 /// How often the idle reaper looks (`sweep_loop`).
 const SWEEP_EVERY: Duration = Duration::from_secs(30);
 
@@ -508,7 +511,7 @@ async fn ack_exited(app: &App) {
         .unwrap()
         .retain(|a| ids.contains(&a));
     for (id, runner) in rows {
-        if app.terminals.acked.lock().unwrap().contains(&id) {
+        if app.terminals.attached(&id) > 0 || app.terminals.acked.lock().unwrap().contains(&id) {
             continue;
         }
         let close = Command::PtyClose(PtyClose {

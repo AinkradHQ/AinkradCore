@@ -131,11 +131,14 @@ cannot run. --terminal-sandbox=off removes that protection and is logged loudly 
 it only on a host whose `terminal` devices are trusted as admins. Residual with it on: the
 shell is the same uid, so it reaches what that uid owns outside the hidden paths (the user's
 own files, ssh keys, docker, ssh-agent); a shell can still edit its own startup files and,
-on macOS, signal and inspect other processes of the same user; the runner binary, its pty host
-and the user's systemd/launchd launcher files are read-only to it and the user's systemd/D-Bus
-sockets (/run/user/<uid>) are hidden on Linux; a signal sent through the API goes to the
-sandbox wrapper. --terminal-hide <path> (repeatable) hides more, such as a co-located Core's
-state dir (its admin socket); running the Core and the runner as different users is better.
+on macOS, signal other processes of the same user; the runner binary, its pty host and the
+user's systemd/launchd launcher dirs are read-only to it (created when missing), the user's
+systemd/D-Bus sockets (/run/user/<uid>) are hidden on Linux, and on macOS inspecting other
+processes, launchctl and launchd's XPC domain are denied (best effort: Seatbelt cannot stop
+every route to launchd); a Core's default state dirs (/var/lib/ainkrad, /var/lib/ainkrad-relay,
+/run/ainkrad) are hidden without a flag; a signal sent through the API goes to the sandbox
+wrapper. --terminal-hide <path> (repeatable) hides a Core kept elsewhere (its admin.sock);
+running the Core and the runner as different users is better.
 --enable-agents offers agent sessions (the harnesses on PATH, as this runner's user, each
 in a process sandbox, refused when it cannot run): transcripts in <dir>/agents, delivered secrets in $XDG_RUNTIME_DIR (else
 <dir>/secrets), emptied at start.

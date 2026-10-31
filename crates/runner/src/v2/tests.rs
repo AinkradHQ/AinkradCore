@@ -576,6 +576,7 @@ mod pty {
     fn sandboxed_driver(
         dir: &std::path::Path,
         hide: Option<Vec<std::path::PathBuf>>,
+        readonly: Vec<std::path::PathBuf>,
     ) -> Arc<PtyDriver> {
         let host = ainkrad_ptyhost::client::find_host_binary()
             .expect("ainkrad-ptyhost is built next to the tests (cargo test --workspace)");
@@ -585,6 +586,7 @@ mod pty {
             host,
             grace: Duration::from_millis(200),
             hide,
+            readonly,
             ..PtyConfig::new(dir.to_path_buf())
         }))
     }
@@ -612,7 +614,7 @@ mod pty {
             t = terminals.display(),
             pid = std::process::id(),
         );
-        let (mut core, _) = Core::start_pty(sandboxed_driver(&terminals, hidden)).await;
+        let (mut core, _) = Core::start_pty(sandboxed_driver(&terminals, hidden, vec![])).await;
         core.send(1, open(&script)).await;
         let mut out = String::new();
         until(&mut core, 1, &mut out, |o, _| o.contains("PROBE-DONE")).await;
@@ -657,7 +659,7 @@ mod pty {
         let [_, work] = super::super::cli::runtime_paths(&state);
         let _ = std::fs::remove_dir_all(&work);
         let hide = Some(super::super::termbox::hidden_paths(&state, &[]));
-        let (mut core, _) = Core::start_pty(sandboxed_driver(&terminals, hide)).await;
+        let (mut core, _) = Core::start_pty(sandboxed_driver(&terminals, hide, vec![])).await;
         core.send(
             1,
             open(&format!(
@@ -683,12 +685,72 @@ mod pty {
         let _ = std::fs::remove_dir_all(&work);
     }
 
+    /// Review PR 66 re-review: the shell cannot write a read-only launcher path, cannot see the
+    /// user's runtime dir (bus and systemd sockets, Linux), and (macOS) cannot start a process
+    /// through launchd or inspect another process.
+    #[tokio::test]
+    async fn launchers_are_read_only_and_the_user_bus_and_launchd_are_out_of_reach() {
+        let base = tmp();
+        let terminals = base.join("state/terminals");
+        std::fs::create_dir_all(&terminals).unwrap();
+        let unit = base.join("runner.service");
+        std::fs::write(&unit, "ORIGINAL").unwrap();
+        let uid = std::process::Command::new("id").arg("-u").output().unwrap();
+        let uid = String::from_utf8_lossy(&uid.stdout).trim().to_owned();
+        let run_user = std::path::PathBuf::from(format!("/run/user/{uid}"));
+        let canary = run_user.join(format!("apr-canary-{}", std::process::id()));
+        let have_run_user =
+            cfg!(target_os = "linux") && std::fs::write(&canary, "BUSCANARY-3310").is_ok();
+        let script = format!(
+            "(echo HACKED > {u}) 2>/dev/null; (echo X > {u}.new && mv -f {u}.new {u}) 2>/dev/null; \
+             cat {c} 2>/dev/null; \
+             /bin/launchctl list >/dev/null 2>&1 && echo LAUNCHCTL-OK; \
+             ps -p {pid} -o pid= 2>/dev/null | grep -q . && echo PS-SEES-RUNNER; echo PROBE-DONE",
+            u = unit.display(),
+            c = canary.display(),
+            pid = std::process::id(),
+        );
+        let hide = Some(super::super::termbox::hidden_paths(
+            &base.join("state"),
+            &[],
+        ));
+        let (mut core, _) =
+            Core::start_pty(sandboxed_driver(&terminals, hide, vec![unit.clone()])).await;
+        core.send(1, open(&script)).await;
+        let mut out = String::new();
+        let last = tokio::time::timeout(
+            Duration::from_secs(8),
+            until(&mut core, 1, &mut out, |o, b| {
+                o.contains("PROBE-DONE") || matches!(b, Body::Result(_) | Body::Error(_))
+            }),
+        )
+        .await;
+        assert!(
+            out.contains("PROBE-DONE"),
+            "the shell ended early: {out:?} {last:?}"
+        );
+        let kept = std::fs::read_to_string(&unit).unwrap();
+        let _ = std::fs::remove_file(&canary);
+        let _ = std::fs::remove_dir_all(&base);
+        assert_eq!(kept, "ORIGINAL", "the read-only launcher was changed");
+        if have_run_user {
+            assert!(
+                !out.contains("BUSCANARY-3310"),
+                "the user runtime dir is visible: {out:?}"
+            );
+        }
+        if cfg!(target_os = "macos") {
+            assert!(!out.contains("LAUNCHCTL-OK"), "{out:?}");
+            assert!(!out.contains("PS-SEES-RUNNER"), "{out:?}");
+        }
+    }
+
     /// The sandboxed shell is still a terminal: it takes typed input and closes on request.
     #[tokio::test]
     async fn a_sandboxed_terminal_takes_input_and_closes() {
         let dir = tmp();
         let hide = Some(super::super::termbox::hidden_paths(&dir, &[]));
-        let (mut core, _) = Core::start_pty(sandboxed_driver(&dir, hide)).await;
+        let (mut core, _) = Core::start_pty(sandboxed_driver(&dir, hide, vec![])).await;
         core.send(1, open("echo UP; while read l; do echo \"got $l\"; done"))
             .await;
         let mut out = String::new();
