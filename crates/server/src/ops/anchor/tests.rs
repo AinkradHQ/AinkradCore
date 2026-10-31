@@ -405,3 +405,116 @@ async fn a_directory_of_copied_files_verifies_like_the_bucket() {
     let l = read_lines(&h.dir.join("copy")).unwrap();
     assert_eq!(checked(&h, &l, Some(&id.fp)).await.unwrap().anchors, 2);
 }
+
+#[tokio::test]
+async fn a_crash_after_the_put_or_a_stale_head_never_repeats_a_sequence_number() {
+    let fake = fake().await;
+    let h = home(3).await;
+    let id = Identity::ephemeral();
+    let s = sinks(&fake);
+    let seq = |a: &Signed| {
+        serde_json::from_str::<Statement>(&a.statement)
+            .unwrap()
+            .anchor_seq
+    };
+    assert_eq!(seq(&anchored(&h, &id, &s).await), 1);
+    let head = dir(&h.dir).join("head.json");
+    let after_one = fs::read(&head).unwrap();
+    assert_eq!(seq(&anchored(&h, &id, &s).await), 2);
+    // The PUT of anchor 2 landed but head.json never did (a crash), or an old copy came back.
+    fs::write(&head, &after_one).unwrap();
+    assert_eq!(
+        seq(&anchored(&h, &id, &s).await),
+        3,
+        "the bucket's newest wins"
+    );
+    // head.json lost altogether.
+    fs::remove_file(&head).unwrap();
+    assert_eq!(seq(&anchored(&h, &id, &s).await), 4);
+
+    let all = read_bucket(&bucket(&fake)).await.unwrap();
+    assert_eq!(all.len(), 4);
+    assert_eq!(
+        checked(&h, &all, Some(&id.fp)).await.unwrap().anchors,
+        4,
+        "no fork, verify stays ok"
+    );
+    let keys = bucket(&fake).list("core/anchors/").await.unwrap();
+    assert_eq!(keys[0], "core/anchors/000000000001.json", "{keys:?}");
+}
+
+#[tokio::test]
+async fn a_junk_object_at_the_newest_name_stops_the_anchor_loudly() {
+    let fake = fake().await;
+    let h = home(2).await;
+    let id = Identity::ephemeral();
+    let s = sinks(&fake);
+    let first = anchored(&h, &id, &s).await;
+    // Something that is not an anchor sits at the next name.
+    let key = "core/anchors/000000000002.json";
+    fake.objects
+        .lock()
+        .unwrap()
+        .insert(key.to_owned(), b"{}\n".to_vec());
+    // The newest in the bucket is now "2", which is not an anchor: refused loudly, nothing forked.
+    let e = anchor_once(&h.pool, &h.dir, &id, &s, &at(9))
+        .await
+        .unwrap_err();
+    assert!(e.contains("000000000002.json"), "{e}");
+    assert_eq!(fake.objects.lock().unwrap().len(), 2);
+    assert_eq!(
+        serde_json::from_str::<Statement>(&first.statement)
+            .unwrap()
+            .anchor_seq,
+        1
+    );
+}
+
+#[tokio::test]
+async fn transport_errors_name_no_host_url_or_bucket() {
+    let dead = || {
+        Bucket::new(
+            "http://127.0.0.1:1",
+            "secretbucket",
+            "r",
+            "core/",
+            "AK".into(),
+            SECRET.into(),
+        )
+        .unwrap()
+    };
+    let h = home(1).await;
+    let id = Identity::ephemeral();
+    let sink = Sinks {
+        bucket: Some(dead()),
+        file: None,
+    };
+    let mut errors = vec![
+        anchor_once(&h.pool, &h.dir, &id, &sink, &at(1))
+            .await
+            .unwrap_err(),
+    ];
+    let tmp = h.dir.join("probe");
+    fs::write(&tmp, b"x").unwrap();
+    errors.push(
+        dead()
+            .put_new("core/anchors/k", &tmp)
+            .await
+            .unwrap_err()
+            .to_string(),
+    );
+    errors.push(
+        dead()
+            .get("core/anchors/k", &h.dir.join("out"))
+            .await
+            .unwrap_err()
+            .to_string(),
+    );
+    errors.push(dead().list("core/").await.unwrap_err().to_string());
+    for e in errors {
+        for leak in ["127.0.0.1", "http", "secretbucket", SECRET, ":1"] {
+            assert!(!e.contains(leak), "{leak} in {e}");
+        }
+        assert!(e.contains("network error (connect)"), "{e}");
+    }
+}

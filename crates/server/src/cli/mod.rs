@@ -661,14 +661,17 @@ async fn serve(
     }
     // Off-box anchors of the audit chain head (E1-10.4), only with the backup bucket configured.
     // A bad bucket setting is logged, never fatal: the Core and its audit log do not depend on it.
-    match ainkrad_core_server::ops::s3::Bucket::from_env() {
-        Ok(Some(bucket)) => {
-            let secs = store::settings::value(
-                &pool,
-                ainkrad_core::settings::Key::AuditAnchorIntervalSecs,
-                ainkrad_core::settings::Scope::Server,
-            )
-            .await?;
+    let anchor_secs = store::settings::value(
+        &pool,
+        ainkrad_core::settings::Key::AuditAnchorIntervalSecs,
+        ainkrad_core::settings::Scope::Server,
+    )
+    .await;
+    match (
+        ainkrad_core_server::ops::s3::Bucket::from_env(),
+        anchor_secs,
+    ) {
+        (Ok(Some(bucket)), Ok(secs)) => {
             let job = ainkrad_core_server::ops::anchor::AnchorJob {
                 pool: pool.clone(),
                 home: state_dir(db).to_path_buf(),
@@ -688,9 +691,12 @@ async fn serve(
                     .await;
             });
         }
-        Ok(None) => {}
-        Err(e) => {
+        (Ok(None), _) => {}
+        (Err(e), _) => {
             tracing::warn!(error = %e, "audit anchors are off: the backup bucket setting is unusable")
+        }
+        (_, Err(e)) => {
+            tracing::warn!(error = %e, "audit anchors are off: the anchor interval setting is unreadable")
         }
     }
     let mut app = App::new(pool, Arc::new(SystemClock), host, identity);

@@ -65,6 +65,21 @@ impl std::error::Error for S3Error {}
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
+/// A transport failure as a fixed phrase: a `reqwest::Error` prints the request URL, which names
+/// the bucket's host and path, and this repo's logs and issues are public.
+fn net(what: &str, e: &reqwest::Error) -> Error {
+    let kind = if e.is_timeout() {
+        "timeout"
+    } else if e.is_connect() {
+        "connect"
+    } else if e.is_body() || e.is_decode() {
+        "body"
+    } else {
+        "request"
+    };
+    format!("{what}: network error ({kind})").into()
+}
+
 /// RFC 3986 percent-encoding as SigV4 wants it; `/` kept when `slash`.
 fn encode(s: &str, slash: bool) -> String {
     let mut out = String::new();
@@ -247,7 +262,10 @@ impl Bucket {
             .request(Method::PUT, key, &[], &sha)?
             .header("content-length", size)
             .body(reqwest::Body::from(file));
-        let r = req.send().await?;
+        let r = req
+            .send()
+            .await
+            .map_err(|e| net(&format!("PUT {key}"), &e))?;
         Self::check(format!("PUT {key}"), r).await.map(drop)
     }
 
@@ -256,11 +274,18 @@ impl Bucket {
         use std::io::Write;
         let empty = hex(digest(&SHA256, b"").as_ref());
         let req = self.request(Method::GET, key, &[], &empty)?;
-        let r = req.send().await?;
+        let r = req
+            .send()
+            .await
+            .map_err(|e| net(&format!("GET {key}"), &e))?;
         let mut r = Self::check(format!("GET {key}"), r).await?;
         let mut out = super::private_file(dest)?;
         let mut n = 0u64;
-        while let Some(chunk) = r.chunk().await? {
+        while let Some(chunk) = r
+            .chunk()
+            .await
+            .map_err(|e| net(&format!("GET {key}"), &e))?
+        {
             out.write_all(&chunk)?;
             n += chunk.len() as u64;
         }
@@ -279,8 +304,12 @@ impl Bucket {
                 query.push(("continuation-token", token.as_str()));
             }
             let req = self.request(Method::GET, "", &query, &empty)?;
-            let r = req.send().await?;
-            let body = Self::check("LIST".to_owned(), r).await?.text().await?;
+            let r = req.send().await.map_err(|e| net("LIST", &e))?;
+            let body = Self::check("LIST".to_owned(), r)
+                .await?
+                .text()
+                .await
+                .map_err(|e| net("LIST", &e))?;
             keys.extend(
                 body.split("<Key>")
                     .skip(1)

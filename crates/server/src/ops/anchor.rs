@@ -19,7 +19,7 @@
 use std::fmt;
 use std::fs;
 use std::future::Future;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,8 +28,8 @@ use ainkrad_proto::v2::Rotation;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
 
-use super::s3::Bucket;
-use super::{compact, private_dir, private_file, random_hex};
+use super::s3::{Bucket, S3Error};
+use super::{private_dir, private_file, random_hex};
 use crate::auth::Identity;
 use crate::auth::crypto::{b64, sha256};
 use crate::scheduler::Clock;
@@ -42,6 +42,8 @@ const SPKI_B64: usize = 122;
 const SIG_B64: usize = 86;
 /// First retry delay after a failure; it doubles up to the interval.
 const BACKOFF: i64 = 30;
+/// The most bytes an anchor object may have when read back.
+const MAX_ANCHOR: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Statement {
@@ -143,10 +145,20 @@ async fn fetch(bucket: &Bucket, key: &str) -> Result<Signed, Error> {
         random_hex().map_err(|e| e.to_string())?
     ));
     let got = bucket.get(key, &tmp).await.map_err(|e| e.to_string());
-    let text = fs::read_to_string(&tmp);
+    // An anchor is a few hundred bytes: anything bigger is not one.
+    let text = fs::File::open(&tmp).and_then(|f| {
+        let mut text = String::new();
+        f.take(MAX_ANCHOR + 1)
+            .read_to_string(&mut text)
+            .map(|_| text)
+    });
     let _ = fs::remove_file(&tmp);
     got?;
-    serde_json::from_str(text.map_err(io(key))?.trim()).map_err(io(key))
+    let text = text.map_err(io(key))?;
+    if text.len() as u64 > MAX_ANCHOR {
+        return Err(format!("{key}: too large to be an anchor"));
+    }
+    serde_json::from_str(text.trim()).map_err(io(key))
 }
 
 /// Takes the home's anchor lock (blocks while another anchor runs), released on drop.
@@ -188,12 +200,19 @@ pub async fn anchor_once(
         dir(home).join("head.json"),
         dir(home).join("rotations.json"),
     );
-    let head = match read_json::<Head>(&head_path)? {
-        Some(h) => h,
-        None => match &sinks.bucket {
-            Some(b) => newest_in_bucket(b).await?,
-            None => Head::default(),
-        },
+    // The newest of what this box remembers and what the bucket holds: a stale or lost
+    // head.json (a crash after the PUT, a restore) never makes a sequence number repeat.
+    let local = read_json::<Head>(&head_path)?.unwrap_or_default();
+    let head = match &sinks.bucket {
+        Some(b) => {
+            let remote = newest_in_bucket(b).await?;
+            if remote.anchor_seq >= local.anchor_seq {
+                remote
+            } else {
+                local
+            }
+        }
+        None => local,
     };
     let mut known: Vec<Rotation> = read_json(&rot_path)?.unwrap_or_default();
     if let Some(r) = &id.rotation
@@ -242,20 +261,23 @@ pub async fn anchor_once(
     // The bucket is authoritative: a refusal there leaves the state alone, so the next try
     // reuses the sequence number and nothing is forked.
     if let Some(bucket) = &sinks.bucket {
-        let key = format!(
-            "{}{PREFIX}{:012}-{}-{}.json",
-            bucket.prefix,
-            st.anchor_seq,
-            compact(&st.at),
-            random_hex().map_err(|e| e.to_string())?
-        );
+        // One name per sequence number, so a second PUT of it is refused by the create-only bucket.
+        let key = format!("{}{PREFIX}{:012}.json", bucket.prefix, st.anchor_seq);
         let tmp = dir(home).join(format!(".put-{}", random_hex().map_err(|e| e.to_string())?));
         private_file(&tmp)
             .and_then(|mut f| f.write_all(line.as_bytes()))
             .map_err(io("anchor temp file"))?;
-        let put = bucket.put_new(&key, &tmp).await.map_err(|e| e.to_string());
+        let put = bucket.put_new(&key, &tmp).await;
         let _ = fs::remove_file(&tmp);
-        put.map_err(|e| format!("bucket: {e}"))?;
+        if let Err(e) = put {
+            // Refused because the name exists: fine only if it already holds this very anchor.
+            let taken = e
+                .downcast_ref::<S3Error>()
+                .is_some_and(|s| matches!(s.status, 403 | 412));
+            if !(taken && fetch(bucket, &key).await.is_ok_and(|s| s == signed)) {
+                return Err(format!("bucket: {e}"));
+            }
+        }
     }
     let appended = match &sinks.file {
         Some(path) => append(path, &line).map_err(io(&path.display().to_string())),

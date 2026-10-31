@@ -142,7 +142,16 @@ async fn verify_anchors(home: &Path, rest: &[&str]) -> Result_ {
     // host's own (weaker: a host that lies about its key could pass).
     let pin = match get("--core-fp") {
         Some(fp) => Some(fp.to_owned()),
-        None => Identity::load_readonly(&home.0).ok().map(|id| id.fp),
+        None => Some(
+            Identity::load_readonly(&home.0)
+                .map_err(|e| {
+                    format!(
+                        "cannot read this host's identity key to pin the signer ({e}); pass \
+                         --core-fp <fingerprint>"
+                    )
+                })?
+                .fp,
+        ),
     };
     let pool = open(&home.db()).await?;
     let report = anchor::verify(&pool, &lines, pin.as_deref()).await??;
