@@ -7675,6 +7675,18 @@
         ],
         "type": "object"
       },
+      "SettingBody": {
+        "properties": {
+          "value": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
       "SettingChange": {
         "description": "One set or reset, newest first.",
         "properties": {
@@ -7713,6 +7725,41 @@
           "at",
           "actor",
           "scope"
+        ],
+        "type": "object"
+      },
+      "SettingOut": {
+        "properties": {
+          "default": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "description": {
+            "type": "string"
+          },
+          "max": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "min": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "default",
+          "min",
+          "max",
+          "description"
         ],
         "type": "object"
       },
@@ -13051,6 +13098,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -13364,6 +13412,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -13489,6 +13538,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -13614,6 +13664,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -13780,7 +13831,7 @@
                 }
               }
             },
-            "description": "A decided `pr_merge`, `workflow_push` or `permission_escalation`; needs a step-up"
+            "description": "A decided `pr_merge`, `workflow_push`, `permission_escalation`, or the approval of a `hire_agent`, `sprint_commit` or `plan_approval`; needs a step-up"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -14303,6 +14354,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -14959,6 +15011,7 @@
         "tags": [
           "money"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       },
       "put": {
@@ -15141,6 +15194,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -15721,6 +15775,7 @@
         "tags": [
           "projects"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -15897,6 +15952,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -16016,6 +16072,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -16079,6 +16136,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -18048,6 +18106,7 @@
         "tags": [
           "projects"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -18143,6 +18202,7 @@
         "tags": [
           "money"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -18323,6 +18383,7 @@
         "tags": [
           "projects"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -20145,6 +20206,7 @@
         "tags": [
           "projects"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -20906,6 +20968,7 @@
         "tags": [
           "requirements"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -21193,6 +21256,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -21591,6 +21655,115 @@
         "x-ainkrad-scope": "admin"
       }
     },
+    "/modules/citadel/v1/settings": {
+      "get": {
+        "operationId": "citadelListSettings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SettingOut"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The module's tunables with their values, bounds and defaults (`mcp.enabled`, `run.token_ttl_secs`, ...)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/citadel/v1/settings/{name}": {
+      "put": {
+        "operationId": "citadelSetSetting",
+        "parameters": [
+          {
+            "description": "A name from `GET /settings`",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingOut"
+                }
+              }
+            },
+            "description": "Set (audited as `setting.set`); 404 for an unknown name, 400 out of bounds"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/modules/citadel/v1/sprints/{id}": {
       "delete": {
         "operationId": "citadelDeleteSprint",
@@ -21771,6 +21944,7 @@
         "tags": [
           "projects"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },

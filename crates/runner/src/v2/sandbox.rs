@@ -78,7 +78,13 @@ impl Sandbox for ProcessSandbox {
         }
         let session = &start.session;
         let secret_dir = self.secrets.join(session);
-        if !secret_dir.exists() && !start.secrets.is_empty() {
+        // The run token goes to the harness's private MCP config, not to the secrets dir: a session
+        // whose only grant is the token has no dir, and that is not a failure.
+        let delivered = start
+            .secrets
+            .iter()
+            .any(|s| s.var != super::agent::RUN_TOKEN_VAR);
+        if !secret_dir.exists() && delivered {
             return Err("the session secret directory was not created privately".to_owned());
         }
         let tmp = self.state.join("private-tmp").join(session);

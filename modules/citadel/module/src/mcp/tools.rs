@@ -80,16 +80,6 @@ async fn unknown_audited(app: &App, scope: RunScope) -> bool {
     .unwrap_or(true)
 }
 
-/// `args` with every string run through the Core's redactor (keys of known shapes included).
-fn redacted(args: &JsonObject) -> JsonObject {
-    let mut v = Value::Object(args.clone());
-    ainkrad_proto::redact::Redactor::new().json(&mut v);
-    match v {
-        Value::Object(o) => o,
-        _ => JsonObject::new(),
-    }
-}
-
 /// Runs tool `name` for `scope` and audits the call as the run's agent, refused or not.
 pub(super) async fn call(
     app: &App,
@@ -97,10 +87,12 @@ pub(super) async fn call(
     name: &str,
     args: &JsonObject,
 ) -> Result<Value> {
+    // An agent's free text is stored as written and read back by `read` devices (a phone): the
+    // platform redactor runs over every string argument first, one place for every tool.
+    let mut redacted = Value::Object(args.clone());
+    ainkrad_proto::redact::Redactor::new().json(&mut redacted);
+    let args = redacted.as_object().unwrap_or(args);
     let known = TOOLS.contains(&name);
-    // Nothing an agent writes is stored as it sent it: a key it holds or a shape of one is
-    // redacted before it reaches an issue, a comment or an approval (B-M2).
-    let args = &redacted(args);
     // Every name counts, an unknown one too: the cap bounds what a run can make the Core do.
     let result = if let Err(e) = count(app, scope).await {
         Err(e)

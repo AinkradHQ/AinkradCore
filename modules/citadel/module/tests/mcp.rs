@@ -963,4 +963,34 @@ async fn mcp_text_is_redacted_done_is_refused_and_creation_is_capped() {
         a.seed.issue
     );
     assert_eq!(count(app, &subtasks).await, 2);
+
+/// F-05: a credential an agent pastes into a comment is redacted before it is stored, because a
+/// `read` device (a phone) reads comments back.
+#[tokio::test]
+async fn an_agents_comment_is_redacted_before_it_is_stored() {
+    let w = world().await;
+    let a = w.co("A", "AAA").await;
+    let t = w.token(a.run.id).await;
+    let secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    let (_, reply) = rpc(
+        &w.fx.app,
+        Some(&t),
+        tool(
+            "comment",
+            json!({"issue_id": a.seed.issue, "body": format!("token is {secret}")}),
+        ),
+    )
+    .await;
+    let (failed, text) = answer(&reply);
+    assert!(!failed, "{text}");
+    let stored: String =
+        sqlx::query_scalar("SELECT group_concat(body) FROM citadel_comments WHERE issue_id = ?")
+            .bind(a.seed.issue)
+            .fetch_one(&w.fx.app.pool)
+            .await
+            .unwrap();
+    assert!(
+        stored.contains("token is") && !stored.contains(secret),
+        "{stored}"
+    );
 }
