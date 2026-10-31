@@ -185,3 +185,39 @@ async fn the_visibility_migration_reverts_and_reapplies() {
     emit(pool, &["ops.line"]).await;
     assert_eq!(head(pool, View::all()).await.unwrap().0, 4);
 }
+
+/// Review S6: a page walks the `(scope, seq)` index of each scope the view holds, never the
+/// hidden rows, and merging the scopes keeps the log's order and the page limit.
+#[tokio::test]
+async fn replay_reads_only_visible_scopes_by_index_and_merges_in_order() {
+    let db = db().await;
+    let pool = &db.pool;
+    for _ in 0..5 {
+        emit(pool, &["ops.secret", "term.out", "ops.line", "ops.secret"]).await;
+    }
+    let both = View::of(&["read".to_owned(), "terminal".to_owned()]);
+    let mut tx = pool.begin().await.unwrap();
+    let page = read(&mut tx, both, 0, 7).await.unwrap().unwrap();
+    let kinds: Vec<&str> = page.events.iter().map(|(_, e)| e.kind.as_str()).collect();
+    assert_eq!(kinds.len(), 7);
+    assert!(kinds.iter().all(|k| *k != "ops.secret"));
+    assert!(
+        page.events.windows(2).all(|w| w[0].0 < w[1].0),
+        "oldest first"
+    );
+    let vseqs: Vec<i64> = page.events.iter().map(|(_, e)| e.seq).collect();
+    assert_eq!(vseqs, (1..=7).collect::<Vec<_>>());
+    // The plan: an index search on the scope, no scan of the whole view table.
+    let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(
+        "EXPLAIN QUERY PLAN SELECT e.seq FROM event_views v JOIN events e ON e.seq = v.seq \
+         WHERE v.scope = ? AND v.seq > ? ORDER BY v.seq LIMIT ?",
+    )
+    .bind("read")
+    .bind(0)
+    .bind(5)
+    .fetch_all(&mut *tx)
+    .await
+    .unwrap();
+    let plan: String = plan.into_iter().map(|r| r.3).collect::<Vec<_>>().join("; ");
+    assert!(plan.contains("event_views_scope_seq"), "{plan}");
+}

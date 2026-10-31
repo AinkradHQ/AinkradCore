@@ -175,6 +175,39 @@ async fn the_last_admin_can_be_neither_demoted_nor_revoked() {
     assert_eq!(admins, 1, "{mac}");
 }
 
+/// Review S2: an admin enrolled without a step-up key can never elevate, so it is not "another
+/// admin": the only one that can still step up cannot demote or revoke itself.
+#[tokio::test]
+async fn an_admin_that_can_never_elevate_does_not_count_as_another_admin() {
+    let fx = fx().await;
+    let ctl = TestDevice::enroll_keys(
+        &fx.app.pool,
+        "ctl",
+        "device",
+        &ALL,
+        &fx.app.auth.identity.fp,
+        fx.clock.clone(),
+        false,
+    )
+    .await;
+    let (s, b) = scopes(&fx, &fx.dev, &fx.dev, &["read"]).await;
+    assert_eq!(
+        (s, &b["code"]),
+        (StatusCode::CONFLICT, &json!("conflict")),
+        "{b}"
+    );
+    let (s, _) = send(
+        &fx.app,
+        req(Method::DELETE, &path(&fx.dev), Some(&fx.dev), None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    // Once the other admin holds a step-up key, the same calls go through.
+    let other = fx.enroll("other", &ALL).await;
+    let (s, _) = scopes(&fx, &fx.dev, &fx.dev, &["read"]).await;
+    assert_eq!(s, StatusCode::OK, "{} {}", ctl.id, other.id);
+}
+
 /// The review's H1 matrix for the new routes: a runner and a read-only phone get 403 on every
 /// one, elevated or not.
 #[tokio::test]
