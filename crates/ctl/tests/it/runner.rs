@@ -273,3 +273,85 @@ fn a_revoked_runner_exits_6() {
          restart while revoked (auth_failed x3)"
     );
 }
+
+/// E2 exit regression: the real runner with `--enable-pty` and its default terminal sandbox opens
+/// `term new <runner> sh …` (a bare name, as typed), and that shell cannot read the runner's state:
+/// the sandbox is on, not silently skipped. Unit tests open `/bin/sh` through the driver only.
+#[test]
+fn a_real_runner_opens_a_bare_named_shell_inside_its_terminal_sandbox() {
+    // Short: the host's socket path under macOS's long temp dir must fit in sun_path.
+    let (core, url) = loopback_core("pty");
+    let ks = core.keystore("mac");
+    bootstrap(&core, &ks);
+    let a = args(&[&s(&["--keystore", &ks.display().to_string()]), &core.at()]);
+    let id = pair_runner(&core, &a, &url, "vm");
+    let log = std::fs::File::create(core.dir.join("vm.log")).unwrap();
+    let mut runner = Reap(
+        Command::new(runner_bin())
+            .args(["connect", "--enable-pty", "--state"])
+            .arg(core.dir.join("vm"))
+            .env("AINKRAD_PTYHOST", ptyhost_bin())
+            .env("RUST_LOG", "info")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(log)
+            .spawn()
+            .unwrap(),
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    if let Some(status) = runner.0.try_wait().unwrap() {
+        // Fail closed: no sandbox, no terminals. Only CI's Linux runners must have one.
+        let log = std::fs::read_to_string(core.dir.join("vm.log")).unwrap();
+        assert!(
+            std::env::var_os("AINKRAD_REQUIRE_SANDBOX").is_none()
+                && log.contains("terminal sandbox cannot run"),
+            "the runner exited ({status}): {log}"
+        );
+        eprintln!("skipped: the terminal sandbox cannot run here");
+        return;
+    }
+    wait_online(&a, &id, true, Duration::from_secs(20));
+    // Beside the runner's key, in the state dir the sandbox hides.
+    std::fs::write(core.dir.join("vm/canary"), "RUNNER-STATE-CANARY-3317").unwrap();
+    let out = core.dir.join("shell.out");
+    let script = format!(
+        "cat {}/canary >{o} 2>&1; sleep 0 & wait && echo x >/dev/null && echo DEV-OK >>{o}; \
+         echo SHELL-DONE >>{o}",
+        core.dir.join("vm").display(),
+        o = out.display()
+    );
+    let o = ctl(&args(&[&a, &s(&["term", "new", &id, "sh", "-c", &script])]));
+    let log = || std::fs::read_to_string(core.dir.join("vm.log")).unwrap_or_default();
+    assert!(o.status.success(), "{o:?}\n{}", log());
+    let start = Instant::now();
+    let seen = loop {
+        let seen = std::fs::read_to_string(&out).unwrap_or_default();
+        if seen.contains("SHELL-DONE") {
+            break seen;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "the shell did not run: {}",
+            log()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    // Closed, so the host (which keeps an exited terminal until it is acknowledged) goes too.
+    let o = ctl(&args(&[&a, &s(&["term", "kill", stdout(&o).trim()])]));
+    assert!(o.status.success(), "{o:?}");
+    // Background jobs and /dev/null work in the sandbox (E2 exit step 2).
+    assert!(seen.contains("DEV-OK"), "{seen}");
+    assert!(
+        !seen.contains("RUNNER-STATE-CANARY-3317"),
+        "the shell read the runner's state: {seen}"
+    );
+}
+
+/// A child killed and reaped however the test ends.
+struct Reap(Child);
+impl Drop for Reap {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
