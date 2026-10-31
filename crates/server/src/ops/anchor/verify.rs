@@ -7,7 +7,9 @@ use std::path::Path;
 use ainkrad_proto::v2::rotation_message;
 use sqlx::sqlite::SqlitePool;
 
-use super::{PREFIX, SIG_B64, SPKI_B64, Signed, Statement, fetch, hash_of, message};
+use super::{
+    PREFIX, SIG_B64, SPKI_B64, Signed, Statement, fetch_text, hash_of, message, seq_of_key,
+};
 use crate::auth::crypto::{fingerprint, unb64, verify as verify_sig};
 use crate::ops::s3::Bucket;
 use crate::store::audit::chain;
@@ -60,23 +62,43 @@ pub fn read_lines(from: &Path) -> std::io::Result<Vec<String>> {
     Ok(lines)
 }
 
-/// Every anchor object under the bucket's `anchors/` prefix, read only.
-pub async fn read_bucket(bucket: &Bucket) -> Result<Vec<String>, Error> {
+/// Every anchor object under the bucket's `anchors/` prefix, read only. The bucket is
+/// create-only, so an object there that is not a well-formed anchor of its own name (junk, a
+/// forgery, an oversized blob) is evidence, not noise: `Tampered`. The outer error is a failure
+/// to read the bucket at all.
+pub async fn read_bucket(bucket: &Bucket) -> Result<Result<Vec<String>, Tampered>, Error> {
     let prefix = format!("{}{PREFIX}", bucket.prefix);
     let mut lines = Vec::new();
     for key in bucket.list(&prefix).await.map_err(|e| e.to_string())? {
-        lines.push(serde_json::to_string(&fetch(bucket, &key).await?).map_err(|e| e.to_string())?);
+        let Some(n) = seq_of_key(&prefix, &key) else {
+            return Ok(bad(format!(
+                "an object in the anchor prefix is not named like an anchor ({key})"
+            )));
+        };
+        let Some(text) = fetch_text(bucket, &key).await? else {
+            return Ok(bad(format!("{key} is too large to be an anchor")));
+        };
+        let Ok(c) = check_one(text.trim()) else {
+            return Ok(bad(format!("{key} is not a validly signed anchor")));
+        };
+        if c.st.anchor_seq != n {
+            return Ok(bad(format!(
+                "{key} holds anchor {}, not {n}",
+                c.st.anchor_seq
+            )));
+        }
+        lines.push(text.trim().to_owned());
     }
-    Ok(lines)
+    Ok(Ok(lines))
 }
 
-struct Checked {
-    st: Statement,
-    signed: Signed,
-    spki: Vec<u8>,
+pub(super) struct Checked {
+    pub(super) st: Statement,
+    pub(super) signed: Signed,
+    pub(super) spki: Vec<u8>,
 }
 
-fn check_one(line: &str) -> Result<Checked, Tampered> {
+pub(super) fn check_one(line: &str) -> Result<Checked, Tampered> {
     let Ok(signed) = serde_json::from_str::<Signed>(line) else {
         return bad("an anchor is not readable");
     };

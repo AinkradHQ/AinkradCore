@@ -134,7 +134,7 @@ async fn verify_anchors(home: &Path, rest: &[&str]) -> Result_ {
         let bucket = Bucket::from_env()
             .map_err(|e| e.to_string())?
             .ok_or("no bucket: set AINKRAD_BACKUP_*")?;
-        anchor::read_bucket(&bucket).await?
+        anchor::read_bucket(&bucket).await??
     } else {
         anchor::read_lines(Path::new(from)).map_err(|e| format!("{from}: {e}"))?
     };

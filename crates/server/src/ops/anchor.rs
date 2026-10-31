@@ -122,30 +122,71 @@ pub struct Sinks {
     pub file: Option<PathBuf>,
 }
 
-/// The newest anchor in the bucket, for a home with no state of its own (restored, or new).
-async fn newest_in_bucket(bucket: &Bucket) -> Result<Head, Error> {
-    let prefix = format!("{}{PREFIX}", bucket.prefix);
-    let mut keys = bucket.list(&prefix).await.map_err(|e| e.to_string())?;
-    keys.sort();
-    let Some(key) = keys.pop() else {
-        return Ok(Head::default());
-    };
-    let signed = fetch(bucket, &key).await?;
-    let st: Statement = serde_json::from_str(&signed.statement).map_err(io(&key))?;
-    Ok(Head {
-        anchor_seq: st.anchor_seq,
-        hash: hash_of(&signed.statement),
-        fp: st.core_fp,
-    })
+/// The anchor number in an object key `<prefix>anchors/<12 digits>.json`; anything else under
+/// the prefix is not an anchor name.
+fn seq_of_key(prefix: &str, key: &str) -> Option<u64> {
+    let n = key.strip_prefix(prefix)?.strip_suffix(".json")?;
+    if n.len() == 12 && n.bytes().all(|b| b.is_ascii_digit()) {
+        n.parse().ok()
+    } else {
+        None
+    }
 }
 
-async fn fetch(bucket: &Bucket, key: &str) -> Result<Signed, Error> {
+/// How many invalid objects `newest_in_bucket` looks past before giving up.
+const MAX_WALK: usize = 16;
+
+/// The newest VALID anchor in the bucket: named `<12 digits>.json`, signed, its number equal to
+/// its name's, by this Core's key or one it rotated from. The bucket is create-only, so an
+/// object nobody can delete may be junk or forged; it is skipped, never trusted. Errors when
+/// there are anchor-named objects and none is valid (nothing bogus is then written).
+async fn newest_in_bucket(
+    bucket: &Bucket,
+    id: &Identity,
+    known: &[Rotation],
+) -> Result<Head, Error> {
+    let prefix = format!("{}{PREFIX}", bucket.prefix);
+    let mut keys: Vec<(u64, String)> = bucket
+        .list(&prefix)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter_map(|k| seq_of_key(&prefix, &k).map(|n| (n, k)))
+        .collect();
+    if keys.is_empty() {
+        return Ok(Head::default());
+    }
+    keys.sort_by_key(|(n, _)| std::cmp::Reverse(*n));
+    for (n, key) in keys.iter().take(MAX_WALK) {
+        let Some(text) = fetch_text(bucket, key).await? else {
+            continue;
+        };
+        let Ok(c) = verify::check_one(text.trim()) else {
+            continue;
+        };
+        let ours = c.st.core_fp == id.fp || known.iter().any(|r| r.old_fp == c.st.core_fp);
+        if c.st.anchor_seq == *n && ours {
+            return Ok(Head {
+                anchor_seq: *n,
+                hash: hash_of(&c.signed.statement),
+                fp: c.st.core_fp,
+            });
+        }
+    }
+    Err(
+        "the bucket holds anchor objects but no valid recent one (forged or damaged?); not \
+         anchoring until an operator looks"
+            .to_owned(),
+    )
+}
+
+/// The object's text; `None` when it is too big to be an anchor (a few hundred bytes).
+async fn fetch_text(bucket: &Bucket, key: &str) -> Result<Option<String>, Error> {
     let tmp = std::env::temp_dir().join(format!(
         ".anchor-{}",
         random_hex().map_err(|e| e.to_string())?
     ));
     let got = bucket.get(key, &tmp).await.map_err(|e| e.to_string());
-    // An anchor is a few hundred bytes: anything bigger is not one.
     let text = fs::File::open(&tmp).and_then(|f| {
         let mut text = String::new();
         f.take(MAX_ANCHOR + 1)
@@ -155,9 +196,13 @@ async fn fetch(bucket: &Bucket, key: &str) -> Result<Signed, Error> {
     let _ = fs::remove_file(&tmp);
     got?;
     let text = text.map_err(io(key))?;
-    if text.len() as u64 > MAX_ANCHOR {
-        return Err(format!("{key}: too large to be an anchor"));
-    }
+    Ok((text.len() as u64 <= MAX_ANCHOR).then_some(text))
+}
+
+async fn fetch(bucket: &Bucket, key: &str) -> Result<Signed, Error> {
+    let text = fetch_text(bucket, key)
+        .await?
+        .ok_or_else(|| format!("{key}: too large to be an anchor"))?;
     serde_json::from_str(text.trim()).map_err(io(key))
 }
 
@@ -200,12 +245,13 @@ pub async fn anchor_once(
         dir(home).join("head.json"),
         dir(home).join("rotations.json"),
     );
+    let mut known: Vec<Rotation> = read_json(&rot_path)?.unwrap_or_default();
     // The newest of what this box remembers and what the bucket holds: a stale or lost
     // head.json (a crash after the PUT, a restore) never makes a sequence number repeat.
     let local = read_json::<Head>(&head_path)?.unwrap_or_default();
     let head = match &sinks.bucket {
         Some(b) => {
-            let remote = newest_in_bucket(b).await?;
+            let remote = newest_in_bucket(b, id, &known).await?;
             if remote.anchor_seq >= local.anchor_seq {
                 remote
             } else {
@@ -214,7 +260,6 @@ pub async fn anchor_once(
         }
         None => local,
     };
-    let mut known: Vec<Rotation> = read_json(&rot_path)?.unwrap_or_default();
     if let Some(r) = &id.rotation
         && !known.contains(r)
     {
@@ -237,7 +282,10 @@ pub async fn anchor_once(
     let st = Statement {
         v: 1,
         core_fp: id.fp.clone(),
-        anchor_seq: head.anchor_seq + 1,
+        anchor_seq: head
+            .anchor_seq
+            .checked_add(1)
+            .ok_or_else(|| "the anchor sequence cannot grow further".to_owned())?,
         prev_anchor_hash: if head.hash.is_empty() {
             chain::GENESIS.to_owned()
         } else {
@@ -274,8 +322,15 @@ pub async fn anchor_once(
             let taken = e
                 .downcast_ref::<S3Error>()
                 .is_some_and(|s| matches!(s.status, 403 | 412));
-            if !(taken && fetch(bucket, &key).await.is_ok_and(|s| s == signed)) {
+            if !taken {
                 return Err(format!("bucket: {e}"));
+            }
+            if !fetch(bucket, &key).await.is_ok_and(|s| s == signed) {
+                return Err(format!(
+                    "anchor number {} is already taken by a different object (a forged or \
+                     damaged one in the create-only bucket?)",
+                    st.anchor_seq
+                ));
             }
         }
     }
