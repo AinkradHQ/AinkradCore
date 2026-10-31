@@ -98,16 +98,17 @@ pub fn coalesce(all: Vec<Notification>) -> Vec<Notification> {
 /// At most [`Limiter::MAX`] pushes per device in any [`Limiter::WINDOW`] seconds; per process,
 /// so a restart forgets (the cost is one more burst).
 #[derive(Default)]
-pub struct Limiter(Mutex<HashMap<i64, VecDeque<i64>>>);
+pub struct Limiter(Mutex<HashMap<(i64, String), VecDeque<i64>>>);
 
 impl Limiter {
     pub const MAX: usize = 10;
     pub const WINDOW: i64 = 60;
 
-    /// Whether `device` may be pushed at `now` (unix seconds); counts it when it may.
-    pub fn allow(&self, device: i64, now: i64) -> bool {
+    /// Whether `device` may be pushed at `now` (unix seconds); counts it when it may. Each
+    /// module has a budget of its own (`bucket`), so one cannot use up the platform's or another's.
+    pub fn allow(&self, device: i64, bucket: &str, now: i64) -> bool {
         let mut all = self.0.lock().unwrap();
-        let sent = all.entry(device).or_default();
+        let sent = all.entry((device, bucket.to_owned())).or_default();
         while sent.front().is_some_and(|t| now - t >= Self::WINDOW) {
             sent.pop_front();
         }

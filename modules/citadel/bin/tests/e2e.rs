@@ -323,7 +323,7 @@ async fn hire_and_assign(rig: &Rig, company: i64, name: &str, key: &str, title: 
                         "justification": "e2e", "sandbox": "workspace-write"})),
         )
         .await;
-    rig.ok("POST", &format!("{M}/approvals/{}/decide", hire["hire_approval_id"]), Some(json!({"approve": true})))
+    rig.ok("POST", &format!("{M}/approvals/{}/decide-forge", hire["hire_approval_id"]), Some(json!({"approve": true})))
         .await;
     let agent = hire["agent"]["id"].as_i64().unwrap();
     let project = rig

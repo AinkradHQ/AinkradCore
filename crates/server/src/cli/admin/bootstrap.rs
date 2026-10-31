@@ -59,7 +59,7 @@ fn state_dir(db: &Path) -> &Path {
 /// service user only, the same user the server's socket accepts claims from.
 /// Checked before the database is opened, so a wrong user (root, say) never creates or
 /// migrates it, or leaves its own `-wal`/`-shm` files beside it (review N4).
-fn owner_only(db: &Path) -> Result_ {
+pub(crate) fn owner_only(db: &Path) -> Result_ {
     use std::os::unix::fs::MetadataExt;
     let owner = std::fs::metadata(db)
         .map_err(|e| {
