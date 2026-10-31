@@ -20,3 +20,8 @@ all = { level = "warn", priority = -1 }
 inherits = "release"
 codegen-units = 1
 strip = true
+
+# KAN-253: age without its localisation proc-macros (reproducible builds, no basic-toml / proc-macro-error2).
+# Same file format and cryptography as age 0.11.5; the fork changes only the error-message lookup.
+[patch.crates-io]
+age = { git = "https://github.com/AinkradHQ/rage", rev = "794958a40fd3471e8ea75be0acdf9761191b2a46" }
