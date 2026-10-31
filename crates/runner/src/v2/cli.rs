@@ -111,6 +111,7 @@ pub async fn pair_main(args: &[&str]) -> ExitCode {
 pub const CONNECT_USAGE: &str = "usage:
   ainkrad-runner connect [--state <dir>] [--ca <pem>] [--enable-exec] [--enable-pty]
                          [--enable-agents] [--terminal-sandbox=on|off]
+                         [--terminal-hide <path>]…
 
 Serves the Core it paired with (`ainkrad-runner pair`) over protocol v2, reconnecting with a
 jittered backoff and resuming commands in flight. Stops on SIGTERM or Ctrl-C; commands still
@@ -129,9 +130,14 @@ rest of the host stays usable. The runner refuses to start with --enable-pty whe
 cannot run. --terminal-sandbox=off removes that protection and is logged loudly at start: use
 it only on a host whose `terminal` devices are trusted as admins. Residual with it on: the
 shell is the same uid, so it reaches what that uid owns outside the hidden paths (the user's
-own files, ssh keys, docker); a signal sent through the API goes to the sandbox wrapper.
---enable-agents offers agent sessions (the harnesses on PATH, as this runner's user, unconfined
-until E2-09): transcripts in <dir>/agents, delivered secrets in $XDG_RUNTIME_DIR (else
+own files, ssh keys, docker, ssh-agent); a shell can still edit its own startup files and,
+on macOS, signal and inspect other processes of the same user; the runner binary, its pty host
+and the user's systemd/launchd launcher files are read-only to it and the user's systemd/D-Bus
+sockets (/run/user/<uid>) are hidden on Linux; a signal sent through the API goes to the
+sandbox wrapper. --terminal-hide <path> (repeatable) hides more, such as a co-located Core's
+state dir (its admin socket); running the Core and the runner as different users is better.
+--enable-agents offers agent sessions (the harnesses on PATH, as this runner's user, each
+in a process sandbox, refused when it cannot run): transcripts in <dir>/agents, delivered secrets in $XDG_RUNTIME_DIR (else
 <dir>/secrets), emptied at start.
 Exit status: 0 stopped (SIGTERM, Ctrl-C); 1 an error that retrying cannot fix (state, URL, TLS);
 2 usage; 6 rejected by the Core: this runner was revoked (close 4001), or the Core refused it
@@ -176,7 +182,10 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         })
         .collect();
     let args = args.as_slice();
-    if !args.len().is_multiple_of(2) || args.chunks(2).any(|f| !matches!(f[0], "--state" | "--ca"))
+    if !args.len().is_multiple_of(2)
+        || args
+            .chunks(2)
+            .any(|f| !matches!(f[0], "--state" | "--ca" | "--terminal-hide"))
     {
         eprintln!("{CONNECT_USAGE}");
         return ExitCode::from(2);
@@ -223,10 +232,31 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         eprintln!("ainkrad-runner: terminals: {e}");
         return ExitCode::FAILURE;
     }
+    // Created now, so they are hidden from every terminal that ever opens (see `prepare`).
+    let hidden = terminal_sandbox.then(|| {
+        super::termbox::hidden_paths(
+            &state.0,
+            &args
+                .windows(2)
+                .filter(|w| w[0] == "--terminal-hide")
+                .map(|w| PathBuf::from(w[1]))
+                .collect::<Vec<_>>(),
+        )
+    });
+    if let Some(h) = &hidden
+        && pty_enabled
+        && let Err(e) = super::termbox::prepare(h)
+    {
+        eprintln!("ainkrad-runner: terminals: {e}");
+        return ExitCode::FAILURE;
+    }
+    let host = ainkrad_ptyhost::client::find_host_binary()
+        .unwrap_or_else(|| PathBuf::from("ainkrad-ptyhost"));
     let pty = pty_enabled.then(|| {
         Arc::new(super::PtyDriver::new(super::PtyConfig {
             enabled: true,
-            hide: terminal_sandbox.then(|| super::termbox::hidden_paths(&state.0)),
+            hide: hidden.clone(),
+            readonly: super::termbox::readonly_paths(&host),
             ..super::PtyConfig::new(state.0.join("terminals"))
         }))
     });

@@ -51,6 +51,8 @@ pub struct PtyConfig {
     /// The terminal sandbox (`termbox`): `Some(paths)` runs every shell with those paths
     /// hidden, `None` (`--terminal-sandbox=off`) runs shells unsandboxed.
     pub hide: Option<Vec<PathBuf>>,
+    /// With the sandbox: paths the shell may read but not write (the runner binary, launchers).
+    pub readonly: Vec<PathBuf>,
 }
 
 impl PtyConfig {
@@ -67,6 +69,7 @@ impl PtyConfig {
             grace: Duration::from_secs(2),
             // On by default: a terminal is a shell as the runner's user.
             hide: Some(Vec::new()),
+            readonly: Vec::new(),
         }
     }
 }
@@ -209,7 +212,9 @@ impl PtyDriver {
                 .or_else(|| spec.env.get("HOME").cloned())
                 .filter(|c| c.starts_with('/'))
                 .unwrap_or_else(|| "/".to_owned());
-            let (launcher, args) = super::termbox::wrap(hide, &program, &spec.args, &cwd);
+            let (launcher, args) =
+                super::termbox::wrap(hide, &self.config.readonly, &program, &spec.args, &cwd)
+                    .map_err(|e| invalid(&e))?;
             spec.program = Some(launcher);
             spec.args = args;
             spec.cwd.get_or_insert(cwd);

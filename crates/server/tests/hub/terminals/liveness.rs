@@ -324,7 +324,7 @@ async fn an_exited_terminal_nobody_acked_is_hung_up() {
         fx.dir.join(format!("{id}.json")).exists(),
         "the host lingers, unacked"
     );
-    sqlx::query("UPDATE core_terminals SET last_activity=last_activity-120 WHERE id=?")
+    sqlx::query("UPDATE core_terminals SET last_activity=last_activity-1000 WHERE id=?")
         .bind(&id)
         .execute(&fx.core.app.pool)
         .await

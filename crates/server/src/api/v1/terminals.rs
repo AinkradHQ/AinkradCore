@@ -41,7 +41,7 @@ const KEEP_EXITED: i64 = 3600;
 const MAX_ATTACH_PER_TERMINAL: u32 = 4;
 const MAX_ATTACH_PER_DEVICE: u32 = 8;
 /// An exited terminal is hung up (the host acked and freed) once it has been exited this long.
-const ACK_EXITED_AFTER: i64 = 60;
+const ACK_EXITED_AFTER: i64 = 900;
 /// How often the idle reaper looks (`sweep_loop`).
 const SWEEP_EVERY: Duration = Duration::from_secs(30);
 

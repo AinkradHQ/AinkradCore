@@ -602,7 +602,7 @@ mod pty {
         std::fs::write(secrets.join("secret-canary"), "SECRETCANARY-4419").unwrap();
         let _other =
             std::os::unix::net::UnixListener::bind(terminals.join("t_other.sock")).unwrap();
-        let hidden = hide.then(|| super::super::termbox::hidden_paths(&state));
+        let hidden = hide.then(|| super::super::termbox::hidden_paths(&state, &[]));
         let script = format!(
             "cat {s}/runner-key-canary 2>&1; cat {x}/secret-canary 2>&1; \
              if [ -e {t}/t_other.sock ]; then echo SOCK-VISIBLE; else echo SOCK-HIDDEN; fi; \
@@ -645,11 +645,49 @@ mod pty {
         }
     }
 
+    /// Review PR 66 H-A and H-C: the agents' work root does not exist when the terminal opens
+    /// (it is created lazily); a file put there afterwards is still hidden from that shell. A
+    /// program that could be a launcher option is refused.
+    #[tokio::test]
+    async fn late_created_runner_dirs_are_hidden_and_option_like_programs_refused() {
+        let base = tmp();
+        let state = base.join("state");
+        let terminals = state.join("terminals");
+        std::fs::create_dir_all(&terminals).unwrap();
+        let [_, work] = super::super::cli::runtime_paths(&state);
+        let _ = std::fs::remove_dir_all(&work);
+        let hide = Some(super::super::termbox::hidden_paths(&state, &[]));
+        let (mut core, _) = Core::start_pty(sandboxed_driver(&terminals, hide)).await;
+        core.send(
+            1,
+            open(&format!(
+                "sleep 1; cat {}/token 2>&1; echo PROBE-DONE",
+                work.display()
+            )),
+        )
+        .await;
+        let mut out = String::new();
+        until(&mut core, 1, &mut out, |_, _| true).await;
+        // The shell is running; the agents' first run creates the root and puts a token in it.
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(work.join("token"), "WORKTOKEN-5521").unwrap();
+        until(&mut core, 1, &mut out, |o, _| o.contains("PROBE-DONE")).await;
+        assert!(!out.contains("WORKTOKEN-5521"), "{out:?}");
+        let mut bad = open("true");
+        if let Body::Command(Command::PtyOpen(o)) = &mut bad {
+            o.program = Some("-f".to_owned());
+        }
+        core.send(3, bad).await;
+        assert_eq!(error(core.answer(3).await), ErrorCode::InvalidArgs);
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&work);
+    }
+
     /// The sandboxed shell is still a terminal: it takes typed input and closes on request.
     #[tokio::test]
     async fn a_sandboxed_terminal_takes_input_and_closes() {
         let dir = tmp();
-        let hide = Some(super::super::termbox::hidden_paths(&dir));
+        let hide = Some(super::super::termbox::hidden_paths(&dir, &[]));
         let (mut core, _) = Core::start_pty(sandboxed_driver(&dir, hide)).await;
         core.send(1, open("echo UP; while read l; do echo \"got $l\"; done"))
             .await;
