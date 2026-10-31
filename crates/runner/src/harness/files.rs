@@ -105,11 +105,15 @@ impl RunFiles {
             let path = files.dir.join("mcp.json");
             private_file(&path, config.to_string().as_bytes())?;
             files.mcp_config = Some(path);
-            // The `citadel` CLI (E15.18) and the token it reads.
-            let token_file = files.dir.join("token");
-            private_file(&token_file, token.as_bytes())?;
-            files.token = Some(token_file);
-            files.bin = Some(super::cli::install(root, url)?);
+            // The `citadel` CLI (E15.18) and the token it reads, only for the monolith's
+            // `/mcp/v1`. The Core's token route has no CLI route, so its runs get neither the
+            // CLI, the advice to use it, nor a second copy of the token: MCP only (S10).
+            if !url.contains("/token/") {
+                let token_file = files.dir.join("token");
+                private_file(&token_file, token.as_bytes())?;
+                files.token = Some(token_file);
+                files.bin = Some(super::cli::install(root, url)?);
+            }
         }
         // A run with the CLI is told when to use it, after its own instructions.
         let told = match (instructions, &files.bin) {
@@ -199,6 +203,16 @@ mod tests {
         drop(files);
         assert!(!dir.exists(), "removed with the token in it");
         assert!(root.join("bin/citadel").exists());
+        // The Core's token route: MCP only, no CLI, no token file, no CLI advice.
+        let core = Some(("http://127.0.0.1:1/token/citadel/v1/mcp", &token));
+        let files = RunFiles::write(&root, "run-8", "claude", core, Some("# Skill")).unwrap();
+        assert!(files.bin.is_none() && files.token.is_none());
+        assert!(!files.dir.join("token").exists());
+        assert_eq!(
+            std::fs::read_to_string(files.instructions.as_ref().unwrap()).unwrap(),
+            "# Skill"
+        );
+        drop(files);
         assert!(RunFiles::write(&root, "run-1", "pi", mcp, None).is_err());
         assert!(!root.join("run-1").join("mcp.json").exists());
         let _ = std::fs::remove_dir_all(&root);

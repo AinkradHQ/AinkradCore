@@ -323,6 +323,28 @@ async fn two_sessions_run_at_once_and_capacity_and_slots_hold() {
 }
 
 #[tokio::test]
+async fn two_agy_runs_never_share_the_one_mcp_link() {
+    let (root, mut config) = dirs("agy-one");
+    config.slots = BTreeMap::from([("agy".to_owned(), 2), ("fake".to_owned(), 2)]);
+    let d = Arc::new(AgentDriver::new(config, script("sleep 5")).unwrap());
+    d.start(start("as_a", "agy")).unwrap();
+    assert_eq!(
+        d.start(start("as_b", "agy")).unwrap_err().code,
+        ErrorCode::Busy,
+        "a second agy would repoint the first's MCP link"
+    );
+    d.start(start("as_c", "fake")).unwrap();
+    for s in ["as_a", "as_c"] {
+        d.stop(AgentStop {
+            session: s.to_owned(),
+            kill: true,
+        })
+        .unwrap();
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
 async fn slots_split_the_capacity_per_harness() {
     let (root, mut config) = dirs("slots");
     config.slots = BTreeMap::from([("fake".to_owned(), 1), ("other".to_owned(), 1)]);
