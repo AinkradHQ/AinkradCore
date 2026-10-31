@@ -122,6 +122,11 @@ async fn a_killed_host_ends_its_terminal_and_frees_the_slot() {
     .await;
     let t = terminal(&fx, &id).await;
     assert_eq!(t["exit_signal"], "host_lost", "{t}");
+    // The row is written before its event: wait for the event too.
+    fx.until("the exited event", async || {
+        !exited_events(&fx, &id).await.is_empty()
+    })
+    .await;
     let events = exited_events(&fx, &id).await;
     assert!(
         events.len() == 1 && events[0]["reason"] == "host_lost",
@@ -166,6 +171,10 @@ async fn a_runner_hello_settles_terminals_that_ended_while_nobody_watched() {
     })
     .await;
     assert_eq!(terminal(&fx, &lost).await["exit_signal"], "host_lost");
+    fx.until("the exited event", async || {
+        !exited_events(&fx, &lost).await.is_empty()
+    })
+    .await;
     assert_eq!(exited_events(&fx, &lost).await.len(), 1);
     assert_eq!(fx.status(o, &kept).await, "running");
 
