@@ -517,7 +517,7 @@ pub async fn redeem(
     let (secret, name): (i64, String) = (row.try_get("id")?, row.try_get("name")?);
     let version: i64 = row.try_get("version")?;
     let key_id: String = row.try_get("key_id")?;
-    if key_id != sealer.key_id() {
+    if !sealer.holds(&key_id) {
         tracing::error!(
             name,
             key_id,
@@ -530,7 +530,7 @@ pub async fn redeem(
         );
     }
     let sealed: Vec<u8> = row.try_get("sealed")?;
-    let plain = match sealer.open(&label(&name, version), &sealed) {
+    let plain = match sealer.open_as(&key_id, &label(&name, version), &sealed) {
         Ok(p) => p,
         Err(e) => {
             tracing::error!(name, error = %e, "a sealed secret did not open");
@@ -588,7 +588,7 @@ pub async fn open_for_module(
     };
     let (id, version): (i64, i64) = (row.try_get("id")?, row.try_get("version")?);
     let key_id: String = row.try_get("key_id")?;
-    if key_id != sealer.key_id() {
+    if !sealer.holds(&key_id) {
         return refused(
             "secrets_unavailable",
             "the secret is sealed under a master key this Core does not hold",
@@ -596,7 +596,7 @@ pub async fn open_for_module(
     }
     let sealed: Vec<u8> = row.try_get("sealed")?;
     let value = sealer
-        .open(&label(name, version), &sealed)
+        .open_as(&key_id, &label(name, version), &sealed)
         .ok()
         .and_then(|p| {
             std::str::from_utf8(&p)
@@ -612,6 +612,109 @@ pub async fn open_for_module(
     audit(&mut tx, AuditActor::System, "secret.used", id, details).await?;
     tx.commit().await?;
     Ok(value)
+}
+
+/// What a master-key rotation did: the secrets held and how many it moved to the new key.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Resealed {
+    pub secrets: usize,
+    pub moved: usize,
+    pub from: Vec<String>,
+}
+
+/// Master-key rotation, the database half (E2-07.1): in ONE transaction every secret not yet
+/// under `target` is opened with its own key (`keys` holds the current and retired ones) and
+/// sealed again under `target` with a fresh nonce and the same associated data (name and
+/// version); then every secret is opened with `target` alone before anything commits, so a
+/// value that did not survive the move rolls the whole rotation back. The audit row
+/// `secret.master_rotated` (counts and key ids, no key material) is written in the same
+/// transaction, once per target key. `abort` rolls back after the check (crash injection).
+pub async fn reseal_all(
+    pool: &SqlitePool,
+    keys: &SecretBox,
+    target: &SecretBox,
+    abort: bool,
+) -> Result<Resealed, Error> {
+    let mut tx = super::begin_write(pool).await?;
+    let rows =
+        sqlx::query("SELECT id, name, version, key_id, sealed FROM core_secrets ORDER BY id")
+            .fetch_all(&mut *tx)
+            .await?;
+    let (mut moved, mut from) = (0, Vec::<String>::new());
+    for row in &rows {
+        let (id, name): (i64, String) = (row.try_get("id")?, row.try_get("name")?);
+        let key_id: String = row.try_get("key_id")?;
+        if key_id == target.key_id() {
+            continue;
+        }
+        let aad = label(&name, row.try_get("version")?);
+        let plain = keys
+            .open_as(&key_id, &aad, &row.try_get::<Vec<u8>, _>("sealed")?)
+            .map_err(|_| Error::Refused {
+                code: "secrets_unavailable",
+                message: format!("secret {name:?} did not open under its key {key_id}"),
+            })?;
+        let sealed = target
+            .seal(&aad, &plain)
+            .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+        sqlx::query("UPDATE core_secrets SET key_id = ?, sealed = ? WHERE id = ?")
+            .bind(target.key_id())
+            .bind(&sealed)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        moved += 1;
+        if !from.contains(&key_id) {
+            from.push(key_id);
+        }
+    }
+    // Verify with the new key alone, from what the transaction now holds.
+    let rows = sqlx::query("SELECT name, version, key_id, sealed FROM core_secrets")
+        .fetch_all(&mut *tx)
+        .await?;
+    for row in &rows {
+        let name: String = row.try_get("name")?;
+        let ok = row.try_get::<String, _>("key_id")? == target.key_id()
+            && target
+                .open(
+                    &label(&name, row.try_get("version")?),
+                    &row.try_get::<Vec<u8>, _>("sealed")?,
+                )
+                .is_ok();
+        if !ok {
+            return refused(
+                "secrets_unavailable",
+                format!("secret {name:?} did not verify under the new key; nothing was changed"),
+            );
+        }
+    }
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE action = 'secret.master_rotated' \
+         AND json_extract(details, '$.to_key_id') = ?",
+    )
+    .bind(target.key_id())
+    .fetch_one(&mut *tx)
+    .await?;
+    if audited == 0 {
+        let event = NewAuditEvent {
+            actor: AuditActor::System,
+            action: "secret.master_rotated".to_owned(),
+            entity: None,
+            details: json!({"to_key_id": target.key_id(), "from_key_ids": from,
+                            "total": rows.len(), "resealed": moved})
+            .to_string(),
+        };
+        super::audit::append(&mut tx, &event).await?;
+    }
+    if abort {
+        return refused("aborted", "stopped before commit (test)");
+    }
+    tx.commit().await?;
+    Ok(Resealed {
+        secrets: rows.len(),
+        moved,
+        from,
+    })
 }
 
 #[cfg(test)]
