@@ -36,8 +36,8 @@ pub static MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 6,
-        name: "citadel_0006_mcp_creates",
-        up: include_str!("../migrations/0006_citadel_0006_mcp_creates.up.sql"),
-        down: include_str!("../migrations/0006_citadel_0006_mcp_creates.down.sql"),
+        name: "citadel_0006_mcp_caps",
+        up: include_str!("../migrations/0006_citadel_0006_mcp_caps.up.sql"),
+        down: include_str!("../migrations/0006_citadel_0006_mcp_caps.down.sql"),
     },
 ];

@@ -24,6 +24,7 @@ use crate::store::org::text;
 
 pub mod control;
 pub mod dispatch;
+pub mod progress;
 mod prompt;
 pub mod reconcile;
 pub mod timer;
@@ -33,6 +34,7 @@ pub mod wake;
 
 pub use control::*;
 pub use dispatch::*;
+pub use progress::*;
 pub use reconcile::*;
 pub use token::*;
 pub use transition::*;

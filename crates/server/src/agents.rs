@@ -287,11 +287,12 @@ pub fn validate_new(new: &store::NewSession<'_>, admin: bool) -> Result<(), Inva
         || new.secrets.iter().any(|s| {
             !crate::store::secrets::valid_name(&s.name)
                 || !ainkrad_proto::v2::valid_secret_var(&s.var)
+                || s.var.eq_ignore_ascii_case(ainkrad_proto::v2::RUN_TOKEN_VAR)
         })
     {
         return Err(Invalid::Bad(
             "at most 16 secrets, each a secret's name and a variable [A-Z_][A-Z0-9_]* the runner \
-             does not set itself",
+             does not set itself (CITADEL_RUN_TOKEN is reserved for a module's run token)",
         ));
     }
     if !new.secrets.is_empty() && !admin {

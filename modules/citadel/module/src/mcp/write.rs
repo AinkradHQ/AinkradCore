@@ -7,15 +7,15 @@ use rmcp::model::JsonObject;
 use serde_json::{Value, json};
 
 use super::args::{MAX_TEXT, MAX_TITLE, Result, ToolError, int, required, text};
-use super::tools::{company_issue, count_create, next_actor, target};
-use crate::domain::gov::{ApprovalKind, NewApproval};
+use super::tools::{company_issue, next_actor, reserve, target};
+use crate::domain::gov::{ApprovalKind, KnowledgeKind, NewApproval};
 use crate::domain::org::AgentId;
 use crate::domain::work::{
     Actor, BlockerLink, IssueId, IssueKind, IssueState, IssueTransition, NewComment, NewIssue,
     NextActor, UserId,
 };
 use crate::store::exec::RunScope;
-use crate::store::gov::open_approval;
+use crate::store::gov::{KnowledgeError, Proposal, open_approval, propose};
 use crate::store::org::{get_agent, user_exists};
 use crate::store::work::{
     BlockerError, IssueTransitionError, add_blocker, create_comment, create_issue, issue_key,
@@ -28,6 +28,7 @@ const ADMIN: UserId = UserId(1);
 
 pub(super) async fn comment(app: &App, scope: RunScope, args: &JsonObject) -> Result<Value> {
     let issue = target(app, scope, int(args, "issue_id")?).await?;
+    reserve(app, scope, "comment", 1, "mcp.max_comments_per_run").await?;
     let new = NewComment {
         issue_id: issue.id,
         author: Actor::Agent(scope.agent_id),
@@ -95,7 +96,8 @@ async fn link(app: &App, blocker: i64, blocked: i64) -> Result<()> {
 }
 
 /// Moves the issue, only while the agent is its next actor. `done` is refused: it skips the
-/// review and pull-request gate (B-M3), so an agent submits for review and a reviewer closes it.
+/// review and pull-request gate (B-M3), so an agent submits for review and a reviewer approves,
+/// whatever evidence it holds.
 pub(super) async fn transition(app: &App, scope: RunScope, args: &JsonObject) -> Result<Value> {
     let issue = target(app, scope, int(args, "issue_id")?).await?;
     let me = NextActor::Agent(scope.agent_id);
@@ -139,7 +141,7 @@ pub(super) async fn transition(app: &App, scope: RunScope, args: &JsonObject) ->
         }
         other => {
             return Err(ToolError::Invalid(format!(
-                "transition {other:?} is not one of start, submit_for_review, block, done"
+                "transition {other:?} is not one of start, submit_for_review, block"
             )));
         }
     };
@@ -157,7 +159,7 @@ pub(super) async fn transition(app: &App, scope: RunScope, args: &JsonObject) ->
 /// A subtask of the run's issue, owned by and waiting on the agent.
 pub(super) async fn create_subtask(app: &App, scope: RunScope, args: &JsonObject) -> Result<Value> {
     let parent = target(app, scope, None).await?;
-    count_create(app, scope).await?;
+    reserve(app, scope, "issue", 1, "mcp.max_issues_per_run").await?;
     let me = scope.agent_id;
     let new = NewIssue {
         project_id: parent.project_id,
@@ -185,7 +187,7 @@ pub(super) async fn report_blocker(app: &App, scope: RunScope, args: &JsonObject
             let title = required(args, "title", MAX_TITLE)
                 .map_err(|_| ToolError::Invalid("give blocker_issue_id, or a title".to_owned()))?;
             let assignee = person(app, scope, args, "assignee").await?;
-            count_create(app, scope).await?;
+            reserve(app, scope, "issue", 1, "mcp.max_issues_per_run").await?;
             let new = NewIssue {
                 project_id: blocked.project_id,
                 epic_id: None,
@@ -227,7 +229,7 @@ pub(super) async fn request_approval(
             ));
         }
     };
-    count_create(app, scope).await?;
+    reserve(app, scope, "approval", 1, "mcp.max_approvals_per_run").await?;
     let payload = json!({"summary": required(args, "summary", MAX_TEXT)?,
                          "details": text(args, "details", MAX_TEXT)?,
                          "run": scope.run_id.0});
@@ -242,4 +244,53 @@ pub(super) async fn request_approval(
     };
     let a = open_approval(&app.pool, &new, &app.clock.now()).await?;
     Ok(json!({"approval_id": a.id.0, "status": a.status.as_str(), "expires_at": a.expires_at}))
+}
+
+/// Proposes an entry for the run's project (it stays proposed until its team lead or a human
+/// decides it: no tool does);  a `state` entry with `target: "spec"` proposes a
+/// new project spec (its body).
+pub(super) async fn propose_knowledge(
+    app: &App,
+    scope: RunScope,
+    args: &JsonObject,
+) -> Result<Value> {
+    let issue = target(app, scope, None).await?;
+    let kind = required(args, "kind", MAX_TITLE)?
+        .parse::<KnowledgeKind>()
+        .map_err(|_| {
+            ToolError::Invalid("kind must be decision, landmine, state or retro".to_owned())
+        })?;
+    let (spec, profile_field) = match text(args, "target", MAX_TITLE)? {
+        None => (false, None),
+        Some("spec") => (true, None),
+        Some(t) => match t.strip_prefix("profile.") {
+            Some(field) => (false, Some(field.to_owned())),
+            None => {
+                let why = "target must be spec or profile.<field>".to_owned();
+                return Err(ToolError::Invalid(why));
+            }
+        },
+    };
+    reserve(app, scope, "knowledge", 1, "mcp.max_knowledge_per_run").await?;
+    let p = Proposal {
+        project: issue.project_id,
+        kind,
+        title: required(args, "title", MAX_TITLE)?.to_owned(),
+        body: required(args, "body", MAX_TEXT)?.to_owned(),
+        spec,
+        profile_field,
+        rationale: text(args, "rationale", MAX_TITLE)?.map(str::to_owned),
+    };
+    let k = propose(&app.pool, &p, scope.agent_id)
+        .await
+        .map_err(knowledge_error)?;
+    Ok(json!({"knowledge_entry_id": k.id.0, "status": k.status.as_str()}))
+}
+
+fn knowledge_error(e: KnowledgeError) -> ToolError {
+    match e {
+        KnowledgeError::Db(e) => e.into(),
+        KnowledgeError::Invalid(why) => ToolError::Invalid(why),
+        e => ToolError::Refused(e.to_string()),
+    }
 }

@@ -77,6 +77,11 @@ async fn a_create_is_checked_before_any_runner_is_asked() {
                        "secrets": [{"name": "git.token", "var": "LD_PRELOAD"}]}),
         ),
         (
+            "reserved run token var",
+            json!({"runner": vm.id, "harness": "claude",
+                       "secrets": [{"name": "git.token", "var": "CITADEL_RUN_TOKEN"}]}),
+        ),
+        (
             "name",
             json!({"runner": vm.id, "harness": "claude",
                         "secrets": [{"name": "Git", "var": "T"}]}),
