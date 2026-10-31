@@ -67,6 +67,7 @@ use super::{
         pairing::reject,
         me::me,
         audit::list,
+        crate::health::metrics::get,
         runners::list,
         runners::get,
         runners::noop,
@@ -504,6 +505,8 @@ mod tests {
                 "agent.message",
                 "agent.state",
                 "agent.transcript",
+                "alarm.cleared",
+                "alarm.raised",
                 "audit",
                 "notify.delivery",
                 "runner.connected",
@@ -514,6 +517,7 @@ mod tests {
                 "terminal.detached",
                 "terminal.exited",
                 "terminal.opened",
+                "terminal.reap_warning",
                 "toy.line"
             ])
         );
@@ -523,11 +527,12 @@ mod tests {
             json!({"agent.approval_decided": "approve", "agent.approval_requested": "approve",
                 "agent.created": "agent", "agent.ended": "agent", "agent.message": "agent",
                 "agent.state": "agent", "agent.transcript": "agent",
-                "audit": "admin", "notify.delivery": "admin", "runner.connected": "read",
+                "alarm.cleared": "admin", "alarm.raised": "admin", "audit": "admin", "notify.delivery": "admin", "runner.connected": "read",
                 "runner.degraded": "read", "runner.disconnected": "read",
                 "terminal.attached": "terminal", "terminal.closed": "terminal",
                 "terminal.detached": "terminal", "terminal.exited": "terminal",
-                "terminal.opened": "terminal", "toy.line": "admin"})
+                "terminal.opened": "terminal", "terminal.reap_warning": "terminal",
+                "toy.line": "admin"})
         );
         let actions = s["AuditEntry"]["x-audit-actions"].as_array().unwrap();
         assert!(actions.contains(&json!("toy.made")) && actions.contains(&json!("setting.set")));
@@ -542,6 +547,8 @@ mod tests {
                 "agent.message",
                 "agent.state",
                 "agent.transcript",
+                "alarm.cleared",
+                "alarm.raised",
                 "audit",
                 "notify.delivery",
                 "runner.connected",
@@ -551,7 +558,8 @@ mod tests {
                 "terminal.closed",
                 "terminal.detached",
                 "terminal.exited",
-                "terminal.opened"
+                "terminal.opened",
+                "terminal.reap_warning"
             ])
         );
     }

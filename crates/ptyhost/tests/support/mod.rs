@@ -74,6 +74,7 @@ impl Drop for TestDir {
     }
 }
 
+#[allow(dead_code)]
 pub struct ChildGuard(pub Child);
 impl std::ops::Deref for ChildGuard {
     type Target = Child;

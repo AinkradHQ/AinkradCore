@@ -342,6 +342,9 @@ fn v2_terminal_frames_are_pinned() {
             env: BTreeMap::from([("LANG".to_owned(), "en_US.UTF-8".to_owned())]),
             env_pass: vec!["PATH".to_owned()],
             size,
+            watch: false,
+            scrollback_bytes: None,
+            scrollback_budget: None,
         })),
     );
     t(
@@ -351,6 +354,7 @@ fn v2_terminal_frames_are_pinned() {
         Body::Command(Command::PtyAttach(PtyAttach {
             terminal: "t_AAECAwQFBgcICQoL".to_owned(),
             seq: 4096,
+            watch: false,
         })),
     );
     t(

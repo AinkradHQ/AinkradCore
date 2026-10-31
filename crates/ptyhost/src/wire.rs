@@ -94,6 +94,9 @@ pub enum ToHost {
     },
     /// The exit was read: the host cleans up and ends.
     Ack,
+    /// Free scrollback disk (the runner's budget, E2-06.2): drop the older half of the disk
+    /// ring, or all of it if only one half is held. An older host skips it (and keeps none).
+    Shed,
     /// From a newer client: ignored.
     #[serde(other)]
     Unknown,

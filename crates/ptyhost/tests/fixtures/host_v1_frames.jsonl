@@ -1,0 +1,5 @@
+{"type":"hello","protocol":1,"info":{"id":"t_oldhost0000001","pid":4242,"boot":"0123456789abcdef0123456789abcdef","started":1761900000000,"child":4243,"state":"running","size":{"rows":24,"cols":80},"seq":0}}
+{"type":"out","seq":0,"data":"aGVsbG8gZnJvbSB0aGUgb2xkIGhvc3Q="}
+{"type":"snapshot","seq":23,"data":"G1syShtbSA=="}
+{"type":"error","message":"bad size"}
+{"type":"exit","exit":{"code":0}}

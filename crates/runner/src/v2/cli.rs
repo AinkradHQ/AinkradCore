@@ -256,12 +256,14 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     let host = ainkrad_ptyhost::client::find_host_binary()
         .unwrap_or_else(|| PathBuf::from("ainkrad-ptyhost"));
     let pty = pty_enabled.then(|| {
-        Arc::new(super::PtyDriver::new(super::PtyConfig {
+        let d = Arc::new(super::PtyDriver::new(super::PtyConfig {
             enabled: true,
             hide: hidden.clone(),
             readonly: super::termbox::readonly_paths(&host),
             ..super::PtyConfig::new(state.0.join("terminals"))
-        }))
+        }));
+        d.spawn_budget_loop();
+        d
     });
     if agents_enabled && std::env::var("AINKRAD_AGENT_NETWORK").is_ok_and(|v| v == "allow") {
         let m = "AINKRAD_AGENT_NETWORK=allow: agent sessions without secrets get the HOST network (cloud metadata, LAN, loopback services); use only on a stage-1 host with no instance role and nothing on loopback";

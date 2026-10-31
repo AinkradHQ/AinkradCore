@@ -63,6 +63,32 @@ pub struct Rooms {
     slots: Mutex<(HashMap<String, u32>, HashMap<String, u32>)>,
     /// Exited terminals whose host this Core already told to go (`ack_exited`).
     acked: Mutex<std::collections::HashSet<String>>,
+    /// Idle terminals already warned: terminal -> the unix time of the warning; it is closed
+    /// `terminal.reap_grace_secs` later unless a client attaches first (`sweep`). A Core
+    /// restart forgets it, which only means a fresh warning.
+    warned: Mutex<HashMap<String, i64>>,
+    /// Hosts a runner holds that the Core has no live record of (`flag_orphans`).
+    orphans: Mutex<HashMap<String, Orphan>>,
+}
+
+/// A host with no Core record: when it was first seen, and when it was warned about.
+struct Orphan {
+    runner: String,
+    seen: i64,
+    warned: Option<i64>,
+}
+
+/// A host must be unrecorded this long before it is warned about: a terminal being created
+/// has a host a moment before it has a row.
+const ORPHAN_SETTLE: i64 = 2;
+/// Unrecorded hosts tracked per runner (a runner holds at most a few dozen terminals).
+const MAX_ORPHANS_PER_RUNNER: usize = 64;
+
+/// Whether `t` is a terminal id the runner may have named: `t_` and at most 30 of `[A-Za-z0-9_]`.
+fn named(t: &str) -> bool {
+    t.len() <= 32
+        && t.starts_with("t_")
+        && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 /// One attach slot; released on drop.
@@ -122,6 +148,13 @@ impl Rooms {
             }
         }
     }
+    /// How many terminals have a client attached, and how many clients in all.
+    pub fn attached_total(&self) -> (u32, u32) {
+        let rooms = self.rooms.lock().unwrap();
+        let live = rooms.values().filter(|r| r.1 > 0);
+        (live.clone().count() as u32, live.map(|r| r.1).sum())
+    }
+
     fn attached(&self, terminal: &str) -> u32 {
         self.rooms.lock().unwrap().get(terminal).map_or(0, |r| r.1)
     }
@@ -385,6 +418,7 @@ async fn ended(app: &App, id: &str, code: Option<i32>, signal: Option<String>) {
 /// Only rows older than `before` are looked at: a terminal opened since the hello was taken
 /// is not in it.
 pub async fn reconcile(app: &App, runner: &str, listed: &[TerminalInfo], before: i64) {
+    flag_orphans(app, runner, listed).await;
     let Ok(ids) = sqlx::query_scalar::<_, String>("SELECT id FROM core_terminals WHERE runner=? AND status IN ('created','running') AND last_activity<?")
         .bind(runner)
         .bind(before)
@@ -411,6 +445,139 @@ pub async fn reconcile(app: &App, runner: &str, listed: &[TerminalInfo], before:
     }
 }
 
+/// Notes each host `listed` that the Core has no live record of (no row, or a reaped one):
+/// the sweep warns about it and closes it after `terminal.orphan_grace_secs`. An exited host
+/// whose row is still kept is not an orphan (it waits for its exit to be read).
+///
+/// The ids come from the runner, so they are checked like any input: only a well-formed
+/// terminal id is tracked, at most `MAX_ORPHANS_PER_RUNNER` per runner, and a runner's entries
+/// are replaced by each of its hellos (a host it no longer lists is forgotten).
+async fn flag_orphans(app: &App, runner: &str, listed: &[TerminalInfo]) {
+    app.terminals
+        .orphans
+        .lock()
+        .unwrap()
+        .retain(|id, o| o.runner != runner || listed.iter().any(|i| &i.terminal == id));
+    for i in listed.iter().filter(|i| named(&i.terminal)) {
+        let full = {
+            let all = app.terminals.orphans.lock().unwrap();
+            !all.contains_key(&i.terminal)
+                && all.values().filter(|o| o.runner == runner).count() >= MAX_ORPHANS_PER_RUNNER
+        };
+        if full {
+            tracing::warn!("a runner lists more unrecorded terminal hosts than are tracked");
+            break;
+        }
+        let known = sqlx::query_scalar::<_, String>("SELECT status FROM core_terminals WHERE id=?")
+            .bind(&i.terminal)
+            .fetch_optional(&app.pool)
+            .await;
+        if matches!(known, Ok(None)) || matches!(known, Ok(Some(ref s)) if s == "reaped") {
+            app.terminals
+                .orphans
+                .lock()
+                .unwrap()
+                .entry(i.terminal.clone())
+                .or_insert(Orphan {
+                    runner: runner.to_owned(),
+                    seen: app.clock.unix(),
+                    warned: None,
+                });
+        }
+    }
+}
+
+/// The orphan pass of `sweep`: a flagged host that now has a live row is forgotten; one
+/// unrecorded for `ORPHAN_SETTLE` is warned about once, with the grace; one past its grace is
+/// closed on its runner, with `terminal.closed` (reason `orphan`) as the report. A runner
+/// that is offline is tried again at the next pass.
+async fn sweep_orphans(app: &App) {
+    let Ok(grace) =
+        crate::store::settings::value(&app.pool, Key::TerminalOrphanGraceSecs, Scope::Server).await
+    else {
+        return;
+    };
+    let now = app.clock.unix();
+    // A runner that disconnected takes its flags with it; its next hello flags afresh.
+    app.terminals
+        .orphans
+        .lock()
+        .unwrap()
+        .retain(|_, o| app.hub.online(&o.runner));
+    let ids: Vec<String> = app
+        .terminals
+        .orphans
+        .lock()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    for id in ids {
+        let live = sqlx::query_scalar::<_, String>("SELECT status FROM core_terminals WHERE id=?")
+            .bind(&id)
+            .fetch_optional(&app.pool)
+            .await;
+        if !matches!(live, Ok(None)) && !matches!(live, Ok(Some(ref s)) if s == "reaped") {
+            app.terminals.orphans.lock().unwrap().remove(&id);
+            continue;
+        }
+        let (runner, state) = {
+            let mut all = app.terminals.orphans.lock().unwrap();
+            let Some(o) = all.get_mut(&id) else { continue };
+            match o.warned {
+                None if now - o.seen >= ORPHAN_SETTLE => {
+                    o.warned = Some(now);
+                    (o.runner.clone(), Some((now, true)))
+                }
+                w => (o.runner.clone(), w.map(|t| (t, false))),
+            }
+        };
+        match state {
+            Some((_, true)) => {
+                warn_event(app, &id, "orphan", grace, now + grace).await;
+            }
+            Some((at, false)) if now >= at + grace && close_on_runner(app, &runner, &id).await => {
+                app.terminals.orphans.lock().unwrap().remove(&id);
+                tracing::warn!(terminal = %id, "closed an orphaned terminal host");
+                let _ = event_with(app, "terminal.closed", &id, "core", Some("orphan")).await;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `pty.close` on `runner`; whether the runner answered it (a host already gone counts).
+async fn close_on_runner(app: &App, runner: &str, id: &str) -> bool {
+    let close = Command::PtyClose(PtyClose {
+        terminal: id.to_owned(),
+    });
+    let Ok(d) = app
+        .hub
+        .dispatch_elevated(runner, close, app.hub.continue_terminal_elevation())
+    else {
+        return false;
+    };
+    matches!(
+        tokio::time::timeout(CLOSE_WAIT, d.outcome()).await,
+        Ok(Ok(Body::Result(Reply::PtyClose(_))))
+    )
+}
+
+/// `terminal.reap_warning`: `id` is closed at `reap_at` (unix seconds) for `reason` (`idle` or
+/// `orphan`) unless it becomes active; `grace` is the warning period.
+async fn warn_event(app: &App, id: &str, reason: &str, grace: i64, reap_at: i64) {
+    let Ok(mut tx) = store::begin_write(&app.pool).await else {
+        return;
+    };
+    let payload = json!({"terminal":id,"by_device":"core","at":iso_of_unix(app.clock.unix()),"reason":reason,"grace_secs":grace,"reap_at":iso_of_unix(reap_at)});
+    if store::events::append(&mut tx, "terminal.reap_warning", &payload)
+        .await
+        .is_ok()
+    {
+        let _ = tx.commit().await;
+    }
+}
+
 async fn touch(app: &App, id: &str) {
     let _ = sqlx::query("UPDATE core_terminals SET last_activity=? WHERE id=?")
         .bind(app.clock.unix())
@@ -423,6 +590,7 @@ async fn touch(app: &App, id: &str) {
 /// (0 turns it off). A runner that is offline is tried again at the next pass.
 pub async fn sweep(app: &App) {
     ack_exited(app).await;
+    sweep_orphans(app).await;
     // A revoked device's terminals are closed: its streams already ended with the revoke, and
     // a shell it left running must not outlive its access.
     if let Ok(rows) = sqlx::query_as::<_, (String, String)>(
@@ -441,8 +609,14 @@ pub async fn sweep(app: &App) {
         return;
     };
     if idle <= 0 {
+        app.terminals.warned.lock().unwrap().clear();
         return;
     }
+    let Ok(grace) =
+        crate::store::settings::value(&app.pool, Key::TerminalReapGraceSecs, Scope::Server).await
+    else {
+        return;
+    };
     let Ok(rows) = sqlx::query_as::<_, (String, String)>(
         "SELECT id,runner FROM core_terminals WHERE status='running' AND last_activity<?",
     )
@@ -452,11 +626,37 @@ pub async fn sweep(app: &App) {
     else {
         return;
     };
+    let now = app.clock.unix();
+    // Warned terminals that are no longer idle (activity, a client, closed) start over.
+    {
+        let idle_now: Vec<&String> = rows
+            .iter()
+            .filter(|r| app.terminals.attached(&r.0) == 0)
+            .map(|r| &r.0)
+            .collect();
+        app.terminals
+            .warned
+            .lock()
+            .unwrap()
+            .retain(|id, _| idle_now.contains(&id));
+    }
     for (id, runner) in rows {
         if app.terminals.attached(&id) > 0 {
             continue;
         }
-        hang_up(app, &id, &runner, "idle").await;
+        // First the warning, with the grace; the close only once the grace has passed.
+        let due = app.terminals.warned.lock().unwrap().get(&id).copied();
+        match due {
+            None => {
+                app.terminals.warned.lock().unwrap().insert(id.clone(), now);
+                warn_event(app, &id, "idle", grace, now + grace).await;
+            }
+            Some(at) if now >= at + grace => {
+                hang_up(app, &id, &runner, "idle").await;
+                app.terminals.warned.lock().unwrap().remove(&id);
+            }
+            Some(_) => {}
+        }
     }
 }
 
@@ -553,6 +753,7 @@ fn ensure_monitor(app: &App, t: &Terminal) {
     let attach = Command::PtyAttach(PtyAttach {
         terminal: t.id.clone(),
         seq: t.seq.unwrap_or(0),
+        watch: true,
     });
     if let Ok(d) =
         app.hub
@@ -655,6 +856,13 @@ pub async fn create(
         )
         .into_response();
     }
+    let scrollback = match (
+        store::settings::value(&app.pool, Key::TerminalScrollbackBytes, Scope::Server).await,
+        store::settings::value(&app.pool, Key::TerminalScrollbackBudget, Scope::Server).await,
+    ) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(e), _) | (_, Err(e)) => return ApiError::from(e).into_response(),
+    };
     // The gate passed scope and step-up for this route; only now is the token minted.
     let mut d = match app.hub.dispatch_elevated(
         &runner.id,
@@ -668,6 +876,10 @@ pub async fn create(
                 rows: req.size.rows,
                 cols: req.size.cols,
             },
+            // The Core's own stream only watches for the exit; clients attach separately.
+            watch: true,
+            scrollback_bytes: u64::try_from(scrollback.0).ok(),
+            scrollback_budget: u64::try_from(scrollback.1).ok(),
         }),
         app.hub.terminal_elevation(&me),
     ) {
@@ -716,10 +928,7 @@ async fn register(
     info: &TerminalInfo,
 ) -> Result<(), ApiError> {
     let t = &info.terminal;
-    let named = t.len() <= 32
-        && t.starts_with("t_")
-        && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
-    if !named {
+    if !named(t) {
         return Err(ApiError::new(
             axum::http::StatusCode::BAD_GATEWAY,
             "terminal_failed",
@@ -852,6 +1061,8 @@ pub async fn signal(
         Command::PtyAttach(PtyAttach {
             terminal: id.clone(),
             seq: t.seq.unwrap_or(0),
+            // A one-shot signal is not a client.
+            watch: true,
         }),
         app.hub.terminal_elevation(&me),
     ) {
@@ -918,6 +1129,7 @@ pub async fn attach(
             terminal: id.clone(),
             // A fresh attach (no `after`) gets the terminal's history or a snapshot.
             seq: q.after.unwrap_or(0),
+            watch: false,
         }),
         app.hub.terminal_elevation(&me),
     ) {

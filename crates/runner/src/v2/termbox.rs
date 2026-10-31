@@ -26,6 +26,11 @@ pub fn hidden_paths(state: &Path, extra: &[PathBuf]) -> Vec<PathBuf> {
     let mut v = vec![state.to_path_buf()];
     v.extend(home.map(|h| h.join(".ainkrad-runner")));
     v.extend(super::cli::runtime_paths(state));
+    // The terminals' scrollback (output only, 0600): inside the state dir, so already hidden;
+    // named on its own so it stays hidden if the terminal directory ever moves.
+    v.push(ainkrad_ptyhost::host::scrollback_dir(
+        &state.join("terminals"),
+    ));
     v.extend(extra.iter().cloned());
     v
 }

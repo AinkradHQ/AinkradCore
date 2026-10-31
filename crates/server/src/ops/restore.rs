@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use super::config::Home;
 use super::init::{fresh, lay_out, migrate, undo};
 use super::s3::Bucket;
+use super::secretbox::{SecretBox, key_files};
 use super::{Result_, archive, private_dir, random_hex};
 use crate::auth::Identity;
 use crate::store;
@@ -91,14 +92,32 @@ async fn build(
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(e.into()),
         };
+        // The spare master keys (a rotation's retired and pending ones), checked like the
+        // master key before the home is touched: each must be 32 bytes and named by its id.
+        let mut spares = Vec::new();
+        for (id, path, _) in super::secretbox::key_files(&files.join("keys"))? {
+            let key = super::secretbox::SecretBox::from_file(&path)?;
+            if key.key_id() != id {
+                return Err(format!("{} is not the key it is named for", path.display()).into());
+            }
+            spares.push(path);
+        }
         created = true;
         let (h, fp) = lay_out(home, master.as_deref())?;
+        for path in spares {
+            // Staged 0600 beside the home (same filesystem), so a rename keeps it private.
+            std::fs::rename(
+                &path,
+                h.keys().join(path.file_name().ok_or("a key file name")?),
+            )?;
+        }
         if core_fp.is_some() {
             // Staged 0600 beside the home (same filesystem), so a rename keeps it private.
             std::fs::rename(&identity, h.identity())?;
         }
         store::restore(&files.join("core.db"), &h.db(), false).await?;
         migrate(&h).await?;
+        unheld_keys(&h).await?;
         Ok::<_, Box<dyn std::error::Error>>((manifest, h, fp, master.is_some(), core_fp))
     }
     .await;
@@ -127,6 +146,32 @@ async fn build(
         ),
     }
     Ok(())
+}
+
+/// Fails when a secret in the restored database is sealed under a master key the restored home
+/// does not hold (the current key and the spares from the archive): such a secret could never
+/// be opened, so a restore that looks fine would hide a lost key (for example one purged before
+/// the backup). The caller removes the half-built home.
+async fn unheld_keys(h: &Home) -> Result_ {
+    let pool = store::connect(&h.db()).await?;
+    let named: Result<Vec<String>, _> =
+        sqlx::query_scalar("SELECT DISTINCT key_id FROM core_secrets")
+            .fetch_all(&pool)
+            .await;
+    pool.close().await;
+    let mut held = vec![SecretBox::from_file(&h.master_key())?.key_id().to_owned()];
+    held.extend(key_files(&h.keys())?.into_iter().map(|f| f.0));
+    let missing: Vec<String> = named?.into_iter().filter(|id| !held.contains(id)).collect();
+    match missing.is_empty() {
+        true => Ok(()),
+        false => Err(format!(
+            "restore refused: the database holds secrets sealed under master key(s) {} that the \
+             archive does not carry (a retired key purged before the backup?). Restore an \
+             archive that has them (keys/master.<id>.key.retired); nothing was written.",
+            missing.join(", ")
+        )
+        .into()),
+    }
 }
 
 fn report(m: &archive::Manifest, h: &Home, fp: &str, signer: &str, kept_master: bool) {

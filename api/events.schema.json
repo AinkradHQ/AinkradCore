@@ -63,6 +63,8 @@
     "agent.message",
     "agent.state",
     "agent.transcript",
+    "alarm.cleared",
+    "alarm.raised",
     "audit",
     "notify.delivery",
     "runner.connected",
@@ -72,6 +74,7 @@
     "terminal.closed",
     "terminal.detached",
     "terminal.exited",
-    "terminal.opened"
+    "terminal.opened",
+    "terminal.reap_warning"
   ]
 }

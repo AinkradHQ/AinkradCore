@@ -409,6 +409,8 @@
           "agent.killed",
           "agent.messaged",
           "agent.resumed",
+          "alarm.cleared",
+          "alarm.raised",
           "api.refused",
           "auth.lockout",
           "auth.lockout_cleared",
@@ -418,6 +420,9 @@
           "device.renamed",
           "device.revoked",
           "device.scopes_changed",
+          "identity.rotation.announced",
+          "identity.rotation.started",
+          "identity.rotation.switched",
           "job.failed",
           "job.missed",
           "job.ran",
@@ -436,6 +441,7 @@
           "secret.created",
           "secret.deleted",
           "secret.leased",
+          "secret.master_rotated",
           "secret.redeemed",
           "secret.rotated",
           "secret.used",
@@ -777,6 +783,8 @@
           "agent.message",
           "agent.state",
           "agent.transcript",
+          "alarm.cleared",
+          "alarm.raised",
           "audit",
           "notify.delivery",
           "runner.connected",
@@ -786,7 +794,8 @@
           "terminal.closed",
           "terminal.detached",
           "terminal.exited",
-          "terminal.opened"
+          "terminal.opened",
+          "terminal.reap_warning"
         ],
         "x-event-scopes": {
           "agent.approval_decided": "approve",
@@ -796,6 +805,8 @@
           "agent.message": "agent",
           "agent.state": "agent",
           "agent.transcript": "agent",
+          "alarm.cleared": "admin",
+          "alarm.raised": "admin",
           "audit": "admin",
           "notify.delivery": "admin",
           "runner.connected": "read",
@@ -805,7 +816,8 @@
           "terminal.closed": "terminal",
           "terminal.detached": "terminal",
           "terminal.exited": "terminal",
-          "terminal.opened": "terminal"
+          "terminal.opened": "terminal",
+          "terminal.reap_warning": "terminal"
         }
       },
       "EventActor": {
@@ -2316,7 +2328,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.20.0"
+    "version": "1.23.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -3641,6 +3653,48 @@
           "devices"
         ],
         "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/metrics": {
+      "get": {
+        "operationId": "getMetrics",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Prometheus text format: process, event bus, audit chain, store, backup, certificate, disk, scheduler, runner, terminal, agent and alarm gauges and request counts by status class. No identifiers, names or content."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "ops"
+        ],
+        "x-ainkrad-scope": "admin"
       }
     },
     "/api/v1/pairings": {

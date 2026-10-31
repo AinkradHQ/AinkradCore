@@ -187,6 +187,10 @@ async fn no_signature_nonce_challenge_or_key_is_logged() {
     // a lease and its redemption (then a spent one), and a real-shaped value refused.
     planted.extend(secrets_flow(&mut app, &mac, clock.clone()).await);
 
+    // Master-key rotation (E2-07.1): the old and the new key, loaded and rotated, in every
+    // encoding the code could print, and the audit row it wrote.
+    planted.extend(rotation_flow(&dir, &pool, &mac, &clock).await);
+
     let log = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
     assert!(
         log.contains("pairing claimed") && log.contains("pairing claim refused"),
@@ -207,6 +211,7 @@ async fn no_signature_nonce_challenge_or_key_is_logged() {
         "an unattributed auth_failed: {log}"
     );
     assert!(log.contains("web session issued"), "{log}");
+    assert!(log.contains("secrets broker: master key loaded"), "{log}");
     // The broker's refusals ran, so their lines are scanned too.
     assert!(
         log.contains("real_secret_refused") && log.contains("lease_expired"),
@@ -323,6 +328,76 @@ async fn secrets_flow(app: &mut App, mac: &TestDevice, clock: Arc<SystemClock>) 
     assert_eq!(answers[1]["code"], "lease_expired", "{answers:?}");
     sent.push(lease);
     sent
+}
+
+/// Loads a master key, seals a secret, rotates the key and loads the new one; returns the
+/// key bytes (hex and base64url) and the value. Also asserts the audit row holds none of them.
+async fn rotation_flow(
+    dir: &std::path::Path,
+    pool: &sqlx::SqlitePool,
+    mac: &TestDevice,
+    clock: &SystemClock,
+) -> Vec<String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    use ainkrad_core::audit::AuditActor;
+    use ainkrad_core_server::ops::master_rotate::{Stop, rotate};
+    use ainkrad_core_server::ops::secretbox::SecretBox;
+    use ainkrad_core_server::store::secrets::{self, NewValue};
+    const VALUE: &str = "log-planted-rot-c81d";
+    // The broker flow above sealed under its own test key: start this one clean.
+    sqlx::query("DELETE FROM core_secrets")
+        .execute(pool)
+        .await
+        .unwrap();
+    let keys = dir.join("keys");
+    std::fs::create_dir_all(&keys).unwrap();
+    let master = keys.join("master.key");
+    let old = [0xa7u8; 32];
+    std::fs::write(&master, old).unwrap();
+    std::fs::set_permissions(&master, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let sealer = SecretBox::for_serve(&master).expect("a 0600 key");
+    let new = NewValue {
+        value: VALUE,
+        runners: None,
+        delivery: None,
+    };
+    secrets::create(
+        pool,
+        &sealer,
+        "rot.token",
+        &new,
+        &mac.id,
+        AuditActor::System,
+        &clock.now(),
+    )
+    .await
+    .unwrap();
+    let report = rotate(&dir.join("core.db"), &keys, Stop::Never)
+        .await
+        .unwrap();
+    assert_eq!(report.moved, 1);
+    SecretBox::for_serve(&master).expect("the new key loads");
+    let fresh = std::fs::read(&master).unwrap();
+    assert_ne!(fresh, old);
+    let details: String = sqlx::query_scalar(
+        "SELECT details FROM audit_events WHERE action = 'secret.master_rotated'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    let mut planted = vec![VALUE.to_owned()];
+    for key in [old.to_vec(), fresh] {
+        planted.extend([hex(&key), b64(&key)]);
+    }
+    for p in &planted {
+        assert!(
+            !details.contains(p),
+            "{p} in the rotation audit row: {details}"
+        );
+    }
+    planted
 }
 
 fn json(text: &str) -> serde_json::Value {

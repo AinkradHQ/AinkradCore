@@ -1,0 +1,7 @@
+{"type":"attach","seq":0}
+{"type":"input","data":"bHMK"}
+{"type":"resize","size":{"rows":30,"cols":100}}
+{"type":"signal","signal":"INT"}
+{"type":"snapshot"}
+{"type":"close","grace_ms":2000}
+{"type":"ack"}

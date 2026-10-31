@@ -40,6 +40,7 @@ fn spec(program: &str, args: &[&str]) -> Spec {
             &BTreeMap::new(),
         ),
         size: SIZE,
+        scrollback_bytes: None,
     }
 }
 
@@ -338,7 +339,11 @@ async fn resume_by_seq_and_a_snapshot_when_it_is_gone() {
     let id = in_process(
         &dir,
         sh("printf 0123456789abcdefghij; read x; echo done"),
-        |c| c.ring = 8,
+        |c| {
+            c.ring = 8;
+            // Memory only: with a disk ring the older seq would replay from disk.
+            c.disk = None;
+        },
     )
     .await;
     let (_, mut r, mut w) = connect(&dir, &id).await.unwrap();

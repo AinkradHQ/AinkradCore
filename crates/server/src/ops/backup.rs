@@ -55,14 +55,27 @@ pub(crate) async fn archive_home(
         let master = home.master_key();
         let identity = home.identity();
         let mut files = vec![
-            ("core.db", plain.as_path()),
-            ("keys/master.key", master.as_path()),
+            ("core.db".to_owned(), plain.clone()),
+            ("keys/master.key".to_owned(), master.clone()),
         ];
+        // A rotation's retired and pending master keys, so a backup taken at any point of one
+        // (or just after) restores with every key its database still names. A plaintext
+        // export never carries secrets, so no spare keys either.
+        if kind == "backup" {
+            for (id, path, retired) in super::secretbox::key_files(&home.keys())? {
+                let suffix = if retired { ".retired" } else { "" };
+                files.push((format!("keys/master.{id}.key{suffix}"), path));
+            }
+        }
         // The Core identity only inside the encrypted backup, never in a plaintext export. A
         // home that never served has none yet.
         if kind == "backup" && identity.exists() {
-            files.push((archive::IDENTITY, identity.as_path()));
+            files.push((archive::IDENTITY.to_owned(), identity));
         }
+        let files: Vec<(&str, &Path)> = files
+            .iter()
+            .map(|(n, p)| (n.as_str(), p.as_path()))
+            .collect();
         Ok(archive::write(
             out,
             &signer,

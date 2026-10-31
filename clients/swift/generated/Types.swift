@@ -76,6 +76,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/me`.
     /// - Remark: Generated from `#/paths//api/v1/me/get(getMe)`.
     func getMe(_ input: Operations.GetMe.Input) async throws -> Operations.GetMe.Output
+    /// - Remark: HTTP `GET /api/v1/metrics`.
+    /// - Remark: Generated from `#/paths//api/v1/metrics/get(getMetrics)`.
+    func getMetrics(_ input: Operations.GetMetrics.Input) async throws -> Operations.GetMetrics.Output
     /// - Remark: HTTP `POST /api/v1/pairings`.
     /// - Remark: Generated from `#/paths//api/v1/pairings/post(createPairing)`.
     func createPairing(_ input: Operations.CreatePairing.Input) async throws -> Operations.CreatePairing.Output
@@ -422,6 +425,11 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//api/v1/me/get(getMe)`.
     public func getMe(headers: Operations.GetMe.Input.Headers = .init()) async throws -> Operations.GetMe.Output {
         try await getMe(Operations.GetMe.Input(headers: headers))
+    }
+    /// - Remark: HTTP `GET /api/v1/metrics`.
+    /// - Remark: Generated from `#/paths//api/v1/metrics/get(getMetrics)`.
+    public func getMetrics(headers: Operations.GetMetrics.Input.Headers = .init()) async throws -> Operations.GetMetrics.Output {
+        try await getMetrics(Operations.GetMetrics.Input(headers: headers))
     }
     /// - Remark: HTTP `POST /api/v1/pairings`.
     /// - Remark: Generated from `#/paths//api/v1/pairings/post(createPairing)`.

@@ -50,6 +50,30 @@ registry! {
     TerminalMaxPerRunner "terminal.max_per_runner" Count 16, 1, 256, SO,
         "How many terminals (not yet ended) one runner may hold for the Core; read at each \
          create.";
+    AlarmBackupMaxAgeSecs "alarm.backup_max_age_secs" Seconds 172_800, 3_600, 31_536_000, SO,
+        "The alarm `backup_age` raises when the newest backup in the home is older than this (or \
+         there is none and the database is older); it clears once a newer one lands. Read at \
+         each alarm pass.";
+    AlarmCertMinDays "alarm.cert_min_days" Count 14, 1, 90, SO,
+        "The alarm `cert_expiry` raises when the public listener's certificate has fewer than this \
+         many days left; it clears once it is renewed. Read at each alarm pass.";
+    AlarmDiskMinFreePct "alarm.disk_min_free_pct" Percent 10, 1, 90, SO,
+        "The alarm `disk_free` raises when the filesystem holding the database has less than this \
+         share free; it clears once there is more. Read at each alarm pass.";
+    TerminalReapGraceSecs "terminal.reap_grace_secs" Seconds 300, 1, 86_400, SO,
+        "How long after a `terminal.reap_warning` an idle terminal (see terminal.idle_secs) is \
+         closed, unless a client attaches meanwhile; read at each pass of the idle reaper.";
+    TerminalOrphanGraceSecs "terminal.orphan_grace_secs" Seconds 600, 1, 86_400, SO,
+        "How long a terminal host that a runner holds but the Core has no live record of is \
+         flagged (`terminal.reap_warning`, reason orphan) before the Core closes it; read at \
+         each pass of the reaper.";
+    TerminalScrollbackBytes "terminal.scrollback_bytes" Bytes 8_388_608, 262_144, 67_108_864, SO,
+        "The disk cap of one terminal's scrollback ring on its runner (output only, `0600`); \
+         sent with each create, so it applies to terminals opened after the change.";
+    TerminalScrollbackBudget "terminal.scrollback_budget_bytes" Bytes 268_435_456, 1_048_576, 68_719_476_736, SO,
+        "The scrollback disk budget of one runner across its terminals: past it the runner \
+         frees the least recently used terminals that have no client attached, within about a \
+         second; sent with each create.";
     AuditAnchorIntervalSecs "audit.anchor_interval_secs" Seconds 3_600, 300, 86_400, SO,
         "Time between off-box anchors of the audit chain head (E1-10.4), written only when the \
          backup bucket is configured; read at start.";
