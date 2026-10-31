@@ -75,6 +75,19 @@ pub struct AgentConfig {
     pub stop_grace: Duration,
 }
 
+/// `slots` for `harness`, cut to one where its runs share state. agy reads its MCP config
+/// (which holds the run token) through one link in its home, so a second run would repoint it
+/// and call with the first's token.
+// ponytail: one agy at a time; a home per run would lose its login, so that is the upgrade
+// only once agy takes its config by flag.
+fn one_at_a_time(harness: &str, slots: usize) -> usize {
+    if harness == "agy" {
+        slots.min(1)
+    } else {
+        slots
+    }
+}
+
 impl AgentConfig {
     pub fn new(dir: PathBuf, secrets_dir: PathBuf) -> Self {
         Self {
@@ -330,7 +343,7 @@ impl AgentDriver {
         if running.len() >= self.config.capacity as usize
             || slots
                 .get(&req.harness)
-                .is_some_and(|n| of_harness >= *n as usize)
+                .is_some_and(|n| of_harness >= one_at_a_time(&req.harness, *n as usize))
         {
             return Err(refuse(
                 ErrorCode::Busy,

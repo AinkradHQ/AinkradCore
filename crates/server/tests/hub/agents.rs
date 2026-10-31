@@ -49,6 +49,9 @@ struct Script {
     env: Arc<Mutex<RunEnv>>,
     /// The `RunToken` each run was handed.
     tokens: Arc<Mutex<Vec<String>>>,
+    /// How long the first `start` takes (the Core's answer may time out first).
+    first_start: Duration,
+    starts: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 fn script(s: &str) -> Script {
@@ -60,6 +63,13 @@ fn script(s: &str) -> Script {
 
 impl Executor for Script {
     async fn start(&self, job: &Job) -> Result<Option<String>, String> {
+        if self
+            .starts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            == 0
+        {
+            tokio::time::sleep(self.first_start).await;
+        }
         Ok(Some(format!("h-{}", job.context_ref)))
     }
 
@@ -588,6 +598,9 @@ async fn a_decision_from_the_core_unblocks_the_waiting_harness() {
 /// A module that mints one credential per launch, as Citadel's run token.
 struct Minter;
 
+/// Counts the launches that asked it for a credential.
+static MINTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 const MINTED: &str = "cit_run_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 impl ainkrad_core_server::module::Module for Minter {
@@ -609,6 +622,7 @@ impl ainkrad_core_server::module::Module for Minter {
     > {
         Box::pin(async move {
             assert_eq!(s.owner_ref.as_deref(), Some("run:1"));
+            MINTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(vec![ainkrad_core_server::module::Credential {
                 var: "CITADEL_RUN_TOKEN".to_owned(),
                 value: ainkrad_core_server::module::Zeroizing::new(MINTED.to_owned()),
@@ -675,6 +689,57 @@ async fn a_module_credential_reaches_the_runner_as_its_run_token_and_nowhere_els
         .await
         .unwrap();
     assert_eq!(sealed, 0, "an ephemeral credential is never stored");
+    r.halt().await;
+    let _ = std::fs::remove_dir_all(&st.0);
+}
+
+/// A start whose answer is lost (it timed out) is retried with a freshly minted credential: the
+/// runner may already have redeemed the first attempt's single-use lease.
+#[tokio::test]
+async fn a_retried_start_mints_a_fresh_credential_instead_of_resending_a_spent_lease() {
+    // The Core's answer times out before the runner's: the start is retried.
+    let quick = AgentsConfig {
+        answer: Duration::from_millis(1),
+        ..quick()
+    };
+    let core = Core::start_agents("agents-retry", hub_quick(), quick).await;
+    let base = format!("http://{}", core.host);
+    let st = state("retry");
+    let e = paired(&core, &base, None, &st).await;
+    let exec = Script {
+        ..script("echo hi")
+    };
+    let r = run_runner(&core, &base, &st, exec).await;
+    let mut app = core.app.clone();
+    app.modules = Arc::from([Arc::new(Minter) as Arc<dyn ainkrad_core_server::module::Module>]);
+    let policy = json!({"mode": "ask"});
+    let new = NewSession {
+        runner: &e.device_id,
+        harness: "fake",
+        model: None,
+        prompt: Some("go"),
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: &e.device_id,
+    };
+    let before = MINTS.load(std::sync::atomic::Ordering::SeqCst);
+    let s = service::ModuleAgents::named("tmod")
+        .create_ref(&app, &new, Some("run:1"))
+        .await
+        .unwrap_or_else(|e| panic!("{}", service::describe(&e)));
+    let (done, _) = finished(&core, &s.id).await;
+    assert_eq!(
+        done.outcome.as_ref().unwrap()["kind"],
+        "succeeded",
+        "{:?}",
+        done.outcome
+    );
+    let mints = MINTS.load(std::sync::atomic::Ordering::SeqCst) - before;
+    assert!(
+        mints >= 2,
+        "the retry reused the first attempt's lease ({mints} minted)"
+    );
     r.halt().await;
     let _ = std::fs::remove_dir_all(&st.0);
 }

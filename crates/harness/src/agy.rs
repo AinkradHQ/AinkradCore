@@ -77,8 +77,8 @@ pub fn mcp_config(url: &str, token: &str) -> Value {
 /// the spec's files are linked there, MCP servers as `.gemini/config/mcp_config.json` and
 /// instructions as `.gemini/GEMINI.md`; a file the spec lacks removes a stale link. Links,
 /// not copies: the run token stays only in the runner's per-run file, and dies with it.
-// ponytail: one home per runner, so two agy runs at once would share these links; the runner
-// works one run at a time. A home per run is the upgrade if that changes.
+// ponytail: one home per runner, so two agy runs at once would share these links: the v2
+// driver admits one agy at a time (`one_at_a_time`). A home per run is the upgrade.
 fn link_files(spec: &Spec) -> io::Result<()> {
     let gemini = spec.config_dir.join(".gemini");
     let links = [
