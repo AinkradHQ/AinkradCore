@@ -470,3 +470,5 @@ pub use verify::{Report, Tampered, read_bucket, read_lines, verify};
 mod fixture;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_hostile;
