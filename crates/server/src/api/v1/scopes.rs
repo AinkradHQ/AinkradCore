@@ -5,7 +5,7 @@
 //! called, and the contract test fails on its missing `x-ainkrad-scope`.
 //!
 //! - `read`: what the device itself shows (its own identity and push token, events, settings).
-//! - `admin`: devices, pairing, setting changes, the audit log.
+//! - `admin`: devices, pairing, setting changes, the audit log, the metrics.
 //! - `agent`: sending a runner a command (`POST /api/v1/runners/{id}/noop`).
 //! - Agent sessions (E2-08): `agent`; deciding a tool call `approve`.
 //! - Secrets (E2-07): managing them and granting a lease is `admin` (and destructive); the one
@@ -47,6 +47,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/devices", "admin"),
     ("DELETE", "/api/v1/devices/{id}", "admin"),
     ("GET", "/api/v1/audit", "admin"),
+    ("GET", "/api/v1/metrics", "admin"),
     ("POST", "/api/v1/pairings", "admin"),
     ("GET", "/api/v1/pairings/{id}", "admin"),
     ("POST", "/api/v1/pairings/{id}/approve", "admin"),

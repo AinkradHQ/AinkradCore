@@ -13,6 +13,7 @@ pub mod config;
 pub mod export;
 pub mod init;
 pub mod logging;
+pub mod master_rotate;
 pub mod restore;
 pub mod s3;
 pub mod secretbox;

@@ -74,6 +74,8 @@ pub struct App {
     pub agents: Arc<crate::agents::Agents>,
     /// The terminal service's in-memory state (`v1::terminals`).
     pub terminals: Arc<v1::Rooms>,
+    /// Alarms and the counters behind `/api/v1/metrics` (`crate::health`).
+    pub health: Arc<crate::health::Health>,
 }
 
 /// Resolves once serve is stopping (`App::closing`).
@@ -107,6 +109,7 @@ impl App {
             secrets: None,
             agents: Arc::default(),
             terminals: Arc::default(),
+            health: Arc::default(),
         }
     }
 }
@@ -137,7 +140,26 @@ pub fn router(app: App) -> Router {
         .merge(v1::router(app.clone()))
         // Only declared token routes, only behind `gateway::token` (called from the pre-auth gate).
         .merge(crate::module::mount_token(&app.modules).with_state(app.clone()))
-        .layer(axum::middleware::from_fn_with_state(app, preauth::gate))
+        .layer(axum::middleware::from_fn_with_state(
+            app.clone(),
+            preauth::gate,
+        ))
+        // Outermost, so every answer is counted, a refusal of the gate included.
+        .layer(axum::middleware::from_fn_with_state(
+            app.health.clone(),
+            count_responses,
+        ))
+}
+
+/// Counts each response by status class for `/api/v1/metrics`.
+async fn count_responses(
+    axum::extract::State(health): axum::extract::State<Arc<crate::health::Health>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let response = next.run(request).await;
+    health.count_response(response.status().as_u16());
+    response
 }
 
 /// The shared checks as a status, code and reason: the `Host`, an allowed `Origin` or none, no `Authorization`, a

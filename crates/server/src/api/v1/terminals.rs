@@ -148,6 +148,13 @@ impl Rooms {
             }
         }
     }
+    /// How many terminals have a client attached, and how many clients in all.
+    pub fn attached_total(&self) -> (u32, u32) {
+        let rooms = self.rooms.lock().unwrap();
+        let live = rooms.values().filter(|r| r.1 > 0);
+        (live.clone().count() as u32, live.map(|r| r.1).sum())
+    }
+
     fn attached(&self, terminal: &str) -> u32 {
         self.rooms.lock().unwrap().get(terminal).map_or(0, |r| r.1)
     }

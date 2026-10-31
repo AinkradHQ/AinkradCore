@@ -44,6 +44,8 @@ const USAGE: &str = "usage:
   ainkrad-core-server device list <db>
   ainkrad-core-server device revoke <db> <device-id>
   ainkrad-core-server identity rotate <db>
+  ainkrad-core-server secrets rotate-master <db>
+  ainkrad-core-server secrets purge-retired-keys <db> [--older-than-days <n>]
 
 serve listens on a Unix socket next to the database (<db dir>/core.sock, 0600) by default and
 serves the app at /api/v1 (signed requests from a paired device) and the modules mounted
@@ -83,6 +85,10 @@ pairing (bootstrap for the first): there are no keys to hand out.
 identity rotate starts a planned rotation of the Core identity key (never for a stolen key: use
 recover --revoke-runners): a new key beside the current one, which keeps signing for 7 days while
 serve sends every runner the statement; the first start after that switches keys.
+secrets rotate-master makes a new master key and re-seals every secret under it in one
+transaction (stopped server only; the old key is kept as keys/master.<id>.key.retired);
+secrets purge-retired-keys deletes retired keys no secret names after the retention window
+(--older-than-days, default 30).
 backup <db> <dest> is a raw, unencrypted local snapshot (VACUUM INTO); restore [--force] <src>
 <db> swaps such a snapshot over a stopped database in place. The encrypted, signed backups and
 the fresh-home restore are under Operations.";
@@ -173,7 +179,13 @@ pub async fn run(available: Vec<Arc<dyn Module>>) -> ExitCode {
             }
         }
         ["device", "revoke", db, id] => revoke_device(Path::new(db), id).await,
-        ["identity", "rotate", db] => rotate_identity(Path::new(db)),
+        ["identity", "rotate", db] => rotate_identity(Path::new(db)).await,
+        ["secrets", "rotate-master", db] => secrets_keys(Path::new(db), None).await,
+        ["secrets", "purge-retired-keys", db] => secrets_keys(Path::new(db), Some(30)).await,
+        ["secrets", "purge-retired-keys", db, "--older-than-days", n] => match n.parse() {
+            Ok(n) => secrets_keys(Path::new(db), Some(n)).await,
+            Err(_) => Err("--older-than-days is a whole number".into()),
+        },
         // Last, so a module command can never shadow a platform verb.
         _ => match module_admin::find(&available, &args) {
             Some(module) => module_admin::run(module, &args).await,
@@ -224,12 +236,20 @@ async fn list_devices(db: &Path) -> Result_ {
 }
 
 /// `identity rotate`: a planned rotation of the Core identity key (handshake spec §13).
-fn rotate_identity(db: &Path) -> Result_ {
-    use ainkrad_core_server::auth::identity::{Identity, WINDOW};
-    // ponytail: not an audit row yet. A new audit action changes the contract
-    // (`x-audit-actions`) and the generated clients; the statement file is the record until
-    // that lands with the next contract change.
+async fn rotate_identity(db: &Path) -> Result_ {
+    use ainkrad_core_server::auth::identity::{Identity, WINDOW, audit};
+    // Like `recover`: the database's owner only, opened first so a refused audit is known
+    // before the key files change.
+    admin::bootstrap::owner_only(db)?;
+    let pool = store::connect(db).await?;
     let r = Identity::rotate(state_dir(db), SystemClock.unix())?;
+    let details = serde_json::json!({"old_fp": r.old_fp, "new_fp": r.new_fp,
+        "not_before": r.not_before, "by": "local-admin"});
+    audit(&pool, "started", details).await.map_err(|e| {
+        format!(
+            "the rotation started but its audit row failed ({e}); the statement file is the record"
+        )
+    })?;
     eprintln!(
         "rotation to {} started; the current key {} signs for at least {} more days.\n\
          Restart serve now so runners receive the statement: the window counts from that \
@@ -241,6 +261,40 @@ fn rotate_identity(db: &Path) -> Result_ {
         WINDOW / 86_400,
         r.not_before
     );
+    Ok(())
+}
+
+/// `secrets rotate-master` (`purge` None) and `secrets purge-retired-keys` (`purge` Some(days)):
+/// offline on the database, never beside a server (E2-07.1; `ops::master_rotate`).
+async fn secrets_keys(db: &Path, purge: Option<u64>) -> Result_ {
+    use ainkrad_core_server::ops::master_rotate::{self, Stop};
+    if !db.is_file() {
+        return Err(format!("{}: no database (init or serve creates it)", db.display()).into());
+    }
+    admin::bootstrap::owner_only(db)?;
+    let _held = module_admin::lock(db)?;
+    if let Some(sock) = module_admin::live_server(db) {
+        return Err(format!(
+            "a server may be running on {}: stop it before changing the master key",
+            sock.display()
+        )
+        .into());
+    }
+    let keys = state_dir(db).join("keys");
+    match purge {
+        None => {
+            let r = master_rotate::rotate(db, &keys, Stop::Never).await?;
+            eprintln!("{}", master_rotate::describe(&r));
+        }
+        Some(days) => {
+            let gone = master_rotate::purge_retired(db, &keys, days).await?;
+            eprintln!(
+                "{} retired master key(s) removed: {}",
+                gone.len(),
+                gone.join(" ")
+            );
+        }
+    }
     Ok(())
 }
 
@@ -611,10 +665,12 @@ async fn serve(
         gateway = with_iroh(gateway, db, &flags).await?;
     }
     tracing::info!(listen = ?ListenLog(&listen), %host, "serving");
+    let health = Arc::new(ainkrad_core_server::health::Health::new(db));
     let scheduler = Scheduler {
         pool: pool.clone(),
         clock: SystemClock,
         every: tick,
+        health: Some(Arc::clone(&health)),
     };
     // Dropping `stop` ends both loops.
     let (stop, mut stopped) = tokio::sync::watch::channel(());
@@ -644,9 +700,14 @@ async fn serve(
         state_dir(db),
     )?);
     tracing::info!(core_fp = identity.fp, "Core identity");
+    ainkrad_core_server::auth::identity::audit_switch(&pool, &identity).await;
     if let Some(r) = &identity.rotation {
         // This serve announces the statement: the window counts from the first one that does.
-        ainkrad_core_server::auth::Identity::announce(state_dir(db), SystemClock.unix())?;
+        if ainkrad_core_server::auth::Identity::announce(state_dir(db), SystemClock.unix())? {
+            let details = serde_json::json!({"new_fp": r.new_fp, "not_before": r.not_before,
+                "window_secs": ainkrad_core_server::auth::identity::WINDOW});
+            ainkrad_core_server::auth::identity::audit_logged(&pool, "announced", details).await;
+        }
         tracing::warn!(
             new_fp = r.new_fp,
             "Core identity rotation pending: runners get the statement; the new key takes over at \
@@ -655,6 +716,7 @@ async fn serve(
     }
     let mut app = App::new(pool, Arc::new(SystemClock), host, identity);
     app.limits = limits;
+    app.health = health;
     app.modules = Arc::clone(&modules);
     if flags.plain_runner {
         tracing::warn!("runners may connect over plain HTTP from loopback (--allow-plain-runner)");

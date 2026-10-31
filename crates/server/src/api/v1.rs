@@ -163,6 +163,7 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/events/latest", get(events::latest))
         .route("/api/v1/ws-ticket", post(ticket::issue))
         .route("/api/v1/audit", get(audit::list))
+        .route("/api/v1/metrics", get(crate::health::metrics::get))
         .route("/api/v1/runners", get(runners::list))
         .route("/api/v1/runners/{id}", get(runners::get))
         .route("/api/v1/runners/{id}/noop", post(runners::noop))

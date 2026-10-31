@@ -50,6 +50,16 @@ registry! {
     TerminalMaxPerRunner "terminal.max_per_runner" Count 16, 1, 256, SO,
         "How many terminals (not yet ended) one runner may hold for the Core; read at each \
          create.";
+    AlarmBackupMaxAgeSecs "alarm.backup_max_age_secs" Seconds 172_800, 3_600, 31_536_000, SO,
+        "The alarm `backup_age` raises when the newest backup in the home is older than this (or \
+         there is none and the database is older); it clears once a newer one lands. Read at \
+         each alarm pass.";
+    AlarmCertMinDays "alarm.cert_min_days" Count 14, 1, 90, SO,
+        "The alarm `cert_expiry` raises when the public listener's certificate has fewer than this \
+         many days left; it clears once it is renewed. Read at each alarm pass.";
+    AlarmDiskMinFreePct "alarm.disk_min_free_pct" Percent 10, 1, 90, SO,
+        "The alarm `disk_free` raises when the filesystem holding the database has less than this \
+         share free; it clears once there is more. Read at each alarm pass.";
     TerminalReapGraceSecs "terminal.reap_grace_secs" Seconds 300, 1, 86_400, SO,
         "How long after a `terminal.reap_warning` an idle terminal (see terminal.idle_secs) is \
          closed, unless a client attaches meanwhile; read at each pass of the idle reaper.";

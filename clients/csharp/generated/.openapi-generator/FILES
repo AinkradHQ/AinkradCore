@@ -10,6 +10,7 @@ src/Ainkrad.Client/Api/AgentsApi.cs
 src/Ainkrad.Client/Api/DevicesApi.cs
 src/Ainkrad.Client/Api/EventsApi.cs
 src/Ainkrad.Client/Api/HandshakeApi.cs
+src/Ainkrad.Client/Api/OpsApi.cs
 src/Ainkrad.Client/Api/PairingApi.cs
 src/Ainkrad.Client/Api/RunnersApi.cs
 src/Ainkrad.Client/Api/SecretsApi.cs

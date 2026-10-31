@@ -7,6 +7,7 @@ pub mod api;
 pub mod auth;
 pub mod cli;
 pub mod gateway;
+pub mod health;
 pub mod hub;
 pub mod jobs;
 pub mod live;

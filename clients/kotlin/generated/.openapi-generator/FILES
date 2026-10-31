@@ -10,6 +10,7 @@ src/main/kotlin/ainkrad/client/apis/AgentsApi.kt
 src/main/kotlin/ainkrad/client/apis/DevicesApi.kt
 src/main/kotlin/ainkrad/client/apis/EventsApi.kt
 src/main/kotlin/ainkrad/client/apis/HandshakeApi.kt
+src/main/kotlin/ainkrad/client/apis/OpsApi.kt
 src/main/kotlin/ainkrad/client/apis/PairingApi.kt
 src/main/kotlin/ainkrad/client/apis/RunnersApi.kt
 src/main/kotlin/ainkrad/client/apis/SecretsApi.kt
