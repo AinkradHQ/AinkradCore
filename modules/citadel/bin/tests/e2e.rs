@@ -459,20 +459,28 @@ async fn a_citadel_run_goes_from_issue_to_cleanup_through_the_composed_binary() 
         .unwrap();
     assert_eq!(live.status(), 200, "the token works while its run is live");
 
-    // Turn the engine off (no follow-up wake starts a new run), then cancel the worker's run.
+    // The harness process is running now: the kill below must be what ends it.
+    let alive = || {
+        Command::new("pgrep")
+            .args(["-f", &format!("{}/bin/claude", rig.dir.display())])
+            .stdout(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    assert!(alive(), "the run's harness process is live before the kill");
+
+    // Turn the engine off (no follow-up wake starts a new run), then kill the worker's run.
     rig.ok("POST", &format!("{M}/engine"), Some(json!({"enabled": false}))).await;
-    rig.ok("POST", &format!("{M}/runs/{run_id}/cancel"), None).await;
-    let done = until(60, "the cancelled run ends", async || {
+    rig.ok("POST", &format!("{M}/runs/{run_id}/kill"), None).await;
+    let done = until(60, "the killed run ends", async || {
         rig.run_of(issue).await.filter(|r| r["state"] == "cancelled")
     })
     .await;
     assert!(done["terminal_reason"].is_string() || done["ended_at"].is_string());
-    // Kill: a wake restarts nothing while the engine is off; a stray live run is killed.
-    for r in rig.runs().await {
-        if matches!(r["state"].as_str(), Some("running" | "claimed")) {
-            rig.ok("POST", &format!("{M}/runs/{}/kill", r["id"]), None).await;
-        }
-    }
+    assert!(
+        rig.runs().await.iter().all(|r| !matches!(r["state"].as_str(), Some("running" | "claimed"))),
+        "no run is still live after the kill"
+    );
     let gone = rig
         .http
         .post(&mcp)
@@ -484,14 +492,7 @@ async fn a_citadel_run_goes_from_issue_to_cleanup_through_the_composed_binary() 
         .unwrap();
     assert_eq!(gone.status(), 401, "a finished run's token is refused");
 
-    // Cleanup: no harness process of this run is left.
-    let alive = || {
-        Command::new("pgrep")
-            .args(["-f", &format!("{}/bin/claude", rig.dir.display())])
-            .stdout(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
-    };
+    // Cleanup: the kill took the harness process with it.
     until(30, "no harness process is left", async || (!alive()).then_some(())).await;
 
     // No secret in logs, the database or any transcript.

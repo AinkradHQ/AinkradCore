@@ -835,3 +835,30 @@ async fn an_agents_comment_is_redacted_before_it_is_stored() {
         "{stored}"
     );
 }
+
+/// The same switch through the settings route as an elevated admin (PR72-T1): `mcp.enabled=0`
+/// closes the MCP route to a live token, `1` opens it again.
+#[tokio::test]
+async fn the_settings_route_turns_the_mcp_route_off_and_on() {
+    let w = world().await;
+    let a = w.co("A", "AAA").await;
+    let t = w.token(a.run.id).await;
+    let app = &w.fx.app;
+    assert_eq!(rpc(app, Some(&t), list()).await.0, StatusCode::OK);
+    for (value, want) in [(0, StatusCode::UNAUTHORIZED), (1, StatusCode::OK)] {
+        let (s, body) = call(
+            &w.fx,
+            Some(&w.fx.dev),
+            Method::PUT,
+            "/settings/mcp.enabled",
+            Some(json!({"value": value})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{body}");
+        assert_eq!(
+            rpc(app, Some(&t), list()).await.0,
+            want,
+            "mcp.enabled={value}"
+        );
+    }
+}
