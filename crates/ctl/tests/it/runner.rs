@@ -279,7 +279,8 @@ fn a_revoked_runner_exits_6() {
 /// the sandbox is on, not silently skipped. Unit tests open `/bin/sh` through the driver only.
 #[test]
 fn a_real_runner_opens_a_bare_named_shell_inside_its_terminal_sandbox() {
-    let (core, url) = loopback_core("runner-pty");
+    // Short: the host's socket path under macOS's long temp dir must fit in sun_path.
+    let (core, url) = loopback_core("pty");
     let ks = core.keystore("mac");
     bootstrap(&core, &ks);
     let a = args(&[&s(&["--keystore", &ks.display().to_string()]), &core.at()]);
