@@ -173,7 +173,7 @@ pub async fn run(available: Vec<Arc<dyn Module>>) -> ExitCode {
             }
         }
         ["device", "revoke", db, id] => revoke_device(Path::new(db), id).await,
-        ["identity", "rotate", db] => rotate_identity(Path::new(db)),
+        ["identity", "rotate", db] => rotate_identity(Path::new(db)).await,
         // Last, so a module command can never shadow a platform verb.
         _ => match module_admin::find(&available, &args) {
             Some(module) => module_admin::run(module, &args).await,
@@ -224,12 +224,20 @@ async fn list_devices(db: &Path) -> Result_ {
 }
 
 /// `identity rotate`: a planned rotation of the Core identity key (handshake spec §13).
-fn rotate_identity(db: &Path) -> Result_ {
-    use ainkrad_core_server::auth::identity::{Identity, WINDOW};
-    // ponytail: not an audit row yet. A new audit action changes the contract
-    // (`x-audit-actions`) and the generated clients; the statement file is the record until
-    // that lands with the next contract change.
+async fn rotate_identity(db: &Path) -> Result_ {
+    use ainkrad_core_server::auth::identity::{Identity, WINDOW, audit};
+    // Like `recover`: the database's owner only, opened first so a refused audit is known
+    // before the key files change.
+    admin::bootstrap::owner_only(db)?;
+    let pool = store::connect(db).await?;
     let r = Identity::rotate(state_dir(db), SystemClock.unix())?;
+    let details = serde_json::json!({"old_fp": r.old_fp, "new_fp": r.new_fp,
+        "not_before": r.not_before});
+    audit(&pool, "started", details).await.map_err(|e| {
+        format!(
+            "the rotation started but its audit row failed ({e}); the statement file is the record"
+        )
+    })?;
     eprintln!(
         "rotation to {} started; the current key {} signs for at least {} more days.\n\
          Restart serve now so runners receive the statement: the window counts from that \
@@ -646,7 +654,12 @@ async fn serve(
     tracing::info!(core_fp = identity.fp, "Core identity");
     if let Some(r) = &identity.rotation {
         // This serve announces the statement: the window counts from the first one that does.
-        ainkrad_core_server::auth::Identity::announce(state_dir(db), SystemClock.unix())?;
+    ainkrad_core_server::auth::identity::audit_switch(&pool, &identity).await?;
+        if ainkrad_core_server::auth::Identity::announce(state_dir(db), SystemClock.unix())? {
+            let details = serde_json::json!({"new_fp": r.new_fp, "not_before": r.not_before,
+                "window_secs": ainkrad_core_server::auth::identity::WINDOW});
+            ainkrad_core_server::auth::identity::audit(&pool, "announced", details).await?;
+        }
         tracing::warn!(
             new_fp = r.new_fp,
             "Core identity rotation pending: runners get the statement; the new key takes over at \
