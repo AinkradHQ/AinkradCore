@@ -38,31 +38,31 @@ async fn names(pool: &SqlitePool, a: AgentId) -> Vec<String> {
 use crate::domain::gov::Skill;
 
 #[tokio::test]
-#[ignore = "S7: skills_for_run reads the run table"]
+#[ignore = "not ported yet: skills_for_run reads the run table"]
 async fn a_role_skill_reaches_that_roles_runs_only() {
     todo!("monolith store/gov/tests/skills.rs; the per-agent twin is below")
 }
 
 #[tokio::test]
-#[ignore = "S7: skills_for_run reads the run table"]
+#[ignore = "not ported yet: skills_for_run reads the run table"]
 async fn a_department_skill_reaches_its_members_through_their_teams() {
     todo!("monolith store/gov/tests/skills.rs; the per-agent twin is below")
 }
 
 #[tokio::test]
-#[ignore = "S7: skills_for_run reads the run table"]
+#[ignore = "not ported yet: skills_for_run reads the run table"]
 async fn a_project_skill_reaches_runs_on_that_projects_issues() {
     todo!("monolith store/gov/tests/skills.rs: a run on the project's issue")
 }
 
 #[tokio::test]
-#[ignore = "S7: skills_for_run reads the run table"]
+#[ignore = "not ported yet: skills_for_run reads the run table"]
 async fn publishing_adds_a_version_and_the_latest_wins() {
     todo!("monolith store/gov/tests/skills.rs; the per-agent twin is below")
 }
 
 #[tokio::test]
-#[ignore = "S7: skills_for_run reads the run table"]
+#[ignore = "not ported yet: skills_for_run reads the run table"]
 async fn an_overflowing_budget_drops_the_lowest_precedence_and_says_so() {
     todo!(
         "monolith store/gov/tests/skills.rs: fit_skills at skills_for_run (fit_skills itself is tested in domain)"
@@ -70,7 +70,7 @@ async fn an_overflowing_budget_drops_the_lowest_precedence_and_says_so() {
 }
 
 #[tokio::test]
-#[ignore = "S7: skills_for_run reads the run table"]
+#[ignore = "not ported yet: skills_for_run reads the run table"]
 async fn another_companys_skills_never_appear() {
     todo!("monolith store/gov/tests/skills.rs; the per-agent twin is below")
 }

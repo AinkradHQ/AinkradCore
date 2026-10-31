@@ -134,7 +134,6 @@ async fn a_request_about_an_existing_project_is_kicked_off_there() {
 }
 
 #[tokio::test]
-#[ignore = "S7: needs the wake queue (wake_requests)"]
 async fn a_request_about_an_existing_project_is_kicked_off_there_wakes() {
     let db = db().await;
     let pool = &db.pool;
@@ -185,7 +184,7 @@ async fn a_request_about_an_existing_project_is_kicked_off_there_wakes() {
             .unwrap();
     assert_eq!(in_wrk, 2, "the request and exactly one kickoff");
     let woken: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM wake_requests WHERE agent_id = ? AND issue_id = ?",
+        "SELECT count(*) FROM citadel_wake_requests WHERE agent_id = ? AND issue_id = ?",
     )
     .bind(o.eng_po.0)
     .bind(kickoff.id.0)

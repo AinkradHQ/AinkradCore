@@ -322,7 +322,7 @@ async fn reads_the_org_and_keeps_companies_apart() {
     assert_eq!(agents[0]["id"], b_agent.0);
     let one = ok(&fx, &format!("/agents/{}", a_agent.0)).await;
     assert_eq!(one["harness"], "opencode");
-    // Not ported: `listRunners` is the Core's, `listStuck` is the run engine's (S7).
+    // Not ported: `listRunners` is the Core's.
 
     for missing in ["/companies/99/org", "/companies/99/agents", "/agents/99"] {
         let (status, body) = get(&fx, missing).await;
@@ -332,7 +332,6 @@ async fn reads_the_org_and_keeps_companies_apart() {
 }
 
 #[tokio::test]
-#[ignore = "S4/S7: submitRequest (the company intake) is not ported"]
 async fn a_request_lands_in_the_company_intake_audited_as_the_admin() {
     let fx = fx().await;
     let a = company(&fx, "A").await;

@@ -3,6 +3,9 @@
 //! the platform (`ainkrad_core_server::agents`), so the monolith's runner and lease records are
 //! gone: a session's own supervisor is the lease.
 
+pub mod breaker;
+pub mod stuck;
+
 use crate::domain::org::{UnknownVariant, text_enum};
 use std::fmt;
 use std::str::FromStr;

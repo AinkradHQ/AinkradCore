@@ -7,7 +7,9 @@
 //! sprint) and freezes the completed points. Sprints are scrum only: kanban is refused (E5.3).
 
 use crate::domain::gov::ApprovalId;
+use crate::domain::work::WakeSource;
 use crate::domain::work::{NewSprint, ProjectMode, Sprint, SprintState};
+use crate::store::exec::{NewWakeRequest, enqueue_in};
 use ainkrad_core::audit::AuditActor;
 use sqlx::SqliteConnection;
 
@@ -441,8 +443,27 @@ pub(super) async fn start_in(
     };
     let details = serde_json::json!({"committed": committed, "gate": gate});
     append_sprint_event(conn, &started, actor, "sprint.started", details).await?;
-    // S7: the owners of the committed work that waits on them are woken to start it (R7a), once
-    // per issue (key `sprint:<id>:started:issue:<issue>`); the wake queue is the run engine's.
+    // The owners of the committed work that waits on them are woken to start it (R7a), once per
+    // issue; one already working, or waiting on a person, is not woken.
+    let owned: Vec<(i64, i64)> = sqlx::query_as(
+        "SELECT id, owner_agent_id FROM citadel_issues WHERE sprint_id = ? \
+         AND owner_agent_id IS NOT NULL AND next_agent_id = owner_agent_id \
+         AND state NOT IN ('done', 'cancelled') ORDER BY id",
+    )
+    .bind(s.id.0)
+    .fetch_all(&mut *conn)
+    .await?;
+    for (issue, owner) in owned {
+        let wake = NewWakeRequest {
+            agent_id: AgentId(owner),
+            issue_id: Some(IssueId(issue)),
+            source: WakeSource::Assignment,
+            reason: format!("sprint {} started", started.name),
+            idempotency_key: format!("sprint:{}:started:issue:{issue}", s.id.0),
+            not_before: None,
+        };
+        enqueue_in(conn, &wake, 1).await?;
+    }
     Ok(started)
 }
 

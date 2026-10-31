@@ -18,7 +18,7 @@ pub(super) struct Brief {
     pub policy: Value,
 }
 
-fn cut(s: &str, max: usize) -> &str {
+pub(super) fn cut(s: &str, max: usize) -> &str {
     match s.char_indices().nth(max) {
         Some((i, _)) => &s[..i],
         None => s,

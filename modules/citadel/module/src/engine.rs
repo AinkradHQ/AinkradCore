@@ -1,5 +1,5 @@
 //! The run engine's scheduler jobs (E2-11): `dispatch` starts runs for due wakes, `reconcile`
-//! makes runs follow their sessions, `timers` queues agent heartbeat wakes. The platform's job
+//! makes runs follow their sessions, `timers` queues agent heartbeat wakes, `repair` fixes what the stuck detector finds (only while the engine is on). The platform's job
 //! engine runs them (leases, retries, missed runs) and survives a restart; the handlers keep no
 //! state of their own, so a restart or a retried run changes nothing it should not.
 //!
@@ -33,6 +33,7 @@ const BATCH: usize = 8;
 struct Dispatch;
 struct Reconcile;
 struct Timers;
+struct Repair;
 
 impl JobHandler for Dispatch {
     fn run<'a>(&'a self, run: &'a Run) -> Done<'a> {
@@ -85,6 +86,21 @@ impl JobHandler for Timers {
     }
 }
 
+impl JobHandler for Repair {
+    fn run<'a>(&'a self, run: &'a Run) -> Done<'a> {
+        Box::pin(async {
+            let app = app()?;
+            let done = exec::repair_stuck(&app, &Platform, &app.clock.now())
+                .await
+                .map_err(|e| e.to_string())?;
+            if done.is_empty() {
+                run.idle();
+            }
+            Ok(())
+        })
+    }
+}
+
 /// `Module::jobs`: a missed pass is skipped (the next is seconds away), a failed one retried.
 // A pass that did nothing calls `Run::idle`, so an idle engine writes no `job.ran` audit rows.
 pub fn jobs() -> Vec<Job> {
@@ -99,5 +115,6 @@ pub fn jobs() -> Vec<Job> {
         job("dispatch", 10, Arc::new(Dispatch)),
         job("reconcile", 15, Arc::new(Reconcile)),
         job("timers", 60, Arc::new(Timers)),
+        job("repair", 60, Arc::new(Repair)),
     ]
 }

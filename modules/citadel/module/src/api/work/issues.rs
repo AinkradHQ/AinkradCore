@@ -20,7 +20,7 @@ use crate::domain::work::{
 use crate::store::work::{self, IssueTransitionError};
 
 /// The issue as the client sees it, keyed by its project.
-pub(super) async fn issue_out(app: &App, i: core::Issue) -> Result<Issue, ApiError> {
+pub(crate) async fn issue_out(app: &App, i: core::Issue) -> Result<Issue, ApiError> {
     let key = work::get_project(&app.pool, i.project_id)
         .await?
         .map(|p| p.key)

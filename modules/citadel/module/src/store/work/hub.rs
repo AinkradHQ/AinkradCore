@@ -15,6 +15,8 @@
 //! Every step is audited (`question.asked`, `question.answered`, `requirement.message`), so the
 //! client's event stream carries it and a new question is pushed.
 
+use crate::domain::work::WakeSource;
+use crate::store::exec::{NewWakeRequest, enqueue_in};
 use std::fmt;
 
 use ainkrad_core::audit::AuditActor;
@@ -300,9 +302,17 @@ pub(crate) async fn answer_in(
     .bind(q.id.0)
     .execute(&mut *conn)
     .await?;
-    // S7: the asker's `comment` wake (`answer:<question>`, reason "your question was answered:
-    // <answer>") is enqueued here, before the reassignment below so its own wake folds into it;
-    // the module has no wake queue yet.
+    // The answer's wake first: the reassignment's own folds into it, so the run is told the
+    // answer.
+    let wake = NewWakeRequest {
+        agent_id: q.agent_id,
+        issue_id: Some(q.issue_id),
+        source: WakeSource::Comment,
+        reason: format!("your question was answered: {answer}"),
+        idempotency_key: format!("answer:{}", q.id.0),
+        not_before: None,
+    };
+    enqueue_in(conn, &wake, 1).await?;
     let actor = user_audit(by);
     if let Some(i) = issue_in(conn, q.issue_id).await?
         && !i.state.is_terminal()
@@ -388,8 +398,15 @@ pub async fn post_to_requirement(
             .await?;
             let woke = match (r.owner_agent_id, r.owner_issue_id) {
                 (Some(agent), Some(issue)) => {
-                    // S7: the owner's `comment` wake (`thread:<comment>`, reason "<key> thread:
-                    // <body>") is enqueued here; the module has no wake queue yet.
+                    let wake = NewWakeRequest {
+                        agent_id: agent,
+                        issue_id: Some(issue),
+                        source: WakeSource::Comment,
+                        reason: format!("{} thread: {}", r.key(), body.trim()),
+                        idempotency_key: format!("thread:{comment}"),
+                        not_before: None,
+                    };
+                    enqueue_in(&mut tx, &wake, 1).await?;
                     Some((agent, issue))
                 }
                 _ => None,

@@ -8,7 +8,7 @@
 //! `admin`.
 
 use ainkrad_core_server::api::App;
-use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller, Paging};
+use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY, Caller, Paging};
 use ainkrad_core_server::store::agents as sessions;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -23,9 +23,7 @@ use super::scope::Acting;
 use super::types::{Timestamp, opt_ts, ts};
 use crate::domain::org::AgentId;
 use crate::domain::work::{IssueId, RunId, WakeSource};
-use crate::store::exec::{
-    self as engine, ControlError, NewWakeRequest, Platform, Run, RunFilter, enqueue_wake,
-};
+use crate::store::exec::{self as engine, ControlError, NewWakeRequest, Platform, Run, RunFilter};
 
 pub fn routes() -> Router<App> {
     Router::new()
@@ -81,6 +79,9 @@ pub struct RunOut {
     pub cache_tokens: i64,
     /// Millionths of a dollar; absent while unpriced (never 0).
     pub cost_usd_micros: Option<i64>,
+    /// The task's tier (`small`, `standard` or `large`): which of its agent's models the task is
+    /// routed to, from the project's routing rules and the issue's points.
+    pub tier: Option<String>,
     pub queued_at: Timestamp,
     pub started_at: Option<Timestamp>,
     pub ended_at: Option<Timestamp>,
@@ -101,11 +102,26 @@ impl From<Run> for RunOut {
             output_tokens: r.usage.output_tokens,
             cache_tokens: r.usage.cache_tokens,
             cost_usd_micros: r.usage.cost_usd_micros,
+            tier: None,
             queued_at: ts(&r.queued_at),
             started_at: opt_ts(r.started_at.as_deref()),
             ended_at: opt_ts(r.ended_at.as_deref()),
         }
     }
+}
+
+/// `r` as the client sees it, with its task's tier.
+async fn with_tier(app: &App, r: Run) -> Result<RunOut, ApiError> {
+    let issue = r.issue_id;
+    let mut o = RunOut::from(r);
+    let mut conn = app.pool.acquire().await?;
+    o.tier = Some(
+        engine::task_tier_in(&mut conn, issue)
+            .await?
+            .as_str()
+            .to_owned(),
+    );
+    Ok(o)
 }
 
 async fn one(app: &App, id: i64) -> Result<Run, ApiError> {
@@ -142,7 +158,7 @@ pub async fn list_runs(
     let mut out = Vec::new();
     for r in runs {
         if acting.sees(engine::run_company(&app.pool, r.id).await?) {
-            out.push(r.into());
+            out.push(with_tier(&app, r).await?);
         }
     }
     Ok(Json(out))
@@ -152,7 +168,7 @@ pub async fn list_runs(
     params(("id" = i64, Path, description = "Run id")),
     responses((status = 200, description = "The run", body = RunOut)))]
 pub async fn get_run(State(app): State<App>, _: Acting, Path(id): Path<i64>) -> ApiResult<RunOut> {
-    Ok(Json(one(&app, id).await?.into()))
+    Ok(Json(with_tier(&app, one(&app, id).await?).await?))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -286,7 +302,7 @@ pub async fn message(
     engine::message_run(&app, &Platform, RunId(id), &b.text, &me.device.id)
         .await
         .map_err(controlled)?;
-    Ok(Json(one(&app, id).await?.into()))
+    Ok(Json(with_tier(&app, one(&app, id).await?).await?))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -317,14 +333,22 @@ pub async fn wake(
     if reason.is_empty() || reason.chars().count() > 500 {
         return Err(ApiError::bad_request("a reason is 1 to 500 characters"));
     }
-    found(
+    let agent = found(
         crate::store::org::get_agent(&app.pool, AgentId(id)).await?,
         "agent",
     )?;
+    // Only an active agent is woken: a paused one waits for the admin, a terminated one is gone.
+    if agent.status != crate::domain::org::AgentStatus::Active {
+        return Err(ApiError::conflict(format!(
+            "agent {id} is {}, not active",
+            agent.status.as_str()
+        )));
+    }
     // A manual wake is idempotent per second, so a double tap is one wake.
     let key = format!("manual:agent:{id}:{}", app.clock.unix());
-    let w = enqueue_wake(
-        &app.pool,
+    let mut tx = ainkrad_core_server::store::begin_write(&app.pool).await?;
+    let w = engine::enqueue_in(
+        &mut tx,
         &NewWakeRequest {
             agent_id: AgentId(id),
             issue_id: b.issue_id.map(IssueId),
@@ -333,9 +357,19 @@ pub async fn wake(
             idempotency_key: key,
             not_before: None,
         },
+        1,
     )
     .await
     .map_err(super::error::refused)?;
+    crate::store::audit::append(
+        &mut tx,
+        crate::store::audit::Event::new(BY, "agent.woken")
+            .entity("agent", id)
+            .company(agent.company_id.0)
+            .details(serde_json::json!({"wake": w.id, "issue": b.issue_id})),
+    )
+    .await?;
+    tx.commit().await?;
     Ok(Json(WakeOut {
         id: w.id,
         status: w.status.as_str().to_owned(),
@@ -386,7 +420,10 @@ pub struct SettingOut {
     pub description: String,
 }
 
-async fn setting_out(app: &App, spec: &ainkrad_core_server::module::ModuleSetting) -> Result<SettingOut, ApiError> {
+async fn setting_out(
+    app: &App,
+    spec: &ainkrad_core_server::module::ModuleSetting,
+) -> Result<SettingOut, ApiError> {
     Ok(SettingOut {
         name: spec.name.to_owned(),
         value: crate::settings::value(&app.pool, spec.name).await?,
@@ -448,8 +485,17 @@ pub async fn set_setting(
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        list_runs, get_run, transcript, cancel, kill, message, wake, get_engine, set_engine,
-        list_settings, set_setting
+        list_runs,
+        get_run,
+        transcript,
+        cancel,
+        kill,
+        message,
+        wake,
+        get_engine,
+        set_engine,
+        list_settings,
+        set_setting
     ),
     components(schemas(
         RunOut,

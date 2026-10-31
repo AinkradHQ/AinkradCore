@@ -20,7 +20,7 @@ async fn the_knowledge_budget_is_the_projects_setting() {
 }
 
 #[tokio::test]
-#[ignore = "per-company settings scope; S7: skills_for_run reads the run table"]
+#[ignore = "per-company settings scope; skills_for_run is not ported yet"]
 async fn the_skill_budget_is_the_runs_projects_setting() {
     todo!("monolith store/gov/tests/settings.rs: company and project skills.budget_bytes")
 }

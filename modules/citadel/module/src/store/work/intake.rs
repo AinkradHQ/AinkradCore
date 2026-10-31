@@ -12,6 +12,8 @@
 //! requirement reaches it through its issues), and its owner moves from the CEO to the first
 //! route's product owner.
 
+use crate::domain::work::WakeSource;
+use crate::store::exec::{NewWakeRequest, enqueue_in};
 use std::fmt;
 
 use ainkrad_core::audit::AuditActor;
@@ -337,10 +339,20 @@ pub async fn submit_intake_with(
     i.priority_level = level;
     i.priority = level.is_high();
     i.criteria = criteria;
-    // S7: the CEO's `assignment` wake (`intake:<issue>`, reason "intake request: <title>", with
-    // " (for project <key>)" when `hint` names one) is enqueued here; the module has no wake
-    // queue yet.
-    let _ = &hint;
+    if let NextActor::Agent(ceo) = next {
+        let wake = NewWakeRequest {
+            agent_id: ceo,
+            issue_id: Some(i.id),
+            source: WakeSource::Assignment,
+            reason: match &hint {
+                Some(key) => format!("intake request: {} (for project {key})", i.title),
+                None => format!("intake request: {}", i.title),
+            },
+            idempotency_key: format!("intake:{}", i.id.0),
+            not_before: None,
+        };
+        enqueue_in(&mut tx, &wake, 1).await?;
+    }
     let details = json!({"title": i.title, "next_actor": format!("{next:?}")});
     let entity = ("issue", i.id.0);
     append_org_event(&mut tx, company, actor, "intake.submitted", entity, details).await?;

@@ -1,15 +1,16 @@
 //! The governance routes end to end through the Core's client gate (ported from the monolith's
 //! `api/v1/tests/{gov,money}.rs`): approvals with a reply, prices and budget caps.
 //!
-//! Left as `#[ignore]`d stubs, each with its blocker: the cost reports (S7: they read the run
-//! table), the reply waking the agent (S7: the wake queue), and the two issue/runner tests the
-//! monolith kept in `money.rs` (S4 and S7 routes).
+//! Left as `#[ignore]`d stubs, each with its blocker: the cost reports (they read the run
+//! table, not ported yet), and the two issue/runner tests the monolith kept in `money.rs` (S4 and S7 routes).
 
 mod common;
 mod gov_seed;
 
 use axum::http::{Method, StatusCode};
 use citadel_module::domain::gov::{ApprovalKind, NewApproval};
+use citadel_module::domain::work::WakeSource;
+use citadel_module::store::exec::list_wake_requests;
 use citadel_module::store::gov::open_approval;
 use common::*;
 use gov_seed::*;
@@ -68,6 +69,7 @@ async fn the_inbox_lists_pending_and_a_reply_is_recorded() {
     let decide = format!("/approvals/{}/decide", mine.id.0);
     let (status, _) = post(&fx, &decide, json!({"approve": false, "raise_tokens": 5})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "a raise only with approve");
+    let wakes_before = list_wake_requests(pool, a.agent).await.unwrap().len();
     let (status, decided) = post(
         &fx,
         &decide,
@@ -86,6 +88,14 @@ async fn the_inbox_lists_pending_and_a_reply_is_recorded() {
         "decided at the app's now: {decided}"
     );
     assert_eq!(decided["created_at"], inbox[0]["created_at"]);
+    // The reply reaches the agent: one `approval` wake, and a comment on the issue.
+    let wakes = list_wake_requests(pool, a.agent).await.unwrap();
+    assert!(wakes.len() > wakes_before, "the reply wakes the agent");
+    assert!(
+        wakes
+            .iter()
+            .any(|w| w.source == WakeSource::Approval && w.reason.contains("Rebase first."))
+    );
     let (status, body) = post(&fx, &decide, json!({"approve": true})).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(get(&fx, &uri).await.1, json!([]));
@@ -95,13 +105,7 @@ async fn the_inbox_lists_pending_and_a_reply_is_recorded() {
 }
 
 #[tokio::test]
-#[ignore = "S7: the reply wakes the agent (needs the wake queue)"]
-async fn a_reply_reaches_the_agent() {
-    todo!("monolith api/v1/tests/gov.rs: list_wake_requests grows after the reply")
-}
-
-#[tokio::test]
-#[ignore = "S7: cost_report reads the run table (getCompanyCosts, getSprintCosts)"]
+#[ignore = "not ported yet: cost_report reads the run table (getCompanyCosts, getSprintCosts)"]
 async fn costs_report_tokens_and_budgets() {
     todo!("monolith api/v1/tests/gov.rs: GET /companies/{{id}}/costs and /sprints/{{id}}/costs")
 }
@@ -212,7 +216,7 @@ async fn an_issue_moves_to_the_backlog_once_no_run_works_on_it() {
 }
 
 #[tokio::test]
-#[ignore = "S7: runner wake modes, the stuck report and the push classifier"]
+#[ignore = "runner wake modes (a Core runner is a device; no wake-my-Mac intent) and the push classifier (S11)"]
 async fn run_when_back_keeps_the_work_waiting_and_pushes_on_return() {
     todo!("monolith api/v1/tests/money.rs")
 }
@@ -250,7 +254,7 @@ async fn budgets_take_a_dollar_cap_and_an_issue_scope() {
 }
 
 #[tokio::test]
-#[ignore = "S7: apply_from past prices the run table's events (and listUnpriced reads it)"]
+#[ignore = "not ported yet: apply_from past prices the run table's events (and listUnpriced reads it)"]
 async fn prices_apply_to_the_past() {
     todo!(
         "monolith api/v1/tests/money.rs: apply_from past and GET /companies/{{id}}/costs/unpriced"
