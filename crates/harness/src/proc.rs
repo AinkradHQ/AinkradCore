@@ -33,6 +33,8 @@ pub(crate) struct Proc {
     stderr: Arc<Mutex<Vec<u8>>>,
     /// The task filling `stderr`, until `wait` has let it reach EOF.
     stderr_reader: Option<JoinHandle<()>>,
+    /// The terminating signal `wait` saw, so a sandbox kill is told apart from an exit code.
+    pub(crate) signal: Option<i32>,
 }
 
 /// `program args…` in the spec's `process_dir` (else its `cwd`), with only its allowlisted
@@ -135,6 +137,7 @@ impl Proc {
             lines: Some(BufReader::new(stdout).lines()),
             stderr,
             stderr_reader,
+            signal: None,
         })
     }
 
@@ -202,7 +205,13 @@ impl Proc {
             // ponytail: bounded, as a grandchild that inherited the pipe can hold it open.
             let _ = tokio::time::timeout(Duration::from_secs(2), reader).await;
         }
-        status.ok()?.code()
+        let status = status.ok()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            self.signal = status.signal();
+        }
+        status.code()
     }
 
     /// Kills it and its group: for a server, which does not exit on stdin EOF.
