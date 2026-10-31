@@ -76,7 +76,9 @@ pub async fn read_bucket(bucket: &Bucket) -> Result<Result<Vec<String>, Tampered
             )));
         };
         let Some(text) = fetch_text(bucket, &key).await? else {
-            return Ok(bad(format!("{key} is too large to be an anchor")));
+            return Ok(bad(format!(
+                "{key} is not a readable anchor (gone, too large or not text)"
+            )));
         };
         let Ok(c) = check_one(text.trim()) else {
             return Ok(bad(format!("{key} is not a validly signed anchor")));

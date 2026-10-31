@@ -226,3 +226,49 @@ async fn transport_errors_name_no_host_url_or_bucket() {
         assert!(e.contains("network error (connect)"), "{e}");
     }
 }
+
+#[tokio::test]
+async fn a_non_text_object_at_the_newest_name_is_skipped_for_anchoring_and_is_tampering_for_verify()
+{
+    let fake = fake().await;
+    let h = home(2).await;
+    let id = Identity::ephemeral();
+    let s = sinks(&fake);
+    assert_eq!(seq(&anchored(&h, &id, &s).await), 1);
+    // Invalid UTF-8, and a cap that would cut a multibyte character in two.
+    fake.objects.lock().unwrap().insert(
+        "core/anchors/000000000009.json".to_owned(),
+        vec![0xff, 0xfe, 0x00, 0x80],
+    );
+    let mut wide = "é".repeat(MAX_ANCHOR as usize).into_bytes();
+    wide.push(b'x');
+    fake.objects
+        .lock()
+        .unwrap()
+        .insert("core/anchors/000000000008.json".to_owned(), wide);
+    assert_eq!(
+        seq(&anchored(&h, &id, &s).await),
+        2,
+        "anchoring walks past them"
+    );
+    let t = read_bucket(&bucket(&fake)).await.unwrap().unwrap_err();
+    assert!(t.0.contains("not a readable anchor"), "{t}");
+}
+
+#[tokio::test]
+async fn a_download_stops_just_past_the_limit() {
+    let fake = fake().await;
+    fake.objects
+        .lock()
+        .unwrap()
+        .insert("core/big".to_owned(), vec![b'a'; 100_000]);
+    let dest = std::env::temp_dir().join(format!("core-anchor-cap-{}", std::process::id()));
+    let _ = fs::remove_file(&dest);
+    let n = bucket(&fake)
+        .get_limit("core/big", &dest, 10)
+        .await
+        .unwrap();
+    let on_disk = fs::metadata(&dest).unwrap().len();
+    let _ = fs::remove_file(&dest);
+    assert_eq!((n, on_disk), (11, 11), "at most limit + 1 bytes written");
+}

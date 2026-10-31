@@ -271,6 +271,12 @@ impl Bucket {
 
     /// GETs `key` into a new file at `dest` (0600).
     pub async fn get(&self, key: &str, dest: &Path) -> Result<u64, Error> {
+        self.get_limit(key, dest, u64::MAX).await
+    }
+
+    /// [`Bucket::get`] that stops once more than `limit` bytes arrived: at most `limit + 1` are
+    /// written, so a caller sees "too big" without the whole object ever reaching the disk.
+    pub async fn get_limit(&self, key: &str, dest: &Path, limit: u64) -> Result<u64, Error> {
         use std::io::Write;
         let empty = hex(digest(&SHA256, b"").as_ref());
         let req = self.request(Method::GET, key, &[], &empty)?;
@@ -281,12 +287,17 @@ impl Bucket {
         let mut r = Self::check(format!("GET {key}"), r).await?;
         let mut out = super::private_file(dest)?;
         let mut n = 0u64;
-        while let Some(chunk) = r
-            .chunk()
-            .await
-            .map_err(|e| net(&format!("GET {key}"), &e))?
-        {
-            out.write_all(&chunk)?;
+        while n <= limit {
+            let Some(chunk) = r
+                .chunk()
+                .await
+                .map_err(|e| net(&format!("GET {key}"), &e))?
+            else {
+                break;
+            };
+            let room = usize::try_from(limit.saturating_add(1) - n).unwrap_or(usize::MAX);
+            let chunk = &chunk[..chunk.len().min(room)];
+            out.write_all(chunk)?;
             n += chunk.len() as u64;
         }
         out.sync_all()?;

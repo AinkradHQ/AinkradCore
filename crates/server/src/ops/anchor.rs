@@ -19,7 +19,7 @@
 use std::fmt;
 use std::fs;
 use std::future::Future;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -158,6 +158,7 @@ async fn newest_in_bucket(
     }
     keys.sort_by_key(|(n, _)| std::cmp::Reverse(*n));
     for (n, key) in keys.iter().take(MAX_WALK) {
+        // Gone, oversized or not text: skipped like any other invalid object.
         let Some(text) = fetch_text(bucket, key).await? else {
             continue;
         };
@@ -180,30 +181,30 @@ async fn newest_in_bucket(
     )
 }
 
-/// The object's text; `None` when it is too big to be an anchor (a few hundred bytes).
+/// The object's text; `None` when it is not usable as an anchor: gone (404), too big (a few
+/// hundred bytes is normal; at most `MAX_ANCHOR` bytes are ever downloaded) or not UTF-8.
+/// Other failures (network, refused) are errors.
 async fn fetch_text(bucket: &Bucket, key: &str) -> Result<Option<String>, Error> {
     let tmp = std::env::temp_dir().join(format!(
         ".anchor-{}",
         random_hex().map_err(|e| e.to_string())?
     ));
-    let got = bucket.get(key, &tmp).await.map_err(|e| e.to_string());
-    let text = fs::File::open(&tmp).and_then(|f| {
-        let mut text = String::new();
-        f.take(MAX_ANCHOR + 1)
-            .read_to_string(&mut text)
-            .map(|_| text)
-    });
+    let got = bucket.get_limit(key, &tmp, MAX_ANCHOR).await;
+    let bytes = match got {
+        Ok(_) => fs::read(&tmp).map_err(io(key)),
+        Err(e) if e.downcast_ref::<S3Error>().is_some_and(|s| s.status == 404) => {
+            let _ = fs::remove_file(&tmp);
+            return Ok(None);
+        }
+        Err(e) => Err(e.to_string()),
+    };
     let _ = fs::remove_file(&tmp);
-    got?;
-    let text = text.map_err(io(key))?;
-    Ok((text.len() as u64 <= MAX_ANCHOR).then_some(text))
-}
-
-async fn fetch(bucket: &Bucket, key: &str) -> Result<Signed, Error> {
-    let text = fetch_text(bucket, key)
-        .await?
-        .ok_or_else(|| format!("{key}: too large to be an anchor"))?;
-    serde_json::from_str(text.trim()).map_err(io(key))
+    let bytes = bytes?;
+    Ok(if bytes.len() as u64 > MAX_ANCHOR {
+        None
+    } else {
+        String::from_utf8(bytes).ok()
+    })
 }
 
 /// Takes the home's anchor lock (blocks while another anchor runs), released on drop.
@@ -318,17 +319,24 @@ pub async fn anchor_once(
         let put = bucket.put_new(&key, &tmp).await;
         let _ = fs::remove_file(&tmp);
         if let Err(e) = put {
-            // Refused because the name exists: fine only if it already holds this very anchor.
-            let taken = e
-                .downcast_ref::<S3Error>()
-                .is_some_and(|s| matches!(s.status, 403 | 412));
+            // 412 says the name exists; a 403 means the same only if an object is there to read
+            // (otherwise it is the credentials). Fine only if it is this very anchor.
+            let status = e.downcast_ref::<S3Error>().map(|s| s.status);
+            let existing = match status {
+                Some(412 | 403) => fetch_text(bucket, &key).await.ok().flatten(),
+                _ => None,
+            };
+            let taken = status == Some(412) || existing.is_some();
             if !taken {
                 return Err(format!("bucket: {e}"));
             }
-            if !fetch(bucket, &key).await.is_ok_and(|s| s == signed) {
+            let same = existing
+                .and_then(|t| serde_json::from_str::<Signed>(t.trim()).ok())
+                .is_some_and(|s| s == signed);
+            if !same {
                 return Err(format!(
-                    "anchor number {} is already taken by a different object (a forged or \
-                     damaged one in the create-only bucket?)",
+                    "anchor number {} is already taken by a different or unreadable object in \
+                     the bucket (forged, damaged, or written by another Core?)",
                     st.anchor_seq
                 ));
             }
@@ -392,13 +400,13 @@ impl Schedule {
 
     pub fn ok(&mut self, now: i64) {
         self.fails = 0;
-        self.next = now + self.interval;
+        self.next = now.saturating_add(self.interval);
     }
 
     pub fn fail(&mut self, now: i64) {
         self.fails += 1;
         let delay = BACKOFF.saturating_mul(1 << (self.fails - 1).min(20));
-        self.next = now + delay.min(self.interval);
+        self.next = now.saturating_add(delay.min(self.interval));
     }
 }
 
