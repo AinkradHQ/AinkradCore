@@ -118,7 +118,7 @@ pub async fn backup(config: &Config, local_only: bool) -> Result_ {
             "backup_recipient is not an age recipient (age1...): run `backup-keygen` on another \
              machine and put the recipient in the config"
         })?;
-    let bucket = match (local_only, Bucket::from_env()?) {
+    let bucket = match (local_only, Bucket::from_env().map_err(|e| e.to_string())?) {
         (true, _) => None,
         (false, Some(b)) => Some(b),
         (false, None) => {
@@ -161,7 +161,10 @@ pub async fn backup(config: &Config, local_only: bool) -> Result_ {
     match bucket {
         Some(bucket) => {
             let key = format!("{}{name}", bucket.prefix);
-            bucket.put_new(&key, &path).await?;
+            bucket
+                .put_new(&key, &path)
+                .await
+                .map_err(|e| e.to_string())?;
             eprintln!("uploaded as {key}");
             println!("{key}");
         }

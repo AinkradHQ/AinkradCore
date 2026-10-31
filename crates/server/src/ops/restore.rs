@@ -27,10 +27,11 @@ pub async fn restore(src: &str, identity: &Path, signer: &str, home: &Path) -> R
     build(&home, signer, async |staging: &Path| {
         let file = match src.strip_prefix("s3:") {
             Some(key) => {
-                let bucket =
-                    Bucket::from_env()?.ok_or("s3:<key> needs the bucket: set AINKRAD_BACKUP_*")?;
+                let bucket = Bucket::from_env()
+                    .map_err(|e| e.to_string())?
+                    .ok_or("s3:<key> needs the bucket: set AINKRAD_BACKUP_*")?;
                 let to = staging.join("download.age");
-                let n = bucket.get(key, &to).await?;
+                let n = bucket.get(key, &to).await.map_err(|e| e.to_string())?;
                 eprintln!("downloaded {key} ({n} bytes)");
                 to
             }

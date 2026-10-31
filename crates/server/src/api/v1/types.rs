@@ -74,7 +74,8 @@
 ///    `terminal.reap_grace_secs`, `terminal.orphan_grace_secs`, `terminal.scrollback_bytes` and
 ///    `terminal.scrollback_budget_bytes`, and `watch` and the scrollback limits on the runner's
 ///    `pty.open` and `pty.attach`.
-pub const API_MINOR: u32 = 23;
+/// 24: the setting `audit.anchor_interval_secs` (E1-10.4, off-box anchors of the audit chain head).
+pub const API_MINOR: u32 = 24;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

@@ -187,10 +187,9 @@ pub async fn verify_db(pool: &SqlitePool) -> Result<Result<Verified, Broken>, sq
         }
         Ok(())
     })
-    .await;
-    if let Err(e) = walked {
-        return Err(sqlx::Error::Protocol(e.to_string()));
-    }
+    .await
+    .map_err(|e| sqlx::Error::Protocol(e.to_string()));
+    walked?;
     if let Some(b) = broken {
         return Ok(Err(b));
     }

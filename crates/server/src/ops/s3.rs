@@ -63,7 +63,22 @@ impl fmt::Display for S3Error {
 
 impl std::error::Error for S3Error {}
 
-type Error = Box<dyn std::error::Error>;
+type Error = Box<dyn std::error::Error + Send + Sync>;
+
+/// A transport failure as a fixed phrase: a `reqwest::Error` prints the request URL, which names
+/// the bucket's host and path, and this repo's logs and issues are public.
+fn net(what: &str, e: &reqwest::Error) -> Error {
+    let kind = if e.is_timeout() {
+        "timeout"
+    } else if e.is_connect() {
+        "connect"
+    } else if e.is_body() || e.is_decode() {
+        "body"
+    } else {
+        "request"
+    };
+    format!("{what}: network error ({kind})").into()
+}
 
 /// RFC 3986 percent-encoding as SigV4 wants it; `/` kept when `slash`.
 fn encode(s: &str, slash: bool) -> String {
@@ -243,50 +258,80 @@ impl Bucket {
         }
         let sha = super::archive::sha256_hex(path)?;
         let file = tokio::fs::File::open(path).await?;
-        let r = self
+        let req = self
             .request(Method::PUT, key, &[], &sha)?
             .header("content-length", size)
-            .body(reqwest::Body::from(file))
+            .body(reqwest::Body::from(file));
+        let r = req
             .send()
-            .await?;
+            .await
+            .map_err(|e| net(&format!("PUT {key}"), &e))?;
         Self::check(format!("PUT {key}"), r).await.map(drop)
     }
 
     /// GETs `key` into a new file at `dest` (0600).
     pub async fn get(&self, key: &str, dest: &Path) -> Result<u64, Error> {
+        self.get_limit(key, dest, u64::MAX).await
+    }
+
+    /// [`Bucket::get`] that stops once more than `limit` bytes arrived: at most `limit + 1` are
+    /// written, so a caller sees "too big" without the whole object ever reaching the disk.
+    pub async fn get_limit(&self, key: &str, dest: &Path, limit: u64) -> Result<u64, Error> {
         use std::io::Write;
         let empty = hex(digest(&SHA256, b"").as_ref());
-        let r = self.request(Method::GET, key, &[], &empty)?.send().await?;
+        let req = self.request(Method::GET, key, &[], &empty)?;
+        let r = req
+            .send()
+            .await
+            .map_err(|e| net(&format!("GET {key}"), &e))?;
         let mut r = Self::check(format!("GET {key}"), r).await?;
         let mut out = super::private_file(dest)?;
         let mut n = 0u64;
-        while let Some(chunk) = r.chunk().await? {
-            out.write_all(&chunk)?;
+        while n <= limit {
+            let Some(chunk) = r
+                .chunk()
+                .await
+                .map_err(|e| net(&format!("GET {key}"), &e))?
+            else {
+                break;
+            };
+            let room = usize::try_from(limit.saturating_add(1) - n).unwrap_or(usize::MAX);
+            let chunk = &chunk[..chunk.len().min(room)];
+            out.write_all(chunk)?;
             n += chunk.len() as u64;
         }
         out.sync_all()?;
         Ok(n)
     }
 
-    /// The object keys under `prefix` (the first 1000).
+    /// Every object key under `prefix`, following the listing's continuation tokens.
     pub async fn list(&self, prefix: &str) -> Result<Vec<String>, Error> {
         let empty = hex(digest(&SHA256, b"").as_ref());
-        let r = self
-            .request(
-                Method::GET,
-                "",
-                &[("list-type", "2"), ("prefix", prefix)],
-                &empty,
-            )?
-            .send()
-            .await?;
-        let body = Self::check("LIST".to_owned(), r).await?.text().await?;
-        Ok(body
-            .split("<Key>")
-            .skip(1)
-            .filter_map(|s| s.split_once("</Key>"))
-            .map(|(k, _)| unescape(k))
-            .collect())
+        let mut keys = Vec::new();
+        let mut token = String::new();
+        loop {
+            let mut query = vec![("list-type", "2"), ("prefix", prefix)];
+            if !token.is_empty() {
+                query.push(("continuation-token", token.as_str()));
+            }
+            let req = self.request(Method::GET, "", &query, &empty)?;
+            let r = req.send().await.map_err(|e| net("LIST", &e))?;
+            let body = Self::check("LIST".to_owned(), r)
+                .await?
+                .text()
+                .await
+                .map_err(|e| net("LIST", &e))?;
+            keys.extend(
+                body.split("<Key>")
+                    .skip(1)
+                    .filter_map(|s| s.split_once("</Key>"))
+                    .map(|(k, _)| unescape(k)),
+            );
+            match tag(&body, "NextContinuationToken") {
+                Some(next) if tag(&body, "IsTruncated").as_deref() == Some("true") => token = next,
+                _ => return Ok(keys),
+            }
+        }
     }
 }
 

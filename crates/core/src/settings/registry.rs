@@ -74,4 +74,7 @@ registry! {
         "The scrollback disk budget of one runner across its terminals: past it the runner \
          frees the least recently used terminals that have no client attached, within about a \
          second; sent with each create.";
+    AuditAnchorIntervalSecs "audit.anchor_interval_secs" Seconds 3_600, 300, 86_400, SO,
+        "Time between off-box anchors of the audit chain head (E1-10.4), written only when the \
+         backup bucket is configured; read at start.";
 }
