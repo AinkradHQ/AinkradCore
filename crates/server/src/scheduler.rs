@@ -120,6 +120,8 @@ pub struct Scheduler<C> {
     pub clock: C,
     /// Time between ticks.
     pub every: Duration,
+    /// The alarms to evaluate each tick (`Health::tick` reads the host once a minute).
+    pub health: Option<std::sync::Arc<crate::health::Health>>,
 }
 
 impl<C: Clock> Scheduler<C> {
@@ -146,6 +148,11 @@ impl<C: Clock> Scheduler<C> {
                     let unix = unix_secs(&now).unwrap_or_default();
                     if let Err(e) = crate::store::gov::prune_limits(&self.pool, unix).await {
                         eprintln!("ainkrad-core-server: pruning lockouts failed: {e}");
+                    }
+                    if let Some(health) = &self.health
+                        && let Err(e) = health.tick(&self.pool, unix).await
+                    {
+                        eprintln!("ainkrad-core-server: alarm pass failed: {e}");
                     }
                     ticks += 1;
                 }
@@ -266,6 +273,7 @@ mod tests {
                 done: Mutex::new(Some(tx)),
             },
             every: Duration::from_millis(5),
+            health: None,
         };
         // Shut down once the clock runs out, or after 5 s if the loop stops asking it.
         let shutdown = async {
@@ -307,6 +315,7 @@ mod tests {
                 done: Mutex::new(Some(tx)),
             },
             every: Duration::from_millis(5),
+            health: None,
         };
         let shutdown = async {
             let _ = tokio::time::timeout(Duration::from_secs(5), rx).await;

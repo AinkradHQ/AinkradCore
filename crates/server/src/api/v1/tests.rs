@@ -29,6 +29,7 @@ mod audit_growth;
 mod devices;
 mod events;
 mod me;
+mod metrics;
 mod modules;
 mod pairing;
 mod pairing_abuse;

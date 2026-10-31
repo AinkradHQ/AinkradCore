@@ -50,6 +50,9 @@ pub struct Identity {
     /// The pending rotation's statement, signed by this key, while its window is open: the hub
     /// sends it to every runner that connects.
     pub rotation: Option<Rotation>,
+    /// The fingerprint of the key this load replaced, when this load completed a rotation (the
+    /// switchover): the caller audits it ([`audit`]).
+    pub switched_from: Option<String>,
 }
 
 impl std::fmt::Debug for Identity {
@@ -73,6 +76,7 @@ impl Identity {
             spki,
             fp,
             rotation: None,
+            switched_from: None,
         })
     }
 
@@ -115,7 +119,7 @@ impl Identity {
                 }
                 std::fs::rename(&next, &path)?;
             }
-            let current = Self::from_pkcs8(&read_private(&path)?)?;
+            let mut current = Self::from_pkcs8(&read_private(&path)?)?;
             if current.fp != r.new_fp {
                 return Err(std::io::Error::other(format!(
                     "{ROTATION} names {} but {FILE} is {}; nothing changed",
@@ -125,6 +129,7 @@ impl Identity {
             std::fs::remove_file(dir.join(ROTATION))?;
             let _ = std::fs::remove_file(dir.join(ANNOUNCED));
             tracing::info!(core_fp = current.fp, "Core identity rotated to the new key");
+            current.switched_from = Some(r.old_fp.clone());
             return Ok(current);
         }
         if !path.exists() {
@@ -189,13 +194,15 @@ impl Identity {
 
     /// Stamps the window's start the first time a `serve` loads a pending statement (and so
     /// announces it); later calls keep the first stamp. Nothing to do without a statement.
-    pub fn announce(dir: &Path, now: i64) -> std::io::Result<()> {
+    /// `true` when this call stamped it (the announcement to audit).
+    pub fn announce(dir: &Path, now: i64) -> std::io::Result<bool> {
         if !dir.join(ROTATION).exists() || read_announced(dir)?.is_some() {
-            return Ok(());
+            return Ok(false);
         }
         match write_private(&dir.join(ANNOUNCED), now.to_string().as_bytes(), true) {
             Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => Err(e),
-            _ => Ok(()),
+            Err(_) => Ok(false),
+            Ok(()) => Ok(true),
         }
     }
 
@@ -243,6 +250,50 @@ impl Identity {
             .expect("signing with a loaded key")
             .as_ref()
             .to_vec()
+    }
+}
+
+/// Writes the audit row of a rotation step (E1-11.8): `identity.rotation.started` (`identity
+/// rotate`), `.announced` (the first `serve` that sends the statement) or `.switched` (the first
+/// start after the window), by the system. Fingerprints are public; no key material goes in.
+pub async fn audit(
+    pool: &sqlx::SqlitePool,
+    step: &str,
+    details: serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    let event = ainkrad_core::audit::NewAuditEvent {
+        actor: ainkrad_core::audit::AuditActor::System,
+        action: format!("identity.rotation.{step}"),
+        entity: None,
+        details: details.to_string(),
+    };
+    crate::store::audit::append_one(pool, &event)
+        .await
+        .map(drop)
+}
+
+/// [`audit`] that retries a few times and then logs the row instead of failing: the key files
+/// have already changed, so a database error must not stop the Core from starting, and the
+/// switchover is in memory only. The log line carries the row (public fingerprints).
+pub async fn audit_logged(pool: &sqlx::SqlitePool, step: &str, details: serde_json::Value) {
+    let mut last = None;
+    for wait in [0, 1, 3] {
+        tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+        match audit(pool, step, details.clone()).await {
+            Ok(()) => return,
+            Err(e) => last = Some(e),
+        }
+    }
+    if let Some(e) = last {
+        tracing::error!(step, %details, error = %e, "the rotation audit row could not be written");
+    }
+}
+
+/// Audits the switchover `identity` completed when it was loaded, if it did.
+pub async fn audit_switch(pool: &sqlx::SqlitePool, identity: &Identity) {
+    if let Some(old) = &identity.switched_from {
+        let details = serde_json::json!({"old_fp": old, "new_fp": identity.fp});
+        audit_logged(pool, "switched", details).await;
     }
 }
 
@@ -387,6 +438,8 @@ mod tests {
 
         let after = Identity::load_at(&dir, first + WINDOW).unwrap();
         assert_eq!(after.fp, r.new_fp);
+        assert_eq!(after.switched_from.as_deref(), Some(old.fp.as_str()));
+        assert_eq!(during.switched_from, None);
         assert!(after.rotation.is_none());
         for f in [NEXT, ROTATION, ANNOUNCED] {
             assert!(!dir.join(f).exists(), "{f}");
@@ -434,5 +487,77 @@ mod tests {
         write_private(&dir.join(NEXT), &der, true).unwrap();
         assert_eq!(Identity::load_at(&dir, 1_001).unwrap().rotation, Some(r));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+
+    /// E1-11.8: each step of a rotation is one audit row by the system, with public fingerprints
+    /// only; a plain load, and a repeated announce, write none.
+    #[tokio::test]
+    async fn each_rotation_step_writes_one_audit_row() {
+        let dir = std::env::temp_dir().join(format!("core-identity-audit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = crate::store::connect(&dir.join("core.db")).await.unwrap();
+        let actions = |pool: &sqlx::SqlitePool| {
+            let pool = pool.clone();
+            async move {
+                let mut rows =
+                    crate::store::audit::page(&pool, None, Some("identity."), None, None, 20)
+                        .await
+                        .unwrap();
+                rows.reverse();
+                rows
+            }
+        };
+        let old = Identity::load_at(&dir, 1_000).unwrap();
+        audit_switch(&pool, &old).await;
+        assert!(
+            actions(&pool).await.is_empty(),
+            "a plain load audits nothing"
+        );
+
+        let r = Identity::rotate(&dir, 1_000).unwrap();
+        let details = serde_json::json!({"old_fp": r.old_fp, "new_fp": r.new_fp,
+            "not_before": r.not_before});
+        audit(&pool, "started", details).await.unwrap();
+        assert!(Identity::announce(&dir, 2_000).unwrap());
+        assert!(!Identity::announce(&dir, 2_500).unwrap(), "once");
+        audit(&pool, "announced", serde_json::json!({"new_fp": r.new_fp}))
+            .await
+            .unwrap();
+        let after = Identity::load_at(&dir, 2_000 + WINDOW).unwrap();
+        audit_switch(&pool, &after).await;
+        let again = Identity::load_at(&dir, 2_000 + WINDOW + 5).unwrap();
+        audit_switch(&pool, &again).await;
+
+        let rows = actions(&pool).await;
+        let names: Vec<&str> = rows.iter().map(|e| e.action.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "identity.rotation.started",
+                "identity.rotation.announced",
+                "identity.rotation.switched"
+            ]
+        );
+        assert!(
+            rows.iter()
+                .all(|e| e.actor == ainkrad_core::audit::AuditActor::System)
+        );
+        let switched: serde_json::Value = serde_json::from_str(&rows[2].details).unwrap();
+        assert_eq!(switched["old_fp"], old.fp.as_str());
+        assert_eq!(switched["new_fp"], r.new_fp.as_str());
+        // The chain still verifies with the new rows in it.
+        assert!(
+            crate::store::audit::chain::verify_db(&pool)
+                .await
+                .unwrap()
+                .is_ok()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -66,7 +66,11 @@
 ///    `terminal.max_per_device` and `terminal.max_per_runner`.
 /// 20: the `secret.used` audit action (additive enum value).
 /// 21: the `secret.master_rotated` audit action (master-key rotation, E2-07.1).
-pub const API_MINOR: u32 = 21;
+/// 22: health (E1-13.4, E1-19.3, E1-11.8): `getMetrics` (`GET /api/v1/metrics`, Prometheus text,
+///    scope `admin`), the `alarm.raised` and `alarm.cleared` event kinds and audit actions (scope
+///    `admin`), the `identity.rotation.started`, `.announced` and `.switched` audit actions, and
+///    the `alarm.*` settings.
+pub const API_MINOR: u32 = 22;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
