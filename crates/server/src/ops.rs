@@ -7,6 +7,7 @@ use std::io;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
+pub mod anchor;
 pub mod archive;
 pub mod backup;
 pub mod config;

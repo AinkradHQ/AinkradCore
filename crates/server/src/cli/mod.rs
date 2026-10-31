@@ -187,7 +187,12 @@ pub async fn run(available: Vec<Arc<dyn Module>>) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("ainkrad-core-server: {e}");
-            ExitCode::FAILURE
+            // Evidence of a rewritten audit log (verify-anchors) is told apart from a failure.
+            if e.is::<ainkrad_core_server::ops::anchor::Tampered>() {
+                ExitCode::from(3)
+            } else {
+                ExitCode::FAILURE
+            }
         }
     }
 }
@@ -620,6 +625,7 @@ async fn serve(
     let (stop, mut stopped) = tokio::sync::watch::channel(());
     let mut stopped_push = stopped.clone();
     let mut stopped_jobs = stopped.clone();
+    let stopped_anchor = stopped.clone();
     // The jobs of the mounted modules come from `Module::jobs`.
     ainkrad_core_server::jobs::register(&pool, &SystemClock.now(), &modules).await?;
     let engine = ainkrad_core_server::jobs::Engine::new(
@@ -652,6 +658,40 @@ async fn serve(
             "Core identity rotation pending: runners get the statement; the new key takes over at \
              the first start a full window after the first announcement"
         );
+    }
+    // Off-box anchors of the audit chain head (E1-10.4), only with the backup bucket configured.
+    // A bad bucket setting is logged, never fatal: the Core and its audit log do not depend on it.
+    match ainkrad_core_server::ops::s3::Bucket::from_env() {
+        Ok(Some(bucket)) => {
+            let secs = store::settings::value(
+                &pool,
+                ainkrad_core::settings::Key::AuditAnchorIntervalSecs,
+                ainkrad_core::settings::Scope::Server,
+            )
+            .await?;
+            let job = ainkrad_core_server::ops::anchor::AnchorJob {
+                pool: pool.clone(),
+                home: state_dir(db).to_path_buf(),
+                identity: Arc::clone(&identity),
+                sinks: ainkrad_core_server::ops::anchor::Sinks {
+                    bucket: Some(bucket),
+                    file: std::env::var_os("AINKRAD_ANCHOR_FILE")
+                        .filter(|v| !v.is_empty())
+                        .map(Into::into),
+                },
+                clock: SystemClock,
+                interval: Duration::from_secs(secs as u64),
+            };
+            let mut stopped_anchor = stopped_anchor;
+            tokio::spawn(async move {
+                job.run(async { drop(stopped_anchor.changed().await) })
+                    .await;
+            });
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::warn!(error = %e, "audit anchors are off: the backup bucket setting is unusable")
+        }
     }
     let mut app = App::new(pool, Arc::new(SystemClock), host, identity);
     app.limits = limits;

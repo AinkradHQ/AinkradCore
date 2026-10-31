@@ -28,9 +28,21 @@ Audit (E1-10):
   ainkrad-core-server audit verify <db>
   ainkrad-core-server audit verify --export <file.jsonl>
   ainkrad-core-server audit export <db> [<file.jsonl>]
+  ainkrad-core-server audit anchor <home> [--file <path>] [--local-only]
+  ainkrad-core-server audit verify-anchors <home> --from <file|dir|bucket> [--core-fp <fp>]
 verify checks the audit hash chain and names the first changed or missing row; with --export it
 checks an export on its own. export writes every audit row as one JSON line, with its hash and
-prev_hash, to the file (refusing an existing one) or stdout. Both open the database read-only.";
+prev_hash, to the file (refusing an existing one) or stdout. Both open the database read-only.
+anchor (E1-10.4) signs the chain head {seq, hash, rows, time, anchor number, previous anchor's
+hash} with the Core identity key and PUTs it as a new object <AINKRAD_BACKUP_PREFIX>anchors/..
+to the backup bucket, and appends it to --file (or $AINKRAD_ANCHOR_FILE) for the operator to
+copy off the box; --local-only skips the bucket. It never anchors a broken chain. serve does the
+same every audit.anchor_interval_secs when the bucket is configured. verify-anchors reads the
+anchors (a file, a directory of files, or the bucket, read only) and checks signatures, anchor
+continuity, key rotation, that the newest signer is --core-fp (else this host's identity: pass
+the fingerprint you recorded offline), and that each anchored head is still in the database with
+the same hash: exit 0 ok, 3 tampering found (rebuilt, truncated or rolled-back chain), 1 could
+not check.";
 
 /// `--name value` pairs, each name among `known`; `None` on anything else.
 fn flags<'a>(rest: &[&'a str], known: &[&str]) -> Option<HashMap<&'a str, &'a str>> {

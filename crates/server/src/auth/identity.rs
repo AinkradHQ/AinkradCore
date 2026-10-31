@@ -187,6 +187,15 @@ impl Identity {
         Ok(me)
     }
 
+    /// The key in `dir` as it is now, read only: nothing is created, switched or removed (a CLI
+    /// beside a running Core must not complete its rotation). A pending statement is attached
+    /// when it is this key's own.
+    pub fn load_readonly(dir: &Path) -> std::io::Result<Self> {
+        let mut me = Self::from_pkcs8(&read_private(&dir.join(FILE))?)?;
+        me.rotation = read_rotation(dir)?.filter(|r| r.old_fp == me.fp);
+        Ok(me)
+    }
+
     /// Stamps the window's start the first time a `serve` loads a pending statement (and so
     /// announces it); later calls keep the first stamp. Nothing to do without a statement.
     pub fn announce(dir: &Path, now: i64) -> std::io::Result<()> {

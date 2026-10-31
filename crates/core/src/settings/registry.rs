@@ -50,4 +50,7 @@ registry! {
     TerminalMaxPerRunner "terminal.max_per_runner" Count 16, 1, 256, SO,
         "How many terminals (not yet ended) one runner may hold for the Core; read at each \
          create.";
+    AuditAnchorIntervalSecs "audit.anchor_interval_secs" Seconds 3_600, 300, 86_400, SO,
+        "Time between off-box anchors of the audit chain head (E1-10.4), written only when the \
+         backup bucket is configured; read at start.";
 }
