@@ -70,7 +70,11 @@
 ///    scope `admin`), the `alarm.raised` and `alarm.cleared` event kinds and audit actions (scope
 ///    `admin`), the `identity.rotation.started`, `.announced` and `.switched` audit actions, and
 ///    the `alarm.*` settings.
-pub const API_MINOR: u32 = 22;
+/// 23: terminal storage (E2-04.3, E2-06): the `terminal.reap_warning` event, the settings
+///    `terminal.reap_grace_secs`, `terminal.orphan_grace_secs`, `terminal.scrollback_bytes` and
+///    `terminal.scrollback_budget_bytes`, and `watch` and the scrollback limits on the runner's
+///    `pty.open` and `pty.attach`.
+pub const API_MINOR: u32 = 23;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

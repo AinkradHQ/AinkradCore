@@ -50,7 +50,25 @@ pub struct PtyOpen {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env_pass: Vec<String>,
     pub size: Size,
+    /// This stream only watches for the exit (the Core's monitor): it is not a client, so it
+    /// does not protect the terminal's scrollback from the disk budget.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub watch: bool,
+    /// The disk cap for this terminal's scrollback; the runner clamps it to its bounds.
+    /// Absent: the runner's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scrollback_bytes: Option<u64>,
+    /// The runner's total scrollback disk budget (E2-06.2), applied by LRU across its
+    /// terminals; the runner clamps it. Absent: unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scrollback_budget: Option<u64>,
 }
+
+/// The bounds the runner clamps a terminal's scrollback cap and its disk budget to; the
+/// Core's settings (`terminal.scrollback_bytes`, `terminal.scrollback_budget_bytes`) use the
+/// same ones.
+pub const SCROLLBACK_BYTES: (u64, u64, u64) = (256 << 10, 64 << 20, 8 << 20);
+pub const SCROLLBACK_BUDGET: (u64, u64, u64) = (1 << 20, 64 << 30, 256 << 20);
 
 /// `pty.attach`: reach a running terminal and resume its output at `seq`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -59,6 +77,9 @@ pub struct PtyAttach {
     /// The next output byte the attacher wants; older than the runner keeps gets a snapshot.
     #[serde(default)]
     pub seq: u64,
+    /// Only watches for the exit (the Core's monitor), not a client; see [`PtyOpen::watch`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub watch: bool,
 }
 
 /// `pty.close`: hang the terminal up (HUP, then TERM, then KILL) and answer its exit.

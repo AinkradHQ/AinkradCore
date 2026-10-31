@@ -49,7 +49,10 @@ fn main() -> ExitCode {
         }
     };
     // The child is forked while this process has one thread: no runtime yet (review L1).
-    let cfg = HostConfig::new(PathBuf::from(dir), id);
+    let mut cfg = HostConfig::new(PathBuf::from(dir), id);
+    if let (Some(d), Some(cap)) = (cfg.disk.as_mut(), spec.scrollback_bytes) {
+        d.cap = cap;
+    }
     let spawned = match prepare(&cfg).and_then(|()| Pty::spawn(&spec)) {
         Ok(s) => s,
         Err(e) => {

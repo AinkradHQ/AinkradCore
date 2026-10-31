@@ -235,6 +235,14 @@ impl Fx {
         panic!("timed out waiting for {what}");
     }
 
+    /// Files a runner's terminal directory still holds: hosts' records and sockets, and the
+    /// scrollback ring files (the `scrollback` directory itself stays).
+    fn leftovers(&self) -> usize {
+        let count = |d: &std::path::Path| std::fs::read_dir(d).map_or(0, |r| r.count());
+        let sd = self.dir.join("scrollback");
+        count(&self.dir) - usize::from(sd.is_dir()) + count(&sd)
+    }
+
     async fn count(&self, sql: &'static str) -> i64 {
         sqlx::query_scalar(sql)
             .fetch_one(&self.core.app.pool)
@@ -352,10 +360,8 @@ async fn a_terminal_is_created_attached_resized_signalled_and_closed_through_the
         .call(o, "DELETE", &format!("/api/v1/terminals/{id}"), None)
         .await;
     assert!(s == 200 && closed["status"] == "reaped", "{closed}");
-    fx.until("the host gone", async || {
-        std::fs::read_dir(&fx.dir).unwrap().count() == 0
-    })
-    .await;
+    fx.until("the host gone", async || fx.leftovers() == 0)
+        .await;
 
     let actions: Vec<String> = sqlx::query_scalar(
         "SELECT action FROM audit_events WHERE action LIKE 'terminal.%' ORDER BY seq",
@@ -525,17 +531,13 @@ async fn an_exit_is_recorded_after_a_restart_and_a_failed_create_leaves_no_host(
     fx.call(o, "DELETE", &format!("/api/v1/terminals/{id}"), None)
         .await;
 
-    fx.until("the first host gone", async || {
-        std::fs::read_dir(&fx.dir).unwrap().count() == 0
-    })
-    .await;
+    fx.until("the first host gone", async || fx.leftovers() == 0)
+        .await;
     sqlx::query("CREATE TRIGGER no_rows BEFORE INSERT ON core_terminals BEGIN SELECT RAISE(ABORT, 'no'); END")
         .execute(&fx.core.app.pool).await.unwrap();
     assert_ne!(fx.create(o, "/bin/cat", &[]).await.0, 201);
-    fx.until("the orphan host closed", async || {
-        std::fs::read_dir(&fx.dir).unwrap().count() == 0
-    })
-    .await;
+    fx.until("the orphan host closed", async || fx.leftovers() == 0)
+        .await;
 }
 
 /// M3 and M5: a client that stops reading cannot hold up a revocation, an oversized message

@@ -456,20 +456,29 @@ impl Session {
         let (inbox_tx, inbox) = mpsc::unbounded_channel();
         h.inbox = Some(inbox_tx);
         tokio::spawn(async move {
-            let (op, terminal, seq) = match command {
+            let (op, terminal, seq, watch) = match command {
                 Command::PtyOpen(req) => match pty.open(&req).await {
-                    Ok(id) => (Op::Open, id, 0),
+                    Ok(id) => (Op::Open, id, 0, req.watch),
                     Err(e) => {
                         tracing::warn!(code = ?e.code, "a terminal did not open: {}", e.message);
                         let _ = done.send((stream, Body::Error(e)));
                         return;
                     }
                 },
-                Command::PtyAttach(req) => (Op::Attach, req.terminal, req.seq),
+                Command::PtyAttach(req) => (Op::Attach, req.terminal, req.seq, req.watch),
                 _ => return,
             };
             let last = pty
-                .bridge(op, terminal, seq, stream, inbox, cancel_rx, done.clone())
+                .bridge(
+                    op,
+                    watch,
+                    terminal,
+                    seq,
+                    stream,
+                    inbox,
+                    cancel_rx,
+                    done.clone(),
+                )
                 .await;
             let _ = done.send((stream, last));
         });

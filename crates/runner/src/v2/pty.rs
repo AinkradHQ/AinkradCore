@@ -13,18 +13,22 @@
 //! - Every connection's hello lists the hosts found in the terminal directory (stale ones are
 //!   cleaned), so a restarted runner re-announces the terminals it no longer has streams for.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ainkrad_proto::v2::{
     Body, Control, Credit, DRIVER_PTY, DriverInfo, Emit, ErrorCode, OP_PTY_ATTACH, OP_PTY_CLOSE,
-    OP_PTY_OPEN, Outflow, Output, PtyOpen, Reply, SIGNAL_HOST_LOST, SIGNALS, STREAM_WINDOW,
-    Snapshot, StreamError, TerminalExit, TerminalInfo,
+    OP_PTY_OPEN, Outflow, Output, PtyOpen, Reply, SCROLLBACK_BUDGET, SCROLLBACK_BYTES,
+    SIGNAL_HOST_LOST, SIGNALS, STREAM_WINDOW, Snapshot, StreamError, TerminalExit, TerminalInfo,
 };
 use ainkrad_ptyhost::client::{HostReader, HostWriter, connect, launch, new_id, scan};
+use ainkrad_ptyhost::host::scrollback_dir;
 use ainkrad_ptyhost::pty::{Exit, Spec, environment};
+use ainkrad_ptyhost::store;
 use ainkrad_ptyhost::wire::{FromHost, HostInfo, ToHost};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -76,6 +80,39 @@ impl PtyConfig {
 
 pub struct PtyDriver {
     config: PtyConfig,
+    /// The scrollback disk budget across this runner's terminals (E2-06.2), in bytes.
+    budget: AtomicU64,
+    /// Per terminal: the clients attached now and when one last attached, typed or left. A
+    /// watch stream (the Core's exit monitor) is not a client and is not counted.
+    clients: Mutex<HashMap<String, (u32, u64)>>,
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0))
+}
+
+/// One attached client of a terminal; leaving restarts its idle clock.
+struct ClientGuard {
+    driver: Arc<PtyDriver>,
+    terminal: String,
+}
+
+impl Drop for ClientGuard {
+    fn drop(&mut self) {
+        let mut all = self.driver.clients.lock().unwrap();
+        if let Some(c) = all.get_mut(&self.terminal) {
+            c.0 = c.0.saturating_sub(1);
+            c.1 = now_ms();
+        }
+    }
+}
+
+/// The scrollback files of a terminal being read must not be mistaken for the budget's:
+/// `usage` counts every ring file in the directory.
+fn clamp((min, max, _): (u64, u64, u64), v: u64) -> u64 {
+    v.clamp(min, max)
 }
 
 fn err(code: ErrorCode, m: impl Into<String>) -> StreamError {
@@ -135,7 +172,98 @@ pub enum Op {
 
 impl PtyDriver {
     pub fn new(config: PtyConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            budget: AtomicU64::new(SCROLLBACK_BUDGET.2),
+            clients: Mutex::default(),
+        }
+    }
+
+    /// Sets the scrollback disk budget (clamped to its bounds).
+    pub fn set_budget(&self, bytes: u64) {
+        self.budget
+            .store(clamp(SCROLLBACK_BUDGET, bytes), Ordering::Relaxed);
+    }
+
+    /// Checks the budget once a second until the driver is dropped.
+    // ponytail: a 1 s poll, so a flood overshoots the budget by about a second of output; a
+    // host asking the runner when its ring rotates is the upgrade if that matters.
+    pub fn spawn_budget_loop(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let Some(d) = weak.upgrade() else { return };
+                d.enforce_budget().await;
+            }
+        });
+    }
+
+    fn client(self: &Arc<Self>, terminal: &str) -> ClientGuard {
+        let mut all = self.clients.lock().unwrap();
+        let c = all.entry(terminal.to_owned()).or_default();
+        c.0 += 1;
+        c.1 = now_ms();
+        ClientGuard {
+            driver: Arc::clone(self),
+            terminal: terminal.to_owned(),
+        }
+    }
+
+    fn typed(&self, terminal: &str) {
+        if let Some(c) = self.clients.lock().unwrap().get_mut(terminal) {
+            c.1 = now_ms();
+        }
+    }
+
+    /// Frees scrollback disk until the total is within the budget: the least recently used
+    /// terminals first, never one with a client attached. A terminal's own cap still bounds
+    /// the attached ones, so the total can exceed the budget by at most that many caps.
+    pub async fn enforce_budget(&self) {
+        if !self.config.enabled {
+            return;
+        }
+        let dir = scrollback_dir(&self.config.dir);
+        let budget = self.budget.load(Ordering::Relaxed);
+        let total = |d: &std::path::Path| store::usage(d).iter().map(|u| u.1).sum::<u64>();
+        let mut sum = total(&dir);
+        if sum <= budget {
+            return;
+        }
+        let mut cands: Vec<(u64, String)> = {
+            let held = self.clients.lock().unwrap();
+            store::usage(&dir)
+                .into_iter()
+                .filter(|u| held.get(&u.0).is_none_or(|c| c.0 == 0))
+                .map(|u| (held.get(&u.0).map_or(u.2, |c| c.1.max(u.2)), u.0))
+                .collect()
+        };
+        cands.sort();
+        for (_, id) in cands {
+            for _ in 0..2 {
+                if sum <= budget {
+                    return;
+                }
+                let Ok(Ok((_, _, mut wr))) =
+                    tokio::time::timeout(Duration::from_secs(1), connect(&self.config.dir, &id))
+                        .await
+                else {
+                    break;
+                };
+                if wr.send(&ToHost::Shed).await.is_err() {
+                    break;
+                }
+                // The host frees it a moment later: wait for the effect, briefly.
+                for _ in 0..50 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    let now = total(&dir);
+                    if now < sum {
+                        sum = now;
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     /// The driver as advertised in `hello`; `None` when it is off.
@@ -198,7 +326,12 @@ impl PtyDriver {
                 &req.env,
             ),
             size: req.size,
+            scrollback_bytes: req.scrollback_bytes.map(|b| clamp(SCROLLBACK_BYTES, b)),
         };
+        if let Some(b) = req.scrollback_budget {
+            self.set_budget(b);
+        }
+        self.enforce_budget().await;
         if let Some(hide) = &self.config.hide {
             // The shell the host would start by default is named here, so the wrapper can run it.
             let program = spec
@@ -288,6 +421,7 @@ impl PtyDriver {
     pub async fn bridge(
         self: Arc<Self>,
         op: Op,
+        watch: bool,
         terminal: String,
         seq: u64,
         stream: u64,
@@ -301,6 +435,7 @@ impl PtyDriver {
             Err(_) if self.host_gone(&terminal).await => return host_lost(op, &terminal),
             Err(e) => return Body::Error(e),
         };
+        let _client = (!watch).then(|| self.client(&terminal));
         let send = |b: Body| drop(out.send((stream, b)));
         send(Body::Control(Control::Opened(info_of(&info))));
         if wr.send(&ToHost::Attach { seq }).await.is_err() {
@@ -379,6 +514,7 @@ impl PtyDriver {
                 b = inbox.recv() => match b {
                     None => return Body::Error(err(ErrorCode::Cancelled, "the stream was dropped")),
                     Some(Body::Output(Output { data })) => {
+                        self.typed(&terminal);
                         let _ = wr.send(&ToHost::Input { data }).await;
                     }
                     Some(Body::Control(Control::Resize(size))) if size.valid() => {

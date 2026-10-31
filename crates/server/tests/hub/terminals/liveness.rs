@@ -71,6 +71,19 @@ async fn exited_events(fx: &Fx, id: &str) -> Vec<Value> {
         .collect()
 }
 
+/// The `terminal.reap_warning` events about `id`, as their payloads.
+async fn warnings_of(fx: &Fx, id: &str) -> Vec<Value> {
+    let rows: Vec<String> =
+        sqlx::query_scalar("SELECT payload FROM events WHERE kind='terminal.reap_warning'")
+            .fetch_all(&fx.core.app.pool)
+            .await
+            .unwrap();
+    rows.iter()
+        .filter_map(|p| serde_json::from_str::<Value>(p).ok())
+        .filter(|v| v["terminal"] == id)
+        .collect()
+}
+
 async fn running_of(fx: &Fx) -> i64 {
     fx.count("SELECT count(*) FROM core_terminals WHERE status IN ('created','running')")
         .await
@@ -211,6 +224,42 @@ async fn an_idle_terminal_with_nobody_attached_is_closed() {
     assert_eq!(fx.status(o, &orphan).await, "running");
 
     set(&fx, Setting::TerminalIdleSecs, "1").await;
+    set(&fx, Setting::TerminalReapGraceSecs, "3600").await;
+    // Phase one: a warning, once, and nothing is closed however many passes run.
+    for _ in 0..3 {
+        ainkrad_core_server::api::v1::sweep_terminals(&fx.core.app).await;
+    }
+    assert_eq!(
+        fx.status(o, &orphan).await,
+        "running",
+        "no close in the grace"
+    );
+    let warnings = warnings_of(&fx, &orphan).await;
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!(warnings[0]["reason"], "idle");
+    assert_eq!(warnings[0]["grace_secs"], 3600);
+    assert!(warnings[0]["reap_at"].is_string(), "{warnings:?}");
+    assert!(
+        warnings_of(&fx, &watched).await.is_empty(),
+        "attached: no warning"
+    );
+    // A client that attaches in the grace cancels it: it is not closed, and a later idle
+    // period is warned about afresh.
+    let mut back = fx.ws(o, &orphan).await;
+    back.read_until("ready").await;
+    ainkrad_core_server::api::v1::sweep_terminals(&fx.core.app).await;
+    drop(back);
+    fx.until("the client left", async || {
+        terminal(&fx, &orphan).await["attached"] == 0
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    ainkrad_core_server::api::v1::sweep_terminals(&fx.core.app).await;
+    assert_eq!(warnings_of(&fx, &orphan).await.len(), 2, "warned again");
+    assert_eq!(fx.status(o, &orphan).await, "running");
+    // Phase two: the grace is over.
+    set(&fx, Setting::TerminalReapGraceSecs, "1").await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
     // A pass that cannot reach the runner (busy, offline) leaves the row for the next one.
     for _ in 0..20 {
         ainkrad_core_server::api::v1::sweep_terminals(&fx.core.app).await;
@@ -402,4 +451,161 @@ async fn a_revoked_devices_terminals_are_closed() {
         !fx.dir.join(format!("{mine}.json")).exists()
     })
     .await;
+}
+
+/// E2-06.3: a host the runner holds but the Core has no record of is flagged (a
+/// `terminal.reap_warning` with reason `orphan` and the grace), left alone for the grace, and
+/// then closed (`terminal.closed`, reason `orphan`). A host with a live row is never flagged.
+#[tokio::test]
+async fn a_host_with_no_core_record_is_flagged_then_closed_after_the_grace() {
+    use ainkrad_proto::v2::{Size, TerminalInfo, TerminalState};
+    let fx = Fx::new("t-orphan").await;
+    let o = &fx.owner;
+    let lost = fx.sh(o).await;
+    let kept = fx.sh(o).await;
+    let info = |id: &str| TerminalInfo {
+        terminal: id.to_owned(),
+        state: TerminalState::Running,
+        size: Size { rows: 24, cols: 80 },
+        seq: 0,
+        pid: None,
+        exit: None,
+    };
+    // The Core loses its record of one terminal (a restored backup, a wiped database).
+    sqlx::query("DELETE FROM core_terminals WHERE id=?")
+        .bind(&lost)
+        .execute(&fx.core.app.pool)
+        .await
+        .unwrap();
+    set(&fx, Setting::TerminalOrphanGraceSecs, "3600").await;
+    let before = fx.core.app.clock.unix() + 60;
+    ainkrad_core_server::api::v1::reconcile_terminals(
+        &fx.core.app,
+        &fx.runner,
+        &[info(&lost), info(&kept)],
+        before,
+    )
+    .await;
+    // Too new to judge: a terminal being created has a host before it has a row.
+    ainkrad_core_server::api::v1::sweep_terminals(&fx.core.app).await;
+    assert!(warnings_of(&fx, &lost).await.is_empty());
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    for _ in 0..3 {
+        ainkrad_core_server::api::v1::sweep_terminals(&fx.core.app).await;
+    }
+    let w = warnings_of(&fx, &lost).await;
+    assert_eq!(w.len(), 1, "flagged once: {w:?}");
+    assert_eq!(
+        (w[0]["reason"].as_str(), w[0]["grace_secs"].as_i64()),
+        (Some("orphan"), Some(3600))
+    );
+    assert!(
+        fx.dir.join(format!("{lost}.json")).exists(),
+        "alive in the grace"
+    );
+    assert!(
+        warnings_of(&fx, &kept).await.is_empty(),
+        "a live row is not an orphan"
+    );
+
+    set(&fx, Setting::TerminalOrphanGraceSecs, "1").await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    for _ in 0..20 {
+        ainkrad_core_server::api::v1::sweep_terminals(&fx.core.app).await;
+        if !fx.dir.join(format!("{lost}.json")).exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(
+        !fx.dir.join(format!("{lost}.json")).exists(),
+        "the orphan host was closed"
+    );
+    let closed: Vec<String> =
+        sqlx::query_scalar("SELECT payload FROM events WHERE kind='terminal.closed'")
+            .fetch_all(&fx.core.app.pool)
+            .await
+            .unwrap();
+    assert!(
+        closed
+            .iter()
+            .any(|p| p.contains(&lost) && p.contains("\"reason\":\"orphan\"")),
+        "{closed:?}"
+    );
+    assert_eq!(
+        fx.status(o, &kept).await,
+        "running",
+        "the recorded terminal was not touched"
+    );
+}
+
+/// The orphan map is filled from what a runner says, so it is bounded and checked: a malformed
+/// id is not tracked, at most 64 hosts per runner are, a hello replaces the runner's set, and a
+/// runner that disconnects takes its flags with it.
+#[tokio::test]
+async fn the_orphan_list_is_validated_capped_and_dropped_with_its_runner() {
+    use ainkrad_proto::v2::{Size, TerminalInfo, TerminalState};
+    let fx = Fx::new("t-orphan-cap").await;
+    set(&fx, Setting::TerminalOrphanGraceSecs, "3600").await;
+    let info = |id: &str| TerminalInfo {
+        terminal: id.to_owned(),
+        state: TerminalState::Running,
+        size: Size { rows: 24, cols: 80 },
+        seq: 0,
+        pid: None,
+        exit: None,
+    };
+    let before = fx.core.app.clock.unix() + 60;
+    let mut listed: Vec<TerminalInfo> = (0..70).map(|i| info(&format!("t_cap{i:03}"))).collect();
+    listed.extend([
+        info("../etc/passwd"),
+        info("x_nope"),
+        info(&format!("t_{}", "a".repeat(40))),
+    ]);
+    ainkrad_core_server::api::v1::reconcile_terminals(&fx.core.app, &fx.runner, &listed, before)
+        .await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    ainkrad_core_server::api::v1::sweep_terminals(&fx.core.app).await;
+    let mut tracked = 0;
+    for i in 0..70 {
+        tracked += usize::from(has_warning(&fx, &format!("t_cap{i:03}")).await);
+    }
+    assert_eq!(tracked, 64, "at most 64 hosts per runner");
+    for bad in ["../etc/passwd", "x_nope"] {
+        assert!(!has_warning(&fx, bad).await, "{bad} was tracked");
+    }
+    assert!(
+        !has_warning(&fx, &format!("t_{}", "a".repeat(40))).await,
+        "a long id was tracked"
+    );
+    // A hello that lists none replaces the set: nothing is left to close.
+    ainkrad_core_server::api::v1::reconcile_terminals(&fx.core.app, &fx.runner, &[], before).await;
+    let n = warnings_of(&fx, "t_cap000").await.len();
+    set(&fx, Setting::TerminalOrphanGraceSecs, "1").await;
+    ainkrad_core_server::api::v1::reconcile_terminals(
+        &fx.core.app,
+        &fx.runner,
+        &[info("t_late")],
+        before,
+    )
+    .await;
+    // The runner goes: its flags go with it, even a freshly made one.
+    fx.stop.send_replace(true);
+    fx.until("the runner offline", async || {
+        !fx.core.app.hub.online(&fx.runner)
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    for _ in 0..3 {
+        ainkrad_core_server::api::v1::sweep_terminals(&fx.core.app).await;
+    }
+    assert!(
+        warnings_of(&fx, "t_late").await.is_empty(),
+        "flagged by a runner that left"
+    );
+    assert_eq!(warnings_of(&fx, "t_cap000").await.len(), n);
+}
+
+async fn has_warning(fx: &Fx, id: &str) -> bool {
+    !warnings_of(fx, id).await.is_empty()
 }

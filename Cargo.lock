@@ -206,6 +206,7 @@ dependencies = [
  "ainkrad-sys",
  "ainkrad-term",
  "base64 0.22.1",
+ "libc",
  "portable-pty",
  "serde",
  "serde_json",

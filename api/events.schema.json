@@ -74,6 +74,7 @@
     "terminal.closed",
     "terminal.detached",
     "terminal.exited",
-    "terminal.opened"
+    "terminal.opened",
+    "terminal.reap_warning"
   ]
 }

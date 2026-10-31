@@ -1223,6 +1223,10 @@
         },
         "terminal": {
           "type": "string"
+        },
+        "watch": {
+          "description": "Only watches for the exit (the Core's monitor), not a client; see [`PtyOpen::watch`].",
+          "type": "boolean"
         }
       },
       "required": [
@@ -1279,8 +1283,30 @@
             "null"
           ]
         },
+        "scrollback_budget": {
+          "description": "The runner's total scrollback disk budget (E2-06.2), applied by LRU across its\nterminals; the runner clamps it. Absent: unchanged.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "scrollback_bytes": {
+          "description": "The disk cap for this terminal's scrollback; the runner clamps it to its bounds.\nAbsent: the runner's default.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "size": {
           "$ref": "#/$defs/Size"
+        },
+        "watch": {
+          "description": "This stream only watches for the exit (the Core's monitor): it is not a client, so it\ndoes not protect the terminal's scrollback from the disk budget.",
+          "type": "boolean"
         }
       },
       "required": [
