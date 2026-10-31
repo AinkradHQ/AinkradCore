@@ -1,0 +1,16 @@
+[package]
+name = "ainkrad-gitfixture"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Test support only (E2 KAN-271): a local HTTPS git server with a throwaway CA. Depended on by dev-dependencies
+# alone, so none of it reaches a shipped binary.
+[dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+tokio = { version = "1.54.0", features = ["io-util", "net", "process", "rt", "sync", "time"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
