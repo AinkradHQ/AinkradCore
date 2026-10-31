@@ -378,6 +378,8 @@ async fn a_citadel_run_goes_from_issue_to_cleanup_through_the_composed_binary() 
     // mcp.enabled is a Core setting the operator turns on (admin + step-up); the hard-stop budget
     // on the capped agent allows only a few tokens.
     rig.ok("PUT", &format!("{M}/settings/mcp.enabled"), Some(json!({"value": 1}))).await;
+    // The run token is a credential: it follows secrets.mode, so mode 1 (throwaway values only).
+    rig.ok("PUT", "/api/v1/settings/server/secrets.mode", Some(json!({"value": 1}))).await;
     rig.ok(
         "POST",
         &format!("{M}/companies/{company}/budgets"),

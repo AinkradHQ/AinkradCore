@@ -45,7 +45,7 @@ pub mod secrets;
 use secrets::{Delivered, Redeem};
 
 /// The variable the Core delivers a run's token under (`Module::credentials` of Citadel).
-pub const RUN_TOKEN_VAR: &str = "CITADEL_RUN_TOKEN";
+pub const RUN_TOKEN_VAR: &str = ainkrad_proto::v2::RUN_TOKEN_VAR;
 
 type Fut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 

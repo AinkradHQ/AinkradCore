@@ -136,6 +136,13 @@ async fn enabled(conn: &mut SqliteConnection) -> Result<i64, Error> {
     }
 }
 
+/// Refuses while the broker is off. Credentials a module mints (the run token) pass it too, so
+/// `secrets.mode 0` stops every credential path.
+pub async fn require_enabled(pool: &SqlitePool) -> Result<(), Error> {
+    let mut conn = pool.acquire().await?;
+    enabled(&mut conn).await.map(drop)
+}
+
 /// The checks every value passes before it is sealed.
 async fn check_value(conn: &mut SqliteConnection, value: &str) -> Result<(), Error> {
     let mode = enabled(conn).await?;

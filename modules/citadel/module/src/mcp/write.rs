@@ -14,7 +14,7 @@ use crate::domain::work::{
     Actor, BlockerLink, IssueId, IssueKind, IssueState, IssueTransition, NewComment, NewIssue,
     NextActor, UserId,
 };
-use crate::store::exec::{EmptyDone, RunScope, done_evidence, get_run, refuse_empty_done};
+use crate::store::exec::RunScope;
 use crate::store::gov::{KnowledgeError, Proposal, open_approval, propose};
 use crate::store::org::{get_agent, user_exists};
 use crate::store::work::{
@@ -95,9 +95,9 @@ async fn link(app: &App, blocker: i64, blocked: i64) -> Result<()> {
     }
 }
 
-/// Moves the issue, only while the agent is its next actor. A `done` with nothing to show for
-/// it is refused (`empty_done`). Not ported yet: the pull request review that `done` goes
-/// through, which needs the forge slice (S6).
+/// Moves the issue, only while the agent is its next actor. `done` is refused: it skips the
+/// review and pull-request gate (B-M3), so an agent submits for review and a reviewer approves,
+/// whatever evidence it holds.
 pub(super) async fn transition(app: &App, scope: RunScope, args: &JsonObject) -> Result<Value> {
     let issue = target(app, scope, int(args, "issue_id")?).await?;
     let me = NextActor::Agent(scope.agent_id);
@@ -134,17 +134,17 @@ pub(super) async fn transition(app: &App, scope: RunScope, args: &JsonObject) ->
             }
             IssueTransition::Block
         }
-        "done" => IssueTransition::Done,
+        "done" => {
+            return Err(ToolError::Refused(
+                "an agent cannot mark an issue done: use submit_for_review".to_owned(),
+            ));
+        }
         other => {
             return Err(ToolError::Invalid(format!(
-                "transition {other:?} is not one of start, submit_for_review, block, done"
+                "transition {other:?} is not one of start, submit_for_review, block"
             )));
         }
     };
-    // Only a done the issue's state allows is judged; any other is refused below, as illegal.
-    if step == IssueTransition::Done && issue.state == IssueState::InProgress {
-        empty_done(app, scope, issue.id).await?;
-    }
     let moved = match transition_issue(&app.pool, issue.id, &step, AuditActor::System).await {
         Ok(moved) => moved,
         Err(IssueTransitionError::Db(e)) => return Err(e.into()),
@@ -154,32 +154,6 @@ pub(super) async fn transition(app: &App, scope: RunScope, args: &JsonObject) ->
         json!({"issue_id": moved.id.0, "key": issue_key(&app.pool, moved.id).await?,
               "state": moved.state.as_str(), "next_actor": next_actor(&moved.next_actor)}),
     )
-}
-
-/// Refuses a done with nothing to show for it (pain #3): no PR and no comment from this run.
-/// The agent is told why; its second empty done on the issue escalates it up the chain.
-async fn empty_done(app: &App, scope: RunScope, issue: IssueId) -> Result<()> {
-    let pool = &app.pool;
-    if done_evidence(pool, issue, scope.run_id).await? {
-        return Ok(());
-    }
-    let run = get_run(pool, scope.run_id)
-        .await?
-        .ok_or_else(|| ToolError::Refused("your run is gone".to_owned()))?;
-    let why = "done refused: nothing shows this work was done (no PR, and no result comment of \
-               80 characters or more from this run on this issue)";
-    match refuse_empty_done(pool, issue, &run, &app.clock.now()).await {
-        Ok(EmptyDone::Refused) => Err(ToolError::Refused(format!(
-            "{why}. Comment what you did (or why no change was needed), then try again. A \
-             second empty done escalates the issue."
-        ))),
-        Ok(EmptyDone::Escalated(to)) => Err(ToolError::Refused(format!(
-            "{why}, a second time: the issue was escalated to {}. Stop working on it.",
-            next_actor(&Some(to))
-        ))),
-        Err(IssueTransitionError::Db(e)) => Err(e.into()),
-        Err(e) => Err(ToolError::Refused(e.to_string())),
-    }
 }
 
 /// A subtask of the run's issue, owned by and waiting on the agent.

@@ -9,6 +9,24 @@ use super::agent::Sandbox;
 
 const DEFAULT_PROCESSES: u32 = 64;
 
+/// The network policy of one session (`AINKRAD_SANDBOX_NETWORK`). A session that holds leased
+/// secrets (`holds`) defaults to `deny`: an agent that can read a secret can send it anywhere
+/// the sandbox reaches. Explicit `allow` for such a session is refused on Linux, where
+/// bubblewrap would share the host network (cloud metadata, LAN, loopback) with no filter;
+/// macOS Seatbelt limits egress to TCP 443, DNS and loopback. Without secrets the default is
+/// `allow`, so on Linux that still needs a host with no instance role and nothing on loopback.
+fn network_for(requested: Option<&str>, holds: bool, linux: bool) -> Result<&'static str, String> {
+    match (requested, holds) {
+        (None, true) | (Some("deny"), _) => Ok("deny"),
+        (None, false) | (Some("allow"), false) => Ok("allow"),
+        (Some("allow"), true) if !linux => Ok("allow"),
+        (Some("allow"), true) => Err("this host cannot filter egress for an agent network: a \
+            session that holds secrets runs with AINKRAD_AGENT_NETWORK=deny"
+            .into()),
+        _ => Err("AINKRAD_AGENT_NETWORK must be allow or deny".into()),
+    }
+}
+
 pub struct ProcessSandbox {
     state: PathBuf,
     secrets: PathBuf,
@@ -89,10 +107,12 @@ impl Sandbox for ProcessSandbox {
         // The process sandbox still owns the filesystem boundary; this makes HOME harmless
         // even on systems whose Seatbelt profile cannot hide a pre-existing home directory.
         Self::add(env, "HOME", "/nonexistent");
-        let network = std::env::var("AINKRAD_AGENT_NETWORK").unwrap_or_else(|_| "allow".into());
-        if !matches!(network.as_str(), "allow" | "deny") {
-            return Err("AINKRAD_AGENT_NETWORK must be allow or deny".into());
-        }
+        let holds = start
+            .secrets
+            .iter()
+            .any(|g| g.var != super::agent::RUN_TOKEN_VAR);
+        let requested = std::env::var("AINKRAD_AGENT_NETWORK").ok();
+        let network = network_for(requested.as_deref(), holds, cfg!(target_os = "linux"))?;
         Self::add(env, "AINKRAD_SANDBOX_NETWORK", network);
         Self::add(
             env,
@@ -119,5 +139,21 @@ impl Sandbox for ProcessSandbox {
             Self::add(env, &format!("AINKRAD_SANDBOX_{key}"), value);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::network_for;
+
+    #[test]
+    fn secrets_default_to_deny_and_linux_refuses_unfiltered_allow() {
+        assert_eq!(network_for(None, true, true), Ok("deny"));
+        assert_eq!(network_for(None, true, false), Ok("deny"));
+        assert_eq!(network_for(Some("deny"), true, true), Ok("deny"));
+        assert!(network_for(Some("allow"), true, true).is_err());
+        assert_eq!(network_for(Some("allow"), true, false), Ok("allow"));
+        assert_eq!(network_for(None, false, true), Ok("allow"));
+        assert!(network_for(Some("lan"), false, false).is_err());
     }
 }

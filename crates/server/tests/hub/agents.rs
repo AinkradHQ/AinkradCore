@@ -249,7 +249,18 @@ pub(super) async fn secret(core: &Core, name: &str, runners: &[String], delivery
     .unwrap();
 }
 
+/// Makes `device` an admin as well, so a session it creates may hold secrets (the Core re-checks
+/// its creator at every start).
+pub(super) async fn make_admin(core: &Core, device: &str) {
+    sqlx::query("UPDATE core_devices SET scopes = '[\"runner\",\"admin\"]' WHERE id = ?")
+        .bind(device)
+        .execute(&core.app.pool)
+        .await
+        .unwrap();
+}
+
 async fn session(core: &Core, runner: &str, secrets: &[SessionSecret]) -> String {
+    make_admin(core, runner).await;
     let policy = json!({"mode": "ask"});
     let new = NewSession {
         runner,
@@ -642,6 +653,7 @@ async fn a_module_credential_reaches_the_runner_as_its_run_token_and_nowhere_els
     let r = run_runner(&core, &base, &st, exec).await;
     let mut app = core.app.clone();
     app.modules = Arc::from([Arc::new(Minter) as Arc<dyn ainkrad_core_server::module::Module>]);
+    throwaway_mode(&core).await;
     let policy = json!({"mode": "ask"});
     let new = NewSession {
         runner: &e.device_id,
@@ -712,6 +724,7 @@ async fn a_retried_start_mints_a_fresh_credential_instead_of_resending_a_spent_l
     let r = run_runner(&core, &base, &st, exec).await;
     let mut app = core.app.clone();
     app.modules = Arc::from([Arc::new(Minter) as Arc<dyn ainkrad_core_server::module::Module>]);
+    throwaway_mode(&core).await;
     let policy = json!({"mode": "ask"});
     let new = NewSession {
         runner: &e.device_id,
@@ -740,6 +753,45 @@ async fn a_retried_start_mints_a_fresh_credential_instead_of_resending_a_spent_l
         mints >= 2,
         "the retry reused the first attempt's lease ({mints} minted)"
     );
+    r.halt().await;
+    let _ = std::fs::remove_dir_all(&st.0);
+}
+
+/// `secrets.mode 0` stops the run token like every other credential path: the session is refused
+/// at its start, no credential is held for redemption and the runner is never handed one.
+#[tokio::test]
+async fn a_module_credential_is_refused_while_the_broker_is_off() {
+    let core = Core::start("agents-cred-off", hub_quick()).await;
+    let base = format!("http://{}", core.host);
+    let st = state("cred-off");
+    let e = paired(&core, &base, None, &st).await;
+    let exec = script("echo hi");
+    let tokens = exec.tokens.clone();
+    let r = run_runner(&core, &base, &st, exec).await;
+    let mut app = core.app.clone();
+    app.modules = Arc::from([Arc::new(Minter) as Arc<dyn ainkrad_core_server::module::Module>]);
+    let policy = json!({"mode": "ask"});
+    let new = NewSession {
+        runner: &e.device_id,
+        harness: "fake",
+        model: None,
+        prompt: Some("go"),
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: &e.device_id,
+    };
+    let made = service::ModuleAgents::named("tmod")
+        .create_ref(&app, &new, Some("run:1"))
+        .await;
+    assert!(made.is_err(), "a run token was minted with secrets.mode 0");
+    assert!(tokens.lock().unwrap().is_empty());
+    let redeemed: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE action = 'secret.redeemed'")
+            .fetch_one(&core.app.pool)
+            .await
+            .unwrap();
+    assert_eq!(redeemed, 0);
     r.halt().await;
     let _ = std::fs::remove_dir_all(&st.0);
 }

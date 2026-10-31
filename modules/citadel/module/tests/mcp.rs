@@ -755,6 +755,56 @@ async fn call_at(fx: &Fx, uri: &str) -> (StatusCode, Value) {
     send(&fx.app, b.body(Body::empty()).unwrap()).await
 }
 
+#[tokio::test]
+async fn mcp_text_is_redacted_and_done_is_refused() {
+    let w = world().await;
+    let a = w.co("A", "AAA").await;
+    let t = w.token(a.run.id).await;
+    let app = &w.fx.app;
+    // B-M2: a key an agent writes never reaches a comment, an issue or an approval as sent.
+    let key = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789";
+    let (_, r) = rpc(app, Some(&t), tool("comment", json!({"body": format!("key {key}")}))).await;
+    assert!(!answer(&r).0, "{}", answer(&r).1);
+    let (_, r) = rpc(
+        app,
+        Some(&t),
+        tool("create_subtask", json!({"title": "t", "body": format!("key {key}")})),
+    )
+    .await;
+    assert!(!answer(&r).0, "{}", answer(&r).1);
+    let (_, r) = rpc(
+        app,
+        Some(&t),
+        tool(
+            "request_approval",
+            json!({"kind": "pr_merge", "summary": format!("key {key}"), "details": key}),
+        ),
+    )
+    .await;
+    assert!(!answer(&r).0, "{}", answer(&r).1);
+    for sql in [
+        "SELECT count(*) FROM citadel_comments WHERE body LIKE '%abcdefghijkl%'",
+        "SELECT count(*) FROM citadel_issues WHERE body LIKE '%abcdefghijkl%'",
+        "SELECT count(*) FROM citadel_approvals WHERE payload LIKE '%abcdefghijkl%'",
+    ] {
+        assert_eq!(count(app, sql).await, 0, "{sql}");
+    }
+    // B-M3: `done` skips the review gate, so it is refused and the issue stays as it was.
+    let (_, r) = rpc(
+        app,
+        Some(&t),
+        tool("transition", json!({"transition": "done"})),
+    )
+    .await;
+    let (failed, text) = answer(&r);
+    assert!(failed && text.contains("submit_for_review"), "{text}");
+    let done = format!(
+        "SELECT count(*) FROM citadel_issues WHERE id = {} AND state = 'done'",
+        a.seed.issue
+    );
+    assert_eq!(count(app, &done).await, 0);
+}
+
 /// F-05: a credential an agent pastes into a comment is redacted before it is stored, because a
 /// `read` device (a phone) reads comments back.
 #[tokio::test]

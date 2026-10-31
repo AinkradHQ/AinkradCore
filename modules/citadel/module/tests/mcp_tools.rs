@@ -519,37 +519,16 @@ async fn org_chart_and_requirement_tools_are_the_runs_companys() {
     );
 }
 
+/// B-M3: `done` skips the review gate, so it is refused with or without evidence, and the
+/// issue stays in progress.
 #[tokio::test]
-async fn done_without_anything_to_show_is_refused_and_a_second_time_escalated() {
-    let (w, a, ta, _, _) = two().await;
-    let app = &w.fx.app;
-    ok(&w, &ta, "transition", json!({"transition": "start"})).await;
-    let why = refused(&w, &ta, "transition", json!({"transition": "done"})).await;
-    assert!(why.contains("nothing shows"), "{why}");
-    let issue = work::get_issue(
-        &app.pool,
-        citadel_module::domain::work::IssueId(a.seed.issue),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(issue.state.as_str(), "in_progress");
-    let why = refused(&w, &ta, "transition", json!({"transition": "done"})).await;
-    assert!(why.contains("escalated"), "{why}");
-    assert_eq!(
-        count(
-            app,
-            "SELECT count(*) FROM audit_events WHERE action = 'citadel.issue.done_refused'"
-        )
-        .await,
-        2
-    );
-}
-
-#[tokio::test]
-async fn done_with_a_comment_from_the_run_passes() {
+async fn done_is_refused_even_with_a_result_comment() {
     let (w, a, ta, _, _) = two().await;
     ok(&w, &ta, "transition", json!({"transition": "start"})).await;
+    for _ in 0..2 {
+        let why = refused(&w, &ta, "transition", json!({"transition": "done"})).await;
+        assert!(why.contains("submit_for_review"), "{why}");
+    }
     ok(
         &w,
         &ta,
@@ -557,7 +536,14 @@ async fn done_with_a_comment_from_the_run_passes() {
         json!({"body": "changed nothing: the code on main already does this, verified by reading the handler and its tests"}),
     )
     .await;
-    let moved = ok(&w, &ta, "transition", json!({"transition": "done"})).await;
-    assert_eq!(moved["issue_id"], a.seed.issue);
-    assert_ne!(moved["state"], "in_progress");
+    let why = refused(&w, &ta, "transition", json!({"transition": "done"})).await;
+    assert!(why.contains("submit_for_review"), "{why}");
+    let issue = work::get_issue(
+        &w.fx.app.pool,
+        citadel_module::domain::work::IssueId(a.seed.issue),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(issue.state.as_str(), "in_progress");
 }

@@ -42,6 +42,9 @@ pub const AGENT_OPS: [&str; 5] = [
 /// Variables a secret may not take: the ones that steer how programs are found and loaded.
 const RESERVED_VARS: &[&str] = &["PATH", "HOME", "SHELL", "USER", "LOGNAME", "TMPDIR", "IFS"];
 
+/// The variable a module's run token is delivered under; a client session may not name it.
+pub const RUN_TOKEN_VAR: &str = "CITADEL_RUN_TOKEN";
+
 /// A variable a secret may be delivered under: `[A-Z_][A-Z0-9_]{0,63}`, not one the runner
 /// sets itself, not a loader's (`LD_*`, `DYLD_*`).
 pub fn valid_secret_var(var: &str) -> bool {

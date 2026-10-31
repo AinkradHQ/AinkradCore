@@ -297,7 +297,9 @@ pub async fn redeem(
         return Err(ApiError::not_found("no such lease"));
     }
     // A credential a module minted for this runner's session (`Module::credentials`): held in
-    // memory, single use, outside the broker's mode and tables.
+    // memory, single use, outside the broker's tables but not its mode (`secrets.mode 0` stops
+    // it like every other credential path).
+    store::require_enabled(&app.pool).await?;
     if let Some(e) = app
         .agents
         .take_ephemeral(&b.lease, &me.device.id, app.clock.unix())

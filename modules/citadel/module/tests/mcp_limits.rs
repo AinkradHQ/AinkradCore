@@ -99,7 +99,7 @@ async fn done_needs_a_real_result_on_this_issue() {
     )
     .await;
     let why = refused(&w, &ta, "transition", json!({"transition": "done"})).await;
-    assert!(why.contains("nothing shows"), "{why}");
+    assert!(why.contains("submit_for_review"), "{why}");
 }
 
 /// A `cit_run_` token shape an agent might paste into anything it writes.
