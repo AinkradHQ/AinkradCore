@@ -14,7 +14,7 @@ use axum::extract::State;
 use axum::http::header;
 use axum::response::IntoResponse;
 
-use super::{Alarm, Readings};
+use super::Alarm;
 use crate::api::App;
 use crate::store::{events, gov};
 
@@ -88,7 +88,7 @@ pub async fn disk(dir: &Path) -> Option<(u64, u64)> {
 }
 
 /// This process's resident memory (bytes) and open file descriptors, where the host says.
-async fn process() -> (Option<u64>, Option<u64>) {
+pub(super) async fn process() -> (Option<u64>, Option<u64>) {
     let pid = std::process::id().to_string();
     let rss = match std::fs::read_to_string("/proc/self/status") {
         Ok(s) => s.lines().find_map(|l| {
@@ -135,16 +135,17 @@ pub async fn render(app: &App) -> String {
         "Seconds since this process started.",
         h.uptime_secs(),
     );
-    let (rss, fds) = process().await;
+    // Process and host readings come from a short cache (`Health::host`).
+    let host = h.host().await;
     o.opt(
         "ainkrad_process_resident_memory_bytes",
         "Resident memory of the Core process.",
-        rss,
+        host.rss_bytes,
     );
     o.opt(
         "ainkrad_process_open_fds",
         "Open file descriptors of the Core process.",
-        fds,
+        host.open_fds,
     );
 
     // Event bus.
@@ -293,7 +294,7 @@ pub async fn render(app: &App) -> String {
             "Size of the write-ahead log.",
             size(Path::new(&wal)).or(Some(0)),
         );
-        let r = Readings::gather(db).await;
+        let r = &host.readings;
         o.opt(
             "ainkrad_backup_last_timestamp_seconds",
             "Unix time of the newest local backup.",

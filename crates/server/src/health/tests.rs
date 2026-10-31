@@ -108,20 +108,20 @@ async fn drill(alarm: Alarm, bad: impl Fn(&mut Readings)) {
     // It clears after the same debounce, once.
     assert!(
         again
-            .tick_with(&pool, T0 + 1_000, &fine())
+            .tick_with(&pool, T0 + 4_000, &fine())
             .await
             .unwrap()
             .is_empty()
     );
     let t = again
-        .tick_with(&pool, T0 + 1_000 + DEBOUNCE_SECS, &fine())
+        .tick_with(&pool, T0 + 4_000 + DEBOUNCE_SECS, &fine())
         .await
         .unwrap();
     assert!(t.len() == 1 && !t[0].raised);
     assert!(!again.active(alarm));
     assert!(
         again
-            .tick_with(&pool, T0 + 2_000, &fine())
+            .tick_with(&pool, T0 + 5_000, &fine())
             .await
             .unwrap()
             .is_empty()
@@ -274,4 +274,40 @@ fn an_alarm_push_names_the_alarm_and_reaches_admins_only() {
         json!({"alarm": "disk_free", "value": 4, "threshold": 10})
     );
     assert!(!n.title.contains("/secret"));
+}
+
+/// A reading that flaps around its threshold (ten minutes bad, ten good, for six hours) is not
+/// 18 raise/clear pairs: the alarm changes at most once per `MIN_GAP_SECS`, and the held change
+/// lands as soon as the gap is over.
+#[tokio::test]
+async fn a_flapping_reading_writes_one_transition_per_gap() {
+    let (pool, dir) = pool().await;
+    let h = Health::new(&dir.join("core.db"));
+    let mut bad = fine();
+    bad.disk_free_bytes = Some(5);
+    let mut changes = vec![];
+    for minute in 0..6 * 60 {
+        let at = T0 + minute * 60;
+        let readings = if (minute / 10) % 2 == 0 {
+            &bad
+        } else {
+            &fine()
+        };
+        for t in h.tick_with(&pool, at, readings).await.unwrap() {
+            changes.push((at - T0, t.raised));
+        }
+    }
+    assert!(changes.len() <= 6, "{changes:?}");
+    assert!(changes[0].1, "{changes:?}");
+    for pair in changes.windows(2) {
+        assert!(pair[1].0 - pair[0].0 >= MIN_GAP_SECS, "{changes:?}");
+        assert_ne!(pair[0].1, pair[1].1, "alternating: {changes:?}");
+    }
+    assert_eq!(
+        rows(&pool).await.len(),
+        changes.len(),
+        "one row each, no more"
+    );
+    assert_eq!(kinds(&pool).await.len(), changes.len());
+    let _ = std::fs::remove_dir_all(dir);
 }

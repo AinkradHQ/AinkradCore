@@ -35,6 +35,20 @@ pub mod metrics;
 pub const DEBOUNCE_SECS: i64 = 120;
 /// The host is read at most this often, whatever the scheduler's tick.
 pub const EVERY_SECS: i64 = 60;
+/// An alarm changes state at most this often: a reading that flaps around its threshold writes
+/// one audit row and one push per gap, not per debounce (about 2 000 rows a day otherwise).
+pub const MIN_GAP_SECS: i64 = 3_600;
+/// `/api/v1/metrics` shows a host reading at most this old, so a scrape loop cannot make the
+/// Core run `df` and `ps` and parse the certificate on every request.
+pub const HOST_CACHE_SECS: u64 = 5;
+
+/// What the host showed to a scrape: the process and the alarm readings.
+#[derive(Debug, Default)]
+pub struct HostSnapshot {
+    pub rss_bytes: Option<u64>,
+    pub open_fds: Option<u64>,
+    pub readings: Readings,
+}
 
 /// The three conditions, named as in `alarm.raised` payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -121,8 +135,22 @@ impl Readings {
         })
     }
 
-    /// Reads the host: the home of `db`, and the certificate under `<home>/tls`.
+    /// Reads the host: the home of `db`, and the certificate under `<home>/tls`. The file reads
+    /// and the certificate parse run off the async threads.
     pub async fn gather(db: &Path) -> Self {
+        let owned = db.to_path_buf();
+        let mut r = tokio::task::spawn_blocking(move || Self::read_files(&owned))
+            .await
+            .unwrap_or_default();
+        let home = db.parent().filter(|p| !p.as_os_str().is_empty());
+        if let Some((free, total)) = metrics::disk(home.unwrap_or(Path::new("."))).await {
+            r.disk_free_bytes = Some(free);
+            r.disk_total_bytes = Some(total);
+        }
+        r
+    }
+
+    fn read_files(db: &Path) -> Self {
         let home = db.parent().filter(|p| !p.as_os_str().is_empty());
         let home = home.unwrap_or(Path::new("."));
         let unix = |t: SystemTime| {
@@ -150,10 +178,6 @@ impl Readings {
             .zip(std::fs::read_to_string(tls.join("key.pem")).ok())
             .and_then(|(chain, key)| crate::gateway::tls::Cert::from_pem(&chain, &key).ok())
             .and_then(|c| unix(c.not_after));
-        if let Some((free, total)) = metrics::disk(home).await {
-            r.disk_free_bytes = Some(free);
-            r.disk_total_bytes = Some(total);
-        }
         r
     }
 }
@@ -161,6 +185,8 @@ impl Readings {
 #[derive(Debug, Default)]
 struct Slot {
     active: bool,
+    /// When `active` last changed (unix seconds), for [`MIN_GAP_SECS`].
+    changed_at: Option<i64>,
     /// Since when the reading has disagreed with `active`.
     pending_since: Option<i64>,
 }
@@ -190,6 +216,7 @@ pub struct Health {
     /// Responses by class: 2xx, 3xx, 4xx, 5xx, other.
     requests: [AtomicU64; 5],
     state: Mutex<State>,
+    host: tokio::sync::Mutex<Option<(Instant, std::sync::Arc<HostSnapshot>)>>,
 }
 
 impl Health {
@@ -222,6 +249,28 @@ impl Health {
 
     pub fn uptime_secs(&self) -> u64 {
         self.started.map_or(0, |s| s.elapsed().as_secs())
+    }
+
+    /// The host as of at most [`HOST_CACHE_SECS`] ago; one scrape at a time computes it.
+    pub async fn host(&self) -> std::sync::Arc<HostSnapshot> {
+        let mut cache = self.host.lock().await;
+        if let Some((at, snap)) = &*cache
+            && at.elapsed().as_secs() < HOST_CACHE_SECS
+        {
+            return std::sync::Arc::clone(snap);
+        }
+        let (rss_bytes, open_fds) = metrics::process().await;
+        let readings = match &self.db {
+            Some(db) => Readings::gather(db).await,
+            None => Readings::default(),
+        };
+        let snap = std::sync::Arc::new(HostSnapshot {
+            rss_bytes,
+            open_fds,
+            readings,
+        });
+        *cache = Some((Instant::now(), std::sync::Arc::clone(&snap)));
+        snap
     }
 
     /// Whether `alarm` is raised, as of the last pass.
@@ -259,8 +308,9 @@ impl Health {
                 standing.push((alarm, standing_from_audit(pool, alarm).await?));
             }
             let mut state = self.state.lock().unwrap();
-            for (alarm, active) in standing {
-                state.slots.entry(alarm.name()).or_default().active = active;
+            for (alarm, (active, at)) in standing {
+                let slot = state.slots.entry(alarm.name()).or_default();
+                (slot.active, slot.changed_at) = (active, at);
             }
             state.restored = true;
         }
@@ -277,7 +327,11 @@ impl Health {
                     continue;
                 }
                 let since = *slot.pending_since.get_or_insert(now);
-                if now - since < DEBOUNCE_SECS {
+                // Held back: not long enough yet, or the alarm changed too recently. The
+                // reading stays pending, so the change lands once the gap is over.
+                if now - since < DEBOUNCE_SECS
+                    || slot.changed_at.is_some_and(|t| now - t < MIN_GAP_SECS)
+                {
                     continue;
                 }
                 breached
@@ -291,7 +345,7 @@ impl Health {
             write(pool, &t).await?;
             let mut state = self.state.lock().unwrap();
             let slot = state.slots.entry(alarm.name()).or_default();
-            (slot.active, slot.pending_since) = (raised, None);
+            (slot.active, slot.pending_since, slot.changed_at) = (raised, None, Some(now));
             out.push(t);
         }
         self.state.lock().unwrap().last_eval = Some(now);
@@ -321,16 +375,24 @@ async fn write(pool: &SqlitePool, t: &Transition) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-/// Whether the newest `alarm.*` audit row of `alarm` says raised.
-async fn standing_from_audit(pool: &SqlitePool, alarm: Alarm) -> Result<bool, sqlx::Error> {
-    let last: Option<String> = sqlx::query_scalar(
-        "SELECT action FROM audit_events WHERE action IN ('alarm.raised', 'alarm.cleared') \
+/// Whether the newest `alarm.*` audit row of `alarm` says raised, and when it was written.
+// ponytail: the first pass scans the audit table once per alarm when there is no such row yet;
+// an index on action if the chain ever gets large enough for that to matter.
+async fn standing_from_audit(
+    pool: &SqlitePool,
+    alarm: Alarm,
+) -> Result<(bool, Option<i64>), sqlx::Error> {
+    let last: Option<(String, String)> = sqlx::query_as(
+        "SELECT action, at FROM audit_events WHERE action IN ('alarm.raised', 'alarm.cleared') \
          AND json_extract(details, '$.alarm') = ? ORDER BY seq DESC LIMIT 1",
     )
     .bind(alarm.name())
     .fetch_optional(pool)
     .await?;
-    Ok(last.as_deref() == Some("alarm.raised"))
+    Ok(match last {
+        Some((action, at)) => (action == "alarm.raised", crate::scheduler::unix_secs(&at)),
+        None => (false, None),
+    })
 }
 
 #[cfg(test)]

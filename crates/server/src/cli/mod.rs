@@ -232,7 +232,7 @@ async fn rotate_identity(db: &Path) -> Result_ {
     let pool = store::connect(db).await?;
     let r = Identity::rotate(state_dir(db), SystemClock.unix())?;
     let details = serde_json::json!({"old_fp": r.old_fp, "new_fp": r.new_fp,
-        "not_before": r.not_before});
+        "not_before": r.not_before, "by": "local-admin"});
     audit(&pool, "started", details).await.map_err(|e| {
         format!(
             "the rotation started but its audit row failed ({e}); the statement file is the record"
@@ -654,13 +654,13 @@ async fn serve(
         state_dir(db),
     )?);
     tracing::info!(core_fp = identity.fp, "Core identity");
-    ainkrad_core_server::auth::identity::audit_switch(&pool, &identity).await?;
+    ainkrad_core_server::auth::identity::audit_switch(&pool, &identity).await;
     if let Some(r) = &identity.rotation {
         // This serve announces the statement: the window counts from the first one that does.
         if ainkrad_core_server::auth::Identity::announce(state_dir(db), SystemClock.unix())? {
             let details = serde_json::json!({"new_fp": r.new_fp, "not_before": r.not_before,
                 "window_secs": ainkrad_core_server::auth::identity::WINDOW});
-            ainkrad_core_server::auth::identity::audit(&pool, "announced", details).await?;
+            ainkrad_core_server::auth::identity::audit_logged(&pool, "announced", details).await;
         }
         tracing::warn!(
             new_fp = r.new_fp,

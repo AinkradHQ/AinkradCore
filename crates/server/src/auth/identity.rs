@@ -272,14 +272,28 @@ pub async fn audit(
         .map(drop)
 }
 
-/// Audits the switchover `identity` completed when it was loaded, if it did.
-pub async fn audit_switch(pool: &sqlx::SqlitePool, identity: &Identity) -> Result<(), sqlx::Error> {
-    match &identity.switched_from {
-        Some(old) => {
-            let details = serde_json::json!({"old_fp": old, "new_fp": identity.fp});
-            audit(pool, "switched", details).await
+/// [`audit`] that retries a few times and then logs the row instead of failing: the key files
+/// have already changed, so a database error must not stop the Core from starting, and the
+/// switchover is in memory only. The log line carries the row (public fingerprints).
+pub async fn audit_logged(pool: &sqlx::SqlitePool, step: &str, details: serde_json::Value) {
+    let mut last = None;
+    for wait in [0, 1, 3] {
+        tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+        match audit(pool, step, details.clone()).await {
+            Ok(()) => return,
+            Err(e) => last = Some(e),
         }
-        None => Ok(()),
+    }
+    if let Some(e) = last {
+        tracing::error!(step, %details, error = %e, "the rotation audit row could not be written");
+    }
+}
+
+/// Audits the switchover `identity` completed when it was loaded, if it did.
+pub async fn audit_switch(pool: &sqlx::SqlitePool, identity: &Identity) {
+    if let Some(old) = &identity.switched_from {
+        let details = serde_json::json!({"old_fp": old, "new_fp": identity.fp});
+        audit_logged(pool, "switched", details).await;
     }
 }
 
@@ -500,7 +514,7 @@ mod audit_tests {
             }
         };
         let old = Identity::load_at(&dir, 1_000).unwrap();
-        audit_switch(&pool, &old).await.unwrap();
+        audit_switch(&pool, &old).await;
         assert!(
             actions(&pool).await.is_empty(),
             "a plain load audits nothing"
@@ -516,9 +530,9 @@ mod audit_tests {
             .await
             .unwrap();
         let after = Identity::load_at(&dir, 2_000 + WINDOW).unwrap();
-        audit_switch(&pool, &after).await.unwrap();
+        audit_switch(&pool, &after).await;
         let again = Identity::load_at(&dir, 2_000 + WINDOW + 5).unwrap();
-        audit_switch(&pool, &again).await.unwrap();
+        audit_switch(&pool, &again).await;
 
         let rows = actions(&pool).await;
         let names: Vec<&str> = rows.iter().map(|e| e.action.as_str()).collect();
