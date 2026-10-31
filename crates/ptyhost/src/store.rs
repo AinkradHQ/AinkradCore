@@ -94,13 +94,19 @@ struct Read {
 
 /// Reads a generation file, stopping at the first short or corrupt record. `None` when the
 /// file is missing or its header is not ours.
-fn read_gen(path: &Path) -> Option<Read> {
-    // A symlink or other non-file under a ring's name is never followed.
-    if !std::fs::symlink_metadata(path).ok()?.file_type().is_file() {
+///
+/// A symlink or other non-file under a ring's name is never followed (the file is opened with
+/// `O_NOFOLLOW` and checked on the open handle, so there is no gap to race), and a file larger
+/// than a generation can be (`max`: half the cap plus one record) is refused, never read whole.
+fn read_gen(path: &Path, max: u64) -> Option<Read> {
+    use std::io::Read as _;
+    let f = open_nofollow(path, false).ok()?;
+    if !f.metadata().ok()?.file_type().is_file() {
         return None;
     }
-    let b = std::fs::read(path).ok()?;
-    if b.len() < HEAD || &b[..8] != MAGIC {
+    let mut b = Vec::new();
+    f.take(max.checked_add(1)?).read_to_end(&mut b).ok()?;
+    if b.len() as u64 > max || b.len() < HEAD || &b[..8] != MAGIC {
         return None;
     }
     let start = u64::from_le_bytes(b[8..16].try_into().ok()?);
@@ -124,6 +130,21 @@ fn read_gen(path: &Path) -> Option<Read> {
     })
 }
 
+/// Opens `path` without following a symlink in its last component (and without blocking on a
+/// FIFO planted in its place); the caller checks the handle is a regular file.
+fn open_nofollow(path: &Path, write: bool) -> io::Result<File> {
+    OpenOptions::new()
+        .read(!write)
+        .write(write)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+}
+
+/// The largest a generation file may be: half the cap, one record over, and the header.
+fn max_gen(half: u64) -> u64 {
+    half + (PIECE + REC + HEAD) as u64
+}
+
 fn create(path: &Path, start: u64) -> io::Result<File> {
     let mut f = OpenOptions::new()
         .write(true)
@@ -139,9 +160,10 @@ fn create(path: &Path, start: u64) -> io::Result<File> {
 
 /// Truncates then unlinks `path` (best effort).
 fn wipe(path: &Path) {
-    // Only a regular file is truncated: a symlink is removed itself, its target untouched.
-    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
-        && let Ok(f) = OpenOptions::new().write(true).open(path)
+    // Only a regular file is truncated, judged on the opened handle (a symlink is not
+    // opened at all): a symlink is removed itself, its target untouched.
+    if let Ok(f) = open_nofollow(path, true)
+        && f.metadata().is_ok_and(|m| m.file_type().is_file())
     {
         let _ = f.set_len(0);
     }
@@ -178,13 +200,18 @@ impl DiskRing {
         let mut gens: Vec<Gen> = Vec::new();
         for n in found {
             let path = ring_path(dir, id, n);
-            match read_gen(&path) {
-                Some(r) => gens.push(Gen {
+            // A header is trusted no further than the file: a start that would overflow the
+            // `seq` space is damage, and the file goes.
+            let gen_of = |r: Read| {
+                Some(Gen {
                     n,
                     start: r.start,
-                    end: r.start + r.payload.len() as u64,
+                    end: r.start.checked_add(r.payload.len() as u64)?,
                     len: r.valid,
-                }),
+                })
+            };
+            match read_gen(&path, max_gen(half)).and_then(gen_of) {
+                Some(g) => gens.push(g),
                 None => wipe(&path),
             }
         }
@@ -204,7 +231,10 @@ impl DiskRing {
         match cur {
             Some(c) => {
                 let path = ring_path(dir, id, c.n);
-                let file = OpenOptions::new().write(true).open(&path)?;
+                let file = open_nofollow(&path, true)?;
+                if !file.metadata()?.file_type().is_file() {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "not a file"));
+                }
                 file.set_len(c.len)?;
                 let mut file = file;
                 std::io::Seek::seek(&mut file, std::io::SeekFrom::End(0))?;
@@ -304,8 +334,8 @@ impl DiskRing {
             if g.end <= seq {
                 continue;
             }
-            let r = read_gen(&ring_path(&self.dir, &self.id, g.n))?;
-            if r.start != g.start || r.payload.len() as u64 != g.end - g.start {
+            let r = read_gen(&ring_path(&self.dir, &self.id, g.n), max_gen(self.half))?;
+            if r.start != g.start || r.payload.len() as u64 != g.end.checked_sub(g.start)? {
                 return None;
             }
             let skip = usize::try_from(seq.saturating_sub(g.start)).ok()?;
@@ -509,6 +539,32 @@ mod tests {
             b"aaaa",
             "the corrupt record is dropped"
         );
+    }
+
+    #[test]
+    fn a_header_near_the_end_of_the_seq_space_is_damage_not_a_panic() {
+        let d = tmp();
+        let _c = Clean(d.clone());
+        // A well-formed file whose header says it starts 2 bytes before u64::MAX and holds 10.
+        let p = ring_path(&d, "t_o", 0);
+        let mut f = create(&p, u64::MAX - 2).unwrap();
+        let body = b"0123456789";
+        f.write_all(&(body.len() as u32).to_le_bytes()).unwrap();
+        f.write_all(&crc32(body).to_le_bytes()).unwrap();
+        f.write_all(body).unwrap();
+        drop(f);
+        let r = DiskRing::open(&d, "t_o", 1 << 20).unwrap();
+        assert_eq!((r.start(), r.end()), (0, 0), "the damaged file was dropped");
+        assert!(r.since(u64::MAX - 2).is_none());
+        // A file larger than a generation can be is refused, never read whole.
+        let big = ring_path(&d, "t_p", 0);
+        let mut f = create(&big, 0).unwrap();
+        f.write_all(&vec![0u8; (max_gen(CAP_MIN / 2) + 1) as usize])
+            .unwrap();
+        drop(f);
+        assert!(read_gen(&big, max_gen(CAP_MIN / 2)).is_none());
+        let r = DiskRing::open(&d, "t_p", CAP_MIN).unwrap();
+        assert_eq!(r.end(), 0);
     }
 
     #[test]

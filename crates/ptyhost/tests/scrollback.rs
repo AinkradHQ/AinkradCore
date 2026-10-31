@@ -261,3 +261,24 @@ async fn wait_exit(r: &mut HostReader) {
         }
     }
 }
+
+/// One attach never queues more than the default cap, however large the terminal's own cap:
+/// with a 64 MiB cap and 10 MiB printed, a resume from 0 gets a snapshot (not 10 MiB of
+/// frames), and one within the last megabyte replays exactly.
+#[tokio::test]
+async fn a_resume_far_back_is_a_snapshot_not_a_huge_replay() {
+    let dir = tmp();
+    let script = "head -c 10485760 /dev/zero | tr '\\0' d; echo END; sleep 600";
+    let (id, _, mut r, _w) = start(&dir, &sh(script, Some(store::CAP_MAX))).await;
+    read_until(&mut r, has("END")).await;
+    let info = connect(&dir, &id).await.unwrap().0;
+    assert!(disk_total(&dir) > 9_000_000, "it is all on disk");
+    let (bytes, snap) = reattach(&dir, &id, 0, info.seq).await;
+    assert!(
+        snap && bytes.is_empty(),
+        "a snapshot, got {} bytes",
+        bytes.len()
+    );
+    let (tail, snap) = reattach(&dir, &id, info.seq - (1 << 20), 1 << 20).await;
+    assert!(!snap && tail.len() == 1 << 20);
+}

@@ -16,6 +16,7 @@ ainkrad-proto = { path = "../proto" }
 ainkrad-sys = { path = "../sys" }
 ainkrad-term = { path = "../term" }
 base64 = "0.22.1"
+libc = "0.2.191"
 # The PTY (decision P2.1): Unix PTYs now, ConPTY for E6.
 portable-pty = "0.9.0"
 serde = { version = "1.0.229", features = ["derive"] }

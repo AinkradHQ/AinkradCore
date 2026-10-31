@@ -538,3 +538,74 @@ async fn a_host_with_no_core_record_is_flagged_then_closed_after_the_grace() {
         "the recorded terminal was not touched"
     );
 }
+
+/// The orphan map is filled from what a runner says, so it is bounded and checked: a malformed
+/// id is not tracked, at most 64 hosts per runner are, a hello replaces the runner's set, and a
+/// runner that disconnects takes its flags with it.
+#[tokio::test]
+async fn the_orphan_list_is_validated_capped_and_dropped_with_its_runner() {
+    use ainkrad_proto::v2::{Size, TerminalInfo, TerminalState};
+    let fx = Fx::new("t-orphan-cap").await;
+    set(&fx, Setting::TerminalOrphanGraceSecs, "3600").await;
+    let info = |id: &str| TerminalInfo {
+        terminal: id.to_owned(),
+        state: TerminalState::Running,
+        size: Size { rows: 24, cols: 80 },
+        seq: 0,
+        pid: None,
+        exit: None,
+    };
+    let before = fx.core.app.clock.unix() + 60;
+    let mut listed: Vec<TerminalInfo> = (0..70).map(|i| info(&format!("t_cap{i:03}"))).collect();
+    listed.extend([
+        info("../etc/passwd"),
+        info("x_nope"),
+        info(&format!("t_{}", "a".repeat(40))),
+    ]);
+    ainkrad_core_server::api::v1::reconcile_terminals(&fx.core.app, &fx.runner, &listed, before)
+        .await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    ainkrad_core_server::api::v1::sweep_terminals(&fx.core.app).await;
+    let mut tracked = 0;
+    for i in 0..70 {
+        tracked += usize::from(has_warning(&fx, &format!("t_cap{i:03}")).await);
+    }
+    assert_eq!(tracked, 64, "at most 64 hosts per runner");
+    for bad in ["../etc/passwd", "x_nope"] {
+        assert!(!has_warning(&fx, bad).await, "{bad} was tracked");
+    }
+    assert!(
+        !has_warning(&fx, &format!("t_{}", "a".repeat(40))).await,
+        "a long id was tracked"
+    );
+    // A hello that lists none replaces the set: nothing is left to close.
+    ainkrad_core_server::api::v1::reconcile_terminals(&fx.core.app, &fx.runner, &[], before).await;
+    let n = warnings_of(&fx, "t_cap000").await.len();
+    set(&fx, Setting::TerminalOrphanGraceSecs, "1").await;
+    ainkrad_core_server::api::v1::reconcile_terminals(
+        &fx.core.app,
+        &fx.runner,
+        &[info("t_late")],
+        before,
+    )
+    .await;
+    // The runner goes: its flags go with it, even a freshly made one.
+    fx.stop.send_replace(true);
+    fx.until("the runner offline", async || {
+        !fx.core.app.hub.online(&fx.runner)
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    for _ in 0..3 {
+        ainkrad_core_server::api::v1::sweep_terminals(&fx.core.app).await;
+    }
+    assert!(
+        warnings_of(&fx, "t_late").await.is_empty(),
+        "flagged by a runner that left"
+    );
+    assert_eq!(warnings_of(&fx, "t_cap000").await.len(), n);
+}
+
+async fn has_warning(fx: &Fx, id: &str) -> bool {
+    !warnings_of(fx, id).await.is_empty()
+}

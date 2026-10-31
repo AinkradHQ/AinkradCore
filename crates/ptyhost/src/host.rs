@@ -61,6 +61,8 @@ pub fn scrollback_dir(dir: &Path) -> PathBuf {
 
 /// The most output bytes in one `out` message of a replay: a line stays far below `MAX_LINE`.
 const REPLAY_CHUNK: usize = 512 * 1024;
+/// The most a resume replays from disk (the default cap): older asks get a snapshot.
+const REPLAY_MAX: u64 = store::CAP_DEFAULT;
 
 impl HostConfig {
     pub fn new(dir: PathBuf, id: String) -> Self {
@@ -249,10 +251,14 @@ impl State {
                 if let Some(c) = self.clients.get_mut(&client) {
                     c.attached = true;
                 }
-                let held = self
-                    .ring
-                    .since(seq)
-                    .or_else(|| self.disk.as_ref().and_then(|d| d.since(seq)));
+                // The disk serves a resume only within `REPLAY_MAX`: further back a snapshot is
+                // sent, so one attach never queues more than that, whatever the cap.
+                let held = self.ring.since(seq).or_else(|| {
+                    self.disk
+                        .as_ref()
+                        .filter(|d| d.end().saturating_sub(seq) <= REPLAY_MAX)
+                        .and_then(|d| d.since(seq))
+                });
                 match held {
                     Some(b) if b.is_empty() => {}
                     Some(b) => {

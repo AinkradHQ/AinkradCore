@@ -81,6 +81,15 @@ struct Orphan {
 /// A host must be unrecorded this long before it is warned about: a terminal being created
 /// has a host a moment before it has a row.
 const ORPHAN_SETTLE: i64 = 2;
+/// Unrecorded hosts tracked per runner (a runner holds at most a few dozen terminals).
+const MAX_ORPHANS_PER_RUNNER: usize = 64;
+
+/// Whether `t` is a terminal id the runner may have named: `t_` and at most 30 of `[A-Za-z0-9_]`.
+fn named(t: &str) -> bool {
+    t.len() <= 32
+        && t.starts_with("t_")
+        && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
 
 /// One attach slot; released on drop.
 pub struct AttachSlot {
@@ -432,8 +441,26 @@ pub async fn reconcile(app: &App, runner: &str, listed: &[TerminalInfo], before:
 /// Notes each host `listed` that the Core has no live record of (no row, or a reaped one):
 /// the sweep warns about it and closes it after `terminal.orphan_grace_secs`. An exited host
 /// whose row is still kept is not an orphan (it waits for its exit to be read).
+///
+/// The ids come from the runner, so they are checked like any input: only a well-formed
+/// terminal id is tracked, at most `MAX_ORPHANS_PER_RUNNER` per runner, and a runner's entries
+/// are replaced by each of its hellos (a host it no longer lists is forgotten).
 async fn flag_orphans(app: &App, runner: &str, listed: &[TerminalInfo]) {
-    for i in listed {
+    app.terminals
+        .orphans
+        .lock()
+        .unwrap()
+        .retain(|id, o| o.runner != runner || listed.iter().any(|i| &i.terminal == id));
+    for i in listed.iter().filter(|i| named(&i.terminal)) {
+        let full = {
+            let all = app.terminals.orphans.lock().unwrap();
+            !all.contains_key(&i.terminal)
+                && all.values().filter(|o| o.runner == runner).count() >= MAX_ORPHANS_PER_RUNNER
+        };
+        if full {
+            tracing::warn!("a runner lists more unrecorded terminal hosts than are tracked");
+            break;
+        }
         let known = sqlx::query_scalar::<_, String>("SELECT status FROM core_terminals WHERE id=?")
             .bind(&i.terminal)
             .fetch_optional(&app.pool)
@@ -464,6 +491,12 @@ async fn sweep_orphans(app: &App) {
         return;
     };
     let now = app.clock.unix();
+    // A runner that disconnected takes its flags with it; its next hello flags afresh.
+    app.terminals
+        .orphans
+        .lock()
+        .unwrap()
+        .retain(|_, o| app.hub.online(&o.runner));
     let ids: Vec<String> = app
         .terminals
         .orphans
@@ -888,10 +921,7 @@ async fn register(
     info: &TerminalInfo,
 ) -> Result<(), ApiError> {
     let t = &info.terminal;
-    let named = t.len() <= 32
-        && t.starts_with("t_")
-        && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
-    if !named {
+    if !named(t) {
         return Err(ApiError::new(
             axum::http::StatusCode::BAD_GATEWAY,
             "terminal_failed",
