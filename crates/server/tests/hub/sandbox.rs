@@ -31,6 +31,7 @@ async fn retried_starts_reuse_the_same_lease() {
     };
     let mut fake = Fake::welcomed(&core, &runner, vec![driver]).await;
     agents::throwaway_mode(&core).await;
+    agents::make_admin(&core, &runner.id).await;
     agents::secret(&core, "test.retry", std::slice::from_ref(&runner.id), "env").await;
     let secrets = [SessionSecret {
         name: "test.retry".into(),
@@ -124,4 +125,69 @@ async fn an_agent_cannot_select_approval_bypasses() {
             axum::http::StatusCode::FORBIDDEN
         );
     }
+}
+
+/// B-M1: a session whose creator was revoked is leased nothing, on a start or a resume, and ends.
+#[tokio::test]
+async fn a_revoked_creator_is_leased_no_secrets() {
+    let core = Core::start("sandbox-revoked", quick()).await;
+    let runner = core.runner().await;
+    let driver = DriverInfo {
+        name: AGENT_DRIVER.into(),
+        commands: AGENT_OPS.iter().map(|s| (*s).into()).collect(),
+        capacity: 2,
+        streams: Some(32),
+        ..DriverInfo::default()
+    };
+    let _fake = Fake::welcomed(&core, &runner, vec![driver]).await;
+    agents::throwaway_mode(&core).await;
+    agents::secret(
+        &core,
+        "test.revoked",
+        std::slice::from_ref(&runner.id),
+        "env",
+    )
+    .await;
+    agents::make_admin(&core, &runner.id).await;
+    let secrets = [SessionSecret {
+        name: "test.revoked".into(),
+        var: "TOKEN".into(),
+    }];
+    let policy = serde_json::json!({"mode": "ask"});
+    let session = sessions::create(
+        &core.app.pool,
+        &NewSession {
+            runner: &runner.id,
+            harness: "fake",
+            model: None,
+            prompt: Some("go"),
+            workspace: None,
+            policy: &policy,
+            secrets: &secrets,
+            created_by: &runner.id,
+        },
+        AuditActor::System,
+        &core.app.clock.now(),
+    )
+    .await
+    .unwrap();
+    service::authorize_for_tests(&core.app, &session.id);
+    sqlx::query("UPDATE core_devices SET revoked_at = ?, status = 'rejected' WHERE id = ?")
+        .bind(core.app.clock.now())
+        .bind(&runner.id)
+        .execute(&core.app.pool)
+        .await
+        .unwrap();
+    assert!(service::start(&core.app, &session).await.is_err());
+    let leases: i64 = sqlx::query_scalar("SELECT count(*) FROM core_secret_leases")
+        .fetch_one(&core.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(leases, 0, "a revoked creator was leased a secret");
+    let ended = sessions::get(&core.app.pool, &session.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!ended.live(), "the session stayed live: {}", ended.state);
+    core.app.closing.send_replace(true);
 }

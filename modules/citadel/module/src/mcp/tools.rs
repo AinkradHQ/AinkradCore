@@ -49,6 +49,25 @@ async fn count(app: &App, scope: RunScope) -> Result<()> {
     })
 }
 
+/// Counts one issue or approval created by the run, refusing past `mcp.max_creates_per_run`
+/// (B-M4: a poisoned issue cannot fan out into other agents' prompts without bound).
+pub(super) async fn count_create(app: &App, scope: RunScope) -> Result<()> {
+    let max = crate::settings::value(&app.pool, "mcp.max_creates_per_run").await?;
+    let counted: Option<i64> = sqlx::query_scalar(
+        "UPDATE citadel_runs SET mcp_creates = mcp_creates + 1 WHERE id = ? AND mcp_creates < ? \
+         RETURNING mcp_creates",
+    )
+    .bind(scope.run_id.0)
+    .bind(max)
+    .fetch_optional(&app.pool)
+    .await?;
+    counted.map(drop).ok_or_else(|| {
+        ToolError::Refused(format!(
+            "this run has created {max} issues and approvals (mcp.max_creates_per_run)"
+        ))
+    })
+}
+
 /// Whether the run already has an `mcp.unknown_tool` row (a failed read counts as yes: no row).
 async fn unknown_audited(app: &App, scope: RunScope) -> bool {
     sqlx::query_scalar::<_, bool>(
@@ -61,6 +80,16 @@ async fn unknown_audited(app: &App, scope: RunScope) -> bool {
     .unwrap_or(true)
 }
 
+/// `args` with every string run through the Core's redactor (keys of known shapes included).
+fn redacted(args: &JsonObject) -> JsonObject {
+    let mut v = Value::Object(args.clone());
+    ainkrad_proto::redact::Redactor::new().json(&mut v);
+    match v {
+        Value::Object(o) => o,
+        _ => JsonObject::new(),
+    }
+}
+
 /// Runs tool `name` for `scope` and audits the call as the run's agent, refused or not.
 pub(super) async fn call(
     app: &App,
@@ -69,6 +98,9 @@ pub(super) async fn call(
     args: &JsonObject,
 ) -> Result<Value> {
     let known = TOOLS.contains(&name);
+    // Nothing an agent writes is stored as it sent it: a key it holds or a shape of one is
+    // redacted before it reaches an issue, a comment or an approval (B-M2).
+    let args = &redacted(args);
     // Every name counts, an unknown one too: the cap bounds what a run can make the Core do.
     let result = if let Err(e) = count(app, scope).await {
         Err(e)

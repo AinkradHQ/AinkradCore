@@ -378,3 +378,34 @@ async fn sockets_nested_userns_shm_and_the_harness_binary() {
     }
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// B-H2: a session on the `deny` policy (the default for one that holds secrets) reaches
+/// neither a TCP canary on the host's loopback nor the cloud metadata address.
+#[tokio::test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "OWNER: run scripts/sandbox-macos-test.sh"
+)]
+async fn a_denied_network_reaches_no_loopback_canary_and_no_metadata_address() {
+    if !mechanism_available() {
+        return;
+    }
+    let (root, spec) = fixture("netdeny");
+    let canary = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = canary.local_addr().unwrap().port();
+    // bash's /dev/tcp: no interpreter outside the toolchain paths is needed.
+    let probe = |host: &str, port: u16| {
+        format!("(exec 3<>/dev/tcp/{host}/{port}) 2>/dev/null && exit 99; exit 0")
+    };
+    for (host, port) in [("127.0.0.1", port), ("169.254.169.254", 80)] {
+        let (code, err) = run(&spec, "/bin/bash", &probe(host, port)).await;
+        assert_eq!(code, Some(0), "{host}:{port} was reachable: {err}");
+    }
+    // The control: the same probe, unsandboxed, reaches the canary.
+    let open = std::process::Command::new("/bin/bash")
+        .args(["-c", &probe("127.0.0.1", port)])
+        .status()
+        .unwrap();
+    assert_eq!(open.code(), Some(99));
+    let _ = std::fs::remove_dir_all(root);
+}

@@ -204,6 +204,21 @@ fn not_a_modules(s: &Session) -> Result<(), ApiError> {
     }
 }
 
+/// A session that holds leased secrets answers only to its creator or an `admin` device: any
+/// other `agent` device could message it into printing the value (B-H1), read what it printed,
+/// or resume it to lease the secrets again. The POST routes are step-up routes already.
+fn owns_secrets(s: &Session, me: &Caller) -> Result<(), ApiError> {
+    let admin = me.device.scopes.iter().any(|scope| scope == "admin");
+    if s.secrets.is_empty() || s.created_by == me.device.id || admin {
+        return Ok(());
+    }
+    Err(ApiError::new(
+        StatusCode::FORBIDDEN,
+        "forbidden_scope",
+        "a session holding secrets answers only to its creator or an admin device",
+    ))
+}
+
 #[utoipa::path(post, path = "/api/v1/agent-sessions", operation_id = "createAgentSession",
     tag = "agents",
     request_body = NewAgentSession,
@@ -285,6 +300,7 @@ pub async fn transcript(
     Query(p): Query<super::Paging>,
 ) -> ApiResult<AgentTranscript> {
     let s = one(&app, &id).await?;
+    owns_secrets(&s, &me)?;
     // What a module's agent saw and did is the module's `admin` read, not an `agent` device's.
     if s.owner_module.is_some() && !me.device.scopes.iter().any(|scope| scope == "admin") {
         return Err(ApiError::new(
@@ -313,6 +329,7 @@ pub async fn transcript(
 /// Sends `command` about `s` to its runner (answer within the service's wait).
 async fn tell(app: &App, s: &Session, command: Command, caller: &Caller) -> Result<(), ApiError> {
     not_a_modules(s)?;
+    owns_secrets(s, caller)?;
     send(app, s, command, caller).await
 }
 
@@ -497,6 +514,7 @@ pub async fn resume(
 ) -> ApiResult<AgentSession> {
     let s = one(&app, &id).await?;
     not_a_modules(&s)?;
+    owns_secrets(&s, &me)?;
     if !store::reopen(&app.pool, &s.id, &app.clock.now()).await? {
         return Err(ApiError::new(
             StatusCode::CONFLICT,

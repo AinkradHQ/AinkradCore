@@ -39,6 +39,9 @@ async fn minted(app: &App, s: &Session) -> Result<Vec<SecretGrant>, Refusal> {
     {
         let invalid = |why: String| Refusal::Runner(StreamError::new(ErrorCode::InvalidArgs, why));
         let minted = module.credentials(app, s).await.map_err(invalid)?;
+        if !minted.is_empty() {
+            crate::store::secrets::require_enabled(&app.pool).await?;
+        }
         let now = app.clock.unix();
         for c in minted {
             if !ainkrad_proto::v2::valid_secret_var(&c.var) {
@@ -100,6 +103,21 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
     if let Err(e) = start_command(s, Vec::new(), resume) {
         fail(app, s, &describe(&e)).await;
         return Err(e);
+    }
+    // A revoked or de-scoped creator gets no fresh secrets, on a restart or a resume either
+    // (B-M1): the session ends.
+    if !s.secrets.is_empty() {
+        let admin = crate::store::gov::get_device(&app.pool, &s.created_by)
+            .await?
+            .is_some_and(|d| d.usable() && d.scopes.iter().any(|x| x == "admin"));
+        if !admin {
+            let e = Refusal::Runner(StreamError::new(
+                ErrorCode::InvalidArgs,
+                "the session's creator is no longer an active admin device",
+            ));
+            fail(app, s, &describe(&e)).await;
+            return Err(e);
+        }
     }
     let cached = { app.agents.leases.lock().unwrap().get(&s.id).cloned() };
     let mut secrets = match cached {

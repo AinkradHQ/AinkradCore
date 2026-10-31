@@ -887,3 +887,74 @@ async fn call_at(fx: &Fx, uri: &str) -> (StatusCode, Value) {
     }
     send(&fx.app, b.body(Body::empty()).unwrap()).await
 }
+
+#[tokio::test]
+async fn mcp_text_is_redacted_done_is_refused_and_creation_is_capped() {
+    let w = world().await;
+    let a = w.co("A", "AAA").await;
+    let t = w.token(a.run.id).await;
+    let app = &w.fx.app;
+    // B-M2: a key an agent writes never reaches a comment, an issue or an approval as sent.
+    let key = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789";
+    let (_, r) = rpc(app, Some(&t), tool("comment", json!({"body": format!("key {key}")}))).await;
+    assert!(!answer(&r).0, "{}", answer(&r).1);
+    let (_, r) = rpc(
+        app,
+        Some(&t),
+        tool("create_subtask", json!({"title": "t", "body": format!("key {key}")})),
+    )
+    .await;
+    assert!(!answer(&r).0, "{}", answer(&r).1);
+    let (_, r) = rpc(
+        app,
+        Some(&t),
+        tool(
+            "request_approval",
+            json!({"kind": "pr_merge", "summary": format!("key {key}"), "details": key}),
+        ),
+    )
+    .await;
+    assert!(!answer(&r).0, "{}", answer(&r).1);
+    for sql in [
+        "SELECT count(*) FROM citadel_comments WHERE body LIKE '%abcdefghijkl%'",
+        "SELECT count(*) FROM citadel_issues WHERE body LIKE '%abcdefghijkl%'",
+        "SELECT count(*) FROM citadel_approvals WHERE payload LIKE '%abcdefghijkl%'",
+    ] {
+        assert_eq!(count(app, sql).await, 0, "{sql}");
+    }
+    // B-M3: `done` skips the review gate, so it is refused and the issue stays as it was.
+    let (_, r) = rpc(
+        app,
+        Some(&t),
+        tool("transition", json!({"transition": "done"})),
+    )
+    .await;
+    let (failed, text) = answer(&r);
+    assert!(failed && text.contains("submit_for_review"), "{text}");
+    let done = format!(
+        "SELECT count(*) FROM citadel_issues WHERE id = {} AND state = 'done'",
+        a.seed.issue
+    );
+    assert_eq!(count(app, &done).await, 0);
+    // B-M4: past mcp.max_creates_per_run no issue or approval is made (two were made above).
+    set(app, "mcp.max_creates_per_run", "3").await;
+    let (_, r) = rpc(app, Some(&t), tool("create_subtask", json!({"title": "c"}))).await;
+    assert!(!answer(&r).0, "{}", answer(&r).1);
+    for (name, args) in [
+        ("create_subtask", json!({"title": "d"})),
+        ("report_blocker", json!({"title": "e"})),
+        (
+            "request_approval",
+            json!({"kind": "pr_merge", "summary": "s"}),
+        ),
+    ] {
+        let (_, r) = rpc(app, Some(&t), tool(name, args)).await;
+        let (failed, text) = answer(&r);
+        assert!(failed && text.contains("mcp.max_creates_per_run"), "{name}: {text}");
+    }
+    let subtasks = format!(
+        "SELECT count(*) FROM citadel_issues WHERE parent_id = {}",
+        a.seed.issue
+    );
+    assert_eq!(count(app, &subtasks).await, 2);
+}

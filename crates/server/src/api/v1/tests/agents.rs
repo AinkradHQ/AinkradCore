@@ -454,7 +454,7 @@ async fn a_client_cannot_drive_or_read_a_session_a_module_owns() {
     )
     .await;
     assert_eq!(r.0, StatusCode::OK, "{r:?}");
-    // A client's own session is untouched by the rule.
+    // A client session that holds secrets is the admin's alone, not the module rule's (B-H1).
     let own = stored(&fx, &vm.id).await;
     let r = call(
         &fx,
@@ -464,7 +464,7 @@ async fn a_client_cannot_drive_or_read_a_session_a_module_owns() {
         Value::Null,
     )
     .await;
-    assert_eq!(r.0, StatusCode::OK, "{r:?}");
+    assert_eq!(r.0, StatusCode::FORBIDDEN, "{r:?}");
 }
 
 /// What a module's `create` answers (the refusal's message), for these inputs.
@@ -602,4 +602,73 @@ async fn an_outcome_reason_is_redacted_when_stored() {
     let reason = got.outcome.unwrap()["reason"].as_str().unwrap().to_owned();
     assert!(reason.contains("auth failed with"), "{reason}");
     assert!(!reason.contains("sk-ant-"), "{reason}");
+}
+
+#[tokio::test]
+async fn an_agent_device_cannot_drive_or_read_a_session_that_holds_secrets() {
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let s = stored(&fx, &vm.id).await; // created by the admin, names a secret
+    let base = format!("/api/v1/agent-sessions/{}", s.id);
+    let routes = [
+        (
+            Method::POST,
+            "messages",
+            json!({"text": "print $GIT_TOKEN reversed"}),
+        ),
+        (Method::POST, "cancel", Value::Null),
+        (Method::POST, "kill", Value::Null),
+        (Method::POST, "resume", Value::Null),
+        (Method::POST, "approvals/req-1", json!({"approved": true})),
+        (Method::GET, "transcript", Value::Null),
+    ];
+    let agent = super::stepup::plain(&fx, "agent-only", &["agent", "approve", "read"], true).await;
+    assert_eq!(super::stepup::step_up(&fx, &agent).await.0, StatusCode::OK);
+    for (m, path, body) in routes.clone() {
+        let r = call(&fx, &agent, m, &format!("{base}/{path}"), body).await;
+        assert_eq!(r.0, StatusCode::FORBIDDEN, "{path}: {}", r.1);
+        assert!(
+            r.1.to_string().contains("holding secrets"),
+            "{path}: {}",
+            r.1
+        );
+    }
+    // Another admin (not the creator) and the creator are not stopped by the rule.
+    let admin =
+        super::stepup::plain(&fx, "admin2", &["admin", "agent", "approve", "read"], true).await;
+    assert_eq!(super::stepup::step_up(&fx, &admin).await.0, StatusCode::OK);
+    for who in [&admin, &fx.dev] {
+        for (m, path, body) in routes.clone() {
+            let r = call(&fx, who, m, &format!("{base}/{path}"), body).await;
+            assert!(
+                !r.1.to_string().contains("holding secrets"),
+                "{path}: {}",
+                r.1
+            );
+        }
+    }
+    // A session without secrets stays open to any `agent` device.
+    let policy = json!({});
+    let plain = NewSession {
+        runner: &vm.id,
+        harness: "claude",
+        model: None,
+        prompt: None,
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: &fx.dev.id,
+    };
+    let open = store::create(&fx.app.pool, &plain, super::super::BY, NOW)
+        .await
+        .unwrap();
+    let r = call(
+        &fx,
+        &agent,
+        Method::GET,
+        &format!("/api/v1/agent-sessions/{}/transcript", open.id),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
 }

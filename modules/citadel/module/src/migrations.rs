@@ -28,4 +28,10 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0004_citadel_0004_mcp.up.sql"),
         down: include_str!("../migrations/0004_citadel_0004_mcp.down.sql"),
     },
+    Migration {
+        version: 5,
+        name: "citadel_0005_mcp_creates",
+        up: include_str!("../migrations/0005_citadel_0005_mcp_creates.up.sql"),
+        down: include_str!("../migrations/0005_citadel_0005_mcp_creates.down.sql"),
+    },
 ];

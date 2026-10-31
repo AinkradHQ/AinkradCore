@@ -250,6 +250,14 @@ pub const SETTINGS: &[ModuleSetting] = &[
         "The most tool calls one run's token may make; past it every call is refused.",
     ),
     s(
+        "mcp.max_creates_per_run",
+        20,
+        1,
+        1_000,
+        "The most issues and approvals one run's token may create (create_subtask, report_blocker, \
+         request_approval); past it those calls are refused.",
+    ),
+    s(
         "wake.timer_batch",
         50,
         1,

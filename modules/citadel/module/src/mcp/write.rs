@@ -7,7 +7,7 @@ use rmcp::model::JsonObject;
 use serde_json::{Value, json};
 
 use super::args::{MAX_TEXT, MAX_TITLE, Result, ToolError, int, required, text};
-use super::tools::{company_issue, next_actor, target};
+use super::tools::{company_issue, count_create, next_actor, target};
 use crate::domain::gov::{ApprovalKind, NewApproval};
 use crate::domain::org::AgentId;
 use crate::domain::work::{
@@ -94,9 +94,8 @@ async fn link(app: &App, blocker: i64, blocked: i64) -> Result<()> {
     }
 }
 
-/// Moves the issue, only while the agent is its next actor.
-// Not ported yet (the reference is `modules/citadel/server`): the empty-done check and the pull
-// request review that `done` goes through (they need the forge slice).
+/// Moves the issue, only while the agent is its next actor. `done` is refused: it skips the
+/// review and pull-request gate (B-M3), so an agent submits for review and a reviewer closes it.
 pub(super) async fn transition(app: &App, scope: RunScope, args: &JsonObject) -> Result<Value> {
     let issue = target(app, scope, int(args, "issue_id")?).await?;
     let me = NextActor::Agent(scope.agent_id);
@@ -133,7 +132,11 @@ pub(super) async fn transition(app: &App, scope: RunScope, args: &JsonObject) ->
             }
             IssueTransition::Block
         }
-        "done" => IssueTransition::Done,
+        "done" => {
+            return Err(ToolError::Refused(
+                "an agent cannot mark an issue done: use submit_for_review".to_owned(),
+            ));
+        }
         other => {
             return Err(ToolError::Invalid(format!(
                 "transition {other:?} is not one of start, submit_for_review, block, done"
@@ -154,6 +157,7 @@ pub(super) async fn transition(app: &App, scope: RunScope, args: &JsonObject) ->
 /// A subtask of the run's issue, owned by and waiting on the agent.
 pub(super) async fn create_subtask(app: &App, scope: RunScope, args: &JsonObject) -> Result<Value> {
     let parent = target(app, scope, None).await?;
+    count_create(app, scope).await?;
     let me = scope.agent_id;
     let new = NewIssue {
         project_id: parent.project_id,
@@ -181,6 +185,7 @@ pub(super) async fn report_blocker(app: &App, scope: RunScope, args: &JsonObject
             let title = required(args, "title", MAX_TITLE)
                 .map_err(|_| ToolError::Invalid("give blocker_issue_id, or a title".to_owned()))?;
             let assignee = person(app, scope, args, "assignee").await?;
+            count_create(app, scope).await?;
             let new = NewIssue {
                 project_id: blocked.project_id,
                 epic_id: None,
@@ -222,6 +227,7 @@ pub(super) async fn request_approval(
             ));
         }
     };
+    count_create(app, scope).await?;
     let payload = json!({"summary": required(args, "summary", MAX_TEXT)?,
                          "details": text(args, "details", MAX_TEXT)?,
                          "run": scope.run_id.0});

@@ -135,7 +135,7 @@ pub async fn credentials(app: &App, session: &Session) -> Result<Vec<Credential>
 
 const INSTRUCTIONS: &str = "Citadel tracks the issue you are working on. Read it with \
     get_issue and its project with get_context. Report progress with comment, and move the issue \
-    with transition (start, submit_for_review, block, done) while you are its next actor. You can \
+    with transition (start, submit_for_review, block) while you are its next actor. You can \
     only reach your run's issue and its subtasks: create_subtask splits work, report_blocker links \
     what blocks you. Ask a human to approve something with request_approval; get_approval reads \
     the decision.";
