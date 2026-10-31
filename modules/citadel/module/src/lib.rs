@@ -82,6 +82,10 @@ impl Module for Citadel {
         api::DESTRUCTIVE.as_slice()
     }
 
+    fn non_destructive(&self) -> Option<&'static [(&'static str, &'static str)]> {
+        Some(api::writes::NON_DESTRUCTIVE)
+    }
+
     fn jobs(&self) -> Vec<ainkrad_core_server::jobs::Job> {
         engine::jobs()
     }

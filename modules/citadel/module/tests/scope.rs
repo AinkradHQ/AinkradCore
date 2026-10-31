@@ -277,3 +277,57 @@ async fn every_operation_takes_the_company_scope() {
     }
     assert!(seen >= 14, "{seen} operations");
 }
+
+/// F-06: without the header the company is the one the path's ids belong to, so a path naming
+/// things of two companies is refused as "not there" and writes nothing.
+#[tokio::test]
+async fn a_path_naming_two_companies_is_refused_without_a_header() {
+    let t = two().await;
+    let (fx, d) = (&t.fx, Some(&t.fx.dev));
+    let theirs = org::create_agent(
+        &fx.app.pool,
+        &NewAgent {
+            company_id: CompanyId(t.b),
+            name: "Bob".into(),
+            role: "dev".into(),
+            org_role: OrgRole::None,
+            reports_to: None,
+            harness: Harness::Claude,
+            model: "m".into(),
+            runner_tags: vec![],
+            status: AgentStatus::Active,
+        },
+    )
+    .await
+    .unwrap();
+    let path = format!("/teams/{}/members/{}", t.team_a, theirs.id.0);
+    let (s, body) = call(
+        fx,
+        d,
+        Method::PUT,
+        &path,
+        Some(json!({"team_role": "member"})),
+    )
+    .await;
+    assert_eq!(
+        (s, &body["code"]),
+        (StatusCode::NOT_FOUND, &json!("not_found")),
+        "{body}"
+    );
+    let seated: i64 = sqlx::query_scalar("SELECT count(*) FROM citadel_team_memberships")
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(seated, 0);
+    // The same company's agent still seats.
+    let path = format!("/teams/{}/members/{}", t.team_a, t.agent_a);
+    let (s, body) = call(
+        fx,
+        d,
+        Method::PUT,
+        &path,
+        Some(json!({"team_role": "member"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+}
