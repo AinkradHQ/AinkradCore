@@ -161,13 +161,40 @@ fn fake_codex(dir: &std::path::Path, fixture: &str) -> PathBuf {
     std::fs::write(
         &script,
         format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {d}/argv\nenv > {d}/env\n\
+            "#!/bin/sh\n[ -z \"$AINKRAD_EXEC_PROBE\" ] || exit 0\nprintf '%s\\n' \"$@\" > {d}/argv\nenv > {d}/env\n\
              cat {d}/fixture.ndjson\nhead -n 4 > {d}/stdin\n"
         ),
     )
     .unwrap();
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    exec_ready(&script);
     script
+}
+
+/// Waits until a script just written can be executed. Linux refuses to exec a file while any
+/// process holds it open for writing (ETXTBSY), and a fork on another test thread can hold the
+/// writer's descriptor for a moment after it is closed. The script exits at once when
+/// `AINKRAD_EXEC_PROBE` is set; this runs it that way until the kernel stops refusing.
+fn exec_ready(path: &std::path::Path) {
+    use std::process::Stdio;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let probe = std::process::Command::new(path)
+            .env("AINKRAD_EXEC_PROBE", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match probe {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            _ => return,
+        }
+    }
 }
 
 /// Through a real process: argv is `app-server` only; the prompt and the instructions go over
@@ -299,6 +326,7 @@ async fn a_denial_steers_its_reason_into_the_turn() {
     let script = fake_codex(&dir, APPROVE_INTERRUPT);
     let body = std::fs::read_to_string(&script).unwrap();
     std::fs::write(&script, body.replace("head -n 4", "head -n 6")).unwrap();
+    exec_ready(&script);
     let spec = Spec {
         program: Some(script),
         cwd: dir.clone(),

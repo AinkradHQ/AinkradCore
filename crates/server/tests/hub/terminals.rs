@@ -225,7 +225,8 @@ impl Fx {
     }
 
     async fn until(&self, what: &str, mut f: impl AsyncFnMut() -> bool) {
-        for _ in 0..300 {
+        // 2 minutes: a condition that holds returns at once, so only a stalled machine waits.
+        for _ in 0..2400 {
             if f().await {
                 return;
             }

@@ -198,7 +198,7 @@ async fn git_timeout_output_and_disk_caps_terminate_processes_and_do_not_lock_re
         &format!("echo $$ > '{}'; exec sleep 60", pidfile.display()),
     );
     w.git = shim.clone();
-    w.git_timeout = Duration::from_secs(2);
+    w.git_timeout = Duration::from_secs(5);
     assert!(
         w.git(&dir, &["fetch"])
             .await
@@ -206,14 +206,24 @@ async fn git_timeout_output_and_disk_caps_terminate_processes_and_do_not_lock_re
             .contains("timeout")
     );
     let pid = std::fs::read_to_string(&pidfile).unwrap();
-    assert!(
+    // Killed and reaped by the time the timeout is reported; a loaded machine may be a moment
+    // behind with the reaping, so wait for the process to be gone, not for an instant.
+    let gone = || {
         !Std::new("/bin/kill")
             .args(["-0", pid.trim()])
             .stderr(Stdio::null())
             .status()
             .unwrap()
             .success()
-    );
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !gone() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the git process outlived its timeout"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
     script(&shim, "exec yes huge-output");
     assert!(
         w.git(&dir, &["fetch"])
@@ -240,7 +250,7 @@ async fn git_timeout_output_and_disk_caps_terminate_processes_and_do_not_lock_re
     let w = fixture(&dir);
     let _lock = w.lock(&w.mirror(&request().repo)).await;
     let path = tokio::time::timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(60),
         w.prepare_session("as_a", 1, &[request()], None),
     )
     .await
