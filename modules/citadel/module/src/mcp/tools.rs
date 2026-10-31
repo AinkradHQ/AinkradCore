@@ -142,9 +142,9 @@ pub(super) async fn call(
 ) -> Result<Value> {
     // An agent's free text is stored as written and read back by `read` devices (a phone): the
     // platform redactor runs over every string argument first, one place for every tool.
-    let mut redacted = Value::Object(args.clone());
-    ainkrad_proto::redact::Redactor::new().json(&mut redacted);
-    let args = redacted.as_object().unwrap_or(args);
+    let mut scrubbed = Value::Object(args.clone());
+    ainkrad_proto::redact::Redactor::new().json(&mut scrubbed);
+    let args = scrubbed.as_object().unwrap_or(args);
     let known = TOOLS.contains(&name);
     let args = &redacted(args);
     // Every name counts, an unknown one too: the cap bounds what a run can make the Core do.
