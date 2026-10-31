@@ -218,7 +218,10 @@ async fn an_unknown_module_in_the_config_stops_the_start() {
     let cfg = dir.join("config.toml");
     std::fs::write(
         &cfg,
-        format!("home = {:?}\nmodules = [\"nope\"]\n", dir.display().to_string()),
+        format!(
+            "home = {:?}\nmodules = [\"nope\"]\n",
+            dir.display().to_string()
+        ),
     )
     .unwrap();
     let out = tokio::process::Command::new(BIN)

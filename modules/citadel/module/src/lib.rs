@@ -13,6 +13,7 @@ use ainkrad_core_server::module::{
 };
 use ainkrad_core_server::store::Migration;
 use ainkrad_core_server::store::agents::Session;
+use ainkrad_core_server::store::events::StoredEvent;
 use axum::Router;
 
 pub mod admin;
@@ -62,6 +63,32 @@ impl Module for Citadel {
 
     fn event_kinds(&self) -> &'static [&'static str] {
         kinds::EVENT_KINDS
+    }
+
+    fn notification_kinds(&self) -> &'static [(&'static str, &'static str)] {
+        notifications::KINDS
+    }
+
+    fn classify(&self, e: &StoredEvent) -> Option<ainkrad_core_server::push::Notification> {
+        ainkrad_core_server::push::Classifier::notification(&notifications::Citadel, e)
+    }
+
+    fn admin_commands(&self) -> &'static [&'static str] {
+        &["seed"]
+    }
+
+    fn admin<'a>(
+        &'a self,
+        name: &'a str,
+        pool: &'a sqlx::SqlitePool,
+        args: &'a [&'a str],
+    ) -> BoxFut<'a, Result<String, String>> {
+        Box::pin(async move {
+            match name {
+                "seed" => admin::seed_command(pool, args).await,
+                _ => Err("no such command".to_owned()),
+            }
+        })
     }
 
     fn audit_actions(&self) -> &'static [&'static str] {
