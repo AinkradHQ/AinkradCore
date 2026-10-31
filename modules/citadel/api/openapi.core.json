@@ -1539,13 +1539,30 @@
           "citadel.linear.pushed",
           "citadel.linear.state_refused",
           "citadel.loop_breaker.tripped",
+          "citadel.mcp.apply_plan",
+          "citadel.mcp.ask_human",
           "citadel.mcp.comment",
           "citadel.mcp.create_subtask",
+          "citadel.mcp.estimate_issue",
           "citadel.mcp.get_approval",
+          "citadel.mcp.get_artifact",
           "citadel.mcp.get_context",
           "citadel.mcp.get_issue",
+          "citadel.mcp.list_backlog",
+          "citadel.mcp.org_chart",
+          "citadel.mcp.plan_requirement",
+          "citadel.mcp.plan_sprint",
+          "citadel.mcp.post_to_requirement",
+          "citadel.mcp.propose_knowledge",
+          "citadel.mcp.propose_retro_items",
+          "citadel.mcp.publish_artifact",
           "citadel.mcp.report_blocker",
           "citadel.mcp.request_approval",
+          "citadel.mcp.request_repo",
+          "citadel.mcp.set_sprint_issues",
+          "citadel.mcp.sprint_add_issue",
+          "citadel.mcp.sprint_remove_issue",
+          "citadel.mcp.sprint_report",
           "citadel.mcp.transition",
           "citadel.mcp.unknown_tool",
           "citadel.member.capacity_set",
@@ -7676,6 +7693,18 @@
         ],
         "type": "object"
       },
+      "SettingBody": {
+        "properties": {
+          "value": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
       "SettingChange": {
         "description": "One set or reset, newest first.",
         "properties": {
@@ -7714,6 +7743,41 @@
           "at",
           "actor",
           "scope"
+        ],
+        "type": "object"
+      },
+      "SettingOut": {
+        "properties": {
+          "default": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "description": {
+            "type": "string"
+          },
+          "max": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "min": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "default",
+          "min",
+          "max",
+          "description"
         ],
         "type": "object"
       },
@@ -21606,6 +21670,115 @@
         "tags": [
           "runs"
         ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/citadel/v1/settings": {
+      "get": {
+        "operationId": "citadelListSettings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SettingOut"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The module's tunables with their values, bounds and defaults (`mcp.enabled`, `run.token_ttl_secs`, ...)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/citadel/v1/settings/{name}": {
+      "put": {
+        "operationId": "citadelSetSetting",
+        "parameters": [
+          {
+            "description": "A name from `GET /settings`",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingOut"
+                }
+              }
+            },
+            "description": "Set (audited as `setting.set`); 404 for an unknown name, 400 out of bounds"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runs"
+        ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
