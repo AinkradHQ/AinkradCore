@@ -109,6 +109,12 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../migrations/0012_agent_session_owner_ref.up.sql"),
         down: include_str!("../../migrations/0012_agent_session_owner_ref.down.sql"),
     },
+    Migration {
+        version: 13,
+        name: "event_views_scope_index",
+        up: include_str!("../../migrations/0013_event_views_scope_index.up.sql"),
+        down: include_str!("../../migrations/0013_event_views_scope_index.down.sql"),
+    },
 ];
 
 #[derive(Debug)]

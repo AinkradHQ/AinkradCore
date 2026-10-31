@@ -67,11 +67,14 @@ async fn live(conn: &mut SqliteConnection, id: &str) -> Result<Option<Live>, Err
     .transpose()
 }
 
-/// Active, unrevoked admin devices other than `id`.
+/// Active, unrevoked admin devices other than `id` that can elevate (a step-up key, or an
+/// unrevoked passkey). One that never can does not stand in for the admin removed (review S2).
 async fn other_admins(conn: &mut SqliteConnection, id: &str) -> Result<i64, Error> {
     sqlx::query_scalar(
         "SELECT count(*) FROM core_devices WHERE id <> ? AND status = 'active' \
-         AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM json_each(scopes) WHERE value = 'admin')",
+         AND revoked_at IS NULL AND (stepup_spki IS NOT NULL OR (kind = 'passkey' AND EXISTS \
+         (SELECT 1 FROM core_passkeys p WHERE p.device_id = core_devices.id AND p.revoked_at IS NULL))) \
+         AND EXISTS (SELECT 1 FROM json_each(scopes) WHERE value = 'admin')",
     )
     .bind(id)
     .fetch_one(conn)
