@@ -4,6 +4,7 @@
 //! upgrade's authentication and the channel-bound proof, over loopback and over TLS.
 
 mod agents;
+use ainkrad_core_server::agents::AgentsConfig;
 mod fault;
 mod health;
 mod proof;
@@ -103,6 +104,12 @@ impl Core {
         Self::start_on(name, hub, Listen::Tcp("127.0.0.1:0".to_owned()), None, None).await
     }
 
+    /// [`Core::start`] with the agent supervisors paced by `agents`.
+    pub async fn start_agents(name: &str, hub: HubConfig, agents: AgentsConfig) -> Self {
+        let listen = Listen::Tcp("127.0.0.1:0".to_owned());
+        Self::start_with(name, hub, listen, None, None, agents).await
+    }
+
     /// Serves `listen`; `host` overrides the Host clients send (TLS: `localhost:<port>`).
     pub async fn start_on(
         name: &str,
@@ -110,6 +117,17 @@ impl Core {
         listen: Listen,
         dir: Option<&std::path::Path>,
         host: Option<&str>,
+    ) -> Self {
+        Self::start_with(name, hub, listen, dir, host, agents::quick()).await
+    }
+
+    async fn start_with(
+        name: &str,
+        hub: HubConfig,
+        listen: Listen,
+        dir: Option<&std::path::Path>,
+        host: Option<&str>,
+        agents: AgentsConfig,
     ) -> Self {
         log();
         let dir = dir.map(ToOwned::to_owned).unwrap_or_else(|| {
@@ -135,7 +153,7 @@ impl Core {
         // The secrets broker's master key and quick agent supervisors (`agents`).
         let master = ainkrad_core_server::ops::secretbox::SecretBox::new(&[7; 32]);
         app.secrets = Some(Arc::new(master));
-        app.agents = ainkrad_core_server::agents::Agents::new(agents::quick());
+        app.agents = ainkrad_core_server::agents::Agents::new(agents);
         let closing = Arc::clone(&app.closing);
         tokio::spawn(gateway.serve(router(app.clone()), closing, Duration::from_secs(2)));
         Self {
