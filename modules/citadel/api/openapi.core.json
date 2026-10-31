@@ -13051,6 +13051,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -13364,6 +13365,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -13489,6 +13491,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -13614,6 +13617,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -13780,7 +13784,7 @@
                 }
               }
             },
-            "description": "A decided `pr_merge`, `workflow_push` or `permission_escalation`; needs a step-up"
+            "description": "A decided `pr_merge`, `workflow_push`, `permission_escalation`, or the approval of a `hire_agent`, `sprint_commit` or `plan_approval`; needs a step-up"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -14303,6 +14307,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -14959,6 +14964,7 @@
         "tags": [
           "money"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       },
       "put": {
@@ -15141,6 +15147,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -15721,6 +15728,7 @@
         "tags": [
           "projects"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -15897,6 +15905,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -16016,6 +16025,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -16079,6 +16089,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -18048,6 +18059,7 @@
         "tags": [
           "projects"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -18143,6 +18155,7 @@
         "tags": [
           "money"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -18323,6 +18336,7 @@
         "tags": [
           "projects"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -20145,6 +20159,7 @@
         "tags": [
           "projects"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -20906,6 +20921,7 @@
         "tags": [
           "requirements"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -21193,6 +21209,7 @@
         "tags": [
           "org"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -21771,6 +21788,7 @@
         "tags": [
           "projects"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },

@@ -151,9 +151,64 @@ pub async fn activity(
                     kind: kind.to_owned(),
                     user_id,
                 },
-                details: serde_json::from_str(&e.details).unwrap_or(serde_json::Value::Null),
+                details: safe_details(&e.details),
             }
         })
         .collect();
     Ok(Json(ActivityPage { items, next_before }))
+}
+
+/// The keys of an audit row's details a `read` device may see (F-07): ids, counters and states.
+/// Free text, URLs and error messages (a PR url, a failure reason) are dropped, the full row is
+/// the admin-only audit.
+const SAFE_KEYS: &[&str] = &[
+    "from",
+    "to",
+    "state",
+    "transition",
+    "points",
+    "priority",
+    "label_id",
+    "epic_id",
+    "sprint_id",
+    "comment_id",
+    "blocker_id",
+    "agent_id",
+    "run_id",
+    "project_id",
+    "issue_id",
+    "number",
+];
+
+pub(super) fn safe_details(raw: &str) -> serde_json::Value {
+    use serde_json::Value;
+    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(raw) else {
+        return Value::Null;
+    };
+    let kept = map
+        .into_iter()
+        .filter(|(k, v)| {
+            SAFE_KEYS.contains(&k.as_str())
+                && match v {
+                    Value::Number(_) | Value::Bool(_) => true,
+                    Value::String(s) => s.len() <= 32,
+                    _ => false,
+                }
+        })
+        .collect();
+    Value::Object(kept)
+}
+
+#[cfg(test)]
+mod safe_tests {
+    use super::safe_details;
+
+    #[test]
+    fn free_text_and_urls_are_dropped() {
+        let d = safe_details(
+            r#"{"to":"done","points":2,"url":"https://x/pr/1","error":"boom","note":{"a":1}}"#,
+        );
+        assert_eq!(d, serde_json::json!({"to": "done", "points": 2}));
+        assert_eq!(safe_details("not json"), serde_json::Value::Null);
+    }
 }
