@@ -1,0 +1,28 @@
+[package]
+name = "e8a-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "spike"
+path = "src/lib.rs"
+
+[[bin]]
+name = "guest-init"
+path = "src/bin/guest_init.rs"
+
+[[bin]]
+name = "driver"
+path = "src/bin/driver.rs"
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+strip = true
+
+[workspace]
