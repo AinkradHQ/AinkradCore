@@ -687,6 +687,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "citadel-module",
+ "futures-util",
  "rmcp",
  "serde",
  "serde_json",
