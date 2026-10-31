@@ -62,10 +62,9 @@ pub(super) fn mechanism_available() -> bool {
 /// failure through it would say nothing about enforcement. Resolved outside the sandbox.
 pub(super) fn python() -> String {
     if cfg!(target_os = "macos") {
-        for p in ["/Library/Developer/CommandLineTools/usr/bin/python3"] {
-            if Path::new(p).exists() {
-                return p.into();
-            }
+        let clt = "/Library/Developer/CommandLineTools/usr/bin/python3";
+        if Path::new(clt).exists() {
+            return clt.into();
         }
         if let Ok(o) = std::process::Command::new("/usr/bin/xcrun")
             .args(["--find", "python3"])
