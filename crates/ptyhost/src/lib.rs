@@ -10,4 +10,5 @@ pub mod client;
 pub mod host;
 pub mod pty;
 pub mod screen;
+pub mod store;
 pub mod wire;

@@ -23,7 +23,8 @@ pub const PLATFORM: &str = "core";
 /// trigger; and the runner hub's presence (`hub`): `runner.connected`, `runner.disconnected`,
 /// `runner.degraded` (silent past two heartbeats); `notify.delivery`, one per push the
 /// notifications service tried (E2-12); and a terminal's life (E2-01), who and when, never its
-/// content: `terminal.opened`, `.attached`, `.detached`, `.exited`, `.closed`; and agent
+/// content: `terminal.opened`, `.attached`, `.detached`, `.exited`, `.closed`, and `.reap_warning` (an idle
+/// or orphaned terminal is about to be closed, with the grace left); and agent
 /// sessions' (`agent.*`, E2-08).
 pub const PLATFORM_EVENT_KINDS: &[&str] = &[
     "audit",
@@ -43,6 +44,7 @@ pub const PLATFORM_EVENT_KINDS: &[&str] = &[
     "terminal.detached",
     "terminal.exited",
     "terminal.opened",
+    "terminal.reap_warning",
 ];
 
 /// The scopes an event kind may be visible to (a runner reads no event stream).

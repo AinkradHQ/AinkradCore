@@ -786,7 +786,8 @@
           "terminal.closed",
           "terminal.detached",
           "terminal.exited",
-          "terminal.opened"
+          "terminal.opened",
+          "terminal.reap_warning"
         ],
         "x-event-scopes": {
           "agent.approval_decided": "approve",
@@ -805,7 +806,8 @@
           "terminal.closed": "terminal",
           "terminal.detached": "terminal",
           "terminal.exited": "terminal",
-          "terminal.opened": "terminal"
+          "terminal.opened": "terminal",
+          "terminal.reap_warning": "terminal"
         }
       },
       "EventActor": {
@@ -2316,7 +2318,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.20.0"
+    "version": "1.21.0"
   },
   "openapi": "3.1.0",
   "paths": {

@@ -513,6 +513,7 @@ mod tests {
                 "terminal.detached",
                 "terminal.exited",
                 "terminal.opened",
+                "terminal.reap_warning",
                 "toy.line"
             ])
         );
@@ -526,7 +527,8 @@ mod tests {
                 "runner.degraded": "read", "runner.disconnected": "read",
                 "terminal.attached": "terminal", "terminal.closed": "terminal",
                 "terminal.detached": "terminal", "terminal.exited": "terminal",
-                "terminal.opened": "terminal", "toy.line": "admin"})
+                "terminal.opened": "terminal", "terminal.reap_warning": "terminal",
+                "toy.line": "admin"})
         );
         let actions = s["AuditEntry"]["x-audit-actions"].as_array().unwrap();
         assert!(actions.contains(&json!("toy.made")) && actions.contains(&json!("setting.set")));
@@ -550,7 +552,8 @@ mod tests {
                 "terminal.closed",
                 "terminal.detached",
                 "terminal.exited",
-                "terminal.opened"
+                "terminal.opened",
+                "terminal.reap_warning"
             ])
         );
     }

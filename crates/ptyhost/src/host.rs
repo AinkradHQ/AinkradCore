@@ -29,6 +29,7 @@ use tokio::time::Instant;
 
 use crate::pty::{Exit, Pty, Spawned, Spec, hang_up};
 use crate::screen::{Ring, Screen};
+use crate::store::{self, DiskRing};
 use crate::wire::{FromHost, HOST_PROTOCOL, HostInfo, HostRecord, ToHost, read_line, valid_id};
 
 /// How the host runs.
@@ -38,21 +39,43 @@ pub struct HostConfig {
     pub id: String,
     /// The only uid whose connections are served (the host's own, outside tests).
     pub allow_uid: u32,
-    /// Output bytes kept for a resume by `seq`.
+    /// Output bytes kept in memory for a resume by `seq`; older bytes come from the disk ring.
     pub ring: usize,
+    /// The on-disk scrollback ring (E2-04.3); `None`: memory only.
+    pub disk: Option<DiskConfig>,
     /// Messages queued per client before it is dropped as too slow.
     pub client_queue: usize,
 }
 
+/// Where and how large the disk ring is.
+pub struct DiskConfig {
+    /// A `0700` directory shared by this runner's hosts (`<terminals>/scrollback`).
+    pub dir: PathBuf,
+    pub cap: u64,
+}
+
+/// The directory of the disk rings under the runner's terminal directory.
+pub fn scrollback_dir(dir: &Path) -> PathBuf {
+    dir.join("scrollback")
+}
+
+/// The most output bytes in one `out` message of a replay: a line stays far below `MAX_LINE`.
+const REPLAY_CHUNK: usize = 512 * 1024;
+
 impl HostConfig {
     pub fn new(dir: PathBuf, id: String) -> Self {
+        let disk = Some(DiskConfig {
+            dir: scrollback_dir(&dir),
+            cap: store::CAP_DEFAULT,
+        });
         Self {
             dir,
+            disk,
             id,
             allow_uid: ainkrad_sys::getuid(),
-            // The per-terminal replay budget is finite and matches the protocol's 8 MiB
-            // scrollback default. The VT screen itself has independent bounded history.
-            ring: 8 << 20,
+            // Memory keeps the last 1 MiB for a resume; the disk ring holds the rest of the
+            // scrollback (8 MiB by default). The VT screen has its own bounded history.
+            ring: 1 << 20,
             client_queue: 1024,
         }
     }
@@ -136,6 +159,7 @@ struct State {
     exit: Option<Exit>,
     announced: bool,
     ring: Ring,
+    disk: Option<DiskRing>,
     screen: Box<dyn Screen>,
     clients: HashMap<u64, Client>,
     input: mpsc::Sender<Vec<u8>>,
@@ -192,6 +216,14 @@ impl State {
     async fn output(&mut self, bytes: &[u8]) {
         let seq = self.ring.end();
         self.ring.push(bytes);
+        // Output only: nothing typed is written here. A disk error ends the disk ring for this
+        // terminal (memory still serves it); no other terminal is touched.
+        if let Some(d) = self.disk.as_mut()
+            && d.append(seq, bytes).is_err()
+            && let Some(d) = self.disk.take()
+        {
+            d.destroy();
+        }
         self.screen.feed(bytes);
         let m = FromHost::Out {
             seq,
@@ -217,15 +249,25 @@ impl State {
                 if let Some(c) = self.clients.get_mut(&client) {
                     c.attached = true;
                 }
-                match self.ring.since(seq) {
+                let held = self
+                    .ring
+                    .since(seq)
+                    .or_else(|| self.disk.as_ref().and_then(|d| d.since(seq)));
+                match held {
                     Some(b) if b.is_empty() => {}
-                    Some(b) => self.send(
-                        client,
-                        FromHost::Out {
-                            seq,
-                            data: STANDARD.encode(b),
-                        },
-                    ),
+                    Some(b) => {
+                        let mut at = seq;
+                        for part in b.chunks(REPLAY_CHUNK) {
+                            self.send(
+                                client,
+                                FromHost::Out {
+                                    seq: at,
+                                    data: STANDARD.encode(part),
+                                },
+                            );
+                            at += part.len() as u64;
+                        }
+                    }
                     None => self.send(client, self.snapshot()),
                 }
                 let told = self.clients.get(&client).is_none_or(|c| c.told);
@@ -276,6 +318,14 @@ impl State {
                         .next(Lifecycle::ExitRead)
                         .unwrap_or(TerminalState::Reaped);
                     return true;
+                }
+            }
+            ToHost::Shed => {
+                if let Some(d) = self.disk.as_mut()
+                    && d.shed().is_err()
+                    && let Some(d) = self.disk.take()
+                {
+                    d.destroy();
                 }
             }
             ToHost::Unknown => {}
@@ -355,7 +405,8 @@ pub fn prepare(cfg: &HostConfig) -> io::Result<()> {
             "bad terminal id",
         ));
     }
-    private_dir(&cfg.dir)
+    private_dir(&cfg.dir)?;
+    cfg.disk.as_ref().map_or(Ok(()), |d| private_dir(&d.dir))
 }
 
 /// Runs the terminal `spec` as host `cfg` until a client acks its exit. `ready` is called once
@@ -426,6 +477,11 @@ pub async fn serve(
         exit: None,
         announced: false,
         ring: Ring::new(cfg.ring),
+        // No disk ring is better than a failed terminal: the open goes on in memory.
+        disk: cfg
+            .disk
+            .as_ref()
+            .and_then(|d| DiskRing::open(&d.dir, &cfg.id, d.cap).ok()),
         screen,
         clients: HashMap::new(),
         input,
@@ -521,6 +577,10 @@ pub async fn serve(
     }
     let _ = std::fs::remove_file(&record);
     let _ = std::fs::remove_file(&sock);
+    // The terminal is over and its exit was read: its scrollback goes with it.
+    if let Some(d) = st.disk.take() {
+        d.destroy();
+    }
     // Nothing signals the group any more: the zombie leader can go.
     st.pty.reap();
     Ok(())

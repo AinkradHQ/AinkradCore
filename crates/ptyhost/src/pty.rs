@@ -36,6 +36,10 @@ pub struct Spec {
     /// The child's whole environment.
     pub env: BTreeMap<String, String>,
     pub size: Size,
+    /// The disk cap for this terminal's scrollback (clamped to `store::CAP_MIN..=CAP_MAX`);
+    /// absent: `store::CAP_DEFAULT`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scrollback_bytes: Option<u64>,
 }
 
 /// How a child ended.

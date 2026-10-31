@@ -65,7 +65,11 @@
 ///    (`terminal.closed`, reason `idle`), and the settings `terminal.idle_secs`,
 ///    `terminal.max_per_device` and `terminal.max_per_runner`.
 /// 20: the `secret.used` audit action (additive enum value).
-pub const API_MINOR: u32 = 20;
+/// 21: terminal storage (E2-04.3, E2-06): the `terminal.reap_warning` event, the settings
+///    `terminal.reap_grace_secs`, `terminal.orphan_grace_secs`, `terminal.scrollback_bytes` and
+///    `terminal.scrollback_budget_bytes`, and `watch` and the scrollback limits on the runner's
+///    `pty.open` and `pty.attach`.
+pub const API_MINOR: u32 = 21;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

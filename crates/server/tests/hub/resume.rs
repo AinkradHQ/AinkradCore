@@ -197,6 +197,7 @@ async fn a_terminal_resume_resends_missed_credit_once_and_never_typed_input() {
     let attach = Command::PtyAttach(PtyAttach {
         terminal: "t_a".to_owned(),
         seq: 0,
+        watch: false,
     });
     let mut d = hub
         .dispatch_elevated(&dev.id, attach, Elevated::for_tests())

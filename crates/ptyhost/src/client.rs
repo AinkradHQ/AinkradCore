@@ -10,8 +10,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
-use crate::host::{owned_dir, random_hex, record_path, socket_path};
+use crate::host::{owned_dir, random_hex, record_path, scrollback_dir, socket_path};
 use crate::pty::Spec;
+use crate::store;
 use crate::wire::{FromHost, HOST_PROTOCOL, HostInfo, HostRecord, ToHost, read_line, valid_id};
 
 /// How long a host may take to answer its socket, or to start.
@@ -191,13 +192,35 @@ pub async fn scan_report(dir: &Path) -> ScanReport {
                 orphaned.push(id.clone());
                 let _ = std::fs::remove_file(record_path(dir, &id));
                 let _ = std::fs::remove_file(socket_path(dir, &id));
+                // Its scrollback goes too: nobody can read it any more.
+                store::remove_all(&scrollback_dir(dir), &id);
             }
             _ => {}
         }
     }
+    sweep_rings(dir);
     live.sort_by(|a, b| a.id.cmp(&b.id));
     orphaned.sort();
     ScanReport { live, orphaned }
+}
+
+/// How old a ring file with no host record must be before it is deleted: a host being
+/// started writes its ring a moment before its record.
+const STRAY_RING: Duration = Duration::from_secs(60);
+
+/// Deletes ring files that belong to no host record (a crash between the two, a removed
+/// record): the disk never keeps scrollback nobody can read.
+fn sweep_rings(dir: &Path) {
+    let sd = scrollback_dir(dir);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0));
+    for (id, _, modified) in store::usage(&sd) {
+        let old = now.saturating_sub(modified) > STRAY_RING.as_millis() as u64;
+        if old && valid_id(&id) && !record_path(dir, &id).exists() {
+            store::remove_all(&sd, &id);
+        }
+    }
 }
 
 pub async fn scan(dir: &Path) -> Vec<HostInfo> {

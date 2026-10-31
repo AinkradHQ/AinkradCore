@@ -52,12 +52,16 @@ async fn the_noop_runs_end_to_end_and_only_advertised_commands_reach_the_runner(
         env: Default::default(),
         env_pass: vec![],
         size: Size { rows: 24, cols: 80 },
+        watch: false,
+        scrollback_bytes: None,
+        scrollback_budget: None,
     });
     for cmd in [
         shell,
         Command::PtyAttach(PtyAttach {
             terminal: "t_x".to_owned(),
             seq: 0,
+            watch: false,
         }),
     ] {
         let refused = hub.dispatch(&dev.id, cmd).err().expect("no proof");
@@ -293,6 +297,7 @@ async fn terminal_streams_take_only_metered_snapshots_and_one_opened() {
         Command::PtyAttach(PtyAttach {
             terminal: t.to_owned(),
             seq: 0,
+            watch: false,
         })
     };
     let info = TerminalInfo {

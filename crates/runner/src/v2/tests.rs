@@ -558,6 +558,8 @@ mod pty {
     use base64::engine::general_purpose::STANDARD;
 
     use super::*;
+    use crate::v2::pty::Op;
+    use tokio::sync::{mpsc, oneshot};
 
     fn driver(dir: &std::path::Path, enabled: bool) -> Arc<PtyDriver> {
         let host = ainkrad_ptyhost::client::find_host_binary()
@@ -776,6 +778,266 @@ mod pty {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Kills the hosts (and their shells) of a test's terminal directory, pass or fail.
+    struct Hosts(std::path::PathBuf);
+    impl Drop for Hosts {
+        fn drop(&mut self) {
+            if let Ok(rd) = std::fs::read_dir(&self.0) {
+                for e in rd.flatten() {
+                    let Ok(text) = std::fs::read_to_string(e.path()) else {
+                        continue;
+                    };
+                    if let Ok(rec) = serde_json::from_str::<serde_json::Value>(&text)
+                        && let Some(pid) = rec["pid"].as_u64()
+                    {
+                        let kids = std::process::Command::new("pgrep")
+                            .args(["-P", &pid.to_string()])
+                            .output()
+                            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                            .unwrap_or_default();
+                        for p in kids.split_whitespace().chain([pid.to_string().as_str()]) {
+                            let _ = std::process::Command::new("kill")
+                                .args(["-KILL", p])
+                                .status();
+                        }
+                    }
+                }
+            }
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn flood(bytes: usize) -> PtyOpen {
+        let Body::Command(Command::PtyOpen(mut o)) = open(&format!(
+            "head -c {bytes} /dev/zero | tr '\\0' x; echo END; sleep 600"
+        )) else {
+            unreachable!()
+        };
+        o.watch = true;
+        o
+    }
+
+    fn disk_of(dir: &std::path::Path, id: &str) -> u64 {
+        ainkrad_ptyhost::store::usage(&ainkrad_ptyhost::host::scrollback_dir(dir))
+            .iter()
+            .filter(|u| u.0 == id)
+            .map(|u| u.1)
+            .sum()
+    }
+
+    async fn flooded(d: &Arc<PtyDriver>, dir: &std::path::Path, bytes: usize) -> String {
+        let id = d.open(&flood(bytes)).await.unwrap();
+        for _ in 0..200 {
+            if disk_of(dir, &id) >= bytes as u64 {
+                return id;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("{id} did not print {bytes} bytes");
+    }
+
+    /// E2-06.2: the scrollback budget holds across terminals. The least recently used terminal
+    /// with no client is freed first, then the next; a terminal with a client attached keeps
+    /// its scrollback, and the Core's own exit monitor (a `watch` stream) is not a client.
+    #[tokio::test]
+    async fn the_scrollback_budget_frees_the_least_recently_used_and_spares_attached() {
+        let dir = tmp();
+        let _hosts = Hosts(dir.clone());
+        let d = driver(&dir, true);
+        d.set_budget(u64::MAX); // no limit while the flood arrives
+        let a = flooded(&d, &dir, 900_000).await;
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        let b = flooded(&d, &dir, 900_000).await;
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        let c = flooded(&d, &dir, 900_000).await;
+        // B is watched by the Core's monitor; C has a real client.
+        for (id, watch, stream) in [(&b, true, 7), (&c, false, 8)] {
+            let (_inbox_tx, inbox) = mpsc::unbounded_channel();
+            let (cancel_tx, cancel) = oneshot::channel();
+            let (out, mut seen) = mpsc::unbounded_channel();
+            let (driver, id) = (Arc::clone(&d), id.clone());
+            tokio::spawn(async move {
+                let _keep = (_inbox_tx, cancel_tx);
+                driver
+                    .bridge(Op::Attach, watch, id, 0, stream, inbox, cancel, out)
+                    .await;
+            });
+            tokio::spawn(async move { while seen.recv().await.is_some() {} });
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let kept = disk_of(&dir, &c);
+        let all = |dir: &std::path::Path| {
+            ainkrad_ptyhost::store::usage(&ainkrad_ptyhost::host::scrollback_dir(dir))
+                .iter()
+                .map(|u| u.1)
+                .sum::<u64>()
+        };
+        assert!(all(&dir) > 2_000_000, "the flood is on disk: {}", all(&dir));
+        d.set_budget(0); // clamped to the floor: 1 MiB
+        d.enforce_budget().await;
+        assert!(all(&dir) <= 1 << 20, "over budget: {}", all(&dir));
+        assert!(disk_of(&dir, &a) < 100_000, "A was the least recently used");
+        assert!(
+            disk_of(&dir, &b) < 100_000,
+            "a watch stream is not a client"
+        );
+        assert_eq!(disk_of(&dir, &c), kept, "a client is attached to C");
+        // Nothing is evicted when the budget is met.
+        d.enforce_budget().await;
+        assert_eq!(disk_of(&dir, &c), kept);
+    }
+
+    /// With the sandbox on, a shell cannot read the scrollback files (output of every terminal
+    /// of this runner); with it off the same shell can, so the probe measures something. The
+    /// directory is also named on its own in the hidden paths, and exists before any shell.
+    #[tokio::test]
+    async fn a_terminal_shell_cannot_read_the_scrollback_files() {
+        let sd = |state: &std::path::Path| {
+            ainkrad_ptyhost::host::scrollback_dir(&state.join("terminals"))
+        };
+        let probe = |hide: bool| async move {
+            let state = tmp().join("state");
+            let terminals = state.join("terminals");
+            let ring = sd(&state);
+            std::fs::create_dir_all(&ring).unwrap();
+            std::fs::write(ring.join("t_canary.0.ring"), "RINGCANARY-9921").unwrap();
+            let hidden = hide.then(|| super::super::termbox::hidden_paths(&state, &[]));
+            if let Some(h) = &hidden {
+                assert!(h.contains(&ring), "the scrollback dir is hidden by name");
+            }
+            let script = format!(
+                "cat {}/t_canary.0.ring 2>&1; echo PROBE-DONE",
+                ring.display()
+            );
+            let (mut core, _) = Core::start_pty(sandboxed_driver(&terminals, hidden, vec![])).await;
+            core.send(1, open(&script)).await;
+            let mut out = String::new();
+            until(&mut core, 1, &mut out, |o, _| o.contains("PROBE-DONE")).await;
+            let _ = std::fs::remove_dir_all(state.parent().unwrap());
+            out
+        };
+        let on = probe(true).await;
+        assert!(!on.contains("RINGCANARY-9921"), "{on:?}");
+        let off = probe(false).await;
+        assert!(off.contains("RINGCANARY-9921"), "{off:?}");
+    }
+
+    /// E2-07.5, the process-listing and scrollback sinks. A secret in a terminal's environment
+    /// (how a Core-set `env` reaches a shell) is not in the argv of any process, host, sandbox
+    /// wrapper or shell (`ps -axww`; the environment of a same-uid process is a separate
+    /// matter and is not claimed here). Scrollback is NOT redacted (P2.11: an interactive
+    /// shell stream is the user's own): what the terminal prints is on disk and in the
+    /// snapshot, so the boundary is exactly that. A secret the shell never printed is in
+    /// neither, and typed input is not written. Both with the sandbox on and off.
+    #[tokio::test]
+    async fn a_planted_secret_stays_out_of_the_process_listing_and_unprinted_out_of_scrollback() {
+        use ainkrad_ptyhost::wire::{FromHost, ToHost};
+        for sandboxed in [false, true] {
+            let base = tmp();
+            let state = base.join("state");
+            let terminals = state.join("terminals");
+            std::fs::create_dir_all(&terminals).unwrap();
+            let _hosts = Hosts(base.clone());
+            let nonce = b64(&super::super::key::random::<6>()).replace(['-', '_'], "x");
+            let (hidden_secret, printed, typed) = (
+                format!("ENVSECRET-{nonce}"),
+                format!("PRINTEDSECRET-{nonce}"),
+                format!("TYPEDSECRET-{nonce}"),
+            );
+            let d = if sandboxed {
+                let hide = Some(super::super::termbox::hidden_paths(&state, &[]));
+                sandboxed_driver(&terminals, hide, vec![])
+            } else {
+                driver(&terminals, true)
+            };
+            let Body::Command(Command::PtyOpen(mut req)) = open(
+                "stty -echo; echo \"visible:$PRINTED\"; read x; echo typed-line-read; sleep 600",
+            ) else {
+                unreachable!()
+            };
+            req.env = [
+                ("HIDDEN".to_owned(), hidden_secret.clone()),
+                ("PRINTED".to_owned(), printed.clone()),
+            ]
+            .into();
+            let id = d.open(&req).await.unwrap();
+            let ring = ainkrad_ptyhost::host::scrollback_dir(&terminals);
+            let on_disk = || {
+                let mut all = Vec::new();
+                for e in std::fs::read_dir(&ring).into_iter().flatten().flatten() {
+                    all.extend(std::fs::read(e.path()).unwrap_or_default());
+                }
+                String::from_utf8_lossy(&all).into_owned()
+            };
+            for _ in 0..200 {
+                if on_disk().contains(&format!("visible:{printed}")) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            let (_, mut rd, mut wr) = ainkrad_ptyhost::client::connect(&terminals, &id)
+                .await
+                .unwrap();
+            wr.send(&ToHost::Input {
+                data: STANDARD.encode(format!("{typed}\n")),
+            })
+            .await
+            .unwrap();
+            for _ in 0..200 {
+                if on_disk().contains("typed-line-read") {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            // The process listing: every process's argv.
+            let ps = std::process::Command::new("ps")
+                .args(["-axww", "-o", "command="])
+                .output()
+                .unwrap();
+            let listing = String::from_utf8_lossy(&ps.stdout).into_owned();
+            assert!(
+                listing.contains("ainkrad-ptyhost"),
+                "the listing shows the host (not vacuous)"
+            );
+            for secret in [&hidden_secret, &printed, &typed] {
+                assert!(
+                    !listing.contains(secret.as_str()),
+                    "{secret} in ps (sandbox {sandboxed})"
+                );
+            }
+            // The scrollback sink: the printed value is there (no redaction, by design), the
+            // unprinted env secret and the typed line are not.
+            let disk = on_disk();
+            assert!(
+                disk.contains(&printed),
+                "printed output is on disk: {disk:?}"
+            );
+            assert!(disk.contains("typed-line-read"));
+            assert!(
+                !disk.contains(&hidden_secret),
+                "an unprinted env secret is on disk"
+            );
+            assert!(!disk.contains(&typed), "typed input is on disk");
+            // The snapshot sink: the same.
+            wr.send(&ToHost::Snapshot).await.unwrap();
+            let snap = loop {
+                match tokio::time::timeout(Duration::from_secs(10), rd.recv()).await {
+                    Ok(Ok(Some(FromHost::Snapshot { data, .. }))) => {
+                        break String::from_utf8_lossy(&STANDARD.decode(data).unwrap())
+                            .into_owned();
+                    }
+                    Ok(Ok(Some(_))) => {}
+                    other => panic!("no snapshot: {other:?}"),
+                }
+            };
+            assert!(snap.contains(&printed), "{snap:?}");
+            assert!(
+                !snap.contains(&hidden_secret) && !snap.contains(&typed),
+                "{snap:?}"
+            );
+        }
+    }
+
     fn tmp() -> std::path::PathBuf {
         let r = b64(&super::super::key::random::<6>()).replace(['-', '_'], "x");
         std::path::PathBuf::from(format!("/tmp/apr-{r}"))
@@ -789,6 +1051,9 @@ mod pty {
             env: Default::default(),
             env_pass: vec![],
             size: Size { rows: 24, cols: 80 },
+            watch: false,
+            scrollback_bytes: None,
+            scrollback_budget: None,
         }))
     }
 
@@ -865,6 +1130,7 @@ mod pty {
             Body::Command(Command::PtyAttach(PtyAttach {
                 terminal: id.clone(),
                 seq: 0,
+                watch: false,
             })),
         )
         .await;
