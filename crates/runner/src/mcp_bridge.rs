@@ -9,13 +9,15 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
-use tokio::io::{
-    AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
-    copy, copy_bidirectional, split,
-};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, copy, copy_bidirectional, split};
 use tokio::net::{TcpListener, TcpStream, UnixListener, UnixStream};
-use tokio::task::JoinHandle;
+use tokio::sync::Semaphore;
+use tokio::task::{JoinHandle, JoinSet};
+use tokio::time::timeout;
+
+pub mod filter;
 
 /// The port inside the sandbox's own network namespace (a fresh one, so a fixed number is safe).
 pub const FORWARD_PORT: u16 = 47831;
@@ -27,6 +29,8 @@ pub struct Target {
     pub tls: bool,
     /// The Core as the enrolment names it (`host[:port]`): what the Core expects in `Host`.
     pub authority: String,
+    /// The one path the bridge forwards (`POST` only).
+    pub path: String,
 }
 
 /// The Core MCP URL's authority, and the same URL as the sandbox sees it.
@@ -50,18 +54,27 @@ pub fn parse(url: &str) -> Option<(Target, String)> {
                 port,
                 tls,
                 authority: authority.to_owned(),
+                path: format!("/{path}"),
             },
             format!("http://127.0.0.1:{FORWARD_PORT}/{path}"),
         )
     })
 }
 
-/// Aborts the listener when dropped (the run ended).
+/// Open connections per run, and across every run of this runner.
+const PER_RUN: usize = 16;
+const GLOBAL: usize = 128;
+static OPEN: Semaphore = Semaphore::const_new(GLOBAL);
+/// No connection outlives this, whatever it is doing.
+const LIFETIME: Duration = Duration::from_secs(6 * 3600);
+const CONNECT: Duration = Duration::from_secs(10);
+
+/// Aborts the listener and every connection it spawned when dropped (the run ended).
 pub struct Bridge(JoinHandle<()>);
 
 impl Drop for Bridge {
     fn drop(&mut self) {
-        self.0.abort();
+        self.0.abort(); // the accept task owns the JoinSet; dropping it aborts every connection
     }
 }
 
@@ -81,122 +94,67 @@ fn tls_config(given: Option<Arc<rustls::ClientConfig>>) -> Arc<rustls::ClientCon
     })
 }
 
-async fn upstream(
+trait Duplex: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Duplex for T {}
+
+async fn connect(target: &Target, tls: &Arc<rustls::ClientConfig>) -> io::Result<Box<dyn Duplex>> {
+    let tcp = TcpStream::connect((target.host.as_str(), target.port)).await?;
+    if !target.tls {
+        return Ok(Box::new(tcp));
+    }
+    let name =
+        rustls::pki_types::ServerName::try_from(target.host.clone()).map_err(io::Error::other)?;
+    let tls = tokio_rustls::TlsConnector::from(tls.clone())
+        .connect(name, tcp)
+        .await?;
+    Ok(Box::new(tls))
+}
+
+async fn refuse<W: AsyncWrite + Unpin>(w: &mut W, r: filter::Refusal) {
+    let reply = format!(
+        "HTTP/1.1 {} {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        r.0, r.1
+    );
+    let _ = timeout(Duration::from_secs(5), w.write_all(reply.as_bytes())).await;
+}
+
+/// One client: the first request is checked before the Core is dialled at all; a refusal is
+/// answered and nothing is sent upstream.
+async fn serve(
     target: &Target,
     tls: &Arc<rustls::ClientConfig>,
     client: UnixStream,
 ) -> io::Result<()> {
-    let tcp = TcpStream::connect((target.host.as_str(), target.port)).await?;
-    if target.tls {
-        let name = rustls::pki_types::ServerName::try_from(target.host.clone())
-            .map_err(io::Error::other)?;
-        let tls = tokio_rustls::TlsConnector::from(tls.clone())
-            .connect(name, tcp)
-            .await?;
-        relay(client, tls, &target.authority).await
-    } else {
-        relay(client, tcp, &target.authority).await
-    }
-}
-
-/// Client requests go through `rewrite_requests`; responses are copied as they come.
-async fn relay<U: AsyncRead + AsyncWrite + Unpin>(
-    client: UnixStream,
-    up: U,
-    authority: &str,
-) -> io::Result<()> {
     let (cr, mut cw) = split(client);
+    let mut reader = BufReader::new(cr);
+    let first = match filter::read_request(&mut reader, &target.authority, &target.path).await {
+        Ok(Some(q)) => q,
+        Ok(None) => return Ok(()),
+        Err(refusal) => {
+            refuse(&mut cw, refusal).await;
+            return Ok(());
+        }
+    };
+    let up = timeout(CONNECT, connect(target, tls))
+        .await
+        .map_err(|_| io::Error::other("connecting to the Core timed out"))??;
     let (mut ur, mut uw) = split(up);
     let requests = async {
-        let r = rewrite_requests(BufReader::new(cr), &mut uw, authority).await;
-        let _ = uw.shutdown().await;
-        r
-    };
-    let (a, b) = tokio::join!(requests, copy(&mut ur, &mut cw));
-    a.and(b.map(|_| ()))
-}
-
-const MAX_HEAD: usize = 64 * 1024;
-
-/// Copies HTTP/1.x requests from `r` to `w`, setting `Host` to `authority` on each: the sandbox
-/// dialled the forwarder's loopback address, but the Core only answers to its own name. Handles
-/// keep-alive (many requests per connection), heads split across reads, and bodies sized by
-/// `Content-Length` or `chunked`.
-pub async fn rewrite_requests<R, W>(mut r: R, mut w: W, authority: &str) -> io::Result<()>
-where
-    R: AsyncBufRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    let bad = |m: &str| io::Error::new(io::ErrorKind::InvalidData, m.to_owned());
-    let mut line = Vec::new();
-    loop {
-        let mut head = Vec::new();
-        let (mut length, mut chunked, mut first) = (0u64, false, true);
+        let mut q = first;
         loop {
-            line.clear();
-            if r.read_until(b'\n', &mut line).await? == 0 {
-                return if first {
-                    w.flush().await
-                } else {
-                    Err(bad("truncated head"))
-                };
+            uw.write_all(&q.head).await?;
+            filter::forward_body(&mut reader, &mut uw, q.body).await?;
+            uw.flush().await?;
+            match filter::read_request(&mut reader, &target.authority, &target.path).await {
+                Ok(Some(next)) => q = next,
+                Ok(None) => return uw.shutdown().await, // the client is done; let responses finish
+                Err(_) => return Err(io::Error::other("refused a later request")),
             }
-            first = false;
-            if head.len() + line.len() > MAX_HEAD {
-                return Err(bad("head too large"));
-            }
-            if line == b"\r\n" {
-                break;
-            }
-            let text = String::from_utf8_lossy(&line).to_ascii_lowercase();
-            if text.starts_with("host:") {
-                head.extend_from_slice(format!("Host: {authority}\r\n").as_bytes());
-                continue;
-            }
-            if let Some(v) = text.strip_prefix("content-length:") {
-                length = v.trim().parse().map_err(|_| bad("content-length"))?;
-            } else if text.starts_with("transfer-encoding:") && text.contains("chunked") {
-                chunked = true;
-            }
-            head.extend_from_slice(&line);
         }
-        head.extend_from_slice(b"\r\n");
-        w.write_all(&head).await?;
-        if chunked {
-            loop {
-                line.clear();
-                r.read_until(b'\n', &mut line).await?;
-                w.write_all(&line).await?;
-                let size = u64::from_str_radix(
-                    String::from_utf8_lossy(&line)
-                        .split(';')
-                        .next()
-                        .unwrap_or("")
-                        .trim(),
-                    16,
-                )
-                .map_err(|_| bad("chunk size"))?;
-                if size == 0 {
-                    // Trailers, up to the blank line.
-                    loop {
-                        line.clear();
-                        if r.read_until(b'\n', &mut line).await? == 0 {
-                            return Err(bad("truncated trailer"));
-                        }
-                        w.write_all(&line).await?;
-                        if line == b"\r\n" {
-                            break;
-                        }
-                    }
-                    break;
-                }
-                copy(&mut (&mut r).take(size + 2), &mut w).await?;
-            }
-        } else {
-            copy(&mut (&mut r).take(length), &mut w).await?;
-        }
-        w.flush().await?;
-    }
+    };
+    // Either side failing drops the other: the connection closes.
+    tokio::try_join!(requests, async { copy(&mut ur, &mut cw).await.map(|_| ()) })?;
+    Ok(())
 }
 
 /// Listens on `sock` (mode 0600) and forwards every connection to `target`.
@@ -208,14 +166,29 @@ pub fn start(
     let listener = UnixListener::bind(sock)?;
     std::fs::set_permissions(sock, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
     let tls = tls_config(tls);
+    let run = Arc::new(Semaphore::new(PER_RUN));
     Ok(Bridge(tokio::spawn(async move {
-        while let Ok((client, _)) = listener.accept().await {
-            let (target, tls) = (target.clone(), tls.clone());
-            tokio::spawn(async move {
-                if let Err(e) = upstream(&target, &tls, client).await {
-                    tracing::debug!(error = %e, "mcp bridge connection ended");
+        let mut conns = JoinSet::new();
+        loop {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let Ok((client, _)) = accepted else { break };
+                    // Over a limit: close at once; nothing is queued.
+                    let (Ok(mine), Ok(global)) = (run.clone().try_acquire_owned(), OPEN.try_acquire()) else {
+                        continue;
+                    };
+                    let (target, tls) = (target.clone(), tls.clone());
+                    conns.spawn(async move {
+                        let _held = (mine, global);
+                        match timeout(LIFETIME, serve(&target, &tls, client)).await {
+                            Ok(Err(e)) => tracing::debug!(error = %e, "mcp bridge connection ended"),
+                            Err(_) => tracing::debug!("mcp bridge connection reached its lifetime cap"),
+                            Ok(Ok(())) => {}
+                        }
+                    });
                 }
-            });
+                Some(_) = conns.join_next(), if !conns.is_empty() => {}
+            }
         }
     })))
 }
@@ -243,33 +216,102 @@ pub async fn forward_main(port: &str, sock: &str) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::AsyncReadExt;
 
-    #[tokio::test]
-    async fn every_request_on_a_connection_gets_the_core_host() {
-        let input = b"POST /a HTTP/1.1\r\nhOsT: 127.0.0.1:47831\r\nContent-Length: 5\r\n\r\nHost:\
-            GET /b HTTP/1.1\r\nHost: 127.0.0.1:47831\r\n\r\n\
-            POST /c HTTP/1.1\r\nTransfer-Encoding: chunked\r\nHost: x\r\n\r\n3\r\nabc\r\n0\r\n\r\n\
-            GET /d HTTP/1.1\r\nHost: y\r\n\r\n";
-        // One byte per read: a head split anywhere still parses.
-        let (mut tx, rx) = tokio::io::duplex(1);
-        let feed = tokio::spawn(async move {
-            for b in input.iter() {
-                tx.write_all(&[*b]).await.unwrap();
+    const REQ: &str = "POST /token/citadel/v1/mcp HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n";
+
+    /// A counting upstream and a bridge to it; the socket lives in a fresh temp dir.
+    async fn rig(name: &str) -> (Bridge, PathBuf, Arc<AtomicUsize>) {
+        let up = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = up.local_addr().unwrap().port();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let h = hits.clone();
+        tokio::spawn(async move {
+            while let Ok((mut c, _)) = up.accept().await {
+                h.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut buf = [0; 1024];
+                    while c.read(&mut buf).await.is_ok_and(|n| n > 0) {
+                        let _ = c
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                            .await;
+                    }
+                });
             }
         });
+        let dir = std::env::temp_dir().join(format!("mcp-bridge-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("s");
+        let target = Target {
+            host: "127.0.0.1".into(),
+            port,
+            tls: false,
+            authority: format!("127.0.0.1:{port}"),
+            path: "/token/citadel/v1/mcp".into(),
+        };
+        (start(&sock, target, None).unwrap(), sock, hits)
+    }
+
+    async fn status(sock: &Path, raw: &[u8]) -> String {
+        let mut c = UnixStream::connect(sock).await.unwrap();
+        c.write_all(raw).await.unwrap();
         let mut out = Vec::new();
-        rewrite_requests(BufReader::new(rx), &mut out, "core.example:8443")
-            .await
-            .unwrap();
-        feed.await.unwrap();
-        let out = String::from_utf8(out).unwrap();
+        let _ = timeout(Duration::from_secs(5), c.read_to_end(&mut out)).await;
+        String::from_utf8_lossy(&out)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_owned()
+    }
+
+    #[tokio::test]
+    async fn refused_requests_never_reach_the_core() {
+        let (_bridge, sock, hits) = rig("refuse").await;
+        for (raw, want) in [
+            ("GET /token/citadel/v1/mcp HTTP/1.1\r\n\r\n".to_owned(), "403"),
+            ("CONNECT 169.254.169.254:80 HTTP/1.1\r\n\r\n".to_owned(), "403"),
+            ("POST /handshake HTTP/1.1\r\n\r\n".to_owned(), "404"),
+            ("POST /token/citadel/v1/mcp?x=1 HTTP/1.1\r\n\r\n".to_owned(), "404"),
+            ("POST /token/citadel/v1/mcp HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n".to_owned(), "403"),
+            ("POST /token/citadel/v1/mcp HTTP/1.1\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n".to_owned(), "400"),
+            ("POST /token/citadel/v1/mcp HTTP/1.1\r\nContent-Length: 5\r\nContent-Length: 5\r\n\r\n".to_owned(), "400"),
+            (format!("POST /token/citadel/v1/mcp HTTP/1.1\r\nX: {}\r\n\r\n", "a".repeat(20_000)), "431"),
+        ] {
+            let got = status(&sock, raw.as_bytes()).await;
+            assert!(got.contains(want), "{want}: {got}");
+        }
         assert_eq!(
-            out.matches("Host: core.example:8443\r\n").count(),
-            4,
-            "{out}"
+            hits.load(Ordering::SeqCst),
+            0,
+            "a refused request reached the Core"
         );
-        assert!(!out.contains("47831") && !out.contains("Host: x") && !out.contains("Host: y"));
-        assert!(out.contains("\r\n\r\nHost:GET /b") && out.contains("3\r\nabc\r\n0\r\n\r\nGET /d"));
+        assert!(status(&sock, REQ.as_bytes()).await.contains("200"));
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn connections_are_capped_and_ending_the_bridge_closes_them_all() {
+        let (bridge, sock, _) = rig("cap").await;
+        let mut held = Vec::new();
+        for _ in 0..PER_RUN {
+            held.push(UnixStream::connect(&sock).await.unwrap());
+        }
+        // Every slot is taken by an idle client: the next one is closed without a reply.
+        let mut extra = UnixStream::connect(&sock).await.unwrap();
+        let mut buf = [0; 8];
+        let n = timeout(Duration::from_secs(5), extra.read(&mut buf))
+            .await
+            .expect("the extra connection hung");
+        assert!(matches!(n, Ok(0)), "over the limit: {n:?}");
+        drop(bridge);
+        for mut c in held {
+            let n = timeout(Duration::from_secs(5), c.read(&mut buf))
+                .await
+                .expect("a connection outlived the bridge");
+            assert!(matches!(n, Ok(0) | Err(_)));
+        }
     }
 
     #[test]

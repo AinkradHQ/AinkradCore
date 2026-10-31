@@ -79,6 +79,7 @@ async fn a_denied_session_reaches_only_its_mcp_route() {
             port: mcp_port,
             tls: false,
             authority: format!("127.0.0.1:{mcp_port}"),
+            path: "/token/citadel/v1/mcp".into(),
         },
         None,
     )
@@ -106,7 +107,7 @@ async fn a_denied_session_reaches_only_its_mcp_route() {
     let script = format!(
         r#"for i in $(seq 60); do exec 3<>/dev/tcp/127.0.0.1/{fwd} 2>/dev/null && break; sleep 0.2; done
 for n in 1 2; do
-  printf 'GET /x HTTP/1.1\r\nHost: 127.0.0.1:{fwd}\r\n\r\n' >&3
+  printf 'POST /token/citadel/v1/mcp HTTP/1.1\r\nHost: 127.0.0.1:{fwd}\r\nContent-Length: 0\r\n\r\n' >&3
   read -r -t 5 l1 <&3; read -r -t 5 l2 <&3; read -r -t 5 l3 <&3; read -r -t 5 -N 6 body <&3
   echo "mcp$n:${{l1%$'\r'}} $body"
 done

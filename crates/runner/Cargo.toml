@@ -35,4 +35,5 @@ zeroize = "1.9.1"
 
 # A local HTTPS git server with a throwaway CA, for the workspace's transport tests (KAN-271).
 [dev-dependencies]
+tokio = { version = "1.54.0", features = ["test-util"] }
 ainkrad-gitfixture = { path = "../gitfixture" }

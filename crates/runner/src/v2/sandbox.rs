@@ -116,6 +116,9 @@ impl Sandbox for ProcessSandbox {
             .any(|g| g.var != super::agent::RUN_TOKEN_VAR);
         let requested = std::env::var("AINKRAD_AGENT_NETWORK").ok();
         let network = network_for(requested.as_deref(), holds, cfg!(target_os = "linux"))?;
+        if network == "allow" && requested.is_some() {
+            tracing::warn!(session = %session, holds, "AINKRAD_AGENT_NETWORK=allow: this agent session has the host network");
+        }
         Self::add(env, "AINKRAD_SANDBOX_NETWORK", network);
         Self::add(
             env,

@@ -263,6 +263,11 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             ..super::PtyConfig::new(state.0.join("terminals"))
         }))
     });
+    if agents_enabled && std::env::var("AINKRAD_AGENT_NETWORK").is_ok_and(|v| v == "allow") {
+        let m = "AINKRAD_AGENT_NETWORK=allow: agent sessions without secrets get the HOST network (cloud metadata, LAN, loopback services); use only on a stage-1 host with no instance role and nothing on loopback";
+        eprintln!("ainkrad-runner: WARNING: {m}");
+        tracing::warn!("{m}");
+    }
     let agents = match agents_enabled.then(|| agents(&state.0, core_url(&state), tls.clone())) {
         None => None,
         Some(a) => match a.await {

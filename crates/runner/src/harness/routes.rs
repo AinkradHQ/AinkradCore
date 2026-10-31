@@ -168,7 +168,9 @@ impl HarnessExecutor {
         let instructions = job.instructions.as_deref();
         // Removed when this future ends or is dropped (a cancelled run).
         // A harness that may be kept warm reads its files from its agent's stable dir (E15.6).
-        let name = match self.limits(job).warm_max > 0 && long_lived(&job.harness) {
+        // A session with no network is never kept warm (`turn.rs`: isolated runs are not), and
+        // its MCP bridge lives and dies with this run, so its files are always the run's own.
+        let name = match self.limits(job).warm_max > 0 && long_lived(&job.harness) && !denied {
             true => format!("warm-{}-{}", job.agent, job.harness),
             false => format!("run-{}", job.run),
         };
@@ -268,7 +270,7 @@ impl HarnessExecutor {
         };
         let reports = reports.clone();
         let _bridge = bridge; // held until the run ends
-        match job.harness.as_str() {
+        let outcome = match job.harness.as_str() {
             "claude" => self.work::<Claude>(job, spec, reports, meter).await,
             "codex" => self.work::<Codex>(job, spec, reports, meter).await,
             "opencode" => self.work::<OpenCode>(job, spec, reports, meter).await,
@@ -277,7 +279,36 @@ impl HarnessExecutor {
                 format!("harness {other:?} is not supported"),
                 "harness_start",
             ),
+        };
+        if denied {
+            return no_network_note(outcome);
         }
+        outcome
+    }
+}
+
+/// A failure that looks like an unreachable model API, said plainly for a session with no network.
+fn no_network_note(outcome: Outcome) -> Outcome {
+    const SIGNS: [&str; 7] = [
+        "connect",
+        "network",
+        "dns",
+        "resolve",
+        "unreachable",
+        "timed out",
+        "fetch failed",
+    ];
+    match outcome {
+        Outcome::Failed {
+            reason,
+            fingerprint,
+        } if SIGNS.iter().any(|s| reason.to_lowercase().contains(s)) => Outcome::Failed {
+            reason: format!(
+                "{reason} (this session has no network: AINKRAD_AGENT_NETWORK=deny is the Linux default, so the harness cannot reach its model API; stage 1 uses a local mock model)"
+            ),
+            fingerprint,
+        },
+        other => other,
     }
 }
 
