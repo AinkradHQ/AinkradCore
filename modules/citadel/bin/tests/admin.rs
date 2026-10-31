@@ -116,7 +116,7 @@ async fn it_refuses_a_running_server_and_a_missing_database() {
     let listener = std::os::unix::net::UnixListener::bind(home.0.join("core.sock")).unwrap();
     let out = home.seed_cmd(&file);
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("server is running"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("server may be running"));
     drop(listener);
     assert_eq!(home.count("citadel_companies").await, 0, "nothing written");
     // A stale socket file is not a server.
