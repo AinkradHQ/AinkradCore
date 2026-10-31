@@ -33,6 +33,7 @@ import kotlinx.serialization.Contextual
  * @param exitCode 
  * @param exitSignal 
  * @param openedBy 
+ * @param orphaned Running with no client attached: it is closed once idle past `terminal.idle_secs`.
  * @param seq 
  * @param propertySize 
  */
@@ -64,6 +65,10 @@ data class Terminal (
 
     @SerialName(value = "opened_by")
     val openedBy: kotlin.String? = null,
+
+    /* Running with no client attached: it is closed once idle past `terminal.idle_secs`. */
+    @SerialName(value = "orphaned")
+    val orphaned: kotlin.Boolean? = null,
 
     @SerialName(value = "seq")
     val seq: kotlin.Long? = null,
