@@ -101,6 +101,10 @@ fn readme(dir: &Path) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "Apple git uses the system keychain and ignores GIT_SSL_CAINFO; runs on Linux"
+)]
 async fn a_session_clones_over_https_and_certificate_checks_stay_on() {
     let rig = rig("tls-clone");
     bare_repo(&rig.served, "origin.git", readme);
@@ -218,6 +222,10 @@ async fn the_credential_helper_answers_only_the_configured_host() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "Apple git uses the system keychain and ignores GIT_SSL_CAINFO; runs on Linux"
+)]
 async fn a_hostile_repo_runs_nothing_and_fetches_no_submodule() {
     let rig = rig("tls-hostile");
     let server = rig.server(|_| {}).await;
@@ -339,6 +347,10 @@ async fn a_hostile_repo_runs_nothing_and_fetches_no_submodule() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "Apple git uses the system keychain and ignores GIT_SSL_CAINFO; runs on Linux"
+)]
 async fn a_stalled_server_is_cut_off_at_the_timeout_and_git_is_killed() {
     let mut rig = rig("tls-stall");
     let server = rig.server(|c| c.stall = true).await;
@@ -371,6 +383,10 @@ async fn a_stalled_server_is_cut_off_at_the_timeout_and_git_is_killed() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "Apple git uses the system keychain and ignores GIT_SSL_CAINFO; runs on Linux"
+)]
 async fn an_oversize_pack_is_cut_off_by_the_size_cap_while_streaming() {
     let mut rig = rig("tls-oversize");
     const BLOB: usize = 24 * 1024 * 1024;
