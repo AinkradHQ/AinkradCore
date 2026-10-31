@@ -320,7 +320,43 @@ fault_slow_client() {
   a term kill "$t" >/dev/null 2>&1 || true
   EV="a stopped client behind 3 MB: the fast client finished, runner RSS +$((r1 - r0)) KB, the slow client caught up (a snapshot) once resumed"
 }
-fault_disk_full() { EV="not applicable: terminal scrollback is in memory (1 MiB ring); the on-disk ring is E2-04.3, not in the tree"; return 0; }
+# The scrollback disk budget (E2-06.2) under a flood: four terminals print 2 MB each into a 1 MiB budget (cap 512 KiB each);
+# the one with a client attached keeps its scrollback, the least recently used unattached ones are freed, the total comes
+# back within the budget, and the Core, the runner, the evicted terminals and a new terminal all keep working.
+fault_disk_full() {
+  local sd=$RSTATE/terminals/scrollback budget=1048576 ts=() t i total sa s1 s2 ok= out=$W/df-new.bin
+  ring_bytes() { find "$sd" -name "$1.*.ring" -exec cat {} + 2>/dev/null | wc -c | tr -d ' '; }
+  ring_total() { find "$sd" -name '*.ring' -exec cat {} + 2>/dev/null | wc -c | tr -d ' '; }
+  "$SRV" setting set "$DB" terminal.scrollback_budget_bytes $budget >/dev/null &&
+    "$SRV" setting set "$DB" terminal.scrollback_bytes 524288 >/dev/null || { EV="could not set the scrollback limits"; return 1; }
+  rm -f "$W/go-df"
+  ts+=("$(new_term sh -c "echo READY; while [ ! -f $W/go-df ]; do sleep 0.1; done; head -c 2000000 /dev/zero | tr '\\\\0' x | fold -w 79; echo FLOOD-DONE-0; exec cat")")
+  bg_attach a "$W/df-0.bin" 120 "${ts[0]}"
+  wait_for 20 grep -aq READY "$W/df-0.bin" || { EV="no READY from the attached terminal"; return 1; }
+  for i in 1 2 3; do
+    ts+=("$(new_term sh -c "head -c 2000000 /dev/zero | tr '\\\\0' x | fold -w 79; echo FLOOD-DONE-$i; exec cat")")
+    sleep 1.2
+  done
+  touch "$W/go-df"
+  # The budget is enforced about once a second: wait for the total to settle inside it.
+  total=0; for i in $(seq 1 60); do total=$(ring_total); [ "$total" -le $budget ] && [ "$total" -gt 0 ] && { ok=1; break; }; sleep 1; done
+  [ -n "$ok" ] || { EV="the scrollback total is $total bytes, over the $budget budget after 60 s"; return 1; }
+  sleep 3; total=$(ring_total)
+  [ "$total" -le $budget ] || { EV="the total grew back to $total (budget $budget)"; return 1; }
+  sa=$(ring_bytes "${ts[0]}"); s1=$(ring_bytes "${ts[1]}"); s2=$(ring_bytes "${ts[2]}")
+  [ "$sa" -gt 100000 ] || { EV="the terminal with a client lost its scrollback ($sa bytes)"; return 1; }
+  [ "$s1" -lt 100000 ] || { EV="the least recently used unattached terminal still holds $s1 bytes"; return 1; }
+  curl -fsS "$URL/healthz" >/dev/null && alive "$RPID" && alive "$CORE" || { EV="the Core or the runner stopped"; return 1; }
+  # Evicted is not dead: the terminal still echoes, and a new one opens and prints.
+  attach a "$W/df-1.bin" 8 "${ts[1]}" 'still-here-df\n' >/dev/null 2>&1 || true
+  grep -aq 'still-here-df' "$W/df-1.bin" || { EV="the evicted terminal ${ts[1]} does not answer"; return 1; }
+  t=$(new_term sh -c "echo ALIVE-NEW-DF; exec cat")
+  attach a "$out" 8 "$t" >/dev/null 2>&1 || true
+  grep -aq ALIVE-NEW-DF "$out" || { EV="a new terminal printed nothing"; return 1; }
+  for t in "${ts[@]}"; do a term kill "$t" >/dev/null 2>&1 || true; done
+  pkill -f "term attach" 2>/dev/null || true
+  EV="4 terminals x 2 MB into a $budget byte budget: total $total bytes; the attached one kept $sa bytes, the LRU unattached ones were freed ($s1, $s2 bytes); Core, runner, the evicted terminal and a new terminal all answered"
+}
 
 run_faults() {
   local names=(core_kill runner_kill host_kill network_cut slow_client disk_full) n
