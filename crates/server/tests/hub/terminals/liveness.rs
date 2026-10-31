@@ -122,6 +122,11 @@ async fn a_killed_host_ends_its_terminal_and_frees_the_slot() {
     .await;
     let t = terminal(&fx, &id).await;
     assert_eq!(t["exit_signal"], "host_lost", "{t}");
+    // The row is written before its event: wait for the event too.
+    fx.until("the exited event", async || {
+        !exited_events(&fx, &id).await.is_empty()
+    })
+    .await;
     let events = exited_events(&fx, &id).await;
     assert!(
         events.len() == 1 && events[0]["reason"] == "host_lost",
@@ -166,6 +171,10 @@ async fn a_runner_hello_settles_terminals_that_ended_while_nobody_watched() {
     })
     .await;
     assert_eq!(terminal(&fx, &lost).await["exit_signal"], "host_lost");
+    fx.until("the exited event", async || {
+        !exited_events(&fx, &lost).await.is_empty()
+    })
+    .await;
     assert_eq!(exited_events(&fx, &lost).await.len(), 1);
     assert_eq!(fx.status(o, &kept).await, "running");
 
@@ -245,4 +254,152 @@ async fn an_idle_terminal_with_nobody_attached_is_closed() {
     .await;
     ainkrad_core_server::api::v1::sweep_terminals(&fx.core.app).await;
     assert_eq!(fx.status(o, &watched).await, "running");
+}
+
+/// One terminal takes at most four attached clients: the fifth is refused with 429 and a
+/// slot freed by a closing client is usable again, so a flood of attaches cannot hold the
+/// runner's shared stream pool.
+#[tokio::test]
+async fn attaches_are_capped_per_terminal() {
+    let fx = Fx::new("t-attach-cap").await;
+    let o = &fx.owner;
+    let id = fx.sh(o).await;
+    let mut held = Vec::new();
+    for _ in 0..4 {
+        let mut c = fx.ws(o, &id).await;
+        c.read_until("ready").await;
+        held.push(c);
+    }
+    let uri = format!("/api/v1/terminals/{id}/ws");
+    let try_ws = async || {
+        let tcp = tokio::net::TcpStream::connect(("127.0.0.1", fx.core.port))
+            .await
+            .unwrap();
+        let mut req = format!("ws://{}{uri}", fx.core.host)
+            .into_client_request()
+            .unwrap();
+        for (n, v) in o.headers("GET", &uri, b"") {
+            req.headers_mut()
+                .insert(n, HeaderValue::from_str(&v).unwrap());
+        }
+        let io: Box<dyn Io> = Box::new(tcp);
+        tokio_tungstenite::client_async(req, io).await
+    };
+    match try_ws().await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(r)) => assert_eq!(r.status(), 429),
+        other => panic!(
+            "the fifth attach must be refused with 429: {:?}",
+            other.map(|_| ())
+        ),
+    }
+    drop(held.pop());
+    fx.until("a slot was freed", async || try_ws().await.is_ok())
+        .await;
+}
+
+/// A terminal that exited while nobody was attached, whose host nobody acked: the runner
+/// restarts, its hello reports the exit, and the host still lingers. Returns its id.
+async fn exited_unacked(fx: &Fx) -> (String, StopOnDrop) {
+    let (s, b) = fx
+        .create(&fx.owner, "/bin/sh", &["-c", "echo FINAL-OUTPUT; sleep 3"])
+        .await;
+    assert_eq!(s, 201, "{b}");
+    let id = b["id"].as_str().unwrap().to_owned();
+    fx.core.app.terminals.forget_monitors();
+    fx.stop.send_replace(true);
+    fx.until("the runner offline", async || {
+        !fx.core.app.hub.online(&fx.runner)
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(4500)).await;
+    let base = format!("http://{}", fx.core.host);
+    let runner = StopOnDrop(spawn_daemon(&fx.st, &base, &fx.dir));
+    fx.until("the exit was recorded", async || {
+        fx.status(&fx.owner, &id).await == "exited"
+    })
+    .await;
+    assert!(
+        fx.dir.join(format!("{id}.json")).exists(),
+        "the host lingers, unacked"
+    );
+    (id, runner)
+}
+
+async fn age(fx: &Fx, id: &str, secs: i64) {
+    sqlx::query("UPDATE core_terminals SET last_activity=last_activity-? WHERE id=?")
+        .bind(secs)
+        .bind(id)
+        .execute(&fx.core.app.pool)
+        .await
+        .unwrap();
+}
+
+/// An exited terminal's output stays retrievable (its host kept) until a hard cap just inside
+/// the row's life; only then does the sweep hang it up, and the row stays listed.
+#[tokio::test]
+async fn an_exited_terminal_keeps_its_output_until_the_cap() {
+    let fx = Fx::new("t-ack-exited").await;
+    let (id, _runner) = exited_unacked(&fx).await;
+    age(&fx, &id, 1000).await;
+    ainkrad_core_server::api::v1::sweep_terminals(&fx.core.app).await;
+    assert!(
+        fx.dir.join(format!("{id}.json")).exists(),
+        "output is kept well before the cap"
+    );
+    age(&fx, &id, 2400).await;
+    ainkrad_core_server::api::v1::sweep_terminals(&fx.core.app).await;
+    assert!(
+        !fx.dir.join(format!("{id}.json")).exists(),
+        "the sweep acked the host at the cap"
+    );
+    assert_eq!(
+        fx.status(&fx.owner, &id).await,
+        "exited",
+        "the row stays listed"
+    );
+}
+
+/// A client that attaches to the exited terminal reads the final output and the exit, and the
+/// runner then frees the host itself: output is not lost to it, and nothing lingers.
+#[tokio::test]
+async fn a_client_reading_an_exited_terminal_gets_its_output_and_frees_the_host() {
+    let fx = Fx::new("t-read-exited").await;
+    let (id, _runner) = exited_unacked(&fx).await;
+    let mut c = fx.ws(&fx.owner, &id).await;
+    c.read_until("FINAL-OUTPUT").await;
+    fx.until("the host was freed after the read", async || {
+        !fx.dir.join(format!("{id}.json")).exists()
+    })
+    .await;
+}
+
+/// A revoked device's running terminal is closed by the sweep: its shell does not outlive its
+/// access. Another device's terminal is left alone.
+#[tokio::test]
+async fn a_revoked_devices_terminals_are_closed() {
+    let fx = Fx::new("t-revoked").await;
+    let gone = fx.device(true).await;
+    let mine = fx.sh(&gone).await;
+    let other = fx.sh(&fx.owner).await;
+    let now = fx.core.app.clock.now();
+    assert!(
+        gov::revoke_device(&fx.core.app.pool, &gone.id, AuditActor::System, None, &now)
+            .await
+            .unwrap()
+    );
+    fx.core.app.auth.revoked(&gone.id);
+    ainkrad_core_server::api::v1::sweep_terminals(&fx.core.app).await;
+    let status = async |id: &str| -> String {
+        sqlx::query_scalar("SELECT status FROM core_terminals WHERE id=?")
+            .bind(id.to_owned())
+            .fetch_one(&fx.core.app.pool)
+            .await
+            .unwrap()
+    };
+    assert_eq!(status(&mine).await, "reaped");
+    assert_eq!(status(&other).await, "running");
+    fx.until("the host is gone", async || {
+        !fx.dir.join(format!("{mine}.json")).exists()
+    })
+    .await;
 }
