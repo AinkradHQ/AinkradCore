@@ -10,6 +10,22 @@ use crate::domain::org::AgentId;
 use crate::domain::work::{Actor, IssueState, IssueTransition, UserId};
 use crate::store::audit::{Event, append};
 
+/// The PRs a `pr_merge` approval covers: each `(repo, number, head the approver saw)`. A payload
+/// with `prs` (an issue with PRs on several repos) lists them all; an older one names one.
+fn targets(payload: &serde_json::Value) -> Vec<(Option<i64>, Option<i64>, Option<String>)> {
+    let one = |v: &serde_json::Value| {
+        (
+            v["repo_id"].as_i64(),
+            v["pr"].as_i64(),
+            v["head_sha"].as_str().map(str::to_owned),
+        )
+    };
+    match payload["prs"].as_array() {
+        Some(all) if !all.is_empty() => all.iter().map(one).collect(),
+        _ => vec![one(payload)],
+    }
+}
+
 pub(crate) async fn merge_decided_in(
     conn: &mut SqliteConnection,
     a: &Approval,
@@ -22,54 +38,56 @@ pub(crate) async fn merge_decided_in(
         return Ok(());
     };
     let payload: serde_json::Value = serde_json::from_str(&a.payload).unwrap_or_default();
-    let Some(number) = payload["pr"].as_i64() else {
+    // Resolve each covered PR to its open row and the head it has now. A PR that cannot be
+    // found, or whose head is not the one the approver saw (or that names none), makes the
+    // whole approval stale: nothing merges, and it is audited (fail closed).
+    let mut found: Vec<(i64, i64)> = vec![];
+    let mut stale = false;
+    for (repo, number, seen) in targets(&payload) {
+        let Some(number) = number else {
+            return Ok(());
+        };
+        let row: Option<(i64, Option<String>)> = match repo {
+            Some(r) => {
+                sqlx::query_as(
+                    "SELECT repo_id, head_sha FROM citadel_issue_prs WHERE issue_id = ? \
+                     AND repo_id = ? AND number = ? AND state = 'open'",
+                )
+                .bind(issue.0)
+                .bind(r)
+                .bind(number)
+                .fetch_optional(&mut *conn)
+                .await?
+            }
+            None => {
+                sqlx::query_as(
+                    "SELECT repo_id, head_sha FROM citadel_issue_prs WHERE issue_id = ? \
+                     AND number = ? AND state = 'open'",
+                )
+                .bind(issue.0)
+                .bind(number)
+                .fetch_optional(&mut *conn)
+                .await?
+            }
+        };
+        let Some((repo, head)) = row else {
+            if targets(&payload).len() == 1 {
+                return Ok(());
+            }
+            stale = true;
+            continue;
+        };
+        stale |= seen.is_none() || head != seen;
+        found.push((repo, number));
+    }
+    let Some(&(repo, number)) = found.first() else {
         return Ok(());
     };
-    let repo: Option<i64> = match payload["repo_id"].as_i64() {
-        Some(r) => {
-            sqlx::query_scalar(
-                "SELECT repo_id FROM citadel_issue_prs WHERE issue_id = ? AND repo_id = ? \
-                 AND number = ? AND state = 'open'",
-            )
-            .bind(issue.0)
-            .bind(r)
-            .bind(number)
-            .fetch_optional(&mut *conn)
-            .await?
-        }
-        None => {
-            sqlx::query_scalar(
-                "SELECT repo_id FROM citadel_issue_prs WHERE issue_id = ? AND number = ? \
-                 AND state = 'open'",
-            )
-            .bind(issue.0)
-            .bind(number)
-            .fetch_optional(&mut *conn)
-            .await?
-        }
-    };
-    let Some(repo) = repo else {
-        return Ok(());
-    };
-    // The decision is for the head the approver saw: a branch that moved since (or an approval
-    // that names none) merges nothing and says so.
-    let head: Option<String> = sqlx::query_scalar(
-        "SELECT head_sha FROM citadel_issue_prs WHERE issue_id = ? AND repo_id = ?",
-    )
-    .bind(issue.0)
-    .bind(repo)
-    .fetch_one(&mut *conn)
-    .await?;
-    let stale = match payload["head_sha"].as_str() {
-        Some(seen) => head.as_deref() != Some(seen),
-        None => true,
-    };
+    let company: i64 = sqlx::query_scalar("SELECT company_id FROM citadel_projects WHERE id = ?")
+        .bind(i.project_id.0)
+        .fetch_one(&mut *conn)
+        .await?;
     if a.status == ApprovalStatus::Approved && stale {
-        let company: i64 =
-            sqlx::query_scalar("SELECT company_id FROM citadel_projects WHERE id = ?")
-                .bind(i.project_id.0)
-                .fetch_one(&mut *conn)
-                .await?;
         let details = json!({"repo_id": repo, "number": number, "approval": a.id.0});
         let ev = Event::new(user_actor(by), "issue.pr_merge_stale")
             .entity("issue", i.id.0)
@@ -80,26 +98,23 @@ pub(crate) async fn merge_decided_in(
     }
     match a.status {
         ApprovalStatus::Approved => {
-            sqlx::query(
-                "UPDATE citadel_issue_prs SET state = 'merging', \
-                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
-                 WHERE issue_id = ? AND repo_id = ?",
-            )
-            .bind(issue.0)
-            .bind(repo)
-            .execute(&mut *conn)
-            .await?;
-            let company: i64 =
-                sqlx::query_scalar("SELECT company_id FROM citadel_projects WHERE id = ?")
-                    .bind(i.project_id.0)
-                    .fetch_one(&mut *conn)
-                    .await?;
-            let details = json!({"repo_id": repo, "number": number, "approval": a.id.0});
-            let ev = Event::new(user_actor(by), "issue.pr_merging")
-                .entity("issue", i.id.0)
-                .company(company)
-                .details(details);
-            append(conn, ev).await?;
+            for (repo, number) in found {
+                sqlx::query(
+                    "UPDATE citadel_issue_prs SET state = 'merging', \
+                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+                     WHERE issue_id = ? AND repo_id = ?",
+                )
+                .bind(issue.0)
+                .bind(repo)
+                .execute(&mut *conn)
+                .await?;
+                let details = json!({"repo_id": repo, "number": number, "approval": a.id.0});
+                let ev = Event::new(user_actor(by), "issue.pr_merging")
+                    .entity("issue", i.id.0)
+                    .company(company)
+                    .details(details);
+                append(conn, ev).await?;
+            }
         }
         ApprovalStatus::Rejected => {
             let author: Option<i64> = sqlx::query_scalar(
@@ -158,10 +173,13 @@ pub(crate) async fn workflow_decided_in(
     match a.status {
         ApprovalStatus::Approved => {
             sqlx::query(
-                "UPDATE citadel_issue_prs SET push_held = NULL, last_error = NULL, \
+                // The human pushed the approved head, as the approval asked: the branch is on
+                // the forge, so the request is due (`pushed_sha`), and opens at the next pass.
+                "UPDATE citadel_issue_prs SET push_held = NULL, last_error = NULL, pushed_sha = ?, \
                  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
                  WHERE issue_id = ? AND repo_id = ? AND push_held = ?",
             )
+            .bind(sha)
             .bind(issue.0)
             .bind(repo)
             .bind(sha)

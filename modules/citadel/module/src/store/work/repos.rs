@@ -45,7 +45,7 @@ pub struct Repo {
 macro_rules! repo_columns {
     () => {
         "id, project_id, name, url, default_branch, position, is_primary, forge_kind, \
-         forge_api_url, forge_repo, forge_token_file, build_cmd, test_cmd, lint_cmd, format_cmd"
+         forge_api_url, forge_repo, forge_secret, build_cmd, test_cmd, lint_cmd, format_cmd"
     };
 }
 
@@ -57,7 +57,7 @@ fn repo(row: SqliteRow) -> Result<Repo, Error> {
             kind,
             api_url: row.try_get("forge_api_url")?,
             repo: row.try_get("forge_repo")?,
-            token_file: row.try_get::<String, _>("forge_token_file")?.into(),
+            secret: row.try_get("forge_secret")?,
         }),
         None => None,
     };
@@ -188,7 +188,7 @@ pub async fn add_repo(
     let f = r.forge.as_ref();
     let added = sqlx::query(concat!(
         "INSERT INTO citadel_project_repos (project_id, name, url, default_branch, position, is_primary, \
-         forge_kind, forge_api_url, forge_repo, forge_token_file, build_cmd, test_cmd, lint_cmd, \
+         forge_kind, forge_api_url, forge_repo, forge_secret, build_cmd, test_cmd, lint_cmd, \
          format_cmd) SELECT ?1, ?2, ?3, ?4, coalesce(max(position) + 1, 0), count(*) = 0, ?5, ?6, \
          ?7, ?8, ?9, ?10, ?11, ?12 FROM citadel_project_repos WHERE project_id = ?1 RETURNING ",
         repo_columns!()
@@ -200,7 +200,7 @@ pub async fn add_repo(
     .bind(f.map(|f| f.kind.as_str()))
     .bind(f.map(|f| f.api_url.clone()))
     .bind(f.map(|f| f.repo.clone()))
-    .bind(f.map(|f| f.token_file.to_string_lossy().into_owned()))
+    .bind(f.map(|f| f.secret.clone()))
     .bind(&r.commands.build)
     .bind(&r.commands.test)
     .bind(&r.commands.lint)
@@ -245,7 +245,7 @@ pub async fn update_repo(pool: &SqlitePool, r: &Repo, actor: AuditActor) -> Resu
     let f = r.forge.as_ref();
     sqlx::query(
         "UPDATE citadel_project_repos SET name = ?, url = ?, default_branch = ?, forge_kind = ?, \
-         forge_api_url = ?, forge_repo = ?, forge_token_file = ?, build_cmd = ?, test_cmd = ?, \
+         forge_api_url = ?, forge_repo = ?, forge_secret = ?, build_cmd = ?, test_cmd = ?, \
          lint_cmd = ?, format_cmd = ? WHERE id = ?",
     )
     .bind(&r.name)
@@ -254,7 +254,7 @@ pub async fn update_repo(pool: &SqlitePool, r: &Repo, actor: AuditActor) -> Resu
     .bind(f.map(|f| f.kind.as_str()))
     .bind(f.map(|f| f.api_url.clone()))
     .bind(f.map(|f| f.repo.clone()))
-    .bind(f.map(|f| f.token_file.to_string_lossy().into_owned()))
+    .bind(f.map(|f| f.secret.clone()))
     .bind(&r.commands.build)
     .bind(&r.commands.test)
     .bind(&r.commands.lint)
