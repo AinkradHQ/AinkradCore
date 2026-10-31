@@ -4,7 +4,7 @@
 mod common;
 mod work_seed;
 
-use axum::http::StatusCode;
+use axum::http::{Method, StatusCode};
 use citadel_module::domain::org::AgentId;
 use citadel_module::domain::work::{IssueId, ProjectMode, WakeSource};
 use citadel_module::store::exec::list_wake_requests;
@@ -214,4 +214,46 @@ async fn the_activity_lists_the_audit_rows_about_an_issue_newest_first() {
     let one = ok(&fx, &format!("{uri}/activity?limit=1")).await;
     assert_eq!(one["items"].as_array().unwrap().len(), 1);
     assert!(one["next_before"].is_i64(), "{one}");
+}
+
+/// M-03: a `read` device gets the activity rows with only allow-listed detail keys (ids, counters,
+/// states): never the free text of the audit row, which stays admin-only in `GET /audit`.
+#[tokio::test]
+async fn a_read_device_sees_no_raw_audit_details_in_the_activity() {
+    let fx = fx().await;
+    let a = seed(&fx.app.pool, "A", "AAA", ProjectMode::Kanban).await;
+    let uri = format!("/issues/{}", a.issue);
+    ok_post(&fx, &format!("{uri}/estimate"), json!({"points": 2})).await;
+    ok_post(
+        &fx,
+        &format!("{uri}/comments"),
+        json!({"body": "RAW-COMMENT-TEXT"}),
+    )
+    .await;
+    // Plant a row whose details carry free text, a url and a nested value, as an agent's would.
+    let mut tx = ainkrad_core_server::store::begin_write(&fx.app.pool).await.unwrap();
+    citadel_module::store::audit::append(
+        &mut tx,
+        citadel_module::store::audit::Event::new(ainkrad_core_server::api::v1::BY, "issue.commented")
+            .entity("issue", a.issue)
+            .details(json!({"issue_id": 1, "reason": "RAW-REASON https://x.example/pr/1", "nested": {"k": "RAW-NESTED"}})),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let phone = enroll(&fx.app, "phone", &["read"], true).await;
+    let (s, page) = call(
+        &fx,
+        Some(&phone),
+        Method::GET,
+        &format!("{uri}/activity"),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{page}");
+    let text = page.to_string();
+    for leak in ["RAW-", "https://", "nested", "reason"] {
+        assert!(!text.contains(leak), "the activity leaks {leak:?}: {text}");
+    }
+    assert!(page["items"].as_array().unwrap().len() >= 3, "{page}");
 }

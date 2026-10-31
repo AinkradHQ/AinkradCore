@@ -358,3 +358,137 @@ async fn cost_reports_start_empty_and_are_company_scoped() {
     .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
+
+async fn company(fx: &Fx, name: &str) -> i64 {
+    let (s, c) = call(
+        fx,
+        Some(&fx.dev),
+        Method::POST,
+        "/companies",
+        Some(json!({"name": name})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{c}");
+    c["id"].as_i64().unwrap()
+}
+
+/// M-03: below `admin` a usage report names no account label (often an email) and no provider
+/// error text; the admin keeps both.
+#[tokio::test]
+async fn a_read_device_sees_no_account_label_or_status_reason_in_usage() {
+    let fx = fx().await;
+    let reader = enroll(&fx.app, "reader", &["read"], true).await;
+    let a = company(&fx, "A").await;
+    broker_secret(&fx, "claude-main").await;
+    let body =
+        json!({"harness": "claude", "label": "owner-main", "secret_name": "claude-main"});
+    let (_, acc) = call(&fx, Some(&fx.dev), Method::POST, "/accounts", Some(body)).await;
+    let id = acc["id"].as_i64().unwrap_or_else(|| panic!("{acc}"));
+    for (m, p) in [(Method::PUT, format!("/accounts/{id}/companies/{a}"))] {
+        assert_eq!(
+            call(&fx, Some(&fx.dev), m, &p, None).await.0,
+            StatusCode::OK
+        );
+    }
+    let st = json!({"status": "disabled", "reason": "429 for owner@example.com"});
+    let r = call(
+        &fx,
+        Some(&fx.dev),
+        Method::PUT,
+        &format!("/accounts/{id}/status"),
+        Some(st),
+    )
+    .await;
+    assert_eq!(r.0, StatusCode::OK, "{r:?}");
+    for p in [
+        "/accounts/usage".to_owned(),
+        format!("/companies/{a}/account-usage"),
+    ] {
+        let (s, admin) = call(&fx, Some(&fx.dev), Method::GET, &p, None).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(
+            admin[0]["label"], "owner-main",
+            "{p}: admin keeps the label"
+        );
+        assert_eq!(admin[0]["status_reason"], "429 for owner@example.com");
+        let (s, phone) = call(&fx, Some(&reader), Method::GET, &p, None).await;
+        assert_eq!(s, StatusCode::OK, "{p}");
+        let text = phone.to_string();
+        assert!(
+            !text.contains("owner-main") && !text.contains("429"),
+            "{p}: {text}"
+        );
+        assert!(phone[0]["status_reason"].is_null(), "{p}");
+        assert_eq!(phone[0]["id"], id, "{p}: the rest of the report is kept");
+    }
+}
+
+/// M-03: an account assigned to company A is not readable or changeable by id from company B.
+#[tokio::test]
+async fn another_companys_account_is_not_found_by_id() {
+    let fx = fx().await;
+    let (a, b) = (company(&fx, "A").await, company(&fx, "B").await);
+    broker_secret(&fx, "claude-main").await;
+    let body = json!({"harness": "claude", "label": "main", "secret_name": "claude-main"});
+    let (_, acc) = call(&fx, Some(&fx.dev), Method::POST, "/accounts", Some(body)).await;
+    let id = acc["id"].as_i64().unwrap();
+    let assign = format!("/accounts/{id}/companies/{a}");
+    assert_eq!(
+        call(&fx, Some(&fx.dev), Method::PUT, &assign, None).await.0,
+        StatusCode::OK
+    );
+    let writes = [
+        (
+            Method::PUT,
+            format!("/accounts/{id}/status"),
+            Some(json!({"status": "disabled"})),
+        ),
+        (
+            Method::PUT,
+            format!("/accounts/{id}/plan"),
+            Some(json!({"plan_tier": "pro"})),
+        ),
+        (
+            Method::PUT,
+            format!("/accounts/{id}/limits"),
+            Some(json!({"unit": "tokens", "window_secs": 60, "cap": 5})),
+        ),
+        (
+            Method::DELETE,
+            format!("/accounts/{id}/limits/tokens/60"),
+            None,
+        ),
+        (Method::PUT, format!("/accounts/{id}/companies/{b}"), None),
+        (
+            Method::DELETE,
+            format!("/accounts/{id}/companies/{a}"),
+            None,
+        ),
+        (Method::DELETE, format!("/accounts/{id}"), None),
+    ];
+    let b = b.to_string();
+    for (m, p, body) in writes.clone() {
+        let (s, v) = call_in(&fx, Some(&fx.dev), Some(&b), m.clone(), &p, body).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{m} {p}: {v}");
+    }
+    let (_, list) = call_in(&fx, Some(&fx.dev), Some(&b), Method::GET, "/accounts", None).await;
+    assert!(
+        list.as_array().unwrap().is_empty(),
+        "the list already hid it"
+    );
+    // Nothing changed, and company A itself still reaches it.
+    let (_, kept) = call(&fx, Some(&fx.dev), Method::GET, "/accounts", None).await;
+    assert_eq!(kept[0]["status"], "active");
+    assert_eq!(kept[0]["company_ids"], json!([a]));
+    let a = a.to_string();
+    let (s, v) = call_in(
+        &fx,
+        Some(&fx.dev),
+        Some(&a),
+        Method::PUT,
+        &format!("/accounts/{id}/plan"),
+        Some(json!({"plan_tier": "pro"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+}

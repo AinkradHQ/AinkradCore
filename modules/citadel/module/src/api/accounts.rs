@@ -6,7 +6,8 @@
 //! credential value, file path, or environment variable name.
 
 use ainkrad_core_server::api::App;
-use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY};
+use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY, Caller};
+use axum::Extension;
 use axum::extract::{Path, State};
 use axum::routing::{delete, get, put};
 use axum::{Json, Router};
@@ -306,6 +307,33 @@ impl From<store::AccountUsage> for AccountUsageReport {
     }
 }
 
+/// An account assigned to companies is reachable only by id from one of them (M-03); a missing
+/// or unassigned one falls through to the route's own 404 or the shared pool.
+async fn own(app: &App, acting: Acting, id: i64) -> Result<(), ApiError> {
+    if let (Some(c), Some(a)) = (
+        acting.0,
+        store::get_account(&app.pool, AccountId(id)).await?,
+    ) && !a.company_ids.is_empty()
+        && !a.company_ids.contains(&c)
+    {
+        return Err(ApiError::not_found(format!(
+            "no account {id} in company {}",
+            c.0
+        )));
+    }
+    Ok(())
+}
+
+/// Below `admin` the usage report keeps no account label (often an email) and no provider
+/// error text (M-03).
+fn for_caller(me: &Caller, mut r: AccountUsageReport) -> AccountUsageReport {
+    if !me.device.scopes.iter().any(|s| s == "admin") {
+        r.label = format!("account {}", r.id);
+        r.status_reason = None;
+    }
+    r
+}
+
 #[utoipa::path(get, path = "/accounts", operation_id = "listAccounts", tag = "governance",
     responses((status = 200, description = "Every provider account in the pool (never a token)",
         body = Vec<Account>)))]
@@ -353,9 +381,10 @@ pub async fn create_account(
         body = Deleted)))]
 pub async fn delete_account(
     State(app): State<App>,
-    _: Acting,
+    acting: Acting,
     Path(id): Path<i64>,
 ) -> ApiResult<Deleted> {
+    own(&app, acting, id).await?;
     let deleted = match store::delete_account(&app.pool, AccountId(id), BY).await {
         Ok(d) => d,
         Err(sqlx::Error::InvalidArgument(why)) => return Err(ApiError::conflict(why)),
@@ -373,9 +402,10 @@ pub async fn delete_account(
         body = Account)))]
 pub async fn assign_account(
     State(app): State<App>,
-    _: Acting,
+    acting: Acting,
     Path((id, cid)): Path<(i64, i64)>,
 ) -> ApiResult<Account> {
+    own(&app, acting, id).await?;
     found(
         store::get_account(&app.pool, AccountId(id)).await?,
         "account",
@@ -402,9 +432,10 @@ pub async fn assign_account(
         body = Account)))]
 pub async fn unassign_account(
     State(app): State<App>,
-    _: Acting,
+    acting: Acting,
     Path((id, cid)): Path<(i64, i64)>,
 ) -> ApiResult<Account> {
+    own(&app, acting, id).await?;
     found(
         store::get_account(&app.pool, AccountId(id)).await?,
         "account",
@@ -429,10 +460,11 @@ pub async fn unassign_account(
     responses((status = 200, description = "The account after the status change", body = Account)))]
 pub async fn set_account_status(
     State(app): State<App>,
-    _: Acting,
+    acting: Acting,
     Path(id): Path<i64>,
     Json(body): Json<AccountStatusBody>,
 ) -> ApiResult<Account> {
+    own(&app, acting, id).await?;
     let status = match body.status {
         AccountStatusApi::Active => AccountStatus::Active,
         AccountStatusApi::Cooling => AccountStatus::Cooling,
@@ -457,10 +489,11 @@ pub async fn set_account_status(
     responses((status = 200, description = "The account with its new plan tier", body = Account)))]
 pub async fn set_account_plan(
     State(app): State<App>,
-    _: Acting,
+    acting: Acting,
     Path(id): Path<i64>,
     Json(body): Json<AccountPlanBody>,
 ) -> ApiResult<Account> {
+    own(&app, acting, id).await?;
     let tier = body.plan_tier.map(PlanTier::from);
     let updated = store::set_account_plan(&app.pool, AccountId(id), tier, BY)
         .await
@@ -474,10 +507,11 @@ pub async fn set_account_plan(
     responses((status = 200, description = "The configured limit", body = AccountLimitBody)))]
 pub async fn set_account_limit(
     State(app): State<App>,
-    _: Acting,
+    acting: Acting,
     Path(id): Path<i64>,
     Json(body): Json<AccountLimitBody>,
 ) -> ApiResult<AccountLimitBody> {
+    own(&app, acting, id).await?;
     found(
         store::get_account(&app.pool, AccountId(id)).await?,
         "account",
@@ -509,9 +543,10 @@ pub async fn set_account_limit(
     responses((status = 200, description = "Cleared", body = Deleted)))]
 pub async fn clear_account_limit(
     State(app): State<App>,
-    _: Acting,
+    acting: Acting,
     Path((id, unit_raw, window_secs)): Path<(i64, String, i64)>,
 ) -> ApiResult<Deleted> {
+    own(&app, acting, id).await?;
     let unit: LimitUnit = unit_raw
         .parse()
         .map_err(|_| ApiError::bad_request("unit is `tokens` or `messages`"))?;
@@ -528,10 +563,16 @@ pub async fn clear_account_limit(
 pub async fn get_account_usage(
     State(app): State<App>,
     acting: Acting,
+    Extension(me): Extension<Caller>,
 ) -> ApiResult<Vec<AccountUsageReport>> {
     let now = app.clock.now();
     let usage = store::account_usage(&app.pool, acting.0, &now).await?;
-    Ok(Json(usage.into_iter().map(Into::into).collect()))
+    Ok(Json(
+        usage
+            .into_iter()
+            .map(|u| for_caller(&me, u.into()))
+            .collect(),
+    ))
 }
 
 #[utoipa::path(get, path = "/companies/{id}/account-usage",
@@ -542,12 +583,18 @@ pub async fn get_account_usage(
 pub async fn get_company_account_usage(
     State(app): State<App>,
     _: Acting,
+    Extension(me): Extension<Caller>,
     Path(id): Path<i64>,
 ) -> ApiResult<Vec<AccountUsageReport>> {
     found(org::get_company(&app.pool, CompanyId(id)).await?, "company")?;
     let now = app.clock.now();
     let usage = store::account_usage(&app.pool, Some(CompanyId(id)), &now).await?;
-    Ok(Json(usage.into_iter().map(Into::into).collect()))
+    Ok(Json(
+        usage
+            .into_iter()
+            .map(|u| for_caller(&me, u.into()))
+            .collect(),
+    ))
 }
 
 pub fn routes() -> Router<App> {
