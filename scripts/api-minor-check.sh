@@ -5,6 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ref="${BASE_REF:-origin/development}"
+git rev-parse --git-dir >/dev/null 2>&1 || { echo "api-minor-check: not a git checkout (a builder copy), skipped" >&2; exit 0; }
 types=crates/server/src/api/v1/types.rs
 git rev-parse -q --verify "$ref" >/dev/null || {
   [ -n "${API_MINOR_CHECK_SKIP:-}" ] && { echo "api-minor-check: SKIPPED, no $ref" >&2; exit 0; }

@@ -492,3 +492,25 @@ async fn another_companys_account_is_not_found_by_id() {
     .await;
     assert_eq!(s, StatusCode::OK, "{v}");
 }
+
+/// A2: with a company acting, an account is assigned to or taken from that company only.
+#[tokio::test]
+async fn an_account_cannot_be_assigned_to_or_from_another_company() {
+    let fx = fx().await;
+    let (a, b) = (company(&fx, "A").await, company(&fx, "B").await);
+    broker_secret(&fx, "claude-main").await;
+    let body = json!({"harness": "claude", "label": "main", "secret_name": "claude-main"});
+    let (_, acc) = call(&fx, Some(&fx.dev), Method::POST, "/accounts", Some(body)).await;
+    let id = acc["id"].as_i64().unwrap();
+    let ha = a.to_string();
+    for (m, cid) in [(Method::PUT, b), (Method::DELETE, b)] {
+        let p = format!("/accounts/{id}/companies/{cid}");
+        let (s, v) = call_in(&fx, Some(&fx.dev), Some(&ha), m.clone(), &p, None).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{m} {p}: {v}");
+    }
+    let (_, kept) = call(&fx, Some(&fx.dev), Method::GET, "/accounts", None).await;
+    assert_eq!(kept[0]["company_ids"], json!([]), "nothing was assigned");
+    let p = format!("/accounts/{id}/companies/{a}");
+    let (s, v) = call_in(&fx, Some(&fx.dev), Some(&ha), Method::PUT, &p, None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+}

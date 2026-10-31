@@ -324,6 +324,17 @@ async fn own(app: &App, acting: Acting, id: i64) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// The company an account is assigned to or from is the acting one (A2).
+fn target(acting: Acting, cid: i64) -> Result<(), ApiError> {
+    match acting.0 {
+        Some(c) if c.0 != cid => Err(ApiError::not_found(format!(
+            "no company {cid} in company {}",
+            c.0
+        ))),
+        _ => Ok(()),
+    }
+}
+
 /// Below `admin` the usage report keeps no account label (often an email) and no provider
 /// error text (M-03).
 fn for_caller(me: &Caller, mut r: AccountUsageReport) -> AccountUsageReport {
@@ -405,6 +416,7 @@ pub async fn assign_account(
     acting: Acting,
     Path((id, cid)): Path<(i64, i64)>,
 ) -> ApiResult<Account> {
+    target(acting, cid)?;
     own(&app, acting, id).await?;
     found(
         store::get_account(&app.pool, AccountId(id)).await?,
@@ -435,6 +447,7 @@ pub async fn unassign_account(
     acting: Acting,
     Path((id, cid)): Path<(i64, i64)>,
 ) -> ApiResult<Account> {
+    target(acting, cid)?;
     own(&app, acting, id).await?;
     found(
         store::get_account(&app.pool, AccountId(id)).await?,
