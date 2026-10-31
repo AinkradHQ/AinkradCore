@@ -114,6 +114,24 @@ fn quote(p: &Path) -> String {
         .replace('"', "\\\"")
 }
 
+/// A bare program name (`sh`, `htop`) looked up on the shell's `PATH`, as the unsandboxed host
+/// would, so [`wrap`] gets the absolute path it requires. Anything else (an absolute or relative
+/// path, a name that could be an option) is returned unchanged for [`wrap`] to judge.
+pub fn resolve(program: &str, path: Option<&str>) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    if program.is_empty() || program.contains('/') || program.starts_with('-') {
+        return program.to_owned();
+    }
+    path.unwrap_or_default()
+        .split(':')
+        .filter(|d| d.starts_with('/'))
+        .map(|d| Path::new(d).join(program))
+        .find(|p| {
+            std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+        .map_or_else(|| program.to_owned(), |p| p.to_string_lossy().into_owned())
+}
+
 /// `program args` run with `hidden` unreadable and `readonly` unwritable: the command line to
 /// start instead. Fails closed: an absent hidden path, or a `program` that is not an absolute
 /// path (a leading `-` would be read as an option of the launcher, replacing its profile).
@@ -165,6 +183,10 @@ pub fn wrap(
                 "--bind",
                 "/",
                 "/",
+                // In the user namespace the host's device nodes cannot be opened (`sh: cannot
+                // open /dev/null`, so no `cmd &`); a minimal /dev of its own, as for agents.
+                "--dev",
+                "/dev",
                 "--proc",
                 "/proc",
                 "--unshare-user",
@@ -236,6 +258,22 @@ mod tests {
             let args = ["/tmp/allow.sb".to_owned(), "/bin/sh".to_owned()];
             assert!(wrap(&[], &[], bad, &args, "/").is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_bare_name_is_found_on_path_and_nothing_else_is_rewritten() {
+        let path = Some("relative/dir:/nonexistent:/bin:/usr/bin");
+        let sh = resolve("sh", path);
+        assert!(sh.starts_with('/') && sh.ends_with("/sh"), "{sh}");
+        assert!(wrap(&[], &[], &sh, &[], "/").is_ok());
+        for keep in ["-f", "./sh", "bin/sh", "", "no-such-program-e2"] {
+            assert_eq!(resolve(keep, path), keep);
+            assert!(
+                wrap(&[], &[], &resolve(keep, path), &[], "/").is_err(),
+                "{keep:?}"
+            );
+        }
+        assert_eq!(resolve("sh", None), "sh");
     }
 
     #[test]
