@@ -16,6 +16,7 @@ fn fake(dir: &Path, mode: &str) -> HarnessExecutor {
         r#"#!/usr/bin/perl
 use IO::Select;
 use Time::HiRes qw(sleep);
+exit 0 if $ENV{{AINKRAD_EXEC_PROBE}};
 $| = 1;
 my $in = IO::Select->new(\*STDIN);
 <STDIN>; <STDIN>;
@@ -41,6 +42,7 @@ while (1) {{
     );
     std::fs::write(&bin, script).unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::exec_ready(&bin);
     let mut ex = HarnessExecutor::new(dir.join("work"), dir.join("config"));
     ex.bins.insert("claude".to_owned(), bin);
     ex
