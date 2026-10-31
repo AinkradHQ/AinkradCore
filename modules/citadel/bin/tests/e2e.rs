@@ -69,11 +69,11 @@ tool() {{ curl -sS -m 10 -H "authorization: Bearer $tok" -H 'content-type: appli
   -H 'accept: application/json, text/event-stream' \
   -d "{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{{\"name\":\"$1\",\"arguments\":$2}}}}" "$url" 2>/dev/null; }}
 failed() {{ case $1 in *'"isError":true'*|'') return 0;; esac; return 1; }}
-printf '%s' "$tok" > mcp-token-copy
 r=$(tool get_issue '{{}}')
 if failed "$r"; then say MCP-GET-ISSUE-FAILED; else say MCP-GET-ISSUE-OK; fi
 case $r in *CAPPED*) capped=1;; esac
 if [ -z "$capped" ]; then
+  printf '%s' "$tok" > mcp-token-copy
   r=$(tool comment '{{"body":"hello from the fake harness"}}')
   if failed "$r"; then say MCP-COMMENT-FAILED; else say MCP-COMMENT-OK; fi
   gate() {{ # gate <kind> <label>: ask a human, act only when granted
