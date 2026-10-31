@@ -263,7 +263,12 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             ..super::PtyConfig::new(state.0.join("terminals"))
         }))
     });
-    let agents = match agents_enabled.then(|| agents(&state.0, core_url(&state))) {
+    if agents_enabled && std::env::var("AINKRAD_AGENT_NETWORK").is_ok_and(|v| v == "allow") {
+        let m = "AINKRAD_AGENT_NETWORK=allow: agent sessions without secrets get the HOST network (cloud metadata, LAN, loopback services); use only on a stage-1 host with no instance role and nothing on loopback";
+        eprintln!("ainkrad-runner: WARNING: {m}");
+        tracing::warn!("{m}");
+    }
+    let agents = match agents_enabled.then(|| agents(&state.0, core_url(&state), tls.clone())) {
         None => None,
         Some(a) => match a.await {
             Ok(a) => Some(a),
@@ -326,12 +331,14 @@ fn core_url(state: &super::key::State) -> Option<String> {
 async fn agents(
     state: &std::path::Path,
     core_url: Option<String>,
+    tls: Option<Arc<rustls::ClientConfig>>,
 ) -> Result<super::agent::AgentDriver, String> {
     let [secrets, work] = runtime_paths(state);
     let mut executor = crate::HarnessExecutor::new(work, state.join("agents-config"));
     // The Citadel MCP server at the Core this runner is enrolled with: without it a run's harness
     // is given no MCP config, whatever token the Core minted.
     executor.mcp_url = core_url.and_then(|u| crate::core_mcp_url(&u));
+    executor.mcp_tls = tls;
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();

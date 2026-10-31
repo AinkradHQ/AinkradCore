@@ -13,6 +13,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # scripts/api-minor-check.sh compares with origin/development
       - run: rustup show
       - name: Enable the Linux sandbox (bubblewrap and unprivileged user namespaces)
         if: runner.os == 'Linux'

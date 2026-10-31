@@ -147,13 +147,30 @@ impl HarnessExecutor {
         let mcp = self
             .mcp_url
             .as_deref()
-            .filter(|_| !token.expose().is_empty())
-            .map(|url| (url, token));
+            .filter(|_| !token.expose().is_empty());
+        // A Linux session with no network (the default) reaches the MCP route through a bridge.
+        let denied = cfg!(target_os = "linux")
+            && self
+                .run_env
+                .lock()
+                .expect("run env lock")
+                .get(&job.run)
+                .is_some_and(|e| {
+                    e.iter()
+                        .any(|(n, v)| n == "AINKRAD_SANDBOX_NETWORK" && v == "deny")
+                });
+        let bridged = mcp.filter(|_| denied).and_then(crate::mcp_bridge::parse);
+        let mcp = match (&bridged, mcp) {
+            (Some((_, local)), _) => Some((local.as_str(), token)),
+            (None, url) => url.map(|url| (url, token)),
+        };
         let private = self.work_root.join("private");
         let instructions = job.instructions.as_deref();
         // Removed when this future ends or is dropped (a cancelled run).
         // A harness that may be kept warm reads its files from its agent's stable dir (E15.6).
-        let name = match self.limits(job).warm_max > 0 && long_lived(&job.harness) {
+        // A session with no network is never kept warm (`turn.rs`: isolated runs are not), and
+        // its MCP bridge lives and dies with this run, so its files are always the run's own.
+        let name = match self.limits(job).warm_max > 0 && long_lived(&job.harness) && !denied {
             true => format!("warm-{}-{}", job.agent, job.harness),
             false => format!("run-{}", job.run),
         };
@@ -161,6 +178,24 @@ impl HarnessExecutor {
             Ok(files) => files,
             Err(e) => return failed(format!("writing the run's files: {e}"), "run_files"),
         };
+        let mut bridge = None;
+        let mut bridge_env: Vec<(String, std::ffi::OsString)> = Vec::new();
+        if let Some((target, _)) = bridged {
+            let sock = files.dir.join("mcp.sock");
+            match crate::mcp_bridge::start(&sock, target, self.mcp_tls.clone()) {
+                Ok(b) => bridge = Some(b),
+                Err(e) => return failed(format!("the MCP bridge: {e}"), "run_files"),
+            }
+            let exe = std::env::current_exe().unwrap_or_default();
+            bridge_env.extend([
+                ("AINKRAD_SANDBOX_MCP_SOCK".to_owned(), sock.into()),
+                ("AINKRAD_SANDBOX_MCP_FWD".to_owned(), exe.into()),
+                (
+                    "AINKRAD_SANDBOX_MCP_PORT".to_owned(),
+                    crate::mcp_bridge::FORWARD_PORT.to_string().into(),
+                ),
+            ]);
+        }
         let config_dir = match self.config_dir(job) {
             Ok(dir) => dir,
             Err(why) => return failed(why, "account"),
@@ -180,6 +215,7 @@ impl HarnessExecutor {
         if let Some(own) = self.run_env.lock().expect("run env lock").get(&job.run) {
             env.extend(own.iter().map(|(n, v)| (n.clone(), v.into())));
         }
+        env.extend(bridge_env);
         // Every worktree of a repo builds into its one shared cache (E15.9).
         if let (Some(_), Some(issue)) = (&job.workspace, job.issue) {
             env.extend(self.workspaces.cache_env(issue, &job.trees()));
@@ -233,7 +269,8 @@ impl HarnessExecutor {
             mcp_config: files.mcp_config.clone(),
         };
         let reports = reports.clone();
-        match job.harness.as_str() {
+        let _bridge = bridge; // held until the run ends
+        let outcome = match job.harness.as_str() {
             "claude" => self.work::<Claude>(job, spec, reports, meter).await,
             "codex" => self.work::<Codex>(job, spec, reports, meter).await,
             "opencode" => self.work::<OpenCode>(job, spec, reports, meter).await,
@@ -242,7 +279,36 @@ impl HarnessExecutor {
                 format!("harness {other:?} is not supported"),
                 "harness_start",
             ),
+        };
+        if denied {
+            return no_network_note(outcome);
         }
+        outcome
+    }
+}
+
+/// A failure that looks like an unreachable model API, said plainly for a session with no network.
+fn no_network_note(outcome: Outcome) -> Outcome {
+    const SIGNS: [&str; 7] = [
+        "connect",
+        "network",
+        "dns",
+        "resolve",
+        "unreachable",
+        "timed out",
+        "fetch failed",
+    ];
+    match outcome {
+        Outcome::Failed {
+            reason,
+            fingerprint,
+        } if SIGNS.iter().any(|s| reason.to_lowercase().contains(s)) => Outcome::Failed {
+            reason: format!(
+                "{reason} (this session has no network: AINKRAD_AGENT_NETWORK=deny is the Linux default, so the harness cannot reach its model API; stage 1 uses a local mock model)"
+            ),
+            fingerprint,
+        },
+        other => other,
     }
 }
 

@@ -133,15 +133,15 @@ pub(crate) fn profile(spec: &Spec, program: &OsStr) -> String {
     s.push_str("(allow file-read* (literal \"/dev/null\") (literal \"/dev/urandom\") (literal \"/dev/random\"))\n(allow file-write* (literal \"/dev/null\"))\n");
     // No keychain mach services and no home/state grants, including metadata lookups.
     // Network policy (`AINKRAD_SANDBOX_NETWORK`, set per session by the runner):
-    //  - `deny`: nothing at all.
-    //  - default `allow`: agents must reach their model API and package hosts, so outbound
+    //  - `deny`, missing or anything but `allow`: nothing at all.
+    //  - `allow`: agents must reach their model API and package hosts, so outbound
     //    HTTPS and DNS stay open. It is NOT `network*`: that also covers AF_UNIX connects,
     //    which would let a same-uid agent reach ptyhost, docker or ssh-agent sockets. Only
     //    TCP/443, DNS and loopback IP are granted; unix sockets other than the DNS resolver
     //    are not, and plain-HTTP/link-local hosts (cloud metadata, port 80) are not reachable.
     //    Residual: loopback services on this host are reachable (a harness may run a local
     //    HTTP API); Seatbelt cannot separate those from the internet.
-    if env(spec, "AINKRAD_SANDBOX_NETWORK") != "deny" {
+    if env(spec, "AINKRAD_SANDBOX_NETWORK") == "allow" {
         s.push_str(concat!(
             "(allow network-outbound (remote tcp \"*:443\") (remote udp \"*:53\") (remote tcp \"*:53\") (remote ip \"localhost:*\"))\n",
             "(allow network-bind (local ip \"localhost:*\"))\n",
@@ -284,8 +284,27 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
         for p in [&spec.instructions, &spec.mcp_config].into_iter().flatten() {
             c.arg("--ro-bind").arg(p).arg(p);
         }
-        if env(spec, "AINKRAD_SANDBOX_NETWORK") == "deny" {
+        // Network: the default is none. A run's MCP route comes in through a unix socket the
+        // runner bridges to the Core, and a forwarder (the runner itself) on the namespace's
+        // own loopback; the host's loopback and the metadata address stay unreachable.
+        if env(spec, "AINKRAD_SANDBOX_NETWORK") != "allow" {
             c.arg("--unshare-net");
+            let (sock, fwd, port) = (
+                env(spec, "AINKRAD_SANDBOX_MCP_SOCK"),
+                env(spec, "AINKRAD_SANDBOX_MCP_FWD"),
+                env(spec, "AINKRAD_SANDBOX_MCP_PORT"),
+            );
+            if [sock, fwd, port].iter().all(|v| !v.is_empty()) {
+                c.arg("--bind").arg(sock).arg(sock);
+                c.arg("--ro-bind").arg(fwd).arg(fwd);
+                for (k, v) in [
+                    ("AINKRAD_MCP_SOCK", sock),
+                    ("AINKRAD_MCP_FWD", fwd),
+                    ("AINKRAD_MCP_PORT", port),
+                ] {
+                    c.arg("--setenv").arg(k).arg(v);
+                }
+            }
         }
         c.args(["--remount-ro", "/dev", "--remount-ro", "/"])
             .arg("--chdir")
@@ -302,11 +321,14 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
             Err(io::Error::other("invalid sandbox limit"))
         }
     };
+    // Starts the MCP forwarder (when bwrap was given one) before the harness; it dies with the sandbox.
+    const FORWARDER: &str = "[ -z \"$AINKRAD_MCP_FWD\" ] || \"$AINKRAD_MCP_FWD\" mcp-forward \"$AINKRAD_MCP_PORT\" \"$AINKRAD_MCP_SOCK\" </dev/null >/dev/null 2>&1 & ";
     let script = if cfg!(target_os = "macos") {
         "ulimit -S -u \"$1\" && ulimit -H -u \"$1\" && ulimit -S -t \"$2\" && ulimit -H -t \"$2\" && ulimit -S -f \"$3\" && ulimit -H -f \"$3\" || exit 125; shift 4; exec \"$@\""
     } else {
-        "ulimit -S -u \"$1\" && ulimit -H -u \"$1\" && ulimit -S -t \"$2\" && ulimit -H -t \"$2\" && ulimit -S -f \"$3\" && ulimit -H -f \"$3\" && ulimit -S -v \"$4\" && ulimit -H -v \"$4\" || exit 125; shift 4; exec \"$@\""
+        "ulimit -S -u \"$1\" && ulimit -H -u \"$1\" && ulimit -S -t \"$2\" && ulimit -H -t \"$2\" && ulimit -S -f \"$3\" && ulimit -H -f \"$3\" && ulimit -S -v \"$4\" && ulimit -H -v \"$4\" || exit 125; shift 4; FORWARDER_HERE exec \"$@\""
     };
+    let script = script.replace("FORWARDER_HERE ", FORWARDER);
     let mut processes = limits("AINKRAD_SANDBOX_PROCESSES", "64")?
         .parse::<u64>()
         .map_err(io::Error::other)?;
@@ -332,7 +354,7 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
             .ok_or_else(|| io::Error::other("process limit overflow"))?;
     }
     c.arg("/bin/bash")
-        .args(["-c", script, "ainkrad-sandbox"])
+        .args(["-c", script.as_str(), "ainkrad-sandbox"])
         .arg(processes.to_string())
         .arg(limits("AINKRAD_SANDBOX_CPU", "900")?)
         .arg(limits("AINKRAD_SANDBOX_FILE", "1048576")?)

@@ -119,6 +119,9 @@ fn macos_profile_has_no_blanket_network_and_no_unix_sockets() {
     let (root, spec) = fixture("netprofile");
     let mut allow = spec.clone();
     allow.env.retain(|(n, _)| n != "AINKRAD_SANDBOX_NETWORK");
+    allow
+        .env
+        .push(("AINKRAD_SANDBOX_NETWORK".into(), "allow".into()));
     let text = profile(&allow, OsStr::new("/bin/true"));
     assert!(
         !text.contains("network*"),
@@ -229,9 +232,12 @@ fn profile_has_only_explicit_grants_and_no_keychain_service() {
     assert!(!text.contains("keychain") && !text.contains("(allow network*)"));
     let mut allow = spec.clone();
     allow.env.retain(|(n, _)| n != "AINKRAD_SANDBOX_NETWORK");
+    allow
+        .env
+        .push(("AINKRAD_SANDBOX_NETWORK".into(), "allow".into()));
     assert!(
         profile(&allow, OsStr::new("/bin/true")).contains("(allow network-outbound (remote tcp"),
-        "network defaults to allow"
+        "an explicit allow grants the filtered network"
     );
     let _ = std::fs::remove_dir_all(root);
 }
@@ -297,6 +303,9 @@ sys.exit(99)
     assert_eq!(code, Some(0), "deny network escaped: {err}");
     let mut allow = spec.clone();
     allow.env.retain(|(n, _)| n != "AINKRAD_SANDBOX_NETWORK");
+    allow
+        .env
+        .push(("AINKRAD_SANDBOX_NETWORK".into(), "allow".into()));
     let (code, err) = run(&allow, &python(), &script).await;
     assert_eq!(
         code,
@@ -473,6 +482,9 @@ async fn sockets_nested_userns_shm_and_the_harness_binary() {
         assert_eq!(code, Some(0), "deny reached an abstract socket: {err}");
         let mut allow = spec.clone();
         allow.env.retain(|(n, _)| n != "AINKRAD_SANDBOX_NETWORK");
+        allow
+            .env
+            .push(("AINKRAD_SANDBOX_NETWORK".into(), "allow".into()));
         let (code, _) = run(&allow, &python(), &abstract_connect).await;
         assert_eq!(
             code,
@@ -522,5 +534,23 @@ async fn a_denied_network_reaches_no_loopback_canary_and_no_metadata_address() {
         .status()
         .unwrap();
     assert_eq!(open.code(), Some(99));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn missing_or_unknown_network_value_grants_no_network() {
+    let (root, spec) = fixture("netdefault");
+    for value in [None, Some(""), Some("lan"), Some("ALLOW")] {
+        let mut s = spec.clone();
+        s.env.retain(|(n, _)| n != "AINKRAD_SANDBOX_NETWORK");
+        if let Some(v) = value {
+            s.env.push(("AINKRAD_SANDBOX_NETWORK".into(), v.into()));
+        }
+        let text = profile(&s, OsStr::new("/bin/true"));
+        assert!(
+            !text.contains("(allow network-outbound (remote") && !text.contains("network-bind"),
+            "{value:?} must deny the network:\n{text}"
+        );
+    }
     let _ = std::fs::remove_dir_all(root);
 }

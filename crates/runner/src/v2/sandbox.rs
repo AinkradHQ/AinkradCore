@@ -14,10 +14,13 @@ const DEFAULT_PROCESSES: u32 = 64;
 /// the sandbox reaches. Explicit `allow` for such a session is refused on Linux, where
 /// bubblewrap would share the host network (cloud metadata, LAN, loopback) with no filter;
 /// macOS Seatbelt limits egress to TCP 443, DNS and loopback. Without secrets the default is
-/// `allow`, so on Linux that still needs a host with no instance role and nothing on loopback.
+/// `allow` on macOS; on Linux it is `deny` too, unless an admin sets `allow` for a stage-1 host.
 fn network_for(requested: Option<&str>, holds: bool, linux: bool) -> Result<&'static str, String> {
     match (requested, holds) {
         (None, true) | (Some("deny"), _) => Ok("deny"),
+        // Linux has no egress filter: even a run holding only its MCP token gets no host
+        // network by default (the MCP route is bridged in, see `mcp_bridge`).
+        (None, false) if linux => Ok("deny"),
         (None, false) | (Some("allow"), false) => Ok("allow"),
         (Some("allow"), true) if !linux => Ok("allow"),
         (Some("allow"), true) => Err("this host cannot filter egress for an agent network: a \
@@ -113,6 +116,9 @@ impl Sandbox for ProcessSandbox {
             .any(|g| g.var != super::agent::RUN_TOKEN_VAR);
         let requested = std::env::var("AINKRAD_AGENT_NETWORK").ok();
         let network = network_for(requested.as_deref(), holds, cfg!(target_os = "linux"))?;
+        if network == "allow" && requested.is_some() {
+            tracing::warn!(session = %session, holds, "AINKRAD_AGENT_NETWORK=allow: this agent session has the host network");
+        }
         Self::add(env, "AINKRAD_SANDBOX_NETWORK", network);
         Self::add(
             env,
@@ -153,7 +159,9 @@ mod tests {
         assert_eq!(network_for(Some("deny"), true, true), Ok("deny"));
         assert!(network_for(Some("allow"), true, true).is_err());
         assert_eq!(network_for(Some("allow"), true, false), Ok("allow"));
-        assert_eq!(network_for(None, false, true), Ok("allow"));
+        assert_eq!(network_for(None, false, true), Ok("deny"));
+        assert_eq!(network_for(None, false, false), Ok("allow"));
+        assert_eq!(network_for(Some("allow"), false, true), Ok("allow"));
         assert!(network_for(Some("lan"), false, false).is_err());
     }
 }

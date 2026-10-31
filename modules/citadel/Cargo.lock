@@ -211,9 +211,11 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-rustls",
  "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
+ "webpki-roots 1.0.10",
  "zeroize",
 ]
 
