@@ -256,7 +256,9 @@ mod tests {
 
     async fn status(sock: &Path, raw: &[u8]) -> String {
         let mut c = UnixStream::connect(sock).await.unwrap();
-        c.write_all(raw).await.unwrap();
+        // The bridge may refuse and close before the whole request is written (EPIPE on macOS):
+        // the status line it already sent is what the test checks.
+        let _ = c.write_all(raw).await;
         let mut out = Vec::new();
         let _ = timeout(Duration::from_secs(5), c.read_to_end(&mut out)).await;
         String::from_utf8_lossy(&out)
