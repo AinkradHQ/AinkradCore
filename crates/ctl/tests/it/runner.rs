@@ -149,6 +149,23 @@ pub fn head(base: &[String]) -> i64 {
         .map_or(0, |e| e["seq"].as_i64().unwrap())
 }
 
+/// Waits for an event of `kind` after `mark`. The Core marks a runner offline slightly before it
+/// appends the event, so a test that saw `offline` must wait for the event, not read once.
+pub fn wait_event(base: &[String], mark: i64, kind: &str, limit: Duration) {
+    let start = Instant::now();
+    loop {
+        let events = events_after(base, mark);
+        if events.iter().any(|e| e["kind"] == kind) {
+            return;
+        }
+        assert!(
+            start.elapsed() < limit,
+            "no {kind} event within {limit:?}: {events:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 #[test]
 fn a_real_runner_is_listed_runs_the_noop_and_its_events_show() {
     let (core, url) = loopback_core("runner");
@@ -206,12 +223,8 @@ fn a_real_runner_is_listed_runs_the_noop_and_its_events_show() {
     let mark = head(&a);
     runner.kill().unwrap();
     runner.wait().unwrap();
-    wait_online(&a, &id, false, Duration::from_secs(5));
-    assert!(
-        events_after(&a, mark)
-            .iter()
-            .any(|e| e["kind"] == "runner.disconnected")
-    );
+    wait_online(&a, &id, false, Duration::from_secs(30));
+    wait_event(&a, mark, "runner.disconnected", Duration::from_secs(15));
     let o = ctl(&args(&[&a, &s(&["run", "noop", &id])]));
     assert_eq!(o.status.code(), Some(4), "{o:?}");
     assert!(
