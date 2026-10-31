@@ -102,6 +102,11 @@ impl Module for Citadel {
         Box::pin(mcp::verify(app, token))
     }
 
+    // The run engine's jobs work on the Core's app (B-F1): without this no run ever starts.
+    fn attach(&self, app: &App) {
+        engine::attach(app);
+    }
+
     fn credentials<'a>(
         &'a self,
         app: &'a App,
