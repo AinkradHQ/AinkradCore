@@ -28,7 +28,10 @@ probe() {
   probe '(version 1)(deny default)' /usr/bin/true
   probe "$base" /usr/bin/true
   probe "$base" /bin/bash -c true
-  probe "$base" /usr/bin/python3 -c pass
+  base2="$base"'(allow file-read* (literal "/private/var/db/xcode_select_link") (literal "/var/db/xcode_select_link") (subpath "/Library/Developer/CommandLineTools") (subpath "/Applications/Xcode.app/Contents/Developer"))(allow file-map-executable (subpath "/Library/Developer/CommandLineTools") (subpath "/Applications/Xcode.app/Contents/Developer"))'
+  probe "$base2" /usr/bin/python3 -c pass
+  probe "$base2" /usr/bin/git --version
+  probe "$base2" /usr/bin/make --version
 } 2>&1 | tee -a "$DIAG"
 
 START=$(date '+%Y-%m-%d %H:%M:%S')

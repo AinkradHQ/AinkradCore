@@ -58,6 +58,28 @@ pub(super) fn mechanism_available() -> bool {
     true
 }
 
+/// A real interpreter, never the /usr/bin shim: on macOS that shim runs xcode-select, so a
+/// failure through it would say nothing about enforcement. Resolved outside the sandbox.
+pub(super) fn python() -> String {
+    if cfg!(target_os = "macos") {
+        for p in ["/Library/Developer/CommandLineTools/usr/bin/python3"] {
+            if Path::new(p).exists() {
+                return p.into();
+            }
+        }
+        if let Ok(o) = std::process::Command::new("/usr/bin/xcrun")
+            .args(["--find", "python3"])
+            .output()
+        {
+            let p = String::from_utf8_lossy(&o.stdout).trim().to_owned();
+            if o.status.success() && Path::new(&p).is_absolute() {
+                return p;
+            }
+        }
+    }
+    "/usr/bin/python3".into()
+}
+
 pub(super) async fn run(spec: &Spec, program: &str, script: &str) -> (Option<i32>, String) {
     let args = vec!["-c".into(), script.into()];
     let mut cmd = crate::proc::command(OsStr::new(program), &args, spec, &[]);
@@ -123,6 +145,12 @@ fn macos_profile_boots_from_system_sb_and_keeps_explicit_denies() {
     assert!(at("(deny default)") < at("(import \"system.sb\")"));
     assert!(text.contains("(allow file-read* file-map-executable (subpath \"/usr\"))"));
     assert!(text.contains("(subpath \"/System/Library\")"));
+    // The Xcode shims' developer-dir lookup: that one symlink, read-only, nothing wider.
+    assert!(text.contains("(allow file-read* (literal \"/private/var/db/xcode_select_link\"))"));
+    assert!(text.contains("(allow file-read* (literal \"/var/db/xcode_select_link\"))"));
+    assert!(
+        !text.contains("(subpath \"/private/var/db\")") && !text.contains("(subpath \"/var\")")
+    );
     // Explicit denies for the state dir, the fake home's ssh keys and every unix socket,
     // emitted before the session grants.
     let state = root.join("state");
@@ -247,7 +275,7 @@ async fn process_sandbox_denies_a_fake_home_canary() {
     );
     let (code, err) = run(
         &spec,
-        "/usr/bin/python3",
+        &python(),
         r#"
 import os, time, sys
 for i in range(128):
@@ -266,11 +294,11 @@ sys.exit(99)
         "import socket, sys\ns=socket.socket()\ns.settimeout(1)\ntry: s.connect(('127.0.0.1', {}))\nexcept OSError: sys.exit(0)\nsys.exit(99)",
         listener.local_addr().unwrap().port()
     );
-    let (code, err) = run(&spec, "/usr/bin/python3", &script).await;
+    let (code, err) = run(&spec, &python(), &script).await;
     assert_eq!(code, Some(0), "deny network escaped: {err}");
     let mut allow = spec.clone();
     allow.env.retain(|(n, _)| n != "AINKRAD_SANDBOX_NETWORK");
-    let (code, err) = run(&allow, "/usr/bin/python3", &script).await;
+    let (code, err) = run(&allow, &python(), &script).await;
     assert_eq!(
         code,
         Some(99),
@@ -367,9 +395,9 @@ async fn sandbox_resource_overruns_are_terminated() {
     ] {
         let mut bounded = spec.clone();
         bounded.env.push((name.into(), value.into()));
-        let (control, err) = run(&bounded, "/usr/bin/python3", "pass").await;
+        let (control, err) = run(&bounded, &python(), "pass").await;
         assert_eq!(control, Some(0), "{name} control could not run: {err}");
-        let (code, _) = run(&bounded, "/usr/bin/python3", script).await;
+        let (code, _) = run(&bounded, &python(), script).await;
         assert_ne!(code, Some(0), "{name} allowed the overrun");
     }
     let _ = std::fs::remove_dir_all(root);
@@ -408,7 +436,7 @@ async fn sockets_nested_userns_shm_and_the_harness_binary() {
         "import socket,sys\ns=socket.socket(socket.AF_UNIX)\ntry: s.connect({:?})\nexcept OSError: sys.exit(0)\nsys.exit(99)",
         sock
     );
-    let (code, err) = run(&spec, "/usr/bin/python3", &connect).await;
+    let (code, err) = run(&spec, &python(), &connect).await;
     assert_eq!(code, Some(0), "a host unix socket was reachable: {err}");
     // The control proves the socket accepts a plain connection.
     assert!(std::os::unix::net::UnixStream::connect(&sock).is_ok());
@@ -442,11 +470,11 @@ async fn sockets_nested_userns_shm_and_the_harness_binary() {
         let abstract_connect = format!(
             "import socket,sys\ns=socket.socket(socket.AF_UNIX)\ntry: s.connect('\\0{name}')\nexcept OSError: sys.exit(0)\nsys.exit(99)"
         );
-        let (code, err) = run(&spec, "/usr/bin/python3", &abstract_connect).await;
+        let (code, err) = run(&spec, &python(), &abstract_connect).await;
         assert_eq!(code, Some(0), "deny reached an abstract socket: {err}");
         let mut allow = spec.clone();
         allow.env.retain(|(n, _)| n != "AINKRAD_SANDBOX_NETWORK");
-        let (code, _) = run(&allow, "/usr/bin/python3", &abstract_connect).await;
+        let (code, _) = run(&allow, &python(), &abstract_connect).await;
         assert_eq!(
             code,
             Some(99),
