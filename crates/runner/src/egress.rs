@@ -32,8 +32,10 @@ use tokio::time::timeout;
 use crate::mcp_bridge::filter::{self, Refusal};
 
 pub mod policy;
+mod selftest;
 
 pub use policy::{Deny, Policy};
+pub use selftest::selftest;
 
 /// The forwarder's port inside the sandbox (its own network namespace, so a fixed number is safe):
 /// the MCP route is on `FORWARD_PORT`, this is the next one.
