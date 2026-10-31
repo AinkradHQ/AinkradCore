@@ -8,14 +8,14 @@ use serde_json::{Value, json};
 
 use super::args::{MAX_TEXT, MAX_TITLE, Result, ToolError, int, required, text};
 use super::tools::{company_issue, next_actor, target};
-use crate::domain::gov::{ApprovalKind, NewApproval};
+use crate::domain::gov::{ApprovalKind, KnowledgeKind, NewApproval};
 use crate::domain::org::AgentId;
 use crate::domain::work::{
     Actor, BlockerLink, IssueId, IssueKind, IssueState, IssueTransition, NewComment, NewIssue,
     NextActor, UserId,
 };
-use crate::store::exec::RunScope;
-use crate::store::gov::open_approval;
+use crate::store::exec::{EmptyDone, RunScope, done_evidence, get_run, refuse_empty_done};
+use crate::store::gov::{KnowledgeError, Proposal, open_approval, propose};
 use crate::store::org::{get_agent, user_exists};
 use crate::store::work::{
     BlockerError, IssueTransitionError, add_blocker, create_comment, create_issue, issue_key,
@@ -94,9 +94,9 @@ async fn link(app: &App, blocker: i64, blocked: i64) -> Result<()> {
     }
 }
 
-/// Moves the issue, only while the agent is its next actor.
-// Not ported yet (the reference is `modules/citadel/server`): the empty-done check and the pull
-// request review that `done` goes through (they need the forge slice).
+/// Moves the issue, only while the agent is its next actor. A `done` with nothing to show for
+/// it is refused (`empty_done`). Not ported yet: the pull request review that `done` goes
+/// through, which needs the forge slice (S6).
 pub(super) async fn transition(app: &App, scope: RunScope, args: &JsonObject) -> Result<Value> {
     let issue = target(app, scope, int(args, "issue_id")?).await?;
     let me = NextActor::Agent(scope.agent_id);
@@ -140,6 +140,10 @@ pub(super) async fn transition(app: &App, scope: RunScope, args: &JsonObject) ->
             )));
         }
     };
+    // Only a done the issue's state allows is judged; any other is refused below, as illegal.
+    if step == IssueTransition::Done && issue.state == IssueState::InProgress {
+        empty_done(app, scope, issue.id).await?;
+    }
     let moved = match transition_issue(&app.pool, issue.id, &step, AuditActor::System).await {
         Ok(moved) => moved,
         Err(IssueTransitionError::Db(e)) => return Err(e.into()),
@@ -149,6 +153,32 @@ pub(super) async fn transition(app: &App, scope: RunScope, args: &JsonObject) ->
         json!({"issue_id": moved.id.0, "key": issue_key(&app.pool, moved.id).await?,
               "state": moved.state.as_str(), "next_actor": next_actor(&moved.next_actor)}),
     )
+}
+
+/// Refuses a done with nothing to show for it (pain #3): no PR and no comment from this run.
+/// The agent is told why; its second empty done on the issue escalates it up the chain.
+async fn empty_done(app: &App, scope: RunScope, issue: IssueId) -> Result<()> {
+    let pool = &app.pool;
+    if done_evidence(pool, issue, scope.run_id).await? {
+        return Ok(());
+    }
+    let run = get_run(pool, scope.run_id)
+        .await?
+        .ok_or_else(|| ToolError::Refused("your run is gone".to_owned()))?;
+    let why = "done refused: nothing shows this work was done (no PR, and no comment from \
+               this run)";
+    match refuse_empty_done(pool, issue, &run, &app.clock.now()).await {
+        Ok(EmptyDone::Refused) => Err(ToolError::Refused(format!(
+            "{why}. Comment what you did (or why no change was needed), then try again. A \
+             second empty done escalates the issue."
+        ))),
+        Ok(EmptyDone::Escalated(to)) => Err(ToolError::Refused(format!(
+            "{why}, a second time: the issue was escalated to {}. Stop working on it.",
+            next_actor(&Some(to))
+        ))),
+        Err(IssueTransitionError::Db(e)) => Err(e.into()),
+        Err(e) => Err(ToolError::Refused(e.to_string())),
+    }
 }
 
 /// A subtask of the run's issue, owned by and waiting on the agent.
@@ -236,4 +266,52 @@ pub(super) async fn request_approval(
     };
     let a = open_approval(&app.pool, &new, &app.clock.now()).await?;
     Ok(json!({"approval_id": a.id.0, "status": a.status.as_str(), "expires_at": a.expires_at}))
+}
+
+/// Proposes an entry for the run's project (it stays proposed until its team lead or a human
+/// decides it: no tool does);  a `state` entry with `target: "spec"` proposes a
+/// new project spec (its body).
+pub(super) async fn propose_knowledge(
+    app: &App,
+    scope: RunScope,
+    args: &JsonObject,
+) -> Result<Value> {
+    let issue = target(app, scope, None).await?;
+    let kind = required(args, "kind", MAX_TITLE)?
+        .parse::<KnowledgeKind>()
+        .map_err(|_| {
+            ToolError::Invalid("kind must be decision, landmine, state or retro".to_owned())
+        })?;
+    let (spec, profile_field) = match text(args, "target", MAX_TITLE)? {
+        None => (false, None),
+        Some("spec") => (true, None),
+        Some(t) => match t.strip_prefix("profile.") {
+            Some(field) => (false, Some(field.to_owned())),
+            None => {
+                let why = "target must be spec or profile.<field>".to_owned();
+                return Err(ToolError::Invalid(why));
+            }
+        },
+    };
+    let p = Proposal {
+        project: issue.project_id,
+        kind,
+        title: required(args, "title", MAX_TITLE)?.to_owned(),
+        body: required(args, "body", MAX_TEXT)?.to_owned(),
+        spec,
+        profile_field,
+        rationale: text(args, "rationale", MAX_TITLE)?.map(str::to_owned),
+    };
+    let k = propose(&app.pool, &p, scope.agent_id)
+        .await
+        .map_err(knowledge_error)?;
+    Ok(json!({"knowledge_entry_id": k.id.0, "status": k.status.as_str()}))
+}
+
+fn knowledge_error(e: KnowledgeError) -> ToolError {
+    match e {
+        KnowledgeError::Db(e) => e.into(),
+        KnowledgeError::Invalid(why) => ToolError::Invalid(why),
+        e => ToolError::Refused(e.to_string()),
+    }
 }

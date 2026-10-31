@@ -12,7 +12,7 @@ use rmcp::model::JsonObject;
 use serde_json::{Value, json};
 
 use super::args::{Result, ToolError};
-use super::{read, write};
+use super::{artifacts, hub, org, plan, read, repos, requirements, write};
 use crate::domain::work::{Issue, IssueId, NextActor};
 use crate::store::audit::{self, Event};
 use crate::store::exec::RunScope;
@@ -29,14 +29,32 @@ pub(super) const TOOLS: &[&str] = &[
     "report_blocker",
     "request_approval",
     "get_approval",
+    "list_backlog",
+    "org_chart",
+    "plan_requirement",
+    "apply_plan",
+    "post_to_requirement",
+    "plan_sprint",
+    "sprint_add_issue",
+    "sprint_remove_issue",
+    "set_sprint_issues",
+    "estimate_issue",
+    "sprint_report",
+    "propose_retro_items",
+    "ask_human",
+    "publish_artifact",
+    "get_artifact",
+    "request_repo",
+    "propose_knowledge",
 ];
 
-/// Counts one call for the run, refusing past the cap.
+/// Counts one call for the run, refusing past the cap and once the run is no longer live (a
+/// token revoked between the gate and the tool: the statement that counts is the last check).
 async fn count(app: &App, scope: RunScope) -> Result<()> {
     let max = crate::settings::value(&app.pool, "mcp.max_calls_per_run").await?;
     let counted: Option<i64> = sqlx::query_scalar(
         "UPDATE citadel_runs SET mcp_calls = mcp_calls + 1 WHERE id = ? AND mcp_calls < ? \
-         RETURNING mcp_calls",
+         AND state IN ('claimed', 'running') RETURNING mcp_calls",
     )
     .bind(scope.run_id.0)
     .bind(max)
@@ -44,7 +62,7 @@ async fn count(app: &App, scope: RunScope) -> Result<()> {
     .await?;
     counted.map(drop).ok_or_else(|| {
         ToolError::Refused(format!(
-            "this run has used its {max} tool calls (mcp.max_calls_per_run)"
+            "this run has used its {max} tool calls (mcp.max_calls_per_run) or has ended"
         ))
     })
 }
@@ -84,6 +102,23 @@ pub(super) async fn call(
             "create_subtask" => write::create_subtask(app, scope, args).await,
             "report_blocker" => write::report_blocker(app, scope, args).await,
             "request_approval" => write::request_approval(app, scope, args).await,
+            "list_backlog" => read::list_backlog(app, scope, args).await,
+            "org_chart" => org::org_chart(app, scope).await,
+            "plan_requirement" => requirements::plan_requirement(app, scope, args).await,
+            "apply_plan" => requirements::apply_plan(app, scope, args).await,
+            "post_to_requirement" => hub::post_to_requirement(app, scope, args).await,
+            "ask_human" => hub::ask_human(app, scope, args).await,
+            "publish_artifact" => artifacts::publish_artifact(app, scope, args).await,
+            "get_artifact" => artifacts::get_artifact(app, scope, args).await,
+            "request_repo" => repos::request_repo(app, scope, args).await,
+            "propose_knowledge" => write::propose_knowledge(app, scope, args).await,
+            "plan_sprint" => plan::plan_sprint(app, scope, args).await,
+            "sprint_add_issue" => plan::sprint_add_issue(app, scope, args).await,
+            "sprint_remove_issue" => plan::sprint_remove_issue(app, scope, args).await,
+            "set_sprint_issues" => plan::set_sprint_issues(app, scope, args).await,
+            "estimate_issue" => plan::estimate_issue(app, scope, args).await,
+            "sprint_report" => plan::sprint_report(app, scope, args).await,
+            "propose_retro_items" => plan::propose_retro_items(app, scope, args).await,
             _ => Err(ToolError::Invalid("no such tool".to_owned())),
         }
     };

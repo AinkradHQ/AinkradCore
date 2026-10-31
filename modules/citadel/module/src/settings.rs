@@ -250,6 +250,20 @@ pub const SETTINGS: &[ModuleSetting] = &[
         "The most tool calls one run's token may make; past it every call is refused.",
     ),
     s(
+        "mcp.max_questions_per_run",
+        5,
+        0,
+        100,
+        "The most questions one run may put to a human with ask_human.",
+    ),
+    s(
+        "mcp.max_artifacts_per_run",
+        20,
+        0,
+        1_000,
+        "The most artifacts one run may publish.",
+    ),
+    s(
         "wake.timer_batch",
         50,
         1,
