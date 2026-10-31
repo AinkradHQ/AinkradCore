@@ -263,7 +263,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             ..super::PtyConfig::new(state.0.join("terminals"))
         }))
     });
-    let agents = match agents_enabled.then(|| agents(&state.0)) {
+    let agents = match agents_enabled.then(|| agents(&state.0, core_url(&state))) {
         None => None,
         Some(a) => match a.await {
             Ok(a) => Some(a),
@@ -305,6 +305,14 @@ pub fn runtime_paths(state: &std::path::Path) -> [PathBuf; 2] {
     ]
 }
 
+/// The Core's address as `ws(s)://` (what `core_mcp_url` takes), from the enrolment.
+fn core_url(state: &super::key::State) -> Option<String> {
+    let url = super::key::Enrolment::load(&state.enrolment()).ok()?.url;
+    url.strip_prefix("https://")
+        .map(|r| format!("wss://{r}"))
+        .or_else(|| url.strip_prefix("http://").map(|r| format!("ws://{r}")))
+}
+
 /// The agent driver over `<state>/agents`, driving the real harnesses (`HarnessExecutor`).
 /// Delivered secrets go to `$XDG_RUNTIME_DIR` (a tmpfs on most Linux hosts), in a dir named
 /// for this state dir so two runners never sweep each other's; else `<state>/secrets`.
@@ -315,9 +323,15 @@ pub fn runtime_paths(state: &std::path::Path) -> [PathBuf; 2] {
 /// As the v1 runner does: the work root is outside the home and under no harness instruction
 /// file (`check_roots`), and each harness's version is probed; only an installed one the
 /// compat matrix does not refuse gets a slot, so any other is refused at `agent.start`.
-async fn agents(state: &std::path::Path) -> Result<super::agent::AgentDriver, String> {
+async fn agents(
+    state: &std::path::Path,
+    core_url: Option<String>,
+) -> Result<super::agent::AgentDriver, String> {
     let [secrets, work] = runtime_paths(state);
-    let executor = crate::HarnessExecutor::new(work, state.join("agents-config"));
+    let mut executor = crate::HarnessExecutor::new(work, state.join("agents-config"));
+    // The Citadel MCP server at the Core this runner is enrolled with: without it a run's harness
+    // is given no MCP config, whatever token the Core minted.
+    executor.mcp_url = core_url.and_then(|u| crate::core_mcp_url(&u));
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
