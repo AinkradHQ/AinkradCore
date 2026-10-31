@@ -206,6 +206,9 @@ impl PtyDriver {
                 .take()
                 .or_else(|| spec.env.get("SHELL").cloned())
                 .unwrap_or_else(|| "/bin/sh".to_owned());
+            // `term new <runner> sh` names a program the way the unsandboxed host takes it.
+            let program =
+                super::termbox::resolve(&program, spec.env.get("PATH").map(String::as_str));
             let cwd = spec
                 .cwd
                 .clone()

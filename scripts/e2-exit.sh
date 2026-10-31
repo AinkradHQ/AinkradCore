@@ -160,6 +160,8 @@ ticks() { transcript "$1" | jq -r '.body | tostring' | grep -o 'TICK-[0-9]*' | c
 contiguous() { awk 'NR==1{p=$1;next} $1!=p+1{bad=1} {p=$1} END{exit bad}'; }
 term_status() { a --json term ls | jq -r --arg t "$1" '.[] | select(.id==$t) | .status'; }
 host_pid() { jq -r .pid "$RSTATE/terminals/$1.json"; }
+# A host and every process under it. The shells' own `$$` is in the terminal sandbox's PID namespace (Linux).
+tree() { local c; echo "$1"; for c in $(pgrep -P "$1"); do tree "$c"; done; }
 agent_state() { a --json agent show "$1" | jq -r .state; }
 expect_lines() { seq 1 "$1" | awk '{printf "L%05d\n",$1}'; }
 # stream <name> <action>: a gated 3000-line producer, attached through the proxy; the action hits mid-stream;
@@ -248,20 +250,20 @@ step5() {
   cwd=$(transcript "$AS" | jq -r '.body | tostring' | grep -o 'CWD=[^"]*' | tail -n1 | cut -d= -f2-)
   [ -d "$cwd" ] || { EV="no agent worktree at '$cwd'"; return 1; }
   before=$(cd "$cwd" && ls tick-* | sort | cksum)
-  hp2=$(host_pid "$T2"); sh2=$(cat "$W/t2.pid"); ch2=$(cat "$W/t2.child")
+  hp2=$(tree "$(host_pid "$T2")" | tr '\n' ' ')
   agentpids=$(pgrep -f "$W/bin/claude" || true); [ -n "$agentpids" ] || { EV="no agent process to kill"; return 1; }
   a agent kill "$AS" >"$W/kill-agent.out" || { EV="agent kill failed: $(cat "$W/kill-agent.out")"; return 1; }
   a term kill "$T2" >"$W/kill-term.out" || { EV="term kill failed"; return 1; }
   # shellcheck disable=SC2086
   gone() { local p; for p in "$@"; do alive "$p" && return 1; done; return 0; }
   # shellcheck disable=SC2086
-  wait_for 30 gone $hp2 $sh2 $ch2 $agentpids || { EV="processes left after the kills: $(for p in $hp2 $sh2 $ch2 $agentpids; do alive "$p" && echo -n "$p "; done)"; return 1; }
+  wait_for 30 gone $hp2 $agentpids || { EV="processes left after the kills: $(for p in $hp2 $agentpids; do alive "$p" && echo -n "$p "; done)"; return 1; }
   [ "$(agent_state "$AS")" = ended ] || { sleep 3; [ "$(agent_state "$AS")" = ended ] || { EV="agent is $(agent_state "$AS")"; return 1; }; }
   rt=$(ps -axo pid=,ppid=,stat= | awk -v r="$RPID" '$2==r && $3 ~ /^Z/ {print $1}')
   [ -z "$rt" ] || { EV="zombie children of the runner: $rt"; return 1; }
   [ -d "$cwd" ] && after=$(cd "$cwd" && ls tick-* | sort | cksum) && [ "$before" = "$after" ] || { EV="worktree changed after the kill ('$before' vs '$after')"; return 1; }
   [ -z "$(pgrep -f "ainkrad-ptyhost.*$T2" || true)" ] || { EV="a ptyhost for $T2 is left"; return 1; }
-  EV="agent killed (state ended) and $T2 closed: host $hp2, shell $sh2, child $ch2, harness gone; no zombie under the runner; worktree $cwd kept ($(ls "$cwd" | wc -l | tr -d ' ') files, unchanged)"
+  EV="agent killed (state ended) and $T2 closed: host, shell and child ($hp2) and harness gone; no zombie under the runner; worktree $cwd kept ($(ls "$cwd" | wc -l | tr -d ' ') files, unchanged)"
 }
 
 step6() {
@@ -280,11 +282,13 @@ step7() {
     hits+=$(grep -rlaF --include='*.log' --include='*.err' --include='*.db' --include='*.db-wal' --include='*.jsonl' -- "$v" "$W" 2>/dev/null | tr '\n' ' ' || true)
   done
   [ -z "$hits" ] || { EV="a secret or terminal byte is in: $hits"; return 1; }
+  local t1; t1=$(tree "$(host_pid "$T1")" | tr '\n' ' ')
   a term kill "$T1" >/dev/null 2>&1 || true
   kill "$RPID" "$CORE" "$PROXY" 2>/dev/null; wait "$RPID" "$CORE" 2>/dev/null || true
   left() { pgrep -f "$W" | grep -qv "^$$\$"; }
   wait_for 20 eval '! left' || { EV="processes left after the teardown: $(pgrep -fl "$W" | grep -v "^$$ " | head -n3 | tr '\n' ';')"; return 1; }
-  alive "$(cat "$W/t1.pid")" && { EV="the T1 shell child is left"; return 1; }
+  # shellcheck disable=SC2086
+  for p in $t1; do alive "$p" && { EV="a T1 process ($p) is left"; return 1; }; done
   EV="no canary, passphrase or terminal byte in any log, database or Core file; after the teardown no process names this run and no terminal child is left"
 }
 

@@ -19,6 +19,12 @@ pub fn runner_bin() -> PathBuf {
     BIN.get_or_init(|| built("ainkrad-runner")).clone()
 }
 
+/// The terminal host (`ainkrad-ptyhost`), built next to the runner, which finds it there.
+pub fn ptyhost_bin() -> PathBuf {
+    static BIN: OnceLock<PathBuf> = OnceLock::new();
+    BIN.get_or_init(|| built("ainkrad-ptyhost")).clone()
+}
+
 /// Builds the package's binary of the same name; its path.
 fn built(name: &str) -> PathBuf {
     // target/<profile>/deps/<test> → target/<profile>
