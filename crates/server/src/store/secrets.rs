@@ -554,6 +554,59 @@ pub async fn redeem(
     })
 }
 
+/// Opens secret `name` for the Core's own use on behalf of module `module` (a scheduler job
+/// that calls a forge: no runner is involved, so there is no lease). Only a secret named
+/// `<module>.<…>` may be opened, so a module cannot reach a platform secret or another module's;
+/// the broker must be on (G-SEC); every open is audited as `secret.used` with the name and
+/// `purpose`, never the value. Callers open once per pass and keep the value in the returned
+/// `Zeroizing` buffer only as long as the calls it authenticates.
+pub async fn open_for_module(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    module: &str,
+    name: &str,
+    purpose: &str,
+) -> Result<Zeroizing<String>, Error> {
+    if !valid_name(name) || name.split_once('.').map(|(m, _)| m) != Some(module) {
+        return refused("not_found", "no such secret");
+    }
+    let mut tx = super::begin_write(pool).await?;
+    enabled(&mut tx).await?;
+    let row = sqlx::query("SELECT id, version, key_id, sealed FROM core_secrets WHERE name = ?")
+        .bind(name)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some(row) = row else {
+        return refused("not_found", "no such secret");
+    };
+    let (id, version): (i64, i64) = (row.try_get("id")?, row.try_get("version")?);
+    let key_id: String = row.try_get("key_id")?;
+    if key_id != sealer.key_id() {
+        return refused(
+            "secrets_unavailable",
+            "the secret is sealed under a master key this Core does not hold",
+        );
+    }
+    let sealed: Vec<u8> = row.try_get("sealed")?;
+    let value = sealer
+        .open(&label(name, version), &sealed)
+        .ok()
+        .and_then(|p| {
+            std::str::from_utf8(&p)
+                .ok()
+                .map(|v| Zeroizing::new(v.to_owned()))
+        });
+    let Some(value) = value else {
+        tracing::error!(name, "a sealed secret did not open");
+        return refused("secrets_unavailable", "the secret did not open");
+    };
+    let details = json!({"name": name, "version": version, "module": module,
+                         "purpose": purpose});
+    audit(&mut tx, AuditActor::System, "secret.used", id, details).await?;
+    tx.commit().await?;
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -438,6 +438,7 @@
           "secret.leased",
           "secret.redeemed",
           "secret.rotated",
+          "secret.used",
           "setting.reset",
           "setting.set",
           "terminal.attached",
