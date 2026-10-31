@@ -692,6 +692,9 @@ async fn serve(
     tokio::spawn(ainkrad_core_server::api::v1::terminal_sweep_loop(
         app.clone(),
     ));
+    for m in modules.iter() {
+        m.attach(&app);
+    }
     let (closing, pool) = (Arc::clone(&app.closing), app.pool.clone());
     let server = gateway.serve(router(app), Arc::clone(&closing), gateway::SHUTDOWN_GRACE);
     tokio::pin!(server);

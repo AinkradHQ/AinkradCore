@@ -37,13 +37,15 @@ pub fn routes() -> Router<App> {
         .route("/runs/{id}/message", post(message))
         .route("/agents/{id}/wake", post(wake))
         .route("/engine", get(get_engine).post(set_engine))
+        .route("/settings", get(list_settings))
+        .route("/settings/{name}", axum::routing::put(set_setting))
 }
 
 pub const SCOPES: &[(&str, &str, &str)] =
     &[("GET", "/runs", "read"), ("GET", "/runs/{id}", "read")];
 
 /// Not phone reads: a transcript holds what the agent saw and did.
-pub const ADMIN_READS: &[&str] = &["/runs/{id}/transcript", "/engine"];
+pub const ADMIN_READS: &[&str] = &["/runs/{id}/transcript", "/engine", "/settings"];
 
 pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/runs/{id}/cancel"),
@@ -51,6 +53,7 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/runs/{id}/message"),
     ("POST", "/agents/{id}/wake"),
     ("POST", "/engine"),
+    ("PUT", "/settings/{name}"),
 ];
 
 /// `(path segment, SQL)` company owners of this slice's resources (`scope::OWNERS`).
@@ -373,10 +376,80 @@ pub async fn set_engine(
     Ok(Json(EngineState { enabled: b.enabled }))
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SettingOut {
+    pub name: String,
+    pub value: i64,
+    pub default: i64,
+    pub min: i64,
+    pub max: i64,
+    pub description: String,
+}
+
+async fn setting_out(app: &App, spec: &ainkrad_core_server::module::ModuleSetting) -> Result<SettingOut, ApiError> {
+    Ok(SettingOut {
+        name: spec.name.to_owned(),
+        value: crate::settings::value(&app.pool, spec.name).await?,
+        default: spec.default,
+        min: spec.min,
+        max: spec.max,
+        description: spec.description.to_owned(),
+    })
+}
+
+#[utoipa::path(get, path = "/settings", operation_id = "listSettings", tag = "runs",
+    responses((status = 200, description = "The module's tunables with their values, bounds and defaults \
+        (`mcp.enabled`, `run.token_ttl_secs`, ...)", body = Vec<SettingOut>)))]
+pub async fn list_settings(State(app): State<App>, _: Acting) -> ApiResult<Vec<SettingOut>> {
+    let mut out = Vec::new();
+    for spec in crate::settings::SETTINGS {
+        out.push(setting_out(&app, spec).await?);
+    }
+    Ok(Json(out))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SettingBody {
+    pub value: i64,
+}
+
+#[utoipa::path(put, path = "/settings/{name}", operation_id = "setSetting", tag = "runs",
+    params(("name" = String, Path, description = "A name from `GET /settings`")),
+    request_body = SettingBody,
+    responses((status = 200, description = "Set (audited as `setting.set`); 404 for an unknown \
+        name, 400 out of bounds", body = SettingOut)))]
+pub async fn set_setting(
+    State(app): State<App>,
+    _: Acting,
+    Path(name): Path<String>,
+    Json(b): Json<SettingBody>,
+) -> ApiResult<SettingOut> {
+    use ainkrad_core_server::store::settings::SetError;
+    let spec = crate::settings::SETTINGS
+        .iter()
+        .find(|s| s.name == name)
+        .ok_or_else(|| ApiError::not_found("no such setting"))?;
+    crate::settings::handle()
+        .set(
+            &app.pool,
+            &name,
+            &b.value.to_string(),
+            ainkrad_core_server::api::v1::BY,
+            &app.clock.now(),
+        )
+        .await
+        .map_err(|e| match e {
+            SetError::Refused(why) => ApiError::bad_request(why.to_string()),
+            SetError::Db(e) => e.into(),
+        })?;
+    Ok(Json(setting_out(&app, spec).await?))
+}
+
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        list_runs, get_run, transcript, cancel, kill, message, wake, get_engine, set_engine
+        list_runs, get_run, transcript, cancel, kill, message, wake, get_engine, set_engine,
+        list_settings, set_setting
     ),
     components(schemas(
         RunOut,
@@ -386,7 +459,9 @@ pub async fn set_engine(
         WakeBody,
         WakeOut,
         EngineState,
-        EngineBody
+        EngineBody,
+        SettingOut,
+        SettingBody
     ))
 )]
 pub struct Doc;
