@@ -164,6 +164,7 @@ pub fn json_for(modules: &[Arc<dyn Module>]) -> String {
     merge_modules(&mut spec, modules);
     normalise(&mut spec);
     module_extensions(&mut spec, modules);
+    super::deprecation::mark(&mut spec, super::deprecation::DEPRECATED);
     let [kinds, actions] = registered(modules);
     spec["components"]["schemas"]["Event"]["x-event-kinds"] = json!(kinds);
     spec["components"]["schemas"]["Event"]["x-event-scopes"] = json!(event_scopes(modules));

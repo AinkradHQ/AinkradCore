@@ -119,3 +119,36 @@ impl Limiter {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target(scopes: &[&str]) -> PushTarget {
+        PushTarget {
+            device: ainkrad_core::ids::DeviceKeyId(1),
+            device_id: "d_x".to_owned(),
+            scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
+            provider: "apns".to_owned(),
+            token: String::new(),
+            sandbox: false,
+        }
+    }
+
+    /// Review S1: a push needs the notification's scope (or `admin`), so a `read` phone gets
+    /// nothing about a terminal or an agent, and a runner gets nothing at all.
+    #[test]
+    fn a_push_goes_only_to_devices_holding_its_scope() {
+        for needs in ["terminal", "agent", "approve", "admin"] {
+            assert!(!may_receive(&target(&["read"]), needs), "read gets {needs}");
+            assert!(
+                !may_receive(&target(&["runner"]), needs),
+                "runner gets {needs}"
+            );
+        }
+        assert!(!may_receive(&target(&["runner"]), "read"));
+        assert!(may_receive(&target(&["read"]), "read"));
+        assert!(may_receive(&target(&["terminal"]), "terminal"));
+        assert!(may_receive(&target(&["admin"]), "terminal"));
+    }
+}

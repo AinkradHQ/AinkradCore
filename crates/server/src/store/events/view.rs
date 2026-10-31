@@ -49,18 +49,13 @@ impl View {
         }
     }
 
-    /// The scopes it sees, as an SQL list of literals (constants, never input).
-    fn scopes_sql(&self) -> String {
-        let on: Vec<String> = VISIBLE
+    /// The visibility scopes it sees.
+    fn scopes(&self) -> impl Iterator<Item = &'static str> {
+        VISIBLE
             .iter()
             .zip(self.0)
             .filter(|(_, on)| *on)
-            .map(|(s, _)| format!("'{s}'"))
-            .collect();
-        match on.is_empty() {
-            true => "('')".to_owned(),
-            false => format!("({})", on.join(", ")),
-        }
+            .map(|(s, _)| *s)
     }
 }
 
@@ -156,27 +151,36 @@ pub async fn read(
     if after < global {
         return Ok(Err(PastRetention { floor }));
     }
+    let limit = limit.min(MAX_EVENTS);
+    // One indexed walk per visible scope (`event_views_scope_seq`), then a merge: the cost follows
+    // the rows the view may see, never the hidden ones, so timing a page says nothing about how
+    // many hidden events there are (review S6).
     let q = format!(
-        // Walks `event_views` by seq and stops at the limit (`+` keeps SQLite from sorting
-        // every visible row first).
         "SELECT e.seq, e.at, e.kind, e.payload, {} AS vseq FROM event_views v \
          JOIN events e ON e.seq = v.seq \
-         WHERE v.seq > ? AND +v.scope IN {} ORDER BY v.seq LIMIT ?",
-        view.seq_expr(),
-        view.scopes_sql()
+         WHERE v.scope = ? AND v.seq > ? ORDER BY v.seq LIMIT ?",
+        view.seq_expr()
     );
-    let rows: Vec<(
+    type Row = (
         i64,
         String,
         String,
         sqlx::types::Json<serde_json::Value>,
         i64,
-    )> = sqlx::query_as(AssertSqlSafe(q))
-        .bind(after)
-        .bind(limit.min(MAX_EVENTS))
-        .fetch_all(&mut *conn)
-        .await?;
-    let scanned_to = match rows.len() < limit.min(MAX_EVENTS) as usize {
+    );
+    let mut rows: Vec<Row> = Vec::new();
+    for scope in view.scopes() {
+        let part: Vec<Row> = sqlx::query_as(AssertSqlSafe(q.clone()))
+            .bind(scope)
+            .bind(after)
+            .bind(limit)
+            .fetch_all(&mut *conn)
+            .await?;
+        rows.extend(part);
+    }
+    rows.sort_by_key(|r| r.0);
+    rows.truncate(limit as usize);
+    let scanned_to = match rows.len() < limit as usize {
         true => {
             sqlx::query_scalar("SELECT max(?, coalesce(max(seq), 0)) FROM events")
                 .bind(after)

@@ -116,6 +116,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "secret.created",
     "secret.deleted",
     "secret.leased",
+    "secret.master_rotated",
     "secret.redeemed",
     "secret.rotated",
     "secret.used",

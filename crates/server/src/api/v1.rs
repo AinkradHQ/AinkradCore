@@ -28,6 +28,7 @@ mod agents;
 #[cfg(feature = "test-support")]
 pub use agents::create as create_agent_for_tests;
 mod audit;
+mod deprecation;
 mod devices;
 pub mod events;
 pub mod gate;
@@ -222,6 +223,10 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/agent-sessions/{id}/resume", post(agents::resume))
         // Modules sit inside the same gate: they never authenticate for themselves.
         .merge(crate::module::mount(&app.modules))
+        // `Deprecation`/`Sunset` on deprecated routes (`deprecation`).
+        .route_layer(middleware::from_fn(|r, n| {
+            deprecation::headers(deprecation::DEPRECATED, r, n)
+        }))
         // Refused writes, authenticated (`trace`).
         .route_layer(middleware::from_fn_with_state(
             app.clone(),
