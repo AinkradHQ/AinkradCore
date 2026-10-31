@@ -8,6 +8,9 @@
 //! with a nudge quoting its last words, up to `run.max_no_action_rewakes` times in a row; the next
 //! one escalates the issue up the chain with the reason. Audited as `run.ended_without_action`.
 //!
+//! Only a run that was handed the tools (it had a run token) can fail to use them: with
+//! `mcp.enabled` off, the default, nothing is flagged.
+//!
 //! Never a loop: the count is per (issue, agent), of such runs since the agent's last run that
 //! acted and since the issue last changed, and an escalation moves the issue off the agent. The
 //! nudge is a wake like any other: the dispatcher still admits it against the budgets.
@@ -61,6 +64,15 @@ pub(super) async fn no_action_in(
     .fetch_one(&mut *conn)
     .await?;
     if !waits {
+        return Ok(None);
+    }
+    // A run never handed the tools (`mcp.enabled` is off, the default) could not have acted.
+    let had_tools: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM citadel_run_tokens WHERE run_id = ?)")
+            .bind(r.id.0)
+            .fetch_one(&mut *conn)
+            .await?;
+    if !had_tools {
         return Ok(None);
     }
     // Its own call, or the issue changing (state, next actor) while it ran: by the agent's hand

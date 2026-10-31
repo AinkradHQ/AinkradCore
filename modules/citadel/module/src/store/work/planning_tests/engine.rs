@@ -97,7 +97,7 @@ async fn dev_work_waits_for_the_owners_approval_of_the_complete_plan_engine() {
 }
 
 #[tokio::test]
-#[ignore = "S7: a run's time and tokens come from the runs table"]
+#[ignore = "not ported yet: a run's time and tokens come from the runs table"]
 async fn the_tree_numbers_are_exact_engine() {
     let db = db().await;
     let pool = &db.pool;

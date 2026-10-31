@@ -25,6 +25,8 @@ use crate::work_seed::{Seed, seed};
 #[derive(Default)]
 pub struct Fake {
     pub runners: Vec<String>,
+    /// The harnesses the runners offer; every one when `None`.
+    pub harnesses: Option<Vec<&'static str>>,
     pub busy: AtomicBool,
     pub refuse: AtomicBool,
     /// An admin's cancel lands while the session is starting (and it has already spent tokens).
@@ -34,8 +36,11 @@ pub struct Fake {
 }
 
 impl Host for Fake {
-    async fn runners(&self, _: &App, _: &str) -> Vec<String> {
-        self.runners.clone()
+    async fn runners(&self, _: &App, harness: &str) -> Vec<String> {
+        match &self.harnesses {
+            Some(only) if !only.contains(&harness) => vec![],
+            _ => self.runners.clone(),
+        }
     }
 
     async fn start(&self, app: &App, spec: &StartSpec) -> Result<String, StartFailure> {

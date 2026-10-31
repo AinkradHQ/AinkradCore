@@ -206,7 +206,7 @@ async fn follow<H: Host>(
                 report.capped += 1;
                 return end(pool, &r, RunEvent::TokenCap, now, report).await;
             }
-            scan_approvals(pool, &r, &s, now, report).await
+            scan_approvals(app, host, &r, &s, now, report).await
         }
     }
 }
@@ -378,13 +378,15 @@ pub async fn record_usage(
 
 /// The tool approvals the harness asked since the last look become `permission_escalation`
 /// approvals (one per request, whatever the number of passes). The harness waits on the decision.
-async fn scan_approvals(
-    pool: &SqlitePool,
+async fn scan_approvals<H: Host>(
+    app: &App,
+    host: &H,
     r: &Run,
     s: &Session,
     now: &str,
     report: &mut Report,
 ) -> Result<(), Error> {
+    let pool = &app.pool;
     if s.last_seq <= 0 {
         return Ok(());
     }
@@ -392,6 +394,36 @@ async fn scan_approvals(
     let Some(last) = entries.last().map(|e| e.seq) else {
         return Ok(());
     };
+    // A call an "allow for this issue" rule still covers goes ahead without a reviewer. Told to
+    // the harness first, outside any write transaction: if the runner does not take it, the call
+    // is escalated like any other, so a rule never turns a failure into a silent denial.
+    let rules = match r.issue_id {
+        Some(issue) => crate::store::gov::issue_allow_rules(pool, issue, now).await?,
+        None => vec![],
+    };
+    let mut allowed: Vec<(String, String)> = vec![];
+    for e in entries
+        .iter()
+        .filter(|e| e.body["type"] == "approval_request")
+    {
+        let (Some(request), Some(tool)) = (e.body["id"].as_str(), e.body["tool"].as_str()) else {
+            continue;
+        };
+        let Some(rule) = rules
+            .iter()
+            .find(|rule| ainkrad_proto::runner::allows(rule, tool, &e.body["input"]))
+        else {
+            continue;
+        };
+        let told = Instruction::Decide {
+            request: request.to_owned(),
+            approved: true,
+            reply: Some("allowed for this issue".to_owned()),
+        };
+        if host.instruct(app, &s.id, told).await.is_ok() {
+            allowed.push((request.to_owned(), rule.clone()));
+        }
+    }
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
     let company: i64 = sqlx::query_scalar("SELECT company_id FROM citadel_agents WHERE id = ?")
         .bind(r.agent_id.0)
@@ -404,6 +436,20 @@ async fn scan_approvals(
         let Some(request) = e.body["id"].as_str() else {
             continue;
         };
+        if let Some((_, rule)) = allowed.iter().find(|(id, _)| id == request) {
+            let tool = e.body["tool"].as_str().unwrap_or_default();
+            audit::append(
+                &mut tx,
+                Event::new(SYSTEM, "run.allowed_by_rule")
+                    .entity("run", r.id.0)
+                    .company(company)
+                    .run(r.id.0)
+                    .details(json!({"rule": rule, "request": request, "tool": tool,
+                                    "issue": r.issue_id.map(|i| i.0)})),
+            )
+            .await?;
+            continue;
+        }
         let asked: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM citadel_approvals WHERE kind = 'permission_escalation' \
              AND json_extract(payload, '$.session') = ?1 AND json_extract(payload, '$.request') = ?2)",

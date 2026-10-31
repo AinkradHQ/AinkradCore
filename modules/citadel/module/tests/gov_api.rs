@@ -1,8 +1,8 @@
 //! The governance routes end to end through the Core's client gate (ported from the monolith's
 //! `api/v1/tests/{gov,money}.rs`): approvals with a reply, prices and budget caps.
 //!
-//! Left as `#[ignore]`d stubs, each with its blocker: the cost reports (S7: they read the run
-//! table), and the two issue/runner tests the monolith kept in `money.rs` (S4 and S7 routes).
+//! Left as `#[ignore]`d stubs, each with its blocker: the cost reports (they read the run
+//! table, not ported yet), and the two issue/runner tests the monolith kept in `money.rs` (S4 and S7 routes).
 
 mod common;
 mod gov_seed;
@@ -105,7 +105,7 @@ async fn the_inbox_lists_pending_and_a_reply_is_recorded() {
 }
 
 #[tokio::test]
-#[ignore = "S7: cost_report reads the run table (getCompanyCosts, getSprintCosts)"]
+#[ignore = "not ported yet: cost_report reads the run table (getCompanyCosts, getSprintCosts)"]
 async fn costs_report_tokens_and_budgets() {
     todo!("monolith api/v1/tests/gov.rs: GET /companies/{{id}}/costs and /sprints/{{id}}/costs")
 }
@@ -254,7 +254,7 @@ async fn budgets_take_a_dollar_cap_and_an_issue_scope() {
 }
 
 #[tokio::test]
-#[ignore = "S7: apply_from past prices the run table's events (and listUnpriced reads it)"]
+#[ignore = "not ported yet: apply_from past prices the run table's events (and listUnpriced reads it)"]
 async fn prices_apply_to_the_past() {
     todo!(
         "monolith api/v1/tests/money.rs: apply_from past and GET /companies/{{id}}/costs/unpriced"
