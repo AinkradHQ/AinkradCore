@@ -304,7 +304,6 @@ pub async fn plan_requirement(
 
 /// Submits the requirement's plan as `by` (a planner), from its issue `from_issue`, at `now`;
 /// see the module docs. Refused unless the requirement is `planning` and its plan complete.
-/// (Waking the planners of an approved plan's tasks is the run engine's, S7.)
 pub async fn submit_plan(
     pool: &SqlitePool,
     id: RequirementId,

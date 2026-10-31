@@ -76,11 +76,13 @@ pub(super) fn route(department: DepartmentId, key: &str, mode: ProjectMode) -> R
 
 /// (issue, source) of each wake of the agent, oldest first.
 async fn wakes(pool: &SqlitePool, agent: AgentId) -> Vec<(Option<i64>, String)> {
-    sqlx::query_as("SELECT issue_id, source FROM wake_requests WHERE agent_id = ? ORDER BY id")
-        .bind(agent.0)
-        .fetch_all(pool)
-        .await
-        .unwrap()
+    sqlx::query_as(
+        "SELECT issue_id, source FROM citadel_wake_requests WHERE agent_id = ? ORDER BY id",
+    )
+    .bind(agent.0)
+    .fetch_all(pool)
+    .await
+    .unwrap()
 }
 
 async fn department_of(pool: &SqlitePool, p: &Project) -> DepartmentId {
@@ -173,7 +175,6 @@ async fn non_tech_and_engineering_requests_land_in_different_departments() {
 }
 
 #[tokio::test]
-#[ignore = "S7: needs the wake queue (wake_requests)"]
 async fn non_tech_and_engineering_requests_land_in_different_departments_wakes() {
     let db = db().await;
     let pool = &db.pool;
@@ -396,7 +397,6 @@ async fn without_a_ceo_the_admin_routes() {
 /// With no active CEO a request waits on the admin, who routes it; both departments of one
 /// request get a project.
 #[tokio::test]
-#[ignore = "S7: needs the wake queue (wake_requests)"]
 async fn without_a_ceo_the_admin_routes_wakes() {
     let db = db().await;
     let pool = &db.pool;

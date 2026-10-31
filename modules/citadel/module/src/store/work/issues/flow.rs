@@ -278,7 +278,6 @@ pub async fn delete_issue(
 /// Hands the issue to `next` (a `Reassign` by `actor`) inside the caller's `BEGIN
 /// IMMEDIATE` transaction, waking an agent with `source`; `None` when the issue is gone or
 /// closed and so has no next actor to change.
-#[allow(dead_code)] // `terminate_agent` (the admin's controls) is not ported yet
 pub(crate) async fn reassign_in(
     conn: &mut SqliteConnection,
     id: IssueId,

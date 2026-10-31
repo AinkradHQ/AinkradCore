@@ -290,7 +290,7 @@ async fn the_figure_shows_what_the_agent_is_doing() {
 }
 
 #[tokio::test]
-#[ignore = "S7: the thinking/working/loading/confused/success figure states read runs"]
+#[ignore = "not ported yet: the thinking/working/loading/confused/success figure states read runs"]
 async fn the_figure_shows_a_runs_state() {
     let fx = fx().await;
     let a = company(&fx, "A").await;
@@ -397,7 +397,7 @@ async fn tiers_and_rules_are_read_and_replaced() {
 }
 
 #[tokio::test]
-#[ignore = "S7: a run's tier and getTaskCosts need the run tables"]
+#[ignore = "not ported yet: getTaskCosts is a cost report (a run's tier is tested in detectors.rs)"]
 async fn a_run_shows_its_tier_and_tasks_are_reported() {
     let fx = fx().await;
     let a = company(&fx, "A").await;

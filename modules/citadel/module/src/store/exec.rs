@@ -9,9 +9,15 @@
 //! - `control`: cancel, kill, message and the engine switch.
 //! - `token`: a run's short-lived token for its agent's callbacks (S8).
 //!
-//! Not ported yet (kept in `modules/citadel/server` as the reference): account routing and
-//! fallbacks, tier routing, the loop breaker, the stuck detector and its repairs, escalation,
-//! the no-action and progress watchdogs.
+//! - `breaker`, `no_action`: a run that ends badly (or without acting) consults the loop breaker
+//!   and the escalation chain in its own terminal transition.
+//! - `stuck`, `repair`, `actions`: the stuck detector, its repair pass and the admin's actions.
+//! - `route`: the task's tier and the agent's model chain.
+//! - `terminate`: letting an agent go.
+//!
+//! Not ported (kept in `modules/citadel/server` as the reference): account routing and
+//! fallbacks across accounts (S9), runner tags, the runner-reported progress watchdog (the
+//! platform's session supervisor ends a stalled session), runner disk and wake-a-sleeping-runner.
 
 use ainkrad_core::audit::AuditActor;
 use sqlx::sqlite::{SqlitePool, SqliteRow};
@@ -22,20 +28,35 @@ use crate::domain::org::{AgentId, Harness};
 use crate::domain::work::{IssueId, RunId};
 use crate::store::org::text;
 
+pub mod actions;
+pub mod breaker;
 pub mod control;
 pub mod dispatch;
+pub mod no_action;
+pub mod pause;
 pub mod progress;
 mod prompt;
 pub mod reconcile;
+pub mod repair;
+pub mod route;
+pub mod stuck;
+pub mod terminate;
 pub mod timer;
 pub mod token;
 pub mod transition;
 pub mod wake;
 
+pub use actions::*;
+pub use breaker::{Stop, Trip};
 pub use control::*;
 pub use dispatch::*;
+pub use pause::{pause_agent, resume_agent};
 pub use progress::*;
 pub use reconcile::*;
+pub use repair::{Repaired, repair_stuck};
+pub use route::task_tier_in;
+pub use stuck::{Serving, serving, stuck_report};
+pub use terminate::terminate_agent;
 pub use token::*;
 pub use transition::*;
 pub use wake::*;

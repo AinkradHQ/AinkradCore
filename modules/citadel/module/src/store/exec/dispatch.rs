@@ -23,8 +23,10 @@ use ainkrad_proto::v2::{AgentDecide, AgentSend, AgentStop, Command, ErrorCode};
 use serde_json::json;
 
 use super::prompt::brief;
+use super::route::{chain_in, task_tier_in};
 use super::*;
 use crate::domain::exec::RunEvent;
+use crate::domain::org::{ModelRoute, Tier};
 use crate::store::audit::{self, Event};
 use crate::store::gov::admit_in;
 use crate::store::work::requirements::plan_held;
@@ -170,8 +172,10 @@ struct Candidate {
     wake: i64,
     agent: AgentId,
     issue: Option<IssueId>,
-    harness: Harness,
-    model: String,
+    /// The task's tier, and where it may start: the agent's model for the tier, its own, its
+    /// fallbacks (`route::chain_in`).
+    tier: Tier,
+    chain: Vec<ModelRoute>,
     reason: String,
 }
 
@@ -189,22 +193,30 @@ pub async fn dispatch_next<H: Host>(app: &App, host: &H, now: &str) -> Result<Op
     let Some(c) = pick(&app.pool, now).await? else {
         return Ok(None);
     };
-    let Some(runner) = host
-        .runners(app, c.harness.as_str())
-        .await
-        .into_iter()
-        .next()
-    else {
+    // The first entry of the chain a runner can take now.
+    let mut chosen = None;
+    for route in &c.chain {
+        if let Some(runner) = host
+            .runners(app, route.harness.as_str())
+            .await
+            .into_iter()
+            .next()
+        {
+            chosen = Some((runner, route.clone()));
+            break;
+        }
+    }
+    let Some((runner, route)) = chosen else {
         return Ok(None);
     };
-    let Some((run, brief)) = claim(&app.pool, &c, &runner, now).await? else {
+    let Some((run, brief)) = claim(&app.pool, &c, &route, &runner, now).await? else {
         return Ok(None);
     };
     let spec = StartSpec {
         run: run.id,
         runner,
-        harness: c.harness.as_str().to_owned(),
-        model: c.model.clone(),
+        harness: route.harness.as_str().to_owned(),
+        model: route.model.clone(),
         prompt: brief.prompt,
         workspace: brief.workspace,
         policy: brief.policy,
@@ -287,7 +299,7 @@ async fn pick(pool: &sqlx::SqlitePool, now: &str) -> Result<Option<Candidate>, E
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
     super::wake::drop_stale_in(&mut tx, now).await?;
     let rows = sqlx::query(concat!(
-        "SELECT w.id, w.agent_id, w.issue_id, w.reason, a.harness, a.model, a.company_id \
+        "SELECT w.id, w.agent_id, w.issue_id, w.reason, a.company_id \
          FROM citadel_wake_requests w JOIN citadel_agents a ON a.id = w.agent_id \
          WHERE w.status = 'pending' AND a.status = 'active' \
          AND (w.not_before IS NULL OR julianday(w.not_before) <= julianday(?1)) \
@@ -314,13 +326,30 @@ async fn pick(pool: &sqlx::SqlitePool, now: &str) -> Result<Option<Candidate>, E
         let agent = AgentId(row.try_get("agent_id")?);
         let company = crate::domain::org::CompanyId(row.try_get("company_id")?);
         let issue = row.try_get::<Option<i64>, _>("issue_id")?.map(IssueId);
+        // A hard ceiling on what the engine starts per company per day, whatever woke the run
+        // (a retry, an escalation, a repair): the wake waits for the window to move on.
+        let cap = crate::settings::value_in(&mut tx, "engine.max_runs_per_day").await?;
+        if cap > 0 {
+            let started: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM citadel_runs r JOIN citadel_agents a ON a.id = r.agent_id \
+                 WHERE a.company_id = ?1 AND julianday(r.queued_at) > julianday(?2, '-1 day')",
+            )
+            .bind(company.0)
+            .bind(now)
+            .fetch_one(&mut *tx)
+            .await?;
+            if started >= cap {
+                continue;
+            }
+        }
         if admit_in(&mut tx, agent, company, issue, now).await? {
+            let tier = task_tier_in(&mut tx, issue).await?;
             picked = Some(Candidate {
                 wake: row.try_get("id")?,
                 agent,
                 issue,
-                harness: text(&row, "harness")?,
-                model: row.try_get("model")?,
+                tier,
+                chain: chain_in(&mut tx, agent, tier).await?,
                 reason: row.try_get("reason")?,
             });
             break;
@@ -336,6 +365,7 @@ async fn pick(pool: &sqlx::SqlitePool, now: &str) -> Result<Option<Candidate>, E
 async fn claim(
     pool: &sqlx::SqlitePool,
     c: &Candidate,
+    route: &ModelRoute,
     runner: &str,
     now: &str,
 ) -> Result<Option<(Run, prompt::Brief)>, Error> {
@@ -367,8 +397,8 @@ async fn claim(
     .bind(c.agent.0)
     .bind(c.issue.map(|i| i.0))
     .bind(c.wake)
-    .bind(c.harness.as_str())
-    .bind(&c.model)
+    .bind(route.harness.as_str())
+    .bind(&route.model)
     .bind(now)
     .fetch_one(&mut *tx)
     .await
@@ -383,7 +413,10 @@ async fn claim(
             .entity("wake_request", c.wake)
             .company(company)
             .run(queued.id.0)
-            .details(json!({"model": c.model, "runner": runner})),
+            .details(
+                json!({"model": route.model, "harness": route.harness.as_str(),
+                "tier": c.tier.as_str(), "runner": runner}),
+            ),
     )
     .await?;
     let claim = RunEvent::Claim {

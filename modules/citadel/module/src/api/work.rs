@@ -19,6 +19,7 @@ use utoipa::OpenApi;
 mod charts;
 mod forge;
 mod issues;
+pub(crate) use issues::issue_out;
 mod projects;
 mod repos;
 mod thread;

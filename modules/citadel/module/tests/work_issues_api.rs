@@ -5,7 +5,9 @@ mod common;
 mod work_seed;
 
 use axum::http::StatusCode;
-use citadel_module::domain::work::ProjectMode;
+use citadel_module::domain::org::AgentId;
+use citadel_module::domain::work::{IssueId, ProjectMode, WakeSource};
+use citadel_module::store::exec::list_wake_requests;
 use common::*;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
@@ -42,6 +44,14 @@ async fn creates_assigns_and_steps_an_issue_as_the_admin() {
         json!({"kind": "agent", "agent_id": a.agent})
     );
     let id = assigned["id"].as_i64().unwrap();
+    // The agent assigned at creation is woken on the new issue.
+    let wakes = list_wake_requests(&fx.app.pool, AgentId(a.agent))
+        .await
+        .unwrap();
+    assert!(
+        wakes.iter().any(|w| w.issue_id == Some(IssueId(id))),
+        "the agent is woken"
+    );
 
     let (status, _) = post(&fx, &uri, json!({"title": "x", "state": "done"})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -74,14 +84,6 @@ async fn creates_assigns_and_steps_an_issue_as_the_admin() {
     let got = ok(&fx, &format!("/issues/{id}")).await;
     assert_eq!(got["state"], "cancelled");
     assert_eq!(get(&fx, "/issues/999").await.0, StatusCode::NOT_FOUND);
-}
-
-/// The agent assigned at creation is woken (a `wake_requests` row for the issue): the wake queue
-/// is the run engine's.
-#[tokio::test]
-#[ignore = "S7: needs the wake queue (list_wake_requests)"]
-async fn assigning_an_issue_wakes_the_agent() {
-    unimplemented!("S7: list_wake_requests(pool, agent) holds a wake for the new issue");
 }
 
 #[tokio::test]
@@ -167,8 +169,13 @@ async fn a_comment_is_a_chat_message_that_wakes_the_issues_agent_once() {
         again["woke_agent_id"].is_null(),
         "a retry wakes no one again"
     );
-    // S7: exactly one `comment` wake for the agent (`list_wake_requests`): the wake queue is the
-    // run engine's; see `a_comment_enqueues_one_wake` below.
+    let comment_wakes = list_wake_requests(&fx.app.pool, AgentId(a.agent))
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|w| w.source == WakeSource::Comment)
+        .count();
+    assert_eq!(comment_wakes, 1);
 
     let thread = ok(&fx, &uri).await;
     assert_eq!(thread.as_array().unwrap().len(), 1);
@@ -183,14 +190,6 @@ async fn a_comment_is_a_chat_message_that_wakes_the_issues_agent_once() {
         .filter(|(action, ..)| action == "citadel.issue.commented")
         .count();
     assert_eq!(commented, 1);
-}
-
-#[tokio::test]
-#[ignore = "S7: needs the wake queue (list_wake_requests)"]
-async fn a_comment_enqueues_one_wake() {
-    unimplemented!(
-        "S7: one WakeSource::Comment wake for the agent after the comment and its retry"
-    );
 }
 
 #[tokio::test]

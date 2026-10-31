@@ -2,17 +2,15 @@
 //! deadlines are per kind and configurable; expiry closes what is past its deadline. Sprint
 //! commits are covered with the work slice, permission escalations with the run engine.
 //!
-//! The monolith's tests also asserted the requester's wake and comment, the hire and the
-//! expiry's effect on the hired agent: those need the wake queue (S7), the hire gate (S3) and
-//! the comments (S4), so each is an `#[ignore]`d stub below and a reduced runnable twin checks
-//! what this slice owns.
+//! The requester's wake and comment, the hire, and the expiry's effect on the hired agent.
 
 use serde_json::json;
 
 use super::*;
 use crate::domain::gov::Approval;
 use crate::domain::work::{IssueId, IssueKind, IssueState, NewIssue, NextActor};
-use crate::store::work::create_issue;
+use crate::store::org::{get_agent, hire_agent};
+use crate::store::work::{create_issue, list_comments};
 
 const NOW: &str = "2026-10-22T10:00:00.000Z";
 
@@ -42,6 +40,23 @@ pub(super) async fn open(
     issue: IssueId,
     kind: ApprovalKind,
 ) -> Approval {
+    if kind == ApprovalKind::HireAgent {
+        let new = NewAgent {
+            company_id: c,
+            name: "QA 2".to_owned(),
+            role: "QA".to_owned(),
+            org_role: OrgRole::None,
+            reports_to: None,
+            harness: Harness::Codex,
+            model: "gpt-5".to_owned(),
+            runner_tags: vec![],
+            status: AgentStatus::PendingApproval,
+        };
+        return hire_agent(pool, &new, Some(agent), "tests pile up", BY, NOW)
+            .await
+            .unwrap()
+            .1;
+    }
     let budget = NewBudget {
         scope: BudgetScope::Company(c),
         period: BudgetPeriod::Total,
@@ -62,6 +77,17 @@ pub(super) async fn open(
             .to_string(),
     };
     open_approval(pool, &new, NOW).await.unwrap()
+}
+
+/// (agent, issue, reason) of every approval wake, oldest first.
+async fn wakes(pool: &SqlitePool) -> Vec<(i64, Option<i64>, String)> {
+    sqlx::query_as(
+        "SELECT agent_id, issue_id, reason FROM citadel_wake_requests WHERE source = 'approval' \
+         ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
 }
 
 async fn audited(pool: &SqlitePool, action: &str) -> i64 {
@@ -121,15 +147,85 @@ async fn every_kind_is_decided_once_with_the_reply() {
 }
 
 #[tokio::test]
-#[ignore = "S7: needs the wake queue; S3: hire_agent; S4: issue comments"]
 async fn every_kind_wakes_its_requester_once_with_the_reply() {
-    todo!("monolith store/gov/tests/approvals.rs: wake + comment per kind, incl. hire_agent")
+    let db = db().await;
+    let pool = &db.pool;
+    let (c, po, p) = fixture(pool, "A").await;
+    let kinds = [
+        (ApprovalKind::PrMerge, "PR merge"),
+        (ApprovalKind::BudgetOverrun, "Budget overrun"),
+        (ApprovalKind::HireAgent, "Hire of QA 2"),
+    ];
+    let mut seen = 0;
+    for (kind, subject) in kinds {
+        for approve in [true, false] {
+            let i = issue(pool, &p).await;
+            let a = open(pool, c, po, i, kind).await;
+            assert_eq!(a.expires_at, None, "no deadline by default");
+            let reply = format!("{} because reasons", kind.as_str());
+            let decided = match (kind, approve) {
+                (ApprovalKind::BudgetOverrun, true) => {
+                    let no_raise = decide_approval(pool, a.id, true, ADMIN, None, NOW).await;
+                    assert!(matches!(no_raise, Err(DecideError::Raise)), "{no_raise:?}");
+                    approve_budget_raise(pool, a.id, 500, ADMIN, Some(&reply), NOW).await
+                }
+                _ => decide_approval(pool, a.id, approve, ADMIN, Some(&reply), NOW).await,
+            }
+            .unwrap();
+            let verdict = decided.status.as_str();
+            assert_eq!(verdict, if approve { "approved" } else { "rejected" });
+
+            let all = wakes(pool).await;
+            assert_eq!(all.len(), seen + 1, "{kind:?} woke once");
+            seen += 1;
+            let (agent, on, reason) = all.last().unwrap().clone();
+            let about = (kind != ApprovalKind::HireAgent).then_some(i.0);
+            assert_eq!((agent, on), (po.0, about));
+            let want = format!("approval {}: {subject} {verdict}: {reply}", a.id.0);
+            assert_eq!(reason, want);
+            if let Some(i) = about {
+                let thread = list_comments(pool, IssueId(i)).await.unwrap();
+                assert_eq!(thread.len(), 1);
+                assert_eq!(thread[0].body, format!("{subject} {verdict}: {reply}"));
+            }
+
+            // Never twice: a second decision is refused, a later expiry passes it by.
+            let again = decide_approval(pool, a.id, !approve, ADMIN, Some("no"), NOW).await;
+            assert!(
+                matches!(again, Err(DecideError::NotPending(_))),
+                "{again:?}"
+            );
+            let later = expire_approvals(pool, "2027-10-22T10:00:00.000Z").await;
+            assert!(later.unwrap().is_empty());
+            assert_eq!(wakes(pool).await.len(), seen);
+        }
+    }
 }
 
 #[tokio::test]
-#[ignore = "S3: hire_agent; S7: needs the wake queue"]
 async fn a_hire_a_human_asked_for_wakes_nobody() {
-    todo!("monolith store/gov/tests/approvals.rs: a human-requested hire wakes nobody")
+    let db = db().await;
+    let pool = &db.pool;
+    let (c, _, _) = fixture(pool, "A").await;
+    let new = NewAgent {
+        company_id: c,
+        name: "Dev".to_owned(),
+        role: "Developer".to_owned(),
+        org_role: OrgRole::None,
+        reports_to: None,
+        harness: Harness::Claude,
+        model: "sonnet".to_owned(),
+        runner_tags: vec![],
+        status: AgentStatus::PendingApproval,
+    };
+    let (dev, hire) = hire_agent(pool, &new, None, "needed", BY, NOW)
+        .await
+        .unwrap();
+    assert_eq!(hire.requested_by, dev.id);
+    decide_approval(pool, hire.id, true, ADMIN, Some("welcome"), NOW)
+        .await
+        .unwrap();
+    assert!(wakes(pool).await.is_empty());
 }
 
 /// Sets the server-wide deadline setting of `kind` (0: none).
@@ -217,7 +313,78 @@ async fn a_decision_past_its_deadline_finds_it_expired() {
 }
 
 #[tokio::test]
-#[ignore = "S3: hire_agent (the expired hire is terminated); S7: needs the wake queue; S4: comments"]
 async fn deadlines_are_per_kind_and_expiry_tells_the_requester() {
-    todo!("monolith store/gov/tests/approvals.rs: hire expiry, requester wake, no comment")
+    let db = db().await;
+    let pool = &db.pool;
+    let (c, po, p) = fixture(pool, "A").await;
+    let i = issue(pool, &p).await;
+    let name = "approval.deadline.permission_escalation";
+    assert_eq!(crate::settings::value(pool, name).await.unwrap(), 900);
+    for kind in [ApprovalKind::PrMerge, ApprovalKind::HireAgent] {
+        set_deadline(pool, kind, 3600).await;
+    }
+    let audited_sets: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE action = 'setting.set'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(audited_sets >= 2, "a setting change is audited");
+
+    let merge = open(pool, c, po, i, ApprovalKind::PrMerge).await;
+    let hire = open(pool, c, po, i, ApprovalKind::HireAgent).await;
+    let budget = open(pool, c, po, i, ApprovalKind::BudgetOverrun).await;
+    assert_eq!(
+        merge.expires_at.as_deref(),
+        Some("2026-10-22T11:00:00.000Z")
+    );
+    assert_eq!(hire.expires_at, merge.expires_at);
+    assert_eq!(budget.expires_at, None, "its kind has no deadline");
+
+    let early = expire_approvals(pool, "2026-10-22T10:59:59.000Z").await;
+    assert!(early.unwrap().is_empty());
+    let due = "2026-10-22T11:00:00.000Z";
+    let mut expired = expire_approvals(pool, due).await.unwrap();
+    expired.sort_by_key(|a: &crate::domain::gov::ApprovalId| a.0);
+    assert_eq!(expired, [merge.id, hire.id]);
+    let gone = get_approval(pool, merge.id).await.unwrap().unwrap();
+    assert_eq!(
+        gone.decided_at.as_deref(),
+        Some(due),
+        "expired at the tick's now"
+    );
+    let reasons: Vec<String> = wakes(pool).await.into_iter().map(|w| w.2).collect();
+    assert_eq!(
+        reasons,
+        [
+            format!(
+                "approval {}: PR merge expired: no decision by {due}",
+                merge.id.0
+            ),
+            format!(
+                "approval {}: Hire of QA 2 expired: no decision by {due}",
+                hire.id.0
+            ),
+        ]
+    );
+    assert!(
+        list_comments(pool, i).await.unwrap().is_empty(),
+        "no decider, no comment"
+    );
+    let hired = get_agent(pool, hire.agent_id.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        hired.status,
+        AgentStatus::Terminated,
+        "an expired hire is not hired"
+    );
+    assert!(expire_approvals(pool, due).await.unwrap().is_empty());
+    assert_eq!(wakes(pool).await.len(), 2, "expiry wakes once");
+
+    set_deadline(pool, ApprovalKind::PrMerge, 0).await;
+    assert_eq!(
+        open(pool, c, po, i, ApprovalKind::PrMerge).await.expires_at,
+        None
+    );
 }

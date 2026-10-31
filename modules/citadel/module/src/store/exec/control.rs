@@ -69,13 +69,35 @@ pub async fn stop_run<H: Host>(
     by: &str,
     now: &str,
 ) -> Result<Run, ControlError> {
+    let word = if kill { "killed" } else { "cancelled" };
+    stop_run_because(
+        app,
+        host,
+        id,
+        kill,
+        by,
+        &format!("{word} by the admin"),
+        now,
+    )
+    .await
+}
+
+/// [`stop_run`] with the reason the run's terminal reason will carry.
+pub(super) async fn stop_run_because<H: Host>(
+    app: &App,
+    host: &H,
+    id: RunId,
+    kill: bool,
+    by: &str,
+    reason: &str,
+    now: &str,
+) -> Result<Run, ControlError> {
     let run = get_run(&app.pool, id)
         .await?
         .ok_or(ControlError::NotFound)?;
     if run.state.is_terminal() {
         return Err(ControlError::NotLive(run.state));
     }
-    let word = if kill { "killed" } else { "cancelled" };
     sqlx::query("UPDATE citadel_runs SET cancel_requested_at = coalesce(cancel_requested_at, ?) WHERE id = ?")
         .bind(now)
         .bind(id.0)
@@ -99,7 +121,7 @@ pub async fn stop_run<H: Host>(
         }
     }
     let cancel = RunEvent::Cancel {
-        reason: format!("{word} by the admin"),
+        reason: reason.to_owned(),
     };
     let ended = transition_run(&app.pool, id, SYSTEM, &cancel, now).await?;
     audited(
@@ -162,9 +184,26 @@ pub async fn set_engine(
     } else {
         "engine.disabled"
     };
+    // Switched on, the engine must not replay what piled up while it was off (months-old wakes
+    // of any source): the old ones are dropped, with the reason.
+    let mut aged = 0;
+    if enabled {
+        let max = crate::settings::value_in(&mut tx, "wake.max_age_secs").await?;
+        aged = sqlx::query(
+            "UPDATE citadel_wake_requests SET status = 'dropped', \
+             dropped_reason = 'older than wake.max_age_secs when the engine was switched on' \
+             WHERE status = 'pending' \
+             AND julianday(created_at) < julianday(?1, '-' || ?2 || ' seconds')",
+        )
+        .bind(now)
+        .bind(max)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    }
     audit::append(
         &mut tx,
-        Event::new(SYSTEM, action).details(json!({"by_device": by_device})),
+        Event::new(SYSTEM, action).details(json!({"by_device": by_device, "aged_wakes": aged})),
     )
     .await?;
     tx.commit().await

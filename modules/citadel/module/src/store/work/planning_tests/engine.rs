@@ -1,5 +1,6 @@
-//! The requirement tests that need the run engine (S7): the wake queue, a runner and the
-//! dispatcher, and a run's time and tokens. Their runnable halves are in `requirements`.
+//! The requirement tests that need the run engine (S7): the wake queue, and a run's time and
+//! tokens. The dispatcher's half (a held wake is skipped, a released one is served) is
+//! `tests/detectors.rs`. Their runnable halves are in `requirements`.
 
 use crate::domain::gov::ApprovalKind;
 use crate::domain::work::{IssueTransition, RequirementState};
@@ -10,7 +11,6 @@ use super::requirements::{approve, plan_one, routed, task};
 use super::*;
 
 #[tokio::test]
-#[ignore = "S7: needs the wake queue, a runner and the dispatcher"]
 async fn dev_work_waits_for_the_owners_approval_of_the_complete_plan_engine() {
     let db = db().await;
     let pool = &db.pool;
@@ -28,9 +28,17 @@ async fn dev_work_waits_for_the_owners_approval_of_the_complete_plan_engine() {
     assert!(matches!(e, Err(RequirementError::NotPlanner)), "{e:?}");
 
     // Held: the dev's wake is skipped, the product owner's is not; start is refused.
-    // S7: enqueue the dev's and the product owner's `assignment` wakes (idempotency keys "dev",
-    // "po"), register a runner "box", dispatch until none is left: the product owner's wake is
-    // served (`served.contains(&o.eng_po)`), the dev's waits (`!served.contains(&o.dev)`).
+    for (agent, key) in [(o.dev, "dev"), (o.eng_po, "po")] {
+        let wake = crate::store::exec::NewWakeRequest {
+            agent_id: agent,
+            issue_id: Some(t),
+            source: crate::domain::work::WakeSource::Assignment,
+            reason: "start".to_owned(),
+            idempotency_key: key.to_owned(),
+            not_before: None,
+        };
+        crate::store::exec::enqueue_wake(pool, &wake).await.unwrap();
+    }
     let why = plan_hold(pool, t, o.dev).await.unwrap().unwrap();
     assert!(why.contains("R-1") && why.contains("not approved"), "{why}");
     assert_eq!(plan_hold(pool, kickoff.id, o.eng_po).await.unwrap(), None);
@@ -59,7 +67,16 @@ async fn dev_work_waits_for_the_owners_approval_of_the_complete_plan_engine() {
         .unwrap();
     let r2 = get_requirement(pool, r.id).await.unwrap().unwrap();
     assert_eq!(r2.state, RequirementState::Planning);
-    // S7: the reply wakes the product owner: exactly one `approval` wake for `o.eng_po`.
+    let approval_wakes: Vec<i64> =
+        sqlx::query_scalar("SELECT agent_id FROM citadel_wake_requests WHERE source = 'approval'")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        approval_wakes,
+        [o.eng_po.0],
+        "the reply wakes the product owner once"
+    );
 
     // Approved: version 1, in progress, and the dev's wake goes out.
     let Submitted::Pending(a) = submit_plan(pool, r.id, o.eng_po, Some(kickoff.id), &now)
@@ -77,11 +94,10 @@ async fn dev_work_waits_for_the_owners_approval_of_the_complete_plan_engine() {
         (RequirementState::InProgress, 1)
     );
     assert_eq!(plan_hold(pool, t, o.dev).await.unwrap(), None);
-    // S7: dispatching now serves the dev's wake (`run.agent_id == o.dev`).
 }
 
 #[tokio::test]
-#[ignore = "S7: a run's time and tokens come from the runs table"]
+#[ignore = "not ported yet: a run's time and tokens come from the runs table"]
 async fn the_tree_numbers_are_exact_engine() {
     let db = db().await;
     let pool = &db.pool;

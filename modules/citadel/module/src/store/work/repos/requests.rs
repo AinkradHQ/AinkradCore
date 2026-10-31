@@ -22,16 +22,22 @@ async fn issue_at(
 }
 
 /// Wakes `agent` on `issue` once per `key`.
-// S7: the wake queue is the run engine's; the request's lead and the answer's asker are woken
-// (source `comment`) from there. Nothing is enqueued until it exists.
 async fn wake(
-    _conn: &mut SqliteConnection,
-    _agent: AgentId,
-    _issue: IssueId,
-    _reason: String,
-    _key: String,
+    conn: &mut SqliteConnection,
+    agent: AgentId,
+    issue: IssueId,
+    reason: String,
+    key: String,
 ) -> Result<(), Error> {
-    Ok(())
+    let w = crate::store::exec::NewWakeRequest {
+        agent_id: agent,
+        issue_id: Some(issue),
+        source: crate::domain::work::WakeSource::Comment,
+        reason,
+        idempotency_key: key,
+        not_before: None,
+    };
+    crate::store::exec::enqueue_in(conn, &w, 1).await.map(drop)
 }
 
 /// Sets the repos `issue` touches to `names` (its project's repos), replacing those approved
