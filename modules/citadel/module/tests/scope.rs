@@ -217,7 +217,7 @@ async fn a_read_only_device_reads_and_cannot_write() {
     };
     let spec: serde_json::Value =
         serde_json::from_str(&ainkrad_core_server::api::v1::spec::json_for(&[
-            std::sync::Arc::new(citadel_module::Citadel),
+            std::sync::Arc::new(citadel_module::Citadel::default()),
         ]))
         .unwrap();
     let mut seen = 0;
@@ -255,7 +255,7 @@ async fn every_operation_takes_the_company_scope() {
     let fx = fx().await;
     let spec: serde_json::Value =
         serde_json::from_str(&ainkrad_core_server::api::v1::spec::json_for(&[
-            std::sync::Arc::new(citadel_module::Citadel),
+            std::sync::Arc::new(citadel_module::Citadel::default()),
         ]))
         .unwrap();
     let mut seen = 0;
