@@ -42,6 +42,12 @@ pub const MAGIC: &[u8] = b"AINKRAD-ARCHIVE-1\n";
 /// is encrypted; an archive without it (an export, or one written before it was carried) is
 /// still read.
 pub const FILES: [&str; 3] = ["core.db", "keys/master.key", IDENTITY];
+/// A spare master key member (`keys/master.<id>.key[.retired]`): a retired key, or a rotation's
+/// pending one. Only a backup carries them (it is encrypted).
+pub fn is_spare_key(name: &str) -> bool {
+    name.strip_prefix("keys/")
+        .is_some_and(|f| super::secretbox::key_file_kind(f).is_some())
+}
 /// The Core identity key's member name, the same as its file name in a home.
 pub const IDENTITY: &str = crate::auth::identity::FILE;
 /// DER prefix of a P-256 `SubjectPublicKeyInfo` with an uncompressed point (spec §3).
@@ -230,7 +236,7 @@ pub fn read(input: &mut impl BufRead, pinned: &str, dir: &Path) -> io::Result<Ma
     }
     let names: Vec<&str> = manifest.files.iter().map(|e| e.name.as_str()).collect();
     if names.first() != Some(&"core.db")
-        || names.iter().any(|n| !FILES.contains(n))
+        || names.iter().any(|n| !FILES.contains(n) && !is_spare_key(n))
         || (1..names.len()).any(|i| names[..i].contains(&names[i]))
     {
         return Err(invalid(format!("archive holds {names:?}")));

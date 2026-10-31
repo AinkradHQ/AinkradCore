@@ -90,8 +90,25 @@ async fn build(
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(e.into()),
         };
+        // The spare master keys (a rotation's retired and pending ones), checked like the
+        // master key before the home is touched: each must be 32 bytes and named by its id.
+        let mut spares = Vec::new();
+        for (id, path, _) in super::secretbox::key_files(&files.join("keys"))? {
+            let key = super::secretbox::SecretBox::from_file(&path)?;
+            if key.key_id() != id {
+                return Err(format!("{} is not the key it is named for", path.display()).into());
+            }
+            spares.push(path);
+        }
         created = true;
         let (h, fp) = lay_out(home, master.as_deref())?;
+        for path in spares {
+            // Staged 0600 beside the home (same filesystem), so a rename keeps it private.
+            std::fs::rename(
+                &path,
+                h.keys().join(path.file_name().ok_or("a key file name")?),
+            )?;
+        }
         if core_fp.is_some() {
             // Staged 0600 beside the home (same filesystem), so a rename keeps it private.
             std::fs::rename(&identity, h.identity())?;

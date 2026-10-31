@@ -20,7 +20,7 @@
 //! still has to re-seal. Plaintext buffers are wiped on drop (`Zeroizing`).
 
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
 use ring::digest::{SHA256, digest};
@@ -33,6 +33,40 @@ const TAG_LEN: usize = 16;
 pub struct SecretBox {
     key: LessSafeKey,
     id: String,
+    /// Older (or about to be current) master keys, for opening values still sealed under them:
+    /// a rotation that was interrupted leaves rows under either key. New seals never use these.
+    extra: Vec<SecretBox>,
+}
+
+/// `master.<16 hex>.key` (a key waiting to become current) or `master.<16 hex>.key.retired`
+/// (a former current key, kept for a retention window): the key id and whether it is retired.
+/// `master.key` itself, and any other name, is `None`.
+pub fn key_file_kind(file_name: &str) -> Option<(String, bool)> {
+    let rest = file_name.strip_prefix("master.")?;
+    let (id, retired) = match rest.strip_suffix(".key.retired") {
+        Some(id) => (id, true),
+        None => (rest.strip_suffix(".key")?, false),
+    };
+    (id.len() == 16 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
+        .then(|| (id.to_owned(), retired))
+}
+
+/// The extra key files in `dir` (`keys/`): `(key id, path, retired)`, by id.
+pub fn key_files(dir: &Path) -> std::io::Result<Vec<(String, PathBuf, bool)>> {
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(e),
+    };
+    for entry in entries {
+        let entry = entry?;
+        if let Some((id, retired)) = entry.file_name().to_str().and_then(key_file_kind) {
+            out.push((id, entry.path(), retired));
+        }
+    }
+    out.sort();
+    Ok(out)
 }
 
 /// Why a sealed value did not open. The cases are kept apart only for the message: none of
@@ -76,7 +110,37 @@ impl SecretBox {
         Self {
             key: LessSafeKey::new(key),
             id,
+            extra: Vec::new(),
         }
+    }
+
+    /// Also opens (never seals) values sealed under `extra`.
+    pub fn with_extra(mut self, extra: Vec<SecretBox>) -> Self {
+        self.extra = extra;
+        self
+    }
+
+    /// Whether this box can open a value sealed under key `id`.
+    pub fn holds(&self, id: &str) -> bool {
+        self.find(id).is_some()
+    }
+
+    fn find(&self, id: &str) -> Option<&SecretBox> {
+        (self.id == id)
+            .then_some(self)
+            .or_else(|| self.extra.iter().find(|b| b.id == id))
+    }
+
+    /// [`open`](Self::open) with the key named `key_id` (the current one or an extra).
+    pub fn open_as(
+        &self,
+        key_id: &str,
+        label: &str,
+        sealed: &[u8],
+    ) -> Result<Zeroizing<Vec<u8>>, OpenError> {
+        self.find(key_id)
+            .ok_or(OpenError::Rejected)?
+            .open(label, sealed)
     }
 
     /// The key's id: 16 hex characters, safe to store and log.
@@ -125,7 +189,12 @@ impl SecretBox {
         }
         match Self::from_private_file(path) {
             Ok(b) => {
-                tracing::info!(key_id = b.key_id(), "secrets broker: master key loaded");
+                let b = b.with_extra(Self::load_extra(path.parent()));
+                tracing::info!(
+                    key_id = b.key_id(),
+                    extra_keys = b.extra.len(),
+                    "secrets broker: master key loaded"
+                );
                 Some(b)
             }
             Err(e) => {
@@ -133,6 +202,26 @@ impl SecretBox {
                 None
             }
         }
+    }
+
+    /// The retired and pending keys beside the master key, for opening what is still sealed
+    /// under them. One that does not load (mode, size, a name that is not its id) is skipped
+    /// with a warning: it only matters if a row still names it.
+    fn load_extra(keys: Option<&Path>) -> Vec<SecretBox> {
+        let Some(keys) = keys else {
+            return Vec::new();
+        };
+        let files = key_files(keys).unwrap_or_default();
+        files
+            .into_iter()
+            .filter_map(|(id, path, _)| match Self::from_private_file(&path) {
+                Ok(b) if b.id == id => Some(b),
+                _ => {
+                    tracing::warn!(path = %path.display(), "a spare master key is not loaded");
+                    None
+                }
+            })
+            .collect()
     }
 
     pub fn seal(&self, label: &str, plaintext: &[u8]) -> std::io::Result<Vec<u8>> {
@@ -207,6 +296,45 @@ mod tests {
         let b = SecretBox::for_serve(&key).expect("0600 and 32 bytes");
         assert_eq!(b.key_id(), SecretBox::new(&[7; 32]).key_id());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn spare_key_names_are_exact_and_a_spare_opens_only_what_names_it() {
+        let id = "0123456789abcdef";
+        assert_eq!(
+            key_file_kind(&format!("master.{id}.key")),
+            Some((id.into(), false))
+        );
+        assert_eq!(
+            key_file_kind(&format!("master.{id}.key.retired")),
+            Some((id.into(), true))
+        );
+        for bad in [
+            "master.key",
+            "master..key",
+            "master.0123456789abcde.key",
+            "master.0123456789ABCDEF.key",
+            "master.0123456789abcdefg.key",
+            "master.0123456789abcdef.key.old",
+            "../master.0123456789abcdef.key",
+        ] {
+            assert_eq!(key_file_kind(bad), None, "{bad}");
+        }
+        let (old, new) = (SecretBox::new(&[1; 32]), SecretBox::new(&[2; 32]));
+        let sealed = old.seal("l", b"v").unwrap();
+        let both = SecretBox::new(&[2; 32]).with_extra(vec![SecretBox::new(&[1; 32])]);
+        assert!(both.holds(old.key_id()) && both.holds(new.key_id()));
+        assert_eq!(
+            both.open_as(old.key_id(), "l", &sealed).unwrap().as_slice(),
+            b"v"
+        );
+        assert!(
+            both.open_as(new.key_id(), "l", &sealed).is_err(),
+            "named key only"
+        );
+        assert!(new.open_as(old.key_id(), "l", &sealed).is_err(), "not held");
+        // A spare never seals: new values go under the current key.
+        assert!(new.open("l", &both.seal("l", b"x").unwrap()).is_ok());
     }
 
     #[test]
