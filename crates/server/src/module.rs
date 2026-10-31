@@ -182,6 +182,11 @@ pub trait Module: Send + Sync + 'static {
         Vec::new()
     }
 
+    /// Called once by `serve`, after the app is fully built (hub, secrets, limits set) and before
+    /// it is mounted: hands the module the app its scheduler jobs and background work run on.
+    /// A job handler is given no `App`, so a module that needs one keeps this clone. Nothing by default.
+    fn attach(&self, _app: &App) {}
+
     /// The routes a bearer token reaches without a device signature, listed (deny by default:
     /// none). The Core builds the module's token router from this list and `token_handler`, so
     /// the list is the whole unsigned surface of the module; `mount` validates it.

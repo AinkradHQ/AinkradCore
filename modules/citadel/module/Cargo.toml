@@ -12,6 +12,7 @@ workspace = true
 test-support = []
 
 [dependencies]
+base64 = "0.22.1"
 # The platform the module is built on (it never depends the other way: `dependency_direction`).
 ainkrad-core = { path = "../../../crates/core" }
 ainkrad-core-server = { path = "../../../crates/server" }
@@ -31,6 +32,7 @@ tower = { version = "0.5.3", features = ["util"] }
 zeroize = "1.9.1"
 
 [dev-dependencies]
+futures-util = "0.3.34"
 ainkrad-core-server = { path = "../../../crates/server", features = ["test-support"] }
 citadel-module = { path = ".", features = ["test-support"] }
 ainkrad-providers = { path = "../../../crates/providers", features = ["fake"] }

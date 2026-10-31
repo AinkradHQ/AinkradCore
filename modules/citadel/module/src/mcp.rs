@@ -15,7 +15,12 @@
 //!   or logs.
 //! - the tools (`tools`): a run's own issue and its subtasks, in its company, nothing else.
 //!   No tool decides an approval, touches a secret or credential, or controls a run: those stay
-//!   behind the signed client API with a step-up.
+//!   behind the signed client API with a step-up. Planners also plan their project (backlog,
+//!   sprints, requirements), any agent can `ask_human`, publish and read artifacts, propose
+//!   knowledge and ask for a repo; each is gated by its store rules and counted against the
+//!   run's call cap. Not ported: the forge tools (S6), `decide_*` and `review_*` tools,
+//!   `assign_issue`, `commit_sprint`, `close_sprint`, `set_repos`, `route_intake`,
+//!   `request_hire`, `search_tools`, `describe_tool`.
 
 use std::sync::Arc;
 
@@ -39,8 +44,14 @@ use crate::domain::work::RunId;
 use crate::store::exec::{RunScope, authorize_run_token, issue_run_token};
 
 mod args;
+mod artifacts;
 mod defs;
+mod hub;
+mod org;
+mod plan;
 mod read;
+mod repos;
+mod requirements;
 mod tools;
 mod write;
 
@@ -138,7 +149,9 @@ const INSTRUCTIONS: &str = "Citadel tracks the issue you are working on. Read it
     with transition (start, submit_for_review, block, done) while you are its next actor. You can \
     only reach your run's issue and its subtasks: create_subtask splits work, report_blocker links \
     what blocks you. Ask a human to approve something with request_approval; get_approval reads \
-    the decision.";
+    the decision. Planners of a project read its backlog and plan its sprints and requirements. \
+    ask_human puts a question to the admin, publish_artifact and get_artifact share files, \
+    propose_knowledge and request_repo ask a lead for something.";
 
 /// The run the request's token belongs to (set by the Core's gate).
 fn run_scope(context: &RequestContext<RoleServer>) -> Result<RunScope, ErrorData> {
