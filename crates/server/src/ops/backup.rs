@@ -255,6 +255,7 @@ mod tests {
             .step_by(2)
             .map(|i| u8::from_str_radix(&OLD_BLOB_HEX[i..i + 2], 16).unwrap())
             .collect();
+        // Test-only throwaway key for the fixed blob above; never a real recipient.
         let identity: age::x25519::Identity =
             "AGE-SECRET-KEY-1LUAHR44JF4ZQSH8XDE2DDWMYKC2M86N3CDNFAC2AT88CFYL0C69SDF3K5Y"
                 .parse()
