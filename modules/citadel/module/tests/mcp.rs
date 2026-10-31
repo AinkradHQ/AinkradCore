@@ -471,7 +471,13 @@ async fn a_launch_mints_a_fresh_token_for_the_runs_own_session_only() {
     );
     // Off: nothing is minted, nothing is delivered.
     set(app, "mcp.enabled", "0").await;
-    assert!(Citadel.credentials(app, &sa).await.unwrap().is_empty());
+    assert!(
+        Citadel::default()
+            .credentials(app, &sa)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     citadel_module::settings::handle()
         .set(
             &app.pool,
@@ -482,7 +488,7 @@ async fn a_launch_mints_a_fresh_token_for_the_runs_own_session_only() {
         )
         .await
         .unwrap();
-    let first = Citadel.credentials(app, &sa).await.unwrap();
+    let first = Citadel::default().credentials(app, &sa).await.unwrap();
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].var, "CITADEL_RUN_TOKEN");
     assert!(first[0].value.starts_with("cit_run_"));
@@ -491,7 +497,7 @@ async fn a_launch_mints_a_fresh_token_for_the_runs_own_session_only() {
         StatusCode::OK
     );
     // A later launch (a resume) mints another and the first dies.
-    let second = Citadel.credentials(app, &sa).await.unwrap();
+    let second = Citadel::default().credentials(app, &sa).await.unwrap();
     assert_eq!(
         rpc(app, Some(&first[0].value), list()).await.0,
         StatusCode::UNAUTHORIZED
@@ -504,14 +510,14 @@ async fn a_launch_mints_a_fresh_token_for_the_runs_own_session_only() {
     let mut forged = sb.clone();
     forged.owner_ref = sa.owner_ref.clone();
     assert!(
-        Citadel.credentials(app, &forged).await.is_err(),
+        Citadel::default().credentials(app, &forged).await.is_err(),
         "run A's pointer on B's session"
     );
     let mut none = sa.clone();
     none.owner_ref = None;
-    assert!(Citadel.credentials(app, &none).await.is_err());
+    assert!(Citadel::default().credentials(app, &none).await.is_err());
     none.owner_ref = Some("run:999999".into());
-    assert!(Citadel.credentials(app, &none).await.is_err());
+    assert!(Citadel::default().credentials(app, &none).await.is_err());
     // A run that has ended gets none.
     let cancel = RunEvent::Cancel {
         reason: "stopped".into(),
@@ -525,7 +531,7 @@ async fn a_launch_mints_a_fresh_token_for_the_runs_own_session_only() {
     )
     .await
     .unwrap();
-    assert!(Citadel.credentials(app, &sa).await.is_err());
+    assert!(Citadel::default().credentials(app, &sa).await.is_err());
     assert_eq!(
         rpc(app, Some(&second[0].value), list()).await.0,
         StatusCode::UNAUTHORIZED
@@ -684,7 +690,7 @@ async fn the_unsigned_exemption_is_one_route() {
     want.sort();
     assert_eq!(got, want);
     // Every documented route of the module, signed ones and the engine's, refuses the token ...
-    let doc = Citadel.openapi();
+    let doc = Citadel::default().openapi();
     let mut n = 0;
     for (path, item) in doc["paths"].as_object().unwrap() {
         let uri = format!("{BASE}{}", path.replace("{id}", "1"));

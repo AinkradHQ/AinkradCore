@@ -471,3 +471,36 @@ async fn one_runner_cannot_hold_every_live_lease() {
         StatusCode::OK
     );
 }
+
+/// A module's own jobs open only `<module>.…` secrets, with the broker on, audited and never
+/// with the value in the trail.
+#[tokio::test]
+async fn a_module_opens_only_its_own_secrets_and_it_is_audited() {
+    let (fx, vm) = broker().await;
+    for name in ["citadel.forge.tok", "git.token"] {
+        let made = create(&fx, name, V1, &[vm.id.as_str()]).await;
+        assert_eq!(made.0, StatusCode::OK, "{}", made.1);
+    }
+    let sealer = fx.app.secrets.clone().unwrap();
+    let open = |module: &'static str, name: &'static str| {
+        let (pool, sealer) = (fx.app.pool.clone(), sealer.clone());
+        async move { crate::store::secrets::open_for_module(&pool, &sealer, module, name, "test").await }
+    };
+    let value = open("citadel", "citadel.forge.tok").await.unwrap();
+    assert_eq!(&*value, V1);
+    // Another module's name, a platform secret, a traversal and a missing one all look absent.
+    for (m, n) in [
+        ("other", "citadel.forge.tok"),
+        ("citadel", "git.token"),
+        ("citadel", "citadel.missing"),
+        ("citadel", "citadel.../x"),
+    ] {
+        let e = open(m, n).await.err().unwrap();
+        assert!(e.to_string().starts_with("not_found"), "{m} {n}: {e}");
+    }
+    let t = trail(&fx).await;
+    assert!(t.contains("secret.used") && !t.contains(V1), "{t}");
+    set(&fx, Key::SecretsMode, 0).await;
+    let e = open("citadel", "citadel.forge.tok").await.err().unwrap();
+    assert!(e.to_string().starts_with("secrets_disabled"), "{e}");
+}

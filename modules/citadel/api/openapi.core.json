@@ -1482,6 +1482,8 @@
           "citadel.engine.enabled",
           "citadel.epic.created",
           "citadel.epic.updated",
+          "citadel.forge.host_added",
+          "citadel.forge.host_removed",
           "citadel.intake.routed",
           "citadel.intake.submitted",
           "citadel.issue.backlog",
@@ -1565,9 +1567,20 @@
           "citadel.mcp.unknown_tool",
           "citadel.member.capacity_set",
           "citadel.plan.applied",
+          "citadel.pr.branch_deleted",
+          "citadel.pr.branch_kept",
+          "citadel.pr.checks",
+          "citadel.pr.closed",
+          "citadel.pr.error",
+          "citadel.pr.merge_failed",
+          "citadel.pr.merged",
+          "citadel.pr.opened",
+          "citadel.pr.push_failed",
+          "citadel.pr.requested",
           "citadel.price.set",
           "citadel.project.created",
           "citadel.project.forge_set",
+          "citadel.project.linear_removed",
           "citadel.project.linear_set",
           "citadel.project.logo_reset",
           "citadel.project.logo_set",
@@ -1582,6 +1595,7 @@
           "citadel.project.tier_rules_set",
           "citadel.project.updated",
           "citadel.project.wip_limit_set",
+          "citadel.qa.verdict",
           "citadel.question.answered",
           "citadel.question.asked",
           "citadel.repair.exhausted",
@@ -1665,6 +1679,7 @@
           "secret.leased",
           "secret.redeemed",
           "secret.rotated",
+          "secret.used",
           "setting.reset",
           "setting.set",
           "terminal.attached",
@@ -3313,6 +3328,30 @@
           }
         ]
       },
+      "ForgeHosts": {
+        "description": "The hosts allowed besides the public ones.",
+        "properties": {
+          "added": {
+            "description": "Added by an operator, e.g. a self-hosted GitLab.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "public": {
+            "description": "Always allowed: GitHub, GitLab.com and Linear.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "public",
+          "added"
+        ],
+        "type": "object"
+      },
       "Handshake": {
         "description": "What the server is and speaks, for anyone.",
         "properties": {
@@ -4105,6 +4144,63 @@
             "type": "string"
           }
         ]
+      },
+      "LinearBody": {
+        "additionalProperties": false,
+        "properties": {
+          "api_url": {
+            "description": "Absent: Linear's public API.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "secret_name": {
+            "description": "The broker secret holding the API token, `citadel.linear.<name>`.",
+            "type": "string"
+          },
+          "team_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "team_id",
+          "secret_name"
+        ],
+        "type": "object"
+      },
+      "LinearLink": {
+        "description": "A project's Linear link.",
+        "properties": {
+          "api_url": {
+            "type": "string"
+          },
+          "cursor": {
+            "description": "The latest `updatedAt` read from Linear.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "secret_name": {
+            "description": "The broker secret holding the API token (never the token).",
+            "type": "string"
+          },
+          "team_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "team_id",
+          "api_url",
+          "secret_name"
+        ],
+        "type": "object"
       },
       "Lockout": {
         "description": "A key that is locked now.",
@@ -6599,15 +6695,21 @@
             "description": "`owner/name`, or a GitLab project path.",
             "type": "string"
           },
+          "secret_name": {
+            "description": "The broker secret holding the API token, `citadel.forge.<name>` (never the token). Required\nwhen setting.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "token_file": {
-            "description": "The server-side file holding the API token (never the token).",
+            "description": "Retired: credentials live in the secrets broker. Always empty in answers; a non-empty\nvalue in a request is refused.",
             "type": "string"
           }
         },
         "required": [
           "kind",
-          "repo",
-          "token_file"
+          "repo"
         ],
         "type": "object"
       },
@@ -16452,6 +16554,154 @@
         "x-ainkrad-scope": "admin"
       }
     },
+    "/modules/citadel/v1/forge/hosts": {
+      "get": {
+        "operationId": "citadelListForgeHosts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForgeHosts"
+                }
+              }
+            },
+            "description": "The hosts a forge or Linear API may be on"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "forge"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/citadel/v1/forge/hosts/{host}": {
+      "delete": {
+        "operationId": "citadelRemoveForgeHost",
+        "parameters": [
+          {
+            "description": "A host added earlier",
+            "in": "path",
+            "name": "host",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForgeHosts"
+                }
+              }
+            },
+            "description": "The hosts after it"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "forge"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      },
+      "put": {
+        "operationId": "citadelAddForgeHost",
+        "parameters": [
+          {
+            "description": "A lowercase host name, never an IP address",
+            "in": "path",
+            "name": "host",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForgeHosts"
+                }
+              }
+            },
+            "description": "The hosts after it (idempotent); refused (400) for a name that is not a public-looking host name"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "forge"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/modules/citadel/v1/issues/{id}": {
       "get": {
         "operationId": "citadelGetIssue",
@@ -18995,6 +19245,176 @@
         "tags": [
           "projects"
         ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/citadel/v1/projects/{id}/linear": {
+      "delete": {
+        "operationId": "citadelRemoveProjectLinear",
+        "parameters": [
+          {
+            "description": "Project id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "description": "Whether a link was removed"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "forge"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      },
+      "get": {
+        "operationId": "citadelGetProjectLinear",
+        "parameters": [
+          {
+            "description": "Project id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinearLink"
+                }
+              }
+            },
+            "description": "The project's Linear link"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No such project, or it is not synced with Linear"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "forge"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "put": {
+        "operationId": "citadelSetProjectLinear",
+        "parameters": [
+          {
+            "description": "Project id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinearBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinearLink"
+                }
+              }
+            },
+            "description": "The link; the sync's cursor starts over"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "forge"
+        ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },

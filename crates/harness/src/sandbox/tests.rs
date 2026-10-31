@@ -62,11 +62,35 @@ pub(super) async fn run(spec: &Spec, program: &str, script: &str) -> (Option<i32
     let args = vec!["-c".into(), script.into()];
     let mut cmd = crate::proc::command(OsStr::new(program), &args, spec, &[]);
     cmd.env("PATH", "/usr/bin:/bin");
+    diag_profile(spec, program);
     let mut child = Proc::spawn_with_pgid_file(cmd, None).unwrap();
     let status = tokio::time::timeout(Duration::from_secs(30), child.wait())
         .await
         .expect("sandbox probe timed out");
-    (status, child.stderr_tail())
+    (status, outcome(&child, status))
+}
+
+/// "exit=Some(0) signal=None stderr=..": a sandbox kill shows as a signal, not an exit code.
+pub(super) fn outcome(child: &Proc, status: Option<i32>) -> String {
+    let out = format!(
+        "exit={status:?} signal={:?} stderr={}",
+        child.signal,
+        child.stderr_tail()
+    );
+    if std::env::var_os("AINKRAD_SANDBOX_DIAG").is_some() {
+        eprintln!("DIAG {out}");
+    }
+    out
+}
+
+/// With `AINKRAD_SANDBOX_DIAG=1` (scripts/sandbox-macos-test.sh) print the generated profile.
+pub(super) fn diag_profile(spec: &Spec, program: &str) {
+    if std::env::var_os("AINKRAD_SANDBOX_DIAG").is_some() {
+        eprintln!(
+            "DIAG program={program}\nDIAG profile:\n{}",
+            profile(spec, OsStr::new(program))
+        );
+    }
 }
 
 #[test]
@@ -84,6 +108,54 @@ fn macos_profile_has_no_blanket_network_and_no_unix_sockets() {
     // The only unix socket granted is the DNS resolver's.
     assert_eq!(text.matches("(allow network-outbound (literal").count(), 1);
     assert!(!text.contains("docker") && !text.contains("ssh-agent"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn macos_profile_boots_from_system_sb_and_keeps_explicit_denies() {
+    let (root, spec) = fixture("golden");
+    let text = profile(&spec, OsStr::new("/bin/true"));
+    let at = |needle: &str| {
+        text.find(needle)
+            .unwrap_or_else(|| panic!("missing {needle}"))
+    };
+    // The base profile every process needs to start, right after the default deny.
+    assert!(at("(deny default)") < at("(import \"system.sb\")"));
+    assert!(text.contains("(allow file-read* file-map-executable (subpath \"/usr\"))"));
+    assert!(text.contains("(subpath \"/System/Library\")"));
+    // Explicit denies for the state dir, the fake home's ssh keys and every unix socket,
+    // emitted before the session grants.
+    let state = root.join("state");
+    let deny_state = format!(
+        "(deny file-read* file-write* (subpath \"{}\"))",
+        state.display()
+    );
+    let ssh = format!(
+        "(deny file-read* file-write* (subpath \"{}\"))",
+        root.join("home/.ssh").display()
+    );
+    assert!(text.contains(&deny_state) && text.contains(&ssh));
+    assert!(text.contains("(deny network-outbound (remote unix-socket))"));
+    let work = format!(
+        "(allow file-read* file-write* (subpath \"{}\"))",
+        root.join("work").display()
+    );
+    assert!(at(&deny_state) < at(&work) && at(&ssh) < at(&work));
+    // Ancestors are stat-able by name only; the worktree itself is the only write grant.
+    assert!(text.contains(&format!(
+        "(allow file-read-metadata (literal \"{}\"))",
+        root.display()
+    )));
+    for line in text
+        .lines()
+        .filter(|l| l.contains("file-write*") && l.starts_with("(allow"))
+    {
+        let p = ["work", "config", "tmp"].map(|d| root.join(d));
+        assert!(
+            p.iter().any(|p| line.contains(p.to_str().unwrap())) || line.contains("/dev/null"),
+            "{line}"
+        );
+    }
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -118,7 +190,14 @@ fn profile_has_only_explicit_grants_and_no_keychain_service() {
         assert!(text.contains(root.join(dir).to_str().unwrap()));
     }
     for dir in ["home", "state", "other"] {
-        assert!(!text.contains(root.join(dir).to_str().unwrap()));
+        let path = root.join(dir);
+        assert!(
+            !text
+                .lines()
+                .filter(|l| l.starts_with("(allow"))
+                .any(|l| l.contains(path.to_str().unwrap())),
+            "{dir} granted"
+        );
     }
     assert!(!text.contains("keychain") && !text.contains("(allow network*)"));
     let mut allow = spec.clone();
@@ -217,9 +296,17 @@ async fn sandbox_timeout_kills_whole_group() {
         &[],
     );
     cmd.env("PATH", "/usr/bin:/bin");
+    diag_profile(&spec, "/bin/bash");
     let mut child = Proc::spawn_with_pgid_file(cmd, None).unwrap();
     let pgid = child.pgid;
-    assert_eq!(child.line().await.as_deref(), Some("ready"));
+    let first = child.line().await;
+    assert_eq!(
+        first.as_deref(),
+        Some("ready"),
+        "signal={:?} stderr={}",
+        child.signal,
+        child.stderr_tail()
+    );
     assert!(
         tokio::time::timeout(Duration::from_millis(250), child.wait())
             .await
@@ -334,12 +421,13 @@ async fn sockets_nested_userns_shm_and_the_harness_binary() {
     )
     .unwrap();
     std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    diag_profile(&spec, stub.to_str().unwrap());
     let cmd = crate::proc::command(stub.as_os_str(), &[], &spec, &[]);
     let mut child = Proc::spawn_with_pgid_file(cmd, None).unwrap();
     let code = tokio::time::timeout(Duration::from_secs(30), child.wait())
         .await
         .unwrap();
-    assert_eq!(code, Some(0), "stub: {}", child.stderr_tail());
+    assert_eq!(code, Some(0), "stub: {}", outcome(&child, code));
     assert!(root.join("work/ran").exists() && !root.join("tools/w").exists());
     #[cfg(target_os = "linux")]
     {
