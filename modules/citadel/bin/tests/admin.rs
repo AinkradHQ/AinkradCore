@@ -10,6 +10,19 @@ const BIN: &str = env!("CARGO_BIN_EXE_ainkrad-core-citadel");
 struct Home(PathBuf);
 
 impl Home {
+    /// Runs the module's migrations as a first `serve --enable-module citadel` would.
+    async fn enabled(self) -> Self {
+        let pool = ainkrad_core_server::store::connect(&self.db())
+            .await
+            .unwrap();
+        let modules: Vec<std::sync::Arc<dyn ainkrad_core_server::module::Module>> =
+            vec![std::sync::Arc::new(citadel_module::Citadel::default())];
+        ainkrad_core_server::store::migrate::migrate_modules(&pool, &modules)
+            .await
+            .unwrap();
+        pool.close().await;
+        self
+    }
     async fn new(name: &str) -> Self {
         let dir = std::env::temp_dir().join(format!("core-citadel-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -63,7 +76,7 @@ const SEED: &str = "[[companies]]\nname = \"Ainkrad\"\nkind = \"own\"\n";
 
 #[tokio::test]
 async fn the_seed_is_idempotent_and_creates_no_credentials() {
-    let home = Home::new("seed").await;
+    let home = Home::new("seed").await.enabled().await;
     let file = home.seed(SEED);
     let first = home.seed_cmd(&file);
     assert!(
@@ -84,7 +97,7 @@ async fn the_seed_is_idempotent_and_creates_no_credentials() {
 
 #[tokio::test]
 async fn a_seed_with_a_credential_or_a_bad_row_changes_nothing() {
-    let home = Home::new("bad").await;
+    let home = Home::new("bad").await.enabled().await;
     for text in [
         "[[companies]]\nname = \"X\"\npassword = \"hunter2\"\n",
         "token = \"abc\"\n",
@@ -98,7 +111,7 @@ async fn a_seed_with_a_credential_or_a_bad_row_changes_nothing() {
 
 #[tokio::test]
 async fn it_refuses_a_running_server_and_a_missing_database() {
-    let home = Home::new("live").await;
+    let home = Home::new("live").await.enabled().await;
     let file = home.seed(SEED);
     let listener = std::os::unix::net::UnixListener::bind(home.0.join("core.sock")).unwrap();
     let out = home.seed_cmd(&file);
@@ -128,4 +141,25 @@ async fn an_unknown_command_or_module_is_a_usage_error() {
         let out = home.run(&[args[0], args[1], db.to_str().unwrap()]);
         assert_eq!(out.status.code(), Some(2), "{args:?}");
     }
+}
+
+#[tokio::test]
+async fn it_refuses_a_database_a_server_holds_or_a_module_that_is_not_enabled() {
+    // Not enabled: the hook never creates the module's schema.
+    let plain = Home::new("plain").await;
+    let out = plain.seed_cmd(&plain.seed(SEED));
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not enabled"));
+    assert_eq!(plain.count("citadel_companies").await, 0);
+
+    // A server holds `<db>.lock` whatever its socket: the hook is refused.
+    let home = Home::new("locked").await.enabled().await;
+    let lock = std::fs::File::create(home.0.join("core.db.lock")).unwrap();
+    lock.lock().unwrap();
+    let out = home.seed_cmd(&home.seed(SEED));
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("in use"));
+    assert_eq!(home.count("citadel_companies").await, 0);
+    drop(lock);
+    assert!(home.seed_cmd(&home.seed(SEED)).status.success());
 }

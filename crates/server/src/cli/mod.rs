@@ -575,6 +575,8 @@ async fn serve(
     // Flags first: a refused --listen never creates or migrates the database.
     let listen = listen(db, &flags)?;
     let modules = enabled(available, &flags.modules)?;
+    // Held for the whole run: a module admin command refuses to run beside this server.
+    let _db_lock = module_admin::lock(db)?;
     // Declarations first (typos in a scope or step-up table panic here, not at the first request).
     drop(ainkrad_core_server::module::mount(&modules));
     let pool = store::connect(db).await?;

@@ -174,7 +174,16 @@ fn a_bad_declaration_stops_the_server_at_start() {
         commands: &["seed"],
     };
     validate(&fine);
-    let bad: [(Kinds, &[&str]); 9] = [
+    let long: &'static str = Box::leak(format!("toy.{}", "a".repeat(80)).into_boxed_str());
+    let long: Kinds = Box::leak(Box::new([(long, "read")]));
+    let bad: [(Kinds, &[&str]); 16] = [
+        (&[("toy.a.", "read")], &[]),
+        (&[("toy.a..b", "read")], &[]),
+        (&[("toy..a", "read")], &[]),
+        (&[("toy.a._b", "read")], &[]),
+        (&[("toy.é", "read")], &[]),
+        (&[("toy.A", "read")], &[]),
+        (long, &[]),
         (&[("approval_needed", "read")], &[]),
         (&[("agent_finished", "agent")], &[]),
         (&[("other.alert", "read")], &[]),

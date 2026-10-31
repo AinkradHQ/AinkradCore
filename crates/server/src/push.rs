@@ -256,7 +256,9 @@ impl Pusher {
                     tracing::debug!(provider = %to.provider, "no push provider for this token");
                     continue;
                 };
-                if !self.limiter.allow(to.device.0, self.clock.unix()) {
+                // A module's kinds are `<id>.<name>`: its own budget; the platform's have none.
+                let bucket = n.kind.split_once('.').map_or("", |(id, _)| id);
+                if !self.limiter.allow(to.device.0, bucket, self.clock.unix()) {
                     tracing::warn!(
                         device = to.device.0,
                         kind = n.kind,

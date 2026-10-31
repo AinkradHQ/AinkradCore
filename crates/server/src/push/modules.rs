@@ -21,7 +21,7 @@ pub(crate) fn validate(m: &dyn Module) {
     for (kind, scope) in m.notification_kinds() {
         let name = kind.strip_prefix(id).and_then(|k| k.strip_prefix('.'));
         assert!(
-            name.is_some_and(|n| valid_id(&n.replace('.', "_"))),
+            kind.len() <= 64 && name.is_some_and(|n| n.split('.').all(valid_id)),
             "module {id}: notification kind {kind:?} must be {id}.<name>"
         );
         assert!(
