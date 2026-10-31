@@ -1,6 +1,6 @@
 CARGO ?= cargo
 
-.PHONY: check-env install-test perf test-web e1-exit e1-exit-faults e2-exit e2-exit-faults e2-soak soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel release-dry release-repro release-test fuzz-smoke audit-fuzz
+.PHONY: check-env install-test perf test-web e1-exit e1-exit-faults e2-exit e2-exit-faults e2-soak soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel build-toy test-toy release-dry release-repro release-test fuzz-smoke audit-fuzz
 build: lint ; $(CARGO) build --workspace
 test: lint ; $(CARGO) test --workspace
 lint: format-check check-env ; scripts/api-minor-check.sh && $(CARGO) clippy --workspace --all-targets -- -D warnings
@@ -58,6 +58,10 @@ perf: ; ulimit -n 4096 && $(CARGO) test --release -p ainkrad-core-server --test 
 CITADEL = --manifest-path modules/citadel/Cargo.toml --workspace
 build-citadel: ; $(CARGO) build $(CITADEL)
 test-citadel: ; $(CARGO) test $(CITADEL)
+# The toy module (E1-20.2, the module API guide's reference): its own workspace, driven through the real gate.
+TOY = --manifest-path modules/toy/Cargo.toml
+build-toy: ; $(CARGO) build $(TOY)
+test-toy: ; $(CARGO) test $(TOY)
 # Local run (E1-01.5): state in ./state (gitignored); `Run/run.sh run` comes here. The default listener is a
 # Unix socket (state/core.sock); for HTTP on loopback use `make run LISTEN=loopback:7700`.
 LISTEN ?= unix:state/core.sock
