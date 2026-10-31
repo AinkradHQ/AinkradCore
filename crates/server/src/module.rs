@@ -118,6 +118,39 @@ pub trait Module: Send + Sync + 'static {
         self.scope()
     }
 
+    /// The push kinds the module may raise, each `(<id>.<name>, scope)`: the scope a device
+    /// needs to be sent it (one of `read`, `approve`, `terminal`, `agent`, `admin`; never
+    /// `runner`). A push of any other kind is dropped (`push::modules`).
+    fn notification_kinds(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+
+    /// The push `e` calls for, if any; only the module's own events reach it. Ids only: the Core
+    /// confines it to a declared kind and scope and cleans it (`push::policy`).
+    fn classify(
+        &self,
+        _e: &crate::store::events::StoredEvent,
+    ) -> Option<crate::push::Notification> {
+        None
+    }
+
+    /// The admin subcommands the module adds to a composed binary, run as
+    /// `<binary> <module id> <name> <db> [args…]` (`cli`): names only, never a platform verb.
+    fn admin_commands(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Runs the admin command `name` on the migrated database `pool` of a stopped Core; the
+    /// output is printed. The CLI refuses a database a server is serving before it gets here.
+    fn admin<'a>(
+        &'a self,
+        _name: &'a str,
+        _pool: &'a sqlx::SqlitePool,
+        _args: &'a [&'a str],
+    ) -> BoxFut<'a, Result<String, String>> {
+        Box::pin(async { Err("no such command".to_owned()) })
+    }
+
     /// The audit actions the module records, each `<id>.<…>`.
     fn audit_actions(&self) -> &'static [&'static str] {
         &[]
@@ -241,6 +274,7 @@ pub(crate) fn validate(m: &dyn Module) {
         "module {id}: scope {:?}",
         m.scope()
     );
+    crate::push::modules::validate(m);
     let mut seen = HashSet::new();
     for (method, template, scope) in m.route_scopes() {
         assert!(

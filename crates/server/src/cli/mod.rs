@@ -13,6 +13,7 @@ use ainkrad_core_server::{gateway, push};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 
 mod admin;
+mod module_admin;
 
 fn usage() -> String {
     format!(
@@ -173,10 +174,14 @@ pub async fn run(available: Vec<Arc<dyn Module>>) -> ExitCode {
         }
         ["device", "revoke", db, id] => revoke_device(Path::new(db), id).await,
         ["identity", "rotate", db] => rotate_identity(Path::new(db)),
-        _ => {
-            eprintln!("{}", usage());
-            return ExitCode::from(2);
-        }
+        // Last, so a module command can never shadow a platform verb.
+        _ => match module_admin::find(&available, &args) {
+            Some(module) => module_admin::run(module, &args).await,
+            None => {
+                eprintln!("{}", usage());
+                return ExitCode::from(2);
+            }
+        },
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -590,7 +595,7 @@ async fn serve(
     let pusher = push::Pusher::new(
         pool.clone(),
         push::providers(apns),
-        Arc::new(push::Platform),
+        Arc::new(push::modules::Modules(Arc::clone(&modules))),
         push_every,
         Arc::new(SystemClock),
     );

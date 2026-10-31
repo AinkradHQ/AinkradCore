@@ -31,6 +31,7 @@ use crate::store::gov::{
 use crate::store::{audit, begin_write};
 
 pub mod apns;
+pub mod modules;
 pub mod policy;
 pub mod stub;
 
@@ -346,3 +347,5 @@ pub fn providers(apns: Option<apns::ApnsNotifier>) -> Vec<Arc<dyn PushProvider>>
 mod tests;
 #[cfg(test)]
 mod tests_apns;
+#[cfg(test)]
+mod tests_modules;
