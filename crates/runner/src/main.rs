@@ -194,6 +194,9 @@ async fn main() -> ExitCode {
                 .init();
             return ainkrad_runner::v2::cli::connect_main(rest).await;
         }
+        ["mcp-forward", port, sock] => {
+            return ainkrad_runner::mcp_bridge::forward_main(port, sock).await;
+        }
         ["install-launchd", rest @ ..] => return install_launchd(rest),
         ["uninstall-launchd"] => return uninstall_launchd(false),
         ["uninstall-launchd", "--unload"] => return uninstall_launchd(true),

@@ -72,6 +72,7 @@ mod executor;
 mod harness;
 pub mod load;
 pub mod mac;
+pub mod mcp_bridge;
 mod messages;
 mod state;
 pub mod v2;

@@ -26,6 +26,16 @@ mod sandbox;
 pub use sandbox::identity as process_identity;
 pub use sandbox::reap_group;
 
+/// The sandboxed command for `program` (test support for the runner's network-isolation test).
+#[doc(hidden)]
+pub fn sandbox_command(
+    program: &std::ffi::OsStr,
+    args: &[String],
+    spec: &Spec,
+) -> tokio::process::Command {
+    sandbox::command(program, args, spec)
+}
+
 pub use classify::{DROPPED, ErrorClass, PROTOCOL, classify};
 pub use meter::{Meter, tokens, weighted_tokens};
 

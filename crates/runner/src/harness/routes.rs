@@ -147,8 +147,23 @@ impl HarnessExecutor {
         let mcp = self
             .mcp_url
             .as_deref()
-            .filter(|_| !token.expose().is_empty())
-            .map(|url| (url, token));
+            .filter(|_| !token.expose().is_empty());
+        // A Linux session with no network (the default) reaches the MCP route through a bridge.
+        let denied = cfg!(target_os = "linux")
+            && self
+                .run_env
+                .lock()
+                .expect("run env lock")
+                .get(&job.run)
+                .is_some_and(|e| {
+                    e.iter()
+                        .any(|(n, v)| n == "AINKRAD_SANDBOX_NETWORK" && v == "deny")
+                });
+        let bridged = mcp.filter(|_| denied).and_then(crate::mcp_bridge::parse);
+        let mcp = match (&bridged, mcp) {
+            (Some((_, local)), _) => Some((local.as_str(), token)),
+            (None, url) => url.map(|url| (url, token)),
+        };
         let private = self.work_root.join("private");
         let instructions = job.instructions.as_deref();
         // Removed when this future ends or is dropped (a cancelled run).
@@ -161,6 +176,24 @@ impl HarnessExecutor {
             Ok(files) => files,
             Err(e) => return failed(format!("writing the run's files: {e}"), "run_files"),
         };
+        let mut bridge = None;
+        let mut bridge_env: Vec<(String, std::ffi::OsString)> = Vec::new();
+        if let Some((target, _)) = bridged {
+            let sock = files.dir.join("mcp.sock");
+            match crate::mcp_bridge::start(&sock, target, self.mcp_tls.clone()) {
+                Ok(b) => bridge = Some(b),
+                Err(e) => return failed(format!("the MCP bridge: {e}"), "run_files"),
+            }
+            let exe = std::env::current_exe().unwrap_or_default();
+            bridge_env.extend([
+                ("AINKRAD_SANDBOX_MCP_SOCK".to_owned(), sock.into()),
+                ("AINKRAD_SANDBOX_MCP_FWD".to_owned(), exe.into()),
+                (
+                    "AINKRAD_SANDBOX_MCP_PORT".to_owned(),
+                    crate::mcp_bridge::FORWARD_PORT.to_string().into(),
+                ),
+            ]);
+        }
         let config_dir = match self.config_dir(job) {
             Ok(dir) => dir,
             Err(why) => return failed(why, "account"),
@@ -180,6 +213,7 @@ impl HarnessExecutor {
         if let Some(own) = self.run_env.lock().expect("run env lock").get(&job.run) {
             env.extend(own.iter().map(|(n, v)| (n.clone(), v.into())));
         }
+        env.extend(bridge_env);
         // Every worktree of a repo builds into its one shared cache (E15.9).
         if let (Some(_), Some(issue)) = (&job.workspace, job.issue) {
             env.extend(self.workspaces.cache_env(issue, &job.trees()));
@@ -233,6 +267,7 @@ impl HarnessExecutor {
             mcp_config: files.mcp_config.clone(),
         };
         let reports = reports.clone();
+        let _bridge = bridge; // held until the run ends
         match job.harness.as_str() {
             "claude" => self.work::<Claude>(job, spec, reports, meter).await,
             "codex" => self.work::<Codex>(job, spec, reports, meter).await,
