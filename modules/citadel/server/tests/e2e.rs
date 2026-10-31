@@ -56,23 +56,6 @@ fn cli(args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
 
-fn git(dir: &Path, args: &[&str]) {
-    let ok = Command::new("git")
-        .args([
-            "-c",
-            "user.name=e2e",
-            "-c",
-            "user.email=e2e@citadel.invalid",
-        ])
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .status()
-        .unwrap()
-        .success();
-    assert!(ok, "git {args:?}");
-}
-
 /// A count from `sql`, its one parameter bound to `id`.
 async fn count(pool: &SqlitePool, sql: &'static str, id: &str) -> i64 {
     let id: i64 = id.parse().unwrap();
@@ -84,19 +67,26 @@ async fn count(pool: &SqlitePool, sql: &'static str, id: &str) -> i64 {
 }
 
 #[tokio::test]
-#[ignore = "needs an https-served repo: the runner refuses local paths by design (E2-10); re-enable with a local TLS git fixture"]
 async fn an_agent_works_an_issue_through_mcp_end_to_end() {
     let dir = std::env::temp_dir().join(format!("citadel-e2e-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join("repo")).unwrap();
-    git(&dir.join("repo"), &["init", "-q", "-b", "main"]);
-    git(
-        &dir.join("repo"),
-        &["commit", "-q", "--allow-empty", "-m", "Start"],
-    );
+    // The runner refuses local paths (E2-10): the repo is served over HTTPS by the git fixture,
+    // and only this test's runner trusts the fixture's throwaway CA (see `ainkrad_gitfixture`).
+    let served = dir.join("served");
+    std::fs::create_dir_all(&served).unwrap();
+    ainkrad_gitfixture::bare_repo(&served, "repo.git", |_| {});
+    let ca = ainkrad_gitfixture::Ca::new(&dir.join("ca"));
+    let git_server = ainkrad_gitfixture::Server::start(
+        &ca,
+        ainkrad_gitfixture::Config {
+            root: served,
+            ..Default::default()
+        },
+    )
+    .await;
     let db = dir.join("citadel.db");
     let db_arg = db.to_str().unwrap();
-    let repo = dir.join("repo").display().to_string();
+    let repo = git_server.url("127.0.0.1", "repo.git");
 
     let company = cli(&["company", "add", db_arg, "E2E Co"]);
     let agent = cli(&[
@@ -157,6 +147,7 @@ async fn an_agent_works_an_issue_through_mcp_end_to_end() {
 
     let url = format!("ws://{bind}/runner/v1/connect");
     let mut executor = HarnessExecutor::new(dir.join("work"), dir.join("config"));
+    executor.workspaces.git = ca.git_shim(&dir);
     executor.bins.insert("claude".to_owned(), fake_claude(&dir));
     executor.mcp_url = mcp_url(&url);
     executor

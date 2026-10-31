@@ -156,6 +156,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ainkrad-gitfixture"
+version = "0.1.0"
+dependencies = [
+ "rcgen",
+ "rustls",
+ "tokio",
+ "tokio-rustls",
+]
+
+[[package]]
 name = "ainkrad-harness"
 version = "0.1.0"
 dependencies = [
@@ -206,6 +216,7 @@ dependencies = [
 name = "ainkrad-runner"
 version = "0.1.0"
 dependencies = [
+ "ainkrad-gitfixture",
  "ainkrad-harness",
  "ainkrad-proto",
  "ainkrad-ptyhost",

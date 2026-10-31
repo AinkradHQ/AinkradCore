@@ -41,4 +41,13 @@ registry! {
          at each grant.";
     SecretsMaxLeases "secrets.max_leases" Count 64, 1, 1_024, SO,
         "How many unredeemed, unexpired secret leases may exist at once; read at each grant.";
+    TerminalIdleSecs "terminal.idle_secs" Seconds 86_400, 0, 2_592_000, SO,
+        "How long a running terminal with no client attached is kept before the Core closes it \
+         (a client that attaches again restarts the count); 0 never closes one. Read at each \
+         pass of the idle reaper, every 30 seconds.";
+    TerminalMaxPerDevice "terminal.max_per_device" Count 8, 1, 64, SO,
+        "How many terminals (not yet ended) one device may have open; read at each create.";
+    TerminalMaxPerRunner "terminal.max_per_runner" Count 16, 1, 256, SO,
+        "How many terminals (not yet ended) one runner may hold for the Core; read at each \
+         create.";
 }
