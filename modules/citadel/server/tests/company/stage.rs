@@ -36,7 +36,34 @@ const RESULT: &str = include_str!("../../../../../crates/harness/tests/fixtures/
 
 /// The fake `claude`: finds its MCP config, instructions and issue key, plays the run's
 /// script, then a recorded turn.
+/// Waits until a script just written can be executed. Linux refuses to exec a file while any
+/// process holds it open for writing (ETXTBSY), and a fork on another test thread can hold the
+/// writer's descriptor for a moment after it is closed. The script exits at once when
+/// `AINKRAD_EXEC_PROBE` is set; this runs it that way until the kernel stops refusing.
+fn exec_ready(path: &std::path::Path) {
+    use std::process::Stdio;
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let probe = std::process::Command::new(path)
+            .env("AINKRAD_EXEC_PROBE", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match probe {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            _ => return,
+        }
+    }
+}
+
 const FAKE: &str = r#"#!/bin/sh
+[ -z "$AINKRAD_EXEC_PROBE" ] || exit 0
 d=__DIR__
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -129,6 +156,7 @@ impl Stage {
         std::fs::write(&fake, FAKE.replace("__DIR__", &dir.display().to_string())).unwrap();
         std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
+        exec_ready(&fake);
         let new = NewRunner {
             name: "box".to_owned(),
             tags: vec![],
@@ -139,10 +167,11 @@ impl Stage {
         // Only the test transport maps validated HTTPS fixtures onto local bare repos.
         let git_shim = dir.join("fixture-git");
         std::fs::write(&git_shim, format!(
-            "#!/bin/sh\nexport GIT_ALLOW_PROTOCOL=https:ssh:file\nexec git -c protocol.file.allow=always -c 'url.file://{}/.insteadOf=https://fixture.invalid/' \"$@\"\n",
+            "#!/bin/sh\n[ -z \"$AINKRAD_EXEC_PROBE\" ] || exit 0\nexport GIT_ALLOW_PROTOCOL=https:ssh:file\nexec git -c protocol.file.allow=always -c 'url.file://{}/.insteadOf=https://fixture.invalid/' \"$@\"\n",
             dir.display()
         )).unwrap();
         std::fs::set_permissions(&git_shim, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+        exec_ready(&git_shim);
         executor.workspaces.git = git_shim;
         executor.bins.insert("claude".to_owned(), fake);
         executor.mcp_url = mcp_url(&url);

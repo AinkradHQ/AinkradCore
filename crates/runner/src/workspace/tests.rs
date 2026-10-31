@@ -332,8 +332,13 @@ async fn git_errors_surface_with_their_stderr() {
 
 fn script(path: &Path, body: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::write(
+        path,
+        format!("#!/bin/sh\n[ -z \"$AINKRAD_EXEC_PROBE\" ] || exit 0\n{body}\n"),
+    )
+    .unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::exec_ready(path);
 }
 
 /// No identity, no start; once set, an agent's commit in its worktree carries it, read from

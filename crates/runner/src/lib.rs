@@ -131,6 +131,31 @@ pub async fn run_with_clock<E: Executor>(config: Config, executor: E, clock: Wal
     daemon(config, executor, clock, watch::channel(false).1, SILENCE).await
 }
 
+/// Waits until the script just written at `path` can be executed. Linux refuses to exec a file
+/// while any process holds it open for writing (ETXTBSY), and a fork on another test thread can
+/// hold the writer's descriptor for a moment after it is closed. The script must exit at once
+/// when `AINKRAD_EXEC_PROBE` is set; this runs it that way until the kernel stops refusing.
+#[cfg(test)]
+pub(crate) fn exec_ready(path: &std::path::Path) {
+    use std::io::ErrorKind::ExecutableFileBusy;
+    use std::process::Stdio;
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let probe = std::process::Command::new(path)
+            .env("AINKRAD_EXEC_PROBE", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match probe {
+            Err(e) if e.kind() == ExecutableFileBusy && std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            _ => return,
+        }
+    }
+}
+
 /// `run`, with the silence limit set to `silence` (tests use a short one in real time).
 #[cfg(test)]
 pub(crate) async fn run_silenced<E: Executor>(

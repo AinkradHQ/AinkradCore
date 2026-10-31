@@ -233,7 +233,18 @@ impl Drop for Core {
 
 /// Runs ctl to the end and records what it printed.
 pub fn ctl(args: &[String]) -> Output {
-    let out = ctl_command(args).output().unwrap();
+    // Every ctl run opens with a pre-auth handshake, and a Core gives one address 30 of those a
+    // minute (spec §11), shared by the whole test and by ctl's own single retry. A run refused
+    // for that budget alone says nothing about the test: wait for the budget and run it again.
+    // No test here asserts the rate limit (the server's own tests do).
+    let mut out = ctl_command(args).output().unwrap();
+    for _ in 0..8 {
+        if out.status.success() || !String::from_utf8_lossy(&out.stderr).contains("rate_limited") {
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(3));
+        out = ctl_command(args).output().unwrap();
+    }
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
