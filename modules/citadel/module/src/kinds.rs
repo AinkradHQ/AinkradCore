@@ -240,6 +240,7 @@ pub const AUDIT_ACTIONS: &[&str] = &[
     "citadel.runner.back",
     "citadel.runner.disk_full",
     "citadel.runner.wake_requested",
+    "citadel.seed.applied",
     "citadel.skill.published",
     "citadel.sprint.closed",
     "citadel.sprint.commit_requested",
