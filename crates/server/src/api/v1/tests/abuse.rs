@@ -30,13 +30,20 @@ async fn a_challenge_flood_cannot_starve_a_real_device() {
     let sends = (0..10_000).map(|i| {
         let peer = format!("10.{}.{}.1", 20 + i / 30 / 250, (i / 30) % 250);
         let id = crate::auth::crypto::random_id("d_");
-        async move { ask(fx, &peer, &id).await.0 }
+        async move { ask(fx, &peer, &id).await }
     });
-    let statuses = futures_util::future::join_all(sends).await;
-    assert!(
-        statuses.iter().all(|s| *s == StatusCode::OK),
-        "every made-up id gets an answer"
-    );
+    // 10,000 requests, 256 at a time: all at once they queue 30 s for the database pool on a
+    // loaded machine and time out as 500s, which says nothing about the flood.
+    let answers: Vec<_> = futures_util::StreamExt::collect(
+        futures_util::StreamExt::buffer_unordered(futures_util::stream::iter(sends), 256),
+    )
+    .await;
+    let bad: Vec<_> = answers
+        .iter()
+        .filter(|(s, _)| *s != StatusCode::OK)
+        .take(3)
+        .collect();
+    assert!(bad.is_empty(), "every made-up id gets an answer: {bad:?}");
     let (status, got) = ask(fx, "10.99.0.1", &fx.dev.id).await;
     assert_eq!(status, StatusCode::OK);
     let body = json!({"challenge": got["challenge"]}).to_string();

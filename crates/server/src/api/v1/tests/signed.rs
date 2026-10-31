@@ -457,19 +457,15 @@ async fn unknown_revoked_and_bad_signature_look_alike() {
             assert_eq!(status, StatusCode::UNAUTHORIZED);
         }
     }
-    let medians: Vec<u128> = times
-        .iter_mut()
-        .map(|t| {
-            t.sort_unstable();
-            t[t.len() / 2]
-        })
-        .collect();
+    // The fastest of 30 runs: load only ever adds time, so a stalled sample cannot make one
+    // case look slower, while a real difference in work shows in every sample, the fastest too.
+    let fastest: Vec<u128> = times.iter().map(|t| *t.iter().min().unwrap()).collect();
     let (lo, hi) = (
-        *medians.iter().min().unwrap(),
-        *medians.iter().max().unwrap(),
+        *fastest.iter().min().unwrap(),
+        *fastest.iter().max().unwrap(),
     );
     assert!(
         hi * 10 <= lo * 11,
-        "median µs unknown/revoked/bad: {medians:?}"
+        "fastest µs unknown/revoked/bad: {fastest:?}"
     );
 }

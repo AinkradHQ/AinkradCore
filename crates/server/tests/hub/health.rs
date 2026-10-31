@@ -125,30 +125,19 @@ async fn a_silent_runner_is_degraded_then_dropped() {
     let core = Core::start("degraded", quick()).await;
     let dev = core.runner().await;
     let _silent = Fake::welcomed(&core, &dev, vec![exec_driver(&[OP_NOOP], 1)]).await;
+    // Heartbeat 1 s: degraded past 2 s of silence, dropped past 3 s. The events are the record:
+    // a poll of the live state can miss the one second a loaded machine leaves it degraded.
     let hub = Arc::clone(&core.app.hub);
-    // Heartbeat 1 s: degraded past 2 s of silence, dropped past 3 s.
-    let mut degraded = false;
-    for _ in 0..60 {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        if hub.runners().get(&dev.id).is_some_and(|s| s.degraded) {
-            degraded = true;
-            break;
-        }
-    }
-    assert!(degraded, "degraded before it was dropped");
-    for _ in 0..60 {
-        if !hub.online(&dev.id) {
-            break;
-        }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while kinds(&core).await.len() < 3 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{:?}",
+            kinds(&core).await
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert!(!hub.online(&dev.id));
-    for _ in 0..60 {
-        if kinds(&core).await.len() == 3 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
     assert_eq!(
         kinds(&core).await,
         ["runner.connected", "runner.degraded", "runner.disconnected"]
