@@ -24,6 +24,9 @@ use citadel_module::store::exec::{
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+pub mod tools;
+pub use tools::*;
+
 pub const MCP: &str = "/token/citadel/v1/mcp";
 
 /// A host that records the session it would start, owned and pointing at its run, as the

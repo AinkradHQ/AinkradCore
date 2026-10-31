@@ -33,7 +33,6 @@ fn apply_task() -> Value {
         "body": {"type": "string"},
         "points": {"type": "integer", "minimum": 0, "maximum": 1000},
         "assignee_agent_id": {"type": "integer"},
-        "repos": {"type": "array", "items": {"type": "string"}},
         "sprint": {"type": "boolean"}}, "required": ["title"]})
 }
 
@@ -234,7 +233,7 @@ pub(super) fn list() -> Vec<Tool> {
             "As a planner of a requirement (default: your issue's), file its whole plan in one \
              call: epics (new, with a title and project_id defaulting to your issue's \
              project, or existing by epic_id), each with tasks (title, body, points, \
-             assignee_agent_id, repos: the project's repo names it touches); a sprint for them \
+             assignee_agent_id); a sprint for them \
              (sprint_id of a planned one, or name, goal, starts_on, ends_on for a new one in \
              project_id; when that project already has a planned sprint open for issues, the \
              tasks join it instead, its name and dates kept: one sprint per project, not one \

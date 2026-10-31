@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::args::{MAX_TEXT, MAX_TITLE, Result, ToolError, int, required};
 use super::requirements::requirement;
-use super::tools::target;
+use super::tools::{reserve, target};
 use crate::store::work::{
     HubError, MAX_OPTIONS, agent_post_to_requirement, ask_human as ask, get_requirement,
 };
@@ -42,17 +42,8 @@ pub(super) async fn ask_human(app: &App, scope: RunScope, args: &JsonObject) -> 
             )));
         }
     };
-    // A run may only put so many questions to a human (a loop would flood the admin's thread).
-    let max = crate::settings::value(&app.pool, "mcp.max_questions_per_run").await?;
-    let asked: i64 = sqlx::query_scalar("SELECT count(*) FROM citadel_questions WHERE run_id = ?")
-        .bind(scope.run_id.0)
-        .fetch_one(&app.pool)
-        .await?;
-    if asked >= max {
-        return Err(ToolError::Refused(format!(
-            "this run has asked its {max} questions (mcp.max_questions_per_run)"
-        )));
-    }
+    // A run may only put so many questions to a human (a loop would flood the admin).
+    reserve(app, scope, "question", 1, "mcp.max_questions_per_run").await?;
     let q = ask(
         &app.pool,
         scope.agent_id,
@@ -80,6 +71,7 @@ pub(super) async fn post_to_requirement(
 ) -> Result<Value> {
     let r = requirement(app, scope, int(args, "requirement_id")?).await?;
     let body = required(args, "body", MAX_TEXT)?;
+    reserve(app, scope, "comment", 1, "mcp.max_comments_per_run").await?;
     let c = agent_post_to_requirement(&app.pool, r.id, scope.agent_id, Some(scope.run_id), body)
         .await
         .map_err(refused)?;

@@ -7,7 +7,7 @@ use rmcp::model::JsonObject;
 use serde_json::{Value, json};
 
 use super::args::{MAX_TEXT, MAX_TITLE, Result, ToolError, int, required, text};
-use super::tools::{company_issue, next_actor, target};
+use super::tools::{company_issue, next_actor, reserve, target};
 use crate::domain::gov::{ApprovalKind, KnowledgeKind, NewApproval};
 use crate::domain::org::AgentId;
 use crate::domain::work::{
@@ -28,6 +28,7 @@ const ADMIN: UserId = UserId(1);
 
 pub(super) async fn comment(app: &App, scope: RunScope, args: &JsonObject) -> Result<Value> {
     let issue = target(app, scope, int(args, "issue_id")?).await?;
+    reserve(app, scope, "comment", 1, "mcp.max_comments_per_run").await?;
     let new = NewComment {
         issue_id: issue.id,
         author: Actor::Agent(scope.agent_id),
@@ -165,8 +166,8 @@ async fn empty_done(app: &App, scope: RunScope, issue: IssueId) -> Result<()> {
     let run = get_run(pool, scope.run_id)
         .await?
         .ok_or_else(|| ToolError::Refused("your run is gone".to_owned()))?;
-    let why = "done refused: nothing shows this work was done (no PR, and no comment from \
-               this run)";
+    let why = "done refused: nothing shows this work was done (no PR, and no result comment of \
+               80 characters or more from this run on this issue)";
     match refuse_empty_done(pool, issue, &run, &app.clock.now()).await {
         Ok(EmptyDone::Refused) => Err(ToolError::Refused(format!(
             "{why}. Comment what you did (or why no change was needed), then try again. A \
@@ -184,6 +185,7 @@ async fn empty_done(app: &App, scope: RunScope, issue: IssueId) -> Result<()> {
 /// A subtask of the run's issue, owned by and waiting on the agent.
 pub(super) async fn create_subtask(app: &App, scope: RunScope, args: &JsonObject) -> Result<Value> {
     let parent = target(app, scope, None).await?;
+    reserve(app, scope, "issue", 1, "mcp.max_issues_per_run").await?;
     let me = scope.agent_id;
     let new = NewIssue {
         project_id: parent.project_id,
@@ -211,6 +213,7 @@ pub(super) async fn report_blocker(app: &App, scope: RunScope, args: &JsonObject
             let title = required(args, "title", MAX_TITLE)
                 .map_err(|_| ToolError::Invalid("give blocker_issue_id, or a title".to_owned()))?;
             let assignee = person(app, scope, args, "assignee").await?;
+            reserve(app, scope, "issue", 1, "mcp.max_issues_per_run").await?;
             let new = NewIssue {
                 project_id: blocked.project_id,
                 epic_id: None,
@@ -252,6 +255,7 @@ pub(super) async fn request_approval(
             ));
         }
     };
+    reserve(app, scope, "approval", 1, "mcp.max_approvals_per_run").await?;
     let payload = json!({"summary": required(args, "summary", MAX_TEXT)?,
                          "details": text(args, "details", MAX_TEXT)?,
                          "run": scope.run_id.0});
@@ -293,6 +297,7 @@ pub(super) async fn propose_knowledge(
             }
         },
     };
+    reserve(app, scope, "knowledge", 1, "mcp.max_knowledge_per_run").await?;
     let p = Proposal {
         project: issue.project_id,
         kind,

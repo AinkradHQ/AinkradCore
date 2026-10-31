@@ -13,7 +13,7 @@ use rmcp::model::JsonObject;
 use serde_json::{Value, json};
 
 use super::args::{MAX_TEXT, MAX_TITLE, Result, ToolError, int, required, text};
-use super::tools::{company_issue, next_actor};
+use super::tools::{company_issue, next_actor, reserve};
 use crate::domain::gov::KnowledgeKind;
 use ainkrad_core_server::api::App;
 
@@ -61,7 +61,7 @@ pub(super) async fn planned_project(
 }
 
 /// Sprint `id`, if the agent may plan its project; another company's looks like none.
-async fn sprint(app: &App, scope: RunScope, id: i64) -> Result<Sprint> {
+pub(super) async fn sprint(app: &App, scope: RunScope, id: i64) -> Result<Sprint> {
     let refused = || ToolError::Refused(format!("no sprint {id} in this company"));
     let s = get_sprint(&app.pool, SprintId(id))
         .await?
@@ -254,6 +254,14 @@ pub(super) async fn propose_retro_items(
             body: required(item, "body", MAX_TEXT)?.to_owned(),
         });
     }
+    reserve(
+        app,
+        scope,
+        "knowledge",
+        items.len() as i64,
+        "mcp.max_knowledge_per_run",
+    )
+    .await?;
     let proposed = propose_retro(&app.pool, s.id, &items, scope.agent_id)
         .await
         .map_err(refused)?;

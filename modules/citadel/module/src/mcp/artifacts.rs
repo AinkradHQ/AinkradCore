@@ -16,6 +16,7 @@ use rmcp::model::JsonObject;
 use serde_json::{Value, json};
 
 use super::args::{MAX_TITLE, Result, ToolError, clip, int, required, text};
+use super::tools::reserve;
 use crate::domain::gov::ArtifactKind;
 use crate::store::artifacts::{
     Artifact, ArtifactError, ArtifactFilter, NewArtifact, Preview, artifact_root, blob_path,
@@ -77,18 +78,8 @@ pub(super) async fn publish_artifact(
         kind,
         user: None,
     };
-    let max = crate::settings::value(&app.pool, "mcp.max_artifacts_per_run").await?;
-    let published: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM citadel_artifacts WHERE run_id = ?")
-            .bind(scope.run_id.0)
-            .fetch_one(&app.pool)
-            .await?;
-    if published >= max {
-        return Err(ToolError::Refused(format!(
-            "this run has published its {max} artifacts (mcp.max_artifacts_per_run)"
-        )));
-    }
     let b64 = required(args, "content", MAX_BASE64)?;
+    reserve(app, scope, "artifact", 1, "mcp.max_artifacts_per_run").await?;
     // Checked before decoding: what the text decodes to, at most.
     if let Err(e) = check_artifact(&app.pool, &new, (b64.len() / 4 * 3) as u64).await {
         let why = stored(e)?;

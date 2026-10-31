@@ -8,6 +8,7 @@
 //! that checks it.
 
 use ainkrad_core::audit::AuditActor;
+use ainkrad_proto::redact::Redactor;
 use rmcp::model::JsonObject;
 use serde_json::{Value, json};
 
@@ -67,6 +68,59 @@ async fn count(app: &App, scope: RunScope) -> Result<()> {
     })
 }
 
+/// Reserves `n` of `kind` for the run against the cap in setting `setting`, in the one statement
+/// that checks it (so parallel calls cannot overshoot). A reservation is spent even if the
+/// creation then fails: the cap bounds attempts, which is the safe side.
+pub(super) async fn reserve(
+    app: &App,
+    scope: RunScope,
+    kind: &str,
+    n: i64,
+    setting: &str,
+) -> Result<()> {
+    let max = crate::settings::value(&app.pool, setting).await?;
+    let refused = || {
+        ToolError::Refused(format!(
+            "this run may create at most {max} of {kind} ({setting})"
+        ))
+    };
+    if n > max {
+        return Err(refused());
+    }
+    let reserved: Option<i64> = sqlx::query_scalar(
+        "INSERT INTO citadel_run_creations (run_id, kind, n) VALUES (?1, ?2, ?3) \
+         ON CONFLICT (run_id, kind) DO UPDATE SET n = n + excluded.n \
+         WHERE n + excluded.n <= ?4 RETURNING n",
+    )
+    .bind(scope.run_id.0)
+    .bind(kind)
+    .bind(n)
+    .bind(max)
+    .fetch_optional(&app.pool)
+    .await?;
+    reserved.map(drop).ok_or_else(refused)
+}
+
+/// The arguments with every string passed through the redactor, so no secret shape an agent
+/// writes (its own token, a provider key) reaches a comment, a question, a proposal, an issue or
+/// the audit. `content` (base64 of a file) is left for the artifact store, which redacts the
+/// decoded text.
+/// ponytail: the shapes the proto redactor knows; the values of the run's leased secrets live
+/// only on its runner, so they are not matched here (a Core API for them is the upgrade).
+fn redacted(args: &JsonObject) -> JsonObject {
+    let mut args = args.clone();
+    let content = args.remove("content");
+    let mut v = Value::Object(args);
+    Redactor::new().json(&mut v);
+    let Value::Object(mut args) = v else {
+        unreachable!("an object stays one")
+    };
+    if let Some(c) = content {
+        args.insert("content".to_owned(), c);
+    }
+    args
+}
+
 /// Whether the run already has an `mcp.unknown_tool` row (a failed read counts as yes: no row).
 async fn unknown_audited(app: &App, scope: RunScope) -> bool {
     sqlx::query_scalar::<_, bool>(
@@ -87,6 +141,7 @@ pub(super) async fn call(
     args: &JsonObject,
 ) -> Result<Value> {
     let known = TOOLS.contains(&name);
+    let args = &redacted(args);
     // Every name counts, an unknown one too: the cap bounds what a run can make the Core do.
     let result = if let Err(e) = count(app, scope).await {
         Err(e)

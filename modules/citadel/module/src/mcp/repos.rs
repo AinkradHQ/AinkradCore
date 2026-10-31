@@ -7,7 +7,7 @@ use rmcp::model::JsonObject;
 use serde_json::{Value, json};
 
 use super::args::{MAX_TEXT, MAX_TITLE, Result, ToolError, required};
-use super::tools::target;
+use super::tools::{reserve, target};
 use crate::store::work::request_repo as request;
 use ainkrad_core_server::api::App;
 
@@ -22,6 +22,14 @@ pub(super) async fn request_repo(app: &App, scope: RunScope, args: &JsonObject) 
     let issue = target(app, scope, None).await?;
     let repo = required(args, "repo", MAX_TITLE)?;
     let why = required(args, "reason", MAX_TEXT)?;
+    reserve(
+        app,
+        scope,
+        "repo_request",
+        1,
+        "mcp.max_repo_requests_per_run",
+    )
+    .await?;
     request(&app.pool, issue.id, repo, scope.agent_id, why)
         .await
         .map_err(refused)?;

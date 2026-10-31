@@ -11,8 +11,8 @@ use rmcp::model::JsonObject;
 use serde_json::{Value, json};
 
 use super::args::{MAX_TEXT, MAX_TITLE, Result, ToolError, int, required, text};
-use super::plan::planned_project;
-use super::tools::summary;
+use super::plan::{planned_project, sprint as planned_sprint};
+use super::tools::{reserve, summary};
 use crate::store::work::{
     ApplyEpic, ApplyError, ApplySprint, ApplyTask, NewPlanEpic, PlannedTask, Requirement,
     RequirementError, Submitted, apply_plan as store_apply, get_issue, get_requirement, get_sprint,
@@ -22,6 +22,8 @@ use ainkrad_core_server::api::App;
 
 /// The most epics, or tasks, one call files.
 const MAX_ITEMS: usize = 50;
+/// The most epics and tasks together one call files, whatever the lists hold.
+const MAX_FILED: usize = 100;
 
 /// The requirement `asked` names (default: the run's issue's), if it is the run's company's.
 pub(super) async fn requirement(
@@ -120,6 +122,8 @@ pub(super) async fn plan_requirement(
         let project = int(e, "project_id")?.or(fallback).ok_or_else(|| {
             ToolError::Invalid("project_id is required: the requirement has no project".to_owned())
         })?;
+        // The same check as every planning tool: the agent plans this project.
+        planned_project(app, scope, Some(project)).await?;
         let mut tasks = vec![];
         for t in list(e, "tasks")? {
             tasks.push(task(object(t)?, None)?);
@@ -137,6 +141,8 @@ pub(super) async fn plan_requirement(
             .ok_or_else(|| ToolError::Invalid("a task needs epic_id".to_owned()))?;
         tasks.push(task(t, Some(EpicId(epic)))?);
     }
+    let filed = epics.len() + tasks.len() + epics.iter().map(|e| e.tasks.len()).sum::<usize>();
+    filing(app, scope, filed).await?;
     let planned = plan(&app.pool, r.id, scope.agent_id, &epics, &tasks)
         .await
         .map_err(refused)?;
@@ -148,6 +154,34 @@ pub(super) async fn plan_requirement(
     Ok(out)
 }
 
+/// Reserves `filed` epics and tasks against the call bound and the run's creation cap.
+async fn filing(app: &App, scope: RunScope, filed: usize) -> Result<()> {
+    if filed > MAX_FILED {
+        return Err(ToolError::Invalid(format!(
+            "one call files at most {MAX_FILED} epics and tasks together; you gave {filed}"
+        )));
+    }
+    reserve(app, scope, "issue", filed as i64, "mcp.max_issues_per_run").await
+}
+
+/// Whether the agent may have its submitted plan take effect without a human: the policy asks
+/// the owner (an approval is opened), or the agent is a product owner of a project of the
+/// requirement. Any other planner's submission would approve its own plan.
+async fn may_submit(app: &App, scope: RunScope, r: &Requirement) -> Result<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM citadel_projects p WHERE p.intake = 0 \
+         AND (p.requirement_id = ?1 \
+              OR p.id IN (SELECT project_id FROM citadel_epics WHERE requirement_id = ?1) \
+              OR p.id IN (SELECT project_id FROM citadel_issues WHERE requirement_id = ?1)) \
+         AND (p.sprint_approval = 'owner' OR EXISTS (SELECT 1 FROM citadel_team_memberships m \
+              WHERE m.team_id = p.team_id AND m.agent_id = ?2 AND m.team_role = 'product_owner')))",
+    )
+    .bind(r.id.0)
+    .bind(scope.agent_id.0)
+    .fetch_one(&app.pool)
+    .await?)
+}
+
 /// With `submit: true`, submits the plan into `out.submitted`; `out.state` is the requirement's.
 async fn submit(
     app: &App,
@@ -157,6 +191,13 @@ async fn submit(
     out: &mut Value,
 ) -> Result<()> {
     if args.get("submit") == Some(&Value::Bool(true)) {
+        if !may_submit(app, scope, r).await? {
+            return Err(ToolError::Refused(
+                "only a product owner of the requirement's projects can submit its plan, or \
+                 the owner must approve it (the project's sprint approval policy)"
+                    .to_owned(),
+            ));
+        }
         let now = app.clock.now();
         out["submitted"] =
             match submit_plan(&app.pool, r.id, scope.agent_id, scope.issue_id, &now).await {
@@ -189,16 +230,14 @@ async fn submit(
 }
 
 /// A task's repo names.
+/// A task may not name repos: they are granted by the team lead (`request_repo`), never by the
+/// planner's own plan.
 fn repos(t: &JsonObject) -> Result<Vec<String>> {
     match t.get("repos") {
         None | Some(Value::Null) => Ok(vec![]),
-        Some(Value::Array(all)) if all.len() <= MAX_ITEMS => all
-            .iter()
-            .map(|v| v.as_str().map(str::to_owned))
-            .collect::<Option<_>>()
-            .ok_or_else(|| ToolError::Invalid("repos must be names".to_owned())),
+        Some(Value::Array(a)) if a.is_empty() => Ok(vec![]),
         Some(_) => Err(ToolError::Invalid(
-            "repos must be a list of names".to_owned(),
+            "a task cannot name repos: the team lead grants them (request_repo)".to_owned(),
         )),
     }
 }
@@ -216,7 +255,9 @@ async fn sprint(
         Some(_) => return Err(ToolError::Invalid("sprint must be an object".to_owned())),
     };
     if let Some(id) = int(s, "sprint_id")? {
-        return Ok(Some(ApplySprint::Existing(SprintId(id))));
+        // Company and planner checked, so a foreign sprint looks like none.
+        let found = planned_sprint(app, scope, id).await?;
+        return Ok(Some(ApplySprint::Existing(found.id)));
     }
     let project = planned_project(app, scope, int(s, "project_id")?.or(fallback)).await?;
     Ok(Some(ApplySprint::New(NewSprint {
@@ -263,6 +304,14 @@ pub(super) async fn apply_plan(app: &App, scope: RunScope, args: &JsonObject) ->
         });
     }
     let sprint = sprint(app, scope, args, fallback).await?;
+    let filed = epics.len()
+        + epics
+            .iter()
+            .map(|e| match e {
+                ApplyEpic::Existing { tasks, .. } | ApplyEpic::New { tasks, .. } => tasks.len(),
+            })
+            .sum::<usize>();
+    filing(app, scope, filed).await?;
     let applied = store_apply(
         &app.pool,
         r.id,

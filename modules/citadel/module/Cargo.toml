@@ -31,6 +31,7 @@ tower = { version = "0.5.3", features = ["util"] }
 zeroize = "1.9.1"
 
 [dev-dependencies]
+futures-util = "0.3.34"
 ainkrad-core-server = { path = "../../../crates/server", features = ["test-support"] }
 citadel-module = { path = ".", features = ["test-support"] }
 tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }

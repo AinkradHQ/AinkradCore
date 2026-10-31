@@ -2,7 +2,8 @@
 //! issue with nothing to show for it is refused with the reason, and a second one by the same
 //! agent escalates the issue up the chain. Every refusal is audited as `issue.done_refused`.
 //!
-//! What counts as something to show: a pull request on the issue, or a comment this run wrote.
+//! What counts as something to show: a pull request on the issue, or a result comment this run
+//! wrote on that issue (see `done_evidence`).
 //! The monolith also counted the diff the runner measured in the run's worktree; the Core's
 //! runner does not report one yet, so an agent that only changed files says what it did in a
 //! comment first.
@@ -19,7 +20,12 @@ use crate::store::audit::{self, Event};
 use crate::store::org::escalation_target_in;
 use crate::store::work::{IssueTransitionError, reassign_in};
 
-/// Whether `issue` has something to show for a `done` from `run`.
+/// The least a comment must say to count as a result: not "ok".
+pub const MIN_RESULT_CHARS: i64 = 80;
+
+/// Whether `issue` has something to show for a `done` from `run`: a PR on it, or a result the
+/// run wrote on this very issue (a comment of at least [`MIN_RESULT_CHARS`] characters; not a
+/// question to a human, and not a comment on another issue).
 pub async fn done_evidence(
     pool: &SqlitePool,
     issue: IssueId,
@@ -27,10 +33,12 @@ pub async fn done_evidence(
 ) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM citadel_issue_prs WHERE issue_id = ?1) \
-         OR EXISTS (SELECT 1 FROM citadel_comments WHERE run_id = ?2)",
+         OR EXISTS (SELECT 1 FROM citadel_comments WHERE run_id = ?2 AND issue_id = ?1 \
+         AND length(trim(body)) >= ?3 AND coalesce(idempotency_key, '') NOT LIKE 'question:%')",
     )
     .bind(issue.0)
     .bind(run.0)
+    .bind(MIN_RESULT_CHARS)
     .fetch_one(pool)
     .await
 }
