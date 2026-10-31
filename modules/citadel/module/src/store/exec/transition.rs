@@ -10,6 +10,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::{Error, SqliteConnection};
 
 use super::*;
+use crate::domain::exec::breaker::failure_fingerprint;
 use crate::domain::exec::{IllegalTransition, RunEvent, apply};
 use crate::store::audit::{self, Event};
 use crate::store::work::release_held_in;
@@ -42,17 +43,6 @@ impl fmt::Display for TransitionError {
 }
 
 impl std::error::Error for TransitionError {}
-
-/// A failure's class and step, so a repeat of the same failure is recognised: the state and the
-/// reason's first line, capped.
-fn fingerprint(state: RunState, why: &str) -> String {
-    let line = why.lines().next().unwrap_or_default();
-    format!(
-        "{}:{}",
-        state.as_str(),
-        line.chars().take(120).collect::<String>()
-    )
-}
 
 /// Applies `event` to the run and appends `run.<state>` by `actor`, in one transaction. A
 /// heartbeat-like event that changes nothing writes nothing.
@@ -98,7 +88,7 @@ pub(crate) async fn transition_in(
     };
     let fp = match (t.state, &reason) {
         (RunState::Failed | RunState::TimedOut | RunState::RunnerLost, Some(why)) => {
-            Some(fingerprint(t.state, given.unwrap_or(why)))
+            Some(failure_fingerprint(t.state, given.unwrap_or(why)))
         }
         _ => None,
     };
@@ -123,7 +113,7 @@ pub(crate) async fn transition_in(
     else {
         return Err(TransitionError::Conflict);
     };
-    let updated = run(row)?;
+    let mut updated = run(row)?;
     let company: i64 = sqlx::query_scalar("SELECT company_id FROM citadel_agents WHERE id = ?")
         .bind(updated.agent_id.0)
         .fetch_one(&mut *conn)
@@ -143,7 +133,23 @@ pub(crate) async fn transition_in(
     if t.state.is_terminal() {
         revoke_in(conn, current.id, now).await?;
         release_held_in(conn, current.id, actor).await?;
-        super::wake::schedule_retry_in(conn, &updated, now).await?;
+        // A success that left its issue waiting on it untouched is no progress.
+        if t.state == RunState::Succeeded
+            && let Some(why) = super::no_action::no_action_in(conn, &updated, now).await?
+        {
+            updated.terminal_reason = Some(why);
+        }
+        // A run that ended badly consults the loop breaker (and the escalation of a run that may
+        // not be retried) before anything queues its retry: a trip never waits on a caller.
+        let stopped = match fp {
+            Some(_) => super::breaker::stop_in(conn, &updated, now)
+                .await?
+                .is_some(),
+            None => false,
+        };
+        if !stopped {
+            super::wake::schedule_retry_in(conn, &updated, now).await?;
+        }
     }
     Ok(updated)
 }

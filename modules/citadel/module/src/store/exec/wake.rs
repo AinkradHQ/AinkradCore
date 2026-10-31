@@ -319,3 +319,13 @@ pub(crate) async fn schedule_retry_in(
         enqueue_in(conn, &wake, attempt + 1).await?,
     ))
 }
+
+/// Which attempt of its wake the run was; a run with no wake counts as attempt 1.
+pub(super) async fn attempt_in(conn: &mut SqliteConnection, r: &Run) -> Result<i64, Error> {
+    sqlx::query_scalar(
+        "SELECT coalesce((SELECT attempt FROM citadel_wake_requests WHERE id = ?), 1)",
+    )
+    .bind(r.wake_request_id)
+    .fetch_one(&mut *conn)
+    .await
+}

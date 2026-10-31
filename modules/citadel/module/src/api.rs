@@ -12,6 +12,7 @@ use axum::Router;
 use axum::routing::{get, put};
 
 pub mod accounts;
+pub mod controls;
 mod error;
 pub mod governance;
 pub mod model;
@@ -57,6 +58,7 @@ pub static DESTRUCTIVE: LazyLock<Vec<(&str, &str)>> = LazyLock::new(|| {
         governance::DESTRUCTIVE,
         accounts::DESTRUCTIVE,
         runs::DESTRUCTIVE,
+        controls::DESTRUCTIVE,
     ]
     .concat()
 });
@@ -69,6 +71,7 @@ pub fn routes() -> Router<App> {
         .merge(governance::routes())
         .merge(accounts::routes())
         .merge(runs::routes())
+        .merge(controls::routes())
         .route(
             "/companies",
             get(org::list_companies).post(org::create_company),

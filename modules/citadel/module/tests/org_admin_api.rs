@@ -174,28 +174,32 @@ async fn an_agent_is_edited_field_by_field_and_audited() {
     assert_eq!(got["reports_to"], Value::Null);
 }
 
-// The run engine (S7) owns waking and ending an agent: the HTTP halves are kept, their routes
-// are not built, and the run/issue/wake assertions of the monolith need the run tables.
+// The run engine (S7) owns waking and ending an agent. The wake route takes a reason and answers
+// with the queued wake (the engine starts the run when it may), where the monolith's answered
+// with the agent.
 #[tokio::test]
-#[ignore = "S7: wakeAgent needs the run engine and the wake queue"]
 async fn wake_runs_the_active_agent_and_refuses_the_paused() {
     let fx = fx().await;
     let a = company(&fx, "A").await;
     let id = agent(&fx, a, "A dev").await.0;
     let uri = format!("/agents/{id}/wake");
-    let woken = ok_post(&fx, &uri, json!({})).await;
-    assert_eq!(woken["status"], "active");
+    let woken = ok_post(&fx, &uri, json!({"reason": "look at the inbox"})).await;
+    assert_eq!(woken["status"], "pending");
     assert_eq!(audited(&fx, "agent.woken").await, 1);
     ok_post(&fx, &format!("/agents/{id}/pause"), json!({})).await;
-    assert_eq!(post(&fx, &uri, json!({})).await.0, StatusCode::CONFLICT);
     assert_eq!(
-        post(&fx, "/agents/999/wake", json!({})).await.0,
+        post(&fx, &uri, json!({"reason": "again"})).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        post(&fx, "/agents/999/wake", json!({"reason": "x"}))
+            .await
+            .0,
         StatusCode::NOT_FOUND
     );
 }
 
 #[tokio::test]
-#[ignore = "S7: terminateAgent ends runs and hands issues over (run engine)"]
 async fn terminate_ends_runs_hands_issues_to_the_admin_and_wakes_nothing_again() {
     let fx = fx().await;
     let a = company(&fx, "A").await;
@@ -222,7 +226,9 @@ async fn terminate_ends_runs_hands_issues_to_the_admin_and_wakes_nothing_again()
     let details: Value = serde_json::from_str(&details).unwrap();
     assert_eq!(details["reason"], "Replaced by Sam");
     assert_eq!(
-        post(&fx, &format!("/agents/{id}/wake"), json!({})).await.0,
+        post(&fx, &format!("/agents/{id}/wake"), json!({"reason": "x"}))
+            .await
+            .0,
         StatusCode::CONFLICT
     );
     assert_eq!(

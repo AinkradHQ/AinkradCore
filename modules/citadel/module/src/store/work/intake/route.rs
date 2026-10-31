@@ -1,5 +1,7 @@
 //! Routing an intake request (`route_intake`): see the parent module.
 
+use crate::domain::work::WakeSource;
+use crate::store::exec::{NewWakeRequest, enqueue_in};
 use serde_json::json;
 use sqlx::SqliteConnection;
 
@@ -205,9 +207,19 @@ pub async fn route_intake(
                 .execute(&mut *tx)
                 .await?;
         }
-        // S7: the product owner's `assignment` wake (`intake:<intake>:project:<project>`) is
-        // enqueued here, reason "new project <key> routed to your team" or "request routed to
-        // your project <key>"; the module has no wake queue yet.
+        let wake = NewWakeRequest {
+            agent_id: po,
+            issue_id: Some(kickoff.id),
+            source: WakeSource::Assignment,
+            reason: if created {
+                format!("new project {} routed to your team", project.key)
+            } else {
+                format!("request routed to your project {}", project.key)
+            },
+            idempotency_key: format!("intake:{}:project:{}", intake.0, project.id.0),
+            not_before: None,
+        };
+        enqueue_in(&mut tx, &wake, 1).await?;
         routed.push(Routed {
             project,
             created,

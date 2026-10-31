@@ -12,7 +12,7 @@
 
 use std::sync::LazyLock;
 
-use super::{accounts, governance, org_admin, planning, runs, work};
+use super::{accounts, controls, governance, org_admin, planning, runs, work};
 
 /// `(method, template, scope)`, templates relative to `/modules/citadel/v1`: slices 1 and 2's;
 /// each later slice lists its own in its seam file (`org_admin`, `work`, `governance`).
@@ -53,6 +53,7 @@ pub fn is_admin_read(template: &str) -> bool {
         governance::ADMIN_READS,
         accounts::ADMIN_READS,
         runs::ADMIN_READS,
+        controls::ADMIN_READS,
     ]
     .iter()
     .any(|l| l.contains(&template))

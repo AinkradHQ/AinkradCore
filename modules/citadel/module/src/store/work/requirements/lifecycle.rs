@@ -12,8 +12,7 @@ use crate::store::work::{IssueTransitionError, transition_issue_in};
 /// Cancels the requirement as `actor`, with an optional `reason`: each of its open issues is
 /// cancelled through the issue rules (unblocking what waited on it), then the requirement
 /// (`requirement.cancelled`, naming them), in one transaction. Refused when it is done or
-/// cancelled already. (The monolith also refused while a run works on one of its issues and
-/// signalled the wake loop afterwards: both come with the run engine, S7.)
+/// cancelled already, or while a run works on one of its issues (stop the run first).
 pub async fn cancel_requirement(
     pool: &SqlitePool,
     id: RequirementId,
@@ -31,8 +30,16 @@ pub async fn cancel_requirement(
     ) {
         return Err(RequirementError::State(r.state));
     }
-    // S7: refuse with `RequirementError::Busy` while a run (queued, claimed, running) works on
-    // one of its issues; the module has no `runs` table yet.
+    let busy: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM citadel_runs u JOIN citadel_issues i ON i.id = u.issue_id \
+         WHERE i.requirement_id = ? AND u.state IN ('queued', 'claimed', 'running'))",
+    )
+    .bind(id.0)
+    .fetch_one(&mut *tx)
+    .await?;
+    if busy {
+        return Err(RequirementError::Busy);
+    }
     let open: Vec<i64> = sqlx::query_scalar(
         "SELECT id FROM citadel_issues WHERE requirement_id = ? \
          AND state NOT IN ('done', 'cancelled') ORDER BY id",
@@ -74,7 +81,7 @@ pub async fn pause_requirement(
 }
 
 /// Resumes a paused requirement as `actor` (`requirement.resumed`). Not paused changes and
-/// audits nothing. (Letting its held wakes go is the run engine's, S7.)
+/// audits nothing. (Its held wakes go out on the engine's next dispatch.)
 pub async fn resume_requirement(
     pool: &SqlitePool,
     id: RequirementId,

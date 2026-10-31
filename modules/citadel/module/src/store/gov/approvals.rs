@@ -9,11 +9,11 @@
 //! - Expiring: `expire_approvals` (every scheduler tick) closes those past their deadline,
 //!   audited.
 //!
-//! Not ported yet, each marked `// S<n>:` where it goes (they need another slice's functions):
-//! what a decision DOES to its subject (a sprint starts, an agent is hired, a PR is merged, a
-//! plan is approved or sent back, a workflow push is allowed), the requester's comment and
-//! `approval` wake (`notify_in`, needs the wake queue), and the expiry of a permission
-//! escalation whose run ended (needs the run table).
+//! - Telling the requester (`notify_in`): a decider's reply becomes their comment on the subject
+//!   issue and an `approval` wake brings the requester back to it. A permission escalation is
+//!   answered to its harness instead (relayed by the run engine), so it wakes nobody; neither
+//!   does a self-hire, a done-flow merge, or a workflow push waiting on a human.
+//! - Expiring also closes a permission escalation whose run has ended.
 
 use std::fmt;
 
@@ -25,9 +25,11 @@ use sqlx::{Error, Row, SqliteConnection, SqlitePool};
 use super::{id_column, setting_in, user_actor};
 use crate::domain::gov::{Approval, ApprovalId, ApprovalKind, ApprovalStatus, NewApproval};
 use crate::domain::org::{AgentId, CompanyId};
-use crate::domain::work::{IssueId, SprintId, UserId};
+use crate::domain::work::{IssueId, SprintId, UserId, WakeSource};
 use crate::store::audit::{Event, append};
+use crate::store::exec::{NewWakeRequest, enqueue_in};
 use crate::store::org::text;
+use crate::store::work::approval_comment_in;
 
 macro_rules! approval_columns {
     () => {
@@ -344,27 +346,25 @@ async fn decide(
     if let Some((issue, rule)) = allow {
         allow::allow_in(&mut tx, &decided, issue, &rule, by, now).await?;
     }
-    // The decider's reply is a comment on the issue (the monolith's `notify_in`); the requester's
-    // wake is S7's.
-    if let Some(reply) = decided.reply.as_deref().filter(|r| !r.trim().is_empty()) {
-        let subject = subject_in(&mut tx, &decided).await?;
-        let headline = format!("{subject} {}: {reply}", decided.status.as_str());
-        crate::store::work::approval_comment_in(&mut tx, &decided, by, &headline).await?;
-    }
+    notify_in(&mut tx, &decided, Some(by)).await?;
     tx.commit().await?;
     Ok(decided)
 }
 
 /// Expires, at `now`, every pending approval past its deadline, with the reason as the reply;
 /// appends `approval.expired` by the system for each. Returns their ids.
-// S7: also every pending permission escalation whose run has ended (needs the run table);
-// S3/S4: the expiry's effect on a hire (terminated) and a plan approval; S7: the requester's wake.
 pub async fn expire_approvals(pool: &SqlitePool, now: &str) -> Result<Vec<ApprovalId>, Error> {
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
     let ids: Vec<i64> = sqlx::query_scalar(
-        "UPDATE citadel_approvals SET status = 'expired', decided_at = ?1, \
-             reply = 'expired: no decision by ' || expires_at \
-         WHERE status = 'pending' AND julianday(expires_at) <= julianday(?1) RETURNING id",
+        "UPDATE citadel_approvals SET status = 'expired', decided_at = ?1, reply = CASE \
+             WHEN julianday(expires_at) <= julianday(?1) \
+                 THEN 'expired: no decision by ' || expires_at \
+             ELSE 'expired: run ' || json_extract(payload, '$.run') || ' ended' END \
+         WHERE status = 'pending' AND (julianday(expires_at) <= julianday(?1) \
+             OR (kind = 'permission_escalation' AND EXISTS (SELECT 1 FROM citadel_runs r \
+                 WHERE r.id = json_extract(citadel_approvals.payload, '$.run') \
+                 AND r.state NOT IN ('queued', 'claimed', 'running')))) \
+         RETURNING id",
     )
     .bind(now)
     .fetch_all(&mut *tx)
@@ -379,9 +379,49 @@ pub async fn expire_approvals(pool: &SqlitePool, now: &str) -> Result<Vec<Approv
         if a.kind == ApprovalKind::PlanApproval {
             crate::store::work::plan_decided_in(&mut tx, &a, AuditActor::System, now).await?;
         }
+        notify_in(&mut tx, &a, None).await?;
     }
     tx.commit().await?;
     Ok(ids.into_iter().map(ApprovalId).collect())
+}
+
+/// Tells the requester of the decided (or expired) approval; see the module docs. `by` is the
+/// decider, `None` on expiry (no comment then: nobody wrote one).
+async fn notify_in(
+    conn: &mut SqliteConnection,
+    a: &Approval,
+    by: Option<UserId>,
+) -> Result<(), Error> {
+    let subject = subject_in(conn, a).await?;
+    let reply = a.reply.as_deref().map(str::trim).filter(|r| !r.is_empty());
+    let headline = match (a.status, reply) {
+        // Its reply already reads "expired: …".
+        (ApprovalStatus::Expired, Some(r)) => format!("{subject} {r}"),
+        (status, Some(r)) => format!("{subject} {}: {r}", status.as_str()),
+        (status, None) => format!("{subject} {}", status.as_str()),
+    };
+    if let (Some(by), Some(_)) = (by, reply) {
+        approval_comment_in(conn, a, by, &headline).await?;
+    }
+    let self_hire = a.kind == ApprovalKind::HireAgent && a.agent_id == Some(a.requested_by);
+    // The done flow's merge (E9.3) moves its issue itself: merged, or back to its developer.
+    let flow_merge = a.kind == ApprovalKind::PrMerge
+        && serde_json::from_str::<serde_json::Value>(&a.payload)
+            .is_ok_and(|p| p.get("pr").is_some());
+    // An approved workflow push waits on a human, not on the agent (`workflow_decided_in`).
+    let human_push = a.kind == ApprovalKind::WorkflowPush && a.status == ApprovalStatus::Approved;
+    if a.kind == ApprovalKind::PermissionEscalation || self_hire || flow_merge || human_push {
+        return Ok(());
+    }
+    let wake = NewWakeRequest {
+        agent_id: a.requested_by,
+        issue_id: a.issue_id,
+        source: WakeSource::Approval,
+        reason: format!("approval {}: {headline}", a.id.0),
+        idempotency_key: format!("approval:{}:{}", a.id.0, a.status.as_str()),
+        not_before: None,
+    };
+    enqueue_in(conn, &wake, 1).await.map(drop)
 }
 
 /// Appends `approval.<status>` about `a`.

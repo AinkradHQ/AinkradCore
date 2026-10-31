@@ -30,6 +30,16 @@ fn mutating(agent: i64) -> Vec<(Method, String, Option<Value>)> {
             "/engine".into(),
             Some(json!({"enabled": true})),
         ),
+        // The detectors' controls: each ends an agent, makes one act, or moves work.
+        (
+            Method::POST,
+            format!("/agents/{agent}/terminate"),
+            Some(json!({"reason": "gone"})),
+        ),
+        (Method::POST, format!("/agents/{agent}/pause"), None),
+        (Method::POST, format!("/agents/{agent}/resume"), None),
+        (Method::POST, "/runs/1/retry".into(), None),
+        (Method::POST, "/issues/1/release-checkout".into(), None),
     ]
 }
 

@@ -50,8 +50,11 @@ async fn working(pool: &SqlitePool, o: &Org) -> (Requirement, IssueId, IssueId) 
         .await
         .unwrap();
     let r = get_requirement(pool, req).await.unwrap().unwrap();
-    // (S7: every wake so far is marked served here, `UPDATE wake_requests SET status =
-    // 'dispatched' WHERE status = 'pending'`.)
+    // Every wake so far is served: the test counts the ones that follow.
+    sqlx::query("UPDATE citadel_wake_requests SET status = 'dispatched' WHERE status = 'pending'")
+        .execute(pool)
+        .await
+        .unwrap();
     let kickoff = r.owner_issue_id.unwrap();
     (r, kickoff, task)
 }
@@ -59,7 +62,7 @@ async fn working(pool: &SqlitePool, o: &Org) -> (Requirement, IssueId, IssueId) 
 /// (agent, issue, idempotency key) of every wake a run will serve, oldest first.
 async fn wakes(pool: &SqlitePool) -> Vec<(i64, Option<i64>, String)> {
     sqlx::query_as(
-        "SELECT agent_id, issue_id, idempotency_key FROM wake_requests \
+        "SELECT agent_id, issue_id, idempotency_key FROM citadel_wake_requests \
          WHERE status <> 'coalesced' ORDER BY id",
     )
     .fetch_all(pool)
@@ -130,7 +133,6 @@ async fn a_devs_question_shows_in_the_thread_and_the_answer_wakes_that_dev() {
 }
 
 #[tokio::test]
-#[ignore = "S7: needs the wake queue; S11 (E2-12): the push of a new question"]
 async fn a_devs_question_shows_in_the_thread_and_the_answer_wakes_that_dev_wakes() {
     let db = db().await;
     let pool = &db.pool;
@@ -185,7 +187,7 @@ async fn a_devs_question_shows_in_the_thread_and_the_answer_wakes_that_dev_wakes
         "the dev, not the CEO"
     );
     let reason: String =
-        sqlx::query_scalar("SELECT reason FROM wake_requests WHERE idempotency_key = ?")
+        sqlx::query_scalar("SELECT reason FROM citadel_wake_requests WHERE idempotency_key = ?")
             .bind(format!("answer:{}", q.id.0))
             .fetch_one(pool)
             .await

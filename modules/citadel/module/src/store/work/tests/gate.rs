@@ -186,8 +186,14 @@ async fn under_the_owner_policy_the_sprint_waits_for_the_approval() {
         twice,
         Err(DecideError::NotPending(ApprovalStatus::Approved))
     ));
-    // The wake of the product owner (`wake_requests`, source `approval`) is S7's: see
-    // `a_decided_commit_wakes_the_product_owner` below.
+    let woken: Vec<(i64, Option<i64>, String)> = sqlx::query_as(
+        "SELECT agent_id, issue_id, source FROM citadel_wake_requests \
+         WHERE idempotency_key LIKE 'approval:%'",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(woken, [(t.po.0, Some(t.planning.0), "approval".to_owned())]);
 }
 
 const BY: AuditActor = core_user(ADMIN);
@@ -397,11 +403,9 @@ async fn a_sprint_whose_commit_waits_is_not_deleted() {
     );
 }
 
-/// The wakes the decisions enqueue for the product owner (`wake_requests`, source `approval`, key
-/// `approval:<id>`; the reason of a rejection holds the reply): the wake queue is the run
-/// engine's, so `decide_approval` enqueues none yet.
+/// The wake a rejection enqueues for the product owner (source `approval`, key `approval:<id>`;
+/// its reason holds the reply).
 #[tokio::test]
-#[ignore = "S7: needs the wake queue (wake_requests)"]
 async fn a_decided_commit_wakes_the_product_owner() {
     let db = db().await;
     let pool = &db.pool;
@@ -414,7 +418,17 @@ async fn a_decided_commit_wakes_the_product_owner() {
     decide_approval(pool, a.id, false, ADMIN, Some("Too much"), NOW)
         .await
         .unwrap();
-    // S7: SELECT agent_id, reason FROM wake_requests WHERE source = 'approval' AND issue_id = ?
-    // -> (t.po, a reason that holds "rejected" and the reply), once per `approval:<id>`.
-    unimplemented!("S7: assert the approval wake of {:?}", t.po);
+    let (agent, reason): (i64, String) = sqlx::query_as(
+        "SELECT agent_id, reason FROM citadel_wake_requests \
+         WHERE source = 'approval' AND issue_id = ?",
+    )
+    .bind(t.planning.0)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(agent, t.po.0);
+    assert!(
+        reason.contains("rejected") && reason.contains("Too much"),
+        "{reason}"
+    );
 }

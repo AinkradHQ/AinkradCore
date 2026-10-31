@@ -456,6 +456,16 @@ async fn a_run_follows_its_session_to_success_and_releases_what_it_held() {
         .execute(&w.app().pool)
         .await
         .unwrap();
+    // It acted (any state-changing tool call), so its success is not "ended without acting".
+    let mut conn = w.app().pool.acquire().await.unwrap();
+    citadel_module::store::audit::append(
+        &mut conn,
+        citadel_module::store::audit::Event::new(AuditActor::System, "mcp.transition")
+            .run(run.id.0),
+    )
+    .await
+    .unwrap();
+    drop(conn);
     w.report(
         &run,
         AgentState::Ended,
@@ -698,6 +708,14 @@ async fn an_exhausted_hard_stop_budget_kills_the_run_and_blocks_the_next_one() {
         0,
         "a run stopped at its cap is never retried"
     );
+    // A run stopped at its cap escalates its issue to the admin; hand it back to the agent so the
+    // next wake is not stale.
+    sqlx::query("UPDATE citadel_issues SET next_agent_id = ?, next_user_id = NULL WHERE id = ?")
+        .bind(w.seed.agent)
+        .bind(w.seed.issue)
+        .execute(&w.app().pool)
+        .await
+        .unwrap();
     // The next wake is held back, and asks for one overrun approval, however often it is tried.
     w.wake("assign:2").await;
     for _ in 0..3 {
@@ -764,6 +782,14 @@ async fn the_per_run_and_per_issue_caps_stop_a_run() {
         (capped.state, capped.terminal_reason.as_deref()),
         (RunState::Failed, Some("token_cap"))
     );
+    // A run stopped at its cap escalates its issue to the admin; hand it back to the agent so the
+    // next wake is not stale.
+    sqlx::query("UPDATE citadel_issues SET next_agent_id = ?, next_user_id = NULL WHERE id = ?")
+        .bind(w.seed.agent)
+        .bind(w.seed.issue)
+        .execute(&w.app().pool)
+        .await
+        .unwrap();
     // The issue's cap counts every run of the issue: a fresh run starts over its own cap, not its issue's.
     set("run.token_cap", "1000000").await;
     set("issue.token_cap", "1500").await;
@@ -1256,7 +1282,7 @@ async fn the_platform_scheduler_accepts_the_engines_jobs() {
             .fetch_all(&fx.app.pool)
             .await
             .unwrap();
-    assert_eq!(names, ["dispatch", "reconcile", "timers"]);
+    assert_eq!(names, ["dispatch", "reconcile", "repair", "timers"]);
 }
 
 /// L1: an admin's cancel that lands while the session starts must not leave it running, with its
