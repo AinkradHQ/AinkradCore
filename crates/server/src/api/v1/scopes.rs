@@ -326,6 +326,36 @@ mod tests {
         assert!(!destructive(&m("DELETE"), "/api/v1/devices/d_x/y", &[]));
     }
 
+    /// Review S3: independent of `DESTRUCTIVE`. Every state-changing route that needs `admin`,
+    /// `terminal`, `agent` or `approve` is destructive, unless it is named here with the reason.
+    /// A new such route nobody flags fails this test.
+    #[test]
+    fn every_state_changing_privileged_route_is_destructive_or_excepted() {
+        const EXCEPTED: &[(&str, &str)] = &[
+            // Fixed op, no input, changes nothing on the runner (see `DESTRUCTIVE`).
+            ("POST", "/api/v1/runners/{id}/noop"),
+        ];
+        for (m, t, scope) in ROUTES {
+            let privileged = matches!(*scope, "admin" | "terminal" | "agent" | "approve");
+            let writes = *m != "GET";
+            // A terminal socket is a GET but is a live shell.
+            let shell = t.ends_with("/terminals/{id}/ws");
+            if !(privileged && (writes || shell)) {
+                continue;
+            }
+            assert!(
+                declared_destructive(m, t) || EXCEPTED.contains(&(*m, *t)),
+                "{m} {t} ({scope}) changes state but is neither destructive nor excepted"
+            );
+        }
+        for e in EXCEPTED {
+            assert!(
+                !declared_destructive(e.0, e.1),
+                "{e:?} is excepted but listed"
+            );
+        }
+    }
+
     #[test]
     fn every_destructive_route_is_a_declared_route() {
         for (m, t) in DESTRUCTIVE {

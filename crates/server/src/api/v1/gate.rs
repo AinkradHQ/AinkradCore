@@ -348,7 +348,33 @@ pub(crate) async fn client_gate(State(app): State<App>, req: Request, next: Next
             device = v.device.id,
             "destructive route refused: not elevated"
         );
-        return super::stepup::required().into_response();
+        let e = super::stepup::required();
+        // Counted per route in memory; the first per device per window is audited as
+        // `api.refused` (so a burst of attempts leaves a trace but stays O(1); review S5).
+        let now = app.clock.unix();
+        let route = format!("{} {}", parts.method, parts.uri.path());
+        app.auth
+            .refusals
+            .note(&format!("step_up_required {route}"), now);
+        if app
+            .auth
+            .refusals
+            .note(&format!("step_up_required:{}", v.device.id), now)
+        {
+            let event = ainkrad_core::audit::NewAuditEvent {
+                actor: super::BY,
+                action: "api.refused".to_owned(),
+                entity: None,
+                details: serde_json::json!({"error_id": e.error_id, "code": e.code,
+                    "status": 403, "method": parts.method.as_str(),
+                    "path": parts.uri.path(), "client": addr, "device": v.device.id})
+                .to_string(),
+            };
+            if let Err(err) = crate::store::audit::append_one(&app.pool, &event).await {
+                tracing::error!(error = %err, "auditing a step-up refusal failed");
+            }
+        }
+        return e.into_response();
     }
     let session = session.id;
     parts.extensions.insert(Caller {

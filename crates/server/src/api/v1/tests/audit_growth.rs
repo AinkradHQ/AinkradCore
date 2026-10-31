@@ -119,23 +119,47 @@ async fn device_admin_and_gate_refusals_are_counted_and_the_last_admin_audited_o
             StatusCode::CONFLICT
         );
     }
-    // The gate's step_up_required (an un-elevated pairing create) writes nothing either.
+    // The gate's step_up_required (an un-elevated pairing create) is counted, and audited once
+    // per device per window as `api.refused` (review S5).
     let plain_admin = plain(&fx, "plain", &ALL, true).await;
     let enrolled = rows(&fx, None).await;
+    let base = enrolled - start;
     for _ in 0..10 {
         let body = json!({"name": "x", "kind": "device", "scopes": ["read"]});
         let r = post(&fx, &plain_admin, "/api/v1/pairings", body).await;
         assert_eq!(r.1["code"], json!("step_up_required"));
     }
-    assert_eq!(rows(&fx, None).await, enrolled);
-    assert_eq!(rows(&fx, Some("api.refused")).await, 0);
+    assert_eq!(
+        rows(&fx, None).await,
+        enrolled + 1,
+        "one row for ten refusals"
+    );
+    assert_eq!(rows(&fx, Some("api.refused")).await, 1);
+    assert_eq!(
+        fx.app
+            .auth
+            .refusals
+            .count("step_up_required POST /api/v1/pairings"),
+        10
+    );
+    let enrolled = enrolled + 1;
+    // Another device gets its own first row; the same device is quiet for the window.
+    let other = plain(&fx, "other", &ALL, true).await;
+    let enrolled = enrolled + 1; // its enrolment row
+    let body = json!({"name": "x", "kind": "device", "scopes": ["read"]});
+    for _ in 0..3 {
+        let r = post(&fx, &other, "/api/v1/pairings", body.clone()).await;
+        assert_eq!(r.1["code"], json!("step_up_required"));
+    }
+    assert_eq!(rows(&fx, None).await, enrolled + 1);
+    assert_eq!(rows(&fx, Some("api.refused")).await, 2);
     assert_eq!(
         rows(&fx, Some("device.last_admin_refused")).await,
         1,
         "once per window"
     );
     assert_eq!(
-        enrolled - start,
+        base,
         1 + 1,
         "the last-admin row and the extra device's enrolment"
     );

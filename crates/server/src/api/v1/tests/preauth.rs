@@ -278,3 +278,57 @@ async fn the_handshake_proof_is_under_the_challenge_rate() {
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "one shared rate");
     assert_eq!(send(&fx.app, prove("10.60.0.2")).await.0, StatusCode::OK);
 }
+
+/// A client lists the minors it was built for; it uses the newest one the server also lists.
+fn negotiate(client: &[u32], server: &Value) -> Option<u32> {
+    let served: Vec<u32> = serde_json::from_value(server["supported_minors"].clone()).ok()?;
+    client.iter().copied().filter(|m| served.contains(m)).max()
+}
+
+/// E1-05.5: a client built for N+1 talks to a server at N (it negotiates N, an unknown request
+/// field is refused cleanly in the standard error model, never a panic or a 5xx), and a client
+/// at N reads an N+1 answer (additive fields) because it reads only the fields it knows.
+#[tokio::test]
+async fn a_newer_client_talks_to_an_older_server_and_back() {
+    let fx = fx().await;
+    let n = super::super::types::API_MINOR;
+    let (status, body) = send(&fx.app, req(Method::GET, "/handshake", None, None)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // Client at N+1 (also built for every older minor) against server N: the common minor is N.
+    let newer: Vec<u32> = (0..=n + 1).collect();
+    assert_eq!(negotiate(&newer, &body), Some(n));
+    // A client built only for N+1 finds no common minor: it must stop, not guess.
+    assert_eq!(negotiate(&[n + 1], &body), None);
+
+    // The N+1 client's POST /handshake carries a field this server does not know: a clean 400.
+    let nonce = "BQUFBQUFBQUFBQUFBQUFBQ";
+    let newer_body = json!({"nonce": nonce, "client_minor": n + 1});
+    let (status, err) = send(
+        &fx.app,
+        req(Method::POST, "/handshake", None, Some(newer_body)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{err}");
+    assert_eq!(err["code"], "bad_request");
+    assert!(err["error_id"].is_string() && err["message"].is_string());
+    // The same call without it works.
+    let (status, ok) = send(
+        &fx.app,
+        req(
+            Method::POST,
+            "/handshake",
+            None,
+            Some(json!({"nonce": nonce})),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ok}");
+
+    // Client at N against server N+1: the answer gains fields; a reader of the known ones is fine.
+    let mut future = ok.clone();
+    future["supported_minors"] = json!((0..=n + 1).collect::<Vec<u32>>());
+    future["a_field_from_the_future"] = json!({"x": 1});
+    assert_eq!(negotiate(&(0..=n).collect::<Vec<_>>(), &future), Some(n));
+    assert_eq!(future["identity_fingerprint"], ok["identity_fingerprint"]);
+}
