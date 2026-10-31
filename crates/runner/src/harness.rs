@@ -105,6 +105,8 @@ pub struct HarnessExecutor {
     pub mcp_url: Option<String>,
     /// The runner's pinned TLS config for the Core, used by the MCP bridge of a networkless sandbox.
     pub mcp_tls: Option<Arc<rustls::ClientConfig>>,
+    /// The egress allow policy of `AINKRAD_AGENT_NETWORK=filtered`; a filtered run without it is refused.
+    pub egress: Option<Arc<crate::egress::Policy>>,
     /// Idle long-lived harness servers kept for later runs (E15.6), when the server sends no
     /// `limits`; 0 keeps none.
     pub warm_max: u32,
@@ -168,6 +170,7 @@ impl HarnessExecutor {
             resume_backoff_max: Duration::from_secs(30),
             mcp_url: None,
             mcp_tls: None,
+            egress: None,
             warm_max: 0,
             stall_after: Duration::from_secs(STALL_AFTER_SECS),
             tool_output: TOOL_OUTPUT_BYTES as usize,
