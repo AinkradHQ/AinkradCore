@@ -63,6 +63,8 @@
     "agent.message",
     "agent.state",
     "agent.transcript",
+    "alarm.cleared",
+    "alarm.raised",
     "audit",
     "notify.delivery",
     "runner.connected",

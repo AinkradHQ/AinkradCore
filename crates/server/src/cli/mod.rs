@@ -619,10 +619,12 @@ async fn serve(
         gateway = with_iroh(gateway, db, &flags).await?;
     }
     tracing::info!(listen = ?ListenLog(&listen), %host, "serving");
+    let health = Arc::new(ainkrad_core_server::health::Health::new(db));
     let scheduler = Scheduler {
         pool: pool.clone(),
         clock: SystemClock,
         every: tick,
+        health: Some(Arc::clone(&health)),
     };
     // Dropping `stop` ends both loops.
     let (stop, mut stopped) = tokio::sync::watch::channel(());
@@ -652,9 +654,9 @@ async fn serve(
         state_dir(db),
     )?);
     tracing::info!(core_fp = identity.fp, "Core identity");
+    ainkrad_core_server::auth::identity::audit_switch(&pool, &identity).await?;
     if let Some(r) = &identity.rotation {
         // This serve announces the statement: the window counts from the first one that does.
-    ainkrad_core_server::auth::identity::audit_switch(&pool, &identity).await?;
         if ainkrad_core_server::auth::Identity::announce(state_dir(db), SystemClock.unix())? {
             let details = serde_json::json!({"new_fp": r.new_fp, "not_before": r.not_before,
                 "window_secs": ainkrad_core_server::auth::identity::WINDOW});
@@ -668,6 +670,7 @@ async fn serve(
     }
     let mut app = App::new(pool, Arc::new(SystemClock), host, identity);
     app.limits = limits;
+    app.health = health;
     app.modules = Arc::clone(&modules);
     if flags.plain_runner {
         tracing::warn!("runners may connect over plain HTTP from loopback (--allow-plain-runner)");

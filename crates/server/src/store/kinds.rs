@@ -24,8 +24,11 @@ pub const PLATFORM: &str = "core";
 /// `runner.degraded` (silent past two heartbeats); `notify.delivery`, one per push the
 /// notifications service tried (E2-12); and a terminal's life (E2-01), who and when, never its
 /// content: `terminal.opened`, `.attached`, `.detached`, `.exited`, `.closed`; and agent
-/// sessions' (`agent.*`, E2-08).
+/// sessions' (`agent.*`, E2-08); and the health alarms (`alarm.raised`, `alarm.cleared`, E1-19.3),
+/// visible to `admin`.
 pub const PLATFORM_EVENT_KINDS: &[&str] = &[
+    "alarm.cleared",
+    "alarm.raised",
     "audit",
     "agent.approval_decided",
     "agent.approval_requested",
@@ -69,6 +72,8 @@ pub fn platform_scope(kind: &str) -> &'static str {
 
 /// The platform's audit actions.
 pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
+    "alarm.cleared",
+    "alarm.raised",
     "agent.cancelled",
     "agent.created",
     "agent.decided",
@@ -84,14 +89,14 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "device.enrolled",
     "device.last_admin_refused",
     "device.revoked",
+    "identity.rotation.announced",
+    "identity.rotation.started",
+    "identity.rotation.switched",
     "job.failed",
     "job.missed",
     "job.ran",
     "notify.token_pruned",
     "pairing.approved",
-    "identity.rotation.announced",
-    "identity.rotation.started",
-    "identity.rotation.switched",
     "pairing.burned",
     "pairing.claimed",
     "pairing.created",

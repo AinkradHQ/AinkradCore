@@ -171,6 +171,23 @@ pub struct Platform;
 impl Classifier for Platform {
     fn notification(&self, e: &StoredEvent) -> Option<Notification> {
         let p = &e.payload.0;
+        if let ("alarm.raised" | "alarm.cleared", Some(alarm)) =
+            (e.kind.as_str(), p["alarm"].as_str())
+        {
+            // The alarm's name and two integers; the debounce is the evaluator's, and a burst
+            // of them merges by `collapse`.
+            let raised = e.kind == "alarm.raised";
+            let (kind, title) = if raised {
+                ("alarm_raised", "Alarm raised")
+            } else {
+                ("alarm_cleared", "Alarm cleared")
+            };
+            let data = json!({"alarm": alarm, "value": p["value"], "threshold": p["threshold"]});
+            return Some(Notification {
+                collapse: Some(format!("alarm:{alarm}")),
+                ..Notification::new(kind, "admin", title, "", data)
+            });
+        }
         let session = p["session"].as_str()?;
         match e.kind.as_str() {
             "agent.approval_requested" => {
