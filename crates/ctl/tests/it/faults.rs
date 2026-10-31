@@ -159,7 +159,7 @@ fn runner_killed_then_revoked() {
     r.runner.kill().unwrap();
     r.runner.wait().unwrap();
     let off = wait_online(&r.a, &r.id, false, Duration::from_secs(30));
-    assert!(has_event(&r.a, mark, "runner.disconnected", &r.id));
+    wait_event(&r.a, mark, "runner.disconnected", Duration::from_secs(15));
     // The same identity in a new process.
     r.runner = connect(&r.core, "vm");
     let on = wait_online(&r.a, &r.id, true, Duration::from_secs(20));

@@ -81,8 +81,9 @@ pub struct HarnessExecutor {
     /// The file-edit tools `accept_edits` lets through when every path they name is inside
     /// the run's working dir.
     pub edit_tools: Vec<String>,
-    /// This runner's workspaces are disposable sandboxes (a container or VM): only it may take
-    /// a project's sandboxed runs, and agy, which cannot ask before acting, runs only then.
+    /// This runner's runs are confined by a sandbox it installs itself. Never set from the
+    /// environment or a flag: nothing in this mode installs one, so it stays false and a
+    /// project's sandboxed runs are refused (review A M1).
     pub sandboxed: bool,
     /// How long an escalated tool call waits for a reviewer before it is denied, when the
     /// server sends no `limits` (an older server); likewise the resume settings below.

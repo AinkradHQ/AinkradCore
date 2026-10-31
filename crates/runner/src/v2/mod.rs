@@ -35,6 +35,7 @@ pub mod pair;
 pub mod pty;
 mod sandbox;
 mod session;
+pub mod termbox;
 pub use exec::{ExecConfig, ExecDriver};
 pub use pty::{PtyConfig, PtyDriver};
 pub use session::Session;
