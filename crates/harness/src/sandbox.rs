@@ -62,6 +62,18 @@ pub(crate) fn profile(spec: &Spec, program: &OsStr) -> String {
             "(allow file-read* file-map-executable (subpath \"{p}\"))\n"
         ));
     }
+    // The /usr/bin developer shims (python3, git, make, ...) run xcode-select, which reads
+    // this one symlink (both spellings, /var being a link to /private/var) to find the
+    // developer dir, then stats its target (granted above). Nothing else in /var/db.
+    for p in [
+        "/private/var/db/xcode_select_link",
+        "/var/db/xcode_select_link",
+    ] {
+        s.push_str(&format!("(allow file-read* (literal \"{p}\"))\n"));
+    }
+    for p in ["/private/var", "/private/var/db", "/var", "/var/db"] {
+        s.push_str(&format!("(allow file-read-metadata (literal \"{p}\"))\n"));
+    }
     // Explicit denies, before the session grants so a grant inside one of these trees (a
     // worktree under the state dir) still wins. They also hold if system.sb ever widens.
     let mut hidden = vec![PathBuf::from(env(spec, "AINKRAD_SANDBOX_STATE"))];
