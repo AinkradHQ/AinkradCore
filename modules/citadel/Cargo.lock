@@ -684,6 +684,7 @@ dependencies = [
  "ainkrad-core-server",
  "ainkrad-proto",
  "axum",
+ "base64 0.22.1",
  "citadel-module",
  "rmcp",
  "serde",
