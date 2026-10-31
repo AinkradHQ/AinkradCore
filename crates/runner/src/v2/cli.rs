@@ -110,7 +110,7 @@ pub async fn pair_main(args: &[&str]) -> ExitCode {
 
 pub const CONNECT_USAGE: &str = "usage:
   ainkrad-runner connect [--state <dir>] [--ca <pem>] [--enable-exec] [--enable-pty]
-                         [--enable-agents]
+                         [--enable-agents] [--terminal-sandbox=on|off]
 
 Serves the Core it paired with (`ainkrad-runner pair`) over protocol v2, reconnecting with a
 jittered backoff and resuming commands in flight. Stops on SIGTERM or Ctrl-C; commands still
@@ -120,6 +120,16 @@ environment), so turn it on only where that is wanted. --enable-pty offers termi
 as this runner's user, each held by a detached ainkrad-ptyhost (found next to this binary, or
 at $AINKRAD_PTYHOST) that outlives the runner; their sockets are in <dir>/terminals. A
 runner started as root gives root shells.
+SECURITY: the `terminal` scope is ADMIN-EQUIVALENT for anything this runner's user can read
+(its key in <dir>, delivered agent secrets, harness logins), because a terminal is a shell as
+that user, unless the terminal sandbox is on. It is on by default: each shell runs with this
+runner's private paths (<dir>, $HOME/.ainkrad-runner, the secrets dir, the agents' work root)
+hidden, and in its own process namespace on Linux (bubblewrap; macOS: Seatbelt), while the
+rest of the host stays usable. The runner refuses to start with --enable-pty when the sandbox
+cannot run. --terminal-sandbox=off removes that protection and is logged loudly at start: use
+it only on a host whose `terminal` devices are trusted as admins. Residual with it on: the
+shell is the same uid, so it reaches what that uid owns outside the hidden paths (the user's
+own files, ssh keys, docker); a signal sent through the API goes to the sandbox wrapper.
 --enable-agents offers agent sessions (the harnesses on PATH, as this runner's user, unconfined
 until E2-09): transcripts in <dir>/agents, delivered secrets in $XDG_RUNTIME_DIR (else
 <dir>/secrets), emptied at start.
@@ -131,6 +141,20 @@ as an unknown or revoked device (auth_failed) 3 dials in a row; pair it again. N
 /// `connect`'s exit status when the Core rejects this runner (as ctl's for a revoked device).
 pub const EXIT_REJECTED: u8 = 6;
 
+/// `--terminal-sandbox=on|off` (default on); `None` for any other value or a repeat.
+fn terminal_sandbox(args: &[&str]) -> Option<bool> {
+    let mut it = args
+        .iter()
+        .filter_map(|a| a.strip_prefix("--terminal-sandbox="));
+    let value = match it.next() {
+        None => return Some(true),
+        Some("on") => true,
+        Some("off") => false,
+        Some(_) => return None,
+    };
+    it.next().is_none().then_some(value)
+}
+
 fn agents_enabled(args: &[&str]) -> bool {
     args.contains(&"--enable-agents")
 }
@@ -139,10 +163,17 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     let run_enabled = args.contains(&"--enable-exec");
     let pty_enabled = args.contains(&"--enable-pty");
     let agents_enabled = agents_enabled(args);
+    let Some(terminal_sandbox) = terminal_sandbox(args) else {
+        eprintln!("{CONNECT_USAGE}");
+        return ExitCode::from(2);
+    };
     let args: Vec<&str> = args
         .iter()
         .copied()
-        .filter(|a| !matches!(*a, "--enable-exec" | "--enable-pty" | "--enable-agents"))
+        .filter(|a| {
+            !matches!(*a, "--enable-exec" | "--enable-pty" | "--enable-agents")
+                && !a.starts_with("--terminal-sandbox=")
+        })
         .collect();
     let args = args.as_slice();
     if !args.len().is_multiple_of(2) || args.chunks(2).any(|f| !matches!(f[0], "--state" | "--ca"))
@@ -180,9 +211,22 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         }
         stop.send_replace(true);
     });
+    if pty_enabled && !terminal_sandbox {
+        let m = "terminal sandbox is OFF: a `terminal` device can read this runner's key, delivered secrets and harness logins; `terminal` scope is admin-equivalent on this host";
+        eprintln!("ainkrad-runner: WARNING: {m}");
+        tracing::warn!("{m}");
+    }
+    if pty_enabled
+        && terminal_sandbox
+        && let Err(e) = super::termbox::probe()
+    {
+        eprintln!("ainkrad-runner: terminals: {e}");
+        return ExitCode::FAILURE;
+    }
     let pty = pty_enabled.then(|| {
         Arc::new(super::PtyDriver::new(super::PtyConfig {
             enabled: true,
+            hide: terminal_sandbox.then(|| super::termbox::hidden_paths(&state.0)),
             ..super::PtyConfig::new(state.0.join("terminals"))
         }))
     });
@@ -209,6 +253,25 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     }
 }
 
+/// Where this runner keeps delivered secrets (`$XDG_RUNTIME_DIR/ainkrad-runner-<tag>`, else
+/// `<state>/secrets`) and the agents' work root (`<tmp>/ainkrad-agent-runs-<tag>`); the tag is
+/// derived from the state dir so two runners never share either.
+pub fn runtime_paths(state: &std::path::Path) -> [PathBuf; 2] {
+    let tag = ring::digest::digest(&ring::digest::SHA256, state.as_os_str().as_encoded_bytes());
+    let tag: String = tag.as_ref()[..6]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let secrets = match std::env::var_os("XDG_RUNTIME_DIR") {
+        Some(run) => PathBuf::from(run).join(format!("ainkrad-runner-{tag}")),
+        None => state.join("secrets"),
+    };
+    [
+        secrets,
+        std::env::temp_dir().join(format!("ainkrad-agent-runs-{tag}")),
+    ]
+}
+
 /// The agent driver over `<state>/agents`, driving the real harnesses (`HarnessExecutor`).
 /// Delivered secrets go to `$XDG_RUNTIME_DIR` (a tmpfs on most Linux hosts), in a dir named
 /// for this state dir so two runners never sweep each other's; else `<state>/secrets`.
@@ -220,24 +283,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
 /// file (`check_roots`), and each harness's version is probed; only an installed one the
 /// compat matrix does not refuse gets a slot, so any other is refused at `agent.start`.
 async fn agents(state: &std::path::Path) -> Result<super::agent::AgentDriver, String> {
-    let secrets = match std::env::var_os("XDG_RUNTIME_DIR") {
-        Some(run) => {
-            let tag =
-                ring::digest::digest(&ring::digest::SHA256, state.as_os_str().as_encoded_bytes());
-            let tag: String = tag.as_ref()[..6]
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect();
-            PathBuf::from(run).join(format!("ainkrad-runner-{tag}"))
-        }
-        None => state.join("secrets"),
-    };
-    let tag = ring::digest::digest(&ring::digest::SHA256, state.as_os_str().as_encoded_bytes());
-    let tag: String = tag.as_ref()[..6]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    let work = std::env::temp_dir().join(format!("ainkrad-agent-runs-{tag}"));
+    let [secrets, work] = runtime_paths(state);
     let executor = crate::HarnessExecutor::new(work, state.join("agents-config"));
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -265,7 +311,25 @@ async fn agents(state: &std::path::Path) -> Result<super::agent::AgentDriver, St
 
 #[cfg(test)]
 mod tests {
-    use super::agents_enabled;
+    use super::{agents_enabled, terminal_sandbox};
+
+    #[test]
+    fn the_terminal_sandbox_is_on_unless_switched_off_explicitly() {
+        assert_eq!(terminal_sandbox(&["--enable-pty"]), Some(true));
+        assert_eq!(terminal_sandbox(&["--terminal-sandbox=on"]), Some(true));
+        assert_eq!(terminal_sandbox(&["--terminal-sandbox=off"]), Some(false));
+        for bad in [
+            "--terminal-sandbox=",
+            "--terminal-sandbox=0",
+            "--terminal-sandbox=OFF",
+        ] {
+            assert_eq!(terminal_sandbox(&[bad]), None, "{bad}");
+        }
+        assert_eq!(
+            terminal_sandbox(&["--terminal-sandbox=on", "--terminal-sandbox=off"]),
+            None
+        );
+    }
 
     #[test]
     fn agents_are_off_by_default() {

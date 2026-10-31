@@ -4,8 +4,8 @@
 //! logins and the keychain live there), `RunAtLoad` and `KeepAlive`, logging to
 //! `~/Library/Logs/ainkrad-runner/runner.log`. Its arguments are the runner's own command
 //! line, so the key comes from `--key-file`: it is never written into the plist. It copies
-//! the few variables the runner reads (`PATH`, `CITADEL_GIT_ASKPASS`,
-//! `CITADEL_RUNNER_SANDBOXED`), since launchd starts agents with almost none.
+//! the few variables the runner reads (`PATH`, `CITADEL_GIT_ASKPASS`), since launchd starts
+//! agents with almost none.
 
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -14,7 +14,7 @@ use std::process::{Command, Stdio};
 pub const LABEL: &str = "com.ainkrad.ainkrad-runner";
 
 /// The variables the agent gets from the installing shell, when set.
-const PASSED_ENV: &[&str] = &["PATH", "CITADEL_GIT_ASKPASS", "CITADEL_RUNNER_SANDBOXED"];
+const PASSED_ENV: &[&str] = &["PATH", "CITADEL_GIT_ASKPASS"];
 
 /// The tags a runner offers when none are given: `macos` on a Mac, plus `xcode` when
 /// `xcode-select -p` finds a developer directory. Elsewhere none.

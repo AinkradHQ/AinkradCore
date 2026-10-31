@@ -567,8 +567,113 @@ mod pty {
             capacity: 4,
             host,
             grace: Duration::from_millis(200),
+            // These tests are about the driver; the sandbox has its own below.
+            hide: None,
             ..PtyConfig::new(dir.to_path_buf())
         }))
+    }
+
+    fn sandboxed_driver(
+        dir: &std::path::Path,
+        hide: Option<Vec<std::path::PathBuf>>,
+    ) -> Arc<PtyDriver> {
+        let host = ainkrad_ptyhost::client::find_host_binary()
+            .expect("ainkrad-ptyhost is built next to the tests (cargo test --workspace)");
+        Arc::new(PtyDriver::new(PtyConfig {
+            enabled: true,
+            capacity: 4,
+            host,
+            grace: Duration::from_millis(200),
+            hide,
+            ..PtyConfig::new(dir.to_path_buf())
+        }))
+    }
+
+    /// What a shell run through `driver` prints for the runner's private files: the key and a
+    /// delivered-secret canary, another terminal's host socket, and the runner's own process.
+    async fn probe_shell(hide: bool) -> String {
+        let base = tmp();
+        let state = base.join("state");
+        let terminals = state.join("terminals");
+        let [secrets, _] = super::super::cli::runtime_paths(&state);
+        std::fs::create_dir_all(&terminals).unwrap();
+        std::fs::create_dir_all(&secrets).unwrap();
+        std::fs::write(state.join("runner-key-canary"), "KEYCANARY-7731").unwrap();
+        std::fs::write(secrets.join("secret-canary"), "SECRETCANARY-4419").unwrap();
+        let _other =
+            std::os::unix::net::UnixListener::bind(terminals.join("t_other.sock")).unwrap();
+        let hidden = hide.then(|| super::super::termbox::hidden_paths(&state));
+        let script = format!(
+            "cat {s}/runner-key-canary 2>&1; cat {x}/secret-canary 2>&1; \
+             if [ -e {t}/t_other.sock ]; then echo SOCK-VISIBLE; else echo SOCK-HIDDEN; fi; \
+             if [ -r /proc/{pid}/environ ]; then echo PROC-VISIBLE; else echo PROC-HIDDEN; fi; echo PROBE-DONE",
+            s = state.display(),
+            x = secrets.display(),
+            t = terminals.display(),
+            pid = std::process::id(),
+        );
+        let (mut core, _) = Core::start_pty(sandboxed_driver(&terminals, hidden)).await;
+        core.send(1, open(&script)).await;
+        let mut out = String::new();
+        until(&mut core, 1, &mut out, |o, _| o.contains("PROBE-DONE")).await;
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&secrets);
+        out
+    }
+
+    /// H1: a terminal shell cannot read the runner's key, a delivered secret, the process of
+    /// the runner, or reach another terminal's host socket. With the sandbox off the same
+    /// shell reads all of it, which shows the probe measures something.
+    #[tokio::test]
+    async fn a_terminal_shell_cannot_read_the_runner_state_unless_the_sandbox_is_off() {
+        let on = probe_shell(true).await;
+        for leak in [
+            "KEYCANARY-7731",
+            "SECRETCANARY-4419",
+            "SOCK-VISIBLE",
+            "PROC-VISIBLE",
+        ] {
+            assert!(!on.contains(leak), "sandboxed shell saw {leak}: {on:?}");
+        }
+        assert!(on.contains("SOCK-HIDDEN"), "{on:?}");
+        let off = probe_shell(false).await;
+        for seen in ["KEYCANARY-7731", "SECRETCANARY-4419", "SOCK-VISIBLE"] {
+            assert!(
+                off.contains(seen),
+                "unsandboxed shell should see {seen}: {off:?}"
+            );
+        }
+    }
+
+    /// The sandboxed shell is still a terminal: it takes typed input and closes on request.
+    #[tokio::test]
+    async fn a_sandboxed_terminal_takes_input_and_closes() {
+        let dir = tmp();
+        let hide = Some(super::super::termbox::hidden_paths(&dir));
+        let (mut core, _) = Core::start_pty(sandboxed_driver(&dir, hide)).await;
+        core.send(1, open("echo UP; while read l; do echo \"got $l\"; done"))
+            .await;
+        let mut out = String::new();
+        let Body::Control(Control::Opened(info)) = until(&mut core, 1, &mut out, |_, _| true).await
+        else {
+            panic!("opened first")
+        };
+        until(&mut core, 1, &mut out, |o, _| o.contains("UP")).await;
+        core.send(1, input("ping\n")).await;
+        until(&mut core, 1, &mut out, |o, _| o.contains("got ping")).await;
+        core.send(
+            3,
+            Body::Command(Command::PtyClose(PtyClose {
+                terminal: info.terminal,
+            })),
+        )
+        .await;
+        let end = until(&mut core, 3, &mut out, |_, b| {
+            matches!(b, Body::Result(_) | Body::Error(_))
+        })
+        .await;
+        assert!(matches!(end, Body::Result(Reply::PtyClose(_))), "{end:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn tmp() -> std::path::PathBuf {
