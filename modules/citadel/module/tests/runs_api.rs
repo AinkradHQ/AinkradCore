@@ -39,6 +39,11 @@ fn mutating(agent: i64) -> Vec<(Method, String, Option<Value>)> {
         (Method::POST, format!("/agents/{agent}/pause"), None),
         (Method::POST, format!("/agents/{agent}/resume"), None),
         (Method::POST, "/runs/1/retry".into(), None),
+        (
+            Method::POST,
+            "/companies/1/requests".into(),
+            Some(json!({"title": "A billing page"})),
+        ),
         (Method::POST, "/issues/1/release-checkout".into(), None),
     ]
 }

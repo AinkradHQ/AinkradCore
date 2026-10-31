@@ -44,6 +44,9 @@ pub async fn pause_agent<H: Host>(
     .bind(agent.0)
     .fetch_all(&mut *tx)
     .await?;
+    for &id in &live {
+        super::token::revoke_in(&mut tx, RunId(id), now).await?;
+    }
     audit::append(
         &mut tx,
         Event::new(actor, "agent.paused")

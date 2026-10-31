@@ -40,6 +40,8 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/runs/{id}/retry"),
     ("POST", "/agents/{id}/terminate"),
     ("POST", "/agents/{id}/pause"),
+    // Starts spend (the CEO's wake) like `/agents/{id}/wake`, so the same step-up.
+    ("POST", "/companies/{id}/requests"),
     ("POST", "/agents/{id}/resume"),
 ];
 
@@ -311,6 +313,15 @@ pub async fn submit_request(
     )?;
     if new.title.trim().is_empty() {
         return Err(ApiError::bad_request("a request needs a title"));
+    }
+    if new.title.chars().count() > 200
+        || new.body.chars().count() > 20_000
+        || new.criteria.len() > 20
+        || new.criteria.iter().any(|c| c.chars().count() > 500)
+    {
+        return Err(ApiError::bad_request(
+            "a title is at most 200 characters, a body 20000, and 20 criteria of 500",
+        ));
     }
     let extra = IntakeExtra {
         project_id: new.project_id.map(ProjectId),

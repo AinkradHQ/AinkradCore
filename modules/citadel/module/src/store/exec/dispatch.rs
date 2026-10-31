@@ -326,6 +326,22 @@ async fn pick(pool: &sqlx::SqlitePool, now: &str) -> Result<Option<Candidate>, E
         let agent = AgentId(row.try_get("agent_id")?);
         let company = crate::domain::org::CompanyId(row.try_get("company_id")?);
         let issue = row.try_get::<Option<i64>, _>("issue_id")?.map(IssueId);
+        // A hard ceiling on what the engine starts per company per day, whatever woke the run
+        // (a retry, an escalation, a repair): the wake waits for the window to move on.
+        let cap = crate::settings::value_in(&mut tx, "engine.max_runs_per_day").await?;
+        if cap > 0 {
+            let started: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM citadel_runs r JOIN citadel_agents a ON a.id = r.agent_id \
+                 WHERE a.company_id = ?1 AND julianday(r.queued_at) > julianday(?2, '-1 day')",
+            )
+            .bind(company.0)
+            .bind(now)
+            .fetch_one(&mut *tx)
+            .await?;
+            if started >= cap {
+                continue;
+            }
+        }
         if admit_in(&mut tx, agent, company, issue, now).await? {
             let tier = task_tier_in(&mut tx, issue).await?;
             picked = Some(Candidate {

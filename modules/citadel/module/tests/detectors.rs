@@ -422,6 +422,7 @@ async fn a_run_never_handed_the_tools_is_not_flagged_for_not_using_them() {
 #[tokio::test]
 async fn an_idle_issue_is_reported_and_repaired_by_a_wake_only_while_the_engine_is_on() {
     let w = world().await;
+    setting(&w, "mcp.enabled", 1).await;
     let at = later(&w, 2).await;
     let report = engine::stuck_report(w.app(), &w.host, &at).await.unwrap();
     let kinds: Vec<&str> = report.iter().map(|s| s.kind.as_str()).collect();
@@ -485,6 +486,7 @@ async fn an_idle_issue_is_reported_and_repaired_by_a_wake_only_while_the_engine_
 #[tokio::test]
 async fn an_issue_past_its_repair_budget_goes_to_the_admin_once() {
     let w = world().await;
+    setting(&w, "mcp.enabled", 1).await;
     setting(&w, "repair.budget", 0).await;
     let at = later(&w, 2).await;
     let done = engine::repair_stuck(w.app(), &w.host, &at).await.unwrap();
@@ -508,6 +510,7 @@ async fn an_issue_past_its_repair_budget_goes_to_the_admin_once() {
 #[tokio::test]
 async fn work_with_a_live_run_is_never_stuck_and_never_stopped() {
     let w = world().await;
+    setting(&w, "mcp.enabled", 1).await;
     let _run = w.running().await;
     let at = later(&w, 5).await;
     assert!(
@@ -1091,4 +1094,262 @@ async fn a_request_to_the_company_needs_admin() {
         .await,
         0
     );
+}
+
+// --- the review's fixes -------------------------------------------------------------------------
+
+/// A live run with a token, and the token.
+async fn tokened(w: &W) -> (engine::Run, String) {
+    let run = w.running().await;
+    let t = engine::issue_run_token(&w.app().pool, run.id, &w.now())
+        .await
+        .unwrap();
+    (run, t.expose().to_owned())
+}
+
+#[tokio::test]
+async fn a_terminated_or_paused_agent_keeps_no_token_even_if_the_runner_never_answers() {
+    for terminate in [true, false] {
+        let w = world().await;
+        let (run, token) = tokened(&w).await;
+        assert!(
+            engine::authorize_run_token(&w.app().pool, &token, &w.now())
+                .await
+                .is_ok()
+        );
+        w.host
+            .refuse
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let agent = AgentId(w.seed.agent);
+        let by = (AuditActor::System, w.fx.dev.id.as_str());
+        if terminate {
+            engine::terminate_agent(w.app(), &w.host, agent, "gone", ADMIN, by, &w.now())
+                .await
+                .unwrap();
+        } else {
+            engine::pause_agent(w.app(), &w.host, agent, by, &w.now())
+                .await
+                .unwrap();
+        }
+        // The runner took nothing, the run is still live, and the old token is dead.
+        assert!(!w.run(run.id).await.state.is_terminal());
+        assert!(
+            engine::authorize_run_token(&w.app().pool, &token, &w.now())
+                .await
+                .is_err(),
+            "terminate={terminate}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_token_of_a_run_being_stopped_or_of_an_inactive_agent_is_refused() {
+    let w = world().await;
+    let (_, token) = tokened(&w).await;
+    sqlx::query("UPDATE citadel_agents SET status = 'paused' WHERE id = ?")
+        .bind(w.seed.agent)
+        .execute(&w.app().pool)
+        .await
+        .unwrap();
+    assert!(
+        engine::authorize_run_token(&w.app().pool, &token, &w.now())
+            .await
+            .is_err()
+    );
+    sqlx::query("UPDATE citadel_agents SET status = 'active'")
+        .execute(&w.app().pool)
+        .await
+        .unwrap();
+    assert!(
+        engine::authorize_run_token(&w.app().pool, &token, &w.now())
+            .await
+            .is_ok()
+    );
+    sqlx::query("UPDATE citadel_runs SET cancel_requested_at = ?")
+        .bind(w.now())
+        .execute(&w.app().pool)
+        .await
+        .unwrap();
+    assert!(
+        engine::authorize_run_token(&w.app().pool, &token, &w.now())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn a_request_is_capped_in_size() {
+    let w = world().await;
+    let uri = format!("/companies/{}/requests", w.seed.company);
+    for body in [
+        json!({"title": "x".repeat(201)}),
+        json!({"title": "ok", "body": "x".repeat(20_001)}),
+        json!({"title": "ok", "criteria": vec!["c"; 21]}),
+    ] {
+        let (status, _) = call(&w.fx, Some(&w.fx.dev), Method::POST, &uri, Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(audited(&w, "intake.submitted").await, 0);
+}
+
+#[tokio::test]
+async fn a_company_cannot_start_more_runs_a_day_than_its_cap() {
+    let w = world().await;
+    setting(&w, "engine.max_runs_per_day", 1).await;
+    let first = cycle(&w, "a", Outcome::Succeeded, None).await;
+    assert_eq!(first.state, RunState::Succeeded);
+    w.wake("b").await;
+    for _ in 0..3 {
+        assert!(w.dispatch().await.is_none(), "the day's cap is reached");
+    }
+    setting(&w, "engine.max_runs_per_day", 0).await;
+    assert!(w.dispatch().await.is_some(), "0 lifts it");
+}
+
+#[tokio::test]
+async fn repair_does_nothing_while_the_tools_are_off() {
+    let w = world().await;
+    let at = later(&w, 2).await;
+    assert!(
+        engine::repair_stuck(w.app(), &w.host, &at)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        count(&w, "SELECT count(*) FROM citadel_wake_requests").await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn a_runner_outage_is_told_not_acted_on() {
+    let mut w = world().await;
+    setting(&w, "mcp.enabled", 1).await;
+    w.host.runners.clear();
+    w.wake("a").await;
+    let at = later(&w, 2).await;
+    let before = next_actor(&w).await;
+    engine::repair_stuck(w.app(), &w.host, &at).await.unwrap();
+    assert_eq!(
+        next_actor(&w).await,
+        before,
+        "no issue moves because no runner is up"
+    );
+    assert_eq!(
+        count(
+            &w,
+            "SELECT count(*) FROM citadel_wake_requests WHERE status = 'dropped'"
+        )
+        .await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn switching_the_engine_on_drops_the_wakes_that_piled_up() {
+    let w = world().await;
+    engine::set_engine(&w.app().pool, false, &w.fx.dev.id, &w.now())
+        .await
+        .unwrap();
+    w.wake("old").await;
+    sqlx::query("UPDATE citadel_wake_requests SET created_at = '2020-01-01T00:00:00.000Z'")
+        .execute(&w.app().pool)
+        .await
+        .unwrap();
+    let mut fresh = w.wake_for("fresh");
+    fresh.issue_id = None;
+    engine::enqueue_wake(&w.app().pool, &fresh).await.unwrap();
+    engine::set_engine(&w.app().pool, true, &w.fx.dev.id, &w.now())
+        .await
+        .unwrap();
+    let (old, fresh): (String, String) = (
+        sqlx::query_scalar(
+            "SELECT status FROM citadel_wake_requests WHERE idempotency_key = 'old'",
+        )
+        .fetch_one(&w.app().pool)
+        .await
+        .unwrap(),
+        sqlx::query_scalar(
+            "SELECT status FROM citadel_wake_requests WHERE idempotency_key = 'fresh'",
+        )
+        .fetch_one(&w.app().pool)
+        .await
+        .unwrap(),
+    );
+    assert_eq!((old.as_str(), fresh.as_str()), ("dropped", "pending"));
+}
+
+#[tokio::test]
+async fn the_agents_words_are_redacted_capped_and_kept_out_of_the_audit() {
+    let w = world().await;
+    let secret = "sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    let long = format!("{secret} {}", "y".repeat(2_000));
+    let first = cycle_with(&w, "a", Outcome::Succeeded, Some(&long), true).await;
+    let nudge: String =
+        sqlx::query_scalar("SELECT reason FROM citadel_wake_requests WHERE idempotency_key = ?")
+            .bind(format!("no-action:run:{}", first.id.0))
+            .fetch_one(&w.app().pool)
+            .await
+            .unwrap();
+    assert!(!nudge.contains(secret) && nudge.len() < 700, "{nudge}");
+    let details: String = sqlx::query_scalar(
+        "SELECT details FROM audit_events WHERE action = 'citadel.run.ended_without_action'",
+    )
+    .fetch_one(&w.app().pool)
+    .await
+    .unwrap();
+    assert!(
+        !details.contains("yyyy") && !details.contains("sk-ant"),
+        "{details}"
+    );
+}
+
+#[tokio::test]
+async fn one_refused_wake_does_not_abort_the_repair_pass() {
+    let w = world().await;
+    setting(&w, "mcp.enabled", 1).await;
+    // A second company's agent as this issue's next actor (a row the schema normally refuses; the
+    // guard is dropped to stand in for any state the queue would refuse): the wake is refused.
+    sqlx::query("DROP TRIGGER citadel_issues_agents_same_company_update")
+        .execute(&w.app().pool)
+        .await
+        .unwrap();
+    let other = seed(&w.app().pool, "B", "OTH", ProjectMode::Scrum).await;
+    sqlx::query("UPDATE citadel_issues SET next_agent_id = ? WHERE id = ?")
+        .bind(other.agent)
+        .bind(w.seed.issue)
+        .execute(&w.app().pool)
+        .await
+        .unwrap();
+    let at = later(&w, 2).await;
+    let done = engine::repair_stuck(w.app(), &w.host, &at).await.unwrap();
+    assert!(!done.is_empty(), "the pass finished");
+    assert!(
+        done.iter()
+            .any(|r| r.issue_id == Some(IssueId(w.seed.issue)) && !r.changed)
+    );
+    // The other company's own idle issue was still repaired.
+    assert!(
+        done.iter()
+            .any(|r| r.issue_id == Some(IssueId(other.issue)) && r.changed),
+        "{done:?}"
+    );
+}
+
+#[tokio::test]
+async fn checkout_refuses_another_companys_issue() {
+    let w = world().await;
+    let other = seed(&w.app().pool, "B", "OTH", ProjectMode::Scrum).await;
+    let run = w.running().await;
+    let got = work::checkout_issue(&w.app().pool, IssueId(other.issue), run.id, &w.now()).await;
+    assert!(
+        matches!(got, Err(work::CheckoutError::IssueNotFound)),
+        "{got:?}"
+    );
+    let held = work::get_issue(&w.app().pool, IssueId(other.issue))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.checkout_run_id, None);
 }

@@ -119,6 +119,18 @@ pub async fn checkout_issue(
     let before = issue_in(&mut tx, issue_id)
         .await?
         .ok_or(CheckoutError::IssueNotFound)?;
+    // The run's agent works for the issue's company only.
+    let same: bool = sqlx::query_scalar(
+        "SELECT p.company_id = a.company_id FROM citadel_projects p, citadel_agents a \
+         WHERE p.id = ? AND a.id = ?",
+    )
+    .bind(before.project_id.0)
+    .bind(agent)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !same {
+        return Err(CheckoutError::IssueNotFound);
+    }
     let starts = matches!(before.state, IssueState::Backlog | IssueState::Todo);
     if starts && before.parent_id.is_none() {
         let full = super::kanban::wip_full(&mut tx, before.project_id, IssueState::InProgress);

@@ -91,6 +91,10 @@ async fn terminate_in(
     .bind(agent.0)
     .fetch_all(&mut *conn)
     .await?;
+    // Its tokens die with the decision, not when the runner finally answers the stop.
+    for &id in &live {
+        super::token::revoke_in(conn, RunId(id), now).await?;
+    }
     let wakes: Vec<i64> = sqlx::query_scalar(
         "UPDATE citadel_wake_requests SET status = 'dropped', dropped_reason = ? \
          WHERE agent_id = ? AND status = 'pending' RETURNING id",
@@ -137,7 +141,7 @@ async fn terminate_in(
             .entity("agent", agent.0)
             .company(company)
             .details(
-                json!({"reason": reason, "runs": live, "dropped_wakes": wakes,
+                json!({"reason": reason.chars().take(120).collect::<String>(), "runs": live, "dropped_wakes": wakes,
                 "issues": issues, "handed_to": to.0, "at": now}),
             ),
     )

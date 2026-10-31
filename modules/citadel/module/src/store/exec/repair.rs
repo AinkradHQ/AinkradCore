@@ -97,6 +97,10 @@ pub async fn repair_stuck<H: Host>(app: &App, host: &H, now: &str) -> Result<Vec
     if engine_device(&app.pool).await?.is_none() {
         return Ok(vec![]);
     }
+    // Without the tools a run cannot move its issue: rewaking and escalating would only spend.
+    if crate::settings::value(&app.pool, "mcp.enabled").await? == 0 {
+        return Ok(vec![]);
+    }
     let serving = super::stuck::serving(app, host).await;
     let mut tx = ainkrad_core_server::store::begin_write(&app.pool).await?;
     let (mut done, mut touched) = (vec![], HashSet::new());
@@ -178,7 +182,7 @@ async fn park_wake_in(conn: &mut SqliteConnection, f: &IssueFacts) -> Result<(),
         idempotency_key: format!("parked:issue:{}:{since}", f.id.0),
         not_before: None,
     };
-    enqueue_in(conn, &wake, 1).await?;
+    try_enqueue_in(conn, &wake).await?;
     Ok(())
 }
 
@@ -262,7 +266,7 @@ async fn apply(conn: &mut SqliteConnection, it: &Item, now: &str) -> Result<bool
                 return Ok(false);
             };
             let key = format!("repair:issue:{}:{}:{now}", issue.0, it.rule);
-            let w = enqueue_in(conn, &wake_again(agent, key), 1).await?;
+            let w = enqueue_refused(conn, &wake_again(agent, key)).await?;
             Ok(w.status == crate::domain::exec::WakeStatus::Pending)
         }
         (R::ReassignToLead, Some(issue)) if it.rule == "no_next_actor" => {
@@ -285,7 +289,7 @@ async fn apply(conn: &mut SqliteConnection, it: &Item, now: &str) -> Result<bool
             .map(crate::store::org::affected)?;
             if let (true, NextActor::Agent(a)) = (set, to) {
                 let key = format!("repair:issue:{}:{}:{now}", issue.0, it.rule);
-                enqueue_in(conn, &wake_again(a, key), 1).await?;
+                enqueue_refused(conn, &wake_again(a, key)).await?;
             }
             Ok(set)
         }
@@ -343,7 +347,7 @@ async fn apply(conn: &mut SqliteConnection, it: &Item, now: &str) -> Result<bool
             };
             transition_in(conn, &current, AuditActor::System, &cancel, now).await?;
             let key = format!("repair:run:{}", current.id.0);
-            enqueue_in(conn, &wake_again(current.agent_id, key), 1).await?;
+            enqueue_refused(conn, &wake_again(current.agent_id, key)).await?;
             Ok(true)
         }
         (R::DropWake, _) => {
@@ -365,6 +369,19 @@ async fn to_admin(conn: &mut SqliteConnection, it: &Item) -> Result<bool, Failed
     let by = AuditActor::System;
     let moved = reassign_in(conn, issue, admin, by, WakeSource::Escalation).await?;
     Ok(moved.is_some())
+}
+
+/// [`enqueue_in`] inside a repair: a wake the queue refuses is a refused repair (recorded as
+/// unchanged), not a failed pass.
+async fn enqueue_refused(
+    conn: &mut SqliteConnection,
+    w: &NewWakeRequest,
+) -> Result<WakeRequest, Failed> {
+    match enqueue_in(conn, w, 1).await {
+        Ok(w) => Ok(w),
+        Err(Error::InvalidArgument(why)) => Err(Failed::Refused(why)),
+        Err(e) => Err(Failed::Db(e)),
+    }
 }
 
 /// Drops a pending wake with `why` (never silently); `false` when it was no longer pending.

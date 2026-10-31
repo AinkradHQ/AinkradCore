@@ -329,3 +329,20 @@ pub(super) async fn attempt_in(conn: &mut SqliteConnection, r: &Run) -> Result<i
     .fetch_one(&mut *conn)
     .await
 }
+
+/// [`enqueue_in`] for a wake a watcher queues on the side: a refusal of the wake itself (an
+/// issue of another company than the agent, say) is logged and skipped, so one bad row cannot
+/// abort the transaction it rides in (a run's end, the repair pass). Storage errors still fail.
+pub(crate) async fn try_enqueue_in(
+    conn: &mut SqliteConnection,
+    w: &NewWakeRequest,
+) -> Result<Option<WakeRequest>, Error> {
+    match enqueue_in(conn, w, 1).await {
+        Ok(w) => Ok(Some(w)),
+        Err(Error::InvalidArgument(why)) => {
+            tracing::warn!(agent = w.agent_id.0, %why, "a wake was refused and skipped");
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}

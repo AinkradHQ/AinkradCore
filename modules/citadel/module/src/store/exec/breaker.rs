@@ -203,7 +203,7 @@ async fn pause_if_looping(
             idempotency_key: format!("breaker:agent:{}:run:{}", r.agent_id.0, r.id.0),
             not_before: None,
         };
-        enqueue_in(conn, &wake, 1).await?;
+        try_enqueue_in(conn, &wake).await?;
     }
     Ok(true)
 }

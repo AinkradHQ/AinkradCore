@@ -1198,6 +1198,17 @@ async fn no_token_is_issued_for_a_run_that_has_not_started() {
 #[tokio::test]
 async fn cache_tokens_count_at_a_fraction_against_the_runs_own_cap() {
     let w = world().await;
+    // The issue's own cap counts every token in full; this test is about the run's.
+    citadel_module::settings::handle()
+        .set(
+            &w.app().pool,
+            "issue.token_cap",
+            "0",
+            AuditActor::System,
+            &w.now(),
+        )
+        .await
+        .unwrap();
     let run = w.running().await;
     // 12M tokens of context re-read would be six caps in full; at a tenth it is 1.2M, under 2M.
     let cache = Tokens {

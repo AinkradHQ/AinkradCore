@@ -135,7 +135,8 @@ pub async fn authorize_run_token(
 ) -> Result<RunScope, AuthError> {
     let Some(row) = sqlx::query(
         "SELECT t.revoked_at IS NOT NULL AS revoked, julianday(t.expires_at) <= julianday(?) AS expired, \
-         r.id, r.state, r.agent_id, r.issue_id, a.company_id \
+         r.id, r.state, r.agent_id, r.issue_id, a.company_id, a.status AS agent_status, \
+         r.cancel_requested_at IS NOT NULL AS stopping \
          FROM citadel_run_tokens t JOIN citadel_runs r ON r.id = t.run_id \
          JOIN citadel_agents a ON a.id = r.agent_id WHERE t.token_hash = ?",
     )
@@ -153,7 +154,14 @@ pub async fn authorize_run_token(
         return Err(AuthError::Expired);
     }
     let state: RunState = text(&row, "state")?;
-    if state.is_terminal() || state == RunState::Queued {
+    // An agent that is paused or terminated, or a run being stopped, keeps no write power even if
+    // the runner never answers the stop.
+    let agent_status: String = row.try_get("agent_status")?;
+    if state.is_terminal()
+        || state == RunState::Queued
+        || agent_status != "active"
+        || row.try_get::<bool, _>("stopping")?
+    {
         return Err(AuthError::RunNotLive);
     }
     Ok(RunScope {

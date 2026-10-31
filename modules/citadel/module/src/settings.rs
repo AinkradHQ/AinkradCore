@@ -208,10 +208,24 @@ pub const SETTINGS: &[ModuleSetting] = &[
     ),
     s(
         "issue.token_cap",
-        0,
+        5_000_000,
         0,
         1_000_000_000,
         "The most tokens all the runs of one issue may use together; 0 sets no cap.",
+    ),
+    s(
+        "engine.max_runs_per_day",
+        200,
+        0,
+        100_000,
+        "The most runs the engine starts for one company in 24 hours, whatever woke them; 0 sets no cap.",
+    ),
+    s(
+        "wake.max_age_secs",
+        86_400,
+        60,
+        30 * DAY,
+        "A pending wake older than this is dropped when the engine is switched on.",
     ),
     s(
         "wake.max_attempts",

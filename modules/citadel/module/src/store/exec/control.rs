@@ -184,9 +184,26 @@ pub async fn set_engine(
     } else {
         "engine.disabled"
     };
+    // Switched on, the engine must not replay what piled up while it was off (months-old wakes
+    // of any source): the old ones are dropped, with the reason.
+    let mut aged = 0;
+    if enabled {
+        let max = crate::settings::value_in(&mut tx, "wake.max_age_secs").await?;
+        aged = sqlx::query(
+            "UPDATE citadel_wake_requests SET status = 'dropped', \
+             dropped_reason = 'older than wake.max_age_secs when the engine was switched on' \
+             WHERE status = 'pending' \
+             AND julianday(created_at) < julianday(?1, '-' || ?2 || ' seconds')",
+        )
+        .bind(now)
+        .bind(max)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    }
     audit::append(
         &mut tx,
-        Event::new(SYSTEM, action).details(json!({"by_device": by_device})),
+        Event::new(SYSTEM, action).details(json!({"by_device": by_device, "aged_wakes": aged})),
     )
     .await?;
     tx.commit().await

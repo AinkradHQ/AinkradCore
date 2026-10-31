@@ -199,7 +199,9 @@ pub(super) async fn stuck_in(
             agent,
             row.try_get::<Option<i64>, _>("issue_id")?.map(IssueId),
             harness,
-            serving.known,
+            // No runner online at all is an outage (told, not acted on); escalating is for a
+            // runner that is online but offers nothing for this agent.
+            serving.known || serving.harnesses.is_empty(),
             row.try_get("waiting_secs")?,
             after,
         ));
