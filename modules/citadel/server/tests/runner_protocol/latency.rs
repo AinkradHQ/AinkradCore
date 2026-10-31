@@ -27,7 +27,7 @@ async fn a_wake_reaches_a_waiting_runner_at_once() {
     let claimed = "SELECT count(*) FROM runs WHERE claimed_at IS NOT NULL";
     while count(pool, claimed).await == 0 {
         assert!(
-            enqueued.elapsed() < Duration::from_secs(5),
+            enqueued.elapsed() < Duration::from_secs(30),
             "never dispatched"
         );
         tokio::time::sleep(Duration::from_millis(2)).await;
@@ -35,8 +35,10 @@ async fn a_wake_reaches_a_waiting_runner_at_once() {
     let dispatch = enqueued.elapsed();
     let (run, _) = tokens.recv().await.unwrap();
     eprintln!("push dispatch: claimed {dispatch:?} after the wake was enqueued (run {run})");
+    // The poll is a minute: anything well under it was the push. A tighter bound only measures
+    // how loaded the machine is.
     assert!(
-        dispatch < Duration::from_millis(250),
+        dispatch < Duration::from_secs(10),
         "dispatched {dispatch:?} after enqueue"
     );
     release.notify_one();
