@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use tokio::io::copy_bidirectional;
+use tokio::io::{
+    AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
+    copy, copy_bidirectional, split,
+};
 use tokio::net::{TcpListener, TcpStream, UnixListener, UnixStream};
 use tokio::task::JoinHandle;
 
@@ -22,6 +25,8 @@ pub struct Target {
     pub host: String,
     pub port: u16,
     pub tls: bool,
+    /// The Core as the enrolment names it (`host[:port]`): what the Core expects in `Host`.
+    pub authority: String,
 }
 
 /// The Core MCP URL's authority, and the same URL as the sandbox sees it.
@@ -40,7 +45,12 @@ pub fn parse(url: &str) -> Option<(Target, String)> {
     let host = host.trim_matches(['[', ']']).to_owned();
     (!host.is_empty()).then(|| {
         (
-            Target { host, port, tls },
+            Target {
+                host,
+                port,
+                tls,
+                authority: authority.to_owned(),
+            },
             format!("http://127.0.0.1:{FORWARD_PORT}/{path}"),
         )
     })
@@ -74,21 +84,119 @@ fn tls_config(given: Option<Arc<rustls::ClientConfig>>) -> Arc<rustls::ClientCon
 async fn upstream(
     target: &Target,
     tls: &Arc<rustls::ClientConfig>,
-    mut client: UnixStream,
+    client: UnixStream,
 ) -> io::Result<()> {
     let tcp = TcpStream::connect((target.host.as_str(), target.port)).await?;
     if target.tls {
         let name = rustls::pki_types::ServerName::try_from(target.host.clone())
             .map_err(io::Error::other)?;
-        let mut tls = tokio_rustls::TlsConnector::from(tls.clone())
+        let tls = tokio_rustls::TlsConnector::from(tls.clone())
             .connect(name, tcp)
             .await?;
-        copy_bidirectional(&mut client, &mut tls).await?;
+        relay(client, tls, &target.authority).await
     } else {
-        let mut tcp = tcp;
-        copy_bidirectional(&mut client, &mut tcp).await?;
+        relay(client, tcp, &target.authority).await
     }
-    Ok(())
+}
+
+/// Client requests go through `rewrite_requests`; responses are copied as they come.
+async fn relay<U: AsyncRead + AsyncWrite + Unpin>(
+    client: UnixStream,
+    up: U,
+    authority: &str,
+) -> io::Result<()> {
+    let (cr, mut cw) = split(client);
+    let (mut ur, mut uw) = split(up);
+    let requests = async {
+        let r = rewrite_requests(BufReader::new(cr), &mut uw, authority).await;
+        let _ = uw.shutdown().await;
+        r
+    };
+    let (a, b) = tokio::join!(requests, copy(&mut ur, &mut cw));
+    a.and(b.map(|_| ()))
+}
+
+const MAX_HEAD: usize = 64 * 1024;
+
+/// Copies HTTP/1.x requests from `r` to `w`, setting `Host` to `authority` on each: the sandbox
+/// dialled the forwarder's loopback address, but the Core only answers to its own name. Handles
+/// keep-alive (many requests per connection), heads split across reads, and bodies sized by
+/// `Content-Length` or `chunked`.
+pub async fn rewrite_requests<R, W>(mut r: R, mut w: W, authority: &str) -> io::Result<()>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let bad = |m: &str| io::Error::new(io::ErrorKind::InvalidData, m.to_owned());
+    let mut line = Vec::new();
+    loop {
+        let mut head = Vec::new();
+        let (mut length, mut chunked, mut first) = (0u64, false, true);
+        loop {
+            line.clear();
+            if r.read_until(b'\n', &mut line).await? == 0 {
+                return if first {
+                    w.flush().await
+                } else {
+                    Err(bad("truncated head"))
+                };
+            }
+            first = false;
+            if head.len() + line.len() > MAX_HEAD {
+                return Err(bad("head too large"));
+            }
+            if line == b"\r\n" {
+                break;
+            }
+            let text = String::from_utf8_lossy(&line).to_ascii_lowercase();
+            if text.starts_with("host:") {
+                head.extend_from_slice(format!("Host: {authority}\r\n").as_bytes());
+                continue;
+            }
+            if let Some(v) = text.strip_prefix("content-length:") {
+                length = v.trim().parse().map_err(|_| bad("content-length"))?;
+            } else if text.starts_with("transfer-encoding:") && text.contains("chunked") {
+                chunked = true;
+            }
+            head.extend_from_slice(&line);
+        }
+        head.extend_from_slice(b"\r\n");
+        w.write_all(&head).await?;
+        if chunked {
+            loop {
+                line.clear();
+                r.read_until(b'\n', &mut line).await?;
+                w.write_all(&line).await?;
+                let size = u64::from_str_radix(
+                    String::from_utf8_lossy(&line)
+                        .split(';')
+                        .next()
+                        .unwrap_or("")
+                        .trim(),
+                    16,
+                )
+                .map_err(|_| bad("chunk size"))?;
+                if size == 0 {
+                    // Trailers, up to the blank line.
+                    loop {
+                        line.clear();
+                        if r.read_until(b'\n', &mut line).await? == 0 {
+                            return Err(bad("truncated trailer"));
+                        }
+                        w.write_all(&line).await?;
+                        if line == b"\r\n" {
+                            break;
+                        }
+                    }
+                    break;
+                }
+                copy(&mut (&mut r).take(size + 2), &mut w).await?;
+            }
+        } else {
+            copy(&mut (&mut r).take(length), &mut w).await?;
+        }
+        w.flush().await?;
+    }
 }
 
 /// Listens on `sock` (mode 0600) and forwards every connection to `target`.
@@ -135,6 +243,34 @@ pub async fn forward_main(port: &str, sock: &str) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn every_request_on_a_connection_gets_the_core_host() {
+        let input = b"POST /a HTTP/1.1\r\nhOsT: 127.0.0.1:47831\r\nContent-Length: 5\r\n\r\nHost:\
+            GET /b HTTP/1.1\r\nHost: 127.0.0.1:47831\r\n\r\n\
+            POST /c HTTP/1.1\r\nTransfer-Encoding: chunked\r\nHost: x\r\n\r\n3\r\nabc\r\n0\r\n\r\n\
+            GET /d HTTP/1.1\r\nHost: y\r\n\r\n";
+        // One byte per read: a head split anywhere still parses.
+        let (mut tx, rx) = tokio::io::duplex(1);
+        let feed = tokio::spawn(async move {
+            for b in input.iter() {
+                tx.write_all(&[*b]).await.unwrap();
+            }
+        });
+        let mut out = Vec::new();
+        rewrite_requests(BufReader::new(rx), &mut out, "core.example:8443")
+            .await
+            .unwrap();
+        feed.await.unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(
+            out.matches("Host: core.example:8443\r\n").count(),
+            4,
+            "{out}"
+        );
+        assert!(!out.contains("47831") && !out.contains("Host: x") && !out.contains("Host: y"));
+        assert!(out.contains("\r\n\r\nHost:GET /b") && out.contains("3\r\nabc\r\n0\r\n\r\nGET /d"));
+    }
 
     #[test]
     fn the_sandbox_url_keeps_the_path_and_drops_the_host() {

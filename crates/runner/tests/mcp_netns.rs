@@ -9,13 +9,39 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ainkrad_runner::mcp_bridge::{self, Target};
 
-fn serve(listener: TcpListener, reply: &'static str, hits: Arc<AtomicUsize>) {
+/// A keep-alive HTTP server that answers 403 to any `Host` but `want` (the Core's `unknown_host`).
+fn serve(listener: TcpListener, want: String, hits: Arc<AtomicUsize>) {
     std::thread::spawn(move || {
-        for conn in listener.incoming().flatten() {
-            hits.fetch_add(1, Ordering::SeqCst);
-            let mut conn = conn;
-            let _ = conn.read(&mut [0; 512]);
-            let _ = conn.write_all(reply.as_bytes());
+        for mut conn in listener.incoming().flatten() {
+            let (want, hits) = (want.clone(), hits.clone());
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                loop {
+                    let end = loop {
+                        if let Some(p) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                            break p + 4;
+                        }
+                        let mut chunk = [0; 512];
+                        match conn.read(&mut chunk) {
+                            Ok(n) if n > 0 => buf.extend_from_slice(&chunk[..n]),
+                            _ => return,
+                        }
+                    };
+                    let head = String::from_utf8_lossy(&buf[..end]).into_owned();
+                    buf.drain(..end);
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    let ok = head.lines().any(|l| l == format!("Host: {want}"));
+                    let (status, body) = if ok {
+                        ("200 OK", "mcp-ok")
+                    } else {
+                        ("403 Forbidden", "denied")
+                    };
+                    let reply = format!("HTTP/1.1 {status}\r\nContent-Length: 6\r\n\r\n{body}");
+                    if conn.write_all(reply.as_bytes()).is_err() {
+                        return;
+                    }
+                }
+            });
         }
     });
 }
@@ -39,15 +65,11 @@ async fn a_denied_session_reaches_only_its_mcp_route() {
     let mcp_hits = Arc::new(AtomicUsize::new(0));
     let mcp = TcpListener::bind("127.0.0.1:0").unwrap();
     let mcp_port = mcp.local_addr().unwrap().port();
-    serve(mcp, "HTTP/1.0 200 OK\r\n\r\nmcp-ok", mcp_hits.clone());
+    serve(mcp, format!("127.0.0.1:{mcp_port}"), mcp_hits.clone());
     let canary_hits = Arc::new(AtomicUsize::new(0));
     let canary = TcpListener::bind("127.0.0.1:0").unwrap();
     let canary_port = canary.local_addr().unwrap().port();
-    serve(
-        canary,
-        "HTTP/1.0 200 OK\r\n\r\ncanary-reached",
-        canary_hits.clone(),
-    );
+    serve(canary, String::new(), canary_hits.clone());
 
     let sock = root.join("mcp.sock");
     let _bridge = mcp_bridge::start(
@@ -56,6 +78,7 @@ async fn a_denied_session_reaches_only_its_mcp_route() {
             host: "127.0.0.1".into(),
             port: mcp_port,
             tls: false,
+            authority: format!("127.0.0.1:{mcp_port}"),
         },
         None,
     )
@@ -81,9 +104,12 @@ async fn a_denied_session_reaches_only_its_mcp_route() {
         ..ainkrad_harness::Spec::default()
     };
     let script = format!(
-        r#"get() {{ exec 3<>/dev/tcp/$1/$2 && printf 'GET / HTTP/1.0\r\n\r\n' >&3 && cat <&3; }}
-for i in $(seq 60); do out=$( (get 127.0.0.1 {fwd}) 2>/dev/null) && break; sleep 0.2; done
-echo "mcp:$out"
+        r#"for i in $(seq 60); do exec 3<>/dev/tcp/127.0.0.1/{fwd} 2>/dev/null && break; sleep 0.2; done
+for n in 1 2; do
+  printf 'GET /x HTTP/1.1\r\nHost: 127.0.0.1:{fwd}\r\n\r\n' >&3
+  read -r -t 5 l1 <&3; read -r -t 5 l2 <&3; read -r -t 5 l3 <&3; read -r -t 5 -N 6 body <&3
+  echo "mcp$n:${{l1%$'\r'}} $body"
+done
 echo "canary:$( (timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/{canary_port} && echo reached') 2>&1 | tail -1)"
 echo "imds:$( (timeout 3 bash -c 'exec 3<>/dev/tcp/169.254.169.254/80 && echo reached') 2>&1 | tail -1)"
 "#,
@@ -102,11 +128,14 @@ echo "imds:$( (timeout 3 bash -c 'exec 3<>/dev/tcp/169.254.169.254/80 && echo re
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     let err = String::from_utf8_lossy(&out.stderr);
 
-    assert!(
-        text.contains("mcp-ok"),
-        "the MCP route is unreachable: {text} {err}"
-    );
-    assert!(mcp_hits.load(Ordering::SeqCst) >= 1);
+    // Two requests on one keep-alive connection, both with the Core's Host rewritten in.
+    for n in 1..=2 {
+        assert!(
+            text.contains(&format!("mcp{n}:HTTP/1.1 200 OK mcp-ok")),
+            "request {n} failed: {text} {err}"
+        );
+    }
+    assert_eq!(mcp_hits.load(Ordering::SeqCst), 2);
     assert!(
         !text.contains("canary:reached"),
         "reached a host loopback service: {text}"
