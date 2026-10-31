@@ -50,6 +50,12 @@ pub(super) async fn run(
         "drivers": hello.drivers.iter().map(|d| &d.name).collect::<Vec<_>>(),
     });
     let now = app.clock.unix();
+    // What the runner still holds, to settle the Core's terminal rows once it is registered.
+    let held = hello
+        .drivers
+        .iter()
+        .any(|d| d.name == ainkrad_proto::v2::DRIVER_PTY)
+        .then(|| hello.terminals.clone());
     let (generation, streams) = hub.register(
         &device.id,
         &device.name,
@@ -59,6 +65,12 @@ pub(super) async fn run(
         now,
     );
     emit(&app, CONNECTED, connected).await;
+    if let Some(held) = held {
+        let (app, runner) = (app.clone(), device.id.clone());
+        tokio::spawn(async move {
+            crate::api::v1::reconcile_terminals(&app, &runner, &held, now).await
+        });
+    }
     mark_used(&app, &device).await;
     let mut control_seq = 1;
     let welcome = Control::Welcome(CoreWelcome {

@@ -6,8 +6,9 @@ use crate::hub::Dispatched;
 use crate::scheduler::iso_of_unix;
 use crate::store::{self, gov};
 use ainkrad_core::audit::{AuditEntity, NewAuditEvent};
+use ainkrad_core::settings::{Key, Scope};
 use ainkrad_proto::v2::{Body, Command, Control, Frame, PtyAttach, PtyClose, PtyOpen, SignalReq};
-use ainkrad_proto::v2::{Reply, TerminalInfo};
+use ainkrad_proto::v2::{Reply, SIGNAL_HOST_LOST, TerminalInfo};
 use axum::{
     Json,
     extract::ws::{CloseFrame, Message, WebSocket},
@@ -25,8 +26,6 @@ use std::time::Duration;
 use std::time::Instant;
 use utoipa::ToSchema;
 
-const MAX_DEVICE_TERMINALS: i64 = 8;
-const MAX_RUNNER_TERMINALS: i64 = 16;
 const MAX_INPUT: usize = 64 * 1024;
 /// One WebSocket message: base64 of the largest input, with its frame around it.
 const MAX_WS_MESSAGE: usize = 128 * 1024;
@@ -37,6 +36,8 @@ const OPEN_WAIT: Duration = Duration::from_secs(15);
 const CLOSE_WAIT: Duration = Duration::from_secs(30);
 /// How long an exited terminal stays listed before it is reaped.
 const KEEP_EXITED: i64 = 3600;
+/// How often the idle reaper looks (`sweep_loop`).
+const SWEEP_EVERY: Duration = Duration::from_secs(30);
 
 /// What the terminal service keeps in memory (never terminal content).
 #[derive(Default)]
@@ -123,7 +124,7 @@ pub struct TerminalSize {
     pub rows: u16,
     pub cols: u16,
 }
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminalStatus {
     Created,
@@ -153,6 +154,8 @@ pub struct Terminal {
     pub exit_code: Option<i32>,
     pub exit_signal: Option<String>,
     pub attached: Option<u32>,
+    /// Running with no client attached: it is closed once idle past `terminal.idle_secs`.
+    pub orphaned: Option<bool>,
 }
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct NewTerminal {
@@ -187,10 +190,12 @@ fn failed(e: &ainkrad_proto::v2::StreamError) -> ApiError {
 }
 async fn row(app: &App, id: &str) -> Result<Terminal, ApiError> {
     let r = sqlx::query_as::<_, (String,String,String,i64,i64,i64,Option<String>,String,Option<i32>,Option<String>)>("SELECT id,runner,status,rows,cols,output_seq,opened_by,created_at,exit_code,exit_signal FROM core_terminals WHERE id=? AND status!='reaped'").bind(id).fetch_optional(&app.pool).await?.ok_or_else(|| ApiError::not_found("no such terminal"))?;
+    let status = TerminalStatus::parse(&r.2);
+    let attached = app.terminals.attached(id);
     Ok(Terminal {
         id: r.0,
         runner: r.1,
-        status: TerminalStatus::parse(&r.2),
+        status,
         size: Some(TerminalSize {
             rows: r.3 as u16,
             cols: r.4 as u16,
@@ -200,7 +205,8 @@ async fn row(app: &App, id: &str) -> Result<Terminal, ApiError> {
         created_at: Some(ts(&r.7)),
         exit_code: r.8,
         exit_signal: r.9,
-        attached: Some(app.terminals.attached(id)),
+        attached: Some(attached),
+        orphaned: Some(attached == 0 && status == TerminalStatus::Running),
     })
 }
 
@@ -288,14 +294,7 @@ fn monitor(app: &App, terminal: String, mut d: Dispatched) {
         while let Some(body) = d.next().await {
             match body {
                 Body::Result(Reply::PtyOpen(exit) | Reply::PtyAttach(exit)) => {
-                    let _ = sqlx::query("UPDATE core_terminals SET status='exited',exit_code=?,exit_signal=?,last_activity=? WHERE id=? AND status='running'")
-                        .bind(exit.exit_code)
-                        .bind(exit.signal)
-                        .bind(a.clock.unix())
-                        .bind(&id)
-                        .execute(&a.pool)
-                        .await;
-                    let _ = event(&a, "terminal.exited", &id, "runner").await;
+                    ended(&a, &id, exit.exit_code, exit.signal).await;
                     break;
                 }
                 Body::Error(_) => break,
@@ -308,6 +307,126 @@ fn monitor(app: &App, terminal: String, mut d: Dispatched) {
         .lock()
         .unwrap()
         .insert(terminal, task.abort_handle());
+}
+
+/// Records the end of a running terminal (its slot is free from here) and tells the clients:
+/// one `terminal.exited` event, whose `reason` is `host_lost` when the runner's host process
+/// died without reporting how the child ended. A terminal already ended is left alone.
+async fn ended(app: &App, id: &str, code: Option<i32>, signal: Option<String>) {
+    let done = sqlx::query("UPDATE core_terminals SET status='exited',exit_code=?,exit_signal=?,last_activity=? WHERE id=? AND status IN ('created','running')")
+        .bind(code)
+        .bind(&signal)
+        .bind(app.clock.unix())
+        .bind(id)
+        .execute(&app.pool)
+        .await;
+    if done.is_ok_and(|r| r.rows_affected() == 1) {
+        let reason = (signal.as_deref() == Some(SIGNAL_HOST_LOST)).then_some(SIGNAL_HOST_LOST);
+        let _ = event_with(app, "terminal.exited", id, "runner", reason).await;
+    }
+}
+
+/// A runner connected (its `hello` lists the terminals it still holds): settle what the Core
+/// kept while it was away, so a Core or runner restart does not leave rows `running` for
+/// terminals that ended meanwhile. A row the runner no longer lists lost its host; a live one
+/// is watched again and counts as just active, so its clients get a window to reattach.
+/// Only rows older than `before` are looked at: a terminal opened since the hello was taken
+/// is not in it.
+pub async fn reconcile(app: &App, runner: &str, listed: &[TerminalInfo], before: i64) {
+    let Ok(ids) = sqlx::query_scalar::<_, String>("SELECT id FROM core_terminals WHERE runner=? AND status IN ('created','running') AND last_activity<?")
+        .bind(runner)
+        .bind(before)
+        .fetch_all(&app.pool)
+        .await
+    else {
+        return;
+    };
+    for id in ids {
+        match listed.iter().find(|i| i.terminal == id) {
+            None => ended(app, &id, None, Some(SIGNAL_HOST_LOST.to_owned())).await,
+            Some(TerminalInfo { exit: Some(x), .. }) => {
+                ended(app, &id, x.exit_code, x.signal.clone()).await
+            }
+            Some(_) => {
+                touch(app, &id).await;
+                if let Ok(t) = row(app, &id).await {
+                    ensure_monitor(app, &t);
+                }
+            }
+        }
+    }
+}
+
+async fn touch(app: &App, id: &str) {
+    let _ = sqlx::query("UPDATE core_terminals SET last_activity=? WHERE id=?")
+        .bind(app.clock.unix())
+        .bind(id)
+        .execute(&app.pool)
+        .await;
+}
+
+/// Closes every running terminal nobody has been attached to for `terminal.idle_secs`
+/// (0 turns it off). A runner that is offline is tried again at the next pass.
+pub async fn sweep(app: &App) {
+    let Ok(idle) =
+        crate::store::settings::value(&app.pool, Key::TerminalIdleSecs, Scope::Server).await
+    else {
+        return;
+    };
+    if idle <= 0 {
+        return;
+    }
+    let Ok(rows) = sqlx::query_as::<_, (String, String)>(
+        "SELECT id,runner FROM core_terminals WHERE status='running' AND last_activity<?",
+    )
+    .bind(app.clock.unix() - idle)
+    .fetch_all(&app.pool)
+    .await
+    else {
+        return;
+    };
+    for (id, runner) in rows {
+        if app.terminals.attached(&id) > 0 {
+            continue;
+        }
+        let close = Command::PtyClose(PtyClose {
+            terminal: id.clone(),
+        });
+        let Ok(d) =
+            app.hub
+                .dispatch_elevated(&runner, close, app.hub.continue_terminal_elevation())
+        else {
+            continue;
+        };
+        let Ok(Ok(Body::Result(Reply::PtyClose(x)))) =
+            tokio::time::timeout(CLOSE_WAIT, d.outcome()).await
+        else {
+            continue;
+        };
+        let done = sqlx::query("UPDATE core_terminals SET status='reaped',exit_code=?,exit_signal=?,last_activity=? WHERE id=? AND status IN ('running','exited')")
+            .bind(x.exit_code)
+            .bind(x.signal)
+            .bind(app.clock.unix())
+            .bind(&id)
+            .execute(&app.pool)
+            .await;
+        if done.is_ok_and(|r| r.rows_affected() == 1) {
+            let _ = event_with(app, "terminal.closed", &id, "core", Some("idle")).await;
+        }
+    }
+}
+
+/// `sweep` every `SWEEP_EVERY` until the Core stops.
+pub async fn sweep_loop(app: App) {
+    let mut closing = app.closing.subscribe();
+    let mut tick = tokio::time::interval(SWEEP_EVERY);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            () = crate::api::stopping(&mut closing) => return,
+            _ = tick.tick() => sweep(&app).await,
+        }
+    }
 }
 
 /// After a Core restart no stream watches a running terminal: attach one (the caller passed
@@ -339,11 +458,20 @@ async fn reap(app: &App) -> Result<(), ApiError> {
     Ok(())
 }
 async fn event(app: &App, kind: &str, id: &str, by: &str) -> Result<(), ApiError> {
+    event_with(app, kind, id, by, None).await
+}
+async fn event_with(
+    app: &App,
+    kind: &str,
+    id: &str,
+    by: &str,
+    reason: Option<&str>,
+) -> Result<(), ApiError> {
     let mut tx = store::begin_write(&app.pool).await?;
     store::events::append(
         &mut tx,
         kind,
-        &json!({"terminal":id,"by_device":by,"at":iso_of_unix(app.clock.unix())}),
+        &json!({"terminal":id,"by_device":by,"at":iso_of_unix(app.clock.unix()),"reason":reason}),
     )
     .await?;
     tx.commit().await?;
@@ -374,7 +502,14 @@ pub async fn create(
         Ok(n) => n,
         Err(e) => return ApiError::from(e).into_response(),
     };
-    if mine >= MAX_DEVICE_TERMINALS {
+    let (per_device, per_runner) = match (
+        store::settings::value(&app.pool, Key::TerminalMaxPerDevice, Scope::Server).await,
+        store::settings::value(&app.pool, Key::TerminalMaxPerRunner, Scope::Server).await,
+    ) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(e), _) | (_, Err(e)) => return ApiError::from(e).into_response(),
+    };
+    if mine >= per_device {
         return ApiError::new(
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             "terminal_limit",
@@ -397,7 +532,7 @@ pub async fn create(
         Ok(n) => n,
         Err(e) => return ApiError::from(e).into_response(),
     };
-    if count >= MAX_RUNNER_TERMINALS {
+    if count >= per_runner {
         return ApiError::new(
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             "terminal_limit",
@@ -720,6 +855,7 @@ async fn stream(
     rescoped: impl std::future::Future<Output = ()>,
 ) {
     let client = app.terminals.join(&terminal);
+    touch(&app, &terminal).await;
     tokio::pin!(revoked);
     tokio::pin!(rescoped);
     let expiry = tokio::time::sleep(Duration::from_secs(
@@ -767,6 +903,9 @@ async fn stream(
             Some(Ok(Message::Close(_)))|Some(Err(_))|None=>break,
             _=>{}}}
     }
+    // Stamped before the client is counted out, so a pass never sees "nobody attached" with a
+    // stale stamp.
+    touch(&app, &terminal).await;
     app.terminals.leave(&terminal);
     let _ = audit(&app, "terminal.detached", &terminal, &by_device, None).await;
     let _ = event(&app, "terminal.detached", &terminal, &by_device).await;

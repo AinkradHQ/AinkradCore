@@ -38,6 +38,8 @@ struct Fx {
     dir: PathBuf,
     stop: watch::Sender<bool>,
     owner: TestDevice,
+    /// The runner's paired state, to start it again.
+    st: ainkrad_runner::v2::key::State,
 }
 
 impl Drop for Fx {
@@ -60,6 +62,47 @@ impl Drop for Fx {
     }
 }
 
+/// A runner daemon for the runner paired under `state(name)`, its terminals kept in `dir`;
+/// send `true` on the returned channel to stop it. Calling it again is a runner restart: the
+/// hosts under `dir` outlive the old daemon and the new hello lists the live ones.
+fn spawn_daemon(
+    st: &ainkrad_runner::v2::key::State,
+    base: &str,
+    dir: &std::path::Path,
+) -> watch::Sender<bool> {
+    let cfg = PtyConfig {
+        enabled: true,
+        grace: Duration::from_millis(200),
+        ..PtyConfig::new(dir.to_owned())
+    };
+    assert!(
+        cfg.host.is_file(),
+        "ainkrad-ptyhost is built (cargo test --workspace)"
+    );
+    let key = Arc::new(Key::load(&st.key()).unwrap());
+    let enrolment = Arc::new(Mutex::new(Enrolment::load(&st.enrolment()).unwrap()));
+    let daemon = Daemon {
+        client: Client::new(base, None).unwrap(),
+        key,
+        enrolment,
+        save: None,
+        exec: driver(),
+        pty: Some(Arc::new(PtyDriver::new(cfg))),
+        agents: None,
+        tls: None,
+        backoff: Backoff {
+            min: Duration::from_millis(50),
+            max: Duration::from_millis(200),
+            refused: Duration::from_millis(200),
+        },
+    };
+    let (stop, stopped) = watch::channel(false);
+    tokio::spawn(async move {
+        let _ = daemon.run(stopped).await;
+    });
+    stop
+}
+
 fn elevate(core: &Core, dev: &TestDevice) {
     let sid = dev.session.lock().unwrap().clone().unwrap();
     let until = ainkrad_core_server::scheduler::Clock::unix(&*core.app.clock) + 300;
@@ -75,42 +118,14 @@ impl Fx {
         let dir = PathBuf::from(format!("/tmp/ath-{name}-{}", std::process::id() % 100_000));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let cfg = PtyConfig {
-            enabled: true,
-            grace: Duration::from_millis(200),
-            ..PtyConfig::new(dir.clone())
-        };
-        assert!(
-            cfg.host.is_file(),
-            "ainkrad-ptyhost is built (cargo test --workspace)"
-        );
-        let key = Arc::new(Key::load(&st.key()).unwrap());
-        let enrolment = Arc::new(Mutex::new(Enrolment::load(&st.enrolment()).unwrap()));
-        let daemon = Daemon {
-            client: Client::new(&base, None).unwrap(),
-            key,
-            enrolment,
-            save: None,
-            exec: driver(),
-            pty: Some(Arc::new(PtyDriver::new(cfg))),
-            agents: None,
-            tls: None,
-            backoff: Backoff {
-                min: Duration::from_millis(50),
-                max: Duration::from_millis(200),
-                refused: Duration::from_millis(200),
-            },
-        };
-        let (stop, stopped) = watch::channel(false);
-        tokio::spawn(async move {
-            let _ = daemon.run(stopped).await;
-        });
+        let stop = spawn_daemon(&st, &base, &dir);
         let fx = Self {
             runner: e.device_id,
             owner: core.device("device", &["read", "terminal"]).await,
             core,
             dir,
             stop,
+            st,
         };
         for _ in 0..500 {
             if fx.core.app.hub.online(&fx.runner) {
@@ -560,3 +575,5 @@ async fn a_stalled_client_cannot_delay_revocation_and_a_huge_message_ends_the_so
     c.send_text("x".repeat(200 * 1024)).await;
     assert!(c.ended(5).await, "a 200 KiB message closes the socket");
 }
+
+mod liveness;

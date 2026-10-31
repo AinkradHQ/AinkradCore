@@ -112,6 +112,10 @@ pub struct TerminalInfo {
     pub exit: Option<TerminalExit>,
 }
 
+/// The `signal` of a `TerminalExit` the runner could not read from the host: the `ainkrad-ptyhost`
+/// process died (`kill -9`, a crash) so nobody waited for the child. The terminal is over.
+pub const SIGNAL_HOST_LOST: &str = "host_lost";
+
 /// How a terminal's child ended: the `result` of every `pty.*` op.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TerminalExit {
