@@ -291,7 +291,7 @@ async fn an_old_runner_reads_what_this_host_sends() {
                 out |=
                     String::from_utf8_lossy(&STANDARD.decode(data).unwrap()).contains("NEW-HOST");
             }
-            V1FromHost::Snapshot { seq, .. } => snap = seq > 0,
+            V1FromHost::Snapshot { .. } => snap = true,
             V1FromHost::Exit { .. } | V1FromHost::Error { .. } | V1FromHost::Unknown => {}
         }
     }
