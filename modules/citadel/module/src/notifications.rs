@@ -83,7 +83,9 @@ mod tests {
         use ainkrad_core_server::push::Classifier;
         use ainkrad_core_server::push::modules::Modules;
         use std::sync::Arc;
-        let core = Modules(Arc::from(vec![Arc::new(crate::Citadel) as Arc<dyn Module>]));
+        let core = Modules(Arc::from(vec![
+            Arc::new(crate::Citadel::default()) as Arc<dyn Module>
+        ]));
         let audit = |action: &str, payload: serde_json::Value| {
             let mut p = payload;
             p["action"] = action.into();
