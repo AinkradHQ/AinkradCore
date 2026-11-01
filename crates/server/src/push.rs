@@ -19,6 +19,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures_util::future::join_all;
+
 use ainkrad_core::audit::{AuditActor, AuditEntity, NewAuditEvent};
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
@@ -203,6 +205,26 @@ impl Classifier for Platform {
     }
 }
 
+/// How hard one send tries: a failure that may pass (`PushError::Failed`) is tried again after
+/// `backoff`, doubling, up to `attempts` in all and `budget` for the whole send. A dead token
+/// (`InvalidToken`) or a missing transport (`Unsupported`) is never tried again.
+#[derive(Debug, Clone, Copy)]
+pub struct Retry {
+    pub attempts: u32,
+    pub backoff: Duration,
+    pub budget: Duration,
+}
+
+impl Default for Retry {
+    fn default() -> Self {
+        Self {
+            attempts: 3,
+            backoff: Duration::from_millis(500),
+            budget: Duration::from_secs(30),
+        }
+    }
+}
+
 /// Tails the event log and pushes what needs the admin.
 pub struct Pusher {
     pub pool: SqlitePool,
@@ -210,6 +232,7 @@ pub struct Pusher {
     pub classifier: Arc<dyn Classifier>,
     pub every: Duration,
     pub clock: Arc<dyn Clock + Send + Sync>,
+    pub retry: Retry,
     limiter: policy::Limiter,
 }
 
@@ -230,6 +253,7 @@ impl Pusher {
             classifier,
             every,
             clock,
+            retry: Retry::default(),
             limiter: policy::Limiter::default(),
         }
     }
@@ -259,8 +283,11 @@ impl Pusher {
 
     /// Sends `notifications` to the devices that may have them: cleaned, merged by `collapse`,
     /// within each device's ceiling. Returns how many (after merging) were sent.
-    // ponytail: a failed push is counted against its token, not retried; a retry queue (on the
-    // scheduler's jobs) if pushes ever matter more than the app's own inbox.
+    /// A send that fails is tried again within [`Retry`]'s bounds; the sends of one notification
+    /// run together, so one slow gateway does not hold up the others. Nothing here is awaited by
+    /// a request: the pusher runs on its own task, and a failure only counts against its token.
+    // ponytail: retries are in memory and end with the pass; a durable retry queue (on the
+    // scheduler's jobs) if a push must survive a restart.
     pub async fn deliver(&self, notifications: Vec<Notification>) -> Result<usize, sqlx::Error> {
         let all = policy::coalesce(notifications.into_iter().map(policy::clean).collect());
         if all.is_empty() {
@@ -268,7 +295,15 @@ impl Pusher {
         }
         let targets = push_targets(&self.pool).await?;
         for n in &all {
+            let mut sends = vec![];
             for to in targets.iter().filter(|t| policy::may_receive(t, n.scope)) {
+                if to
+                    .kinds
+                    .as_ref()
+                    .is_some_and(|k| !k.iter().any(|k| k == n.kind))
+                {
+                    continue; // the device did not opt into this kind
+                }
                 let Some(provider) = self.providers.iter().find(|p| p.handles(&to.provider)) else {
                     tracing::debug!(provider = %to.provider, "no push provider for this token");
                     continue;
@@ -283,13 +318,41 @@ impl Pusher {
                     );
                     continue;
                 }
-                let result = provider.send(to, n).await;
+                sends.push(async move { (to, self.send(provider.as_ref(), to, n).await) });
+            }
+            for (to, result) in join_all(sends).await {
                 if let Err(e) = self.record(to, n, &result).await {
                     tracing::warn!(device = to.device.0, error = %e, "recording a push failed");
                 }
             }
         }
         Ok(all.len())
+    }
+
+    /// One send, retried within [`Retry`].
+    async fn send(
+        &self,
+        provider: &dyn PushProvider,
+        to: &PushTarget,
+        n: &Notification,
+    ) -> Result<(), PushError> {
+        let work = async {
+            let mut wait = self.retry.backoff;
+            let mut tries = 1;
+            loop {
+                match provider.send(to, n).await {
+                    Err(PushError::Failed(_)) if tries < self.retry.attempts => {
+                        tokio::time::sleep(wait).await;
+                        wait = wait.saturating_mul(2);
+                        tries += 1;
+                    }
+                    other => return other,
+                }
+            }
+        };
+        tokio::time::timeout(self.retry.budget, work)
+            .await
+            .unwrap_or_else(|_| Err(PushError::Failed("the push timed out".to_owned())))
     }
 
     /// The delivery event, and the token's fate, in one transaction.
@@ -368,3 +431,5 @@ mod tests;
 mod tests_apns;
 #[cfg(test)]
 mod tests_modules;
+#[cfg(test)]
+mod tests_optin;

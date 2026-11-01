@@ -49,6 +49,7 @@ zeroize = { version = "1.9.1", features = ["serde"] }
 # The optional iroh listener (E2-19): QUIC with hole punching and a self-hosted relay, for a NAT'd Core.
 # No default features: no n0 services, no UPnP port mapping, no metrics; ring, as the rest of the TLS stack.
 iroh = { version = "1.4.1", default-features = false, features = ["tls-ring"], optional = true }
+futures-util = "0.3.34"
 
 [features]
 # `iroh` is compiled in by default so `make build`/`make test` cover it; the listener itself is off unless
@@ -66,7 +67,6 @@ http-body-util = "0.1.5"
 hyper = { version = "1.12.0", features = ["client"] }
 time = "0.3"
 tokio = { version = "1.54.0", features = ["io-util"] }
-futures-util = "0.3.34"
 tokio-tungstenite = "0.29.0"
 # The real runner against the real hub (`tests/hub/runner.rs`): pairing, the pinned proof.
 ainkrad-runner = { path = "../runner" }

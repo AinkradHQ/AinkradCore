@@ -142,13 +142,16 @@ impl Fx {
 
     pub(super) fn pusher(&self, providers: Vec<Arc<dyn PushProvider>>) -> Pusher {
         let every = Duration::from_secs(1);
-        Pusher::new(
+        let mut pusher = Pusher::new(
             self.pool.clone(),
             providers,
             Arc::new(Silent),
             every,
             Arc::new(SystemClock),
-        )
+        );
+        // One try: these tests count requests; the retry tests (`tests_optin`) set their own.
+        pusher.retry.attempts = 1;
+        pusher
     }
 
     pub(super) async fn deliveries(&self) -> Vec<Value> {

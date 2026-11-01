@@ -34,6 +34,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/me", "read"),
     ("PUT", "/api/v1/push-token", "read"),
     ("DELETE", "/api/v1/push-token", "read"),
+    ("GET", "/api/v1/push-token/kinds", "read"),
+    ("PUT", "/api/v1/push-token/kinds", "read"),
     ("GET", "/api/v1/events", "read"),
     ("GET", "/api/v1/events/ws", "read"),
     ("GET", "/api/v1/events/latest", "read"),
