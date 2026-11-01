@@ -19,6 +19,7 @@ mod classify;
 pub mod claude;
 pub mod codex;
 pub mod compat;
+pub mod exec;
 mod meter;
 pub mod opencode;
 mod proc;
@@ -83,6 +84,9 @@ pub struct Spec {
     pub sandboxed: bool,
     /// The project lets file edits inside `cwd` go ahead without asking (E3.10).
     pub accept_edits: bool,
+    /// Where the process is started (E8a-06); `None` is the local backend: bubblewrap, Seatbelt
+    /// or nothing, as the spec's `AINKRAD_SANDBOX*` variables say.
+    pub backend: Option<std::sync::Arc<dyn exec::ExecBackend>>,
 }
 
 /// One normalised harness event. Serialised as a `run_event` payload.
