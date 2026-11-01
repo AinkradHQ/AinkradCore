@@ -77,14 +77,21 @@ pub(crate) fn spawn(
         .ok_or_else(|| io::Error::other("no stdout"))?;
     let stderr = child.stderr.take();
     let stdin = child.stdin.take();
+    let budget = budget.map(|b| b.start(pgid));
+    let tracker = budget.as_ref().map(|w| w.tracker());
     let timed_out = Arc::new(AtomicBool::new(false));
-    // The host ends the tree at the deadline: nothing inside the sandbox can lift it.
+    // The host ends the tree at the deadline: nothing inside the sandbox can lift it. The group
+    // goes first; the budget watch's tracker then reaches a descendant that left it with
+    // `setsid` (macOS has no pid namespace to contain one; Linux has `--unshare-pid`).
     let timer = deadline.map(|after| {
         let flag = timed_out.clone();
         tokio::spawn(async move {
             tokio::time::sleep(after).await;
             flag.store(true, Ordering::SeqCst);
             kill_group(pgid);
+            if let Some(tracker) = tracker {
+                tracker.kill();
+            }
         })
     });
     Ok(Spawned {
@@ -94,7 +101,7 @@ pub(crate) fn spawn(
         running: Box::new(LocalProcess {
             child,
             pgid,
-            budget: budget.map(|b| b.start(pgid)),
+            budget,
             supervisor,
             pgid_file,
             timer,
@@ -128,6 +135,9 @@ impl LocalProcess {
     }
 
     /// The leader is gone and reaped: its group id may be reused, so the timer must not fire.
+    // ponytail: a timer that fires between the reap and this abort could `killpg` a recycled
+    // group id. The window is a few microseconds, and a group id is not reused while any member
+    // of the group lives; accepted until the deadline moves to a pidfd.
     fn disarm(&mut self) {
         if let Some(timer) = self.timer.take() {
             timer.abort();
