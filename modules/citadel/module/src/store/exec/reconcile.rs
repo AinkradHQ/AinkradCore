@@ -554,10 +554,10 @@ async fn audit_rule(
             .entity("run", r.id.0)
             .company(company)
             .run(r.id.0)
-            .details(
-                json!({"outcome": outcome, "rule_id": rule_id, "request": request,
-                            "tool": tool, "issue": r.issue_id.map(|i| i.0)}),
-            ),
+            .details(json!({"outcome": outcome, "rule_id": rule_id,
+                       "request": request.chars().take(256).collect::<String>(),
+                       "tool": tool.chars().take(256).collect::<String>(),
+                       "issue": r.issue_id.map(|i| i.0)})),
     )
     .await
 }

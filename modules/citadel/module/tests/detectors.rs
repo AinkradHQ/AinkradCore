@@ -1278,6 +1278,22 @@ async fn allowing_for_an_issue_audits_the_rule_id_not_its_text() {
     let _ = id;
 }
 
+/// A tool name or request id over 256 bytes is never allowed by a rule: the call is escalated.
+#[tokio::test]
+async fn an_over_long_tool_name_or_request_id_is_escalated_not_allowed() {
+    let w = world().await;
+    let long = "a".repeat(300);
+    let rule = Some((w.seed.issue, "Bash:ls", "+1 hour"));
+    let (_, opened) = asked_with(&w, rule, &long, json!({"command": "ls"})).await;
+    assert_eq!((opened, w.host.decisions().len()), (1, 0));
+    let w = world().await;
+    let rule = Some((w.seed.issue, "Bash:ls", "+1 hour"));
+    let items = vec![(long.as_str(), "Bash", json!({"command": "ls"}))];
+    let (_, opened) = asked_many(&w, rule, items).await;
+    assert_eq!((opened, w.host.decisions().len()), (1, 0));
+    assert_eq!(audited(&w, "run.allowed_by_rule").await, 0);
+}
+
 /// The audit row is committed before the harness is told, carries ids and no content, and a
 /// decision the runner did not take is escalated and audited as unapplied.
 #[tokio::test]

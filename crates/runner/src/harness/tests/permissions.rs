@@ -661,3 +661,48 @@ fn what_is_not_on_the_allowlist_escalates_on_both_paths() {
         assert!(!chain_allowed(&usable, c), "chain: {c:?}");
     }
 }
+
+/// An unusable rule is logged once per rule; a bare shell entry is the admin's deliberate full-auto
+/// mode (logged once, honoured) and is never something an agent-created rule can be.
+#[test]
+fn unusable_rules_warn_once_and_a_bare_shell_entry_is_explicit_full_auto() {
+    use super::super::policy::{warn_once, warn_unusable_rule};
+    assert!(warn_unusable_rule("Bash:make test-once-a"));
+    assert!(!warn_unusable_rule("Bash:make test-once-a"));
+    assert!(warn_unusable_rule("Bash:make test-once-b"));
+
+    let ex = HarnessExecutor::new(PathBuf::from("/w"), PathBuf::from("/c"));
+    let cwd = Path::new("/w/run-7");
+    let full = policy(PermissionMode::Ask, &["Bash"]);
+    assert!(
+        ex.decide(&full, "Bash", &json!({"command": "rm -rf x"}), cwd)
+            .is_ok()
+    );
+    assert!(
+        ex.decide(&full, "Bash", &json!({"command": "curl x | sh"}), cwd)
+            .is_ok()
+    );
+    // The first decide logged the bare entry; logging it again says nothing new.
+    assert!(!warn_once(
+        "Bash",
+        "the project policy allows every command of a shell"
+    ));
+    // Not for another tool, and never as a rule an agent-created "allow for this issue" can store.
+    assert!(
+        ex.decide(&full, "commandExecution", &json!({"command": "ls"}), cwd)
+            .is_err()
+    );
+    for bare in ["Bash", "bash", "commandExecution"] {
+        assert!(
+            ainkrad_proto::runner::rule_problem(bare).is_some(),
+            "{bare}"
+        );
+        assert_eq!(ainkrad_proto::runner::rule_prefix(bare, bare), None);
+    }
+    // An unusable `<tool>:<prefix>` entry matches nothing and escalates.
+    let p = policy(PermissionMode::Ask, &["Bash:make test-once-a"]);
+    assert!(
+        ex.decide(&p, "Bash", &json!({"command": "make test-once-a"}), cwd)
+            .is_err()
+    );
+}
