@@ -118,6 +118,10 @@ pub trait Sandbox: Send + Sync {
         Kvm::NotApplicable
     }
     fn prepare(&self, start: &AgentStart, env: &mut Vec<(String, String)>) -> Result<(), String>;
+    /// Capabilities the Core may rely on, advertised beside the driver's ops (`egress-filter`).
+    fn capabilities(&self) -> &'static [&'static str] {
+        &[]
+    }
 }
 
 /// The default: the harness runs as the runner's user, unconfined (the E2 landmine E2-09 fixes).
@@ -292,7 +296,11 @@ impl AgentDriver {
     pub fn info(&self) -> DriverInfo {
         DriverInfo {
             name: AGENT_DRIVER.to_owned(),
-            commands: AGENT_OPS.iter().map(|o| (*o).to_owned()).collect(),
+            commands: AGENT_OPS
+                .iter()
+                .chain(self.sandbox.capabilities())
+                .map(|o| (*o).to_owned())
+                .collect(),
             capacity: self.config.capacity,
             slots: self.config.slots.clone(),
             // A read per session, and room for starts, messages, decisions and stops.

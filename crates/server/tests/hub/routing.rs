@@ -88,6 +88,48 @@ async fn the_noop_runs_end_to_end_and_only_advertised_commands_reach_the_runner(
     noop.await.unwrap().expect("the no-op answered");
 }
 
+/// A runner lists capability markers beside its ops (`egress-filter`, E8a-01): routing matches
+/// the exact op string, so a marker is never an op and never changes how commands route.
+#[tokio::test]
+async fn a_capability_marker_among_a_drivers_commands_does_not_affect_routing() {
+    let core = Core::start("marker", quick()).await;
+    let dev = core.runner().await;
+    let mut fake = Fake::welcomed(
+        &core,
+        &dev,
+        vec![exec_driver(&[OP_NOOP, "egress-filter"], 2)],
+    )
+    .await;
+    let hub = Arc::clone(&core.app.hub);
+    assert!(
+        hub.runners()[&dev.id].drivers[0]
+            .commands
+            .iter()
+            .any(|c| c == "egress-filter")
+    );
+    let exec = Command::ExecRun(ExecRun {
+        program: "/bin/true".to_owned(),
+        args: vec![],
+        cwd: None,
+        env: Default::default(),
+        env_pass: vec![],
+        limits: ExecLimits::default(),
+    });
+    let refused = hub
+        .dispatch_elevated(&dev.id, exec, Elevated::for_tests())
+        .err()
+        .expect("exec.run is still not advertised");
+    assert_eq!(refused.code, ErrorCode::UnsupportedCommand);
+    let noop = tokio::spawn({
+        let (hub, id) = (Arc::clone(&hub), dev.id.clone());
+        async move { hub.noop(&id).await }
+    });
+    let cmd = fake.next().await;
+    assert_eq!(cmd.body().unwrap(), Some(Body::Command(Command::Noop)));
+    fake.send(cmd.stream_id, Body::Result(Reply::Noop)).await;
+    noop.await.unwrap().expect("the no-op still routes");
+}
+
 /// E2-15.2: a runner whose host is past `cores * 4` load is `busy` (hello or heartbeat); it takes
 /// work again once a heartbeat reports it back under.
 #[tokio::test]
