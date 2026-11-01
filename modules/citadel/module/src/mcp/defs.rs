@@ -67,10 +67,10 @@ pub(super) fn list() -> Vec<Tool> {
         (
             "transition",
             "Move your issue while you are its next actor: start, submit_for_review (with \
-             reviewer_agent_id or reviewer_user_id), block (optionally blocker_issue_id). A reviewer closes the issue: done is refused.",
+             reviewer_agent_id or reviewer_user_id), block (optionally blocker_issue_id), done (needs a pull request opened on the forge: it sends the issue to QA, it does not close it).",
             json!({"issue_id": issue,
                    "transition": {"type": "string",
-                       "enum": ["start", "submit_for_review", "block"]},
+                       "enum": ["start", "submit_for_review", "block", "done"]},
                    "reviewer_agent_id": person("An agent of your company."),
                    "reviewer_user_id": person("A user."),
                    "blocker_issue_id": person("An issue of your company that blocks this one.")}),

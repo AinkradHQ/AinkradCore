@@ -135,10 +135,81 @@ pub async fn submit_for_qa(
     issue: IssueId,
     dev: AgentId,
 ) -> Result<Option<crate::domain::work::Issue>, DoneError> {
+    submit_in(pool, issue, dev, false).await
+}
+
+/// An agent's `done` over MCP: `submit_for_qa`, but only on evidence the forge produced, and a
+/// refusal otherwise (`DoneError::Refused`). Never moves an issue to `done`: that happens when the
+/// owner-approved PR is merged. The evidence (B-M3, checked in the transaction that moves the
+/// issue) is every live PR of the issue opened on the forge (a number, a URL and a head, so not
+/// one that is merely asked for), none with failing checks, a refused push or commits since the
+/// last push. A comment, a claim or a PR the agent asked for are not evidence.
+pub async fn submit_with_evidence(
+    pool: &SqlitePool,
+    issue: IssueId,
+    dev: AgentId,
+) -> Result<crate::domain::work::Issue, DoneError> {
+    submit_in(pool, issue, dev, true)
+        .await?
+        .ok_or_else(|| DoneError::Refused(NO_EVIDENCE.to_owned()))
+}
+
+const NO_EVIDENCE: &str = "done needs a pull request opened on the forge for this issue; \
+    without one, use submit_for_review";
+
+/// Why the live `prs` are not evidence of finished work, if they are not.
+async fn evidence_problem(
+    conn: &mut SqliteConnection,
+    issue: IssueId,
+    prs: &[IssuePr],
+) -> Result<Option<String>, Error> {
+    for pr in prs.iter().filter(|p| p.phase.is_live()) {
+        let opened = pr.phase != PrPhase::Requested
+            && pr.number.is_some()
+            && pr.url.is_some()
+            && pr.head_sha.is_some();
+        let unpushed: bool = sqlx::query_scalar(
+            "SELECT unpushed_at IS NOT NULL FROM citadel_issue_prs WHERE issue_id = ? AND repo_id = ?",
+        )
+        .bind(issue.0)
+        .bind(pr.repo_id)
+        .fetch_one(&mut *conn)
+        .await?;
+        if !opened {
+            return Ok(Some(format!(
+                "the PR of {} is not opened on the forge yet",
+                pr.head
+            )));
+        }
+        if pr.checks == "failure" {
+            return Ok(Some(format!(
+                "the checks of the PR of {} are failing",
+                pr.head
+            )));
+        }
+        if pr.push_held.is_some() || unpushed {
+            return Ok(Some(format!(
+                "the branch {} has work that is not pushed",
+                pr.head
+            )));
+        }
+    }
+    Ok(None)
+}
+
+async fn submit_in(
+    pool: &SqlitePool,
+    issue: IssueId,
+    dev: AgentId,
+    evidence: bool,
+) -> Result<Option<crate::domain::work::Issue>, DoneError> {
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
     let Some((_, prs)) = live_prs(&mut tx, issue).await? else {
         return Ok(None);
     };
+    if evidence && let Some(why) = evidence_problem(&mut tx, issue, &prs).await? {
+        return Err(DoneError::Refused(why));
+    }
     let project: i64 = sqlx::query_scalar("SELECT project_id FROM citadel_issues WHERE id = ?")
         .bind(issue.0)
         .fetch_one(&mut *tx)

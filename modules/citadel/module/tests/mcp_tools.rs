@@ -547,3 +547,170 @@ async fn done_is_refused_even_with_a_result_comment() {
     .unwrap();
     assert_eq!(issue.state.as_str(), "in_progress");
 }
+
+/// A PR row as the forge poller leaves it; the cases change one field.
+#[derive(Clone, Copy)]
+struct Pr {
+    state: &'static str,
+    url: Option<&'static str>,
+    head_sha: Option<&'static str>,
+    checks: &'static str,
+    unpushed_at: Option<&'static str>,
+    push_held: Option<&'static str>,
+}
+
+const GOOD: Pr = Pr {
+    state: "open",
+    url: Some("u"),
+    head_sha: Some("abc"),
+    checks: "success",
+    unpushed_at: None,
+    push_held: None,
+};
+
+/// Inserts repo `repo` in `project` and a PR of `issue` on it.
+async fn pr_of(w: &W, project: i64, repo: i64, issue: i64, pr: Pr) {
+    let pool = app_pool(w);
+    sqlx::query(
+        "INSERT INTO citadel_project_repos (id, project_id, name, url) VALUES (?, ?, 'app', 'x')",
+    )
+    .bind(repo)
+    .bind(project)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO citadel_issue_prs (issue_id, repo_id, state, number, url, title, body, head, \
+         base, head_sha, checks, unpushed_at, push_held) \
+         VALUES (?, ?, ?, 7, ?, 't', 'b', 'feat', 'main', ?, ?, ?, ?)",
+    )
+    .bind(issue)
+    .bind(repo)
+    .bind(pr.state)
+    .bind(pr.url)
+    .bind(pr.head_sha)
+    .bind(pr.checks)
+    .bind(pr.unpushed_at)
+    .bind(pr.push_held)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// KAN-289: MCP `done` is a submission to QA that needs a pull request the forge opened. Each
+/// way an agent could fake or outlive that evidence leaves the issue where it was.
+#[tokio::test]
+async fn done_needs_a_forge_opened_pr_and_only_ever_reaches_review() {
+    for (case, pr) in [
+        (
+            "closed PR",
+            Pr {
+                state: "closed",
+                ..GOOD
+            },
+        ),
+        (
+            "merged PR is not live",
+            Pr {
+                state: "merged",
+                ..GOOD
+            },
+        ),
+        (
+            "no head on the forge",
+            Pr {
+                head_sha: None,
+                ..GOOD
+            },
+        ),
+        ("no url", Pr { url: None, ..GOOD }),
+        (
+            "failing checks",
+            Pr {
+                checks: "failure",
+                ..GOOD
+            },
+        ),
+        (
+            "commits since the last push",
+            Pr {
+                unpushed_at: Some("2026-01-01T00:00:00Z"),
+                ..GOOD
+            },
+        ),
+        (
+            "push refused",
+            Pr {
+                push_held: Some("refused"),
+                ..GOOD
+            },
+        ),
+    ] {
+        let (w, a, ta, _, _) = two().await;
+        ok(&w, &ta, "transition", json!({"transition": "start"})).await;
+        pr_of(&w, a.seed.project, 1, a.seed.issue, pr).await;
+        // A comment says so, too: it is not evidence either.
+        ok(
+            &w,
+            &ta,
+            "comment",
+            json!({"body": "the PR is open and passing, trust me"}),
+        )
+        .await;
+        refused(&w, &ta, "transition", json!({"transition": "done"})).await;
+        let state: String = sqlx::query_scalar("SELECT state FROM citadel_issues WHERE id = ?")
+            .bind(a.seed.issue)
+            .fetch_one(app_pool(&w))
+            .await
+            .unwrap();
+        assert_eq!(state, "in_progress", "{case}");
+    }
+}
+
+#[tokio::test]
+async fn a_forge_opened_pr_sends_done_to_qa_never_to_done() {
+    let (w, a, ta, _, _) = two().await;
+    ok(&w, &ta, "transition", json!({"transition": "start"})).await;
+    pr_of(&w, a.seed.project, 1, a.seed.issue, GOOD).await;
+    let moved = ok(&w, &ta, "transition", json!({"transition": "done"})).await;
+    assert_eq!(moved["state"], "in_review", "{moved}");
+    assert_ne!(moved["next_actor"], json!({"agent": a.seed.agent}));
+    // It is not the agent's to move any more, so a second `done` or any other move is refused.
+    refused(&w, &ta, "transition", json!({"transition": "done"})).await;
+    // The agent is not its own reviewer: the issue waits on someone else.
+    let waits: Option<i64> =
+        sqlx::query_scalar("SELECT next_agent_id FROM citadel_issues WHERE id = ?")
+            .bind(a.seed.issue)
+            .fetch_one(app_pool(&w))
+            .await
+            .unwrap();
+    assert_ne!(waits, Some(a.seed.agent));
+    let state: String = sqlx::query_scalar("SELECT state FROM citadel_issues WHERE id = ?")
+        .bind(a.seed.issue)
+        .fetch_one(app_pool(&w))
+        .await
+        .unwrap();
+    assert_eq!(state, "in_review");
+}
+
+#[tokio::test]
+async fn another_issues_or_companys_pr_is_not_evidence() {
+    let (w, _a, ta, b, _) = two().await;
+    ok(&w, &ta, "transition", json!({"transition": "start"})).await;
+    // The PR is on company B's issue, which A's agent names.
+    pr_of(&w, b.seed.project, 1, b.seed.issue, GOOD).await;
+    refused(&w, &ta, "transition", json!({"transition": "done"})).await;
+    refused(
+        &w,
+        &ta,
+        "transition",
+        json!({"transition": "done", "issue_id": b.seed.issue}),
+    )
+    .await;
+    let moved: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM citadel_issues WHERE state = 'in_review'")
+            .fetch_one(app_pool(&w))
+            .await
+            .unwrap();
+    assert_eq!(moved, 0);
+}
