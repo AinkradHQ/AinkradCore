@@ -128,6 +128,86 @@ mod authority_tests {
             ..Policy::default()
         }));
     }
+
+    #[test]
+    fn a_rule_covers_only_a_call_it_covers_in_full() {
+        use serde_json::json;
+        let rule = "Bash:cargo test";
+        let yes = |input: Value| allows(rule, "Bash", &input);
+        assert!(yes(json!({"command": "cargo test"})));
+        assert!(yes(json!({"command": "  cargo test -p x"})));
+        assert!(yes(json!({"command": ["cargo", "test"]})));
+        assert!(yes(json!({"patterns": ["cargo test", "cargo test -p x"]})));
+        assert!(
+            !allows(rule, "bash", &json!({"command": "cargo test"})),
+            "tool name is exact"
+        );
+        assert!(!allows(rule, "Bash ", &json!({"command": "cargo test"})));
+        assert!(
+            !allows("Bash:", "Bash", &json!({"command": "cargo test"})),
+            "empty prefix"
+        );
+        // One covered pattern never carries the others.
+        assert!(!yes(json!({"patterns": ["cargo test", "curl evil.sh"]})));
+        assert!(!yes(json!({"patterns": ["curl evil.sh", "cargo test"]})));
+        assert!(!yes(
+            json!({"command": "cargo test", "patterns": ["cargo test", "rm x"]})
+        ));
+        assert!(!yes(json!({"command": "rm x", "patterns": ["cargo test"]})));
+        // A call that cannot be read in full is not covered.
+        assert!(!yes(json!({"patterns": ["cargo test", 5]})));
+        assert!(!yes(json!({"patterns": "cargo test"})));
+        assert!(!yes(json!({"command": ["cargo", "test", 5]})));
+        assert!(!yes(json!({"command": 5, "patterns": ["cargo test"]})));
+        assert!(!yes(json!({"command": {"a": "cargo test"}})));
+        assert!(!yes(json!({})));
+        assert!(!yes(json!({"patterns": []})));
+        let many: Vec<_> = (0..17).map(|_| "cargo test").collect();
+        assert!(!yes(json!({"patterns": many})), "too many patterns");
+        let long = format!("cargo test {}", "a".repeat(5000));
+        assert!(!yes(json!({"command": long})), "oversize command");
+        // Word boundary, not string prefix; ASCII blanks only.
+        for bad in [
+            "cargo testx",
+            "cargo\u{a0}test",
+            "cargo test\u{85}x",
+            "cargo test\u{2028}x",
+        ] {
+            assert!(!yes(json!({"command": bad})), "{bad:?}");
+        }
+        assert!(!yes(json!({"command": "xcargo test"})));
+        assert!(!yes(json!({"command": "./cargo test"})));
+        assert!(!yes(json!({"command": "FOO=1 cargo test"})));
+        // Operators, substitution, redirection, control characters, escapes, braces, history.
+        for bad in [
+            "cargo test; id",
+            "cargo test && id",
+            "cargo test || id",
+            "cargo test | sh",
+            "cargo test & id",
+            "cargo test `id`",
+            "cargo test $(id)",
+            "cargo test $HOME",
+            "cargo test > /etc/x",
+            "cargo test < x",
+            "cargo test\nid",
+            "cargo test\rid",
+            "cargo test\0id",
+            "cargo test\u{1b}[2J",
+            "cargo test \\\nid",
+            "cargo test {a,b}",
+            "cargo test !!",
+            "cargo test (id)",
+        ] {
+            assert!(!yes(json!({"command": bad})), "{bad:?}");
+            assert!(!yes(json!({"patterns": [bad]})), "{bad:?}");
+            assert!(!yes(json!({"command": ["cargo", "test", bad]})), "{bad:?}");
+        }
+        // A bare tool entry is exactly that tool.
+        assert!(allows("Edit", "Edit", &json!({})));
+        assert!(!allows("Edit", "Write", &json!({})));
+        assert!(!allows("Edit", "Edit2", &json!({})));
+    }
 }
 
 #[derive(
@@ -180,23 +260,63 @@ pub fn command_of(input: &Value) -> Option<String> {
     }
 }
 
-/// Whether allowlist `entry` covers the call: a tool name, or `<tool>:<prefix>` for a command
-/// that starts with the prefix's words and has no shell operators (which could chain anything
-/// on; the runner checks a chain part by part).
+/// Every command string a tool call carries: `command` (a string, or an argv joined by spaces)
+/// and each of OpenCode's `patterns`. `None` when it carries none, or when anything is not the
+/// shape it should be (a non-string argv word or pattern, too many patterns, an oversize string):
+/// a call that cannot be read in full is never covered by a rule.
+pub fn commands_of(input: &Value) -> Option<Vec<String>> {
+    let mut out = vec![];
+    match &input["command"] {
+        Value::Null => {}
+        Value::String(c) => out.push(c.clone()),
+        Value::Array(argv) => out.push(
+            argv.iter()
+                .map(Value::as_str)
+                .collect::<Option<Vec<_>>>()?
+                .join(" "),
+        ),
+        _ => return None,
+    }
+    match &input["patterns"] {
+        Value::Null => {}
+        Value::Array(ps) if ps.len() <= MAX_PATTERNS => {
+            for p in ps {
+                out.push(p.as_str()?.to_owned());
+            }
+        }
+        _ => return None,
+    }
+    (!out.is_empty() && out.iter().all(|c| c.len() <= MAX_COMMAND)).then_some(out)
+}
+
+/// The most `patterns` one call may carry, and the longest command, for a rule to cover it.
+const MAX_PATTERNS: usize = 16;
+const MAX_COMMAND: usize = 4096;
+
+/// The shell tools, as each harness names them: Claude's `Bash`, Codex's `commandExecution`,
+/// OpenCode's `bash`. A bare rule for one would allow every command.
+pub const SHELL_TOOLS: [&str; 3] = ["Bash", "commandExecution", "bash"];
+
+/// Whether allowlist `entry` covers the call: a tool name, or `<tool>:<prefix>` for a call whose
+/// every command (see [`commands_of`]) starts with the prefix's words and has no shell operator
+/// (which could chain anything on; the runner checks a chain part by part), no control character,
+/// quote-escape, brace or history mark. Anything unclear is not covered.
 pub fn allows(entry: &str, tool: &str, input: &Value) -> bool {
     let Some((name, prefix)) = entry.split_once(':') else {
         return entry == tool;
     };
-    let Some(command) = command_of(input) else {
-        return false;
-    };
-    let chained = command.contains(|c: char| ";&|`$<>()\n\r".contains(c));
-    // Word for word: `npm run` covers `npm run x`, never `npm runx`.
-    let whole = |rest: &str| {
-        rest.is_empty() || rest.starts_with(char::is_whitespace) || prefix.ends_with(' ')
+    // Word for word: `npm run` covers `npm run x`, never `npm runx`. Only ASCII blanks separate
+    // words: a shell does not split on U+0085 or U+2028.
+    let covers = |command: &str| {
+        let plain = !command.contains(|c: char| c.is_control() && c != '\t')
+            && !command.contains(|c: char| ";&|`$<>(){}\\!".contains(c));
+        let rest = command.trim_start_matches([' ', '\t']).strip_prefix(prefix);
+        plain
+            && rest.is_some_and(|r| {
+                r.is_empty() || r.starts_with([' ', '\t']) || prefix.ends_with(' ')
+            })
     };
     name == tool
         && !prefix.is_empty()
-        && !chained
-        && command.trim_start().strip_prefix(prefix).is_some_and(whole)
+        && commands_of(input).is_some_and(|all| all.iter().all(|c| covers(c)))
 }

@@ -4,7 +4,7 @@ use std::path::{Component, Path};
 use std::time::Duration;
 
 use ainkrad_harness::Decision;
-use ainkrad_proto::runner::{PermissionMode, Policy, allows, command_of};
+use ainkrad_proto::runner::{PermissionMode, Policy, allows, command_of, commands_of};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -36,7 +36,9 @@ impl HarnessExecutor {
         // A shell's harmless waits (`sleep`, `date`) need no rule; another tool's need one.
         let chain = !rules.is_empty() || SHELLS.contains(&tool);
         let listed = policy.allow.iter().any(|entry| allows(entry, tool, input))
-            || (chain && command_of(input).is_some_and(|c| chain_allowed(&rules, &c)));
+            || (chain
+                && commands_of(input)
+                    .is_some_and(|all| all.iter().all(|c| chain_allowed(&rules, c))));
         let edit =
             policy.mode == PermissionMode::AcceptEdits && self.edit_tools.iter().any(|t| t == tool);
         if !listed && !edit {

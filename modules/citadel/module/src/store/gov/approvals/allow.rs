@@ -35,20 +35,41 @@ pub fn allow_rule(tool: &str, input: &serde_json::Value) -> String {
     }
 }
 
-/// The allowlist entries of the issue's live rules at `now`.
+/// The most live rules of one issue the engine looks at: a bound on the work of a pass.
+pub const MAX_ISSUE_RULES: i64 = 64;
+
+/// The issue's live rules at `now` as `(rule id, allowlist entry)`, oldest first, at most
+/// [`MAX_ISSUE_RULES`].
 pub async fn issue_allow_rules(
     pool: impl sqlx::SqliteExecutor<'_>,
     issue: IssueId,
     now: &str,
-) -> Result<Vec<String>, Error> {
-    sqlx::query_scalar(
-        "SELECT rule FROM citadel_issue_allow_rules WHERE issue_id = ? \
-         AND julianday(expires_at) > julianday(?) ORDER BY id",
+) -> Result<Vec<(i64, String)>, Error> {
+    sqlx::query_as(
+        "SELECT id, rule FROM citadel_issue_allow_rules WHERE issue_id = ? \
+         AND julianday(expires_at) > julianday(?) ORDER BY id LIMIT ?",
     )
     .bind(issue.0)
     .bind(now)
+    .bind(MAX_ISSUE_RULES)
     .fetch_all(pool)
     .await
+}
+
+/// Why `rule` may not be stored: it must be `<tool>` or `<tool>:<command prefix>`, made of
+/// printable text, and never a bare shell tool (which would allow every command; a shell needs
+/// a command prefix).
+fn rule_problem(rule: &str) -> Option<&'static str> {
+    let (tool, prefix) = rule.split_once(':').unwrap_or((rule, "x"));
+    if rule.len() > 256 || rule.chars().any(char::is_control) {
+        Some("a rule is short printable text")
+    } else if tool.is_empty() || tool.trim() != tool || prefix.trim().is_empty() {
+        Some("a rule is <tool> or <tool>:<command prefix>")
+    } else if !rule.contains(':') && ainkrad_proto::runner::SHELL_TOOLS.contains(&tool) {
+        Some("a shell needs a command prefix, not the whole tool")
+    } else {
+        None
+    }
 }
 
 /// The issue and the entry an "allow for this issue" of `a` adds: `rule`, else the escalated
@@ -65,6 +86,9 @@ pub(super) fn target(a: &Approval, rule: Option<&str>) -> Result<(IssueId, Strin
         Some(rule) => rule.to_owned(),
         None => allow_rule(tool, &payload["input"]),
     };
+    if let Some(why) = rule_problem(&rule) {
+        return Err(DecideError::Allow(why.to_owned()));
+    }
     Ok((issue, rule))
 }
 
@@ -94,4 +118,31 @@ pub(super) async fn allow_in(
         "expires_at": expires});
     let actor = user_actor(by);
     append_approval_event_as(conn, a, actor, "approval.allowed_for_issue", details).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rule_problem;
+
+    #[test]
+    fn a_stored_rule_names_a_tool_or_a_command_prefix_never_a_whole_shell() {
+        for ok in ["Edit", "Bash:cargo test", "bash:git status", "Bash:cargo "] {
+            assert_eq!(rule_problem(ok), None, "{ok}");
+        }
+        for bad in [
+            "",
+            "Bash",
+            "bash",
+            "commandExecution",
+            "Bash:",
+            "Bash: ",
+            ":cargo",
+            " Edit",
+            "Bash:cargo\ntest",
+            "Bash:cargo\0",
+            &format!("Bash:{}", "a".repeat(300)),
+        ] {
+            assert!(rule_problem(bad).is_some(), "{bad:?}");
+        }
+    }
 }

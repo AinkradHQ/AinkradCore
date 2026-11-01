@@ -394,14 +394,19 @@ async fn scan_approvals<H: Host>(
     let Some(last) = entries.last().map(|e| e.seq) else {
         return Ok(());
     };
-    // A call an "allow for this issue" rule still covers goes ahead without a reviewer. Told to
-    // the harness first, outside any write transaction: if the runner does not take it, the call
-    // is escalated like any other, so a rule never turns a failure into a silent denial.
+    // A call an "allow for this issue" rule still covers goes ahead without a reviewer, with
+    // three guards. (1) Fail closed: a rule must cover the call in full (`allows`: every command
+    // and pattern, no operator), a bare shell rule is never read as "everything", and only a
+    // request id of sane shape is answered. (2) Audit first: `run.allowed_by_rule` is committed
+    // BEFORE the harness is told, so an approval never exists without its row; if the row cannot
+    // be written, nothing is allowed and the call is escalated. (3) If the runner does not take
+    // the decision, the call is escalated like any other and the audit says the rule went unapplied.
+    // The rows carry the rule's id, never its text or the command.
     let rules = match r.issue_id {
         Some(issue) => crate::store::gov::issue_allow_rules(pool, issue, now).await?,
         None => vec![],
     };
-    let mut allowed: Vec<(String, String)> = vec![];
+    let mut matched: Vec<(&str, &str, i64)> = vec![];
     for e in entries
         .iter()
         .filter(|e| e.body["type"] == "approval_request")
@@ -409,26 +414,46 @@ async fn scan_approvals<H: Host>(
         let (Some(request), Some(tool)) = (e.body["id"].as_str(), e.body["tool"].as_str()) else {
             continue;
         };
-        let Some(rule) = rules
-            .iter()
-            .find(|rule| ainkrad_proto::runner::allows(rule, tool, &e.body["input"]))
-        else {
+        if request.is_empty() || request.len() > 256 || request.contains(char::is_control) {
             continue;
-        };
+        }
+        let rule = rules.iter().find(|(_, rule)| {
+            let bare_shell = ainkrad_proto::runner::SHELL_TOOLS.contains(&rule.as_str());
+            !bare_shell && ainkrad_proto::runner::allows(rule, tool, &e.body["input"])
+        });
+        if let Some((rule_id, _)) = rule {
+            matched.push((request, tool, *rule_id));
+        }
+    }
+    let company: i64 = sqlx::query_scalar("SELECT company_id FROM citadel_agents WHERE id = ?")
+        .bind(r.agent_id.0)
+        .fetch_one(pool)
+        .await?;
+    if !matched.is_empty()
+        && audit_allowed(pool, r, company, &matched, "run.allowed_by_rule")
+            .await
+            .is_err()
+    {
+        tracing::warn!(
+            run = r.id.0,
+            "an allow rule was not audited; escalating instead"
+        );
+        matched.clear();
+    }
+    let mut allowed: Vec<&str> = vec![];
+    let mut unapplied = vec![];
+    for &(request, tool, rule_id) in &matched {
         let told = Instruction::Decide {
             request: request.to_owned(),
             approved: true,
             reply: Some("allowed for this issue".to_owned()),
         };
-        if host.instruct(app, &s.id, told).await.is_ok() {
-            allowed.push((request.to_owned(), rule.clone()));
+        match host.instruct(app, &s.id, told).await {
+            Ok(_) => allowed.push(request),
+            Err(_) => unapplied.push((request, tool, rule_id)),
         }
     }
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
-    let company: i64 = sqlx::query_scalar("SELECT company_id FROM citadel_agents WHERE id = ?")
-        .bind(r.agent_id.0)
-        .fetch_one(&mut *tx)
-        .await?;
     for e in entries
         .iter()
         .filter(|e| e.body["type"] == "approval_request")
@@ -436,18 +461,7 @@ async fn scan_approvals<H: Host>(
         let Some(request) = e.body["id"].as_str() else {
             continue;
         };
-        if let Some((_, rule)) = allowed.iter().find(|(id, _)| id == request) {
-            let tool = e.body["tool"].as_str().unwrap_or_default();
-            audit::append(
-                &mut tx,
-                Event::new(SYSTEM, "run.allowed_by_rule")
-                    .entity("run", r.id.0)
-                    .company(company)
-                    .run(r.id.0)
-                    .details(json!({"rule": rule, "request": request, "tool": tool,
-                                    "issue": r.issue_id.map(|i| i.0)})),
-            )
-            .await?;
+        if allowed.contains(&request) {
             continue;
         }
         let asked: bool = sqlx::query_scalar(
@@ -481,11 +495,57 @@ async fn scan_approvals<H: Host>(
         open_approval_in(&mut tx, &new, None, now).await?;
         report.approvals += 1;
     }
+    for (request, tool, rule_id) in unapplied {
+        audit_rule(
+            &mut tx,
+            r,
+            company,
+            (request, tool, rule_id),
+            "run.allow_rule_unapplied",
+        )
+        .await?;
+    }
     sqlx::query("UPDATE citadel_runs SET approval_seq = ? WHERE id = ?")
         .bind(last as i64)
         .bind(r.id.0)
         .execute(&mut *tx)
         .await?;
+    tx.commit().await
+}
+
+/// One audit row for a rule that covered a call: ids and the tool name only, never the rule's text
+/// or the command.
+async fn audit_rule(
+    conn: &mut sqlx::SqliteConnection,
+    r: &Run,
+    company: i64,
+    (request, tool, rule_id): (&str, &str, i64),
+    action: &str,
+) -> Result<(), Error> {
+    audit::append(
+        conn,
+        Event::new(SYSTEM, action)
+            .entity("run", r.id.0)
+            .company(company)
+            .run(r.id.0)
+            .details(json!({"rule_id": rule_id, "request": request, "tool": tool,
+                            "issue": r.issue_id.map(|i| i.0)})),
+    )
+    .await
+}
+
+/// Commits `action` rows for every match in one transaction, all or none.
+async fn audit_allowed(
+    pool: &SqlitePool,
+    r: &Run,
+    company: i64,
+    matched: &[(&str, &str, i64)],
+    action: &str,
+) -> Result<(), Error> {
+    let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
+    for &m in matched {
+        audit_rule(&mut tx, r, company, m, action).await?;
+    }
     tx.commit().await
 }
 

