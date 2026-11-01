@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_core::audit::AuditActor;
+use ainkrad_proto::runner::Isolation;
 use ainkrad_proto::v2::{
     AGENT_DRIVER, AgentEvents, AgentRead, AgentStart, AgentState, Body, Command, ErrorCode, Reply,
     SecretGrant, StreamError,
@@ -33,7 +34,7 @@ use serde_json::{Value, json};
 
 use crate::api::App;
 use crate::api::v1::Caller;
-use crate::hub::Elevated;
+use crate::hub::{Elevated, RunnerState};
 use crate::module::Module;
 use crate::store::agents::{self as store, Session};
 
@@ -121,6 +122,19 @@ fn busy(why: &str) -> Refusal {
 /// Whether the runner can take one more `harness` session now: online, offering `agent`, under
 /// its capacity and the harness's slot (counting the sessions the Core holds on it).
 pub async fn admit(app: &App, runner: &str, harness: &str) -> Result<(), Refusal> {
+    let default = serde_json::to_value(ainkrad_proto::runner::Policy::default())
+        .expect("a policy serializes");
+    admit_with(app, runner, harness, &default).await
+}
+
+/// [`admit`] for a session with `policy`: one that sets `min_isolation` is placed only on a runner
+/// that offers a tier meeting it (E8a-09), see [`tier_refusal`].
+pub async fn admit_with(
+    app: &App,
+    runner: &str,
+    harness: &str,
+    policy: &serde_json::Value,
+) -> Result<(), Refusal> {
     let live = app.hub.runners();
     let Some(r) = live.get(runner).filter(|r| r.online) else {
         return Err(Refusal::Runner(StreamError::new(
@@ -140,6 +154,12 @@ pub async fn admit(app: &App, runner: &str, harness: &str) -> Result<(), Refusal
             "the runner offers no slot for that harness",
         )));
     }
+    if let Some(why) = tier_refusal(r, policy) {
+        return Err(Refusal::Runner(StreamError::new(
+            ErrorCode::InvalidArgs,
+            why,
+        )));
+    }
     let held = store::on_runner(&app.pool, runner).await?;
     let of_harness = held.iter().filter(|h| *h == harness).count();
     if held.len() >= d.capacity as usize
@@ -150,6 +170,40 @@ pub async fn admit(app: &App, runner: &str, harness: &str) -> Result<(), Refusal
         return Err(busy("the runner's agent sessions are at their capacity"));
     }
     Ok(())
+}
+
+/// Why `runner` may not take a session with `policy`, when its isolation does not meet the
+/// policy's `min_isolation` (E8a-09). Fails closed, and there is no weaker tier to fall back to:
+/// a policy that does not parse, a runner that never reported its isolation, one that is silent
+/// (`degraded`), one whose offer does not reach the tier, and one offering a tier it names but
+/// this Core does not know are all refused. `None` when the policy needs no isolation.
+pub fn tier_refusal(runner: &RunnerState, policy: &serde_json::Value) -> Option<String> {
+    let Ok(policy) = serde_json::from_value::<ainkrad_proto::runner::Policy>(policy.clone()) else {
+        return Some("the session's policy does not have its shape".to_owned());
+    };
+    let required = policy.min_isolation.filter(|m| *m != Isolation::None)?;
+    let name = required.as_str();
+    let Some(caps) = &runner.isolation else {
+        return Some(format!(
+            "the session needs {name} isolation and the runner has not reported what it offers"
+        ));
+    };
+    if runner.degraded {
+        return Some(format!(
+            "the session needs {name} isolation and the runner is silent, so its offer is unknown"
+        ));
+    }
+    if !caps.meets(required) {
+        return Some(format!(
+            "the session needs {name} isolation and the runner offers {}",
+            if caps.tiers.is_empty() {
+                "none".to_owned()
+            } else {
+                caps.tiers.join(", ")
+            }
+        ));
+    }
+    None
 }
 
 /// Sends `command` to the session's runner and waits (at most `wait`) for its answer.
@@ -385,7 +439,7 @@ impl ModuleAgents {
         if sandbox_without_flag {
             return Err(invalid_args("a sandboxed mode needs the sandbox flag"));
         }
-        admit(app, new.runner, new.harness).await?;
+        admit_with(app, new.runner, new.harness, new.policy).await?;
         let s = store::create_owned_ref(
             &app.pool,
             new,

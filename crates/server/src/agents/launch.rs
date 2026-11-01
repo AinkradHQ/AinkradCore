@@ -108,6 +108,17 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
         fail(app, s, &describe(&e)).await;
         return Err(e);
     }
+    // A restart or resume is placed again: the runner may have lost the tier since (E8a-09).
+    let refused = app
+        .hub
+        .runners()
+        .get(&s.runner)
+        .and_then(|r| tier_refusal(r, &s.policy));
+    if let Some(why) = refused {
+        let e = Refusal::Runner(StreamError::new(ErrorCode::InvalidArgs, why));
+        fail(app, s, &describe(&e)).await;
+        return Err(e);
+    }
     // A revoked or de-scoped creator gets no fresh secrets, on a restart or a resume either
     // (B-M1): the session ends.
     if !s.secrets.is_empty() {
