@@ -29,7 +29,8 @@ async fn queue(core: &Core) -> (Arc<Engine>, Arc<Skew>) {
         every: Duration::from_millis(50),
         ..Config::default()
     };
-    let clock = Arc::new(Skew::default());
+    // A few seconds ahead: a wake queued a moment ago is due, whatever the rounding.
+    let clock = Arc::new(Skew(std::sync::atomic::AtomicI64::new(5)));
     (
         Engine::new(core.app.pool.clone(), clock.clone(), &modules, config),
         clock,
@@ -37,7 +38,6 @@ async fn queue(core: &Core) -> (Arc<Engine>, Arc<Skew>) {
 }
 
 /// The real clock, moved forward by hand so a backoff passes without waiting.
-#[derive(Default)]
 struct Skew(std::sync::atomic::AtomicI64);
 
 impl Clock for Skew {
