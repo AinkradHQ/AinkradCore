@@ -365,7 +365,7 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
     // Starts the MCP and egress forwarders (when bwrap was given them) before the harness; they die
     // with the sandbox. Descriptors above 2 that the runner leaked are closed first, so a connected
     // socket inherited from the host is not reachable from inside.
-    const FORWARDER: &str = "for f in /proc/$$/fd/*; do n=${f##*/}; [ \"$n\" -gt 2 ] 2>/dev/null && eval \"exec $n>&-\"; done; [ -z \"$AINKRAD_MCP_FWD\" ] || \"$AINKRAD_MCP_FWD\" mcp-forward \"$AINKRAD_MCP_PORT\" \"$AINKRAD_MCP_SOCK\" </dev/null >/dev/null 2>&1 & [ -z \"$AINKRAD_EGRESS_SOCK\" ] || \"$AINKRAD_EGRESS_FWD\" mcp-forward \"$AINKRAD_EGRESS_PORT\" \"$AINKRAD_EGRESS_SOCK\" </dev/null >/dev/null 2>&1 & ";
+    const FORWARDER: &str = "for f in /proc/$$/fd/*; do n=${f##*/}; [ \"$n\" -gt 2 ] 2>/dev/null && eval \"exec $n>&-\"; done; if [ -n \"$AINKRAD_MCP_FWD\" ]; then \"$AINKRAD_MCP_FWD\" mcp-forward \"$AINKRAD_MCP_PORT\" \"$AINKRAD_MCP_SOCK\" </dev/null >/dev/null 2>&1 & fi; if [ -n \"$AINKRAD_EGRESS_SOCK\" ]; then \"$AINKRAD_EGRESS_FWD\" mcp-forward \"$AINKRAD_EGRESS_PORT\" \"$AINKRAD_EGRESS_SOCK\" </dev/null >/dev/null 2>&1 & fi; ";
     let script = if cfg!(target_os = "macos") {
         "ulimit -S -u \"$1\" && ulimit -H -u \"$1\" && ulimit -S -t \"$2\" && ulimit -H -t \"$2\" && ulimit -S -f \"$3\" && ulimit -H -f \"$3\" || exit 125; shift 4; exec \"$@\""
     } else {
