@@ -267,6 +267,7 @@ impl HarnessExecutor {
             accept_edits: job.policy.mode == PermissionMode::AcceptEdits,
             instructions: files.instructions.clone(),
             mcp_config: files.mcp_config.clone(),
+            backend: self.backend.clone(),
         };
         let reports = reports.clone();
         let _bridge = bridge; // held until the run ends

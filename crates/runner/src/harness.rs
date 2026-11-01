@@ -127,6 +127,9 @@ pub struct HarnessExecutor {
     credentials: Mutex<HashMap<i64, Vec<Read>>>,
     /// Harness → the version `probe` found, named in a protocol failure.
     versions: Mutex<BTreeMap<String, String>>,
+    /// Where harness processes start (E8a-06); `None` is the local backend (bubblewrap or
+    /// Seatbelt, as `AINKRAD_SANDBOX*` say). Set it before the first run.
+    pub backend: Option<Arc<dyn ainkrad_harness::exec::ExecBackend>>,
 }
 
 impl HarnessExecutor {
@@ -178,6 +181,7 @@ impl HarnessExecutor {
             run_env: Mutex::new(HashMap::new()),
             credentials: Mutex::new(HashMap::new()),
             versions: Mutex::new(BTreeMap::new()),
+            backend: None,
         }
     }
 

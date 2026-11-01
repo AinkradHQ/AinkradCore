@@ -21,7 +21,8 @@ use std::io;
 use serde_json::{Value, json};
 use tokio::process::Command;
 
-use crate::proc::{self, Proc};
+use crate::exec::Launch;
+use crate::proc::Proc;
 use crate::{Decision, Harness, HarnessEvent, RateWindow, Spec, TurnOutcome, Usage, sum_tokens};
 
 /// The Claude Code version this adapter was written and recorded against (E3.6 probes it).
@@ -106,13 +107,12 @@ pub fn args(spec: &Spec, resume: Option<&str>) -> Vec<String> {
 
 /// The process to spawn: cleared env + allowlist, `CLAUDE_CONFIG_DIR` set to the spec's.
 pub fn command(spec: &Spec, resume: Option<&str>) -> Command {
+    launch(spec, resume).command(spec)
+}
+
+fn launch(spec: &Spec, resume: Option<&str>) -> Launch {
     let program = spec.program.as_deref().unwrap_or("claude".as_ref());
-    proc::command(
-        program.as_os_str(),
-        &args(spec, resume),
-        spec,
-        &[("CLAUDE_CONFIG_DIR", spec.config_dir.as_os_str())],
-    )
+    Launch::new(program, args(spec, resume)).set("CLAUDE_CONFIG_DIR", spec.config_dir.as_os_str())
 }
 
 pub struct Claude {
@@ -353,7 +353,7 @@ impl Decoder {
 impl Claude {
     async fn spawn(spec: &Spec, resume: Option<&str>) -> io::Result<Self> {
         let mut claude = Self {
-            proc: Proc::spawn_with_pgid_file(command(spec, resume), proc::sandbox_pgid_file(spec))?,
+            proc: Proc::start(spec, launch(spec, resume)).await?,
             decoder: Decoder::default(),
             queued: VecDeque::new(),
             next_id: 0,

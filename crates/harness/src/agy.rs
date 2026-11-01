@@ -22,7 +22,8 @@ use std::io;
 use serde_json::{Value, json};
 use tokio::process::Command;
 
-use crate::proc::{self, Proc};
+use crate::exec::Launch;
+use crate::proc::Proc;
 use crate::{Decision, Harness, HarnessEvent, Spec, TurnOutcome, Usage};
 
 /// The agy version this adapter was written and recorded against (E3.6 probes it). Tool names
@@ -57,13 +58,12 @@ pub fn args(spec: &Spec, resume: Option<&str>) -> Vec<String> {
 
 /// The process to spawn: cleared env + allowlist, `HOME` set to the spec's config dir.
 pub fn command(spec: &Spec, resume: Option<&str>) -> Command {
+    launch(spec, resume).command(spec)
+}
+
+fn launch(spec: &Spec, resume: Option<&str>) -> Launch {
     let program = spec.program.as_deref().unwrap_or("agy".as_ref());
-    proc::command(
-        program.as_os_str(),
-        &args(spec, resume),
-        spec,
-        &[("HOME", spec.config_dir.as_os_str())],
-    )
+    Launch::new(program, args(spec, resume)).set("HOME", spec.config_dir.as_os_str())
 }
 
 /// The spec's MCP file for the Citadel MCP server at `url`, in agy's `mcp_config.json` form
@@ -279,7 +279,7 @@ impl Agy {
         std::fs::create_dir_all(&settings)?;
         std::fs::write(settings.join("settings.json"), SETTINGS)?;
         Ok(Self {
-            proc: Proc::spawn_with_pgid_file(command(spec, resume), proc::sandbox_pgid_file(spec))?,
+            proc: Proc::start(spec, launch(spec, resume)).await?,
             decoder: Decoder {
                 resumed: resume.is_some(),
                 ..Decoder::default()

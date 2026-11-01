@@ -24,7 +24,8 @@ use serde_json::{Value, json};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
-use crate::proc::{self, Proc};
+use crate::exec::Launch;
+use crate::proc::Proc;
 use crate::{Decision, Harness, HarnessEvent, Spec, TurnOutcome, Usage, sum_tokens};
 
 /// The OpenCode version this adapter was written and recorded against (E3.6 probes it).
@@ -66,11 +67,17 @@ pub fn mcp_config(url: &str, token: &str) -> Value {
 
 /// The server to spawn: cleared env + allowlist + `env`.
 pub fn command(spec: &Spec, password: &str) -> Command {
+    launch(spec, password).command(spec)
+}
+
+fn launch(spec: &Spec, password: &str) -> Launch {
     let program = spec.program.as_deref().unwrap_or("opencode".as_ref());
-    let env = env(spec, password);
-    let set: Vec<_> = env.iter().map(|(k, v)| (*k, v.as_os_str())).collect();
     let args = ["serve", "--port", "0", "--hostname", "127.0.0.1"].map(str::to_owned);
-    proc::command(program.as_os_str(), &args, spec, &set)
+    let mut launch = Launch::new(program, args.into());
+    for (k, v) in env(spec, password) {
+        launch = launch.set(k, v);
+    }
+    launch
 }
 
 /// The session's permission rules (E3.10): edits, shell and fetches ask (Grimoire's Ask
@@ -311,8 +318,7 @@ impl OpenCode {
             ))
         })?;
         let password = crate::claude::new_session_id()?;
-        let mut proc =
-            Proc::spawn_with_pgid_file(command(spec, &password), proc::sandbox_pgid_file(spec))?;
+        let mut proc = Proc::start(spec, launch(spec, &password)).await?;
         let listening = async {
             while let Some(line) = proc.line().await {
                 if let Some((_, url)) = line.split_once("listening on ") {
