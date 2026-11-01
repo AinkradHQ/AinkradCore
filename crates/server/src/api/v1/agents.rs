@@ -140,6 +140,26 @@ pub struct AgentDecision {
     pub reply: Option<String>,
 }
 
+/// A wake for an idle session.
+#[derive(Deserialize, ToSchema)]
+pub struct AgentWakeRequest {
+    /// Makes the wake idempotent: asking again with the same key queues nothing (it is kept for
+    /// 30 days). 1 to 128 of `A-Za-z0-9_.:-`; absent, the Core makes one up.
+    pub key: Option<String>,
+    /// The next turn, 1 byte to 16 KiB; absent, the session just continues.
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AgentWake {
+    /// The session, `as_…`.
+    pub session: String,
+    /// The wake's key.
+    pub key: String,
+    /// `false` when this key was already used: nothing was queued.
+    pub queued: bool,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AgentTranscriptEntry {
     /// From 1, by one: replay from any `seq` with `after`.
@@ -534,4 +554,75 @@ pub async fn resume(
     .await?;
     agents::supervise(&app, &s.id);
     Ok(Json(one(&app, &id).await?.into()))
+}
+
+#[utoipa::path(post, path = "/api/v1/agent-sessions/{id}/wake",
+    operation_id = "wakeAgentSession", tag = "agents",
+    params(("id" = String, Path, description = "The session's id, `as_…`")),
+    request_body = AgentWakeRequest,
+    responses((status = 200, description = "Queued on the scheduler (audited as \
+        `agent.wake_queued`): once the session is idle it is resumed on its runner, continuing \
+        the harness's own session with `text` as its next turn (`agent.woken`). A session that \
+        is still running is retried for a while, then the wake is dropped. 409 `not_wakeable` \
+        (failed, cancelled, a module's), 409 `limit_reached` (too many wakes waiting), 503 \
+        `scheduler_unavailable`", body = AgentWake)))]
+pub async fn wake(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> ApiResult<AgentWake> {
+    let s = one(&app, &id).await?;
+    let b: AgentWakeRequest = parse(&body)?;
+    let key = match b.key {
+        Some(k) if request_ok(&k) => k,
+        Some(_) => {
+            return Err(ApiError::bad_request(
+                "a wake key is 1 to 128 of A-Za-z0-9_.:-",
+            ));
+        }
+        None => crate::auth::crypto::random_id("w_"),
+    };
+    let long = |t: &String| t.is_empty() || t.len() > crate::agents::wake::MAX_TEXT;
+    if b.text.as_ref().is_some_and(long) {
+        return Err(ApiError::bad_request("a wake text is 1 byte to 16 KiB"));
+    }
+    not_a_modules(&s)?;
+    owns_secrets(&s, &me)?;
+    if !s.wakeable() {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "not_wakeable",
+            "only a session that is not over, was lost, or finished a turn can be woken",
+        ));
+    }
+    let payload = json!({"session": s.id, "by": me.device.id, "text": b.text});
+    let name = crate::agents::wake::JOB;
+    let cap = crate::agents::wake::CAP;
+    let queued = crate::jobs::wake_platform(&app.pool, &app.clock.now(), name, &key, &payload, cap)
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::InvalidArgument(_) => ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "scheduler_unavailable",
+                "the scheduler does not run the wake queue",
+            ),
+            e => e.into(),
+        })?;
+    if queued == crate::jobs::Queued::Full {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "limit_reached",
+            "too many wakes are waiting",
+        ));
+    }
+    let details =
+        json!({"queued": queued == crate::jobs::Queued::New, "bytes": b.text.map(|t| t.len())});
+    let action = "agent.wake_queued";
+    store::action(&app.pool, &s, BY, action, None, details, &me.device.id).await?;
+    Ok(Json(AgentWake {
+        session: s.id,
+        key,
+        queued: queued == crate::jobs::Queued::New,
+    }))
 }

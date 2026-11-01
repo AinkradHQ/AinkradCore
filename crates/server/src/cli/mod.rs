@@ -687,19 +687,15 @@ async fn serve(
     let mut stopped_push = stopped.clone();
     let mut stopped_jobs = stopped.clone();
     let stopped_anchor = stopped.clone();
-    // The jobs of the mounted modules come from `Module::jobs`.
-    ainkrad_core_server::jobs::register(&pool, &SystemClock.now(), &modules).await?;
-    let engine = ainkrad_core_server::jobs::Engine::new(
-        pool.clone(),
-        Arc::new(SystemClock),
-        &modules,
-        Default::default(),
-    );
-    let working = tokio::spawn(async move {
-        engine
-            .run(async { drop(stopped_jobs.changed().await) })
-            .await
-    });
+    // The jobs of the mounted modules come from `Module::jobs`; the platform's own (the agent
+    // wake queue) ride the same registry, as a module that is not mounted.
+    let wake_jobs = Arc::new(ainkrad_core_server::agents::wake::WakeJobs::default());
+    let scheduled: Vec<Arc<dyn Module>> = modules
+        .iter()
+        .cloned()
+        .chain([Arc::clone(&wake_jobs) as Arc<dyn Module>])
+        .collect();
+    ainkrad_core_server::jobs::register(&pool, &SystemClock.now(), &scheduled).await?;
     let pushing = tokio::spawn(async move {
         pusher
             .run(async { drop(stopped_push.changed().await) })
@@ -819,6 +815,19 @@ async fn serve(
     for m in modules.iter() {
         m.attach(&app);
     }
+    wake_jobs.attach(&app);
+    // After the attach: a queued job finds its module's app, also the first one after a restart.
+    let engine = ainkrad_core_server::jobs::Engine::new(
+        app.pool.clone(),
+        Arc::new(SystemClock),
+        &scheduled,
+        Default::default(),
+    );
+    let working = tokio::spawn(async move {
+        engine
+            .run(async { drop(stopped_jobs.changed().await) })
+            .await
+    });
     let (closing, pool) = (Arc::clone(&app.closing), app.pool.clone());
     let server = gateway.serve(router(app), Arc::clone(&closing), gateway::SHUTDOWN_GRACE);
     tokio::pin!(server);

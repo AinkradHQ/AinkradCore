@@ -18,6 +18,7 @@
 //!   driver, or the harness's slot on it, is full (the runner refuses it too).
 
 mod launch;
+pub mod wake;
 use launch::launch;
 pub use launch::{Placement, placement};
 
@@ -513,10 +514,10 @@ impl ModuleAgents {
     }
 }
 
-/// Starts supervising `id`, unless this process already does.
-pub fn supervise(app: &App, id: &str) {
+/// Starts supervising `id`, unless this process already does; whether it started one.
+pub fn supervise(app: &App, id: &str) -> bool {
     if !app.agents.supervised.lock().unwrap().insert(id.to_owned()) {
-        return;
+        return false;
     }
     let (app, id) = (app.clone(), id.to_owned());
     tokio::spawn(async move {
@@ -527,6 +528,7 @@ pub fn supervise(app: &App, id: &str) {
         }
         app.agents.supervised.lock().unwrap().remove(&id);
     });
+    true
 }
 
 /// Supervises every session not over: what a starting Core does (a Core restart re-claims).
@@ -664,6 +666,18 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
         AgentState::Running | AgentState::Unknown => {}
     }
     Ok(())
+}
+
+/// Holds `id` as supervised, as a supervisor that has not finished would (for tests).
+#[cfg(feature = "test-support")]
+pub fn hold_supervision_for_tests(app: &App, id: &str) {
+    app.agents.supervised.lock().unwrap().insert(id.to_owned());
+}
+
+/// Lets go of what [`hold_supervision_for_tests`] held.
+#[cfg(feature = "test-support")]
+pub fn release_supervision_for_tests(app: &App, id: &str) {
+    app.agents.supervised.lock().unwrap().remove(id);
 }
 
 /// The supervised session ids, for tests.
