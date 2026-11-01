@@ -227,6 +227,13 @@ async fn a_wake_waits_for_the_previous_supervisor_to_let_go_and_is_dropped_if_it
     assert_eq!(s.resumes, 1);
     assert_eq!(actions(&core).await, ["agent.woken"]);
 
+    // The relaunched session's own supervisor ends first, as the old one did.
+    for _ in 0..200 {
+        if !ainkrad_core_server::agents::supervised(&core.app).contains(&id) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     // A supervisor that never lets go: every attempt is refused, the last one audits the drop.
     ainkrad_core_server::agents::hold_supervision_for_tests(&core.app, &id);
     assert_eq!(ask(&core, &id, &r.id, "stuck", None).await, Queued::New);
