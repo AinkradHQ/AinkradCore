@@ -31,7 +31,9 @@ fn screen_text(dump: &str) -> String {
         while let Some(i) = rest.find("\\e[") {
             out.push_str(&rest[..i]);
             let body = &rest[i + 3..];
-            let end = body.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(body.len().saturating_sub(1));
+            let end = body
+                .find(|c: char| c.is_ascii_alphabetic())
+                .unwrap_or(body.len().saturating_sub(1));
             // blank runs are drawn as cursor-forward / erase-characters: they are spaces
             if matches!(body.as_bytes().get(end), Some(b'C' | b'X')) {
                 let n: usize = body[..end].parse().unwrap_or(1);
@@ -70,7 +72,10 @@ fn vim_edit_shows_the_file_and_leaves_clean() {
     let t = before_exit("real_vim_edit");
     let text = screen_text(&t.dump());
     // `A// ok<Esc>u` was undone; the `o/* more */` line stays
-    assert!(text.contains("int main(void)") && !text.contains("// ok"), "{text}");
+    assert!(
+        text.contains("int main(void)") && !text.contains("// ok"),
+        "{text}"
+    );
     assert!(text.contains("/* more */"), "{text}");
     let mut full = Terminal::new(SIZE, Limits::default());
     full.feed(&stream("real_vim_edit"));
@@ -82,7 +87,10 @@ fn vim_split_has_two_status_lines_and_scrolled() {
     let s = stream("real_vim_split_scroll");
     // a scroll region (DECSTBM) was set by the split
     let lossy = String::from_utf8_lossy(&s);
-    assert!(lossy.contains('r') && lossy.matches("\x1b[").count() > 20, "stream");
+    assert!(
+        lossy.contains('r') && lossy.matches("\x1b[").count() > 20,
+        "stream"
+    );
     let text = screen_text(&before_exit("real_vim_split_scroll").dump());
     assert_eq!(text.matches("notes.txt").count(), 2, "{text}");
     assert!(text.contains("of the notes file"), "{text}");
@@ -93,7 +101,15 @@ fn htop_draws_header_table_and_footer() {
     // the key bar is gone by the time htop quits, so check the footer in the stream itself
     assert!(String::from_utf8_lossy(&stream("real_htop")).contains("Quit"));
     let text = screen_text(&before_exit("real_htop").dump());
-    for want in ["CPU", "Mem", "Tasks:", "Load average:", "Uptime:", "PID", "Command"] {
+    for want in [
+        "CPU",
+        "Mem",
+        "Tasks:",
+        "Load average:",
+        "Uptime:",
+        "PID",
+        "Command",
+    ] {
         assert!(text.contains(want), "missing {want}\n{text}");
     }
 }
@@ -101,9 +117,18 @@ fn htop_draws_header_table_and_footer() {
 #[test]
 fn tmux_has_three_panes_and_a_status_bar() {
     let text = screen_text(&before_exit("real_tmux_splits").dump());
-    assert!(text.contains("[s]") && text.contains("main") && text.contains("ainkrad"), "{text}");
-    assert!(text.contains('│') || text.contains('|'), "no vertical border\n{text}");
-    assert!(text.contains('─') || text.contains('-'), "no horizontal border\n{text}");
+    assert!(
+        text.contains("[s]") && text.contains("main") && text.contains("ainkrad"),
+        "{text}"
+    );
+    assert!(
+        text.contains('│') || text.contains('|'),
+        "no vertical border\n{text}"
+    );
+    assert!(
+        text.contains('─') || text.contains('-'),
+        "no horizontal border\n{text}"
+    );
     for want in ["one", "two", "three"] {
         assert!(text.contains(want), "{want}\n{text}");
     }
@@ -114,7 +139,10 @@ fn ls_colour_keeps_its_colours() {
     let mut t = Terminal::new(SIZE, Limits::default());
     t.feed(&stream("real_ls_color"));
     let d = t.dump();
-    assert!(d.contains("\\e[34;1m") && d.contains("\\e[32;1m") && d.contains("\\e[36;1m"), "{d}");
+    assert!(
+        d.contains("\\e[34;1m") && d.contains("\\e[32;1m") && d.contains("\\e[36;1m"),
+        "{d}"
+    );
     let text = screen_text(&d);
     for want in ["dir", "run.sh", "data.tar.gz", "link", "plain.txt"] {
         assert!(text.contains(want), "{want}\n{text}");
@@ -126,7 +154,13 @@ fn wide_text_keeps_its_cells() {
     let mut t = Terminal::new(SIZE, Limits::default());
     t.feed(&stream("real_wide_chars"));
     let text = screen_text(&t.dump());
-    for want in ["\u{4f60}\u{597d}", "\u{3053}\u{3093}", "\u{1f680}", "e\u{301}", "wraps"] {
+    for want in [
+        "\u{4f60}\u{597d}",
+        "\u{3053}\u{3093}",
+        "\u{1f680}",
+        "e\u{301}",
+        "wraps",
+    ] {
         assert!(text.contains(want), "{want:?}\n{text}");
     }
 }
@@ -139,7 +173,10 @@ fn less_returns_to_the_shell_screen() {
     assert!(d.contains("alt=false"), "{d}");
     let text = screen_text(&d);
     assert!(text.contains("before") && text.contains("after"), "{text}");
-    assert!(!text.contains("of the notes file"), "pager text leaked\n{text}");
+    assert!(
+        !text.contains("of the notes file"),
+        "pager text leaked\n{text}"
+    );
 }
 
 const REAL: [&str; 7] = [
@@ -182,7 +219,10 @@ fn reattach_from_every_point_of_every_stream() {
 fn resize_then_reattach_keeps_fidelity() {
     let sizes = [
         Size { rows: 18, cols: 60 },
-        Size { rows: 30, cols: 120 },
+        Size {
+            rows: 30,
+            cols: 120,
+        },
         Size { rows: 24, cols: 40 },
         Size { rows: 3, cols: 80 },
     ];

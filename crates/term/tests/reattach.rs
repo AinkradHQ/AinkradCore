@@ -149,3 +149,11 @@ fn diff_brings_a_client_up_to_date() {
     let screen = |d: String| d.split("-- screen").nth(1).unwrap().to_owned();
     assert_eq!(screen(client.dump()), screen(t.dump()));
 }
+
+#[test]
+fn literal_backslash_e_text_reattaches() {
+    // Found by fuzzing: text that spells `\e[94m` is plain text, not an escape, in a snapshot too.
+    let mut t = term(1, 2);
+    t.feed(b"x\\e[94m4b5\r\nbrolled\\e[m");
+    assert_eq!(rebuilt(&t, usize::MAX).dump(), t.dump());
+}
