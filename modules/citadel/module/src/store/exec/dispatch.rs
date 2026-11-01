@@ -74,6 +74,17 @@ pub enum StartFailure {
 pub trait Host: Send + Sync {
     /// Runners that can take one more `harness` session now, best first.
     fn runners(&self, app: &App, harness: &str) -> impl Future<Output = Vec<String>> + Send;
+    /// [`Host::runners`] for a session with `policy`: a runner that cannot meet what the policy
+    /// needs (a sandboxed project on a runner without the tier) is left out, so the next one is
+    /// tried. A host that does not look at policies answers as `runners` does.
+    fn runners_for(
+        &self,
+        app: &App,
+        harness: &str,
+        _policy: &serde_json::Value,
+    ) -> impl Future<Output = Vec<String>> + Send {
+        self.runners(app, harness)
+    }
     /// Creates and starts the session; its id.
     fn start(
         &self,
@@ -99,6 +110,17 @@ pub struct Platform;
 
 impl Host for Platform {
     async fn runners(&self, app: &App, harness: &str) -> Vec<String> {
+        let plain = serde_json::to_value(ainkrad_proto::runner::Policy::default())
+            .expect("a policy serializes");
+        self.runners_for(app, harness, &plain).await
+    }
+
+    async fn runners_for(
+        &self,
+        app: &App,
+        harness: &str,
+        policy: &serde_json::Value,
+    ) -> Vec<String> {
         let mut ids: Vec<(usize, String)> = Vec::new();
         for (id, r) in app.hub.runners() {
             let offers = r.online
@@ -106,7 +128,7 @@ impl Host for Platform {
                     .iter()
                     .any(|d| d.name == ainkrad_proto::v2::AGENT_DRIVER);
             if offers
-                && ainkrad_core_server::agents::admit(app, &id, harness)
+                && ainkrad_core_server::agents::admit_with(app, &id, harness, policy)
                     .await
                     .is_ok()
             {
@@ -193,11 +215,17 @@ pub async fn dispatch_next<H: Host>(app: &App, host: &H, now: &str) -> Result<Op
     let Some(c) = pick(&app.pool, now).await? else {
         return Ok(None);
     };
+    // The project's policy decides which runners qualify (a sandboxed project needs the tier).
+    let project_policy = match c.issue {
+        Some(issue) => crate::store::work::issue_policy(&app.pool, issue).await?,
+        None => Default::default(),
+    };
+    let policy = serde_json::to_value(&project_policy).expect("a policy serializes");
     // The first entry of the chain a runner can take now.
     let mut chosen = None;
     for route in &c.chain {
         if let Some(runner) = host
-            .runners(app, route.harness.as_str())
+            .runners_for(app, route.harness.as_str(), &policy)
             .await
             .into_iter()
             .next()

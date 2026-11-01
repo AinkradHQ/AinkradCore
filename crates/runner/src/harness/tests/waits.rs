@@ -16,6 +16,7 @@ fn polling_a_background_job_goes_ahead() {
             .map(str::to_owned)
             .to_vec(),
         sandboxed: false,
+        ..Policy::default()
     };
     let ok = |p: &Policy, tool, c: &str| ex.decide(p, tool, &json!({"command": c}), cwd).is_ok();
     for allowed in [

@@ -1398,6 +1398,8 @@ export interface components {
         };
         /** @description A paired runner and its live state. */
         Runner: {
+            /** @description The CPU architecture it reported (`aarch64`, `x86_64`), once connected. */
+            arch?: string | null;
             /**
              * Format: int32
              * @description Commands it takes at once.
@@ -1411,6 +1413,11 @@ export interface components {
             host_load?: components["schemas"]["RunnerHostLoad"];
             /** @description The runner's device id, `d_…`. */
             id: string;
+            /**
+             * @description The isolation it offers now (E8a-09): absent until it reports, and then no tier can be
+             *     assumed.
+             */
+            isolation?: components["schemas"]["RunnerIsolation"];
             /** @description Its last frame or request; null if never seen. */
             last_seen?: components["schemas"]["Timestamp"];
             /**
@@ -1452,6 +1459,13 @@ export interface components {
              * @description How many CPUs the runner sees.
              */
             cores: number;
+        };
+        /** @description The isolation tiers a runner offers and the state of its `/dev/kvm` (E8a-09). */
+        RunnerIsolation: {
+            /** @description `not_applicable`, `absent`, `usable` or `unusable`. */
+            kvm?: string | null;
+            /** @description Tiers offered now, by name: `none`, `process`, `microvm`. */
+            tiers?: string[] | null;
         };
         /** @description What a delete answers. */
         SecretDeleted: {

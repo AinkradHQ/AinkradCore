@@ -19,6 +19,7 @@
 
 mod launch;
 use launch::launch;
+pub use launch::{Placement, placement};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -33,7 +34,7 @@ use serde_json::{Value, json};
 
 use crate::api::App;
 use crate::api::v1::Caller;
-use crate::hub::Elevated;
+use crate::hub::{Elevated, RunnerState};
 use crate::module::Module;
 use crate::store::agents::{self as store, Session};
 
@@ -121,6 +122,19 @@ fn busy(why: &str) -> Refusal {
 /// Whether the runner can take one more `harness` session now: online, offering `agent`, under
 /// its capacity and the harness's slot (counting the sessions the Core holds on it).
 pub async fn admit(app: &App, runner: &str, harness: &str) -> Result<(), Refusal> {
+    let default = serde_json::to_value(ainkrad_proto::runner::Policy::default())
+        .expect("a policy serializes");
+    admit_with(app, runner, harness, &default).await
+}
+
+/// [`admit`] for a session with `policy`: one that sets `min_isolation` is placed only on a runner
+/// that offers a tier meeting it (E8a-09), see [`tier_refusal`].
+pub async fn admit_with(
+    app: &App,
+    runner: &str,
+    harness: &str,
+    policy: &serde_json::Value,
+) -> Result<(), Refusal> {
     let live = app.hub.runners();
     let Some(r) = live.get(runner).filter(|r| r.online) else {
         return Err(Refusal::Runner(StreamError::new(
@@ -140,6 +154,12 @@ pub async fn admit(app: &App, runner: &str, harness: &str) -> Result<(), Refusal
             "the runner offers no slot for that harness",
         )));
     }
+    if let Some(why) = tier_refusal(r, policy) {
+        return Err(Refusal::Runner(StreamError::new(
+            ErrorCode::InvalidArgs,
+            why,
+        )));
+    }
     let held = store::on_runner(&app.pool, runner).await?;
     let of_harness = held.iter().filter(|h| *h == harness).count();
     if held.len() >= d.capacity as usize
@@ -150,6 +170,56 @@ pub async fn admit(app: &App, runner: &str, harness: &str) -> Result<(), Refusal
         return Err(busy("the runner's agent sessions are at their capacity"));
     }
     Ok(())
+}
+
+/// Why `runner` may not take a session with `policy`, when its isolation does not meet what the
+/// policy needs: its `min_isolation`, any isolation field (at least `process`), or the legacy
+/// `sandboxed` flag and mode (E8a-09). Fails closed, and there is no weaker tier to fall back to:
+/// a policy that does not parse, a runner that never reported its isolation, one that is silent
+/// (`degraded`), one whose offer does not reach the tier, and one offering a tier it names but
+/// this Core does not know are all refused. `None` when the policy needs no isolation.
+pub fn tier_refusal(runner: &RunnerState, policy: &serde_json::Value) -> Option<String> {
+    let Ok(policy) = serde_json::from_value::<ainkrad_proto::runner::Policy>(policy.clone()) else {
+        return Some("the session's policy does not have its shape".to_owned());
+    };
+    // Egress rules are placed only where the host-enforced filter was proven at start-up: the
+    // runner says so with the `egress-filter` op beside the agent driver's own.
+    let filtered = runner
+        .drivers
+        .iter()
+        .filter(|d| d.name == AGENT_DRIVER)
+        .any(|d| d.commands.iter().any(|c| c == "egress-filter"));
+    if policy.egress.is_some() && !filtered {
+        return Some(
+            "the session sets egress rules and the runner does not offer a proven egress filter"
+                .to_owned(),
+        );
+    }
+    let required = policy.required_tier()?;
+    let name = required.as_str();
+    // Never sent to a runner that has not said what it enforces: an old runner would parse the
+    // frame and drop the fields it does not know.
+    let Some(caps) = &runner.isolation else {
+        return Some(format!(
+            "the session needs {name} isolation and the runner has not reported what it offers"
+        ));
+    };
+    if runner.degraded {
+        return Some(format!(
+            "the session needs {name} isolation and the runner is silent, so its offer is unknown"
+        ));
+    }
+    if !caps.meets(required) {
+        return Some(format!(
+            "the session needs {name} isolation and the runner offers {}",
+            if caps.tiers.is_empty() {
+                "none".to_owned()
+            } else {
+                caps.tiers.join(", ")
+            }
+        ));
+    }
+    None
 }
 
 /// Sends `command` to the session's runner and waits (at most `wait`) for its answer.
@@ -308,6 +378,13 @@ pub fn validate_new(new: &store::NewSession<'_>, admin: bool) -> Result<(), Inva
     let Some(policy) = policy.ok().filter(|_| workspace_ok) else {
         return Err(Invalid::Bad("workspace or policy does not have its shape"));
     };
+    if policy.problem().is_some() {
+        return Err(Invalid::Bad(
+            "the policy's isolation fields are out of bounds: vcpus 1-32, memory_mb 64-262144, \
+             disk_mb 16-1048576, wall_secs 1-86400, image sha256:<64 hex>, egress rules IP \
+             addresses or CIDR blocks (no host names, at most 64 each)",
+        ));
+    }
     if has_destructive_allow(&policy) && !admin {
         return Err(Invalid::Forbidden(
             "approval bypasses require the admin scope",
@@ -378,7 +455,7 @@ impl ModuleAgents {
         if sandbox_without_flag {
             return Err(invalid_args("a sandboxed mode needs the sandbox flag"));
         }
-        admit(app, new.runner, new.harness).await?;
+        admit_with(app, new.runner, new.harness, new.policy).await?;
         let s = store::create_owned_ref(
             &app.pool,
             new,

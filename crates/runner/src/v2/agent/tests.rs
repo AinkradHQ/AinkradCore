@@ -900,3 +900,207 @@ fn requested_isolation_never_falls_back_to_unconfined() {
     request.policy.sandboxed = true;
     assert!(Unconfined.prepare(&request, &mut vec![]).is_err());
 }
+
+/// A sandbox that offers a tier and records what it was asked to prepare.
+struct Tiered(Isolation, Arc<Mutex<usize>>);
+
+impl Sandbox for Tiered {
+    fn name(&self) -> &'static str {
+        "tiered"
+    }
+    fn tier(&self) -> Isolation {
+        self.0
+    }
+    fn prepare(&self, _: &AgentStart, _: &mut Vec<(String, String)>) -> Result<(), String> {
+        *self.1.lock().unwrap() += 1;
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_session_needing_more_isolation_than_the_runner_offers_is_refused_before_anything_starts()
+{
+    let (root, config) = dirs("tier");
+    let prepared = Arc::new(Mutex::new(0));
+    let driver = Arc::new(
+        AgentDriver::new(config, script("true"))
+            .unwrap()
+            .with_sandbox(Arc::new(Tiered(Isolation::Process, prepared.clone()))),
+    );
+    let mut vm = start("as_vm", "fake");
+    vm.policy.min_isolation = Some(Isolation::Microvm);
+    let why = driver.start(vm).unwrap_err();
+    assert_eq!(why.code, ErrorCode::InvalidArgs);
+    assert!(
+        why.message.contains("microvm") && why.message.contains("process"),
+        "{why:?}"
+    );
+    assert_eq!(*prepared.lock().unwrap(), 0, "the sandbox was never asked");
+    assert!(driver.info().commands.contains(&"agent.start".to_owned()));
+    // Control: the tier it does offer starts.
+    let mut ok = start("as_ok", "fake");
+    ok.policy.min_isolation = Some(Isolation::Process);
+    assert!(driver.start(ok).is_ok());
+    // A weaker requirement than the offer starts too.
+    let mut weak = start("as_weak", "fake");
+    weak.policy.min_isolation = Some(Isolation::None);
+    assert!(driver.start(weak).is_ok());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn an_unconfined_runner_refuses_every_isolation_field_and_takes_a_plain_policy() {
+    let (root, config) = dirs("unconfined-fields");
+    let driver = Arc::new(AgentDriver::new(config, script("true")).unwrap());
+    let mut min = start("as_min", "fake");
+    min.policy.min_isolation = Some(Isolation::Process);
+    assert!(driver.start(min).is_err());
+    for set in [
+        (|p: &mut ainkrad_proto::runner::Policy| p.wall_secs = Some(5))
+            as fn(&mut ainkrad_proto::runner::Policy),
+        |p| p.memory_mb = Some(128),
+        |p| p.disk_mb = Some(128),
+        |p| p.vcpus = Some(1),
+        |p| p.egress = Some(Default::default()),
+    ] {
+        let mut request = start("as_fields", "fake");
+        set(&mut request.policy);
+        assert!(Unconfined.prepare(&request, &mut vec![]).is_err());
+    }
+    assert!(
+        Unconfined
+            .prepare(&start("as_plain", "fake"), &mut vec![])
+            .is_ok()
+    );
+    // A policy out of bounds is refused by the runner too, whatever the Core said.
+    let mut wild = start("as_wild", "fake");
+    wild.policy.vcpus = Some(0);
+    assert_eq!(driver.start(wild).unwrap_err().code, ErrorCode::InvalidArgs);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A sandbox whose tier the test sets: 0 none, 1 process.
+struct Switch(Arc<std::sync::atomic::AtomicU8>);
+
+impl Sandbox for Switch {
+    fn name(&self) -> &'static str {
+        "switch"
+    }
+    fn tier(&self) -> Isolation {
+        match self.0.load(std::sync::atomic::Ordering::SeqCst) {
+            0 => Isolation::None,
+            _ => Isolation::Process,
+        }
+    }
+    fn prepare(&self, _: &AgentStart, _: &mut Vec<(String, String)>) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn the_runner_advertises_exactly_what_its_sandbox_gives_now() {
+    use ainkrad_proto::v2::Kvm;
+    let (root, config) = dirs("advertise");
+    let flag = Arc::new(std::sync::atomic::AtomicU8::new(1));
+    let d = AgentDriver::new(config, script("true"))
+        .unwrap()
+        .with_sandbox(Arc::new(Switch(flag.clone())));
+    assert_eq!(d.isolation().tiers, ["process"]);
+    flag.store(0, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(d.isolation().tiers, ["none"]);
+    assert_eq!(d.isolation().kvm, Kvm::NotApplicable);
+    // The default sandbox confines nothing, so it offers nothing more than `none`.
+    let (root2, config) = dirs("advertise-default");
+    let d = AgentDriver::new(config, script("true")).unwrap();
+    assert_eq!(d.isolation().tiers, ["none"]);
+    assert!(!d.isolation().meets(Isolation::Process));
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(root2);
+}
+
+#[tokio::test]
+async fn a_running_session_is_ended_loudly_when_its_tier_goes_away_and_others_are_left() {
+    let (root, config) = dirs("tier-loss");
+    let flag = Arc::new(std::sync::atomic::AtomicU8::new(1));
+    let d = Arc::new(
+        AgentDriver::new(config, script("echo up; sleep 30"))
+            .unwrap()
+            .with_sandbox(Arc::new(Switch(flag.clone()))),
+    );
+    let mut needing = start("as_needs", "fake");
+    needing.policy.min_isolation = Some(Isolation::Process);
+    d.start(needing).unwrap();
+    d.start(start("as_plain", "fake")).unwrap();
+    until("both up", || {
+        d.states().values().all(|s| *s == AgentState::Running)
+    })
+    .await;
+    // The tier holds: a check ends nothing.
+    assert_eq!(d.check_isolation(), 0);
+    flag.store(0, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(d.check_isolation(), 1);
+    until("the end", || d.states()["as_needs"] == AgentState::Ended).await;
+    let (entries, _) = drain_from(&d, "as_needs", 0).await;
+    let last = entries.last().unwrap();
+    assert_eq!(last.body["type"], "ended");
+    let reason = last.body["outcome"]["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("no longer available") && reason.contains("process"),
+        "{reason}"
+    );
+    assert_eq!(last.body["outcome"]["fingerprint"], "isolation");
+    // A session with no requirement runs on, and a second check finds nothing more to end.
+    assert_eq!(d.states()["as_plain"], AgentState::Running);
+    assert_eq!(d.check_isolation(), 0);
+    d.stop(AgentStop {
+        session: "as_plain".into(),
+        kill: true,
+    })
+    .unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn a_session_that_needs_the_tier_only_through_a_field_or_the_legacy_flag_ends_when_it_goes() {
+    let (root, config) = dirs("tier-loss-implied");
+    let flag = Arc::new(std::sync::atomic::AtomicU8::new(1));
+    let d = Arc::new(
+        AgentDriver::new(
+            AgentConfig {
+                capacity: 8,
+                ..config
+            },
+            script("echo up; sleep 30"),
+        )
+        .unwrap()
+        .with_sandbox(Arc::new(Switch(flag.clone()))),
+    );
+    let mut wall = start("as_wall", "fake");
+    wall.policy.wall_secs = Some(600);
+    let mut legacy = start("as_legacy", "fake");
+    legacy.policy.sandboxed = true;
+    let mut mode = start("as_mode", "fake");
+    mode.policy.mode = ainkrad_proto::runner::PermissionMode::Sandboxed;
+    for request in [wall, legacy, mode, start("as_plain", "fake")] {
+        d.start(request).unwrap();
+    }
+    until("all up", || {
+        d.states().values().all(|s| *s == AgentState::Running)
+    })
+    .await;
+    flag.store(0, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(d.check_isolation(), 3);
+    for session in ["as_wall", "as_legacy", "as_mode"] {
+        until("the end", || d.states()[session] == AgentState::Ended).await;
+    }
+    assert_eq!(d.states()["as_plain"], AgentState::Running);
+    // The runner and the Core derive the requirement from one function.
+    use ainkrad_proto::runner::Policy;
+    assert_eq!(Policy::default().required_tier(), None);
+    d.stop(AgentStop {
+        session: "as_plain".into(),
+        kill: true,
+    })
+    .unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}

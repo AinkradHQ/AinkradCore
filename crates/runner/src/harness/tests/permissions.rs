@@ -12,6 +12,7 @@ fn policy(mode: PermissionMode, allow: &[&str]) -> Policy {
         mode,
         allow: allow.iter().map(|s| s.to_string()).collect(),
         sandboxed: mode == PermissionMode::Sandboxed,
+        ..Policy::default()
     }
 }
 

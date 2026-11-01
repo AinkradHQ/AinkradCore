@@ -185,6 +185,7 @@ async fn the_prompt_goes_by_stdin_and_the_config_stays_isolated() {
         session_id: Some(SESSION.to_owned()),
         sandboxed: false,
         accept_edits: false,
+        backend: None,
     };
     let prompt = "PROMPT-CANARY fix the flaky test";
     let mut claude = Claude::start(&spec).await.unwrap();

@@ -20,7 +20,8 @@ use std::io;
 use serde_json::{Value, json};
 use tokio::process::Command;
 
-use crate::proc::{self, Proc};
+use crate::exec::Launch;
+use crate::proc::Proc;
 use crate::{Decision, Harness, HarnessEvent, Spec, TurnOutcome, Usage};
 
 /// The Codex CLI version this adapter was written and recorded against (E3.6 probes it).
@@ -28,13 +29,13 @@ pub const VERSION: &str = "0.154.0";
 
 /// The process to spawn: cleared env + allowlist, `CODEX_HOME` set to the spec's config dir.
 pub fn command(spec: &Spec) -> Command {
+    launch(spec).command(spec)
+}
+
+fn launch(spec: &Spec) -> Launch {
     let program = spec.program.as_deref().unwrap_or("codex".as_ref());
-    proc::command(
-        program.as_os_str(),
-        &["app-server".to_owned()],
-        spec,
-        &[("CODEX_HOME", spec.config_dir.as_os_str())],
-    )
+    Launch::new(program, vec!["app-server".to_owned()])
+        .set("CODEX_HOME", spec.config_dir.as_os_str())
 }
 
 /// The spec's MCP file for the Citadel MCP server at `url`: the `mcp_servers` table of a
@@ -338,7 +339,7 @@ impl Codex {
     async fn spawn(spec: &Spec, resume: Option<&str>) -> io::Result<Self> {
         let params = thread_params(spec, resume)?;
         let mut codex = Self {
-            proc: Proc::spawn_with_pgid_file(command(spec), proc::sandbox_pgid_file(spec))?,
+            proc: Proc::start(spec, launch(spec)).await?,
             thread: String::new(),
             decoder: Decoder::default(),
             queued: VecDeque::new(),

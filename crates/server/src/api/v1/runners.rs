@@ -62,6 +62,20 @@ pub struct Runner {
     pub host_load: Option<RunnerHostLoad>,
     /// Its `ainkrad-runner` version, once connected.
     pub version: Option<String>,
+    /// The CPU architecture it reported (`aarch64`, `x86_64`), once connected.
+    pub arch: Option<String>,
+    /// The isolation it offers now (E8a-09): absent until it reports, and then no tier can be
+    /// assumed.
+    pub isolation: Option<RunnerIsolation>,
+}
+
+/// The isolation tiers a runner offers and the state of its `/dev/kvm` (E8a-09).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RunnerIsolation {
+    /// Tiers offered now, by name: `none`, `process`, `microvm`.
+    pub tiers: Option<Vec<String>>,
+    /// `not_applicable`, `absent`, `usable` or `unusable`.
+    pub kvm: Option<String>,
 }
 
 fn of(d: gov::Device, live: Option<&RunnerState>) -> Runner {
@@ -93,6 +107,15 @@ fn of(d: gov::Device, live: Option<&RunnerState>) -> Runner {
             cores: l.cores,
         }),
         version: live.map(|s| s.version.clone()).filter(|v| !v.is_empty()),
+        arch: live.and_then(|s| s.arch.clone()),
+        isolation: live
+            .and_then(|s| s.isolation.as_ref())
+            .map(|i| RunnerIsolation {
+                tiers: Some(i.tiers.clone()),
+                kvm: serde_json::to_value(i.kvm)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned)),
+            }),
     }
 }
 

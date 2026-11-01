@@ -113,12 +113,71 @@ pub struct HostLoad {
     pub cores: u32,
 }
 
-/// A runner's heartbeat: carries `load` when the runner measured one.
+/// A runner's heartbeat: carries `load` when the runner measured one, and the isolation it
+/// offers now.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Heartbeat {
     /// The host's load when the heartbeat was sent; absent when the runner has no measure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub load: Option<HostLoad>,
+    /// The isolation the runner offers now (E8a-09): a change shows in the next heartbeat, so a
+    /// tier that goes away is no longer offered by the Core's next placement. Absent from a
+    /// runner that does not report it, and from one that offers no agent driver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<IsolationCaps>,
+}
+
+/// The state of `/dev/kvm` on a runner, for the microvm tier (E8a-09).
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Kvm {
+    /// No VM tier is built into this runner, or the host has no KVM concept (macOS).
+    #[default]
+    NotApplicable,
+    /// The host has no `/dev/kvm`.
+    Absent,
+    /// `/dev/kvm` is there and the probe passed.
+    Usable,
+    /// `/dev/kvm` is there and the probe failed (permissions, a broken host).
+    Unusable,
+    /// A state from a newer runner: read as not usable. Never sent.
+    #[serde(other)]
+    Unknown,
+}
+
+/// What isolation a runner can give right now (E8a-09). Placement is by this, and the runner
+/// checks again when a session starts; a stale or forged advertisement therefore never gets a
+/// session a weaker sandbox than it asked for.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct IsolationCaps {
+    /// Every tier offered now, by name (`Isolation::as_str`). A runner whose probe fails stops
+    /// listing the tier. Names, not the enum, so a tier from a newer runner parses here and
+    /// simply meets nothing.
+    pub tiers: Vec<String>,
+    /// `/dev/kvm`, for the microvm tier.
+    #[serde(default)]
+    pub kvm: Kvm,
+}
+
+impl IsolationCaps {
+    /// A runner offering exactly `tier`.
+    pub fn of(tier: crate::runner::Isolation, kvm: Kvm) -> Self {
+        Self {
+            tiers: vec![tier.as_str().to_owned()],
+            kvm,
+        }
+    }
+
+    /// Whether some offered tier meets `required`; a name this side does not know meets nothing.
+    /// The only way a placement compares what a runner offers with what a session needs.
+    pub fn meets(&self, required: crate::runner::Isolation) -> bool {
+        self.tiers
+            .iter()
+            .filter_map(|t| crate::runner::Isolation::from_name(t))
+            .any(|t| t.satisfies(required))
+    }
 }
 
 /// A frame's payload, typed.
@@ -247,6 +306,11 @@ pub struct RunnerHello {
     /// so the hub can apply load-based back-pressure before any heartbeat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub load: Option<HostLoad>,
+    /// The isolation the runner offers (E8a-09), beside `arch`. Absent from a runner that does
+    /// not report it: the Core then treats it as offering no guarantee, and places no session on
+    /// it that needs one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<IsolationCaps>,
 }
 
 /// Resume by `seq` (E1-11.4): how many of the peer's frames one side received on a stream.

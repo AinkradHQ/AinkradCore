@@ -17,6 +17,7 @@ package ainkrad.client.models
 
 import ainkrad.client.models.RunnerDriver
 import ainkrad.client.models.RunnerHostLoad
+import ainkrad.client.models.RunnerIsolation
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
@@ -27,10 +28,12 @@ import kotlinx.serialization.Contextual
  *
  * @param id The runner's device id, `d_…`.
  * @param name 
+ * @param arch The CPU architecture it reported (`aarch64`, `x86_64`), once connected.
  * @param capacity Commands it takes at once.
  * @param degraded Connected but silent past two heartbeats.
  * @param drivers What it last advertised (empty until it first connected since the Core started).
  * @param hostLoad The host's load as its runner last reported it (E2-15.2), if it has.
+ * @param isolation The isolation it offers now (E8a-09): absent until it reports, and then no tier can be assumed.
  * @param lastSeen RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param load Commands in flight.
  * @param online Connected to this Core now.
@@ -47,6 +50,10 @@ data class Runner (
     @SerialName(value = "name")
     val name: kotlin.String,
 
+    /* The CPU architecture it reported (`aarch64`, `x86_64`), once connected. */
+    @SerialName(value = "arch")
+    val arch: kotlin.String? = null,
+
     /* Commands it takes at once. */
     @SerialName(value = "capacity")
     val capacity: kotlin.Int? = null,
@@ -62,6 +69,10 @@ data class Runner (
     /* The host's load as its runner last reported it (E2-15.2), if it has. */
     @SerialName(value = "host_load")
     val hostLoad: RunnerHostLoad? = null,
+
+    /* The isolation it offers now (E8a-09): absent until it reports, and then no tier can be assumed. */
+    @SerialName(value = "isolation")
+    val isolation: RunnerIsolation? = null,
 
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "last_seen")

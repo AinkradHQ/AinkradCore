@@ -7,6 +7,7 @@ mod agents;
 use ainkrad_core_server::agents::AgentsConfig;
 mod fault;
 mod health;
+mod isolation;
 mod proof;
 mod resume;
 mod routing;
@@ -293,6 +294,7 @@ impl Fake {
             streams: self.streams.clone(),
             terminals: vec![],
             load: self.load,
+            isolation: None,
         };
         self.send(CONTROL_STREAM, Body::Control(Control::Hello(hello)))
             .await;
@@ -319,8 +321,14 @@ impl Fake {
 
     /// Sends a heartbeat frame on the control stream with `load`.
     pub async fn heartbeat(&mut self, load: Option<HostLoad>) {
-        self.send(CONTROL_STREAM, Body::Heartbeat(Heartbeat { load }))
-            .await;
+        self.send(
+            CONTROL_STREAM,
+            Body::Heartbeat(Heartbeat {
+                load,
+                isolation: None,
+            }),
+        )
+        .await;
     }
 
     /// The next frame that is not a heartbeat.

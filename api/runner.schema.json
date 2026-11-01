@@ -770,6 +770,25 @@
       ],
       "type": "object"
     },
+    "Egress": {
+      "additionalProperties": false,
+      "description": "Destinations a session may (`allow`) or may not (`deny`) reach, as IP literals or CIDR\nblocks. Host names are refused: they are the runner operator's, resolved only by the\negress proxy outside the sandbox. A session's rules can only narrow what the runner allows.",
+      "properties": {
+        "allow": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deny": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ErrorCode": {
       "description": "Machine codes, snake_case like the client API's (handshake spec §14).",
       "oneOf": [
@@ -992,8 +1011,19 @@
       ]
     },
     "Heartbeat": {
-      "description": "A runner's heartbeat: carries `load` when the runner measured one.",
+      "description": "A runner's heartbeat: carries `load` when the runner measured one, and the isolation it\noffers now.",
       "properties": {
+        "isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IsolationCaps"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The isolation the runner offers now (E8a-09): a change shows in the next heartbeat, so a\ntier that goes away is no longer offered by the Core's next placement. Absent from a\nrunner that does not report it, and from one that offers no agent driver."
+        },
         "load": {
           "anyOf": [
             {
@@ -1047,6 +1077,77 @@
         "cores"
       ],
       "type": "object"
+    },
+    "Isolation": {
+      "description": "How strongly a session is isolated from its host, weakest to strongest.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "The harness runs as the runner's user (the default of a runner with no sandbox).",
+          "type": "string"
+        },
+        {
+          "const": "process",
+          "description": "A process sandbox: bubblewrap or Seatbelt.",
+          "type": "string"
+        },
+        {
+          "const": "microvm",
+          "description": "A virtual machine with its own kernel.",
+          "type": "string"
+        }
+      ]
+    },
+    "IsolationCaps": {
+      "description": "What isolation a runner can give right now (E8a-09). Placement is by this, and the runner\nchecks again when a session starts; a stale or forged advertisement therefore never gets a\nsession a weaker sandbox than it asked for.",
+      "properties": {
+        "kvm": {
+          "$ref": "#/$defs/Kvm",
+          "default": "not_applicable",
+          "description": "`/dev/kvm`, for the microvm tier."
+        },
+        "tiers": {
+          "description": "Every tier offered now, by name (`Isolation::as_str`). A runner whose probe fails stops\nlisting the tier. Names, not the enum, so a tier from a newer runner parses here and\nsimply meets nothing.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tiers"
+      ],
+      "type": "object"
+    },
+    "Kvm": {
+      "description": "The state of `/dev/kvm` on a runner, for the microvm tier (E8a-09).",
+      "oneOf": [
+        {
+          "const": "not_applicable",
+          "description": "No VM tier is built into this runner, or the host has no KVM concept (macOS).",
+          "type": "string"
+        },
+        {
+          "const": "absent",
+          "description": "The host has no `/dev/kvm`.",
+          "type": "string"
+        },
+        {
+          "const": "usable",
+          "description": "`/dev/kvm` is there and the probe passed.",
+          "type": "string"
+        },
+        {
+          "const": "unusable",
+          "description": "`/dev/kvm` is there and the probe failed (permissions, a broken host).",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A state from a newer runner: read as not usable. Never sent.",
+          "type": "string"
+        }
+      ]
     },
     "Login": {
       "description": "A login place on a runner host (1.20): `dir` is relative to its config root\n(`claude`, `accounts/claude-a`), or `credentials/<file>` for an account's token file.",
@@ -1187,6 +1288,7 @@
       ]
     },
     "Policy": {
+      "additionalProperties": false,
       "description": "A project's harness permission policy (1.3). Never full-auto by default.",
       "properties": {
         "allow": {
@@ -1197,6 +1299,53 @@
           },
           "type": "array"
         },
+        "disk_mb": {
+          "description": "Disk cap in MiB, 16 to 1048576. It can only lower the runner's own cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "egress": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Egress"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Destinations the session may reach, narrowing the runner's own allowlist."
+        },
+        "image": {
+          "description": "The guest image, by digest (`sha256:` + 64 hex). Only a tier that boots an image takes it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "memory_mb": {
+          "description": "Memory cap in MiB, 64 to 262144. It can only lower the runner's own cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min_isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Isolation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The weakest isolation the session may run in (E8a-08). Absent: any runner. A runner that\ncannot offer it is never given the session, and refuses it if it is (E8a-09)."
+        },
         "mode": {
           "$ref": "#/$defs/PermissionMode"
         },
@@ -1204,6 +1353,35 @@
           "default": false,
           "description": "Runs must work in a disposable sandbox: only a sandboxed runner may take them.",
           "type": "boolean"
+        },
+        "vcpus": {
+          "description": "Virtual CPUs, 1 to 32. Only a VM tier has them.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "wall_secs": {
+          "description": "A hard wall-clock cap in seconds, 1 to 86400: the host kills the sandbox at the deadline.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkspaceMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the workspace reaches the sandbox. Absent: `bind`."
         }
       },
       "required": [
@@ -1662,6 +1840,17 @@
             "$ref": "#/$defs/DriverInfo"
           },
           "type": "array"
+        },
+        "isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IsolationCaps"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The isolation the runner offers (E8a-09), beside `arch`. Absent from a runner that does\nnot report it: the Core then treats it as offering no guarantee, and places no session on\nit that needs one."
         },
         "load": {
           "anyOf": [
@@ -2199,6 +2388,21 @@
         "branch"
       ],
       "type": "object"
+    },
+    "WorkspaceMode": {
+      "description": "How the session's workspace reaches the sandbox.",
+      "oneOf": [
+        {
+          "const": "bind",
+          "description": "The worktree is bound into the sandbox (every process tier).",
+          "type": "string"
+        },
+        {
+          "const": "copy",
+          "description": "The worktree is copied in and the result copied out; no host path is shared (a VM).",
+          "type": "string"
+        }
+      ]
     },
     "WorktreeDisk": {
       "description": "One issue's worktree in a `DiskReport`.",

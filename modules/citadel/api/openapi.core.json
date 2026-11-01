@@ -7426,6 +7426,13 @@
       "Runner": {
         "description": "A paired runner and its live state.",
         "properties": {
+          "arch": {
+            "description": "The CPU architecture it reported (`aarch64`, `x86_64`), once connected.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "capacity": {
             "description": "Commands it takes at once.",
             "format": "int32",
@@ -7459,6 +7466,10 @@
           "id": {
             "description": "The runner's device id, `d_…`.",
             "type": "string"
+          },
+          "isolation": {
+            "$ref": "#/components/schemas/RunnerIsolation",
+            "description": "The isolation it offers now (E8a-09): absent until it reports, and then no tier can be\nassumed."
           },
           "last_seen": {
             "$ref": "#/components/schemas/Timestamp",
@@ -7563,6 +7574,29 @@
           "avg1",
           "cores"
         ],
+        "type": "object"
+      },
+      "RunnerIsolation": {
+        "description": "The isolation tiers a runner offers and the state of its `/dev/kvm` (E8a-09).",
+        "properties": {
+          "kvm": {
+            "description": "`not_applicable`, `absent`, `usable` or `unusable`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tiers": {
+            "description": "Tiers offered now, by name: `none`, `process`, `microvm`.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "Sandbox": {
@@ -9403,7 +9437,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.24.0"
+    "version": "1.26.0"
   },
   "openapi": "3.1.0",
   "paths": {

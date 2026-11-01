@@ -193,6 +193,7 @@ impl Session {
                 .chain(self.agent.as_ref().map(|a| a.info()))
                 .collect(),
             boot: Some(self.boot.clone()),
+            isolation: self.agent.as_ref().map(|a| a.isolation()),
             streams: held,
             terminals,
             load: host_load().map(|l| HostLoad {
@@ -280,6 +281,7 @@ impl Session {
                                     avg1: l.avg1,
                                     cores: l.cores,
                                 }),
+                                isolation: self.agent.as_ref().map(|a| a.isolation()),
                             }),
                         ),
                     )

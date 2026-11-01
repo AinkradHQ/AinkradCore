@@ -2,32 +2,31 @@
 
 use std::ffi::OsStr;
 use std::io;
-use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::io::{
+    AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, Lines,
+};
+use tokio::process::Command;
 use tokio::task::JoinHandle;
 
 use crate::Spec;
+use crate::exec::{ExecBackend, Exit, Launch, LocalBackend, Running, SpawnRequest, Spawned, Stdio};
 
 /// The bytes of a child's stderr kept for failure reasons.
 const STDERR_TAIL: usize = 2048;
 
 pub(crate) struct Proc {
-    child: Child,
-    /// The child's process group, which it leads: its own children inherit it, so a kill of
-    /// the group reaches a build or a shell job the agent started.
+    /// The started process; dropping it ends its whole tree. First, so it goes before the pipes.
+    running: Box<dyn Running>,
+    /// The process group leader (`0` where the backend has none).
+    #[cfg(test)]
     pub(crate) pgid: u32,
-    budget: Option<crate::sandbox::Watch>,
-    /// macOS dead-man (no parent-death signal there): kills the tree if the runner dies.
-    supervisor: Option<std::process::Child>,
-    pgid_file: Option<std::path::PathBuf>,
-    stdin: Option<ChildStdin>,
+    stdin: Option<Box<dyn AsyncWrite + Send + Sync + Unpin>>,
     /// `None` once handed to `drain`.
-    lines: Option<Lines<BufReader<ChildStdout>>>,
+    lines: Option<Lines<BufReader<Box<dyn AsyncRead + Send + Sync + Unpin>>>>,
     /// The end of its stderr, which goes nowhere else: it may hold secrets, so it reaches a
     /// log only inside a failure reason the runner redacts (E3.9).
     stderr: Arc<Mutex<Vec<u8>>>,
@@ -35,6 +34,8 @@ pub(crate) struct Proc {
     stderr_reader: Option<JoinHandle<()>>,
     /// The terminating signal `wait` saw, so a sandbox kill is told apart from an exit code.
     pub(crate) signal: Option<i32>,
+    /// How the last `wait` found it ended (deadline and OOM flags included).
+    pub(crate) exit: Option<Exit>,
 }
 
 /// `program args…` in the spec's `process_dir` (else its `cwd`), with only its allowlisted
@@ -79,44 +80,44 @@ pub(crate) fn sandbox_pgid_file(spec: &Spec) -> Option<std::path::PathBuf> {
 }
 
 impl Proc {
+    /// Starts `launch` on the spec's exec backend (the local one unless the spec names another),
+    /// under the spec's wall-clock cap. An `Err` means nothing was started.
+    pub(crate) async fn start(spec: &Spec, launch: Launch) -> io::Result<Self> {
+        let deadline = crate::exec::wall_clock(spec)?;
+        let local = LocalBackend;
+        let backend: &dyn ExecBackend = spec.backend.as_deref().unwrap_or(&local);
+        let spawned = backend
+            .spawn(SpawnRequest {
+                spec,
+                launch: &launch,
+                stdio: Stdio::Pipes,
+                deadline,
+            })
+            .await?;
+        Ok(Self::from_spawned(spawned))
+    }
+
+    /// The local backend on a ready command (the unit tests' entry).
+    #[cfg(test)]
     pub(crate) fn spawn_with_pgid_file(
-        mut cmd: Command,
+        cmd: Command,
         pgid_file: Option<std::path::PathBuf>,
     ) -> io::Result<Self> {
-        let budget = crate::sandbox::Budget::take(&mut cmd);
-        let mut child = cmd
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0)
-            .kill_on_drop(true)
-            .spawn()?;
-        let pgid = child.id().ok_or_else(|| io::Error::other("no pid"))?;
-        if let Some(path) = &pgid_file {
-            let persist = || -> io::Result<()> {
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                std::fs::write(path, crate::sandbox::identity(pgid)?)
-            };
-            if let Err(error) = persist() {
-                kill_group(pgid);
-                let _ = child.start_kill();
-                return Err(error);
-            }
-        }
-        // Linux has `--die-with-parent`; macOS needs a supervisor outside the sandbox.
-        let supervisor = (cfg!(target_os = "macos") && budget.is_some())
-            .then(|| crate::sandbox::tree::supervise(pgid, std::process::id()))
-            .transpose()
-            .inspect_err(|_| kill_group(pgid))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| io::Error::other("no stdout"))?;
-        let stderr = Arc::new(Mutex::new(Vec::new()));
-        let stderr_reader = child.stderr.take().map(|mut pipe| {
-            let tail = stderr.clone();
+        Ok(Self::from_spawned(crate::exec::local::spawn(
+            cmd, pgid_file, None,
+        )?))
+    }
+
+    fn from_spawned(spawned: Spawned) -> Self {
+        let Spawned {
+            stdin,
+            stdout,
+            stderr,
+            running,
+        } = spawned;
+        let stderr_tail = Arc::new(Mutex::new(Vec::new()));
+        let stderr_reader = stderr.map(|mut pipe| {
+            let tail = stderr_tail.clone();
             tokio::spawn(async move {
                 let mut buf = [0u8; 4096];
                 while let Ok(n @ 1..) = pipe.read(&mut buf).await {
@@ -127,18 +128,17 @@ impl Proc {
                 }
             })
         });
-        Ok(Self {
-            stdin: child.stdin.take(),
-            child,
-            pgid,
-            supervisor,
-            budget: budget.map(|b| b.start(pgid)),
-            pgid_file,
+        Self {
+            #[cfg(test)]
+            pgid: running.pid().unwrap_or(0),
+            running,
+            stdin,
             lines: Some(BufReader::new(stdout).lines()),
-            stderr,
+            stderr: stderr_tail,
             stderr_reader,
             signal: None,
-        })
+            exit: None,
+        }
     }
 
     /// The last `STDERR_TAIL` bytes of its stderr so far, trimmed.
@@ -180,75 +180,37 @@ impl Proc {
 
     /// Sends SIGINT to the whole group, the way a terminal's Ctrl-C would reach it.
     pub(crate) async fn interrupt(&self) -> io::Result<()> {
-        if self.child.id().is_none() {
-            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "already exited"));
-        }
-        let status = Command::new("/bin/kill")
-            .args(["-INT", "--", &format!("-{}", self.pgid)])
-            .status()
-            .await?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(io::Error::other(format!(
-                "kill -INT -{}: {status}",
-                self.pgid
-            )))
-        }
+        self.running.interrupt().await
     }
 
     /// The exit code once stdout has closed, with its stderr read to the end: stdout's EOF
     /// says nothing about how much of stderr the reader has seen yet.
     pub(crate) async fn wait(&mut self) -> Option<i32> {
-        let status = self.child.wait().await;
+        let exit = self.running.wait().await;
         if let Some(reader) = self.stderr_reader.take() {
             // ponytail: bounded, as a grandchild that inherited the pipe can hold it open.
             let _ = tokio::time::timeout(Duration::from_secs(2), reader).await;
         }
-        let status = status.ok()?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::ExitStatusExt;
-            self.signal = status.signal();
-        }
-        status.code()
+        let exit = exit.ok()?;
+        self.signal = exit.signal;
+        self.exit = Some(exit);
+        exit.code
     }
 
     /// Kills it and its group: for a server, which does not exit on stdin EOF.
     pub(crate) async fn kill(mut self) -> Option<i32> {
-        kill_group(self.pgid);
-        let _ = self.child.kill().await;
-        self.child.wait().await.ok()?.code()
+        self.running.kill().await?.code
     }
 
     /// EOF on stdin, then a kill of the group if it has not exited within 5 s.
     pub(crate) async fn stop(mut self) -> Option<i32> {
         self.stdin = None;
-        match tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await {
-            Ok(status) => status.ok()?.code(),
+        match tokio::time::timeout(Duration::from_secs(5), self.running.wait()).await {
+            Ok(exit) => exit.ok()?.code,
             Err(_) => {
-                kill_group(self.pgid);
-                let _ = self.child.kill().await;
+                self.running.kill().await;
                 None
             }
-        }
-    }
-}
-
-/// Whatever ends the process (a finished turn, a cancelled run whose task is aborted, the
-/// runner stopping), no member of its group outlives it, even once the leader has exited.
-impl Drop for Proc {
-    fn drop(&mut self) {
-        kill_group(self.pgid);
-        if let Some(budget) = self.budget.take() {
-            budget.stop();
-        }
-        if let Some(mut s) = self.supervisor.take() {
-            let _ = s.kill();
-            let _ = s.wait();
-        }
-        if let Some(path) = &self.pgid_file {
-            let _ = std::fs::remove_file(path);
         }
     }
 }

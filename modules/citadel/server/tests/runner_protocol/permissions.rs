@@ -124,6 +124,7 @@ async fn a_sandboxed_project_acts_unasked_only_on_a_sandboxed_runner() {
         mode: PermissionMode::Sandboxed,
         allow: vec![],
         sandboxed: true,
+        ..Policy::default()
     };
     assert!(
         set_project_policy(pool, p, &sandboxed, AuditActor::System)

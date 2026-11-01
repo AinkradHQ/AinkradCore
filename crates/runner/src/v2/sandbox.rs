@@ -2,7 +2,11 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
+use ainkrad_proto::runner::{Isolation, Policy, WorkspaceMode};
 use ainkrad_proto::v2::AgentStart;
 
 use super::agent::Sandbox;
@@ -52,15 +56,112 @@ pub struct ProcessSandbox {
     /// `AINKRAD_AGENT_NETWORK`, read once when the driver started: a later change of the
     /// process environment does not change what a session gets.
     requested: Option<String>,
+    /// Whether the sandbox program works, from a probe thread; read by `tier`.
+    probe: Arc<Probe>,
+}
+
+/// Seconds between probes of the sandbox program.
+const PROBE_EVERY: Duration = Duration::from_secs(2);
+
+/// What the probes saw. The probe forks a program, so it runs on a thread of its own, never on
+/// the async runtime, and one failure (a transient fork error under load) is not "the tier is
+/// gone": two in a row are. Starting a session still probes afresh (`prepare`), failing closed.
+///
+/// An answer is only as good as it is fresh: a probe that hangs, or a thread that died, leaves
+/// the last "ok" in place, so the tier counts as gone once no probe has succeeded for three
+/// intervals (`up_at`). The probe program itself is bounded by `PROBE_LIMIT`.
+struct Probe {
+    up: AtomicBool,
+    fails: AtomicU32,
+    /// Milliseconds since `born` of the last successful probe.
+    last_ok_ms: AtomicU64,
+    born: Instant,
+}
+
+impl Probe {
+    fn new(first: bool) -> Self {
+        Self {
+            up: AtomicBool::new(first),
+            fails: AtomicU32::new(if first { 0 } else { 2 }),
+            last_ok_ms: AtomicU64::new(0),
+            born: Instant::now(),
+        }
+    }
+
+    fn now_ms(&self) -> u64 {
+        u64::try_from(self.born.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    fn record(&self, ok: bool) {
+        if ok {
+            self.fails.store(0, Ordering::SeqCst);
+            self.last_ok_ms.store(self.now_ms(), Ordering::SeqCst);
+            self.up.store(true, Ordering::SeqCst);
+        } else if self.fails.fetch_add(1, Ordering::SeqCst) + 1 >= 2 {
+            self.up.store(false, Ordering::SeqCst);
+        }
+    }
+
+    /// Whether the tier is up at `now_ms`: the last probes said so, and one succeeded recently.
+    fn up_at(&self, now_ms: u64) -> bool {
+        let stale = u64::try_from(PROBE_EVERY.as_millis() * 3).unwrap_or(u64::MAX);
+        self.up.load(Ordering::SeqCst)
+            && now_ms.saturating_sub(self.last_ok_ms.load(Ordering::SeqCst)) <= stale
+    }
+}
+
+/// The longest one probe may take; past it the program is killed and the probe failed.
+const PROBE_LIMIT: Duration = Duration::from_secs(5);
+
+/// Runs `command` to the end, killing it past `limit`: whether it succeeded in time.
+fn succeeds_within(command: &mut Command, limit: Duration) -> bool {
+    use std::process::Stdio;
+    let Ok(mut child) = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let until = Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if Instant::now() < until => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
 }
 
 impl ProcessSandbox {
     pub fn new(state: PathBuf, secrets: PathBuf) -> Self {
+        let first = Self::available();
+        let probe = Arc::new(Probe::new(first));
+        let weak = Arc::downgrade(&probe);
+        let spawned = std::thread::Builder::new()
+            .name("sandbox-probe".to_owned())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(PROBE_EVERY);
+                    let Some(probe) = weak.upgrade() else { return };
+                    probe.record(Self::available());
+                }
+            });
+        if spawned.is_err() {
+            // Nothing would ever notice the tier going away: do not offer it.
+            probe.up.store(false, Ordering::SeqCst);
+        }
         Self {
             state,
             secrets,
             egress_ready: false,
             requested: None,
+            probe,
         }
     }
 
@@ -78,26 +179,69 @@ impl ProcessSandbox {
     }
 
     fn available() -> bool {
-        let program = if cfg!(target_os = "macos") {
-            "sandbox-exec"
-        } else {
-            "/usr/bin/bwrap"
-        };
         if cfg!(target_os = "macos") {
-            return Command::new("/usr/bin/sandbox-exec")
-                .args(["-p", "(version 1)(allow default)", "/usr/bin/true"])
-                .output()
-                .is_ok_and(|o| o.status.success());
+            return succeeds_within(
+                Command::new("/usr/bin/sandbox-exec").args([
+                    "-p",
+                    "(version 1)(allow default)",
+                    "/usr/bin/true",
+                ]),
+                PROBE_LIMIT,
+            );
         }
-        Command::new(program)
-            .arg("--version")
-            .output()
-            .is_ok_and(|o| o.status.success())
+        succeeds_within(Command::new("/usr/bin/bwrap").arg("--version"), PROBE_LIMIT)
     }
 
     fn add(env: &mut Vec<(String, String)>, name: &str, value: impl Into<String>) {
         env.push((name.to_owned(), value.into()));
     }
+}
+
+/// Applies the session policy's isolation fields to the process sandbox's environment, after the
+/// runner's own limits are in `env`: a cap can only lower the runner's, the wall-clock cap is
+/// the host's, and every field a process sandbox cannot honour refuses the session (it is never
+/// ignored, which would be a weaker sandbox than the policy asked for).
+///
+/// `memory_mb` and `disk_mb` ride the same sampled watchdog as the runner's own caps (a 100 ms
+/// aggregate-RSS and disk walk that kills the tree): a process-level budget, not a quota.
+fn apply_policy(policy: &Policy, env: &mut Vec<(String, String)>) -> Result<(), String> {
+    for (field, set) in [
+        ("image", policy.image.is_some()),
+        ("vcpus", policy.vcpus.is_some()),
+        (
+            "workspace copy",
+            policy.workspace == Some(WorkspaceMode::Copy),
+        ),
+        // The session's rules would narrow the runner's allowlist; until that intersection is
+        // wired, accepting them would be a policy the sandbox does not enforce.
+        ("egress", policy.egress.is_some()),
+    ] {
+        if set {
+            return Err(format!(
+                "the policy sets {field}, which the process sandbox cannot enforce; refusing the session"
+            ));
+        }
+    }
+    for (var, mb) in [
+        ("AINKRAD_SANDBOX_MEMORY", policy.memory_mb),
+        ("AINKRAD_SANDBOX_DISK", policy.disk_mb),
+    ] {
+        let Some(mb) = mb else { continue };
+        let cap = u64::from(mb) * 1024;
+        let entry = env
+            .iter_mut()
+            .find(|(n, _)| n == var)
+            .ok_or_else(|| format!("{var} is missing"))?;
+        let runner = entry
+            .1
+            .parse::<u64>()
+            .map_err(|_| format!("invalid {var}"))?;
+        entry.1 = runner.min(cap).to_string();
+    }
+    if let Some(secs) = policy.wall_secs {
+        env.push(("AINKRAD_SANDBOX_WALL".to_owned(), secs.to_string()));
+    }
+    Ok(())
 }
 
 impl Sandbox for ProcessSandbox {
@@ -106,6 +250,16 @@ impl Sandbox for ProcessSandbox {
             "seatbelt"
         } else {
             "bubblewrap"
+        }
+    }
+
+    /// Process isolation while the sandbox program works, as the probe thread last saw it; none
+    /// after two failed probes in a row.
+    fn tier(&self) -> Isolation {
+        if self.probe.up_at(self.probe.now_ms()) {
+            Isolation::Process
+        } else {
+            Isolation::None
         }
     }
 
@@ -194,14 +348,15 @@ impl Sandbox for ProcessSandbox {
             }
             Self::add(env, &format!("AINKRAD_SANDBOX_{key}"), value);
         }
-        Ok(())
+        apply_policy(&start.policy, env)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ProcessSandbox, network_for};
+    use super::{Probe, ProcessSandbox, apply_policy, network_for};
     use crate::v2::agent::Sandbox;
+    use ainkrad_proto::runner::{Egress, Policy, WorkspaceMode};
 
     #[test]
     fn secrets_default_to_deny_and_linux_refuses_unfiltered_allow() {
@@ -241,5 +396,151 @@ mod tests {
             sandbox.with_egress_ready().capabilities(),
             ["egress-filter"]
         );
+    }
+
+    fn runner_env() -> Vec<(String, String)> {
+        [
+            ("AINKRAD_SANDBOX_MEMORY", "4194304"),
+            ("AINKRAD_SANDBOX_DISK", "1048576"),
+        ]
+        .map(|(n, v)| (n.to_owned(), v.to_owned()))
+        .to_vec()
+    }
+
+    fn value(env: &[(String, String)], name: &str) -> Option<String> {
+        env.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone())
+    }
+
+    #[test]
+    fn a_policy_cap_lowers_the_runners_never_raises_it() {
+        let mut env = runner_env();
+        let policy = Policy {
+            memory_mb: Some(512),
+            disk_mb: Some(100_000),
+            wall_secs: Some(90),
+            ..Policy::default()
+        };
+        apply_policy(&policy, &mut env).unwrap();
+        assert_eq!(
+            value(&env, "AINKRAD_SANDBOX_MEMORY").as_deref(),
+            Some("524288")
+        );
+        // 100000 MiB is above the runner's 1 GiB disk cap: the runner's stays.
+        assert_eq!(
+            value(&env, "AINKRAD_SANDBOX_DISK").as_deref(),
+            Some("1048576")
+        );
+        assert_eq!(value(&env, "AINKRAD_SANDBOX_WALL").as_deref(), Some("90"));
+    }
+
+    #[test]
+    fn a_policy_with_no_isolation_fields_changes_nothing() {
+        let mut env = runner_env();
+        apply_policy(&Policy::default(), &mut env).unwrap();
+        assert_eq!(env, runner_env());
+        assert_eq!(value(&env, "AINKRAD_SANDBOX_WALL"), None);
+    }
+
+    #[test]
+    fn a_field_the_process_sandbox_cannot_enforce_refuses_the_session() {
+        for (field, policy) in [
+            (
+                "image",
+                Policy {
+                    image: Some(format!("sha256:{}", "ab".repeat(32))),
+                    ..Policy::default()
+                },
+            ),
+            (
+                "vcpus",
+                Policy {
+                    vcpus: Some(2),
+                    ..Policy::default()
+                },
+            ),
+            (
+                "workspace copy",
+                Policy {
+                    workspace: Some(WorkspaceMode::Copy),
+                    ..Policy::default()
+                },
+            ),
+            (
+                "egress",
+                Policy {
+                    egress: Some(Egress::default()),
+                    ..Policy::default()
+                },
+            ),
+        ] {
+            let mut env = runner_env();
+            let why = apply_policy(&policy, &mut env).unwrap_err();
+            assert!(why.contains(field), "{field}: {why}");
+            assert_eq!(env, runner_env(), "{field}: a refusal leaves the env alone");
+        }
+        // The workspace mode the process tier does have is accepted.
+        let bind = Policy {
+            workspace: Some(WorkspaceMode::Bind),
+            ..Policy::default()
+        };
+        assert!(apply_policy(&bind, &mut runner_env()).is_ok());
+    }
+
+    #[test]
+    fn one_failed_probe_is_not_a_lost_tier_but_two_in_a_row_are() {
+        use std::sync::atomic::Ordering;
+        let probe = Probe::new(true);
+        probe.record(false);
+        assert!(probe.up.load(Ordering::SeqCst), "a transient failure");
+        probe.record(true);
+        probe.record(false);
+        assert!(
+            probe.up.load(Ordering::SeqCst),
+            "the success reset the count"
+        );
+        probe.record(false);
+        assert!(!probe.up.load(Ordering::SeqCst), "two in a row");
+        probe.record(true);
+        assert!(
+            probe.up.load(Ordering::SeqCst),
+            "it recovers on a good probe"
+        );
+    }
+
+    #[test]
+    fn a_probe_that_hangs_or_a_dead_thread_stops_the_tier_being_offered() {
+        let probe = Probe::new(true);
+        probe.record(true);
+        let ok_at = probe.last_ok_ms.load(std::sync::atomic::Ordering::SeqCst);
+        // Fresh, then three intervals on with no success (a stalled probe or a dead thread).
+        assert!(probe.up_at(ok_at + 1_000));
+        assert!(probe.up_at(ok_at + 6_000));
+        assert!(!probe.up_at(ok_at + 6_001));
+        // A later success revives it.
+        probe
+            .last_ok_ms
+            .store(ok_at + 10_000, std::sync::atomic::Ordering::SeqCst);
+        assert!(probe.up_at(ok_at + 11_000));
+    }
+
+    #[test]
+    fn the_probe_program_is_killed_past_its_limit() {
+        use super::succeeds_within;
+        use std::time::{Duration, Instant};
+        let started = Instant::now();
+        let hung = succeeds_within(
+            std::process::Command::new("sleep").arg("30"),
+            Duration::from_millis(300),
+        );
+        assert!(!hung);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(succeeds_within(
+            &mut std::process::Command::new("true"),
+            Duration::from_secs(5)
+        ));
+        assert!(!succeeds_within(
+            &mut std::process::Command::new("false"),
+            Duration::from_secs(5)
+        ));
     }
 }

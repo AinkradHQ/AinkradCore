@@ -12,6 +12,8 @@ pub const OP_EXEC_RUN: &str = "exec.run";
 /// Core to runner, the first frame of a command stream.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "op")]
+// `AgentStart` carries a policy with the isolation fields (E8a-08); a frame is built once and sent.
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Answers `result` at once: proves the path end to end.
     #[serde(rename = "noop")]

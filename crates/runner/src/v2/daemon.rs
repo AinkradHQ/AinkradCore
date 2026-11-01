@@ -165,14 +165,17 @@ pub async fn from_state(
     // Leases are redeemed with this runner's own signed requests (E2-07.2).
     let agents = agents.map(|a| {
         let client = Client::new(&url, tls.clone()).map(Arc::new);
-        Arc::new(match client {
+        let agent = Arc::new(match client {
             Ok(c) => a.with_redeem(super::agent::secrets::http_redeem(
                 c,
                 Arc::clone(&key),
                 Arc::clone(&enrolment),
             )),
             Err(_) => a,
-        })
+        });
+        // A tier that goes away mid-life ends the sessions that need it (E8a-09.3).
+        agent.watch_isolation(std::time::Duration::from_secs(5));
+        agent
     });
     let daemon = Daemon {
         client: Client::new(&url, tls.clone())?,
