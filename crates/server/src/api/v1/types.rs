@@ -75,7 +75,9 @@
 ///    `terminal.scrollback_budget_bytes`, and `watch` and the scrollback limits on the runner's
 ///    `pty.open` and `pty.attach`.
 /// 24: the setting `audit.anchor_interval_secs` (E1-10.4, off-box anchors of the audit chain head).
-pub const API_MINOR: u32 = 24;
+/// 25: the policy isolation fields (E8a-08): `min_isolation`, `image`, `vcpus`, `memory_mb`, `disk_mb`,
+///    `wall_secs`, `egress` and `workspace` on the runner policy (`runner.schema.json`), all optional.
+pub const API_MINOR: u32 = 25;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
