@@ -42,6 +42,18 @@ pub fn parse(url: &str) -> Option<(Target, String)> {
         _ => return None,
     };
     let (authority, path) = rest.split_once('/').map_or((rest, ""), |(a, p)| (a, p));
+    // The authority becomes a `Host:` header line and the path a request line: a control
+    // character, a space or a non-ASCII byte in either would split or forge a header. Anything
+    // but visible ASCII refuses the bridge (the caller then gives the sandbox no route), and a
+    // userinfo (`user@`) is never part of a `Host`.
+    if !authority
+        .bytes()
+        .chain(path.bytes())
+        .all(|b| b.is_ascii_graphic())
+        || authority.contains('@')
+    {
+        return None;
+    }
     let (host, port) = match authority.rsplit_once(':') {
         Some((h, p)) if !h.ends_with(']') || h.starts_with('[') => (h, p.parse().ok()?),
         _ => (authority, if tls { 443 } else { 80 }),
@@ -127,7 +139,14 @@ async fn serve(
 ) -> io::Result<()> {
     let (cr, mut cw) = split(client);
     let mut reader = BufReader::new(cr);
-    let first = match filter::read_request(&mut reader, &target.authority, &target.path).await {
+    let first = match filter::read_request(
+        &mut reader,
+        &target.authority,
+        &target.path,
+        filter::FIRST_LINE,
+    )
+    .await
+    {
         Ok(Some(q)) => q,
         Ok(None) => return Ok(()),
         Err(refusal) => {
@@ -145,7 +164,9 @@ async fn serve(
             uw.write_all(&q.head).await?;
             filter::forward_body(&mut reader, &mut uw, q.body).await?;
             uw.flush().await?;
-            match filter::read_request(&mut reader, &target.authority, &target.path).await {
+            match filter::read_request(&mut reader, &target.authority, &target.path, filter::IDLE)
+                .await
+            {
                 Ok(Some(next)) => q = next,
                 Ok(None) => return uw.shutdown().await, // the client is done; let responses finish
                 Err(_) => return Err(io::Error::other("refused a later request")),
@@ -314,6 +335,32 @@ mod tests {
                 .expect("a connection outlived the bridge");
             assert!(matches!(n, Ok(0) | Err(_)));
         }
+    }
+
+    #[test]
+    fn a_control_character_or_userinfo_in_the_url_gets_no_bridge() {
+        for bad in [
+            "https://core.example\r\nX-Evil: 1/x",
+            "https://core.example:8443\n/x",
+            "https://user@core.example/x",
+            "https://core .example/x",
+            "https://core.example/x\r\nHost: evil",
+            "https://core.exämple/x",
+        ] {
+            assert!(parse(bad).is_none(), "{bad:?}");
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_silent_client_does_not_hold_a_slot() {
+        let (_bridge, sock, _) = rig("silent").await;
+        let mut held = Vec::new();
+        for _ in 0..PER_RUN {
+            held.push(UnixStream::connect(&sock).await.unwrap());
+        }
+        // They say nothing: after the first-line wait every slot is free again.
+        tokio::time::sleep(filter::FIRST_LINE + Duration::from_secs(5)).await;
+        assert!(status(&sock, REQ.as_bytes()).await.contains("200"));
     }
 
     #[test]

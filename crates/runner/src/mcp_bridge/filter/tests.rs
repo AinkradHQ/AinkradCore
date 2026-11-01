@@ -4,7 +4,7 @@ use tokio::io::BufReader;
 const PATH: &str = "/token/citadel/v1/mcp";
 
 async fn read(input: &[u8]) -> Result<Option<Request>, Refusal> {
-    read_request(&mut BufReader::new(input), "core.example:8443", PATH).await
+    read_request(&mut BufReader::new(input), "core.example:8443", PATH, IDLE).await
 }
 
 fn req(lines: &[&str]) -> Vec<u8> {
@@ -135,7 +135,7 @@ async fn a_slow_head_times_out() {
         .await
         .unwrap();
     // The rest never comes; paused time jumps past the head timeout.
-    let got = read_request(&mut BufReader::new(rx), "h", PATH).await;
+    let got = read_request(&mut BufReader::new(rx), "h", PATH, IDLE).await;
     assert_eq!(got.unwrap_err().0, 408);
 }
 
@@ -182,14 +182,32 @@ async fn keep_alive_requests_each_get_the_core_host() {
     let input = b"POST /token/citadel/v1/mcp HTTP/1.1\r\nHost: a\r\nContent-Length: 2\r\n\r\nhiPOST /token/citadel/v1/mcp HTTP/1.1\r\nHost: b\r\n\r\n";
     let mut r = BufReader::new(&input[..]);
     for _ in 0..2 {
-        let q = read_request(&mut r, "core:1", PATH).await.unwrap().unwrap();
+        let q = read_request(&mut r, "core:1", PATH, IDLE)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(String::from_utf8_lossy(&q.head).contains("Host: core:1\r\n"));
         forward_body(&mut r, &mut Vec::new(), q.body).await.unwrap();
     }
     assert!(
-        read_request(&mut r, "core:1", PATH)
+        read_request(&mut r, "core:1", PATH, IDLE)
             .await
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_client_that_says_nothing_is_dropped_after_the_first_line_wait() {
+    // Connected, silent, never closed: not an hour of a held slot, `FIRST_LINE`.
+    let (_tx, rx) = tokio::io::duplex(64);
+    let started = tokio::time::Instant::now();
+    let got = read_request(&mut BufReader::new(rx), "h", PATH, FIRST_LINE).await;
+    assert_eq!(got.unwrap_err().0, 408);
+    assert!(started.elapsed() <= FIRST_LINE + Duration::from_secs(1));
+    // A dribbled first line is cut at the same bound.
+    let (mut tx, rx) = tokio::io::duplex(64);
+    tx.write_all(b"POST /tok").await.unwrap();
+    let got = read_request(&mut BufReader::new(rx), "h", PATH, FIRST_LINE).await;
+    assert_eq!(got.unwrap_err().0, 408);
 }

@@ -159,7 +159,8 @@ transcript() { a --json agent tail "$1" --after 0 --no-follow; } # one JSON entr
 ticks() { transcript "$1" | jq -r '.body | tostring' | grep -o 'TICK-[0-9]*' | cut -d- -f2; }
 contiguous() { awk 'NR==1{p=$1;next} $1!=p+1{bad=1} {p=$1} END{exit bad}'; }
 term_status() { a --json term ls | jq -r --arg t "$1" '.[] | select(.id==$t) | .status'; }
-host_pid() { jq -r .pid "$RSTATE/terminals/$1.json"; }
+# The host's pid, or a failure: an empty or non-numeric pid would make every "is it gone" check below pass vacuously.
+host_pid() { local p; p=$(jq -r .pid "$RSTATE/terminals/$1.json" 2>/dev/null) || p=; case $p in ''|*[!0-9]*) echo "e2-exit: no host pid for terminal '$1'" >&2; return 1 ;; esac; echo "$p"; }
 # A host and every process under it. The shells' own `$$` is in the terminal sandbox's PID namespace (Linux).
 tree() { local c; echo "$1"; for c in $(pgrep -P "$1"); do tree "$c"; done; }
 agent_state() { a --json agent show "$1" | jq -r .state; }
@@ -170,7 +171,7 @@ stream_fault() {
   local name=$1 action=$2 t out=$W/stream-$1.bin
   rm -f "$W/go-$name"
   t=$(new_term sh -c "echo READY; while [ ! -f $W/go-$name ]; do sleep 0.1; done; i=1; while [ \$i -le 3000 ]; do printf 'L%05d\n' \$i; i=\$((i+1)); [ \$((i%100)) = 0 ] && sleep 0.3; done; echo DONE-$name; sleep 100000")
-  local hp; hp=$(host_pid "$t")
+  local hp; hp=$(host_pid "$t") || { EV="no host pid for $t"; return 1; }
   ATTACH_URL=$PURL
   bg_attach a "$out" 90 "$t"; local ap=$!
   ATTACH_URL=$URL
@@ -214,7 +215,7 @@ step1() {
 }
 
 step2() {
-  local hp1 hp2; hp1=$(host_pid "$T1"); hp2=$(host_pid "$T2")
+  local hp1 hp2; hp1=$(host_pid "$T1") && hp2=$(host_pid "$T2") || { EV="no host pid for $T1 or $T2"; return 1; }
   pkill -f "term attach" 2>/dev/null || true
   [ -z "$(ctl_pid "$T1")" ] || { EV="a client survived"; return 1; }
   kill -9 "$CORE"; wait "$CORE" 2>/dev/null || true
@@ -250,7 +251,8 @@ step5() {
   cwd=$(transcript "$AS" | jq -r '.body | tostring' | grep -o 'CWD=[^"]*' | tail -n1 | cut -d= -f2-)
   [ -d "$cwd" ] || { EV="no agent worktree at '$cwd'"; return 1; }
   before=$(cd "$cwd" && ls tick-* | sort | cksum)
-  hp2=$(tree "$(host_pid "$T2")" | tr '\n' ' ')
+  hp2=$(host_pid "$T2") || { EV="no host pid for $T2"; return 1; }
+  hp2=$(tree "$hp2" | tr '\n' ' ')
   agentpids=$(pgrep -f "$W/bin/claude" || true); [ -n "$agentpids" ] || { EV="no agent process to kill"; return 1; }
   a agent kill "$AS" >"$W/kill-agent.out" || { EV="agent kill failed: $(cat "$W/kill-agent.out")"; return 1; }
   a term kill "$T2" >"$W/kill-term.out" || { EV="term kill failed"; return 1; }
@@ -282,7 +284,8 @@ step7() {
     hits+=$(grep -rlaF --include='*.log' --include='*.err' --include='*.db' --include='*.db-wal' --include='*.jsonl' -- "$v" "$W" 2>/dev/null | tr '\n' ' ' || true)
   done
   [ -z "$hits" ] || { EV="a secret or terminal byte is in: $hits"; return 1; }
-  local t1; t1=$(tree "$(host_pid "$T1")" | tr '\n' ' ')
+  local t1; t1=$(host_pid "$T1") || { EV="no host pid for $T1"; return 1; }
+  t1=$(tree "$t1" | tr '\n' ' ')
   a term kill "$T1" >/dev/null 2>&1 || true
   kill "$RPID" "$CORE" "$PROXY" 2>/dev/null; wait "$RPID" "$CORE" 2>/dev/null || true
   left() { pgrep -f "$W" | grep -qv "^$$\$"; }
@@ -297,7 +300,7 @@ fault_core_kill() { stream_fault core_kill corekill; }
 fault_runner_kill() { stream_fault runner_kill runnerkill; }
 fault_network_cut() { stream_fault network_cut2 cut; }
 fault_host_kill() {
-  local t hp; t=$(new_term sh -c "sleep 100000"); hp=$(host_pid "$t")
+  local t hp; t=$(new_term sh -c "sleep 100000"); hp=$(host_pid "$t") || { EV="no host pid for $t"; return 1; }
   bg_attach a "$W/hostkill.bin" 30 "$t"; sleep 2; kill -9 "$hp"
   wait_for 40 eval '[ "$(term_status "$t")" = exited ]' || { EV="$t is '$(term_status "$t")' 40 s after its host was killed"; return 1; }
   pkill -f "term attach $t" 2>/dev/null || true
