@@ -531,7 +531,11 @@ async fn placement_at_launch_refuses_a_runner_the_hub_does_not_know_or_that_lost
         }
     };
     // A runner the hub never saw is not a pass (it used to be, through a missing entry).
-    let ghost = "d_00000000000000000000000000".to_owned();
+    // (A paired runner that never connected: a device the sessions table accepts.)
+    let base = format!("http://{}", core.host);
+    let ghost = paired(&core, &base, None, &state("iso-ghost"))
+        .await
+        .device_id;
     let s = mk(ghost, needs("process")).await;
     assert!(matches!(placement(&core.app, &s), Placement::Away));
     // A connected one with the tier is placed; without it, refused with the reason.
