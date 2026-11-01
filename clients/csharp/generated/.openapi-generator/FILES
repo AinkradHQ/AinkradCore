@@ -83,6 +83,7 @@ src/Ainkrad.Client/Model/PasskeyClaimBody.cs
 src/Ainkrad.Client/Model/PasskeyOptionsBody.cs
 src/Ainkrad.Client/Model/PasskeyRegistrationOptions.cs
 src/Ainkrad.Client/Model/PastRetention.cs
+src/Ainkrad.Client/Model/PushKinds.cs
 src/Ainkrad.Client/Model/PushToken.cs
 src/Ainkrad.Client/Model/RedeemLease.cs
 src/Ainkrad.Client/Model/Rename.cs

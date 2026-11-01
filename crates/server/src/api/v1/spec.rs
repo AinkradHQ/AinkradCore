@@ -47,6 +47,8 @@ use super::{
         devices::set_scopes,
         devices::set_push,
         devices::clear_push,
+        devices::get_push_kinds,
+        devices::set_push_kinds,
         events::replay,
         events::ws,
         events::latest,

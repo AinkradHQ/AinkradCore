@@ -80,9 +80,11 @@
 /// 26: runner isolation capability (E8a-09): `Runner.arch` and `Runner.isolation` (tiers offered now
 ///    and the `/dev/kvm` state) in the API; `isolation` on the runner's hello and heartbeat; a
 ///    session whose policy needs a tier is refused placement where it is not offered.
-/// 27: the agent wake queue (E2-11.3): `wakeAgentSession` (`POST /agent-sessions/{id}/wake`) and
+/// 27: push opt-in (E2-12): `getPushKinds` and `setPushKinds` (`/api/v1/push-token/kinds`, scope
+///    `read`); registering a push token another device holds is now refused (400).
+/// 28: the agent wake queue (E2-11.3): `wakeAgentSession` (`POST /agent-sessions/{id}/wake`) and
 ///    `AgentWake`/`AgentWakeRequest`; `AgentStart.epoch` in the runner schema (optional, 0 when absent).
-pub const API_MINOR: u32 = 27;
+pub const API_MINOR: u32 = 28;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

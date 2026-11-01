@@ -182,6 +182,7 @@ async fn enroll_validate_mark_and_revoke() {
         provider: "apns".to_owned(),
         token: hex,
         sandbox: true,
+        kinds: None,
     };
     assert_eq!(push_targets(&pool).await.unwrap(), [want]);
     assert!(set_push_token(&pool, &runner.id, None).await.unwrap());
