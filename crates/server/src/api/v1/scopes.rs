@@ -89,6 +89,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/agent-sessions/{id}/cancel", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/kill", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/resume", "agent"),
+    ("POST", "/api/v1/agent-sessions/{id}/wake", "agent"),
 ];
 
 /// `(method, path template)` of every route that needs a live elevation (spec §8): device
@@ -128,6 +129,8 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/agent-sessions/{id}/cancel"),
     ("POST", "/api/v1/agent-sessions/{id}/kill"),
     ("POST", "/api/v1/agent-sessions/{id}/resume"),
+    // A wake resumes a harness later, from the queue: it needs the step-up now.
+    ("POST", "/api/v1/agent-sessions/{id}/wake"),
     // Approval can execute a tool; a live step-up is required even for the approve scope.
     ("POST", "/api/v1/agent-sessions/{id}/approvals/{request}"),
 ];

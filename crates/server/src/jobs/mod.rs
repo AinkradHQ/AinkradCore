@@ -30,7 +30,9 @@ mod store;
 
 pub use cron::Cron;
 pub use engine::{Config, Engine};
-pub use store::{Claimed, claim, finish, fire_due, heartbeat, prune, register, wake};
+pub use store::{
+    Cap, Claimed, Queued, claim, finish, fire_due, heartbeat, prune, register, wake, wake_platform,
+};
 
 #[cfg(test)]
 mod tests;

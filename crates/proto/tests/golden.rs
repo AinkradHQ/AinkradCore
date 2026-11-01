@@ -569,6 +569,7 @@ fn v2_agent_frames_are_pinned() {
                 lease: "l_lease".to_owned(),
                 var: "GH_TOKEN".to_owned(),
             }],
+            epoch: 0,
         })),
     );
     // A policy with every isolation field set (E8a-08); the frame above pins the unchanged shape.
@@ -598,6 +599,7 @@ fn v2_agent_frames_are_pinned() {
             },
             resume: None,
             secrets: vec![],
+            epoch: 0,
         })),
     );
     v2(

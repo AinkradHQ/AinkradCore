@@ -319,6 +319,71 @@ extension Components {
                 case output
             }
         }
+        /// - Remark: Generated from `#/components/schemas/AgentWake`.
+        public struct AgentWake: Codable, Hashable, Sendable {
+            /// The wake's key.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentWake/key`.
+            public var key: Swift.String
+            /// `false` when this key was already used: nothing was queued.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentWake/queued`.
+            public var queued: Swift.Bool
+            /// The session, `as_…`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentWake/session`.
+            public var session: Swift.String
+            /// Creates a new `AgentWake`.
+            ///
+            /// - Parameters:
+            ///   - key: The wake's key.
+            ///   - queued: `false` when this key was already used: nothing was queued.
+            ///   - session: The session, `as_…`.
+            public init(
+                key: Swift.String,
+                queued: Swift.Bool,
+                session: Swift.String
+            ) {
+                self.key = key
+                self.queued = queued
+                self.session = session
+            }
+            public enum CodingKeys: String, CodingKey {
+                case key
+                case queued
+                case session
+            }
+        }
+        /// A wake for an idle session.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AgentWakeRequest`.
+        public struct AgentWakeRequest: Codable, Hashable, Sendable {
+            /// Makes the wake idempotent: asking again with the same key queues nothing (it is kept for
+            /// 30 days). 1 to 128 of `A-Za-z0-9_.:-`; absent, the Core makes one up.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentWakeRequest/key`.
+            public var key: Swift.String?
+            /// The next turn, 1 byte to 16 KiB; absent, the session just continues.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentWakeRequest/text`.
+            public var text: Swift.String?
+            /// Creates a new `AgentWakeRequest`.
+            ///
+            /// - Parameters:
+            ///   - key: Makes the wake idempotent: asking again with the same key queues nothing (it is kept for
+            ///   - text: The next turn, 1 byte to 16 KiB; absent, the session just continues.
+            public init(
+                key: Swift.String? = nil,
+                text: Swift.String? = nil
+            ) {
+                self.key = key
+                self.text = text
+            }
+            public enum CodingKeys: String, CodingKey {
+                case key
+                case text
+            }
+        }
         /// The contract a server speaks: `/api/<major>` and its additions so far.
         ///
         /// - Remark: Generated from `#/components/schemas/ApiVersion`.

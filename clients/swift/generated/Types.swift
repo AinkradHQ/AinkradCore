@@ -32,6 +32,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/agent-sessions/{id}/transcript`.
     /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/transcript/get(getAgentTranscript)`.
     func getAgentTranscript(_ input: Operations.GetAgentTranscript.Input) async throws -> Operations.GetAgentTranscript.Output
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/wake`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/wake/post(wakeAgentSession)`.
+    func wakeAgentSession(_ input: Operations.WakeAgentSession.Input) async throws -> Operations.WakeAgentSession.Output
     /// - Remark: HTTP `GET /api/v1/audit`.
     /// - Remark: Generated from `#/paths//api/v1/audit/get(listAudit)`.
     func listAudit(_ input: Operations.ListAudit.Input) async throws -> Operations.ListAudit.Output
@@ -306,6 +309,19 @@ extension APIProtocol {
             path: path,
             query: query,
             headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/wake`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/wake/post(wakeAgentSession)`.
+    public func wakeAgentSession(
+        path: Operations.WakeAgentSession.Input.Path,
+        headers: Operations.WakeAgentSession.Input.Headers = .init(),
+        body: Operations.WakeAgentSession.Input.Body
+    ) async throws -> Operations.WakeAgentSession.Output {
+        try await wakeAgentSession(Operations.WakeAgentSession.Input(
+            path: path,
+            headers: headers,
+            body: body
         ))
     }
     /// - Remark: HTTP `GET /api/v1/audit`.

@@ -150,7 +150,8 @@ pub async fn register(
 
 /// Queues a run of `owner`'s job `name` at `at` (now when `None`), carrying `payload`. `key`
 /// makes it idempotent: waking twice with the same key queues one run (`false` the second
-/// time, even after the first has finished). The job must be registered and enabled.
+/// time, even after the first has finished). The job must be registered and enabled. The
+/// platform's own jobs (`owner` `core`) are not for a module to wake: `wake_platform`.
 pub async fn wake(
     pool: &SqlitePool,
     now: &str,
@@ -160,6 +161,58 @@ pub async fn wake(
     payload: &Value,
     at: Option<&str>,
 ) -> Result<bool, Error> {
+    if owner == crate::store::migrate::CORE {
+        return refuse("the platform's jobs are woken by the platform only".to_owned());
+    }
+    let queued = queue(pool, now, owner, name, key, payload, at, None).await?;
+    Ok(queued == Queued::New)
+}
+
+/// What [`wake_platform`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Queued {
+    New,
+    /// The key was used before: nothing queued.
+    Duplicate,
+    /// The queue holds its bound of waiting wakes: nothing queued.
+    Full,
+}
+
+/// How many wakes of one platform job may wait (`queued` or `running`) in all, and for one
+/// `payload.session`: the queue is bounded however often a client asks.
+#[derive(Debug, Clone, Copy)]
+pub struct Cap {
+    pub total: i64,
+    pub per_session: i64,
+    /// Waiting wakes one requesting device (`payload.by`) may hold.
+    pub per_requester: i64,
+}
+
+/// [`wake`] for the platform's own job `name`, refusing (`Full`) past `cap`. Only the platform
+/// calls it: a handler of that job trusts the payload as the enqueuing route built it.
+pub async fn wake_platform(
+    pool: &SqlitePool,
+    now: &str,
+    name: &str,
+    key: &str,
+    payload: &Value,
+    cap: Cap,
+) -> Result<Queued, Error> {
+    let owner = crate::store::migrate::CORE;
+    queue(pool, now, owner, name, key, payload, None, Some(cap)).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn queue(
+    pool: &SqlitePool,
+    now: &str,
+    owner: &str,
+    name: &str,
+    key: &str,
+    payload: &Value,
+    at: Option<&str>,
+    cap: Option<Cap>,
+) -> Result<Queued, Error> {
     if key.is_empty() || key.len() > 128 {
         return refuse("a wake key is 1 to 128 bytes".to_owned());
     }
@@ -183,12 +236,54 @@ pub async fn wake(
     let Some(job) = job else {
         return refuse(format!("no job {owner}.{name} is registered"));
     };
+    // A platform key is the requester's own per session: a key used on one session never
+    // suppresses the same key on another.
+    let idem = match cap {
+        Some(_) => format!(
+            "wake:{}:{key}",
+            payload["session"].as_str().unwrap_or_default()
+        ),
+        None => format!("wake:{key}"),
+    };
+    if let Some(cap) = cap {
+        let seen: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM core_job_runs WHERE job_id = ? AND idem_key = ?",
+        )
+        .bind(job)
+        .bind(&idem)
+        .fetch_one(&mut *tx)
+        .await?;
+        let waiting = "FROM core_job_runs WHERE job_id = ?1 AND status IN ('queued', 'running')";
+        let all: i64 =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) {waiting}")))
+                .bind(job)
+                .fetch_one(&mut *tx)
+                .await?;
+        let mine: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) {waiting} AND json_extract(payload, '$.session') = ?2"
+        )))
+        .bind(job)
+        .bind(payload["session"].as_str().unwrap_or_default())
+        .fetch_one(&mut *tx)
+        .await?;
+        let by: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) {waiting} AND json_extract(payload, '$.by') = ?2"
+        )))
+        .bind(job)
+        .bind(payload["by"].as_str().unwrap_or_default())
+        .fetch_one(&mut *tx)
+        .await?;
+        let full = all >= cap.total || mine >= cap.per_session || by >= cap.per_requester;
+        if seen == 0 && full {
+            return Ok(Queued::Full);
+        }
+    }
     let queued = sqlx::query(
         "INSERT OR IGNORE INTO core_job_runs (job_id, idem_key, payload, due_at, run_at) \
          VALUES (?1, ?2, ?3, ?4, ?4)",
     )
     .bind(job)
-    .bind(format!("wake:{key}"))
+    .bind(idem)
     .bind(payload.to_string())
     .bind(at)
     .execute(&mut *tx)
@@ -196,7 +291,11 @@ pub async fn wake(
     .rows_affected()
         == 1;
     tx.commit().await?;
-    Ok(queued)
+    Ok(if queued {
+        Queued::New
+    } else {
+        Queued::Duplicate
+    })
 }
 
 /// Deletes finished runs older than 30 days, at most `limit` at a time; returns how many.
@@ -438,7 +537,8 @@ pub async fn finish(
     let mut tx = begin_write(pool).await?;
     let moved = sqlx::query(
         "UPDATE core_job_runs SET status = ?1, holder = NULL, lease_until = NULL, error = ?2, \
-         run_at = coalesce(?3, run_at), finished_at = iif(?4, ?5, NULL) \
+         run_at = coalesce(?3, run_at), finished_at = iif(?4, ?5, NULL), \
+         payload = iif(?4, '{}', payload) \
          WHERE id = ?6 AND holder = ?7 AND status = 'running'",
     )
     .bind(status)
