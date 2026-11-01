@@ -4,7 +4,8 @@ use std::path::{Component, Path};
 use std::time::Duration;
 
 use ainkrad_harness::Decision;
-use ainkrad_proto::runner::{PermissionMode, Policy, allows, command_of};
+use ainkrad_proto::runner::shell::pipelines;
+use ainkrad_proto::runner::{PermissionMode, Policy, allows, commands_of, covers, rule_prefix};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -28,15 +29,28 @@ impl HarnessExecutor {
         if citadel_call(tool, input) {
             return Ok(());
         }
-        let rules: Vec<&str> = (policy.allow.iter())
-            .filter_map(|entry| entry.split_once(':'))
-            .filter(|(name, prefix)| *name == tool && !prefix.is_empty())
-            .map(|(_, prefix)| prefix)
+        // The usable rules for this tool: an entry that `rule_problem` finds fault with (a shell,
+        // a wrapper, a destructive command, stored before the check existed) covers nothing.
+        for entry in policy.allow.iter() {
+            if SHELLS.contains(&entry.as_str()) {
+                // An admin-authored bare shell entry is a deliberate full-auto mode for that shell.
+                warn_once(entry, "the project policy allows every command of a shell");
+            } else if entry.starts_with(tool)
+                && entry[tool.len()..].starts_with(':')
+                && rule_prefix(entry, tool).is_none()
+            {
+                warn_unusable_rule(entry);
+            }
+        }
+        let rules: Vec<Vec<String>> = (policy.allow.iter())
+            .filter_map(|entry| rule_prefix(entry, tool))
             .collect();
         // A shell's harmless waits (`sleep`, `date`) need no rule; another tool's need one.
         let chain = !rules.is_empty() || SHELLS.contains(&tool);
         let listed = policy.allow.iter().any(|entry| allows(entry, tool, input))
-            || (chain && command_of(input).is_some_and(|c| chain_allowed(&rules, &c)));
+            || (chain
+                && commands_of(input)
+                    .is_some_and(|all| all.iter().all(|c| chain_allowed(&rules, c))));
         let edit =
             policy.mode == PermissionMode::AcceptEdits && self.edit_tools.iter().any(|t| t == tool);
         if !listed && !edit {
@@ -111,7 +125,24 @@ impl HarnessExecutor {
 pub(super) fn citadel_call(tool: &str, input: &Value) -> bool {
     tool.starts_with("mcp__citadel__")
         || tool.starts_with("citadel_")
-        || (SHELLS.contains(&tool) && command_of(input).is_some_and(|c| citadel_cli(&c)))
+        || (SHELLS.contains(&tool) && citadel_shell(input))
+}
+
+/// A shell call made only of `citadel` CLI calls. EVERY command it carries is read (`commands_of`):
+/// the `command`, when there is one, must be a citadel call as a whole; each OpenCode pattern is a
+/// pipeline stage (`citadel ...` or a read-only filter like `jq .title`), so a call whose second
+/// pattern is anything else is left to the policy.
+fn citadel_shell(input: &Value) -> bool {
+    let Some(all) = commands_of(input) else {
+        return false;
+    };
+    let stage_filter = |c: &str| {
+        pipelines(c).is_some_and(|ps| matches!(&ps[..], [p] if matches!(&p[..], [s] if filter(s))))
+    };
+    let whole = input["command"].is_null() || citadel_cli(&all[0]);
+    whole
+        && all.iter().all(|c| citadel_cli(c) || stage_filter(c))
+        && all.iter().any(|c| citadel_cli(c))
 }
 
 /// The shell tools: Claude's `Bash`, Codex's `commandExecution`, OpenCode's `bash`.
@@ -122,123 +153,6 @@ const READ_TOOLS: [&str; 8] = ["Read", "Glob", "Grep", "LS", "read", "glob", "gr
 
 /// The longest `sleep` that goes ahead without a rule: an agent polling a background job.
 const MAX_SLEEP_SECS: f64 = 300.0;
-
-/// A shell token: a word with its quotes removed, or a list or pipe operator.
-#[derive(Debug, PartialEq)]
-enum Token {
-    Word(String),
-    Op(&'static str),
-}
-
-/// Splits `command` the way a POSIX shell would, or `None` when it uses anything beyond plain
-/// words, quotes, `2>/dev/null` and `;` `&&` `||` `|`: redirections, expansions, substitutions, globs,
-/// backgrounding, grouping, escapes outside double quotes, or an unterminated quote.
-fn tokens(command: &str) -> Option<Vec<Token>> {
-    let mut out = vec![];
-    let mut word: Option<String> = None;
-    let mut chars = command.chars().peekable();
-    while let Some(c) = chars.next() {
-        let op = match c {
-            ' ' | '\t' => None,
-            '\n' | ';' => Some(";"),
-            '&' if chars.next_if_eq(&'&').is_some() => Some("&&"),
-            '|' if chars.next_if_eq(&'|').is_some() => Some("||"),
-            '|' if chars.peek() != Some(&'&') => Some("|"),
-            // Discarding stderr touches nothing: `2>/dev/null` (or `2> /dev/null`) is dropped.
-            '2' if word.is_none() && dev_null(&mut chars) => None,
-            '\'' => {
-                let w = word.get_or_insert_default();
-                loop {
-                    match chars.next()? {
-                        '\'' => break,
-                        c => w.push(c),
-                    }
-                }
-                continue;
-            }
-            '"' => {
-                let w = word.get_or_insert_default();
-                loop {
-                    match chars.next()? {
-                        '"' => break,
-                        '$' | '`' => return None,
-                        '\\' => match chars.next()? {
-                            c @ ('$' | '`' | '"' | '\\') => w.push(c),
-                            '\n' => return None,
-                            c => w.extend(['\\', c]),
-                        },
-                        c => w.push(c),
-                    }
-                }
-                continue;
-            }
-            c if "&|<>()`$\\*?[]{}~#!".contains(c) => return None,
-            c => {
-                word.get_or_insert_default().push(c);
-                continue;
-            }
-        };
-        out.extend(word.take().map(Token::Word));
-        out.extend(op.map(Token::Op));
-    }
-    out.extend(word.map(Token::Word));
-    Some(out)
-}
-
-/// The pipelines of `command` joined by `;`, `&&`, `||` or newlines, each a list of simple
-/// commands (its words) joined by `|`, or `None` for anything [`tokens`] refuses or a dangling
-/// operator. Codex's `bash -lc '<script>'` wrapper is looked through.
-fn pipelines(command: &str) -> Option<Vec<Vec<Vec<String>>>> {
-    let tokens = tokens(command)?;
-    // Codex may hand over the whole `bash -lc '<script>'` it is about to run.
-    if let [Token::Word(shell), Token::Word(flag), Token::Word(script)] = &tokens[..]
-        && ["sh", "bash", "zsh"].contains(&shell.rsplit('/').next().unwrap_or(""))
-        && (shell.starts_with("/bin/") || shell.starts_with("/usr/bin/") || !shell.contains('/'))
-        && (flag == "-c" || flag == "-lc")
-    {
-        return pipelines(script);
-    }
-    let mut out = vec![];
-    let mut stages: Vec<Vec<String>> = vec![vec![]];
-    let mut before = ";";
-    // Each list operator (and the end, `;`) closes the pipeline before it.
-    for token in tokens.into_iter().chain([Token::Op(";")]) {
-        match token {
-            Token::Word(w) => stages.last_mut().expect("never empty").push(w),
-            Token::Op("|") => stages.push(vec![]),
-            Token::Op(op) => {
-                if stages == [Vec::<String>::new()] {
-                    // `;` and newlines may repeat or trail; `&&` and `||` need two sides.
-                    if before != ";" || op != ";" {
-                        return None;
-                    }
-                } else if stages.iter().any(Vec::is_empty) {
-                    return None;
-                } else {
-                    out.push(std::mem::replace(&mut stages, vec![vec![]]));
-                }
-                before = op;
-            }
-        }
-    }
-    Some(out)
-}
-
-/// Consumes `>/dev/null` (after the `2` of `2>/dev/null`) when it is whole, ending at a blank,
-/// a list or pipe operator, or the end; anything else is left alone.
-fn dev_null(chars: &mut std::iter::Peekable<std::str::Chars>) -> bool {
-    let mut ahead = chars.clone();
-    if ahead.next() != Some('>') {
-        return false;
-    }
-    while ahead.next_if_eq(&' ').is_some() {}
-    let whole = "/dev/null".chars().all(|c| ahead.next() == Some(c))
-        && ahead.peek().is_none_or(|c| " \t\n;&|".contains(*c));
-    if whole {
-        *chars = ahead;
-    }
-    whole
-}
 
 /// Whether `command` only runs the run-scoped `citadel` CLI (E15.18): pipelines joined by `;`,
 /// `&&` or `||`, each a bare `citadel` call piped into nothing but read-only filters, or a lone
@@ -251,27 +165,13 @@ pub(super) fn citadel_cli(command: &str) -> bool {
 }
 
 /// Whether every simple command in `command` would go ahead on its own: it starts with the
-/// words of one of `rules` (allowlist prefixes) or is [`harmless`], it is a bare `echo`, or it
+/// words of one of `rules` (allowlist prefixes, `covers`) or is [`harmless`], it is a bare `echo`, or it
 /// is piped into as a read-only filter; a run-scoped `citadel` pipeline goes ahead whole. The
 /// condition and body of an `until`/`while … do … done` loop are checked the same way. One that
 /// would not, or a command [`pipelines`] or [`unlooped`] refuses, leaves the whole command to a
 /// reviewer.
-pub(super) fn chain_allowed(rules: &[&str], command: &str) -> bool {
-    let rules: Vec<Vec<String>> = rules
-        .iter()
-        .filter_map(|r| tokens(r))
-        // A rule that is not plain words matches no chain.
-        .filter_map(|t| {
-            t.into_iter()
-                .map(|t| match t {
-                    Token::Word(w) => Some(w),
-                    Token::Op(_) => None,
-                })
-                .collect::<Option<Vec<_>>>()
-        })
-        .filter(|r| !r.is_empty())
-        .collect();
-    let listed = |stage: &[String]| rules.iter().any(|r| stage.starts_with(r));
+pub(super) fn chain_allowed(rules: &[Vec<String>], command: &str) -> bool {
+    let listed = |stage: &[String]| rules.iter().any(|r| covers(r, stage));
     pipelines(command).and_then(unlooped).is_some_and(|ps| {
         !ps.is_empty()
             && ps.iter().all(|p| {
@@ -373,4 +273,29 @@ fn filter(stage: &[String]) -> bool {
     let others = args.iter().filter(|a| !flag(a, banned)).count();
     let refused = args.iter().any(|a| a.starts_with('-') && !flag(a, banned));
     others <= operands && !refused
+}
+
+/// Logs `what` once per distinct `entry`; `true` the first time.
+pub(super) fn warn_once(entry: &str, what: &str) -> bool {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let key: String = entry.chars().take(256).collect();
+    let first = SEEN
+        .get_or_init(Default::default)
+        .lock()
+        .is_ok_and(|mut seen| seen.insert(format!("{what}\0{key}")));
+    if first {
+        tracing::warn!(entry = %key, "{what}");
+    }
+    first
+}
+
+/// A `<tool>:<prefix>` entry that is not on the allowlist matches nothing: its calls escalate and a
+/// reviewer can approve them once.
+pub(super) fn warn_unusable_rule(entry: &str) -> bool {
+    warn_once(
+        entry,
+        "an allow rule is not on the safe-command list and matches nothing",
+    )
 }

@@ -20,33 +20,30 @@ pub async fn allow_for_issue(
     decide(pool, id, true, by, reply, Extra::Allow(rule), now).await
 }
 
-/// The allowlist entry that lets the escalated call through: `<tool>:<the command's first two
-/// words>` for a command (`Bash:cargo add`), else the tool.
+/// The allowlist entry that lets the escalated call through: `<tool>:<the first two plain words
+/// of the command that really runs>` (a Codex `bash -lc '<script>'` is read as its script), else
+/// the tool, which a shell then refuses (it needs a command prefix).
 pub fn allow_rule(tool: &str, input: &serde_json::Value) -> String {
-    match ainkrad_proto::runner::command_of(input) {
-        Some(c) => {
-            let words: Vec<&str> = c.split_whitespace().take(2).collect();
-            match words.is_empty() {
-                true => tool.to_owned(),
-                false => format!("{tool}:{}", words.join(" ")),
-            }
-        }
-        None => tool.to_owned(),
-    }
+    ainkrad_proto::runner::default_rule(tool, input)
 }
 
-/// The allowlist entries of the issue's live rules at `now`.
+/// The most live rules of one issue the engine looks at: a bound on the work of a pass.
+pub const MAX_ISSUE_RULES: i64 = 64;
+
+/// The issue's live rules at `now` as `(rule id, allowlist entry)`, oldest first, at most
+/// [`MAX_ISSUE_RULES`].
 pub async fn issue_allow_rules(
     pool: impl sqlx::SqliteExecutor<'_>,
     issue: IssueId,
     now: &str,
-) -> Result<Vec<String>, Error> {
-    sqlx::query_scalar(
-        "SELECT rule FROM citadel_issue_allow_rules WHERE issue_id = ? \
-         AND julianday(expires_at) > julianday(?) ORDER BY id",
+) -> Result<Vec<(i64, String)>, Error> {
+    sqlx::query_as(
+        "SELECT id, rule FROM citadel_issue_allow_rules WHERE issue_id = ? \
+         AND julianday(expires_at) > julianday(?) ORDER BY id LIMIT ?",
     )
     .bind(issue.0)
     .bind(now)
+    .bind(MAX_ISSUE_RULES)
     .fetch_all(pool)
     .await
 }
@@ -63,8 +60,14 @@ pub(super) fn target(a: &Approval, rule: Option<&str>) -> Result<(IssueId, Strin
     let rule = match rule.map(str::trim) {
         Some("") => return Err(DecideError::Allow("an empty rule".to_owned())),
         Some(rule) => rule.to_owned(),
-        None => allow_rule(tool, &payload["input"]),
+        None => match payload["rule"].as_str() {
+            Some(rule) => rule.to_owned(),
+            None => allow_rule(tool, &payload["input"]),
+        },
     };
+    if let Some(why) = ainkrad_proto::runner::rule_problem(&rule) {
+        return Err(DecideError::Allow(why.to_owned()));
+    }
     Ok((issue, rule))
 }
 
@@ -90,8 +93,8 @@ pub(super) async fn allow_in(
     .bind(format!("+{secs} seconds"))
     .fetch_one(&mut *conn)
     .await?;
-    let details = json!({"rule": rule, "rule_id": rule_id, "issue": issue.0,
-        "expires_at": expires});
+    // The rule's text can hold arguments: the audit row names the rule by id only.
+    let details = json!({"rule_id": rule_id, "issue": issue.0, "expires_at": expires});
     let actor = user_actor(by);
     append_approval_event_as(conn, a, actor, "approval.allowed_for_issue", details).await
 }

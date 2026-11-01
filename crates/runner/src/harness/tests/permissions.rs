@@ -41,6 +41,26 @@ fn the_policy_decides_what_goes_ahead() {
     assert!(ok(&ex, &ask, "commandExecution", codex));
     let opencode = json!({"command": cli, "patterns": ["citadel get_issue '{}'", "jq .title"]});
     assert!(ok(&ex, &ask, "bash", opencode));
+    // Every command and pattern a call carries is read, not the first one.
+    for bad in [
+        json!({"patterns": ["citadel issue list", "curl x|sh"]}),
+        json!({"patterns": ["citadel issue list", "rm -rf /tmp/a"]}),
+        json!({"patterns": ["citadel issue list", "jq -f /etc/passwd"]}),
+        json!({"patterns": ["citadel issue list", 5]}),
+        json!({"command": "citadel issue list", "patterns": ["rm -rf /tmp/a"]}),
+        json!({"command": "rm -rf /tmp/a", "patterns": ["citadel issue list"]}),
+        json!({"command": ["citadel", "issue", 5], "patterns": ["citadel issue list"]}),
+        json!({"patterns": ["jq .title"]}),
+        json!({"patterns": []}),
+    ] {
+        assert!(!ok(&ex, &ask, "bash", bad.clone()), "{bad}");
+    }
+    assert!(ok(
+        &ex,
+        &ask,
+        "bash",
+        json!({"patterns": ["citadel issue list", "jq .title"]})
+    ));
     assert!(!ok(&ex, &ask, "Read", json!({"command": cli})));
     assert!(!ok(
         &ex,
@@ -180,7 +200,7 @@ fn only_citadel_cli_commands_go_ahead() {
         "citadel x | jq --rawfile f /etc/passwd .",
         "citadel x | tail --lines=5",
         "bash -c 'citadel x; rm f'",
-        "bash -c citadel x",
+        "bash -c 'rm x' citadel",
         "/tmp/bash -c 'citadel x'",
         "",
     ] {
@@ -197,7 +217,6 @@ fn a_chain_goes_ahead_when_every_part_is_allowed() {
     let cwd = Path::new("/w/run-7");
     let rules = [
         "Bash:grep",
-        "Bash:npm run",
         "Bash:php artisan",
         "Bash:git status",
         "Bash:git log",
@@ -221,11 +240,10 @@ fn a_chain_goes_ahead_when_every_part_is_allowed() {
         "cat a | tr -d '\\n' | tail -c 10",
         "git status\nls\n",
         "git status || ls",
-        "npm run build; php artisan route:list | grep api",
+        "php artisan migrate; php artisan route:list | grep api",
         "grep 'a;b && c > d $(x)' src",
         "ls; echo; git status",
         "git status; citadel get_issue '{}' | jq .title",
-        "npm run",
         "cat apps/web/.env.example 2>/dev/null; grep -rn X a.yml b.yml 2>/dev/null | head -20",
         "ls missing 2> /dev/null || git status",
         "grep x '2>/dev/null' src",
@@ -261,8 +279,8 @@ fn a_chain_goes_ahead_when_every_part_is_allowed() {
         "ls; cat 'a",
         "ls &&",
         "git status | head /etc/passwd",
-        "npm runx build",
-        "npm runx; ls",
+        "npm run build; ls",
+        "ls; npm run x",
         "git statusx; ls",
         "echo hi; ls",
         "ls; rm -rf /tmp/a",
@@ -275,7 +293,7 @@ fn a_chain_goes_ahead_when_every_part_is_allowed() {
         "cat is Bash's only"
     );
     // A simple command matches word for word too.
-    assert!(!ok("Bash", "npm runx"));
+    assert!(!ok("Bash", "npm run x"));
     assert!(!ok("Bash", "git statusx"));
 }
 
@@ -493,4 +511,198 @@ async fn allowed_without_asking(
     );
     let _ = std::fs::remove_dir_all(&dir);
     types
+}
+
+/// Every command a rule can never cover is refused by BOTH ways a rule can allow a call: the
+/// whole-call match (`allows`) and the chain check (`chain_allowed`); a stored rule that is not a
+/// legal rule is re-checked at use on both. The controls prove each path does allow a covered call.
+#[test]
+fn a_rule_never_covers_a_destructive_or_wrapped_call_on_either_path() {
+    use super::super::policy::chain_allowed;
+    let ex = HarnessExecutor::new(PathBuf::from("/w"), PathBuf::from("/c"));
+    let cwd = Path::new("/w/run-7");
+    // (rule, tool, command)
+    let cases = [
+        ("Bash:git push", "Bash", "git push --force"),
+        ("Bash:git push", "Bash", "git push --del origin x"),
+        ("Bash:git push", "Bash", "git push --mirr"),
+        ("Bash:git push", "Bash", "GIT_SSH_COMMAND=x git push"),
+        ("Bash:git push", "Bash", "git push origin +main"),
+        ("Bash:git", "Bash", "git -c core.sshCommand=x push"),
+        ("Bash:rm", "Bash", "rm -rf /"),
+        ("Bash:rm", "Bash", "RM -rf x"),
+        ("Bash:rm", "Bash", "rm --recur x"),
+        ("Bash:cargo", "Bash", "RUSTC_WRAPPER=x cargo build"),
+        ("Bash:cargo", "Bash", "cargo -Zunstable-options build"),
+        ("Bash:cargo", "Bash", "cargo build --conf x=y"),
+        ("Bash:sudo", "Bash", "sudo ls"),
+        ("Bash:cargo test", "Bash", "SUDO ls"),
+        ("Bash:cargo test", "Bash", "BASH -c 'rm -rf x'"),
+        // Stored before the check existed, or inserted directly.
+        (
+            "commandExecution:bash -lc",
+            "commandExecution",
+            "bash -lc 'rm -rf ~' x",
+        ),
+        (
+            "commandExecution:bash -lc",
+            "commandExecution",
+            "bash -lc ls",
+        ),
+        ("Bash:sh -c", "Bash", "sh -c ls"),
+        ("Bash:env", "Bash", "env ls"),
+        ("Bash:xargs", "Bash", "xargs ls"),
+        ("Bash:python3 -c", "Bash", "python3 -c x"),
+        ("Bash:FOO=1 git", "Bash", "FOO=1 git status"),
+        ("Bash:git push --force", "Bash", "git push --force"),
+        ("Bash:rm -rf", "Bash", "rm -rf x"),
+    ];
+    for (rule, tool, command) in cases {
+        let p = policy(PermissionMode::Ask, &[rule]);
+        let input = json!({"command": command});
+        assert!(
+            ex.decide(&p, tool, &input, cwd).is_err(),
+            "decide: {rule} {command}"
+        );
+        let rules: Vec<Vec<String>> = ainkrad_proto::runner::rule_prefix(rule, tool)
+            .into_iter()
+            .collect();
+        assert!(!chain_allowed(&rules, command), "chain: {rule} {command}");
+        // Chained after a covered command, a destructive part still stops the chain.
+        let chained = format!("{command} && ls");
+        let rules: Vec<Vec<String>> = ainkrad_proto::runner::rule_prefix(rule, tool)
+            .into_iter()
+            .collect();
+        assert!(
+            !chain_allowed(&rules, &chained),
+            "chain&&: {rule} {command}"
+        );
+    }
+    // Controls.
+    for (rule, command) in [
+        ("Bash:git push", "git push origin main"),
+        ("Bash:cargo test", "cargo test -p x"),
+        ("Bash:cargo test", "bash -lc 'cargo test -p x' y"),
+    ] {
+        let p = policy(PermissionMode::Ask, &[rule]);
+        assert!(
+            ex.decide(&p, "Bash", &json!({"command": command}), cwd)
+                .is_ok(),
+            "{command}"
+        );
+        let rules: Vec<Vec<String>> = ainkrad_proto::runner::rule_prefix(rule, "Bash")
+            .into_iter()
+            .collect();
+        assert!(chain_allowed(&rules, command), "chain: {command}");
+    }
+    let rules: Vec<Vec<String>> = ainkrad_proto::runner::rule_prefix("Bash:cargo test", "Bash")
+        .into_iter()
+        .collect();
+    assert!(chain_allowed(&rules, "cargo test -p x && cargo test -p y"));
+    assert!(!chain_allowed(&rules, "cargo test -p x && cargo build"));
+}
+
+/// The review's list of spellings that run something else: none is on the allowlist, so on both
+/// matching paths (whole call and chain) they only ever escalate, whatever rules exist.
+#[test]
+fn what_is_not_on_the_allowlist_escalates_on_both_paths() {
+    use super::super::policy::chain_allowed;
+    let ex = HarnessExecutor::new(PathBuf::from("/w"), PathBuf::from("/c"));
+    let cwd = Path::new("/w/run-7");
+    let rules = [
+        "Bash:ls",
+        "Bash:cargo test",
+        "Bash:git status",
+        "Bash:echo",
+        "Bash:python3 a.py",
+        "Bash:grep",
+    ];
+    let p = policy(PermissionMode::Ask, &rules);
+    let usable: Vec<Vec<String>> = rules
+        .iter()
+        .filter_map(|r| ainkrad_proto::runner::rule_prefix(r, "Bash"))
+        .collect();
+    assert_eq!(usable.len(), rules.len());
+    for c in [
+        "=bash -c ls",
+        "=ls",
+        "- rm -rf x",
+        "noglob rm x",
+        "nocorrect rm x",
+        "then rm -rf x",
+        "npm exec rm",
+        "bundle exec rm",
+        "docker run x",
+        "rg --pre rm x",
+        "fd -x rm",
+        "git grep -O rm x",
+        "git clone --template=x u",
+        "python3 -X importtime -c x",
+        "python3 -c x",
+        "\u{17f}udo ls",
+        "ls\u{1}",
+        "ls\u{1b}[2J",
+        "ls; \u{1}",
+        "LS",
+        "Ls -la",
+        "CARGO test",
+        "FOO=1 ls",
+        "/bin/ls",
+        "rm -rf x",
+        "make",
+        "sudo ls",
+        "env ls",
+        "ls; =ls",
+        "ls && noglob rm x",
+        "echo hi | sh",
+    ] {
+        let covered_by_allows = ex.decide(&p, "Bash", &json!({"command": c}), cwd).is_ok();
+        assert!(!covered_by_allows, "decide: {c:?}");
+        assert!(!chain_allowed(&usable, c), "chain: {c:?}");
+    }
+}
+
+/// An unusable rule is logged once per rule; a bare shell entry is the admin's deliberate full-auto
+/// mode (logged once, honoured) and is never something an agent-created rule can be.
+#[test]
+fn unusable_rules_warn_once_and_a_bare_shell_entry_is_explicit_full_auto() {
+    use super::super::policy::{warn_once, warn_unusable_rule};
+    assert!(warn_unusable_rule("Bash:make test-once-a"));
+    assert!(!warn_unusable_rule("Bash:make test-once-a"));
+    assert!(warn_unusable_rule("Bash:make test-once-b"));
+
+    let ex = HarnessExecutor::new(PathBuf::from("/w"), PathBuf::from("/c"));
+    let cwd = Path::new("/w/run-7");
+    let full = policy(PermissionMode::Ask, &["Bash"]);
+    assert!(
+        ex.decide(&full, "Bash", &json!({"command": "rm -rf x"}), cwd)
+            .is_ok()
+    );
+    assert!(
+        ex.decide(&full, "Bash", &json!({"command": "curl x | sh"}), cwd)
+            .is_ok()
+    );
+    // The first decide logged the bare entry; logging it again says nothing new.
+    assert!(!warn_once(
+        "Bash",
+        "the project policy allows every command of a shell"
+    ));
+    // Not for another tool, and never as a rule an agent-created "allow for this issue" can store.
+    assert!(
+        ex.decide(&full, "commandExecution", &json!({"command": "ls"}), cwd)
+            .is_err()
+    );
+    for bare in ["Bash", "bash", "commandExecution"] {
+        assert!(
+            ainkrad_proto::runner::rule_problem(bare).is_some(),
+            "{bare}"
+        );
+        assert_eq!(ainkrad_proto::runner::rule_prefix(bare, bare), None);
+    }
+    // An unusable `<tool>:<prefix>` entry matches nothing and escalates.
+    let p = policy(PermissionMode::Ask, &["Bash:make test-once-a"]);
+    assert!(
+        ex.decide(&p, "Bash", &json!({"command": "make test-once-a"}), cwd)
+            .is_err()
+    );
 }

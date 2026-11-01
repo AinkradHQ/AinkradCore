@@ -15,6 +15,7 @@ use crate::domain::work::{
     NextActor, UserId,
 };
 use crate::store::exec::RunScope;
+use crate::store::forge::{DoneError, submit_with_evidence};
 use crate::store::gov::{KnowledgeError, Proposal, open_approval, propose};
 use crate::store::org::{get_agent, user_exists};
 use crate::store::work::{
@@ -95,9 +96,9 @@ async fn link(app: &App, blocker: i64, blocked: i64) -> Result<()> {
     }
 }
 
-/// Moves the issue, only while the agent is its next actor. `done` is refused: it skips the
-/// review and pull-request gate (B-M3), so an agent submits for review and a reviewer approves,
-/// whatever evidence it holds.
+/// Moves the issue, only while the agent is its next actor. `done` is not a move to done: it
+/// submits the issue to QA, and only when the forge shows an opened pull request for it (B-M3);
+/// a reviewer and the owner's merge approval do the rest.
 pub(super) async fn transition(app: &App, scope: RunScope, args: &JsonObject) -> Result<Value> {
     let issue = target(app, scope, int(args, "issue_id")?).await?;
     let me = NextActor::Agent(scope.agent_id);
@@ -135,13 +136,18 @@ pub(super) async fn transition(app: &App, scope: RunScope, args: &JsonObject) ->
             IssueTransition::Block
         }
         "done" => {
-            return Err(ToolError::Refused(
-                "an agent cannot mark an issue done: use submit_for_review".to_owned(),
-            ));
+            // Evidence-gated (B-M3): in review with the QA reviewer, never straight to done.
+            return match submit_with_evidence(&app.pool, issue.id, scope.agent_id).await {
+                Ok(moved) => Ok(json!({"issue_id": moved.id.0,
+                    "key": issue_key(&app.pool, moved.id).await?,
+                    "state": moved.state.as_str(), "next_actor": next_actor(&moved.next_actor)})),
+                Err(DoneError::Db(e)) => Err(e.into()),
+                Err(e) => Err(ToolError::Refused(e.to_string())),
+            };
         }
         other => {
             return Err(ToolError::Invalid(format!(
-                "transition {other:?} is not one of start, submit_for_review, block"
+                "transition {other:?} is not one of start, submit_for_review, block, done"
             )));
         }
     };
