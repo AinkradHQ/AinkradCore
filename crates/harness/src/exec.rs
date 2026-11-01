@@ -29,6 +29,7 @@ pub(crate) mod local;
 pub use local::LocalBackend;
 
 #[doc(hidden)]
+#[cfg(any(test, feature = "test-fake"))]
 pub mod fake;
 #[cfg(test)]
 mod tests;
