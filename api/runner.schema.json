@@ -1010,8 +1010,19 @@
       ]
     },
     "Heartbeat": {
-      "description": "A runner's heartbeat: carries `load` when the runner measured one.",
+      "description": "A runner's heartbeat: carries `load` when the runner measured one, and the isolation it\noffers now.",
       "properties": {
+        "isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IsolationCaps"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The isolation the runner offers now (E8a-09): a change shows in the next heartbeat, so a\ntier that goes away is no longer offered by the Core's next placement. Absent from a\nrunner that does not report it, and from one that offers no agent driver."
+        },
         "load": {
           "anyOf": [
             {
@@ -1082,6 +1093,57 @@
         {
           "const": "microvm",
           "description": "A virtual machine with its own kernel.",
+          "type": "string"
+        }
+      ]
+    },
+    "IsolationCaps": {
+      "description": "What isolation a runner can give right now (E8a-09). Placement is by this, and the runner\nchecks again when a session starts; a stale or forged advertisement therefore never gets a\nsession a weaker sandbox than it asked for.",
+      "properties": {
+        "kvm": {
+          "$ref": "#/$defs/Kvm",
+          "default": "not_applicable",
+          "description": "`/dev/kvm`, for the microvm tier."
+        },
+        "tiers": {
+          "description": "Every tier offered now, by name (`Isolation::as_str`). A runner whose probe fails stops\nlisting the tier. Names, not the enum, so a tier from a newer runner parses here and\nsimply meets nothing.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tiers"
+      ],
+      "type": "object"
+    },
+    "Kvm": {
+      "description": "The state of `/dev/kvm` on a runner, for the microvm tier (E8a-09).",
+      "oneOf": [
+        {
+          "const": "not_applicable",
+          "description": "No VM tier is built into this runner, or the host has no KVM concept (macOS).",
+          "type": "string"
+        },
+        {
+          "const": "absent",
+          "description": "The host has no `/dev/kvm`.",
+          "type": "string"
+        },
+        {
+          "const": "usable",
+          "description": "`/dev/kvm` is there and the probe passed.",
+          "type": "string"
+        },
+        {
+          "const": "unusable",
+          "description": "`/dev/kvm` is there and the probe failed (permissions, a broken host).",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A state from a newer runner: read as not usable. Never sent.",
           "type": "string"
         }
       ]
@@ -1776,6 +1838,17 @@
             "$ref": "#/$defs/DriverInfo"
           },
           "type": "array"
+        },
+        "isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IsolationCaps"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The isolation the runner offers (E8a-09), beside `arch`. Absent from a runner that does\nnot report it: the Core then treats it as offering no guarantee, and places no session on\nit that needs one."
         },
         "load": {
           "anyOf": [

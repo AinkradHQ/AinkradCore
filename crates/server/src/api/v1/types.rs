@@ -77,7 +77,10 @@
 /// 24: the setting `audit.anchor_interval_secs` (E1-10.4, off-box anchors of the audit chain head).
 /// 25: the policy isolation fields (E8a-08): `min_isolation`, `image`, `vcpus`, `memory_mb`, `disk_mb`,
 ///    `wall_secs`, `egress` and `workspace` on the runner policy (`runner.schema.json`), all optional.
-pub const API_MINOR: u32 = 25;
+/// 26: runner isolation capability (E8a-09): `Runner.arch` and `Runner.isolation` (tiers offered now
+///    and the `/dev/kvm` state) in the API; `isolation` on the runner's hello and heartbeat; a
+///    session whose policy needs a tier is refused placement where it is not offered.
+pub const API_MINOR: u32 = 26;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
