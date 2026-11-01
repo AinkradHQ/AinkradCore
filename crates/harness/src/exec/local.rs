@@ -37,6 +37,11 @@ impl ExecBackend for LocalBackend {
     }
 }
 
+/// ETXTBSY (26 on Linux and macOS): the file is open for writing somewhere.
+pub(crate) fn text_busy(e: &io::Error) -> bool {
+    e.raw_os_error() == Some(26)
+}
+
 /// Starts `cmd` as the leader of its own group, with the budget watchdog, the macOS supervisor,
 /// the identity file and the deadline timer when they apply.
 pub(crate) fn spawn(
@@ -45,13 +50,23 @@ pub(crate) fn spawn(
     deadline: Option<Duration>,
 ) -> io::Result<Spawned> {
     let budget = crate::sandbox::Budget::take(&mut cmd);
-    let mut child = cmd
-        .stdin(PipeStdio::piped())
+    cmd.stdin(PipeStdio::piped())
         .stdout(PipeStdio::piped())
         .stderr(PipeStdio::piped())
         .process_group(0)
-        .kill_on_drop(true)
-        .spawn()?;
+        .kill_on_drop(true);
+    // A harness binary being written (an upgrade, or a test's fake) can be busy for a moment: another
+    // thread's fork holds the write handle until its own exec. Retry that one error briefly.
+    let mut tries = 0;
+    let mut child = loop {
+        match cmd.spawn() {
+            Err(e) if text_busy(&e) && tries < 100 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            other => break other?,
+        }
+    };
     let pgid = child.id().ok_or_else(|| io::Error::other("no pid"))?;
     if let Some(path) = &pgid_file {
         let persist = || -> io::Result<()> {
