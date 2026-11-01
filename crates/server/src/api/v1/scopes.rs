@@ -351,9 +351,9 @@ mod tests {
         assert!(!destructive(&m("DELETE"), "/api/v1/devices/d_x/y", &[]));
     }
 
-    /// Review S3: independent of `DESTRUCTIVE`. Every state-changing route that needs `admin`,
-    /// `terminal`, `agent` or `approve` is destructive, unless it is named here with the reason.
-    /// A new such route nobody flags fails this test.
+    /// Review S3: independent of `DESTRUCTIVE`. Every state-changing route whose scope is not
+    /// `read` or `runner` is destructive, unless it is named here with the reason. The list is
+    /// inverted on purpose: a new scope is covered without anyone remembering to add it here.
     #[test]
     fn every_state_changing_privileged_route_is_destructive_or_excepted() {
         const EXCEPTED: &[(&str, &str)] = &[
@@ -361,7 +361,7 @@ mod tests {
             ("POST", "/api/v1/runners/{id}/noop"),
         ];
         for (m, t, scope) in ROUTES {
-            let privileged = matches!(*scope, "admin" | "terminal" | "agent" | "approve");
+            let privileged = !matches!(*scope, "read" | "runner");
             let writes = *m != "GET";
             // A terminal socket is a GET but is a live shell.
             let shell = t.ends_with("/terminals/{id}/ws");
