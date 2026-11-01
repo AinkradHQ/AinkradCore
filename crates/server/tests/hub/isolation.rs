@@ -369,3 +369,31 @@ fn placement_refuses_a_degraded_silent_unreported_or_short_runner_and_an_unreada
     );
     assert_eq!(tier_refusal(&state_of(None, true), &needs("none")), None);
 }
+
+#[test]
+fn egress_rules_are_placed_only_on_a_runner_that_advertises_the_filter() {
+    use ainkrad_proto::v2::{AGENT_DRIVER, DriverInfo};
+    let with = |commands: &[&str]| {
+        let mut r = state_of(None, false);
+        r.drivers = vec![DriverInfo {
+            name: AGENT_DRIVER.to_owned(),
+            commands: commands.iter().map(|c| (*c).to_owned()).collect(),
+            capacity: 1,
+            ..Default::default()
+        }];
+        r
+    };
+    let rules = json!({"mode": "ask", "egress": {"allow": ["10.0.0.0/8"]}});
+    let why = tier_refusal(&with(&["agent.start"]), &rules).unwrap();
+    assert!(why.contains("egress filter"), "{why}");
+    assert_eq!(
+        tier_refusal(&with(&["agent.start", "egress-filter"]), &rules),
+        None
+    );
+    // The marker on some other driver does not count, and a plain session needs none.
+    assert!(tier_refusal(&state_of(None, false), &rules).is_some());
+    assert_eq!(
+        tier_refusal(&with(&["agent.start"]), &json!({"mode": "ask"})),
+        None
+    );
+}

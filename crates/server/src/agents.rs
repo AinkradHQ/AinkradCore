@@ -181,6 +181,19 @@ pub fn tier_refusal(runner: &RunnerState, policy: &serde_json::Value) -> Option<
     let Ok(policy) = serde_json::from_value::<ainkrad_proto::runner::Policy>(policy.clone()) else {
         return Some("the session's policy does not have its shape".to_owned());
     };
+    // Egress rules are placed only where the host-enforced filter was proven at start-up: the
+    // runner says so with the `egress-filter` op beside the agent driver's own.
+    let filtered = runner
+        .drivers
+        .iter()
+        .filter(|d| d.name == AGENT_DRIVER)
+        .any(|d| d.commands.iter().any(|c| c == "egress-filter"));
+    if policy.egress.is_some() && !filtered {
+        return Some(
+            "the session sets egress rules and the runner does not offer a proven egress filter"
+                .to_owned(),
+        );
+    }
     let required = policy.min_isolation.filter(|m| *m != Isolation::None)?;
     let name = required.as_str();
     let Some(caps) = &runner.isolation else {
