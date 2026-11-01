@@ -93,6 +93,11 @@ fn start_command(s: &Session, secrets: Vec<SecretGrant>, resume: bool) -> Result
         policy,
         resume: resume.then(|| s.harness_session.clone()).flatten(),
         secrets,
+        epoch: if resume {
+            u32::try_from(s.resumes + 1).unwrap_or(u32::MAX)
+        } else {
+            0
+        },
     }))
 }
 

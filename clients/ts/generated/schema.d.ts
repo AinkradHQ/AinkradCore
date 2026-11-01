@@ -132,6 +132,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agent-sessions/{id}/wake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["wakeAgentSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/audit": {
         parameters: {
             query?: never;
@@ -940,6 +956,24 @@ export interface components {
             input: number;
             /** Format: int64 */
             output: number;
+        };
+        AgentWake: {
+            /** @description The wake's key. */
+            key: string;
+            /** @description `false` when this key was already used: nothing was queued. */
+            queued: boolean;
+            /** @description The session, `as_…`. */
+            session: string;
+        };
+        /** @description A wake for an idle session. */
+        AgentWakeRequest: {
+            /**
+             * @description Makes the wake idempotent: asking again with the same key queues nothing (it is kept for
+             *     30 days). 1 to 128 of `A-Za-z0-9_.:-`; absent, the Core makes one up.
+             */
+            key?: string | null;
+            /** @description The next turn, 1 byte to 16 KiB; absent, the session just continues. */
+            text?: string | null;
         };
         /** @description The contract a server speaks: `/api/<major>` and its additions so far. */
         ApiVersion: {
@@ -2032,6 +2066,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentTranscript"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    wakeAgentSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's id, `as_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentWakeRequest"];
+            };
+        };
+        responses: {
+            /** @description Queued on the scheduler (audited as `agent.wake_queued`): once the session is idle it is resumed on its runner, continuing the harness's own session with `text` as its next turn (`agent.woken`). A session that is still running is retried for a while, then the wake is dropped. 409 `not_wakeable` (failed, cancelled, a module's), 409 `limit_reached` (too many wakes waiting), 503 `scheduler_unavailable` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentWake"];
                 };
             };
             400: components["responses"]["BadRequest"];

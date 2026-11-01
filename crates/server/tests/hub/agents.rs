@@ -44,7 +44,7 @@ type RunEnv = std::collections::HashMap<i64, Vec<(String, String)>>;
 
 /// `sh -c <script>` with the run's own variables; each stdout line a `line` event.
 #[derive(Clone, Default)]
-struct Script {
+pub(super) struct Script {
     script: String,
     env: Arc<Mutex<RunEnv>>,
     /// The `RunToken` each run was handed.
@@ -54,7 +54,7 @@ struct Script {
     starts: Arc<std::sync::atomic::AtomicUsize>,
 }
 
-fn script(s: &str) -> Script {
+pub(super) fn script(s: &str) -> Script {
     Script {
         script: s.to_owned(),
         ..Script::default()
@@ -127,14 +127,14 @@ impl Executor for Script {
 }
 
 /// A runner daemon serving `base` with an agent driver over `dir`, until `stop`.
-struct Runner {
-    id: String,
+pub(super) struct Runner {
+    pub(super) id: String,
     stop: watch::Sender<bool>,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl Runner {
-    async fn halt(self) {
+    pub(super) async fn halt(self) {
         self.stop.send_replace(true);
         let _ = tokio::time::timeout(Duration::from_secs(5), self.task).await;
     }
@@ -147,7 +147,7 @@ fn agent_config(dir: &Path) -> AgentConfig {
     }
 }
 
-async fn run_runner(core: &Core, base: &str, st: &State, exec: Script) -> Runner {
+pub(super) async fn run_runner(core: &Core, base: &str, st: &State, exec: Script) -> Runner {
     let key = Arc::new(Key::load(&st.key()).unwrap());
     let enrolment = Arc::new(Mutex::new(Enrolment::load(&st.enrolment()).unwrap()));
     let id = enrolment.lock().unwrap().device_id.clone();
@@ -182,7 +182,7 @@ async fn run_runner(core: &Core, base: &str, st: &State, exec: Script) -> Runner
     Runner { id, stop, task }
 }
 
-async fn until(what: &str, mut f: impl FnMut() -> bool) {
+pub(super) async fn until(what: &str, mut f: impl FnMut() -> bool) {
     for _ in 0..500 {
         if f() {
             return;
@@ -192,12 +192,12 @@ async fn until(what: &str, mut f: impl FnMut() -> bool) {
     panic!("timed out waiting for {what}");
 }
 
-async fn state_of(core: &Core, id: &str) -> sessions::Session {
+pub(super) async fn state_of(core: &Core, id: &str) -> sessions::Session {
     sessions::get(&core.app.pool, id).await.unwrap().unwrap()
 }
 
 /// Waits for the session to be over, then returns its transcript.
-async fn finished(core: &Core, id: &str) -> (sessions::Session, Vec<Value>) {
+pub(super) async fn finished(core: &Core, id: &str) -> (sessions::Session, Vec<Value>) {
     for _ in 0..500 {
         let s = state_of(core, id).await;
         if !s.live() {
@@ -259,7 +259,7 @@ pub(super) async fn make_admin(core: &Core, device: &str) {
         .unwrap();
 }
 
-async fn session(core: &Core, runner: &str, secrets: &[SessionSecret]) -> String {
+pub(super) async fn session(core: &Core, runner: &str, secrets: &[SessionSecret]) -> String {
     make_admin(core, runner).await;
     let policy = json!({"mode": "ask"});
     let new = NewSession {

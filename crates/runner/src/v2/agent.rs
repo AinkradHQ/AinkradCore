@@ -219,6 +219,9 @@ struct Meta {
     usage: Option<Tokens>,
     #[serde(default)]
     outcome: Option<Outcome>,
+    /// The `epoch` of the start it runs under (`AgentStart::epoch`).
+    #[serde(default)]
+    epoch: u32,
 }
 
 struct Live {
@@ -366,8 +369,14 @@ impl AgentDriver {
             ));
         }
         let mut all = self.sessions.lock().unwrap();
+        // A resent start is answered; an interrupted session is started again; one that ended is
+        // started again only by a newer resume (a wake), so a resent resume never runs it twice.
+        let woken = |l: &Live| {
+            l.meta.state == AgentState::Ended && req.resume.is_some() && req.epoch > l.meta.epoch
+        };
         if let Some(live) = all.get(&req.session)
             && live.meta.state != AgentState::Interrupted
+            && !woken(live)
         {
             return Ok(events(&req.session, live, live.meta.last_seq));
         }
@@ -404,6 +413,7 @@ impl AgentDriver {
                 harness_session: None,
                 usage: None,
                 outcome: None,
+                epoch: 0,
             },
             run,
             entries: VecDeque::new(),
@@ -415,6 +425,7 @@ impl AgentDriver {
         live.required = req.policy.required_tier();
         live.meta.state = AgentState::Running;
         live.meta.outcome = None;
+        live.meta.epoch = req.epoch;
         live.run = run;
         save_meta(&self.config, &req.session, &live.meta);
         let me = Arc::clone(self);

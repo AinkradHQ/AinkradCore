@@ -519,3 +519,97 @@ async fn finished_runs_are_pruned_after_thirty_days() {
     assert_eq!(prune(&fx.pool, &fx.clock.iso(), 100).await.unwrap(), 1);
     fx.done().await;
 }
+
+/// The platform's wake queue (`wake_platform`) is the platform's alone, is bounded in all and
+/// per session, dedupes on its key, and a finished run keeps no payload.
+#[tokio::test]
+async fn the_platform_queue_is_closed_to_modules_bounded_and_forgets_its_payload() {
+    let fx = fx("platform").await;
+    let wake_jobs: Vec<Arc<dyn Module>> = vec![Arc::new(crate::agents::wake::WakeJobs::default())];
+    register(&fx.pool, T0, &wake_jobs).await.unwrap();
+    let now = fx.clock.iso();
+    let name = crate::agents::wake::JOB;
+    let cap = Cap {
+        total: 3,
+        per_session: 2,
+        per_requester: 3,
+    };
+    // A module's `wake` cannot reach it.
+    let r = wake(&fx.pool, &now, "core", name, "k", &json!({}), None).await;
+    assert!(matches!(r, Err(sqlx::Error::InvalidArgument(_))), "{r:?}");
+    let ask = |session: &'static str, key: &'static str| {
+        let (pool, now) = (fx.pool.clone(), now.clone());
+        async move {
+            let p = json!({"session": session, "text": "private text 77"});
+            wake_platform(&pool, &now, name, key, &p, cap)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(ask("s1", "a").await, Queued::New);
+    assert_eq!(ask("s1", "b").await, Queued::New);
+    assert_eq!(ask("s1", "c").await, Queued::Full, "two per session");
+    assert_eq!(
+        ask("s1", "a").await,
+        Queued::Duplicate,
+        "a used key is no new wake"
+    );
+    assert_eq!(ask("s2", "d").await, Queued::New);
+    assert_eq!(ask("s3", "e").await, Queued::Full, "three in all");
+    // Nothing handles the job in this test's engine, so the runs fail: after their attempts
+    // they are dead, which frees the queue, and none keeps the wake text.
+    let engine = Engine::new(
+        fx.pool.clone(),
+        fx.clock.clone(),
+        &wake_jobs,
+        Config::default(),
+    );
+    engine.tick().await.unwrap();
+    let kept: Vec<String> =
+        sqlx::query_scalar("SELECT payload FROM core_job_runs WHERE status = 'queued'")
+            .fetch_all(&fx.pool)
+            .await
+            .unwrap();
+    assert_eq!(kept.len(), 3, "failed once, waiting out the backoff");
+    for _ in 0..8 {
+        fx.clock.advance(3600);
+        engine.tick().await.unwrap();
+    }
+    let rows: Vec<(String, String)> = sqlx::query_as("SELECT status, payload FROM core_job_runs")
+        .fetch_all(&fx.pool)
+        .await
+        .unwrap();
+    assert!(
+        rows.iter().all(|r| r.0 == "dead" && r.1 == "{}"),
+        "{rows:?}"
+    );
+    assert_eq!(
+        ask("s3", "e").await,
+        Queued::New,
+        "the queue has room again"
+    );
+    // One requester's cap binds before the totals do: the same device on a second session is
+    // refused, another device is not.
+    let one = Cap {
+        total: 9,
+        per_session: 9,
+        per_requester: 1,
+    };
+    let from = |by: &'static str, session: &'static str| {
+        let (pool, now) = (fx.pool.clone(), now.clone());
+        async move {
+            let p = json!({"session": session, "by": by});
+            wake_platform(&pool, &now, name, "r", &p, one)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(from("d1", "s10").await, Queued::New);
+    assert_eq!(
+        from("d1", "s11").await,
+        Queued::Full,
+        "one device, one waiting wake"
+    );
+    assert_eq!(from("d2", "s11").await, Queued::New);
+    fx.done().await;
+}

@@ -168,6 +168,7 @@ fn start(session: &str, harness: &str) -> AgentStart {
         policy: Default::default(),
         resume: None,
         secrets: vec![],
+        epoch: 0,
     }
 }
 
@@ -584,6 +585,54 @@ async fn a_new_driver_reloads_a_running_session_as_interrupted_and_resumes_it() 
             kill: true,
         })
         .unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A session that ended is started again (a wake) only by a resume with a newer epoch, and the
+/// transcript's numbering goes on; the same resume sent twice, an old epoch and a start that
+/// names no harness session to continue never run it a second time.
+#[tokio::test]
+async fn an_ended_session_is_woken_by_a_newer_resume_and_never_twice() {
+    let (root, config) = dirs("wake");
+    let s = script("echo turn");
+    let seen = Arc::clone(&s.seen);
+    let d = Arc::new(AgentDriver::new(config, s).unwrap());
+    d.start(start("as_w", "fake")).unwrap();
+    let (first, end) = drain(&d, "as_w").await;
+    assert_eq!(end.state, AgentState::Ended);
+    let held = end.last_seq;
+    assert_eq!(first.last().unwrap().seq, held);
+    let harness = end.harness_session.clone();
+    assert!(harness.is_some());
+    // The Core acknowledged everything, as it does when a session ends.
+    d.read(&AgentRead {
+        session: "as_w".into(),
+        after: held,
+        wait_ms: None,
+    })
+    .await
+    .unwrap();
+    let wake = |epoch: u32, resume: Option<String>| AgentStart {
+        resume,
+        epoch,
+        ..start("as_w", "fake")
+    };
+    // Not a wake: no harness session to continue, or an epoch that is not newer.
+    for refused in [wake(1, None), wake(0, harness.clone())] {
+        assert_eq!(d.start(refused).unwrap().state, AgentState::Ended);
+    }
+    assert_eq!(seen.lock().unwrap().resumes.len(), 1, "still the one run");
+    // The wake: the harness runs again on its own session, numbering from where it was.
+    d.start(wake(1, harness.clone())).unwrap();
+    let (rest, end) = drain_from(&d, "as_w", held).await;
+    assert_eq!(rest[0].seq, held + 1);
+    assert!(rest.iter().any(|e| e.body["resumed"] == true));
+    assert_eq!(end.outcome, Some(Outcome::Succeeded));
+    assert_eq!(seen.lock().unwrap().resumes.len(), 2);
+    // The same wake sent again (its answer was lost) is answered, not run again.
+    let again = d.start(wake(1, harness.clone())).unwrap();
+    assert_eq!(again.state, AgentState::Ended);
+    assert_eq!(seen.lock().unwrap().resumes.len(), 2, "never twice");
     let _ = std::fs::remove_dir_all(root);
 }
 

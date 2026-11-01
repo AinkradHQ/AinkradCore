@@ -353,6 +353,13 @@ impl Hub {
         Elevated(())
     }
 
+    /// The capability of the wake queue's job (`agents::wake`): the route that queued the wake
+    /// passed the gate and a live step-up, and the job re-checks that the requesting device is
+    /// still usable and holds `agent` before it uses this. Not a route entry point.
+    pub(crate) fn wake_elevation(&self) -> Elevated {
+        Elevated(())
+    }
+
     /// Continue the elevated create for a live, persisted session after a Core restart. The
     /// session row is written only after the gated create route succeeds; this is not a route
     /// entry point and cannot elevate a new caller.
