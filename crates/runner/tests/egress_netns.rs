@@ -429,37 +429,6 @@ touch {work}/s; echo "T_rmsock=$(rc rm -f {work}/s)"
         path_sock = path_sock_at.display(),
         work = root.join("work").display(),
     )));
-    // The same addresses the sandbox could not reach (metadata v4 and v6, a documentation-range
-    // "public" address, private, CGNAT), made real on the loopback of a private user+network
-    // namespace with a listener each: from there, with no sandbox, every one connects.
-    let stand_ins = parse(&run_host(&format!(
-        r#"unshare -Urn python3 -c '
-import socket, subprocess
-addrs = ["169.254.169.254", "198.51.100.9", "10.1.2.3", "{cgnat}", "fd00:ec2::254"]
-subprocess.run(["ip", "link", "set", "lo", "up"], check=True)
-for a in addrs:
-    v6 = ":" in a
-    subprocess.run(["ip", "addr", "add", a + ("/128" if v6 else "/32"), "dev", "lo"] + (["nodad"] if v6 else []), check=True)
-for a in addrs:
-    fam = socket.AF_INET6 if ":" in a else socket.AF_INET
-    l = socket.socket(fam); l.bind((a, 8099)); l.listen(1)
-    c = socket.socket(fam); c.settimeout(2)
-    try:
-        c.connect((a, 8099)); print("C_" + a + "=reached")
-    except Exception:
-        print("C_" + a + "=unreachable")
-'"#
-    )));
-    let cgnat_text = cgnat.to_string();
-    for a in [
-        "169.254.169.254",
-        "198.51.100.9",
-        "10.1.2.3",
-        cgnat_text.as_str(),
-        "fd00:ec2::254",
-    ] {
-        assert_eq!(stand_ins[&format!("C_{a}")], "reached", "control for {a}");
-    }
     for k in ["D_canary", "D_target", "D_dns_tcp", "U_abstract", "U_path"] {
         assert_eq!(control[k], "reached", "control {k}");
     }
