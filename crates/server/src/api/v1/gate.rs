@@ -352,10 +352,13 @@ pub(crate) async fn client_gate(State(app): State<App>, req: Request, next: Next
         // Counted per route in memory; the first per device per window is audited as
         // `api.refused` (so a burst of attempts leaves a trace but stays O(1); review S5).
         let now = app.clock.unix();
-        let route = format!("{} {}", parts.method, parts.uri.path());
+        // Keyed by the matched route template, never the raw path: one device varying ids must not
+        // fill the map and evict other devices' keys (KAN-298).
+        let route = super::scopes::destructive_template(&parts.method, parts.uri.path(), &app.modules)
+            .unwrap_or_else(|| "unmatched".to_owned());
         app.auth
             .refusals
-            .note(&format!("step_up_required {route}"), now);
+            .note(&format!("step_up_required {} {route}", parts.method), now);
         if app
             .auth
             .refusals

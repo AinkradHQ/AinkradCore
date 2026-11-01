@@ -277,6 +277,30 @@ pub fn destructive(method: &Method, path: &str, modules: &[Arc<dyn Module>]) -> 
         .any(|(m, t)| *m == method.as_str() && fits(t, path))
 }
 
+/// The declared template of the destructive route `method path` is (a module's with its
+/// `/modules/<id>/v1` prefix), so a per-route key stays bounded however many ids a caller varies.
+/// `None` when no template matches.
+pub fn destructive_template(
+    method: &Method,
+    path: &str,
+    modules: &[Arc<dyn Module>],
+) -> Option<String> {
+    if path.starts_with("/modules/") {
+        let (id, sub) = module_path(path)?;
+        let method = module_method(method.as_str())?;
+        return modules
+            .iter()
+            .filter(|m| m.id() == id)
+            .flat_map(|m| m.destructive())
+            .find(|(mm, t)| mm.eq_ignore_ascii_case(method) && fits(t, sub))
+            .map(|(_, t)| format!("/modules/{id}/v1{t}"));
+    }
+    DESTRUCTIVE
+        .iter()
+        .find(|(m, t)| *m == method.as_str() && fits(t, path))
+        .map(|(_, t)| (*t).to_owned())
+}
+
 /// The scope a request needs; `None` when nothing declares one (refused).
 pub fn required(method: &Method, path: &str, modules: &[Arc<dyn Module>]) -> Option<&'static str> {
     if path.starts_with("/modules/") {
@@ -355,6 +379,20 @@ mod tests {
                 "{e:?} is excepted but listed"
             );
         }
+    }
+
+    /// Review S5 (KAN-298): the refusal throttle keys on the template, so varying an id adds no key.
+    #[test]
+    fn a_destructive_route_is_keyed_by_its_template() {
+        let m = Method::DELETE;
+        for id in ["d_a", "d_b", "d_c"] {
+            assert_eq!(
+                destructive_template(&m, &format!("/api/v1/devices/{id}"), &[]).as_deref(),
+                Some("/api/v1/devices/{id}")
+            );
+        }
+        assert_eq!(destructive_template(&Method::GET, "/api/v1/devices/d_a", &[]), None);
+        assert_eq!(destructive_template(&m, "/api/v1/nope/x", &[]), None);
     }
 
     #[test]

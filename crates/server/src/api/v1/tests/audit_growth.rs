@@ -165,6 +165,28 @@ async fn device_admin_and_gate_refusals_are_counted_and_the_last_admin_audited_o
     );
 }
 
+/// KAN-298: the step-up refusal counters key on the route template, so one device varying the id
+/// in the path adds one key, not one per id.
+#[tokio::test]
+async fn step_up_refusals_for_varying_ids_share_one_key() {
+    let fx = fx().await;
+    let admin = plain(&fx, "plain", &ALL, true).await;
+    let before = fx.app.auth.refusals.len();
+    for n in 0..20 {
+        let r = post(&fx, &admin, &format!("/api/v1/pairings/p_{n}/approve"), json!({})).await;
+        assert_eq!(r.1["code"], json!("step_up_required"));
+    }
+    assert_eq!(
+        fx.app
+            .auth
+            .refusals
+            .count("step_up_required POST /api/v1/pairings/{id}/approve"),
+        20
+    );
+    // The route's key plus the device's own: two, whatever the number of ids.
+    assert!(fx.app.auth.refusals.len() <= before + 2, "{}", fx.app.auth.refusals.len());
+}
+
 #[tokio::test]
 async fn a_failed_step_up_takes_the_floor_and_the_hosts_socket_survives_a_full_address_table() {
     let fx = fx().await;
