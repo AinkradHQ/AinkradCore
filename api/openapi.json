@@ -309,6 +309,48 @@
         ],
         "type": "object"
       },
+      "AgentWake": {
+        "properties": {
+          "key": {
+            "description": "The wake's key.",
+            "type": "string"
+          },
+          "queued": {
+            "description": "`false` when this key was already used: nothing was queued.",
+            "type": "boolean"
+          },
+          "session": {
+            "description": "The session, `as_…`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "key",
+          "queued"
+        ],
+        "type": "object"
+      },
+      "AgentWakeRequest": {
+        "description": "A wake for an idle session.",
+        "properties": {
+          "key": {
+            "description": "Makes the wake idempotent: asking again with the same key queues nothing (it is kept for\n30 days). 1 to 128 of `A-Za-z0-9_.:-`; absent, the Core makes one up.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "The next turn, 1 byte to 16 KiB; absent, the session just continues.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ApiVersion": {
         "description": "The contract a server speaks: `/api/<major>` and its additions so far.",
         "properties": {
@@ -409,6 +451,9 @@
           "agent.killed",
           "agent.messaged",
           "agent.resumed",
+          "agent.wake_dropped",
+          "agent.wake_queued",
+          "agent.woken",
           "alarm.cleared",
           "alarm.raised",
           "api.refused",
@@ -2362,7 +2407,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.26.0"
+    "version": "1.27.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2905,6 +2950,70 @@
         "tags": [
           "agents"
         ],
+        "x-ainkrad-scope": "agent"
+      }
+    },
+    "/api/v1/agent-sessions/{id}/wake": {
+      "post": {
+        "operationId": "wakeAgentSession",
+        "parameters": [
+          {
+            "description": "The session's id, `as_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentWakeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentWake"
+                }
+              }
+            },
+            "description": "Queued on the scheduler (audited as `agent.wake_queued`): once the session is idle it is resumed on its runner, continuing the harness's own session with `text` as its next turn (`agent.woken`). A session that is still running is retried for a while, then the wake is dropped. 409 `not_wakeable` (failed, cancelled, a module's), 409 `limit_reached` (too many wakes waiting), 503 `scheduler_unavailable`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "agents"
+        ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "agent"
       }
     },

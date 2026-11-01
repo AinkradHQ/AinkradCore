@@ -33,6 +33,8 @@ src/main/kotlin/ainkrad/client/models/AgentSession.kt
 src/main/kotlin/ainkrad/client/models/AgentTranscript.kt
 src/main/kotlin/ainkrad/client/models/AgentTranscriptEntry.kt
 src/main/kotlin/ainkrad/client/models/AgentUsage.kt
+src/main/kotlin/ainkrad/client/models/AgentWake.kt
+src/main/kotlin/ainkrad/client/models/AgentWakeRequest.kt
 src/main/kotlin/ainkrad/client/models/ApiVersion.kt
 src/main/kotlin/ainkrad/client/models/ApproveBody.kt
 src/main/kotlin/ainkrad/client/models/AuditEntry.kt

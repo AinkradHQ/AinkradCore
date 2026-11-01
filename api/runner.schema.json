@@ -167,6 +167,12 @@
     "AgentStart": {
       "description": "Core to runner: run `harness` in session `session`.",
       "properties": {
+        "epoch": {
+          "description": "Which resume this is, 0 for the first start. A session that has ended is started again\n(a wake) only by a `resume` whose `epoch` is newer than the one it last ran under; the\nsame one again is a resent start and is answered, never run twice.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "harness": {
           "type": "string"
         },

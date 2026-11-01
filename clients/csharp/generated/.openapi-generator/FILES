@@ -41,6 +41,8 @@ src/Ainkrad.Client/Model/AgentSession.cs
 src/Ainkrad.Client/Model/AgentTranscript.cs
 src/Ainkrad.Client/Model/AgentTranscriptEntry.cs
 src/Ainkrad.Client/Model/AgentUsage.cs
+src/Ainkrad.Client/Model/AgentWake.cs
+src/Ainkrad.Client/Model/AgentWakeRequest.cs
 src/Ainkrad.Client/Model/ApiVersion.cs
 src/Ainkrad.Client/Model/ApproveBody.cs
 src/Ainkrad.Client/Model/AuditEntry.cs
