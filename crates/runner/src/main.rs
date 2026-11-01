@@ -78,10 +78,11 @@ struct Args {
     env: Vec<(String, String)>,
 }
 
-/// `KEY=VAL` as `--env` takes it; `None` without a `=` or with an empty key.
+/// `KEY=VAL` as `--env` takes it; `None` without a `=`, with an empty key, or with an `AINKRAD_*`
+/// key: those are the runner's own control variables (sandbox and network mode), never a harness's.
 fn env_pair(pair: &str) -> Option<(String, String)> {
     let (key, value) = pair.split_once('=')?;
-    (!key.is_empty()).then(|| (key.to_owned(), value.to_owned()))
+    (!key.is_empty() && !key.starts_with("AINKRAD_")).then(|| (key.to_owned(), value.to_owned()))
 }
 
 /// `None` on anything it does not know.
@@ -333,5 +334,13 @@ mod tests {
         assert!(parse(&["wss://x", "--env", "FOO"]).is_none(), "no =");
         assert!(parse(&["wss://x", "--env", "=bar"]).is_none(), "no key");
         assert!(parse(&["wss://x", "--env"]).is_none(), "no value");
+        for key in [
+            "AINKRAD_SANDBOX_NETWORK",
+            "AINKRAD_SANDBOX_EGRESS_SOCK",
+            "AINKRAD_X",
+        ] {
+            let pair = format!("{key}=allow");
+            assert!(parse(&["wss://x", "--env", &pair]).is_none(), "{key}");
+        }
     }
 }

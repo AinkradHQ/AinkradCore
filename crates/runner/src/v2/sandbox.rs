@@ -49,6 +49,9 @@ pub struct ProcessSandbox {
     secrets: PathBuf,
     /// The egress filter passed its start-up self-test (`egress::selftest`).
     egress_ready: bool,
+    /// `AINKRAD_AGENT_NETWORK`, read once when the driver started: a later change of the
+    /// process environment does not change what a session gets.
+    requested: Option<String>,
 }
 
 impl ProcessSandbox {
@@ -57,7 +60,14 @@ impl ProcessSandbox {
             state,
             secrets,
             egress_ready: false,
+            requested: None,
         }
+    }
+
+    /// The runner's `AINKRAD_AGENT_NETWORK` (`allow`, `deny`, `filtered`); `None` is the default.
+    pub fn with_network(mut self, requested: Option<String>) -> Self {
+        self.requested = requested;
+        self
     }
 
     /// Marks the egress filter as proven on this host: `filtered` sessions are accepted and the
@@ -149,7 +159,7 @@ impl Sandbox for ProcessSandbox {
             .secrets
             .iter()
             .any(|g| g.var != super::agent::RUN_TOKEN_VAR);
-        let requested = std::env::var("AINKRAD_AGENT_NETWORK").ok();
+        let requested = self.requested.clone();
         let network = network_for(
             requested.as_deref(),
             holds,

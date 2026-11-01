@@ -121,7 +121,7 @@ async fn denied_destinations_are_refused_before_anything_is_dialled_or_looked_up
     )
     .unwrap();
     let r = rig("denied", policy, stub, Limits::default());
-    let public = Ipv4Addr::new(93, 184, 216, 34);
+    let public = "198.51.100.9";
     let cgnat = Ipv4Addr::new(100, 64, 0, 1);
     let denied = [
         // 1: not in the allow list

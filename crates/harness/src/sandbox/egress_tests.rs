@@ -104,3 +104,44 @@ fn a_filtered_sandbox_reaches_only_the_proxy_and_has_no_resolver_config() {
     let deny = argv(&spec).unwrap();
     assert!(!deny.iter().any(|a| a.contains("PROXY")));
 }
+
+#[test]
+fn a_variable_set_twice_takes_the_last_value_so_a_stale_allow_cannot_win() {
+    let (_, mut spec) = fixture("egress-last");
+    set(&mut spec, &EGRESS);
+    // The runner's `--env` comes first in the list, the session's own value after it.
+    for (first, last, isolated) in [
+        ("allow", "filtered", true),
+        ("allow", "deny", true),
+        ("deny", "allow", false),
+    ] {
+        spec.env.retain(|(n, _)| n != "AINKRAD_SANDBOX_NETWORK");
+        spec.env
+            .push(("AINKRAD_SANDBOX_NETWORK".into(), first.into()));
+        spec.env
+            .push(("AINKRAD_SANDBOX_NETWORK".into(), last.into()));
+        let args = argv(&spec).unwrap();
+        assert_eq!(
+            args.iter().any(|a| a == "--unshare-net"),
+            isolated,
+            "{first} then {last}"
+        );
+    }
+    // The egress socket cannot be redirected by an earlier duplicate either.
+    spec.env.retain(|(n, _)| n != "AINKRAD_SANDBOX_NETWORK");
+    spec.env
+        .push(("AINKRAD_SANDBOX_NETWORK".into(), "filtered".into()));
+    spec.env.insert(
+        0,
+        (
+            "AINKRAD_SANDBOX_EGRESS_SOCK".into(),
+            "/tmp/evil.sock".into(),
+        ),
+    );
+    let args = argv(&spec).unwrap();
+    assert!(has(
+        &args,
+        &["--bind", "/run/run-1/egress.sock", "/run/run-1/egress.sock"]
+    ));
+    assert!(!args.iter().any(|a| a == "/tmp/evil.sock"));
+}

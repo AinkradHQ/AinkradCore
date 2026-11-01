@@ -11,9 +11,12 @@ pub(crate) mod tree;
 pub(crate) use budget::configure as configure_budget;
 pub(crate) use budget::{Budget, Watch};
 
+/// The value of `key`; when it is set more than once the LAST one wins, as it does for the
+/// process environment (`Command::envs`), so this builder and the child can never disagree.
 fn env<'a>(spec: &'a Spec, key: &str) -> &'a OsStr {
     spec.env
         .iter()
+        .rev()
         .find(|(n, _)| n == key)
         .map_or(OsStr::new(""), |(_, v)| v)
 }
@@ -236,6 +239,8 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
         c.arg("-p").arg(profile(spec, program));
     } else {
         c = Command::new("/usr/bin/bwrap");
+        // bubblewrap passes inherited descriptors through to the program it runs.
+        ainkrad_sys::close_fds_on_exec(c.as_std_mut());
         c.args([
             "--die-with-parent",
             "--unshare-user",

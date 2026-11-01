@@ -107,6 +107,9 @@ pub struct HarnessExecutor {
     pub mcp_tls: Option<Arc<rustls::ClientConfig>>,
     /// The egress allow policy of `AINKRAD_AGENT_NETWORK=filtered`; a filtered run without it is refused.
     pub egress: Option<Arc<crate::egress::Policy>>,
+    /// The executable a filtered sandbox runs as its in-sandbox forwarder (`mcp-forward`); `None`
+    /// is this runner's own executable. Tests point it at the built binary.
+    pub forwarder: Option<PathBuf>,
     /// Idle long-lived harness servers kept for later runs (E15.6), when the server sends no
     /// `limits`; 0 keeps none.
     pub warm_max: u32,
@@ -171,6 +174,7 @@ impl HarnessExecutor {
             mcp_url: None,
             mcp_tls: None,
             egress: None,
+            forwarder: None,
             warm_max: 0,
             stall_after: Duration::from_secs(STALL_AFTER_SECS),
             tool_output: TOOL_OUTPUT_BYTES as usize,

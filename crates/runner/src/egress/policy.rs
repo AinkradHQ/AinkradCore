@@ -103,6 +103,8 @@ pub enum Deny {
     NotListed,
     Metadata,
     Reserved,
+    /// One of this host's own interface addresses.
+    HostAddress,
 }
 
 /// The cloud metadata services: no allow entry reaches them.
@@ -143,6 +145,7 @@ fn reserved() -> Vec<Cidr> {
         Cidr::v6([0x2002, 0, 0, 0, 0, 0, 0, 0], 16),
         Cidr::v6([0xfc00, 0, 0, 0, 0, 0, 0, 0], 7),
         Cidr::v6([0xfe80, 0, 0, 0, 0, 0, 0, 0], 10),
+        Cidr::v6([0xfec0, 0, 0, 0, 0, 0, 0, 0], 10),
         Cidr::v6([0xff00, 0, 0, 0, 0, 0, 0, 0], 8),
     ]
 }
@@ -180,6 +183,8 @@ pub struct Policy {
     hosts: BTreeSet<String>,
     ports: Vec<u16>,
     reserved: Vec<Cidr>,
+    /// The host's own interface addresses: never a destination, whatever the CIDRs say.
+    own: Vec<IpAddr>,
 }
 
 fn items(list: &str) -> impl Iterator<Item = &str> {
@@ -195,6 +200,7 @@ impl Policy {
             hosts: BTreeSet::new(),
             ports: vec![],
             reserved: reserved(),
+            own: vec![],
         };
         for (n, entry) in items(cidrs).enumerate() {
             let cidr = Cidr::parse(entry).ok_or_else(|| {
@@ -256,221 +262,113 @@ impl Policy {
         self.hosts.contains(name)
     }
 
+    /// Adds the host's own interface addresses (`host_addresses`): a host with a public address on an
+    /// interface would otherwise let `0.0.0.0/0` reach its own services.
+    pub fn with_host_addresses(mut self, addrs: impl IntoIterator<Item = IpAddr>) -> Policy {
+        self.own = addrs.into_iter().map(normalise).collect();
+        self
+    }
+
     /// The address to dial for `ip`, or why not. `named`: the address came from resolving a
     /// listed name, so it needs no CIDR (but is still subject to the reserved ranges).
     pub fn check_ip(&self, ip: IpAddr, named: bool) -> Result<IpAddr, Deny> {
         let ip = normalise(ip);
-        if metadata().iter().any(|m| m.contains(ip)) {
-            return Err(Deny::Metadata);
-        }
+        self.never(ip)?;
         let allowed = self.cidrs.iter().any(|c| c.contains(ip));
         if !allowed && !named {
             return Err(Deny::NotListed);
         }
+        self.gate(ip)?;
+        // An IPv4 address carried inside a NAT64 or 6to4 address is the real destination of a
+        // translated connection: it gets the same checks.
+        if let Some(inner) = embedded_v4(ip) {
+            self.never(inner)?;
+            self.gate(inner)?;
+        }
+        Ok(ip)
+    }
+
+    /// Addresses no entry can open.
+    fn never(&self, ip: IpAddr) -> Result<(), Deny> {
+        if metadata().iter().any(|m| m.contains(ip)) {
+            return Err(Deny::Metadata);
+        }
+        if self.own.contains(&ip) {
+            return Err(Deny::HostAddress);
+        }
+        Ok(())
+    }
+
+    /// Reserved ranges are subtracted unless a CIDR inside that range names the address.
+    fn gate(&self, ip: IpAddr) -> Result<(), Deny> {
         for range in self.reserved.iter().filter(|r| r.contains(ip)) {
             let named_inside = self.cidrs.iter().any(|c| c.contains(ip) && c.within(range));
             if !named_inside {
                 return Err(Deny::Reserved);
             }
         }
-        Ok(ip)
+        Ok(())
     }
+}
+
+/// The IPv4 address inside a NAT64 (`64:ff9b::/96`) or 6to4 (`2002::/16`) address.
+fn embedded_v4(ip: IpAddr) -> Option<IpAddr> {
+    let IpAddr::V6(a) = ip else { return None };
+    let s = a.segments();
+    let octets = if s[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+        [s[6].to_be_bytes(), s[7].to_be_bytes()]
+    } else if s[0] == 0x2002 {
+        [s[1].to_be_bytes(), s[2].to_be_bytes()]
+    } else {
+        return None;
+    };
+    let [[a, b], [c, d]] = octets;
+    Some(IpAddr::V4(Ipv4Addr::new(a, b, c, d)))
+}
+
+/// The host's own interface addresses, from `/proc` (no unsafe, no extra tool). An unreadable
+/// IPv4 table is an error: a runner that cannot list its addresses does not start filtering.
+pub fn host_addresses() -> Result<Vec<IpAddr>, String> {
+    if !cfg!(target_os = "linux") {
+        return Ok(vec![]);
+    }
+    let v4 = std::fs::read_to_string("/proc/net/fib_trie")
+        .map_err(|_| "cannot list the host's IPv4 addresses".to_owned())?;
+    let mut all = parse_fib_trie(&v4);
+    // IPv6 may be switched off, which removes the file.
+    if let Ok(v6) = std::fs::read_to_string("/proc/net/if_inet6") {
+        all.extend(parse_if_inet6(&v6));
+    }
+    all.sort();
+    all.dedup();
+    Ok(all)
+}
+
+/// `/proc/net/fib_trie`: an address line (`|-- a.b.c.d`) followed by `/32 host LOCAL`.
+fn parse_fib_trie(text: &str) -> Vec<IpAddr> {
+    let mut last = None;
+    let mut out = vec![];
+    for line in text.lines().map(str::trim) {
+        if let Some(addr) = line.strip_prefix("|-- ") {
+            last = addr.parse::<Ipv4Addr>().ok();
+        } else if line.starts_with("/32 host LOCAL") {
+            out.extend(last.map(IpAddr::V4));
+        }
+    }
+    out
+}
+
+/// `/proc/net/if_inet6`: the address as 32 hex digits, first on each line.
+fn parse_if_inet6(text: &str) -> Vec<IpAddr> {
+    text.lines()
+        .filter_map(|l| {
+            let hex = l.split_whitespace().next().filter(|h| h.len() == 32)?;
+            u128::from_str_radix(hex, 16)
+                .ok()
+                .map(|v| IpAddr::V6(Ipv6Addr::from(v)))
+        })
+        .collect()
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn ip(s: &str) -> IpAddr {
-        s.parse().unwrap()
-    }
-    fn public() -> IpAddr {
-        IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))
-    }
-    fn policy(cidrs: &str, hosts: &str) -> Policy {
-        Policy::parse(cidrs, hosts, "").unwrap()
-    }
-
-    #[test]
-    fn cidrs_parse_and_match() {
-        let c = Cidr::parse("10.1.2.3/8").unwrap();
-        assert!(c.contains(ip("10.200.0.1")) && !c.contains(ip("172.16.0.1")));
-        assert!(Cidr::parse("0.0.0.0/0").unwrap().contains(public()));
-        assert!(!Cidr::parse("0.0.0.0/0").unwrap().contains(ip("::1")));
-        assert!(Cidr::parse("::/0").unwrap().contains(ip("2606:4700::1")));
-        assert!(Cidr::parse("127.0.0.1").unwrap().contains(ip("127.0.0.1")));
-        for bad in [
-            "",
-            "203.0.113.4/33",
-            "::/129",
-            "1.2.3/24",
-            "a/8",
-            "203.0.113.4/",
-            "203.0.113.4/+8",
-            "::ffff:203.0.113.4/128",
-            "example.test",
-        ] {
-            assert!(Cidr::parse(bad).is_none(), "{bad}");
-        }
-    }
-
-    #[test]
-    fn nothing_is_allowed_by_default_and_the_internet_is_not_reserved_space() {
-        assert_eq!(
-            policy("", "").check_ip(public(), false),
-            Err(Deny::NotListed)
-        );
-        assert_eq!(
-            policy("0.0.0.0/0", "").check_ip(public(), false),
-            Ok(public())
-        );
-    }
-
-    #[test]
-    fn a_broad_allow_never_opens_reserved_space() {
-        let p = policy("0.0.0.0/0,::/0", "");
-        for r in [
-            "127.0.0.1",
-            "10.0.0.1",
-            "172.16.5.5",
-            "192.168.1.1",
-            "169.254.1.1",
-            "0.0.0.0",
-            "::1",
-            "::",
-            "fd12::1",
-            "fe80::1",
-            "ff02::1",
-            "2001:db8::1",
-            "64:ff9b::808:808",
-            "2002:7f00:1::",
-            "2001:0:4136:e378:8000:63bf:3fff:fdd2",
-        ] {
-            assert_eq!(p.check_ip(ip(r), false), Err(Deny::Reserved), "{r}");
-        }
-        let cgnat = IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1));
-        let multicast = IpAddr::V4(Ipv4Addr::new(224, 0, 0, 1));
-        let broadcast = IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255));
-        for r in [cgnat, multicast, broadcast] {
-            assert_eq!(p.check_ip(r, false), Err(Deny::Reserved), "{r}");
-        }
-    }
-
-    #[test]
-    fn a_cidr_inside_a_reserved_range_names_just_that_space() {
-        let p = policy("127.0.0.2/32,10.9.0.0/16", "");
-        assert_eq!(p.check_ip(ip("127.0.0.2"), false), Ok(ip("127.0.0.2")));
-        assert_eq!(p.check_ip(ip("127.0.0.1"), false), Err(Deny::NotListed));
-        assert_eq!(p.check_ip(ip("10.9.4.4"), false), Ok(ip("10.9.4.4")));
-        assert_eq!(p.check_ip(ip("10.8.4.4"), false), Err(Deny::NotListed));
-        // A listed name that resolves into reserved space is still refused unless a CIDR names it.
-        assert_eq!(p.check_ip(ip("10.8.4.4"), true), Err(Deny::Reserved));
-        assert_eq!(p.check_ip(ip("10.9.4.4"), true), Ok(ip("10.9.4.4")));
-    }
-
-    #[test]
-    fn the_metadata_addresses_are_unreachable_whatever_is_allowed() {
-        let p = policy(
-            "0.0.0.0/0,169.254.0.0/16,169.254.169.254/32,::/0,fd00:ec2::/32",
-            "meta.test",
-        );
-        let azure = IpAddr::V4(Ipv4Addr::new(168, 63, 129, 16));
-        let alibaba = IpAddr::V4(Ipv4Addr::new(100, 100, 100, 200));
-        for m in [
-            ip("169.254.169.254"),
-            ip("fd00:ec2::254"),
-            ip("::ffff:169.254.169.254"),
-            azure,
-            alibaba,
-        ] {
-            assert_eq!(p.check_ip(m, false), Err(Deny::Metadata), "{m}");
-            assert_eq!(p.check_ip(m, true), Err(Deny::Metadata), "{m}");
-        }
-    }
-
-    #[test]
-    fn mapped_addresses_are_checked_as_ipv4() {
-        let p = policy("0.0.0.0/0", "");
-        assert_eq!(
-            p.check_ip(ip("::ffff:127.0.0.1"), false),
-            Err(Deny::Reserved)
-        );
-        assert_eq!(
-            p.check_ip(ip("::ffff:10.0.0.1"), false),
-            Err(Deny::Reserved)
-        );
-        assert_eq!(
-            p.check_ip(IpAddr::V6(public().to_canonical_v6()), false),
-            Ok(public())
-        );
-        // The IPv4 form of an allowed host is what an allowed mapped address matches.
-        assert_eq!(
-            policy("127.0.0.2/32", "").check_ip(ip("::ffff:127.0.0.2"), false),
-            Ok(ip("127.0.0.2"))
-        );
-    }
-
-    trait V6 {
-        fn to_canonical_v6(self) -> Ipv6Addr;
-    }
-    impl V6 for IpAddr {
-        fn to_canonical_v6(self) -> Ipv6Addr {
-            match self {
-                IpAddr::V4(a) => a.to_ipv6_mapped(),
-                IpAddr::V6(a) => a,
-            }
-        }
-    }
-
-    #[test]
-    fn host_names_and_ports_are_validated_and_errors_do_not_echo_entries() {
-        assert_eq!(host_name("API.Model.Test."), Some("api.model.test".into()));
-        let label = "a".repeat(64);
-        for bad in [
-            "",
-            ".",
-            "a..b",
-            "-a.test",
-            "a-.test",
-            "*.test",
-            "a_b.test",
-            "203.0.113.4",
-            "0x7f.1",
-            "a.0x1",
-            "h\u{e9}.test",
-            "a b.test",
-            "a@b.test",
-            label.as_str(),
-        ] {
-            assert!(host_name(bad).is_none(), "{bad}");
-        }
-        let long = format!("{}.test", "a.".repeat(130));
-        assert!(host_name(&long).is_none());
-        let e = Policy::parse("not-a-cidr-secret", "", "").unwrap_err();
-        assert!(!e.contains("secret") && e.contains("entry 1"), "{e}");
-        let e = Policy::parse("", "api.model.test,203.0.113.4", "").unwrap_err();
-        assert!(e.contains("HOSTS") && e.contains("entry 2"), "{e}");
-        assert!(Policy::parse("", "", "0").is_err());
-        assert!(Policy::parse("", "", "70000").is_err());
-        assert!(Policy::parse("", "", "443,8443").unwrap().port_ok(8443));
-        assert!(policy("", "").port_ok(443) && !policy("", "").port_ok(80));
-        // A name in the CIDR list, and a CIDR in the host list, are both errors.
-        assert!(Policy::parse("api.model.test", "", "").is_err());
-        assert!(Policy::parse("", "10.0.0.0/8", "").is_err());
-        assert!(Policy::parse(&"10.0.0.1,".repeat(300), "", "").is_err());
-    }
-
-    #[test]
-    fn hosts_match_exactly() {
-        let p = policy("", "api.model.test");
-        assert!(p.host_listed("api.model.test"));
-        for n in [
-            "model.test",
-            "x.api.model.test",
-            "api.model.test.evil.test",
-            "API.model.test",
-        ] {
-            assert!(!p.host_listed(n), "{n}");
-        }
-    }
-}
+mod tests;

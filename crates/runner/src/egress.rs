@@ -34,7 +34,7 @@ use crate::mcp_bridge::filter::{self, Refusal};
 pub mod policy;
 mod selftest;
 
-pub use policy::{Deny, Policy};
+pub use policy::{Deny, Policy, host_addresses};
 pub use selftest::selftest;
 
 /// The forwarder's port inside the sandbox (its own network namespace, so a fixed number is safe):
@@ -48,6 +48,8 @@ static OPEN: Semaphore = Semaphore::const_new(GLOBAL);
 /// Addresses taken from one answer, and dialled for one connection.
 const MAX_ANSWERS: usize = 16;
 const MAX_DIALS: usize = 4;
+/// Consecutive failed accepts after which the proxy gives up.
+const ACCEPT_FAILURES: u32 = 12;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
@@ -82,14 +84,30 @@ pub trait Resolve: Send + Sync {
     fn resolve<'a>(&'a self, name: &'a str) -> Answers<'a>;
 }
 
+/// Lookups in flight across every run. A lookup is a blocking `getaddrinfo` that a timeout cannot
+/// cancel, so each holds its permit until it really ends; a flood of lookups for a name whose
+/// server never answers is refused here instead of using up the runtime's blocking threads.
+static LOOKUPS: Semaphore = Semaphore::const_new(8);
+
 /// The host's resolver.
 pub struct System;
 
 impl Resolve for System {
     fn resolve<'a>(&'a self, name: &'a str) -> Answers<'a> {
         Box::pin(async move {
-            let found = tokio::net::lookup_host((name, 0)).await?;
-            Ok(found.map(|a| a.ip()).take(MAX_ANSWERS).collect())
+            let permit = LOOKUPS
+                .try_acquire()
+                .map_err(|_| io::Error::other("too many lookups in flight"))?;
+            let name = name.to_owned();
+            // The permit moves into the task: dropping this future on a timeout leaves the lookup
+            // running, and the permit with it, until the resolver gives up.
+            tokio::spawn(async move {
+                let _held = permit;
+                let found = tokio::net::lookup_host((name.as_str(), 0)).await?;
+                Ok(found.map(|a| a.ip()).take(MAX_ANSWERS).collect())
+            })
+            .await
+            .map_err(|_| io::Error::other("lookup task ended"))?
         })
     }
 }
@@ -144,10 +162,30 @@ pub fn start_with(
     let me = shared.clone();
     let task = tokio::spawn(async move {
         let mut conns = JoinSet::new();
+        let mut failures = 0u32;
         loop {
             tokio::select! {
                 accepted = listener.accept() => {
-                    let Ok((client, _)) = accepted else { break };
+                    let client = match accepted {
+                        Ok((client, _)) => {
+                            failures = 0;
+                            client
+                        }
+                        // A burst of descriptor exhaustion or an aborted connection must not end
+                        // the run's only way out: back off and try again; give up (the run then
+                        // sees its model unreachable) only when it keeps failing.
+                        Err(_) => {
+                            failures += 1;
+                            if failures > ACCEPT_FAILURES {
+                                tracing::warn!("egress proxy stopped: accept keeps failing");
+                                break;
+                            }
+                            let pause = Duration::from_millis(10)
+                                .saturating_mul(1u32 << failures.min(7));
+                            tokio::time::sleep(pause.min(Duration::from_secs(1))).await;
+                            continue;
+                        }
+                    };
                     // Over a limit: close at once; nothing is queued.
                     let (Ok(mine), Ok(global)) = (run.clone().try_acquire_owned(), OPEN.try_acquire()) else {
                         continue;

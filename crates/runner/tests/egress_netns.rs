@@ -212,7 +212,7 @@ async fn the_filtered_sandbox_refuses_every_vector_and_the_controls_succeed() {
         ..ainkrad_harness::Spec::default()
     };
 
-    let public = Ipv4Addr::new(93, 184, 216, 34);
+    let public = "198.51.100.9";
     let cgnat = Ipv4Addr::new(100, 64, 0, 1);
     let proxied: Vec<(&str, String)> = vec![
         ("v1_public", format!("{public}:443")),
@@ -250,7 +250,9 @@ echo "D_canary=$(direct 127.0.0.1 {canary})"
 echo "D_target=$(direct 127.0.0.2 {target})"
 echo "D_meta=$(direct 169.254.169.254 80)"
 echo "D_public=$(direct {public} 443)"
-echo "D_lan=$(direct 10.0.0.1 443)"
+echo "D_lan=$(direct 10.1.2.3 443)"
+echo "D_cgnat=$(direct {cgnat} 443)"
+echo "D_meta6=$(direct fd00:ec2::254 80)"
 echo "D_dns_tcp=$(direct 127.0.0.1 {tcp_dns})"
 echo "D_dns_route=$(direct 192.0.2.53 53)"
 printf x >/dev/udp/127.0.0.1/{udp_port} 2>/dev/null; echo "D_dns_udp=sent"
@@ -349,8 +351,10 @@ echo "E_resolv=$(ls /etc/resolv.conf /etc/hosts 2>&1 | grep -c 'No such file')"
         "D_canary",
         "D_target",
         "D_meta",
+        "D_meta6",
         "D_public",
         "D_lan",
+        "D_cgnat",
         "D_dns_tcp",
         "D_dns_route",
     ] {
@@ -425,6 +429,37 @@ touch {work}/s; echo "T_rmsock=$(rc rm -f {work}/s)"
         path_sock = path_sock_at.display(),
         work = root.join("work").display(),
     )));
+    // The same addresses the sandbox could not reach (metadata v4 and v6, a documentation-range
+    // "public" address, private, CGNAT), made real on the loopback of a private user+network
+    // namespace with a listener each: from there, with no sandbox, every one connects.
+    let stand_ins = parse(&run_host(&format!(
+        r#"unshare -Urn python3 -c '
+import socket, subprocess
+addrs = ["169.254.169.254", "198.51.100.9", "10.1.2.3", "{cgnat}", "fd00:ec2::254"]
+subprocess.run(["ip", "link", "set", "lo", "up"], check=True)
+for a in addrs:
+    v6 = ":" in a
+    subprocess.run(["ip", "addr", "add", a + ("/128" if v6 else "/32"), "dev", "lo"] + (["nodad"] if v6 else []), check=True)
+for a in addrs:
+    fam = socket.AF_INET6 if ":" in a else socket.AF_INET
+    l = socket.socket(fam); l.bind((a, 8099)); l.listen(1)
+    c = socket.socket(fam); c.settimeout(2)
+    try:
+        c.connect((a, 8099)); print("C_" + a + "=reached")
+    except Exception:
+        print("C_" + a + "=unreachable")
+'"#
+    )));
+    let cgnat_text = cgnat.to_string();
+    for a in [
+        "169.254.169.254",
+        "198.51.100.9",
+        "10.1.2.3",
+        cgnat_text.as_str(),
+        "fd00:ec2::254",
+    ] {
+        assert_eq!(stand_ins[&format!("C_{a}")], "reached", "control for {a}");
+    }
     for k in ["D_canary", "D_target", "D_dns_tcp", "U_abstract", "U_path"] {
         assert_eq!(control[k], "reached", "control {k}");
     }
@@ -458,7 +493,10 @@ rc() { "$@" >/dev/null 2>&1; echo $?; }
 #[tokio::test]
 async fn the_start_up_self_test_passes_on_a_host_that_can_filter() {
     let policy = Policy::parse("", "model.test", "443").unwrap();
-    egress::selftest(&policy)
-        .await
-        .expect("the self-test must pass here");
+    egress::selftest(
+        &policy,
+        std::path::Path::new(env!("CARGO_BIN_EXE_ainkrad-runner")),
+    )
+    .await
+    .expect("the self-test must pass here");
 }

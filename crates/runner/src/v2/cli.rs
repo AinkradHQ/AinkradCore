@@ -339,8 +339,11 @@ async fn egress_filter(executor: &mut crate::HarnessExecutor) -> Result<bool, St
     if !cfg!(target_os = "linux") {
         return Err("AINKRAD_AGENT_NETWORK=filtered is Linux only".into());
     }
-    let policy = crate::egress::Policy::from_env()?;
-    crate::egress::selftest(&policy)
+    let policy =
+        crate::egress::Policy::from_env()?.with_host_addresses(crate::egress::host_addresses()?);
+    let exe =
+        std::env::current_exe().map_err(|_| "cannot find the runner executable".to_owned())?;
+    crate::egress::selftest(&policy, &exe)
         .await
         .map_err(|why| format!("the egress filter failed its start-up check: {why}"))?;
     let (cidrs, hosts, ports) = policy.counts();
@@ -392,7 +395,8 @@ async fn agents(
     }
     super::agent::AgentDriver::new(config, executor)
         .map(|d| {
-            let sandbox = super::sandbox::ProcessSandbox::new(state.to_path_buf(), secrets);
+            let sandbox = super::sandbox::ProcessSandbox::new(state.to_path_buf(), secrets)
+                .with_network(std::env::var("AINKRAD_AGENT_NETWORK").ok());
             d.with_sandbox(Arc::new(if egress_ready {
                 sandbox.with_egress_ready()
             } else {

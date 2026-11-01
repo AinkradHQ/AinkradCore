@@ -212,7 +212,11 @@ impl HarnessExecutor {
                 Ok(p) => egress = Some(p),
                 Err(e) => return failed(format!("the egress proxy: {e}"), "sandbox"),
             }
-            let exe = std::env::current_exe().unwrap_or_default();
+            let exe = self
+                .forwarder
+                .clone()
+                .or_else(|| std::env::current_exe().ok())
+                .unwrap_or_default();
             bridge_env.extend(crate::egress::sandbox_env(&sock, &exe));
         }
         let config_dir = match self.config_dir(job) {
@@ -223,10 +227,14 @@ impl HarnessExecutor {
             return failed(format!("{}: {e}", config_dir.display()), "account");
         }
         let mut env_allow = self.env_allow.clone();
-        // The runner's `--env` first: everything the runner sets after it wins over it.
+        // The runner's `--env` first. A variable set more than once takes its LAST value (the
+        // sandbox builder and `Command::envs` both read it that way), so everything the runner
+        // sets after this wins over it. No `AINKRAD_*` name comes from `--env` at all: those are
+        // the runner's own control variables (the sandbox and its network mode).
         let mut env: Vec<(String, std::ffi::OsString)> = self
             .harness_env
             .iter()
+            .filter(|(name, _)| !name.starts_with("AINKRAD_"))
             .map(|(name, value)| (name.clone(), value.into()))
             .collect();
         env.extend(self.workspaces.env());
