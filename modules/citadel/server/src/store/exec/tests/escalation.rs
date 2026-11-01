@@ -30,6 +30,7 @@ async fn the_default_policy_asks_and_sandboxed_needs_sandboxed_runs() {
         mode: PermissionMode::AcceptEdits,
         allow: vec!["Bash:cargo test".to_owned()],
         sandboxed: false,
+        ..Policy::default()
     };
     assert!(
         set_project_policy(pool, project, &edits, AuditActor::System)
