@@ -54,6 +54,18 @@ async fn ask(core: &Core, id: &str, by: &str, key: &str, text: Option<&str>) -> 
     r.unwrap()
 }
 
+/// Waits until nothing supervises the session any more: a session that has just ended is still
+/// held by its supervisor for a moment, and a wake in that window is (rightly) retried.
+async fn settled(core: &Core, id: &str) {
+    for _ in 0..500 {
+        if !ainkrad_core_server::agents::supervised(&core.app).contains(&id.to_owned()) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("{id} is still supervised");
+}
+
 async fn actions(core: &Core) -> Vec<String> {
     let sql = "SELECT action FROM audit_events WHERE action LIKE 'agent.wake%' \
                OR action = 'agent.woken' ORDER BY seq";
@@ -72,6 +84,7 @@ async fn a_wake_resumes_an_idle_session_and_not_one_whose_requester_lost_access(
     let r = run_runner(&core, &base, &st, script("echo turn")).await;
     let id = session(&core, &r.id, &[]).await;
     let (first, _) = finished(&core, &id).await;
+    settled(&core, &id).await;
     assert_eq!(first.outcome.as_ref().unwrap()["kind"], "succeeded");
     assert!(
         first.harness_session.is_some(),
@@ -173,6 +186,7 @@ async fn a_wake_for_a_busy_session_is_retried_then_dropped_audited_and_a_later_w
     std::fs::write(&gate, "").unwrap();
     let (s, _) = finished(&core, &id).await;
     assert_eq!(s.resumes, 0);
+    settled(&core, &id).await;
     assert_eq!(ask(&core, &id, &r.id, "after", None).await, Queued::New);
     clock.0.fetch_add(4000, std::sync::atomic::Ordering::SeqCst);
     engine.tick().await.unwrap();
@@ -195,12 +209,7 @@ async fn a_wake_waits_for_the_previous_supervisor_to_let_go_and_is_dropped_if_it
     let id = session(&core, &r.id, &[]).await;
     finished(&core, &id).await;
     // The window: the row is committed `ended`, the old supervisor is not yet gone.
-    for _ in 0..200 {
-        if !ainkrad_core_server::agents::supervised(&core.app).contains(&id) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    settled(&core, &id).await;
     ainkrad_core_server::agents::hold_supervision_for_tests(&core.app, &id);
     let (engine, clock) = queue(&core).await;
     assert_eq!(ask(&core, &id, &r.id, "held", None).await, Queued::New);
@@ -228,12 +237,7 @@ async fn a_wake_waits_for_the_previous_supervisor_to_let_go_and_is_dropped_if_it
     assert_eq!(actions(&core).await, ["agent.woken"]);
 
     // The relaunched session's own supervisor ends first, as the old one did.
-    for _ in 0..200 {
-        if !ainkrad_core_server::agents::supervised(&core.app).contains(&id) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    settled(&core, &id).await;
     // A supervisor that never lets go: every attempt is refused, the last one audits the drop.
     ainkrad_core_server::agents::hold_supervision_for_tests(&core.app, &id);
     assert_eq!(ask(&core, &id, &r.id, "stuck", None).await, Queued::New);
