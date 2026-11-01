@@ -28,6 +28,11 @@ use crate::Spec;
 pub(crate) mod local;
 pub use local::LocalBackend;
 
+#[doc(hidden)]
+pub mod fake;
+#[cfg(test)]
+mod tests;
+
 pub type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// The variable of a [`Spec`]'s `env` that carries the wall-clock cap, in whole seconds.
@@ -127,7 +132,7 @@ pub trait ExecBackend: Debug + Send + Sync {
 
 /// The wall-clock cap in `spec`: `None` when absent. A value that is not 1 to 86400 seconds
 /// refuses the start, so a typo never means "no cap".
-pub fn wall_clock(spec: &Spec) -> io::Result<Option<Duration>> {
+pub(crate) fn wall_clock(spec: &Spec) -> io::Result<Option<Duration>> {
     let Some((_, value)) = spec.env.iter().find(|(n, _)| n == WALL_VAR) else {
         return Ok(None);
     };
