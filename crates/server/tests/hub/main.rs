@@ -7,6 +7,7 @@ mod agents;
 use ainkrad_core_server::agents::AgentsConfig;
 mod fault;
 mod health;
+mod isolation;
 mod proof;
 mod resume;
 mod routing;

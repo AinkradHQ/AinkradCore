@@ -1,0 +1,371 @@
+//! Isolation tiers end to end (E8a-09): a runner advertises what its sandbox gives, the Core
+//! places a session needing a tier only where it is offered and says why not, the runner refuses
+//! again whatever the Core believed, and a tier that goes away mid-life ends the sessions that
+//! need it loudly and stops being offered. The real Core and the real runner daemon; the runner's
+//! sandbox is a stand-in whose tier the test flips.
+
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use ainkrad_core::audit::AuditActor;
+use ainkrad_core_server::agents::{self as service, tier_refusal};
+use ainkrad_core_server::hub::RunnerState;
+use ainkrad_core_server::store::agents::{self as sessions, NewSession};
+use ainkrad_proto::runner::{Isolation, Outcome, RunToken};
+use ainkrad_proto::v2::{AgentStart, IsolationCaps, Kvm};
+use ainkrad_runner::v2::agent::{AgentConfig, AgentDriver, Sandbox};
+use ainkrad_runner::v2::client::Client;
+use ainkrad_runner::v2::daemon::{Backoff, Daemon};
+use ainkrad_runner::v2::key::{Enrolment, Key, State};
+use ainkrad_runner::{Executor, Job, Report};
+use serde_json::{Value, json};
+use tokio::sync::{mpsc, watch};
+
+use super::agents::make_admin;
+use super::runner::{driver, paired, state};
+use super::{Core, quick};
+
+/// A harness that works until it is stopped.
+#[derive(Clone, Default)]
+struct Hang;
+
+impl Executor for Hang {
+    async fn start(&self, job: &Job) -> Result<Option<String>, String> {
+        Ok(Some(format!("h-{}", job.context_ref)))
+    }
+    async fn run(&self, _: &Job, _: RunToken, _: mpsc::Sender<Report>) -> Outcome {
+        std::future::pending().await
+    }
+}
+
+/// A sandbox whose tier the test sets: 0 none, 1 process.
+struct Flip(Arc<AtomicU8>, Arc<Mutex<usize>>);
+
+impl Sandbox for Flip {
+    fn name(&self) -> &'static str {
+        "flip"
+    }
+    fn tier(&self) -> Isolation {
+        match self.0.load(Ordering::SeqCst) {
+            0 => Isolation::None,
+            _ => Isolation::Process,
+        }
+    }
+    fn prepare(&self, _: &AgentStart, _: &mut Vec<(String, String)>) -> Result<(), String> {
+        *self.1.lock().unwrap() += 1;
+        Ok(())
+    }
+}
+
+struct Live {
+    id: String,
+    driver: Arc<AgentDriver>,
+    tier: Arc<AtomicU8>,
+    prepared: Arc<Mutex<usize>>,
+    stop: watch::Sender<bool>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+async fn until(what: &str, mut f: impl FnMut() -> bool) {
+    for _ in 0..600 {
+        if f() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("timed out waiting for {what}");
+}
+
+async fn runner(core: &Core, name: &str, tier: u8) -> Live {
+    let base = format!("http://{}", core.host);
+    let st: State = state(name);
+    let e = paired(core, &base, None, &st).await;
+    let key = Arc::new(Key::load(&st.key()).unwrap());
+    let enrolment = Arc::new(Mutex::new(Enrolment::load(&st.enrolment()).unwrap()));
+    let (flag, prepared) = (Arc::new(AtomicU8::new(tier)), Arc::new(Mutex::new(0)));
+    let config = AgentConfig::new(st.0.join("agents"), st.0.join("secrets"));
+    let agents = Arc::new(
+        AgentDriver::new(config, Hang)
+            .unwrap()
+            .with_sandbox(Arc::new(Flip(flag.clone(), prepared.clone()))),
+    );
+    // The daemon's own constructor starts this watch; the test builds the Daemon directly.
+    agents.watch_isolation(Duration::from_millis(100));
+    let daemon = Daemon {
+        client: Client::new(&base, None).unwrap(),
+        key,
+        enrolment,
+        save: None,
+        exec: driver(),
+        pty: None,
+        agents: Some(Arc::clone(&agents)),
+        tls: None,
+        backoff: Backoff {
+            min: Duration::from_millis(50),
+            max: Duration::from_millis(200),
+            refused: Duration::from_millis(200),
+        },
+    };
+    let (stop, stopped) = watch::channel(false);
+    let task = tokio::spawn(async move {
+        let _ = daemon.run(stopped).await;
+    });
+    until("the runner online", || core.app.hub.online(&e.device_id)).await;
+    Live {
+        id: e.device_id,
+        driver: agents,
+        tier: flag,
+        prepared,
+        stop,
+        task,
+    }
+}
+
+impl Live {
+    async fn halt(self) {
+        self.stop.send_replace(true);
+        let _ = tokio::time::timeout(Duration::from_secs(5), self.task).await;
+    }
+
+    fn offered(&self, core: &Core) -> Option<IsolationCaps> {
+        core.app.hub.runners()[&self.id].isolation.clone()
+    }
+}
+
+fn needs(tier: &str) -> Value {
+    json!({"mode": "ask", "min_isolation": tier})
+}
+
+async fn refusal(core: &Core, runner: &str, policy: &Value) -> Option<String> {
+    service::admit_with(&core.app, runner, "fake", policy)
+        .await
+        .err()
+        .map(|e| service::describe(&e))
+}
+
+async fn session(core: &Core, runner: &str, policy: &Value) -> String {
+    make_admin(core, runner).await;
+    let new = NewSession {
+        runner,
+        harness: "fake",
+        model: None,
+        prompt: Some("go"),
+        workspace: None,
+        policy,
+        secrets: &[],
+        created_by: runner,
+    };
+    let s = sessions::create(
+        &core.app.pool,
+        &new,
+        AuditActor::System,
+        &core.app.clock.now(),
+    )
+    .await
+    .unwrap();
+    service::authorize_for_tests(&core.app, &s.id);
+    service::start(&core.app, &s)
+        .await
+        .unwrap_or_else(|e| panic!("{}", service::describe(&e)));
+    s.id
+}
+
+#[tokio::test]
+async fn a_runner_advertises_its_tier_and_the_core_places_by_it_with_a_reason() {
+    let core = Core::start("iso-place", quick()).await;
+    let none = runner(&core, "iso-none", 0).await;
+    let process = runner(&core, "iso-proc", 1).await;
+    // Listed per runner: hello's tiers and kvm state, and the architecture.
+    assert_eq!(
+        none.offered(&core),
+        Some(IsolationCaps::of(Isolation::None, Kvm::NotApplicable))
+    );
+    assert_eq!(
+        process.offered(&core),
+        Some(IsolationCaps::of(Isolation::Process, Kvm::NotApplicable))
+    );
+    assert!(core.app.hub.runners()[&process.id].arch.is_some());
+    // A tier requested on a process-only or unsandboxed runner is refused with the reason.
+    let why = refusal(&core, &process.id, &needs("microvm"))
+        .await
+        .unwrap();
+    assert!(why.contains("microvm") && why.contains("process"), "{why}");
+    let why = refusal(&core, &none.id, &needs("process")).await.unwrap();
+    assert!(why.contains("process") && why.contains("none"), "{why}");
+    // Controls: the tier it offers, a weaker one, and a policy with no requirement place.
+    assert_eq!(refusal(&core, &process.id, &needs("process")).await, None);
+    assert_eq!(refusal(&core, &process.id, &needs("none")).await, None);
+    assert_eq!(
+        refusal(&core, &none.id, &json!({"mode": "ask"})).await,
+        None
+    );
+    // A refused session never reached either runner's sandbox.
+    assert_eq!(
+        *process.prepared.lock().unwrap() + *none.prepared.lock().unwrap(),
+        0
+    );
+    none.halt().await;
+    process.halt().await;
+}
+
+#[tokio::test]
+async fn a_forged_advertisement_is_caught_by_the_runner_itself() {
+    let core = Core::start("iso-forged", quick()).await;
+    let r = runner(&core, "iso-forged", 0).await;
+    // The Core is told (or believes) that this runner offers a VM: the runner's own sandbox does
+    // not, and the start the Core sends is refused by the runner, never run weaker.
+    let forged = IsolationCaps::of(Isolation::Microvm, Kvm::Usable);
+    assert!(forged.meets(Isolation::Microvm));
+    let mut start = AgentStart {
+        session: "as_forged".to_owned(),
+        harness: "fake".to_owned(),
+        model: None,
+        prompt: None,
+        workspace: None,
+        policy: Default::default(),
+        resume: None,
+        secrets: vec![],
+    };
+    start.policy.min_isolation = Some(Isolation::Microvm);
+    let why = r.driver.start(start).unwrap_err();
+    assert!(
+        why.message.contains("microvm") && why.message.contains("none"),
+        "{why:?}"
+    );
+    assert_eq!(*r.prepared.lock().unwrap(), 0);
+    assert!(r.driver.states().is_empty());
+    r.halt().await;
+}
+
+#[tokio::test]
+async fn a_tier_that_disappears_ends_its_sessions_loudly_and_is_no_longer_offered() {
+    let core = Core::start("iso-loss", quick()).await;
+    let r = runner(&core, "iso-loss", 1).await;
+    let needing = session(&core, &r.id, &needs("process")).await;
+    let plain = session(&core, &r.id, &json!({"mode": "ask"})).await;
+    until("both running", || {
+        r.driver
+            .states()
+            .values()
+            .filter(|s| format!("{s:?}") == "Running")
+            .count()
+            == 2
+    })
+    .await;
+    // The probe fails (the stand-in for /dev/kvm vanishing): the runner stops offering the tier.
+    r.tier.store(0, Ordering::SeqCst);
+    // The session that needed it ends, failed, with the reason; the plain one is left alone.
+    let reason = loop {
+        let s = sessions::get(&core.app.pool, &needing)
+            .await
+            .unwrap()
+            .unwrap();
+        if !s.live() {
+            break s.outcome.as_ref().map(Value::to_string).unwrap_or_default();
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert!(
+        reason.contains("no longer available") && reason.contains("process"),
+        "{reason}"
+    );
+    assert!(
+        sessions::get(&core.app.pool, &plain)
+            .await
+            .unwrap()
+            .unwrap()
+            .live()
+    );
+    // The Core learns it from the next heartbeat, and refuses the next placement.
+    until("the Core to see the loss", || {
+        r.offered(&core) == Some(IsolationCaps::of(Isolation::None, Kvm::NotApplicable))
+    })
+    .await;
+    let why = refusal(&core, &r.id, &needs("process")).await.unwrap();
+    assert!(why.contains("process") && why.contains("none"), "{why}");
+    // Never downgraded: the refused session was not started anywhere at the weaker tier.
+    let before = *r.prepared.lock().unwrap();
+    assert!(session_start_refused(&core, &r.id).await);
+    assert_eq!(*r.prepared.lock().unwrap(), before);
+    r.halt().await;
+}
+
+/// Starting a session that needs `process` on the now-unsandboxed runner fails (it is ended,
+/// not run).
+async fn session_start_refused(core: &Core, runner: &str) -> bool {
+    make_admin(core, runner).await;
+    let policy = needs("process");
+    let new = NewSession {
+        runner,
+        harness: "fake",
+        model: None,
+        prompt: Some("go"),
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: runner,
+    };
+    let s = sessions::create(
+        &core.app.pool,
+        &new,
+        AuditActor::System,
+        &core.app.clock.now(),
+    )
+    .await
+    .unwrap();
+    service::authorize_for_tests(&core.app, &s.id);
+    service::start(&core.app, &s).await.is_err()
+}
+
+fn state_of(isolation: Option<IsolationCaps>, degraded: bool) -> RunnerState {
+    RunnerState {
+        online: true,
+        degraded,
+        last_seen: 0,
+        version: String::new(),
+        drivers: vec![],
+        capacity: 1,
+        load: 0,
+        host_load: None,
+        isolation,
+        arch: None,
+    }
+}
+
+#[test]
+fn placement_refuses_a_degraded_silent_unreported_or_short_runner_and_an_unreadable_policy() {
+    let process = Some(IsolationCaps::of(Isolation::Process, Kvm::Absent));
+    let vm = needs("microvm");
+    let proc_req = needs("process");
+    // Offered and fresh: placed.
+    assert_eq!(
+        tier_refusal(&state_of(process.clone(), false), &proc_req),
+        None
+    );
+    // On a degraded (silent) runner, even for a tier it last offered.
+    let why = tier_refusal(&state_of(process.clone(), true), &proc_req).unwrap();
+    assert!(why.contains("silent"), "{why}");
+    // A runner that never reported: no guarantee, so no session that needs one.
+    let why = tier_refusal(&state_of(None, false), &proc_req).unwrap();
+    assert!(why.contains("not reported"), "{why}");
+    // Too weak.
+    assert!(tier_refusal(&state_of(process.clone(), false), &vm).is_some());
+    // An empty offer and an unknown tier meet nothing.
+    for offered in [vec![], vec!["gvisor".to_owned()]] {
+        let caps = IsolationCaps {
+            tiers: offered,
+            kvm: Kvm::Unusable,
+        };
+        assert!(tier_refusal(&state_of(Some(caps), false), &proc_req).is_some());
+    }
+    // A policy that does not parse is refused, never read as "no requirement".
+    let why = tier_refusal(&state_of(process, false), &json!({"min_isolation": "vm"})).unwrap();
+    assert!(why.contains("shape"), "{why}");
+    // No requirement needs no report: an old runner still takes plain sessions.
+    assert_eq!(
+        tier_refusal(&state_of(None, false), &json!({"mode": "ask"})),
+        None
+    );
+    assert_eq!(tier_refusal(&state_of(None, true), &needs("none")), None);
+}

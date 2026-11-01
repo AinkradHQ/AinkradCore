@@ -978,3 +978,84 @@ async fn an_unconfined_runner_refuses_every_isolation_field_and_takes_a_plain_po
     assert_eq!(driver.start(wild).unwrap_err().code, ErrorCode::InvalidArgs);
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// A sandbox whose tier the test sets: 0 none, 1 process.
+struct Switch(Arc<std::sync::atomic::AtomicU8>);
+
+impl Sandbox for Switch {
+    fn name(&self) -> &'static str {
+        "switch"
+    }
+    fn tier(&self) -> Isolation {
+        match self.0.load(std::sync::atomic::Ordering::SeqCst) {
+            0 => Isolation::None,
+            _ => Isolation::Process,
+        }
+    }
+    fn prepare(&self, _: &AgentStart, _: &mut Vec<(String, String)>) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn the_runner_advertises_exactly_what_its_sandbox_gives_now() {
+    use ainkrad_proto::v2::Kvm;
+    let (root, config) = dirs("advertise");
+    let flag = Arc::new(std::sync::atomic::AtomicU8::new(1));
+    let d = AgentDriver::new(config, script("true"))
+        .unwrap()
+        .with_sandbox(Arc::new(Switch(flag.clone())));
+    assert_eq!(d.isolation().tiers, ["process"]);
+    flag.store(0, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(d.isolation().tiers, ["none"]);
+    assert_eq!(d.isolation().kvm, Kvm::NotApplicable);
+    // The default sandbox confines nothing, so it offers nothing more than `none`.
+    let (root2, config) = dirs("advertise-default");
+    let d = AgentDriver::new(config, script("true")).unwrap();
+    assert_eq!(d.isolation().tiers, ["none"]);
+    assert!(!d.isolation().meets(Isolation::Process));
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(root2);
+}
+
+#[tokio::test]
+async fn a_running_session_is_ended_loudly_when_its_tier_goes_away_and_others_are_left() {
+    let (root, config) = dirs("tier-loss");
+    let flag = Arc::new(std::sync::atomic::AtomicU8::new(1));
+    let d = Arc::new(
+        AgentDriver::new(config, script("echo up; sleep 30"))
+            .unwrap()
+            .with_sandbox(Arc::new(Switch(flag.clone()))),
+    );
+    let mut needing = start("as_needs", "fake");
+    needing.policy.min_isolation = Some(Isolation::Process);
+    d.start(needing).unwrap();
+    d.start(start("as_plain", "fake")).unwrap();
+    until("both up", || {
+        d.states().values().all(|s| *s == AgentState::Running)
+    })
+    .await;
+    // The tier holds: a check ends nothing.
+    assert_eq!(d.check_isolation(), 0);
+    flag.store(0, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(d.check_isolation(), 1);
+    until("the end", || d.states()["as_needs"] == AgentState::Ended).await;
+    let (entries, _) = drain_from(&d, "as_needs", 0).await;
+    let last = entries.last().unwrap();
+    assert_eq!(last.body["type"], "ended");
+    let reason = last.body["outcome"]["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("no longer available") && reason.contains("process"),
+        "{reason}"
+    );
+    assert_eq!(last.body["outcome"]["fingerprint"], "isolation");
+    // A session with no requirement runs on, and a second check finds nothing more to end.
+    assert_eq!(d.states()["as_plain"], AgentState::Running);
+    assert_eq!(d.check_isolation(), 0);
+    d.stop(AgentStop {
+        session: "as_plain".into(),
+        kill: true,
+    })
+    .unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
