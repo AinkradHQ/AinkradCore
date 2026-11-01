@@ -395,18 +395,20 @@ async fn scan_approvals<H: Host>(
         return Ok(());
     };
     // A call an "allow for this issue" rule still covers goes ahead without a reviewer, with
-    // three guards. (1) Fail closed: a rule must cover the call in full (`allows`: every command
-    // and pattern, no operator), a bare shell rule is never read as "everything", and only a
-    // request id of sane shape is answered. (2) Audit first: `run.allowed_by_rule` is committed
-    // BEFORE the harness is told, so an approval never exists without its row; if the row cannot
-    // be written, nothing is allowed and the call is escalated. (3) If the runner does not take
-    // the decision, the call is escalated like any other and the audit says the rule went unapplied.
-    // The rows carry the rule's id, never its text or the command.
+    // these guards. (1) Fail closed: a rule must be a legal rule (`rule_problem`) and cover the
+    // call in full (`allows`: every command and pattern, one simple command, nothing destructive);
+    // a request id is allowed only when EVERY entry that carries it is covered, so a repeated id
+    // can never hide an uncovered call. (2) One transaction audits `run.allowed_by_rule`,
+    // escalates every other call and advances the cursor, and it commits BEFORE the harness is
+    // told: an approval never exists without its row, a decision is never sent twice, and a crash
+    // before it is sent leaves a request the runner denies on its own timeout. (3) A decision the
+    // runner does not take is escalated like any other call and audited with outcome `unapplied`. The rows
+    // carry the rule's id, never its text or the command.
     let rules = match r.issue_id {
         Some(issue) => crate::store::gov::issue_allow_rules(pool, issue, now).await?,
         None => vec![],
     };
-    let mut matched: Vec<(&str, &str, i64)> = vec![];
+    let mut verdicts: Vec<(&str, &str, Option<i64>)> = vec![];
     for e in entries
         .iter()
         .filter(|e| e.body["type"] == "approval_request")
@@ -414,103 +416,122 @@ async fn scan_approvals<H: Host>(
         let (Some(request), Some(tool)) = (e.body["id"].as_str(), e.body["tool"].as_str()) else {
             continue;
         };
-        if request.is_empty() || request.len() > 256 || request.contains(char::is_control) {
-            continue;
-        }
-        let rule = rules.iter().find(|(_, rule)| {
-            let bare_shell = ainkrad_proto::runner::SHELL_TOOLS.contains(&rule.as_str());
-            !bare_shell && ainkrad_proto::runner::allows(rule, tool, &e.body["input"])
-        });
-        if let Some((rule_id, _)) = rule {
-            matched.push((request, tool, *rule_id));
+        let sane =
+            !request.is_empty() && request.len() <= 256 && !request.contains(char::is_control);
+        let covered = rules
+            .iter()
+            .find(|(_, rule)| {
+                sane && ainkrad_proto::runner::rule_problem(rule).is_none()
+                    && ainkrad_proto::runner::allows(rule, tool, &e.body["input"])
+            })
+            .map(|(id, _)| *id);
+        match verdicts.iter_mut().find(|v| v.0 == request) {
+            Some(v) if v.1 == tool && v.2 == covered => {}
+            Some(v) => v.2 = None,
+            None => verdicts.push((request, tool, covered)),
         }
     }
+    let matched: Vec<(&str, &str, i64)> = verdicts
+        .iter()
+        .filter_map(|&(q, t, id)| id.map(|id| (q, t, id)))
+        .collect();
     let company: i64 = sqlx::query_scalar("SELECT company_id FROM citadel_agents WHERE id = ?")
         .bind(r.agent_id.0)
         .fetch_one(pool)
         .await?;
-    if !matched.is_empty()
-        && audit_allowed(pool, r, company, &matched, "run.allowed_by_rule")
-            .await
-            .is_err()
-    {
-        tracing::warn!(
-            run = r.id.0,
-            "an allow rule was not audited; escalating instead"
-        );
-        matched.clear();
-    }
-    let mut allowed: Vec<&str> = vec![];
-    let mut unapplied = vec![];
-    for &(request, tool, rule_id) in &matched {
-        let told = Instruction::Decide {
-            request: request.to_owned(),
-            approved: true,
-            reply: Some("allowed for this issue".to_owned()),
-        };
-        match host.instruct(app, &s.id, told).await {
-            Ok(_) => allowed.push(request),
-            Err(_) => unapplied.push((request, tool, rule_id)),
-        }
-    }
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
+    for &m in &matched {
+        audit_rule(&mut tx, r, company, m, "allowed").await?;
+    }
     for e in entries
         .iter()
         .filter(|e| e.body["type"] == "approval_request")
     {
-        let Some(request) = e.body["id"].as_str() else {
-            continue;
-        };
-        if allowed.contains(&request) {
-            continue;
-        }
-        let asked: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM citadel_approvals WHERE kind = 'permission_escalation' \
-             AND json_extract(payload, '$.session') = ?1 AND json_extract(payload, '$.request') = ?2)",
-        )
-        .bind(&s.id)
-        .bind(request)
-        .fetch_one(&mut *tx)
-        .await?;
-        if asked {
+        if e.body["id"]
+            .as_str()
+            .is_some_and(|q| matched.iter().any(|m| m.0 == q))
+        {
             continue;
         }
-        // The tool and a cut of what it was asked to do: the transcript is already redacted, and
-        // what is kept here is shown on a phone, so it stays short.
-        let tool = e.body["tool"].as_str().unwrap_or("a tool");
-        let mut input = e.body["input"].clone();
-        ainkrad_core_server::store::redact::json(&mut input);
-        let input: String = input.to_string().chars().take(300).collect();
-        let payload = json!({"run": r.id.0, "session": s.id, "request": request, "tool": tool,
-                             "input": input, "summary": format!("{tool} needs a decision")});
-        let new = NewApproval {
-            company_id: crate::domain::org::CompanyId(company),
-            kind: ApprovalKind::PermissionEscalation,
-            issue_id: r.issue_id,
-            sprint_id: None,
-            agent_id: None,
-            requested_by: r.agent_id,
-            payload: payload.to_string(),
-        };
-        open_approval_in(&mut tx, &new, None, now).await?;
-        report.approvals += 1;
-    }
-    for (request, tool, rule_id) in unapplied {
-        audit_rule(
-            &mut tx,
-            r,
-            company,
-            (request, tool, rule_id),
-            "run.allow_rule_unapplied",
-        )
-        .await?;
+        escalate_in(&mut tx, r, s, company, e, now, report).await?;
     }
     sqlx::query("UPDATE citadel_runs SET approval_seq = ? WHERE id = ?")
         .bind(last as i64)
         .bind(r.id.0)
         .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
+    let mut unapplied = vec![];
+    for &m in &matched {
+        let told = Instruction::Decide {
+            request: m.0.to_owned(),
+            approved: true,
+            reply: Some("allowed for this issue".to_owned()),
+        };
+        if host.instruct(app, &s.id, told).await.is_err() {
+            unapplied.push(m);
+        }
+    }
+    if unapplied.is_empty() {
+        return Ok(());
+    }
+    let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
+    for m in unapplied {
+        audit_rule(&mut tx, r, company, m, "unapplied").await?;
+        for e in entries
+            .iter()
+            .filter(|e| e.body["id"].as_str() == Some(m.0))
+        {
+            escalate_in(&mut tx, r, s, company, e, now, report).await?;
+        }
+    }
     tx.commit().await
+}
+
+/// Opens the `permission_escalation` for one `approval_request` entry, once per request.
+async fn escalate_in(
+    tx: &mut sqlx::SqliteConnection,
+    r: &Run,
+    s: &Session,
+    company: i64,
+    e: &ainkrad_proto::v2::TranscriptEntry,
+    now: &str,
+    report: &mut Report,
+) -> Result<(), Error> {
+    let Some(request) = e.body["id"].as_str() else {
+        return Ok(());
+    };
+    let asked: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM citadel_approvals WHERE kind = 'permission_escalation' \
+         AND json_extract(payload, '$.session') = ?1 AND json_extract(payload, '$.request') = ?2)",
+    )
+    .bind(&s.id)
+    .bind(request)
+    .fetch_one(&mut *tx)
+    .await?;
+    if asked {
+        return Ok(());
+    }
+    // The tool and a cut of what it was asked to do: the transcript is already redacted, and
+    // what is kept here is shown on a phone, so it stays short.
+    let tool = e.body["tool"].as_str().unwrap_or("a tool");
+    let mut input = e.body["input"].clone();
+    ainkrad_core_server::store::redact::json(&mut input);
+    let input: String = input.to_string().chars().take(300).collect();
+    let payload = json!({"run": r.id.0, "session": s.id, "request": request, "tool": tool,
+                         "input": input, "summary": format!("{tool} needs a decision")});
+    let new = NewApproval {
+        company_id: crate::domain::org::CompanyId(company),
+        kind: ApprovalKind::PermissionEscalation,
+        issue_id: r.issue_id,
+        sprint_id: None,
+        agent_id: None,
+        requested_by: r.agent_id,
+        payload: payload.to_string(),
+    };
+    open_approval_in(tx, &new, None, now).await?;
+    report.approvals += 1;
+    Ok(())
 }
 
 /// One audit row for a rule that covered a call: ids and the tool name only, never the rule's text
@@ -520,33 +541,20 @@ async fn audit_rule(
     r: &Run,
     company: i64,
     (request, tool, rule_id): (&str, &str, i64),
-    action: &str,
+    outcome: &str,
 ) -> Result<(), Error> {
     audit::append(
         conn,
-        Event::new(SYSTEM, action)
+        Event::new(SYSTEM, "run.allowed_by_rule")
             .entity("run", r.id.0)
             .company(company)
             .run(r.id.0)
-            .details(json!({"rule_id": rule_id, "request": request, "tool": tool,
-                            "issue": r.issue_id.map(|i| i.0)})),
+            .details(
+                json!({"outcome": outcome, "rule_id": rule_id, "request": request,
+                            "tool": tool, "issue": r.issue_id.map(|i| i.0)}),
+            ),
     )
     .await
-}
-
-/// Commits `action` rows for every match in one transaction, all or none.
-async fn audit_allowed(
-    pool: &SqlitePool,
-    r: &Run,
-    company: i64,
-    matched: &[(&str, &str, i64)],
-    action: &str,
-) -> Result<(), Error> {
-    let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
-    for &m in matched {
-        audit_rule(&mut tx, r, company, m, action).await?;
-    }
-    tx.commit().await
 }
 
 impl Run {

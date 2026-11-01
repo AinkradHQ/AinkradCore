@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::shell;
+
 use super::isolation::{
     DISK_MB, Egress, Isolation, MEMORY_MB, VCPUS, WALL_SECS, WorkspaceMode, digest_problem,
 };
@@ -201,8 +203,220 @@ mod authority_tests {
         ] {
             assert!(!yes(json!({"command": bad})), "{bad:?}");
             assert!(!yes(json!({"patterns": [bad]})), "{bad:?}");
-            assert!(!yes(json!({"command": ["cargo", "test", bad]})), "{bad:?}");
+            // An argv word is data, not shell, but a control character is still refused.
+            if bad.contains(|c: char| c.is_control() && c != '\n') {
+                assert!(!yes(json!({"command": ["cargo", "test", bad]})), "{bad:?}");
+            }
         }
+        // Quotes make one word; a wrapper is looked through to what really runs.
+        assert!(yes(json!({"command": "cargo test 'a;b' \"c d\""})));
+        assert!(allows(
+            "commandExecution:cargo test",
+            "commandExecution",
+            &json!({"command": ["bash", "-lc", "cargo test -p x"]})
+        ));
+        assert!(allows(
+            "commandExecution:cargo test",
+            "commandExecution",
+            &json!({"command": "bash -lc 'cargo test'"})
+        ));
+        for bad in [
+            "bash -lc 'cargo test; rm -rf x'",
+            "bash -lc 'cargo test && curl x'",
+            "bash -lc 'rm -rf ~/w'",
+            "bash -lc 'cargo test | sh'",
+            "bash -lc \"cargo test $(id)\"",
+            "sh -c 'cargo test'",
+            "bash -lc 'bash -lc \"cargo test; id\"'",
+        ] {
+            assert!(
+                !allows(
+                    "commandExecution:cargo test",
+                    "commandExecution",
+                    &json!({"command": bad})
+                ),
+                "{bad}"
+            );
+        }
+        assert!(!allows(
+            "Bash:bash -lc",
+            "Bash",
+            &json!({"command": "bash -lc 'rm -rf ~/w'"})
+        ));
+    }
+
+    #[test]
+    fn destructive_commands_are_never_covered_by_a_rule() {
+        use serde_json::json;
+        let no = |rule: &str, c: &str| !allows(rule, "Bash", &json!({"command": c}));
+        assert!(allows(
+            "Bash:git push",
+            "Bash",
+            &json!({"command": "git push origin main"})
+        ));
+        assert!(allows(
+            "Bash:git push",
+            "Bash",
+            &json!({"command": "git push -u origin feat"})
+        ));
+        for c in [
+            "git push --force",
+            "git push -f origin main",
+            "git push --force-with-lease",
+            "git push --delete origin x",
+            "git push -d origin x",
+            "git push origin +main",
+            "git push origin :main",
+            "git push --mirror",
+            "git push -fu origin x",
+            "git push --receive-pack=evil",
+            "git -c core.sshCommand=x push",
+            "git -C / push",
+            "git --exec-path=/x push",
+        ] {
+            assert!(no("Bash:git", c), "{c}");
+            assert!(no("Bash:git push", c), "{c}");
+        }
+        assert!(no("Bash:git", "git config alias.x '!id'"));
+        assert!(no("Bash:rm", "rm -rf /"));
+        assert!(no("Bash:rm", "rm -r x"));
+        assert!(no("Bash:rm", "rm -fr x"));
+        assert!(no("Bash:rm", "rm --recursive x"));
+        assert!(allows("Bash:rm", "Bash", &json!({"command": "rm x.txt"})));
+        for (rule, c) in [
+            ("Bash:sudo", "sudo ls"),
+            ("Bash:su", "su root"),
+            ("Bash:chmod", "chmod -R 777 ."),
+            ("Bash:dd", "dd if=/dev/zero of=x"),
+            ("Bash:mkfs.ext4", "mkfs.ext4 /dev/x"),
+            ("Bash:cargo", "cargo --config build.rustc='x' build"),
+            ("Bash:cargo", "cargo -C x build"),
+            ("Bash:cargo", "cargo build --config=x"),
+        ] {
+            assert!(no(rule, c), "{c}");
+        }
+        assert!(allows(
+            "Bash:cargo",
+            "Bash",
+            &json!({"command": "cargo build --release"})
+        ));
+        // The same through the Codex wrapper.
+        assert!(!allows(
+            "commandExecution:git",
+            "commandExecution",
+            &json!({"command": "bash -lc 'git push --force'"})
+        ));
+    }
+
+    #[test]
+    fn a_stored_rule_names_a_tool_or_a_plain_command_never_a_shell_or_wrapper() {
+        for ok in [
+            "Edit",
+            "Bash:cargo test",
+            "bash:git status",
+            "Bash:git push",
+            "Bash:python3 tool.py",
+            "Bash:cargo",
+        ] {
+            assert_eq!(rule_problem(ok), None, "{ok}");
+        }
+        for bad in [
+            "",
+            "Bash",
+            "bash",
+            "commandExecution",
+            "Bash:",
+            "Bash: ",
+            ":cargo",
+            " Edit",
+            "Bash:cargo\ntest",
+            "Bash:cargo\0",
+            &format!("Bash:{}", "a".repeat(300)),
+            "Bash:sh -c",
+            "Bash:bash -lc",
+            "commandExecution:bash -lc",
+            "Bash:/bin/sh",
+            "Bash:env",
+            "Bash:xargs",
+            "Bash:sudo",
+            "Bash:nohup",
+            "Bash:time",
+            "Bash:command",
+            "Bash:exec",
+            "Bash:nice",
+            "Bash:timeout",
+            "Bash:eval",
+            "Bash:find",
+            "Bash:python3 -c",
+            "Bash:python3",
+            "Bash:node -e",
+            "Bash:node",
+            "Bash:perl -e",
+            "Bash:ruby -e",
+            "Bash:python3 -m http.server",
+            "Bash:git push --force",
+            "Bash:git -c x",
+            "Bash:rm -rf",
+            "Bash:cargo test; id",
+            "Bash:cargo $(id)",
+            "Bash:cargo test | sh",
+            "Bash:cargo >x",
+        ] {
+            assert!(rule_problem(bad).is_some(), "{bad:?}");
+        }
+        // A wrapper rule that exists anyway (stored before, or inserted directly) covers nothing.
+        let call = serde_json::json!({"command": "bash -lc 'rm -rf ~/w'"});
+        assert!(!allows(
+            "commandExecution:bash -lc",
+            "commandExecution",
+            &call
+        ));
+    }
+
+    #[test]
+    fn the_default_rule_names_the_command_that_really_runs() {
+        use serde_json::json;
+        let rule = |t: &str, i: Value| default_rule(t, &i);
+        assert_eq!(
+            rule("Bash", json!({"command": "cargo test -p x"})),
+            "Bash:cargo test"
+        );
+        assert_eq!(
+            rule(
+                "commandExecution",
+                json!({"command": ["bash", "-lc", "cargo test -p x"]})
+            ),
+            "commandExecution:cargo test"
+        );
+        assert_eq!(
+            rule(
+                "commandExecution",
+                json!({"command": "bash -lc 'cargo build --release'"})
+            ),
+            "commandExecution:cargo build"
+        );
+        // Not one simple command, or not plain: the bare tool, which a shell then refuses.
+        for i in [
+            json!({"command": "cargo test; rm x"}),
+            json!({"command": "a | b"}),
+            json!({}),
+            json!({"command": "$(id) x"}),
+        ] {
+            assert_eq!(rule("Bash", i), "Bash");
+        }
+        assert_eq!(rule("Bash", json!({"command": "git 'a b'"})), "Bash:git");
+        assert!(
+            rule_problem(&rule(
+                "commandExecution",
+                json!({"command": "bash -lc 'bash -lc x'"})
+            ))
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn a_bare_tool_entry_is_exactly_that_tool() {
+        use serde_json::json;
         // A bare tool entry is exactly that tool.
         assert!(allows("Edit", "Edit", &json!({})));
         assert!(!allows("Edit", "Write", &json!({})));
@@ -245,19 +459,10 @@ impl std::str::FromStr for PermissionMode {
     }
 }
 
-/// The command a tool call runs, when it runs one: Claude's `Bash` and Codex give `command` (a
-/// string or argv), OpenCode's `bash` its `patterns`.
+/// The first command a tool call runs, for DISPLAY and the parked Citadel copy only: it reads one
+/// `patterns` entry, so it must never decide anything. Decisions use [`commands_of`].
 pub fn command_of(input: &Value) -> Option<String> {
-    match (&input["command"], &input["patterns"][0]) {
-        (Value::String(c), _) | (_, Value::String(c)) => Some(c.clone()),
-        (Value::Array(argv), _) => Some(
-            argv.iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(" "),
-        ),
-        _ => None,
-    }
+    commands_of(input).and_then(|all| all.into_iter().next())
 }
 
 /// Every command string a tool call carries: `command` (a string, or an argv joined by spaces)
@@ -269,9 +474,12 @@ pub fn commands_of(input: &Value) -> Option<Vec<String>> {
     match &input["command"] {
         Value::Null => {}
         Value::String(c) => out.push(c.clone()),
+        // An argv is exec'd, not parsed: each word stays one word (quoted when it has to be), so
+        // `["bash", "-lc", "cargo test"]` reads as the shell command it is. A word with a quote
+        // in it cannot be quoted here, so the call is not read at all.
         Value::Array(argv) => out.push(
             argv.iter()
-                .map(Value::as_str)
+                .map(|w| w.as_str().and_then(quote_word))
                 .collect::<Option<Vec<_>>>()?
                 .join(" "),
         ),
@@ -289,6 +497,20 @@ pub fn commands_of(input: &Value) -> Option<Vec<String>> {
     (!out.is_empty() && out.iter().all(|c| c.len() <= MAX_COMMAND)).then_some(out)
 }
 
+/// `word` as one shell word: itself when plain, else in single quotes; `None` when it holds a
+/// single quote (which cannot be written inside them).
+fn quote_word(word: &str) -> Option<String> {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c);
+    match (
+        word.contains('\''),
+        !word.is_empty() && word.chars().all(plain),
+    ) {
+        (true, _) => None,
+        (false, true) => Some(word.to_owned()),
+        (false, false) => Some(format!("'{word}'")),
+    }
+}
+
 /// The most `patterns` one call may carry, and the longest command, for a rule to cover it.
 const MAX_PATTERNS: usize = 16;
 const MAX_COMMAND: usize = 4096;
@@ -297,26 +519,190 @@ const MAX_COMMAND: usize = 4096;
 /// OpenCode's `bash`. A bare rule for one would allow every command.
 pub const SHELL_TOOLS: [&str; 3] = ["Bash", "commandExecution", "bash"];
 
+/// The words of the one simple command `command` runs, or `None` when it is anything else: a
+/// list, a pipe, a redirection, an expansion, a control character, or what [`shell::tokens`]
+/// cannot read. Codex's `bash -lc '<script>'` wrapper is looked through, so a rule is matched on
+/// what really runs.
+pub fn call_words(command: &str) -> Option<Vec<String>> {
+    if command.contains(|c: char| c.is_control() && c != '\t' && c != '\n') {
+        return None;
+    }
+    match shell::pipelines(command)?.as_mut_slice() {
+        [pipeline] => match pipeline.as_mut_slice() {
+            [stage] if !stage.is_empty() => Some(std::mem::take(stage)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether `words` (one simple command) is destructive enough that no allowlist entry may cover
+/// it: it goes to a reviewer every time. A short fixed list, not a shell denylist: privilege
+/// changes, forced or deleting pushes, git and cargo options that load configuration from the
+/// command line, recursive removal and ownership changes, raw disk tools.
+pub fn hard_escalate(words: &[String]) -> bool {
+    let Some(name) = words.first() else {
+        return true;
+    };
+    let name = name.rsplit('/').next().unwrap_or("");
+    let args = &words[1..];
+    let cluster = |a: &String, letters: &str| {
+        a.len() > 1
+            && a.starts_with('-')
+            && !a.starts_with("--")
+            && a[1..].chars().any(|c| letters.contains(c))
+    };
+    match name {
+        "sudo" | "su" | "doas" | "dd" | "shred" | "mkfs" | "fdisk" | "mount" | "umount" => true,
+        n if n.starts_with("mkfs.") => true,
+        "rm" => args
+            .iter()
+            .any(|a| cluster(a, "rR") || a == "--recursive" || a == "--no-preserve-root"),
+        "chmod" | "chown" | "chgrp" => args.iter().any(|a| cluster(a, "R") || a == "--recursive"),
+        "cargo" => args
+            .iter()
+            .any(|a| a == "--config" || a.starts_with("--config=") || a == "-C" || a == "-Z"),
+        "git" => {
+            // A global option before the subcommand (`-c`, `-C`, `--exec-path`, ...) can load
+            // configuration or run another program.
+            let Some(sub) = args.iter().position(|a| !a.starts_with('-')) else {
+                return true;
+            };
+            sub > 0
+                || (args[sub] == "push"
+                    && args[sub + 1..].iter().any(|a| {
+                        cluster(a, "fd")
+                            || a.starts_with("--force")
+                            || a.starts_with("--delete")
+                            || a.starts_with("--mirror")
+                            || a.starts_with("--prune")
+                            || a.starts_with("--receive-pack")
+                            || a.starts_with("--exec")
+                            || a.starts_with('+')
+                            || a.starts_with(':')
+                    }))
+                || matches!(
+                    args[sub].as_str(),
+                    "filter-branch" | "config" | "submodule" | "daemon"
+                )
+        }
+        _ => false,
+    }
+}
+
+/// Programs whose first word makes a rule cover anything: shells, wrappers that run another
+/// command, and programs that execute their arguments.
+const WRAPPERS: [&str; 33] = [
+    "sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh", "env", "xargs", "sudo", "su",
+    "doas", "nohup", "time", "command", "exec", "nice", "timeout", "ionice", "setsid", "stdbuf",
+    "watch", "busybox", "builtin", "eval", "source", ".", "find", "awk", "gawk", "npx", "chroot",
+];
+/// Interpreters: a rule for one must name a script, never reach `-c`, `-e` or `-m`.
+const INTERPRETERS: [&str; 10] = [
+    "python",
+    "python3",
+    "node",
+    "ruby",
+    "perl",
+    "php",
+    "lua",
+    "deno",
+    "bun",
+    "osascript",
+];
+
+/// Why an allow rule (`<tool>` or `<tool>:<command prefix>`, as "allow for this issue" stores
+/// it) must not exist, if it must not: it is not short printable text, it names a whole shell,
+/// its prefix is not plain words, or it would cover a wrapper, an interpreter's inline code or
+/// something [`hard_escalate`]s.
+pub fn rule_problem(rule: &str) -> Option<&'static str> {
+    if rule.len() > 256 || rule.chars().any(char::is_control) {
+        return Some("a rule is short printable text");
+    }
+    let Some((tool, prefix)) = rule.split_once(':') else {
+        let bare_shell = SHELL_TOOLS.contains(&rule);
+        return match (rule.is_empty() || rule.trim() != rule, bare_shell) {
+            (true, _) => Some("a rule is <tool> or <tool>:<command prefix>"),
+            (_, true) => Some("a shell needs a command prefix, not the whole tool"),
+            _ => None,
+        };
+    };
+    if tool.is_empty() || tool.trim() != tool {
+        return Some("a rule is <tool> or <tool>:<command prefix>");
+    }
+    let words = match shell::tokens(prefix) {
+        Some(t) if !t.is_empty() => t
+            .into_iter()
+            .map(|t| match t {
+                shell::Token::Word(w) => Some(w),
+                shell::Token::Op(_) => None,
+            })
+            .collect::<Option<Vec<_>>>(),
+        _ => None,
+    };
+    let Some(words) = words else {
+        return Some("a rule's command prefix is plain words");
+    };
+    let first = words[0].rsplit('/').next().unwrap_or("");
+    if WRAPPERS.contains(&first) {
+        Some("a rule cannot start with a shell or a wrapper that runs another command")
+    } else if INTERPRETERS.contains(&first)
+        && (words.len() < 2 || words[1].starts_with('-') || words[1].contains('='))
+    {
+        Some("an interpreter's rule must name a script, not inline code")
+    } else if hard_escalate(&words) {
+        Some("that command always goes to a reviewer")
+    } else {
+        None
+    }
+}
+
+/// The rule an "allow for this issue" of this call stores when none is given: `<tool>:<the first
+/// two plain words of the command that really runs>`, else the bare tool.
+pub fn default_rule(tool: &str, input: &Value) -> String {
+    let words = commands_of(input)
+        .and_then(|all| all.into_iter().next())
+        .and_then(|c| call_words(&c))
+        .unwrap_or_default();
+    let plain = |w: &String| {
+        !w.is_empty()
+            && w.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "._/=:@%+,-".contains(c) && c != ':')
+    };
+    let kept: Vec<&str> = words
+        .iter()
+        .take(2)
+        .take_while(|w| plain(w))
+        .map(String::as_str)
+        .collect();
+    match kept.is_empty() {
+        true => tool.to_owned(),
+        false => format!("{tool}:{}", kept.join(" ")),
+    }
+}
+
 /// Whether allowlist `entry` covers the call: a tool name, or `<tool>:<prefix>` for a call whose
-/// every command (see [`commands_of`]) starts with the prefix's words and has no shell operator
-/// (which could chain anything on; the runner checks a chain part by part), no control character,
-/// quote-escape, brace or history mark. Anything unclear is not covered.
+/// every command (see [`commands_of`]) is ONE simple command (see [`call_words`]) that starts
+/// with the prefix's words, word for word (`npm run` covers `npm run x`, never `npm runx`), and is
+/// not [`hard_escalate`]d. Quoted words are single words. Anything unclear is not covered.
 pub fn allows(entry: &str, tool: &str, input: &Value) -> bool {
     let Some((name, prefix)) = entry.split_once(':') else {
         return entry == tool;
     };
-    // Word for word: `npm run` covers `npm run x`, never `npm runx`. Only ASCII blanks separate
-    // words: a shell does not split on U+0085 or U+2028.
-    let covers = |command: &str| {
-        let plain = !command.contains(|c: char| c.is_control() && c != '\t')
-            && !command.contains(|c: char| ";&|`$<>(){}\\!".contains(c));
-        let rest = command.trim_start_matches([' ', '\t']).strip_prefix(prefix);
-        plain
-            && rest.is_some_and(|r| {
-                r.is_empty() || r.starts_with([' ', '\t']) || prefix.ends_with(' ')
+    let rule: Option<Vec<String>> = shell::tokens(prefix).and_then(|t| {
+        t.into_iter()
+            .map(|t| match t {
+                shell::Token::Word(w) => Some(w),
+                shell::Token::Op(_) => None,
             })
+            .collect()
+    });
+    let Some(rule) = rule.filter(|r| !r.is_empty()) else {
+        return false;
     };
     name == tool
-        && !prefix.is_empty()
-        && commands_of(input).is_some_and(|all| all.iter().all(|c| covers(c)))
+        && commands_of(input).is_some_and(|all| {
+            all.iter()
+                .all(|c| call_words(c).is_some_and(|w| w.starts_with(&rule) && !hard_escalate(&w)))
+        })
 }

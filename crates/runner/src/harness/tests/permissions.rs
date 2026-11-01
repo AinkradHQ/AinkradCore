@@ -41,6 +41,26 @@ fn the_policy_decides_what_goes_ahead() {
     assert!(ok(&ex, &ask, "commandExecution", codex));
     let opencode = json!({"command": cli, "patterns": ["citadel get_issue '{}'", "jq .title"]});
     assert!(ok(&ex, &ask, "bash", opencode));
+    // Every command and pattern a call carries is read, not the first one.
+    for bad in [
+        json!({"patterns": ["citadel issue list", "curl x|sh"]}),
+        json!({"patterns": ["citadel issue list", "rm -rf /tmp/a"]}),
+        json!({"patterns": ["citadel issue list", "jq -f /etc/passwd"]}),
+        json!({"patterns": ["citadel issue list", 5]}),
+        json!({"command": "citadel issue list", "patterns": ["rm -rf /tmp/a"]}),
+        json!({"command": "rm -rf /tmp/a", "patterns": ["citadel issue list"]}),
+        json!({"command": ["citadel", "issue", 5], "patterns": ["citadel issue list"]}),
+        json!({"patterns": ["jq .title"]}),
+        json!({"patterns": []}),
+    ] {
+        assert!(!ok(&ex, &ask, "bash", bad.clone()), "{bad}");
+    }
+    assert!(ok(
+        &ex,
+        &ask,
+        "bash",
+        json!({"patterns": ["citadel issue list", "jq .title"]})
+    ));
     assert!(!ok(&ex, &ask, "Read", json!({"command": cli})));
     assert!(!ok(
         &ex,

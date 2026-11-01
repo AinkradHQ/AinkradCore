@@ -151,6 +151,7 @@ use serde::{Deserialize, Serialize};
 mod isolation;
 mod limits;
 mod policy;
+pub mod shell;
 mod workspace;
 pub use isolation::*;
 pub use limits::*;

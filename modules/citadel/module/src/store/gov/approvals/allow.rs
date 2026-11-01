@@ -20,19 +20,11 @@ pub async fn allow_for_issue(
     decide(pool, id, true, by, reply, Extra::Allow(rule), now).await
 }
 
-/// The allowlist entry that lets the escalated call through: `<tool>:<the command's first two
-/// words>` for a command (`Bash:cargo add`), else the tool.
+/// The allowlist entry that lets the escalated call through: `<tool>:<the first two plain words
+/// of the command that really runs>` (a Codex `bash -lc '<script>'` is read as its script), else
+/// the tool, which a shell then refuses (it needs a command prefix).
 pub fn allow_rule(tool: &str, input: &serde_json::Value) -> String {
-    match ainkrad_proto::runner::command_of(input) {
-        Some(c) => {
-            let words: Vec<&str> = c.split_whitespace().take(2).collect();
-            match words.is_empty() {
-                true => tool.to_owned(),
-                false => format!("{tool}:{}", words.join(" ")),
-            }
-        }
-        None => tool.to_owned(),
-    }
+    ainkrad_proto::runner::default_rule(tool, input)
 }
 
 /// The most live rules of one issue the engine looks at: a bound on the work of a pass.
@@ -56,22 +48,6 @@ pub async fn issue_allow_rules(
     .await
 }
 
-/// Why `rule` may not be stored: it must be `<tool>` or `<tool>:<command prefix>`, made of
-/// printable text, and never a bare shell tool (which would allow every command; a shell needs
-/// a command prefix).
-fn rule_problem(rule: &str) -> Option<&'static str> {
-    let (tool, prefix) = rule.split_once(':').unwrap_or((rule, "x"));
-    if rule.len() > 256 || rule.chars().any(char::is_control) {
-        Some("a rule is short printable text")
-    } else if tool.is_empty() || tool.trim() != tool || prefix.trim().is_empty() {
-        Some("a rule is <tool> or <tool>:<command prefix>")
-    } else if !rule.contains(':') && ainkrad_proto::runner::SHELL_TOOLS.contains(&tool) {
-        Some("a shell needs a command prefix, not the whole tool")
-    } else {
-        None
-    }
-}
-
 /// The issue and the entry an "allow for this issue" of `a` adds: `rule`, else the escalated
 /// call's own; refused for anything but a permission escalation on an issue.
 pub(super) fn target(a: &Approval, rule: Option<&str>) -> Result<(IssueId, String), DecideError> {
@@ -86,7 +62,7 @@ pub(super) fn target(a: &Approval, rule: Option<&str>) -> Result<(IssueId, Strin
         Some(rule) => rule.to_owned(),
         None => allow_rule(tool, &payload["input"]),
     };
-    if let Some(why) = rule_problem(&rule) {
+    if let Some(why) = ainkrad_proto::runner::rule_problem(&rule) {
         return Err(DecideError::Allow(why.to_owned()));
     }
     Ok((issue, rule))
@@ -114,35 +90,8 @@ pub(super) async fn allow_in(
     .bind(format!("+{secs} seconds"))
     .fetch_one(&mut *conn)
     .await?;
-    let details = json!({"rule": rule, "rule_id": rule_id, "issue": issue.0,
-        "expires_at": expires});
+    // The rule's text can hold arguments: the audit row names the rule by id only.
+    let details = json!({"rule_id": rule_id, "issue": issue.0, "expires_at": expires});
     let actor = user_actor(by);
     append_approval_event_as(conn, a, actor, "approval.allowed_for_issue", details).await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::rule_problem;
-
-    #[test]
-    fn a_stored_rule_names_a_tool_or_a_command_prefix_never_a_whole_shell() {
-        for ok in ["Edit", "Bash:cargo test", "bash:git status", "Bash:cargo "] {
-            assert_eq!(rule_problem(ok), None, "{ok}");
-        }
-        for bad in [
-            "",
-            "Bash",
-            "bash",
-            "commandExecution",
-            "Bash:",
-            "Bash: ",
-            ":cargo",
-            " Edit",
-            "Bash:cargo\ntest",
-            "Bash:cargo\0",
-            &format!("Bash:{}", "a".repeat(300)),
-        ] {
-            assert!(rule_problem(bad).is_some(), "{bad:?}");
-        }
-    }
 }

@@ -191,7 +191,6 @@ pub const AUDIT_ACTIONS: &[&str] = &[
     "citadel.role.created",
     "citadel.role.deleted",
     "citadel.role.updated",
-    "citadel.run.allow_rule_unapplied",
     "citadel.run.allowed_by_rule",
     "citadel.run.cancelled",
     "citadel.run.claimed",
