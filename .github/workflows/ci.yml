@@ -27,6 +27,30 @@ jobs:
       - run: make test
         env:
           AINKRAD_REQUIRE_SANDBOX: ${{ runner.os == 'Linux' && '1' || '' }}
+  exit-smoke:
+    # The real binaries end to end (Core, runner with the default terminal sandbox, ptyhost, ainkradctl):
+    # the combined exit gate's steps 1-7, which a unit test of any one of them cannot catch.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - name: Enable the Linux sandbox (bubblewrap and unprivileged user namespaces)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --unshare-all --ro-bind / / -- /bin/true
+      - run: make e2-exit
+        env:
+          AINKRAD_REQUIRE_SANDBOX: '1'
+      - name: Keep the evidence report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2-exit-report
+          path: target/e2-exit/
+          if-no-files-found: ignore
   deny:
     runs-on: ubuntu-24.04
     steps:
