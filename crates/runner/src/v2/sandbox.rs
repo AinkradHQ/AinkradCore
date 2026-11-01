@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use ainkrad_proto::runner::{Isolation, Policy, WorkspaceMode};
 use ainkrad_proto::v2::AgentStart;
@@ -66,18 +66,74 @@ const PROBE_EVERY: Duration = Duration::from_secs(2);
 /// What the probes saw. The probe forks a program, so it runs on a thread of its own, never on
 /// the async runtime, and one failure (a transient fork error under load) is not "the tier is
 /// gone": two in a row are. Starting a session still probes afresh (`prepare`), failing closed.
+///
+/// An answer is only as good as it is fresh: a probe that hangs, or a thread that died, leaves
+/// the last "ok" in place, so the tier counts as gone once no probe has succeeded for three
+/// intervals (`up_at`). The probe program itself is bounded by `PROBE_LIMIT`.
 struct Probe {
     up: AtomicBool,
     fails: AtomicU32,
+    /// Milliseconds since `born` of the last successful probe.
+    last_ok_ms: AtomicU64,
+    born: Instant,
 }
 
 impl Probe {
+    fn new(first: bool) -> Self {
+        Self {
+            up: AtomicBool::new(first),
+            fails: AtomicU32::new(if first { 0 } else { 2 }),
+            last_ok_ms: AtomicU64::new(0),
+            born: Instant::now(),
+        }
+    }
+
+    fn now_ms(&self) -> u64 {
+        u64::try_from(self.born.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
     fn record(&self, ok: bool) {
         if ok {
             self.fails.store(0, Ordering::SeqCst);
+            self.last_ok_ms.store(self.now_ms(), Ordering::SeqCst);
             self.up.store(true, Ordering::SeqCst);
         } else if self.fails.fetch_add(1, Ordering::SeqCst) + 1 >= 2 {
             self.up.store(false, Ordering::SeqCst);
+        }
+    }
+
+    /// Whether the tier is up at `now_ms`: the last probes said so, and one succeeded recently.
+    fn up_at(&self, now_ms: u64) -> bool {
+        let stale = u64::try_from(PROBE_EVERY.as_millis() * 3).unwrap_or(u64::MAX);
+        self.up.load(Ordering::SeqCst)
+            && now_ms.saturating_sub(self.last_ok_ms.load(Ordering::SeqCst)) <= stale
+    }
+}
+
+/// The longest one probe may take; past it the program is killed and the probe failed.
+const PROBE_LIMIT: Duration = Duration::from_secs(5);
+
+/// Runs `command` to the end, killing it past `limit`: whether it succeeded in time.
+fn succeeds_within(command: &mut Command, limit: Duration) -> bool {
+    use std::process::Stdio;
+    let Ok(mut child) = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let until = Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if Instant::now() < until => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
         }
     }
 }
@@ -85,10 +141,7 @@ impl Probe {
 impl ProcessSandbox {
     pub fn new(state: PathBuf, secrets: PathBuf) -> Self {
         let first = Self::available();
-        let probe = Arc::new(Probe {
-            up: AtomicBool::new(first),
-            fails: AtomicU32::new(if first { 0 } else { 2 }),
-        });
+        let probe = Arc::new(Probe::new(first));
         let weak = Arc::downgrade(&probe);
         let spawned = std::thread::Builder::new()
             .name("sandbox-probe".to_owned())
@@ -126,21 +179,17 @@ impl ProcessSandbox {
     }
 
     fn available() -> bool {
-        let program = if cfg!(target_os = "macos") {
-            "sandbox-exec"
-        } else {
-            "/usr/bin/bwrap"
-        };
         if cfg!(target_os = "macos") {
-            return Command::new("/usr/bin/sandbox-exec")
-                .args(["-p", "(version 1)(allow default)", "/usr/bin/true"])
-                .output()
-                .is_ok_and(|o| o.status.success());
+            return succeeds_within(
+                Command::new("/usr/bin/sandbox-exec").args([
+                    "-p",
+                    "(version 1)(allow default)",
+                    "/usr/bin/true",
+                ]),
+                PROBE_LIMIT,
+            );
         }
-        Command::new(program)
-            .arg("--version")
-            .output()
-            .is_ok_and(|o| o.status.success())
+        succeeds_within(Command::new("/usr/bin/bwrap").arg("--version"), PROBE_LIMIT)
     }
 
     fn add(env: &mut Vec<(String, String)>, name: &str, value: impl Into<String>) {
@@ -207,7 +256,7 @@ impl Sandbox for ProcessSandbox {
     /// Process isolation while the sandbox program works, as the probe thread last saw it; none
     /// after two failed probes in a row.
     fn tier(&self) -> Isolation {
-        if self.probe.up.load(Ordering::SeqCst) {
+        if self.probe.up_at(self.probe.now_ms()) {
             Isolation::Process
         } else {
             Isolation::None
@@ -439,11 +488,8 @@ mod tests {
 
     #[test]
     fn one_failed_probe_is_not_a_lost_tier_but_two_in_a_row_are() {
-        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-        let probe = Probe {
-            up: AtomicBool::new(true),
-            fails: AtomicU32::new(0),
-        };
+        use std::sync::atomic::Ordering;
+        let probe = Probe::new(true);
         probe.record(false);
         assert!(probe.up.load(Ordering::SeqCst), "a transient failure");
         probe.record(true);
@@ -459,5 +505,42 @@ mod tests {
             probe.up.load(Ordering::SeqCst),
             "it recovers on a good probe"
         );
+    }
+
+    #[test]
+    fn a_probe_that_hangs_or_a_dead_thread_stops_the_tier_being_offered() {
+        let probe = Probe::new(true);
+        probe.record(true);
+        let ok_at = probe.last_ok_ms.load(std::sync::atomic::Ordering::SeqCst);
+        // Fresh, then three intervals on with no success (a stalled probe or a dead thread).
+        assert!(probe.up_at(ok_at + 1_000));
+        assert!(probe.up_at(ok_at + 6_000));
+        assert!(!probe.up_at(ok_at + 6_001));
+        // A later success revives it.
+        probe
+            .last_ok_ms
+            .store(ok_at + 10_000, std::sync::atomic::Ordering::SeqCst);
+        assert!(probe.up_at(ok_at + 11_000));
+    }
+
+    #[test]
+    fn the_probe_program_is_killed_past_its_limit() {
+        use super::succeeds_within;
+        use std::time::{Duration, Instant};
+        let started = Instant::now();
+        let hung = succeeds_within(
+            std::process::Command::new("sleep").arg("30"),
+            Duration::from_millis(300),
+        );
+        assert!(!hung);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(succeeds_within(
+            &mut std::process::Command::new("true"),
+            Duration::from_secs(5)
+        ));
+        assert!(!succeeds_within(
+            &mut std::process::Command::new("false"),
+            Duration::from_secs(5)
+        ));
     }
 }
