@@ -20,13 +20,13 @@ fn polling_a_background_job_goes_ahead() {
     };
     let ok = |p: &Policy, tool, c: &str| ex.decide(p, tool, &json!({"command": c}), cwd).is_ok();
     for allowed in [
-        r#"until grep -q "ALL DONE" /tmp/wrk3-dod/summary.log; do sleep 15; done; cat /tmp/wrk3-dod/summary.log"#,
-        r#"sleep 280; grep -E "e2e|collection" /tmp/wrk3-dod/summary.log"#,
-        "sleep 5; date +%T; tail -c 600 /tmp/x.log",
-        "while grep -q RUNNING /tmp/x.log; do sleep 2m; done",
-        "until grep -q DONE /tmp/x.log\ndo\n  sleep 0.5\ndone\ntail -5 /tmp/x.log",
+        r#"until grep -q "ALL DONE" wrk3-dod/summary.log; do sleep 15; done; cat wrk3-dod/summary.log"#,
+        r#"sleep 280; grep -E "e2e|collection" wrk3-dod/summary.log"#,
+        "sleep 5; date +%T; tail -c 600 x.log",
+        "while grep -q RUNNING x.log; do sleep 2m; done",
+        "until grep -q DONE x.log\ndo\n  sleep 0.5\ndone\ntail -5 x.log",
         "sleep 300s && date -u +%s",
-        "true; tail /tmp/x.log | wc -l",
+        "true; tail x.log | wc -l",
     ] {
         assert!(ok(&policy, "Bash", allowed), "{allowed}");
     }
@@ -53,6 +53,10 @@ fn polling_a_background_job_goes_ahead() {
         "for i in 1 2; do sleep 1; done",
         "f() { sleep 1; }; f",
         "wc -l /etc/passwd",
+        // A rule never reaches outside the workspace: the log is polled by a relative path.
+        "tail /tmp/x.log",
+        "until grep -q DONE /tmp/x.log; do sleep 1; done",
+        "cat ../x.log",
     ] {
         assert!(!ok(&policy, "Bash", refused), "{refused}");
     }
