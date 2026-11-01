@@ -668,6 +668,18 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
     Ok(())
 }
 
+/// Holds `id` as supervised, as a supervisor that has not finished would (for tests).
+#[cfg(feature = "test-support")]
+pub fn hold_supervision_for_tests(app: &App, id: &str) {
+    app.agents.supervised.lock().unwrap().insert(id.to_owned());
+}
+
+/// Lets go of what [`hold_supervision_for_tests`] held.
+#[cfg(feature = "test-support")]
+pub fn release_supervision_for_tests(app: &App, id: &str) {
+    app.agents.supervised.lock().unwrap().remove(id);
+}
+
 /// The supervised session ids, for tests.
 pub fn supervised(app: &App) -> Vec<String> {
     let all = app.agents.supervised.lock().unwrap();

@@ -218,3 +218,83 @@ async fn the_queue_is_bounded_per_session_and_a_used_key_is_still_answered() {
         "a key on A must not suppress B"
     );
 }
+
+/// The secrets rule is re-applied when the wake runs, with the requester's scopes as they are
+/// then: a device that was an admin when it queued the wake and is only `agent` now has its
+/// wake dropped, and the session is not woken.
+#[tokio::test]
+async fn a_wake_by_a_requester_demoted_since_is_dropped_on_a_session_holding_secrets() {
+    use crate::jobs::{Config, Engine, Queued};
+    let fx = fx().await;
+    scheduled(&fx).await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let policy = json!({});
+    let secrets = [store::SessionSecret {
+        name: "git.token".into(),
+        var: "GIT_TOKEN".into(),
+    }];
+    let new = NewSession {
+        runner: &vm.id,
+        harness: "claude",
+        model: None,
+        prompt: Some("go"),
+        workspace: None,
+        policy: &policy,
+        secrets: &secrets,
+        created_by: &fx.dev.id,
+    };
+    let s = store::create(&fx.app.pool, &new, super::super::BY, NOW)
+        .await
+        .unwrap();
+    let ok = json!({"kind": "succeeded"});
+    store::end(&fx.app.pool, &s.id, "ended", &ok, NOW)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE core_agent_sessions SET harness_session = 'h-1' WHERE id = ?")
+        .bind(&s.id)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    let other = super::stepup::plain(&fx, "admin2", &["admin", "agent"], true).await;
+    let payload = json!({"session": s.id, "by": other.id});
+    let queued = crate::jobs::wake_platform(&fx.app.pool, NOW, "session_wake", "k", &payload, CAP)
+        .await
+        .unwrap();
+    assert_eq!(queued, Queued::New);
+    // Demoted between queueing and running.
+    sqlx::query("UPDATE core_devices SET scopes = '[\"agent\"]' WHERE id = ?")
+        .bind(&other.id)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    let wake_jobs = Arc::new(WakeJobs::default());
+    wake_jobs.attach(&fx.app);
+    let modules: Vec<Arc<dyn Module>> = vec![wake_jobs];
+    let engine = Engine::new(
+        fx.app.pool.clone(),
+        fx.app.clock.clone(),
+        &modules,
+        Config::default(),
+    );
+    assert_eq!(engine.tick().await.unwrap(), 1);
+    let why: String =
+        sqlx::query_scalar("SELECT details FROM audit_events WHERE action = 'agent.wake_dropped'")
+            .fetch_one(&fx.app.pool)
+            .await
+            .unwrap();
+    assert!(why.contains("requester_not_owner"), "{why}");
+    let after = store::get(&fx.app.pool, &s.id).await.unwrap().unwrap();
+    assert_eq!(
+        (after.state.as_str(), after.resumes),
+        ("ended", 0),
+        "not woken"
+    );
+    assert_eq!(
+        count(
+            &fx,
+            "SELECT count(*) FROM audit_events WHERE action = 'agent.woken'"
+        )
+        .await,
+        0
+    );
+}

@@ -181,3 +181,71 @@ async fn a_wake_for_a_busy_session_is_retried_then_dropped_audited_and_a_later_w
     r.halt().await;
     let _ = std::fs::remove_dir_all(&st.0);
 }
+
+/// A wake that finds an ended session still held by its previous supervisor changes nothing and
+/// is retried; once the supervisor has let go it relaunches the session and is audited once. If
+/// the supervisor never lets go, the last attempt drops the wake with an audit row.
+#[tokio::test]
+async fn a_wake_waits_for_the_previous_supervisor_to_let_go_and_is_dropped_if_it_never_does() {
+    let core = Core::start("wake-super", quick()).await;
+    let base = format!("http://{}", core.host);
+    let st = state("wake-super");
+    paired(&core, &base, None, &st).await;
+    let r = run_runner(&core, &base, &st, script("echo turn")).await;
+    let id = session(&core, &r.id, &[]).await;
+    finished(&core, &id).await;
+    // The window: the row is committed `ended`, the old supervisor is not yet gone.
+    for _ in 0..200 {
+        if !ainkrad_core_server::agents::supervised(&core.app).contains(&id) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    ainkrad_core_server::agents::hold_supervision_for_tests(&core.app, &id);
+    let (engine, clock) = queue(&core).await;
+    assert_eq!(ask(&core, &id, &r.id, "held", None).await, Queued::New);
+    engine.tick().await.unwrap();
+    let rows: Vec<(String, i64)> = sqlx::query_as("SELECT status, attempt FROM core_job_runs")
+        .fetch_all(&core.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, [("queued".to_owned(), 1)], "an error, not ok");
+    assert_eq!(
+        state_of(&core, &id).await.state,
+        "ended",
+        "nothing was reopened"
+    );
+    assert!(
+        actions(&core).await.is_empty(),
+        "and nothing is claimed in the audit log"
+    );
+    // The supervisor lets go: the retry relaunches the session, audited once.
+    ainkrad_core_server::agents::release_supervision_for_tests(&core.app, &id);
+    clock.0.fetch_add(4000, std::sync::atomic::Ordering::SeqCst);
+    engine.tick().await.unwrap();
+    let (s, _) = finished(&core, &id).await;
+    assert_eq!(s.resumes, 1);
+    assert_eq!(actions(&core).await, ["agent.woken"]);
+
+    // A supervisor that never lets go: every attempt is refused, the last one audits the drop.
+    ainkrad_core_server::agents::hold_supervision_for_tests(&core.app, &id);
+    assert_eq!(ask(&core, &id, &r.id, "stuck", None).await, Queued::New);
+    for _ in 0..7 {
+        clock.0.fetch_add(4000, std::sync::atomic::Ordering::SeqCst);
+        engine.tick().await.unwrap();
+    }
+    assert_eq!(actions(&core).await, ["agent.woken", "agent.wake_dropped"]);
+    let why: String =
+        sqlx::query_scalar("SELECT details FROM audit_events WHERE action = 'agent.wake_dropped'")
+            .fetch_one(&core.app.pool)
+            .await
+            .unwrap();
+    assert!(why.contains("supervisor_busy"), "{why}");
+    assert_eq!(
+        state_of(&core, &id).await.resumes,
+        1,
+        "never woken a second time"
+    );
+    r.halt().await;
+    let _ = std::fs::remove_dir_all(&st.0);
+}

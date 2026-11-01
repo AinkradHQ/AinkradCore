@@ -588,5 +588,28 @@ async fn the_platform_queue_is_closed_to_modules_bounded_and_forgets_its_payload
         Queued::New,
         "the queue has room again"
     );
+    // One requester's cap binds before the totals do: the same device on a second session is
+    // refused, another device is not.
+    let one = Cap {
+        total: 9,
+        per_session: 9,
+        per_requester: 1,
+    };
+    let from = |by: &'static str, session: &'static str| {
+        let (pool, now) = (fx.pool.clone(), now.clone());
+        async move {
+            let p = json!({"session": session, "by": by});
+            wake_platform(&pool, &now, name, "r", &p, one)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(from("d1", "s10").await, Queued::New);
+    assert_eq!(
+        from("d1", "s11").await,
+        Queued::Full,
+        "one device, one waiting wake"
+    );
+    assert_eq!(from("d2", "s11").await, Queued::New);
     fx.done().await;
 }

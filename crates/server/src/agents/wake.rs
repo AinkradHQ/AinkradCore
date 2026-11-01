@@ -115,6 +115,16 @@ async fn wake(app: &App, run: &Run) -> Result<(), String> {
     if !s.secrets.is_empty() && s.created_by != by.id && !has(&by, "admin") {
         return dropped(app, &s, &p.by, "requester_not_owner").await;
     }
+    // A session that is over but whose supervisor has not yet let go of it cannot be taken
+    // over: reopening it now could leave it with nobody supervising. Nothing is changed; the run
+    // is retried, and dropped (audited) on the last attempt.
+    let over = matches!(s.state.as_str(), "ended" | "lost");
+    if over && super::supervised(app).contains(&s.id) {
+        return match run.attempt >= ATTEMPTS {
+            true => dropped(app, &s, &p.by, "supervisor_busy").await,
+            false => Err("the session's previous supervisor is still finishing".to_owned()),
+        };
+    }
     let now = app.clock.now();
     match store::wake(&app.pool, &s.id, p.text.as_deref(), &now)
         .await
@@ -126,16 +136,14 @@ async fn wake(app: &App, run: &Run) -> Result<(), String> {
                 .lock()
                 .unwrap()
                 .insert(s.id.clone(), app.hub.wake_elevation());
+            // Not supervised just now (checked above): this starts its supervisor. If another
+            // path started one in between, that one drives the reopened row just the same.
+            super::supervise(app, &s.id);
             let details = json!({"key": run.key});
             let by = AuditActor::System;
             store::action(&app.pool, &s, by, "agent.woken", None, details, &p.by)
                 .await
-                .map_err(db)?;
-            // The old supervisor may still be finishing: retry until a new one has started.
-            match super::supervise(app, &s.id) {
-                true => Ok(()),
-                false => Err("the session's previous supervisor is still finishing".to_owned()),
-            }
+                .map_err(db)
         }
         // Not idle yet: retried after the backoff, and dropped (audited) on the last attempt.
         Woken::Busy if run.attempt >= ATTEMPTS => dropped(app, &s, &p.by, "busy_timeout").await,
