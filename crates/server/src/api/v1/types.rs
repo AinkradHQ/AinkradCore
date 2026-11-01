@@ -80,7 +80,9 @@
 /// 26: runner isolation capability (E8a-09): `Runner.arch` and `Runner.isolation` (tiers offered now
 ///    and the `/dev/kvm` state) in the API; `isolation` on the runner's hello and heartbeat; a
 ///    session whose policy needs a tier is refused placement where it is not offered.
-pub const API_MINOR: u32 = 26;
+/// 27: push opt-in (E2-12): `getPushKinds` and `setPushKinds` (`/api/v1/push-token/kinds`, scope
+///    `read`); registering a push token another device holds is now refused (400).
+pub const API_MINOR: u32 = 27;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

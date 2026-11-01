@@ -167,6 +167,10 @@ pub(crate) async fn revoke_in(
         .bind(seq)
         .execute(&mut *conn)
         .await?;
+    sqlx::query("DELETE FROM core_push_kinds WHERE device_seq = ?")
+        .bind(seq)
+        .execute(&mut *conn)
+        .await?;
     let details = json!({"device": id, "by_device": by_device});
     audit_device(conn, seq, "device.revoked", by, details).await?;
     Ok(true)

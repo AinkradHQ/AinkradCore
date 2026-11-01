@@ -97,6 +97,12 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `DELETE /api/v1/push-token`.
     /// - Remark: Generated from `#/paths//api/v1/push-token/delete(clearPushToken)`.
     func clearPushToken(_ input: Operations.ClearPushToken.Input) async throws -> Operations.ClearPushToken.Output
+    /// - Remark: HTTP `GET /api/v1/push-token/kinds`.
+    /// - Remark: Generated from `#/paths//api/v1/push-token/kinds/get(getPushKinds)`.
+    func getPushKinds(_ input: Operations.GetPushKinds.Input) async throws -> Operations.GetPushKinds.Output
+    /// - Remark: HTTP `PUT /api/v1/push-token/kinds`.
+    /// - Remark: Generated from `#/paths//api/v1/push-token/kinds/put(setPushKinds)`.
+    func setPushKinds(_ input: Operations.SetPushKinds.Input) async throws -> Operations.SetPushKinds.Output
     /// - Remark: HTTP `GET /api/v1/runners`.
     /// - Remark: Generated from `#/paths//api/v1/runners/get(listRunners)`.
     func listRunners(_ input: Operations.ListRunners.Input) async throws -> Operations.ListRunners.Output
@@ -492,6 +498,22 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//api/v1/push-token/delete(clearPushToken)`.
     public func clearPushToken(headers: Operations.ClearPushToken.Input.Headers = .init()) async throws -> Operations.ClearPushToken.Output {
         try await clearPushToken(Operations.ClearPushToken.Input(headers: headers))
+    }
+    /// - Remark: HTTP `GET /api/v1/push-token/kinds`.
+    /// - Remark: Generated from `#/paths//api/v1/push-token/kinds/get(getPushKinds)`.
+    public func getPushKinds(headers: Operations.GetPushKinds.Input.Headers = .init()) async throws -> Operations.GetPushKinds.Output {
+        try await getPushKinds(Operations.GetPushKinds.Input(headers: headers))
+    }
+    /// - Remark: HTTP `PUT /api/v1/push-token/kinds`.
+    /// - Remark: Generated from `#/paths//api/v1/push-token/kinds/put(setPushKinds)`.
+    public func setPushKinds(
+        headers: Operations.SetPushKinds.Input.Headers = .init(),
+        body: Operations.SetPushKinds.Input.Body
+    ) async throws -> Operations.SetPushKinds.Output {
+        try await setPushKinds(Operations.SetPushKinds.Input(
+            headers: headers,
+            body: body
+        ))
     }
     /// - Remark: HTTP `GET /api/v1/runners`.
     /// - Remark: Generated from `#/paths//api/v1/runners/get(listRunners)`.

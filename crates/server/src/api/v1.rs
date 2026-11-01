@@ -158,6 +158,10 @@ pub fn router(app: App) -> Router {
             "/api/v1/push-token",
             put(devices::set_push).delete(devices::clear_push),
         )
+        .route(
+            "/api/v1/push-token/kinds",
+            get(devices::get_push_kinds).put(devices::set_push_kinds),
+        )
         .route("/api/v1/events", get(events::replay))
         .route("/api/v1/events/ws", get(events::ws))
         .route("/api/v1/events/latest", get(events::latest))
