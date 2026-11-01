@@ -123,7 +123,13 @@ async fn ten_thousand_a_minute_to_twenty_clients_one_stalled() {
     tx.commit().await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let host = listener.local_addr().unwrap().to_string();
-    let identity = Arc::new(Identity::load_or_create(&dir).unwrap());
+    let identity = Arc::new(
+        Identity::load_or_create(
+            &dir,
+            &ainkrad_core_server::ops::secretbox::SecretBox::new(&[7; 32]),
+        )
+        .unwrap(),
+    );
     let app = App::new(
         pool.clone(),
         Arc::new(SystemClock),

@@ -11,8 +11,10 @@
 //!   (1 min to 1 h), warning once fewer than 7 days are left. The clock is a parameter, so a
 //!   test can run 90 days in a second (`renew`).
 //!
-//! ponytail: the account key and the certificate key are plain `0600` files; they move into
-//! the store encrypted at rest with the master key in E1-13.1.
+//! The account key (`account.json`) is sealed under the master key (`ops::sealed`); the
+//! certificate key (`key.pem`) is a plain `0600` file.
+//! ponytail: the certificate key stays plain: it is renewed every ~60 days and a copy of it is
+//! revoked by reordering; seal it the same way (label `acme.cert`) if that is not enough.
 //! ponytail: no lock against two Core processes ordering for one state dir; one process per
 //! state dir is the deployment (E1-15's systemd unit).
 //! ponytail: ARI (`renewal_info`) is not used: a fixed 2/3 point, which is what Let's Encrypt
@@ -32,6 +34,8 @@ use instant_acme::{
 use rcgen::{CertificateParams, CustomExtension, KeyPair};
 
 use super::tls::{Cert, Certs, challenge_key};
+use crate::ops::sealed;
+use crate::ops::secretbox::SecretBox;
 
 /// Let's Encrypt production, the default directory.
 pub const LETS_ENCRYPT: &str = "https://acme-v02.api.letsencrypt.org/directory";
@@ -53,6 +57,8 @@ pub struct Acme {
     pub ca_root: Option<PathBuf>,
     /// Where the account and certificate live: `<state>/tls`.
     pub dir: PathBuf,
+    /// The master key the account key is sealed under (`<dir>/account.json`).
+    pub seal: Arc<SecretBox>,
 }
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -86,8 +92,13 @@ impl Acme {
             None => Account::builder(),
         };
         let path = self.dir.join("account.json");
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            let creds: AccountCredentials = serde_json::from_str(&text)?;
+        // Sealed under the master key; a legacy plaintext file is sealed here, once, in place.
+        // A file that is there but will not open stops the order: never a silent new account.
+        if path.exists() {
+            let text = sealed::read(&path, &self.seal, sealed::ACME_LABEL, true, |b| {
+                serde_json::from_slice::<AccountCredentials>(b).is_ok()
+            })?;
+            let creds: AccountCredentials = serde_json::from_slice(&text)?;
             return Ok(builder()?.from_credentials(creds).await?);
         }
         let contact = format!("mailto:{}", self.contact);
@@ -102,9 +113,14 @@ impl Acme {
                 None,
             )
             .await?;
-        write_private(
-            &self.dir,
-            "account.json",
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&self.dir)?;
+        sealed::replace(
+            &self.dir.join("account.json"),
+            &self.seal,
+            sealed::ACME_LABEL,
             serde_json::to_string(&creds)?.as_bytes(),
         )?;
         tracing::info!(directory = self.directory, "ACME account created");

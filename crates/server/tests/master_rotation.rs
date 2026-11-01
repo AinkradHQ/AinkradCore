@@ -813,3 +813,158 @@ async fn a_restore_whose_secrets_name_a_key_the_archive_lacks_fails_loudly() {
         "the half-built home is removed"
     );
 }
+
+// The sealed key files (the Core identity and the ACME account) move with the master key.
+
+use ainkrad_core_server::auth::Identity;
+use ainkrad_core_server::ops::sealed;
+
+/// What `serve` has made by now: the identity, and an ACME account, both sealed under the
+/// current master key. The identity's fingerprint.
+fn put_state(h: &Home) -> String {
+    let seal = h.master();
+    let fp = Identity::load_or_create(&h.root, &seal).unwrap().fp;
+    let tls = h.root.join("tls");
+    std::fs::create_dir_all(&tls).unwrap();
+    sealed::create(
+        &tls.join("account.json"),
+        &seal,
+        sealed::ACME_LABEL,
+        b"{\"stand-in\":1}",
+    )
+    .unwrap();
+    fp
+}
+
+fn file_key(h: &Home, rel: &str) -> String {
+    sealed::key_id_of(&std::fs::read(h.root.join(rel)).unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn rotation_keeps_the_identity_and_the_account_usable_through_every_crash_window() {
+    let d = dir("sealed-files");
+    let h = home(&d.0.join("home"), 2, 1).await;
+    let fp = put_state(&h);
+    let old_id = h.master().key_id().to_owned();
+    let id_file = "core-identity.p8";
+    let account = "tls/account.json";
+    assert_eq!(file_key(&h, id_file), old_id);
+
+    // Crash after the commit, before the files: still under the old key, opened with the same
+    // identity by what serve loads; a purge keeps the retired key the file still names.
+    go(&h, Stop::BeforeFiles).await.unwrap_err();
+    assert_eq!(file_key(&h, id_file), old_id);
+    let served = h.serve_box();
+    assert_eq!(Identity::load_or_create(&h.root, &served).unwrap().fp, fp);
+    assert!(
+        purge_retired(&h.db(), &h.keys(), 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(h.names().iter().any(|n| n.ends_with(".retired")));
+
+    // Crash after the files, before the switch: under the pending key, master.key still the
+    // old one; serve opens them through the spare.
+    go(&h, Stop::BeforeSwitch).await.unwrap_err();
+    let pending = file_key(&h, id_file);
+    assert_ne!(pending, old_id);
+    assert_eq!(file_key(&h, account), pending);
+    assert_eq!(h.master().key_id(), old_id);
+    assert_eq!(
+        Identity::load_or_create(&h.root, &h.serve_box())
+            .unwrap()
+            .fp,
+        fp
+    );
+    assert!(
+        Identity::load_or_create(&h.root, &h.master()).is_err(),
+        "the old key alone does not open it, and no new identity is made"
+    );
+
+    // Done: same identity, new key, account readable; the retired key is now unnamed.
+    let r = go(&h, Stop::Never).await.unwrap();
+    assert_eq!(
+        (r.to.as_str(), h.master().key_id()),
+        (pending.as_str(), pending.as_str())
+    );
+    assert_eq!(
+        Identity::load_or_create(&h.root, &h.master()).unwrap().fp,
+        fp
+    );
+    let acct = std::fs::read(h.root.join(account)).unwrap();
+    assert_eq!(
+        sealed::open_bytes(&h.master(), sealed::ACME_LABEL, &acct)
+            .unwrap()
+            .as_slice(),
+        b"{\"stand-in\":1}"
+    );
+    assert_eq!(mode(&h.root.join(id_file)), 0o600);
+    assert_eq!(
+        purge_retired(&h.db(), &h.keys(), 0).await.unwrap(),
+        vec![old_id]
+    );
+    assert_eq!(
+        Identity::load_or_create(&h.root, &h.serve_box())
+            .unwrap()
+            .fp,
+        fp
+    );
+    h.pool.close().await;
+}
+
+#[tokio::test]
+async fn rotation_refuses_when_a_key_file_names_a_key_the_home_does_not_hold() {
+    let d = dir("sealed-unheld");
+    let h = home(&d.0.join("home"), 0, 0).await;
+    put_state(&h);
+    let before = std::fs::read(h.root.join("core-identity.p8")).unwrap();
+    // A master key that is not the one the identity was sealed under (a swapped file).
+    let master = h.keys().join("master.key");
+    std::fs::write(&master, [9u8; 32]).unwrap();
+    let e = go(&h, Stop::Never).await.unwrap_err();
+    assert!(
+        e.contains("not in") && e.contains("Nothing was changed"),
+        "{e}"
+    );
+    assert_eq!(
+        std::fs::read(h.root.join("core-identity.p8")).unwrap(),
+        before
+    );
+    assert_eq!(h.names(), vec!["master.key".to_owned()], "nothing written");
+    h.pool.close().await;
+}
+
+#[tokio::test]
+async fn backups_carry_the_sealed_identity_and_restore_it_before_during_and_after_a_rotation() {
+    let d = dir("sealed-backup");
+    let h = home(&d.0.join("home"), 1, 1).await;
+    let fp = put_state(&h);
+    let (keygen, _) = run(&["backup-keygen"], &[]).unwrap();
+    let identity = d.0.join("identity.txt");
+    std::fs::write(&identity, &keygen).unwrap();
+    let recipient = keygen
+        .lines()
+        .find_map(|l| l.strip_prefix("# public key: "))
+        .unwrap()
+        .to_owned();
+    let before = backup(&h, &recipient);
+    go(&h, Stop::BeforeSwitch).await.unwrap_err();
+    let mid = backup(&h, &recipient);
+    go(&h, Stop::Never).await.unwrap();
+    let after = backup(&h, &recipient);
+    h.pool.close().await;
+    for (name, file) in [("before", before), ("mid", mid), ("after", after)] {
+        let to = d.0.join(format!("r-{name}"));
+        restore(&file, &identity, &h.fp, &to);
+        let raw = std::fs::read(to.join("core-identity.p8")).unwrap();
+        assert!(sealed::is_sealed(&raw), "{name}: restored sealed");
+        let seal = SecretBox::for_home(&to).unwrap();
+        assert_eq!(
+            Identity::load_or_create(&to, &seal).unwrap().fp,
+            fp,
+            "{name}"
+        );
+        assert_eq!(mode(&to.join("core-identity.p8")), 0o600);
+    }
+}

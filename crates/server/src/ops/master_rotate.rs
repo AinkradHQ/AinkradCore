@@ -9,11 +9,13 @@
 //! 3. re-seals every secret under the new key in one database transaction (`reseal_all`:
 //!    fresh nonces, same associated data, verified with the new key alone before commit, audit
 //!    row in the same transaction);
+//!    Then the sealed key files (the Core identity, its pending next key, the ACME account:
+//!    `ops::sealed`) are re-sealed under the new key, each by an atomic rename, idempotent;
 //! 4. renames the pending file over `master.key` (atomic).
 //!
-//! A crash leaves one of three states, all consistent: before the commit (rows under the old
+//! A crash leaves one of these states, all consistent: before the commit (rows under the old
 //! key; a stray pending key), after the commit and before the rename (rows under the pending
-//! key; `master.key` still the old one), or done. `serve` loads retired and pending keys as
+//! key, the key files under either key; `master.key` still the old one), or done. `serve` loads retired and pending keys as
 //! spares, so it opens every row in each state; a re-run takes the pending key as its target
 //! and completes the move, a no-op for rows already there. A run on a finished rotation starts
 //! a new one. Backups carry the retired and pending keys (inside the age-encrypted archive).
@@ -27,6 +29,7 @@ use std::time::Duration;
 use sqlx::sqlite::SqlitePool;
 use zeroize::Zeroizing;
 
+use super::sealed;
 use super::secretbox::{SecretBox, key_files};
 use crate::store::{self, secrets};
 
@@ -36,7 +39,9 @@ pub enum Stop {
     Never,
     /// After re-sealing and verifying, before the transaction commits.
     BeforeCommit,
-    /// After the commit, before the new key becomes `master.key`.
+    /// After the commit, before the key files are re-sealed.
+    BeforeFiles,
+    /// After the commit and the key files, before the new key becomes `master.key`.
     BeforeSwitch,
 }
 
@@ -126,7 +131,10 @@ pub async fn rotate(
         // Refuse before writing anything when a secret's key is not here.
         let from = current.key_id().to_owned();
         let keyring = current.with_extra(spares);
-        for id in row_key_ids(&pool).await? {
+        let state = keys.parent().unwrap_or(Path::new("."));
+        let mut named = row_key_ids(&pool).await?;
+        named.extend(sealed::file_key_ids(state));
+        for id in named {
             if !keyring.holds(&id) {
                 return Err(format!(
                     "a secret is sealed under master key {id}, which is not in {} (neither the \
@@ -163,6 +171,24 @@ pub async fn rotate(
         let r = secrets::reseal_all(&pool, &keyring, &target, stop == Stop::BeforeCommit)
             .await
             .map_err(|e| e.to_string())?;
+        if stop == Stop::BeforeFiles {
+            return Err("stopped after the commit, before the key files (test)".into());
+        }
+        // The identity key (and its pending next key) and the ACME account, under the new key:
+        // a failure here leaves the rest openable (spares), and a re-run finishes.
+        for (file, label) in [
+            (
+                state.join(crate::auth::identity::FILE),
+                sealed::IDENTITY_LABEL,
+            ),
+            (
+                state.join(crate::auth::identity::NEXT),
+                sealed::IDENTITY_LABEL,
+            ),
+            (state.join("tls").join("account.json"), sealed::ACME_LABEL),
+        ] {
+            sealed::reseal(&file, label, &keyring, &target)?;
+        }
         if stop == Stop::BeforeSwitch {
             return Err("stopped after the commit, before the switch (test)".into());
         }
@@ -202,7 +228,11 @@ pub async fn purge_retired(
     let pool = store::connect(db).await?;
     let named = row_key_ids(&pool).await;
     pool.close().await;
-    let named = named?;
+    let mut named = named?;
+    // A key a sealed key file still names is in use too.
+    named.extend(sealed::file_key_ids(
+        keys.parent().unwrap_or(Path::new(".")),
+    ));
     let limit = Duration::from_secs(older_than_days.saturating_mul(86_400));
     let mut gone = Vec::new();
     for (id, path, retired) in key_files(keys)? {

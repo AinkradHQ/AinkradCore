@@ -99,6 +99,14 @@ fn aad(label: &str) -> Vec<u8> {
     out
 }
 
+impl fmt::Debug for SecretBox {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SecretBox")
+            .field("key_id", &self.id)
+            .finish()
+    }
+}
+
 impl SecretBox {
     pub fn new(key: &[u8; 32]) -> Self {
         let tagged = Zeroizing::new([b"ainkrad-master-key-id\n".as_slice(), key].concat());
@@ -177,6 +185,25 @@ impl SecretBox {
             ));
         }
         Self::from_file(path)
+    }
+
+    /// The key of the home whose files are in `home` (`<home>/keys/master.key`, with the retired
+    /// and pending keys as spares) for sealed key files. Unlike [`for_serve`](Self::for_serve)
+    /// it never returns "no key": a Core identity sealed under a key that is not here must stop
+    /// the caller, never fall back to plaintext or to a new identity (pinned clients would see
+    /// `core_identity_mismatch`).
+    pub fn for_home(home: &Path) -> std::io::Result<Self> {
+        let path = home.join("keys").join("master.key");
+        let b = Self::from_private_file(&path).map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!(
+                    "master key {}: {e}; the Core identity and the ACME account are sealed under                      it, so the Core will not start without it (restore keys/master.key from a                      backup)",
+                    path.display()
+                ),
+            )
+        })?;
+        Ok(b.with_extra(Self::load_extra(path.parent())))
     }
 
     /// The secrets broker's key for `serve`: `None`, with the reason logged, when the file is
