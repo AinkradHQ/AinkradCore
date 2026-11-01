@@ -352,7 +352,8 @@ struct Daemon<E> {
 }
 
 enum Wake {
-    Server(Option<ServerMessage>),
+    // Boxed: a policy with the isolation fields makes an `Assign` far larger than the others.
+    Server(Option<Box<ServerMessage>>),
     Out(Out),
     Check,
     House,
@@ -571,7 +572,7 @@ impl<E: Executor> Daemon<E> {
             *beat.lock().expect("beat lock") = self.beat();
             let wake = tokio::select! {
                 biased;
-                msg = recv(&mut stream, &mut heard) => Wake::Server(msg),
+                msg = recv(&mut stream, &mut heard) => Wake::Server(msg.map(Box::new)),
                 Some(out) = self.out_rx.recv() => Wake::Out(out),
                 _ = check.tick() => Wake::Check,
                 _ = house.tick() => Wake::House,
@@ -604,7 +605,7 @@ impl<E: Executor> Daemon<E> {
                     self.stopping = true;
                     vec![]
                 }
-                Wake::Server(Some(msg)) => self.on_server(msg),
+                Wake::Server(Some(msg)) => self.on_server(*msg),
                 Wake::Out(out) => self.on_out(out),
             };
             for msg in replies {
