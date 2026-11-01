@@ -276,10 +276,23 @@ fn uid_of(name: &str) -> Option<u32> {
         .flatten()
 }
 
-/// This process's uid (`id -u`).
-fn own_uid() -> Option<u32> {
-    let out = Command::new("/usr/bin/id").arg("-u").output().ok()?;
-    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+/// The runner's state dir (its key, delivered secrets) must be closed to every other account:
+/// a mode with group or other bits (the umask decides it when the dir is first created) is
+/// made 0700, and a dir the runner's user does not own is refused.
+pub fn private_state(dir: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let m = std::fs::metadata(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    if m.uid() != ainkrad_sys::getuid() {
+        return Err(format!(
+            "{} is not owned by the runner's user",
+            dir.display()
+        ));
+    }
+    if m.permissions().mode() & 0o077 != 0 {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    Ok(())
 }
 
 /// Whether shells can run as `user` here, tried for real: the account exists and is neither root
@@ -290,7 +303,7 @@ pub fn probe_user(user: &str, sandbox: bool) -> Result<(), String> {
         return Err(format!("{user:?} is not a valid account name"));
     }
     let uid = uid_of(user).ok_or_else(|| format!("there is no account {user:?} on this host"))?;
-    if uid == 0 || Some(uid) == own_uid() {
+    if uid == 0 || uid == ainkrad_sys::getuid() {
         return Err(format!(
             "{user:?} is {} and gives the shells no separation",
             if uid == 0 {
@@ -420,6 +433,20 @@ mod tests {
         if valid_user(&me) {
             assert!(probe_user(&me, false).unwrap_err().contains("own user"));
         }
+    }
+
+    #[test]
+    fn the_state_dir_is_closed_to_other_accounts_before_shells_run_as_another_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("termbox-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        private_state(&dir).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        assert!(private_state(&dir.join("missing")).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -141,7 +141,8 @@ wrapper. --terminal-hide <path> (repeatable) hides a Core kept elsewhere (its ad
 running the Core and the runner as different users is better.
 --terminal-user <account> (E2-25) runs every shell, and its sandbox wrapper, as that other,
 unprivileged account through `sudo -n`, so the `terminal` scope no longer reaches what the
-runner's user owns. It needs --enable-pty and an account that exists and is neither root nor
+runner's user owns. It needs --enable-pty, the sandbox on (it is refused with
+--terminal-sandbox=off), a state dir only the runner's user can enter (made 0700 at start) and an account that exists and is neither root nor
 the runner's user, plus a sudoers rule that lets the runner's user run the sandbox launcher
 (bwrap, or sandbox-exec on macOS) and /usr/bin/true as that account without a password. The
 runner checks all of this at start and refuses to start when any of it is missing; once on,
@@ -201,7 +202,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             )
         })
         || args.iter().filter(|a| **a == "--terminal-user").count() > 1
-        || (args.contains(&"--terminal-user") && !pty_enabled)
+        || (args.contains(&"--terminal-user") && (!pty_enabled || !terminal_sandbox))
     {
         eprintln!("{CONNECT_USAGE}");
         return ExitCode::from(2);
@@ -244,6 +245,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     let terminal_user = flag(args, "--terminal-user").map(str::to_owned);
     if let Some(user) = &terminal_user
         && let Err(e) = super::termbox::probe_user(user, terminal_sandbox)
+            .and_then(|()| super::termbox::private_state(&state.0))
     {
         eprintln!("ainkrad-runner: terminals: --terminal-user: {e}");
         return ExitCode::FAILURE;
