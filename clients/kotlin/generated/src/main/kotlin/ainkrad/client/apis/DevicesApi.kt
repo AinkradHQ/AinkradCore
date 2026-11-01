@@ -23,6 +23,7 @@ import ainkrad.client.models.Elevation
 import ainkrad.client.models.ErrorBody
 import ainkrad.client.models.Lockout
 import ainkrad.client.models.Me
+import ainkrad.client.models.PushKinds
 import ainkrad.client.models.PushToken
 import ainkrad.client.models.Rename
 import ainkrad.client.models.SetScopes
@@ -211,6 +212,39 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * GET /api/v1/push-token/kinds
+        * 
+        * 
+         * @return PushKinds
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun getPushKinds(): HttpResponse<PushKinds> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/push-token/kinds",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * GET /api/v1/devices
         * 
         * 
@@ -366,6 +400,39 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.PUT,
             "/api/v1/devices/{id}/scopes".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * PUT /api/v1/push-token/kinds
+        * 
+        * 
+         * @param pushKinds  
+         * @return PushKinds
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun setPushKinds(pushKinds: PushKinds): HttpResponse<PushKinds> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = pushKinds
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.PUT,
+            "/api/v1/push-token/kinds",
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

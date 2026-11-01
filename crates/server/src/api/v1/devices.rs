@@ -15,7 +15,7 @@ use super::types::{Timestamp, opt_ts, ts};
 use super::{ApiError, ApiResult, BY, Caller};
 use crate::api::App;
 use crate::auth::crypto::is_id;
-use crate::store::gov::{self, Refused, list_devices, set_push_token};
+use crate::store::gov::{self, Refused, get_kinds, list_devices, set_kinds, set_push_token};
 use ainkrad_core::audit::NewAuditEvent;
 use serde_json::json;
 
@@ -235,6 +235,46 @@ pub async fn clear_push(
     Extension(me): Extension<Caller>,
 ) -> ApiResult<Device> {
     push(&app, &me, None).await
+}
+
+/// The notification kinds the calling device is pushed (E2-12.3).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct PushKinds {
+    /// The kinds it opted into, e.g. `approval_needed`; `null` is every kind its scopes allow
+    /// (the default). A kind needs its scope on top: a `read` device is never sent an approval.
+    pub kinds: Option<Vec<String>>,
+}
+
+#[utoipa::path(get, path = "/api/v1/push-token/kinds", operation_id = "getPushKinds",
+    tag = "devices",
+    responses((status = 200, description = "The calling device's opt-in", body = PushKinds)))]
+pub async fn get_push_kinds(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+) -> ApiResult<PushKinds> {
+    let kinds = get_kinds(&app.pool, &me.device.id).await?;
+    Ok(Json(PushKinds { kinds }))
+}
+
+#[utoipa::path(put, path = "/api/v1/push-token/kinds", operation_id = "setPushKinds",
+    tag = "devices", request_body = PushKinds,
+    responses((status = 200, description = "The calling device is now pushed only these \
+        kinds (all when `null`)", body = PushKinds)))]
+pub async fn set_push_kinds(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Json(p): Json<PushKinds>,
+) -> ApiResult<PushKinds> {
+    let set = set_kinds(&app.pool, &me.device.id, p.kinds.as_deref())
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::InvalidArgument(why) => ApiError::bad_request(why),
+            e => e.into(),
+        })?;
+    if !set {
+        return Err(ApiError::not_found("this device is gone"));
+    }
+    get_push_kinds(State(app), Extension(me)).await
 }
 
 async fn push(app: &App, me: &Caller, token: Option<(&str, bool)>) -> ApiResult<Device> {

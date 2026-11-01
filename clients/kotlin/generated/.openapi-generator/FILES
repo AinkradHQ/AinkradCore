@@ -73,6 +73,7 @@ src/main/kotlin/ainkrad/client/models/PasskeyClaimBody.kt
 src/main/kotlin/ainkrad/client/models/PasskeyOptionsBody.kt
 src/main/kotlin/ainkrad/client/models/PasskeyRegistrationOptions.kt
 src/main/kotlin/ainkrad/client/models/PastRetention.kt
+src/main/kotlin/ainkrad/client/models/PushKinds.kt
 src/main/kotlin/ainkrad/client/models/PushToken.kt
 src/main/kotlin/ainkrad/client/models/RedeemLease.kt
 src/main/kotlin/ainkrad/client/models/Rename.kt

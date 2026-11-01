@@ -6469,6 +6469,22 @@
         ],
         "type": "object"
       },
+      "PushKinds": {
+        "description": "The notification kinds the calling device is pushed (E2-12.3).",
+        "properties": {
+          "kinds": {
+            "description": "The kinds it opted into, e.g. `approval_needed`; `null` is every kind its scopes allow\n(the default). A kind needs its scope on top: a `read` device is never sent an approval.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "PushToken": {
         "description": "The calling device's APNs token (E10.4).",
         "properties": {
@@ -9437,7 +9453,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.26.0"
+    "version": "1.27.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -11093,6 +11109,98 @@
               }
             },
             "description": "The calling device now gets pushes: what the modules' push rules pick"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "devices"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/push-token/kinds": {
+      "get": {
+        "operationId": "getPushKinds",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushKinds"
+                }
+              }
+            },
+            "description": "The calling device's opt-in"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "devices"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "put": {
+        "operationId": "setPushKinds",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushKinds"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushKinds"
+                }
+              }
+            },
+            "description": "The calling device is now pushed only these kinds (all when `null`)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
