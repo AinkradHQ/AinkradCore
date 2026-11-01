@@ -517,9 +517,12 @@ async fn escalate_in(
     let tool = e.body["tool"].as_str().unwrap_or("a tool");
     let mut input = e.body["input"].clone();
     ainkrad_core_server::store::redact::json(&mut input);
+    // The rule "allow for this issue" would store, from the whole call (not the cut below).
+    let rule = ainkrad_proto::runner::default_rule(tool, &input);
     let input: String = input.to_string().chars().take(300).collect();
     let payload = json!({"run": r.id.0, "session": s.id, "request": request, "tool": tool,
-                         "input": input, "summary": format!("{tool} needs a decision")});
+                         "input": input, "rule": rule,
+                         "summary": format!("{tool} needs a decision")});
     let new = NewApproval {
         company_id: crate::domain::org::CompanyId(company),
         kind: ApprovalKind::PermissionEscalation,

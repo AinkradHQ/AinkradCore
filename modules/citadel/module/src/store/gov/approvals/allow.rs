@@ -60,7 +60,10 @@ pub(super) fn target(a: &Approval, rule: Option<&str>) -> Result<(IssueId, Strin
     let rule = match rule.map(str::trim) {
         Some("") => return Err(DecideError::Allow("an empty rule".to_owned())),
         Some(rule) => rule.to_owned(),
-        None => allow_rule(tool, &payload["input"]),
+        None => match payload["rule"].as_str() {
+            Some(rule) => rule.to_owned(),
+            None => allow_rule(tool, &payload["input"]),
+        },
     };
     if let Some(why) = ainkrad_proto::runner::rule_problem(&rule) {
         return Err(DecideError::Allow(why.to_owned()));

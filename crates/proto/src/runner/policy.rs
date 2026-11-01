@@ -226,7 +226,6 @@ mod authority_tests {
             "bash -lc 'rm -rf ~/w'",
             "bash -lc 'cargo test | sh'",
             "bash -lc \"cargo test $(id)\"",
-            "sh -c 'cargo test'",
             "bash -lc 'bash -lc \"cargo test; id\"'",
         ] {
             assert!(
@@ -242,6 +241,12 @@ mod authority_tests {
             "Bash:bash -lc",
             "Bash",
             &json!({"command": "bash -lc 'rm -rf ~/w'"})
+        ));
+        // `sh -c 'cargo test'` really is `cargo test`.
+        assert!(allows(
+            "commandExecution:cargo test",
+            "commandExecution",
+            &json!({"command": "sh -c 'cargo test'"})
         ));
     }
 
@@ -405,12 +410,18 @@ mod authority_tests {
             assert_eq!(rule("Bash", i), "Bash");
         }
         assert_eq!(rule("Bash", json!({"command": "git 'a b'"})), "Bash:git");
-        assert!(
-            rule_problem(&rule(
-                "commandExecution",
-                json!({"command": "bash -lc 'bash -lc x'"})
-            ))
-            .is_some()
+        // A wrapper inside the script gives a wrapper rule, which is refused.
+        let wrapped = rule(
+            "commandExecution",
+            json!({"command": "bash -lc 'env FOO=1 rm x'"}),
+        );
+        assert_eq!(wrapped, "commandExecution:env FOO=1");
+        assert!(rule_problem(&wrapped).is_some());
+        // The escalated call's input arrives as the JSON text it was stored as.
+        let stored = json!(r#"{"command":["bash","-lc","cargo test -p x"]}"#);
+        assert_eq!(
+            rule("commandExecution", stored),
+            "commandExecution:cargo test"
         );
     }
 
@@ -660,6 +671,17 @@ pub fn rule_problem(rule: &str) -> Option<&'static str> {
 /// The rule an "allow for this issue" of this call stores when none is given: `<tool>:<the first
 /// two plain words of the command that really runs>`, else the bare tool.
 pub fn default_rule(tool: &str, input: &Value) -> String {
+    let parsed;
+    let input = match input {
+        Value::String(text) => match serde_json::from_str::<Value>(text) {
+            Ok(v) => {
+                parsed = v;
+                &parsed
+            }
+            Err(_) => input,
+        },
+        v => v,
+    };
     let words = commands_of(input)
         .and_then(|all| all.into_iter().next())
         .and_then(|c| call_words(&c))

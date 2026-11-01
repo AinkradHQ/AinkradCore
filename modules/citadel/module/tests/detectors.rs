@@ -1044,7 +1044,8 @@ async fn a_rule_never_allows_a_call_it_does_not_cover_in_full() {
         ("Bash", json!({"command": "cargo test $(id)"})),
         ("Bash", json!({"command": "cargo test `id`"})),
         ("Bash", json!({"command": "cargo test > /etc/passwd"})),
-        ("Bash", json!({"command": ["cargo", "test", "; id"]})),
+        ("Bash", json!({"command": ["cargo", "test", "a'b"]})),
+        ("Bash", json!({"command": ["cargo", "test\u{1b}"]})),
         (
             "Bash",
             json!({"command": format!("cargo test {}", "a".repeat(5000))}),
