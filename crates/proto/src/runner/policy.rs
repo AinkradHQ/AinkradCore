@@ -109,6 +109,15 @@ pub fn has_destructive_allow(policy: &Policy) -> bool {
 #[cfg(test)]
 mod authority_tests {
     use super::*;
+    use serde_json::json;
+
+    fn call(c: &str) -> Value {
+        json!({"command": c})
+    }
+    fn covered(rule: &str, c: &str) -> bool {
+        allows(rule, "Bash", &call(c))
+    }
+
     #[test]
     fn approval_bypasses_cannot_hide_behind_tool_aliases_or_prefixes() {
         for tool in [
@@ -131,57 +140,155 @@ mod authority_tests {
         }));
     }
 
+    /// The allowlist is the gate: a rule exists only for a listed program (and subcommand), and
+    /// covers only a call to it.
+    #[test]
+    fn a_rule_exists_only_for_the_listed_programs() {
+        for ok in [
+            "Edit",
+            "Bash:cargo test",
+            "bash:git status",
+            "Bash:git push",
+            "Bash:ls",
+            "Bash:grep",
+            "Bash:python3 tool.py",
+            "Bash:php artisan route:list",
+            "Bash:node a.js",
+            "Bash:echo",
+        ] {
+            assert_eq!(rule_problem(ok), None, "{ok}");
+        }
+        for bad in [
+            "",
+            "Bash",
+            "bash",
+            "commandExecution",
+            "Bash:",
+            "Bash: ",
+            ":cargo",
+            " Edit",
+            "Bash:cargo",
+            "Bash:cargo run",
+            "Bash:cargo install",
+            "Bash:git",
+            "Bash:git clone",
+            "Bash:git grep",
+            "Bash:git config",
+            "Bash:git pull",
+            "Bash:git rebase",
+            "Bash:git ls-remote",
+            "Bash:python3",
+            "Bash:python3 -c",
+            "Bash:python3 -X importtime -c",
+            "Bash:python3 -m x",
+            "Bash:node -e",
+            "Bash:node18 a.js",
+            "Bash:python3.12 x.py",
+            "Bash:tsx a.ts",
+            "Bash:php -r x",
+            "Bash:perl a.pl",
+            "Bash:ruby a.rb",
+            "Bash:make",
+            "Bash:make test",
+            "Bash:npm run build",
+            "Bash:npm exec rm",
+            "Bash:npx x",
+            "Bash:bundle exec x",
+            "Bash:docker run x",
+            "Bash:fd -x x",
+            "Bash:rm",
+            "Bash:rm -rf",
+            "Bash:RM -r",
+            "Bash:sudo",
+            "Bash:SUDO",
+            "Bash:sh -c",
+            "Bash:bash -lc",
+            "commandExecution:bash -lc",
+            "Bash:/bin/sh",
+            "Bash:/bin/ls",
+            "Bash:env",
+            "Bash:xargs",
+            "Bash:nohup",
+            "Bash:time",
+            "Bash:command",
+            "Bash:builtin",
+            "Bash:exec",
+            "Bash:noglob",
+            "Bash:nocorrect",
+            "Bash:then",
+            "Bash:do",
+            "Bash:if",
+            "Bash:eval",
+            "Bash:ssh host",
+            "Bash:=bash",
+            "Bash:- rm",
+            "Bash:-",
+            "Bash:FOO=1 git",
+            "Bash:\u{17f}udo",
+            "Bash:LS",
+            "Bash:rg --pre x",
+            "Bash:find -exec x",
+            "Bash:sed -i x",
+            "Bash:sort -o x",
+            "Bash:git push --force",
+            "Bash:git -c x",
+            "Bash:cargo -Zfoo build",
+            "Bash:cargo --conf x",
+            "Bash:git branch -D",
+            "Bash:cargo\ntest",
+            "Bash:cargo\0",
+            "Bash:cargo test; id",
+            "Bash:cargo $(id)",
+            "Bash:cargo test | sh",
+            "Bash:cargo >x",
+            &format!("Bash:{}", "a".repeat(300)),
+        ] {
+            assert!(rule_problem(bad).is_some(), "{bad:?}");
+        }
+    }
+
     #[test]
     fn a_rule_covers_only_a_call_it_covers_in_full() {
-        use serde_json::json;
         let rule = "Bash:cargo test";
         let yes = |input: Value| allows(rule, "Bash", &input);
-        assert!(yes(json!({"command": "cargo test"})));
-        assert!(yes(json!({"command": "  cargo test -p x"})));
+        assert!(yes(call("cargo test")));
+        assert!(yes(call("  cargo test -p x")));
         assert!(yes(json!({"command": ["cargo", "test"]})));
         assert!(yes(json!({"patterns": ["cargo test", "cargo test -p x"]})));
+        assert!(yes(call("cargo test 'a;b' \"c d\"")));
         assert!(
-            !allows(rule, "bash", &json!({"command": "cargo test"})),
+            !allows(rule, "bash", &call("cargo test")),
             "tool name is exact"
         );
-        assert!(!allows(rule, "Bash ", &json!({"command": "cargo test"})));
-        assert!(
-            !allows("Bash:", "Bash", &json!({"command": "cargo test"})),
-            "empty prefix"
-        );
+        assert!(!allows("Bash:", "Bash", &call("cargo test")));
         // One covered pattern never carries the others.
-        assert!(!yes(json!({"patterns": ["cargo test", "curl evil.sh"]})));
-        assert!(!yes(json!({"patterns": ["curl evil.sh", "cargo test"]})));
-        assert!(!yes(
-            json!({"command": "cargo test", "patterns": ["cargo test", "rm x"]})
-        ));
-        assert!(!yes(json!({"command": "rm x", "patterns": ["cargo test"]})));
-        // A call that cannot be read in full is not covered.
-        assert!(!yes(json!({"patterns": ["cargo test", 5]})));
-        assert!(!yes(json!({"patterns": "cargo test"})));
-        assert!(!yes(json!({"command": ["cargo", "test", 5]})));
-        assert!(!yes(json!({"command": 5, "patterns": ["cargo test"]})));
-        assert!(!yes(json!({"command": {"a": "cargo test"}})));
-        assert!(!yes(json!({})));
-        assert!(!yes(json!({"patterns": []})));
-        let many: Vec<_> = (0..17).map(|_| "cargo test").collect();
-        assert!(!yes(json!({"patterns": many})), "too many patterns");
-        let long = format!("cargo test {}", "a".repeat(5000));
-        assert!(!yes(json!({"command": long})), "oversize command");
-        // Word boundary, not string prefix; ASCII blanks only.
+        for bad in [
+            json!({"patterns": ["cargo test", "curl evil.sh"]}),
+            json!({"patterns": ["curl evil.sh", "cargo test"]}),
+            json!({"command": "cargo test", "patterns": ["cargo test", "rm -rf x"]}),
+            json!({"command": "rm -rf x", "patterns": ["cargo test"]}),
+            json!({"patterns": ["cargo test", 5]}),
+            json!({"patterns": "cargo test"}),
+            json!({"command": ["cargo", "test", 5]}),
+            json!({"command": 5, "patterns": ["cargo test"]}),
+            json!({"command": {"a": "cargo test"}}),
+            json!({}),
+            json!({"patterns": []}),
+            json!({"patterns": (0..17).map(|_| "cargo test").collect::<Vec<_>>()}),
+            json!({"command": format!("cargo test {}", "a".repeat(5000))}),
+            json!({"command": ["cargo", "test", "a'b"]}),
+        ] {
+            assert!(!yes(bad.clone()), "{bad}");
+        }
         for bad in [
             "cargo testx",
             "cargo\u{a0}test",
             "cargo test\u{85}x",
             "cargo test\u{2028}x",
-        ] {
-            assert!(!yes(json!({"command": bad})), "{bad:?}");
-        }
-        assert!(!yes(json!({"command": "xcargo test"})));
-        assert!(!yes(json!({"command": "./cargo test"})));
-        assert!(!yes(json!({"command": "FOO=1 cargo test"})));
-        // Operators, substitution, redirection, control characters, escapes, braces, history.
-        for bad in [
+            "xcargo test",
+            "./cargo test",
+            "FOO=1 cargo test",
+            "CARGO test",
             "cargo test; id",
             "cargo test && id",
             "cargo test || id",
@@ -201,355 +308,227 @@ mod authority_tests {
             "cargo test !!",
             "cargo test (id)",
         ] {
-            assert!(!yes(json!({"command": bad})), "{bad:?}");
+            assert!(!yes(call(bad)), "{bad:?}");
             assert!(!yes(json!({"patterns": [bad]})), "{bad:?}");
-            // An argv word is data, not shell, but a control character is still refused.
-            if bad.contains(|c: char| c.is_control() && c != '\n') {
-                assert!(!yes(json!({"command": ["cargo", "test", bad]})), "{bad:?}");
-            }
         }
-        // Quotes make one word; a wrapper is looked through to what really runs.
-        assert!(yes(json!({"command": "cargo test 'a;b' \"c d\""})));
-        assert!(allows(
-            "commandExecution:cargo test",
-            "commandExecution",
-            &json!({"command": ["bash", "-lc", "cargo test -p x"]})
-        ));
-        assert!(allows(
-            "commandExecution:cargo test",
-            "commandExecution",
-            &json!({"command": "bash -lc 'cargo test'"})
-        ));
-        for bad in [
-            "bash -lc 'cargo test; rm -rf x'",
-            "bash -lc 'cargo test && curl x'",
-            "bash -lc 'rm -rf ~/w'",
-            "bash -lc 'cargo test | sh'",
-            "bash -lc \"cargo test $(id)\"",
-            "bash -lc 'bash -lc \"cargo test; id\"'",
-        ] {
+        // A control character in a stage is refused by the shell reader itself.
+        for c in ["cargo test\u{1}", "cargo\u{7f}test", "ls\0"] {
             assert!(
-                !allows(
-                    "commandExecution:cargo test",
-                    "commandExecution",
-                    &json!({"command": bad})
-                ),
-                "{bad}"
+                shell::tokens(c).is_none() && shell::pipelines(c).is_none(),
+                "{c:?}"
             );
         }
-        assert!(!allows(
-            "Bash:bash -lc",
-            "Bash",
-            &json!({"command": "bash -lc 'rm -rf ~/w'"})
-        ));
-        // `sh -c 'cargo test'` really is `cargo test`.
-        assert!(allows(
-            "commandExecution:cargo test",
-            "commandExecution",
-            &json!({"command": "sh -c 'cargo test'"})
-        ));
+        assert!(allows("Edit", "Edit", &json!({})) && !allows("Edit", "Write", &json!({})));
     }
 
+    /// Every spelling of "run something else" in the review is simply not on the list.
     #[test]
-    fn destructive_commands_are_never_covered_by_a_rule() {
-        use serde_json::json;
-        let no = |rule: &str, c: &str| !allows(rule, "Bash", &json!({"command": c}));
-        assert!(allows(
-            "Bash:git push",
-            "Bash",
-            &json!({"command": "git push origin main"})
-        ));
-        assert!(allows(
-            "Bash:git push",
-            "Bash",
-            &json!({"command": "git push -u origin feat"})
-        ));
-        for c in [
-            "git push --force",
-            "git push -f origin main",
-            "git push --force-with-lease",
-            "git push --delete origin x",
-            "git push -d origin x",
-            "git push origin +main",
-            "git push origin :main",
-            "git push --mirror",
-            "git push -fu origin x",
-            "git push --receive-pack=evil",
-            "git -c core.sshCommand=x push",
-            "git -C / push",
-            "git --exec-path=/x push",
-        ] {
-            assert!(no("Bash:git", c), "{c}");
-            assert!(no("Bash:git push", c), "{c}");
-        }
-        assert!(no("Bash:git", "git config alias.x '!id'"));
-        assert!(no("Bash:rm", "rm -rf /"));
-        assert!(no("Bash:rm", "rm -r x"));
-        assert!(no("Bash:rm", "rm -fr x"));
-        assert!(no("Bash:rm", "rm --recursive x"));
-        assert!(allows("Bash:rm", "Bash", &json!({"command": "rm x.txt"})));
-        for (rule, c) in [
-            ("Bash:sudo", "sudo ls"),
-            ("Bash:su", "su root"),
-            ("Bash:chmod", "chmod -R 777 ."),
-            ("Bash:dd", "dd if=/dev/zero of=x"),
-            ("Bash:mkfs.ext4", "mkfs.ext4 /dev/x"),
-            ("Bash:cargo", "cargo --config build.rustc='x' build"),
-            ("Bash:cargo", "cargo -C x build"),
-            ("Bash:cargo", "cargo build --config=x"),
-        ] {
-            assert!(no(rule, c), "{c}");
-        }
-        assert!(allows(
-            "Bash:cargo",
-            "Bash",
-            &json!({"command": "cargo build --release"})
-        ));
-        // The same through the Codex wrapper.
-        assert!(!allows(
-            "commandExecution:git",
-            "commandExecution",
-            &json!({"command": "bash -lc 'git push --force'"})
-        ));
-    }
-
-    #[test]
-    fn a_stored_rule_names_a_tool_or_a_plain_command_never_a_shell_or_wrapper() {
-        for ok in [
-            "Edit",
+    fn what_is_not_listed_never_matches_a_rule() {
+        let rules = [
+            "Bash:ls",
             "Bash:cargo test",
-            "bash:git status",
+            "Bash:git status",
             "Bash:git push",
-            "Bash:cargo",
+            "Bash:grep",
+            "Bash:echo",
             "Bash:python3 tool.py",
-            "Bash:python3.12 x.py",
-            "Bash:node18 a.js",
-            "Bash:php artisan route:list",
-            "Bash:tsx a.ts",
-        ] {
-            assert_eq!(rule_problem(ok), None, "{ok}");
-        }
-        for bad in [
-            "",
-            "Bash",
-            "bash",
-            "commandExecution",
-            "Bash:",
-            "Bash: ",
-            ":cargo",
-            " Edit",
-            "Bash:cargo\ntest",
-            "Bash:cargo\0",
-            &format!("Bash:{}", "a".repeat(300)),
-            "Bash:FOO=1 git",
-            "Bash:RM -r",
-            "Bash:SUDO",
-            "Bash:swift build",
-            "Bash:sed -n",
-            "Bash:ssh host",
-            "Bash:uv run",
-            "Bash:bunx x",
-            "Bash:arch -x86_64 ls",
-            "Bash:caffeinate ls",
-            "Bash:flock x ls",
-            "Bash:script -c ls",
-            "Bash:python3.12 -c x",
-            "Bash:node18 -e a",
-            "Bash:pythonw",
-            "Bash:deno eval x",
-            "Bash:php -r x",
-            "Bash:perl -Mx a.pl",
-            "Bash:tar --to-command=x",
-            "Bash:rsync -e ssh",
-            "Bash:git push --forc",
-            "Bash:cargo -Zfoo build",
-            "Bash:cargo --conf x",
-            "Bash:sh -c",
-            "Bash:bash -lc",
-            "commandExecution:bash -lc",
-            "Bash:/bin/sh",
-            "Bash:env",
-            "Bash:xargs",
-            "Bash:sudo",
-            "Bash:nohup",
-            "Bash:time",
-            "Bash:command",
-            "Bash:exec",
-            "Bash:nice",
-            "Bash:timeout",
-            "Bash:eval",
-            "Bash:find",
-            "Bash:python3 -c",
-            "Bash:python3",
-            "Bash:node -e",
-            "Bash:node",
-            "Bash:perl -e",
-            "Bash:ruby -e",
-            "Bash:python3 -m http.server",
-            "Bash:git push --force",
-            "Bash:git -c x",
-            "Bash:rm -rf",
-            "Bash:cargo test; id",
-            "Bash:cargo $(id)",
-            "Bash:cargo test | sh",
-            "Bash:cargo >x",
-        ] {
-            assert!(rule_problem(bad).is_some(), "{bad:?}");
-        }
-        // A wrapper rule that exists anyway (stored before, or inserted directly) covers nothing.
-        let call = serde_json::json!({"command": "bash -lc 'rm -rf ~/w'"});
-        assert!(!allows(
-            "commandExecution:bash -lc",
-            "commandExecution",
-            &call
-        ));
-    }
-
-    #[test]
-    fn case_settings_prefixes_and_runners_do_not_get_past_the_list() {
-        use serde_json::json;
-        let call = |c: &str| json!({"command": c});
-        let no = |rule: &str, c: &str| !allows(rule, "Bash", &call(c));
-        // macOS looks programs up without regard to case; versions and paths do not matter.
-        for c in [
-            "RM -rf x",
-            "Rm -fr x",
-            "/bin/RM -r x",
-            "SUDO ls",
-            "Git push --force",
-            "GIT -c x push",
-            "CHMOD -R 7 .",
-        ] {
-            assert!(
-                no("Bash:rm", c) && no("Bash:sudo", c) && no("Bash:git", c) && no("Bash:chmod", c),
-                "{c}"
-            );
-        }
-        for c in [
-            "BASH -c 'ls'",
-            "Python3.12 -c x",
-            "NODE18 -e x",
-            "Env ls",
-            "XARGS ls",
-            "pythonw x.py",
-        ] {
-            assert!(
-                no("Bash:bash", c) && no("Bash:python3", c) && no("Bash:env", c),
-                "{c}"
-            );
-        }
-        // An interpreter with a named script is a script run; its arguments are the script's.
-        assert!(allows(
-            "Bash:php artisan",
-            "Bash",
-            &call("php artisan migrate -n -r")
-        ));
-        assert!(allows(
-            "Bash:python3 tool.py",
-            "Bash",
-            &call("python3 tool.py -c x")
-        ));
-        assert!(!allows(
-            "Bash:python3 tool.py",
-            "Bash",
-            &call("python3 -c x tool.py")
-        ));
-        assert!(!allows(
-            "Bash:python3 tool.py",
-            "Bash",
-            &call("python3 -m tool.py")
-        ));
-        assert!(!allows(
             "Bash:node a.js",
-            "Bash",
-            &call("node --require x a.js")
-        ));
-        // A leading assignment changes how the program runs: never covered.
+            "Bash:php artisan",
+            "Bash:find",
+            "Bash:rg",
+            "Bash:sed",
+            "Bash:sort",
+            "Bash:cat",
+        ];
         for c in [
+            "=bash -c ls",
+            "=ls",
+            "- rm -rf x",
+            "-rm",
+            "noglob rm x",
+            "nocorrect rm x",
+            "command rm x",
+            "builtin rm x",
+            "exec rm x",
+            "then rm -rf x",
+            "do rm x",
+            "else rm x",
+            "if rm x",
+            "{ rm x",
+            "npm exec rm",
+            "npm run build",
+            "npx rm",
+            "bundle exec rm",
+            "docker run x",
+            "make x",
+            "rg --pre rm x",
+            "rg --pre=rm x",
+            "rg --pr=rm x",
+            "fd -x rm",
+            "fd -X rm",
+            "git grep -O rm x",
+            "git clone --template=x u",
+            "git clone -u x y",
+            "git pull --rebase",
+            "python3 -X importtime -c x",
+            "python3 -c x",
+            "python3 -m x",
+            "python3 -W error a.py",
+            "python3 -",
+            "python3 /abs/a.py",
+            "python3 ../a.py",
+            "python3 a.py",
+            "node -e x",
+            "node --eval x",
+            "node -r x a.js",
+            "node a.js",
+            "php -r x",
+            "perl -e x",
+            "ruby -e x",
+            "python3.12 a.py",
+            "node18 a.js",
+            "\u{17f}udo ls",
+            "\u{212a}it status",
+            "\u{ff4c}s",
+            "LS",
+            "Ls",
+            "CARGO test",
+            "GIT status",
+            "RM -rf x",
+            "SUDO ls",
+            "/bin/ls",
+            "./ls",
+            "~/ls",
+            "FOO=1 ls",
             "GIT_SSH_COMMAND=x git push",
             "RUSTC_WRAPPER=x cargo build",
-            "FOO=1 cargo test",
-            "PATH=/tmp cargo test",
-            "LD_PRELOAD=x cargo test",
-            "BASH_ENV=x ls",
+            "PATH=/tmp ls",
             "A=b",
         ] {
-            assert!(
-                no("Bash:git push", c) && no("Bash:cargo", c) && no("Bash:FOO=1 cargo", c),
-                "{c}"
-            );
+            for rule in rules {
+                // The rules are fine; only a call that matches both rule and table can pass.
+                let listed_call = covered(rule, c);
+                let expected = matches!(
+                    (rule, c),
+                    ("Bash:python3 tool.py", "python3 tool.py") | ("Bash:node a.js", "node a.js")
+                );
+                assert_eq!(listed_call, expected, "{rule} vs {c}");
+            }
         }
-        // Abbreviated long options are the same option.
-        for c in [
-            "git push --del origin x",
-            "git push --mirr",
-            "git push --forc",
-            "git push --force-w",
-            "git push --f",
-            "git fetch --upload-pack=x",
-            "git fetch --upl=x",
-            "git pull --rece=x",
-            "git ls-remote --exe=x",
-            "git rebase --exec x",
-            "git rebase -x x",
-            "git clone -u x y",
-            "git clone --config x=y u",
-            "git clone -c x=y u",
-            "git push --repo=x",
+        // The same words as an entry never become a rule.
+        assert!(rule_problem("Bash:=bash").is_some() && rule_problem("Bash:noglob rm").is_some());
+    }
+
+    /// The listed programs keep their guards (a second layer, including abbreviations).
+    #[test]
+    fn listed_programs_keep_their_dangerous_options_out() {
+        for (rule, c) in [
+            ("Bash:git push", "git push --force"),
+            ("Bash:git push", "git push -f origin main"),
+            ("Bash:git push", "git push --force-with-lease"),
+            ("Bash:git push", "git push --del origin x"),
+            ("Bash:git push", "git push -d origin x"),
+            ("Bash:git push", "git push origin +main"),
+            ("Bash:git push", "git push origin :main"),
+            ("Bash:git push", "git push --mirr"),
+            ("Bash:git push", "git push --forc"),
+            ("Bash:git push", "git push --f"),
+            ("Bash:git push", "git push --receive-pack=x"),
+            ("Bash:git push", "git push --repo=x"),
+            ("Bash:git push", "git push -fu origin x"),
+            ("Bash:git fetch", "git fetch --upload-pack=x"),
+            ("Bash:git fetch", "git fetch --upl=x"),
+            ("Bash:git fetch", "git fetch --prune"),
+            ("Bash:git log", "git log --output=x"),
+            ("Bash:git diff", "git diff --ext-diff"),
+            ("Bash:git diff", "git diff -O x"),
+            ("Bash:git show", "git show --textc"),
+            ("Bash:git branch", "git branch -D x"),
+            ("Bash:git branch", "git branch --delete x"),
+            ("Bash:git branch", "git branch -m a b"),
+            ("Bash:git status", "git -c core.pager=x status"),
+            ("Bash:git status", "git -C / status"),
+            ("Bash:cargo test", "cargo -Zunstable-options test"),
+            ("Bash:cargo test", "cargo test --conf x=y"),
+            ("Bash:cargo build", "cargo build --config=x"),
+            ("Bash:find", "find . -exec rm {} ;"),
+            ("Bash:find", "find . -delete"),
+            ("Bash:find", "find . -ok x"),
+            ("Bash:find", "find . -fprint x"),
+            ("Bash:rg", "rg --pre rm x"),
+            ("Bash:rg", "rg --pr=rm x"),
+            ("Bash:rg", "rg -z x"),
+            ("Bash:sort", "sort -o out in"),
+            ("Bash:sort", "sort --compress-program=x a"),
+            ("Bash:sed", "sed -i s/a/b/ f"),
+            ("Bash:sed", "sed -e 1e f"),
+            ("Bash:sed", "sed s/a/b/e f"),
+            ("Bash:sed", "sed s/a/b/w;x f"),
+            ("Bash:sed", "sed 1e f"),
+            ("Bash:sed", "sed -f s f"),
+            ("Bash:sed", "sed --expression=1e f"),
+            ("Bash:sed", "sed -n 1w x f"),
+            ("Bash:uniq", "uniq in out"),
+            ("Bash:php artisan", "php -r x artisan"),
         ] {
-            assert!(no("Bash:git", c), "{c}");
+            assert!(!covered(rule, c), "{rule} vs {c}");
         }
-        for c in ["rm --recur x", "rm --no-p /", "rm --r x"] {
-            assert!(no("Bash:rm", c), "{c}");
-        }
-        for c in [
-            "cargo -Zunstable-options build",
-            "cargo -Zx test",
-            "cargo --conf x=y build",
-            "cargo -C x build",
+        for (rule, c) in [
+            ("Bash:git push", "git push -u origin feat"),
+            ("Bash:git push", "git push origin main"),
+            ("Bash:git status", "git status -sb"),
+            ("Bash:git log", "git log --oneline -5"),
+            ("Bash:find", "find . -name x -type f"),
+            ("Bash:rg", "rg foo src"),
+            ("Bash:sed", "sed -n 5p f"),
+            ("Bash:sed", "sed s/a/b/g f"),
+            ("Bash:sed", "sed -n 2,4p f"),
+            ("Bash:sort", "sort -u f"),
+            ("Bash:uniq", "uniq -c f"),
+            ("Bash:php artisan", "php artisan migrate -n -r"),
+            ("Bash:python3 tool.py", "python3 tool.py -c x"),
         ] {
-            assert!(no("Bash:cargo", c), "{c}");
+            assert!(covered(rule, c), "{rule} vs {c}");
         }
-        for c in [
-            "tar --to-command=x -xf a",
-            "tar --checkpoint-action=exec=x -cf a b",
-            "tar -I x -cf a b",
-            "tar --use-compress=x -cf a",
-        ] {
-            assert!(no("Bash:tar", c), "{c}");
-        }
-        for c in [
-            "rsync -e x a b",
-            "rsync -ae x a b",
-            "rsync --rsh=x a b",
-            "rsync --rsync-p=x a b",
-        ] {
-            assert!(no("Bash:rsync", c), "{c}");
-        }
-        for c in ["sed -i s/a/b/ f", "sed 1e\\ id f", "sed -n 1p f"] {
-            assert!(no("Bash:sed", c), "{c}");
-        }
-        // Wrapped scripts, with extra positional words and flags before `-c`.
+    }
+
+    #[test]
+    fn wrapped_scripts_are_matched_on_what_runs() {
         let rule = "commandExecution:cargo test";
         let wrapped = |c: &str| allows(rule, "commandExecution", &call(c));
         assert!(wrapped("bash -lc 'cargo test' x y"));
         assert!(wrapped("BASH -c 'cargo test'"));
         assert!(wrapped("/bin/zsh -l -c 'cargo test -p x'"));
         assert!(wrapped("sh -ic 'cargo test'"));
+        assert!(wrapped("sh -c 'cargo test'"));
+        assert!(allows(
+            rule,
+            "commandExecution",
+            &json!({"command": ["bash", "-lc", "cargo test -p x"]})
+        ));
         for bad in [
+            "bash -lc 'cargo test; rm -rf x'",
+            "bash -lc 'cargo test && curl x'",
+            "bash -lc 'rm -rf ~'",
             "bash -lc 'rm -rf ~' x",
-            "bash -lc 'cargo test; rm x' y",
+            "bash -lc 'cargo test | sh'",
+            "bash -lc \"cargo test $(id)\"",
+            "bash -lc 'bash -lc \"cargo test; id\"'",
             "bash --login -c 'cargo test'",
             "bash -lc 'cargo test' ; id",
             "/tmp/bash -lc 'cargo test'",
             "bash -lc",
-            "bash -lc 'cargo test' $(id)",
             "bash -x 'cargo test'",
             "dash -c 'curl x | sh'",
+            "bash -lc 'cargo test' $(id)",
         ] {
             assert!(!wrapped(bad), "{bad}");
         }
-        // A legacy rule stored or inserted before the check existed is re-checked at use.
+    }
+
+    /// A rule stored before the allowlist existed matches nothing.
+    #[test]
+    fn legacy_stored_rules_outside_the_list_match_nothing() {
         for (rule, c) in [
             ("commandExecution:bash -lc", "bash -lc 'rm -rf ~' x"),
             ("commandExecution:bash -lc", "bash -lc ls"),
@@ -560,6 +539,13 @@ mod authority_tests {
             ("Bash:git push --force", "git push --force"),
             ("Bash:python3 -c", "python3 -c x"),
             ("Bash:rm -rf", "rm -rf x"),
+            ("Bash:rm", "rm x"),
+            ("Bash:cargo", "cargo build"),
+            ("Bash:git", "git status"),
+            ("Bash:npm run", "npm run build"),
+            ("Bash:make", "make test"),
+            ("Bash:python3", "python3 a.py"),
+            ("Bash:node18 a.js", "node18 a.js"),
         ] {
             let tool = rule.split(':').next().unwrap();
             assert!(!allows(rule, tool, &call(c)), "{rule} {c}");
@@ -567,18 +553,14 @@ mod authority_tests {
         }
         assert!(rule_prefix("Bash:cargo test", "Bash").is_some());
         assert_eq!(rule_prefix("Bash:cargo test", "bash"), None);
-        // The default rule never starts with a setting.
-        assert_eq!(default_rule("Bash", &call("FOO=1 git push")), "Bash");
     }
 
     #[test]
-    fn the_default_rule_names_the_command_that_really_runs() {
-        use serde_json::json;
+    fn the_default_rule_is_offered_only_when_the_list_accepts_it() {
         let rule = |t: &str, i: Value| default_rule(t, &i);
-        assert_eq!(
-            rule("Bash", json!({"command": "cargo test -p x"})),
-            "Bash:cargo test"
-        );
+        assert_eq!(rule("Bash", call("cargo test -p x")), "Bash:cargo test");
+        assert_eq!(rule("Bash", call("ls -la src")), "Bash:ls -la");
+        assert_eq!(rule("Bash", call("ls")), "Bash:ls");
         assert_eq!(
             rule(
                 "commandExecution",
@@ -587,44 +569,35 @@ mod authority_tests {
             "commandExecution:cargo test"
         );
         assert_eq!(
-            rule(
-                "commandExecution",
-                json!({"command": "bash -lc 'cargo build --release'"})
-            ),
+            rule("commandExecution", call("bash -lc 'cargo build --release'")),
             "commandExecution:cargo build"
         );
-        // Not one simple command, or not plain: the bare tool, which a shell then refuses.
-        for i in [
-            json!({"command": "cargo test; rm x"}),
-            json!({"command": "a | b"}),
-            json!({}),
-            json!({"command": "$(id) x"}),
-        ] {
-            assert_eq!(rule("Bash", i), "Bash");
-        }
-        assert_eq!(rule("Bash", json!({"command": "git 'a b'"})), "Bash:git");
-        // A wrapper inside the script gives a wrapper rule, which is refused.
-        let wrapped = rule(
-            "commandExecution",
-            json!({"command": "bash -lc 'env FOO=1 rm x'"}),
-        );
-        assert_eq!(wrapped, "commandExecution:env FOO=1");
-        assert!(rule_problem(&wrapped).is_some());
-        // The escalated call's input arrives as the JSON text it was stored as.
-        let stored = json!(r#"{"command":["bash","-lc","cargo test -p x"]}"#);
         assert_eq!(
-            rule("commandExecution", stored),
+            rule(
+                "commandExecution",
+                json!(r#"{"command":["bash","-lc","cargo test -p x"]}"#)
+            ),
             "commandExecution:cargo test"
         );
-    }
-
-    #[test]
-    fn a_bare_tool_entry_is_exactly_that_tool() {
-        use serde_json::json;
-        // A bare tool entry is exactly that tool.
-        assert!(allows("Edit", "Edit", &json!({})));
-        assert!(!allows("Edit", "Write", &json!({})));
-        assert!(!allows("Edit", "Edit2", &json!({})));
+        // Not listed, not one simple command, or not plain: the bare tool, so "approve once".
+        for c in [
+            "cargo test; rm x",
+            "a | b",
+            "$(id) x",
+            "FOO=1 git push",
+            "rm -rf x",
+            "make test",
+            "npm run build",
+            "python3 -c x",
+            "=ls",
+            "bash -lc 'env FOO=1 rm x'",
+            "docker run x",
+            "git clone u",
+        ] {
+            assert_eq!(rule("Bash", call(c)), "Bash", "{c}");
+        }
+        assert_eq!(rule("Bash", json!({})), "Bash");
+        assert!(rule_problem("Bash").is_some());
     }
 }
 
@@ -805,7 +778,6 @@ const RUNNERS: &[&str] = &[
     "eval",
     "source",
     ".",
-    "find",
     "awk",
     "gawk",
     "npx",
@@ -821,7 +793,6 @@ const RUNNERS: &[&str] = &[
     "uv",
     "bunx",
     "swift",
-    "sed",
     "at",
     "batch",
     "crontab",
@@ -970,11 +941,187 @@ pub fn hard_escalate(words: &[String]) -> bool {
     }
 }
 
+/// What an allow rule may name. THE allowlist: a rule exists, and covers a call, only for a program
+/// listed here, with a subcommand from its list when it has one. Everything else (shells,
+/// wrappers, runners, reserved words, `noglob`, package managers, `docker`, `make`, unknown tools)
+/// is simply absent, so it can only be approved once. The deny logic in [`hard_escalate`] is a second
+/// layer over the listed programs, not the gate.
+enum Safe {
+    /// The first argument must be one of these subcommands.
+    Sub(&'static [&'static str]),
+    /// Any arguments, except those [`guard`] refuses.
+    Any,
+    /// Runs a script FILE: the first argument must be a plain relative file path, so no option of
+    /// the interpreter (`-c`, `-e`, `-m`, `-r`, `-X`, ...) can come before it.
+    Script,
+}
+
+const SAFE: &[(&str, Safe)] = &[
+    (
+        "cargo",
+        Safe::Sub(&[
+            "build", "check", "test", "clippy", "fmt", "doc", "metadata", "tree",
+        ]),
+    ),
+    (
+        "git",
+        Safe::Sub(&[
+            "status",
+            "diff",
+            "log",
+            "show",
+            "branch",
+            "rev-parse",
+            "add",
+            "commit",
+            "fetch",
+            "push",
+        ]),
+    ),
+    ("ls", Safe::Any),
+    ("cat", Safe::Any),
+    ("head", Safe::Any),
+    ("tail", Safe::Any),
+    ("wc", Safe::Any),
+    ("grep", Safe::Any),
+    ("rg", Safe::Any),
+    ("find", Safe::Any),
+    ("sed", Safe::Any),
+    ("sort", Safe::Any),
+    ("uniq", Safe::Any),
+    ("diff", Safe::Any),
+    ("jq", Safe::Any),
+    ("tree", Safe::Any),
+    ("pwd", Safe::Any),
+    ("echo", Safe::Any),
+    ("test", Safe::Any),
+    ("true", Safe::Any),
+    ("false", Safe::Any),
+    ("node", Safe::Script),
+    ("python3", Safe::Script),
+    ("python", Safe::Script),
+    ("php", Safe::Script),
+];
+
+/// A program word the table can match at all: lower-case ASCII letters, digits and `._+-`, not
+/// starting with a symbol. No case folding, no path, no `=cmd`, `- cmd`, `NAME=value` or non-ASCII.
+fn plain_program(word: &str) -> bool {
+    word.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && word
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "._+-".contains(c))
+}
+
+/// A relative file path of plain characters, with no `..`: `tool.py`, `src/a.js`, `artisan`.
+fn plain_file(word: &str) -> bool {
+    word.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_./-".contains(c))
+        && !word.split('/').any(|p| p.is_empty() || p == "..")
+}
+
+/// The options of a listed program that write, run or delete something.
+fn guard(name: &str, args: &[String]) -> bool {
+    match name {
+        "find" => args.iter().any(|a| {
+            [
+                "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf",
+                "-fls",
+            ]
+            .contains(&a.as_str())
+        }),
+        "rg" => args
+            .iter()
+            .any(|a| long(a, &["--pre", "--hostname-bin", "--search-zip"]) || cluster(a, "z")),
+        "sort" => args.iter().any(|a| {
+            cluster(a, "o") || long(a, &["--output", "--compress-program", "--files0-from"])
+        }),
+        "tree" => args
+            .iter()
+            .any(|a| cluster(a, "o") || long(a, &["--output"])),
+        // `uniq in out` writes `out`.
+        "uniq" => args.iter().filter(|a| !a.starts_with('-')).count() > 1,
+        "sed" => {
+            // Only `-n`/`-E`/`-r` and one script of the form `Np`, `N,Md` or `s/a/b/flags`.
+            let (opts, rest): (Vec<_>, Vec<_>) = args.iter().partition(|a| a.starts_with('-'));
+            let script_ok = |s: &str| {
+                let print_or_delete = !s.is_empty()
+                    && s.trim_end_matches(['p', 'd'])
+                        .chars()
+                        .all(|c| c.is_ascii_digit() || c == ',' || c == '$')
+                    && s.len() > s.trim_end_matches(['p', 'd']).len()
+                    && s.len() - s.trim_end_matches(['p', 'd']).len() == 1;
+                let substitute = s.strip_prefix("s/").is_some_and(|r| {
+                    let parts: Vec<&str> = r.split('/').collect();
+                    parts.len() == 3
+                        && parts[..2].iter().all(|p| !p.contains(['\\', ';', '\n']))
+                        && parts[2].chars().all(|c| "gpiI0123456789".contains(c))
+                });
+                print_or_delete || substitute
+            };
+            // No script yet (a rule's bare prefix) is nothing to refuse.
+            !args.is_empty()
+                && !(opts
+                    .iter()
+                    .all(|o| ["-n", "-E", "-r"].contains(&o.as_str()))
+                    && rest.first().is_some_and(|s| script_ok(s)))
+        }
+        "git" => {
+            let sub = args.first().map(String::as_str).unwrap_or("");
+            let rest = args.get(1..).unwrap_or(&[]);
+            match sub {
+                "diff" | "log" | "show" => rest
+                    .iter()
+                    .any(|a| long(a, &["--output", "--ext-diff", "--textconv"]) || cluster(a, "O")),
+                "branch" => rest.iter().any(|a| {
+                    cluster(a, "dDmMcCfu")
+                        || long(
+                            a,
+                            &[
+                                "--delete",
+                                "--move",
+                                "--copy",
+                                "--force",
+                                "--set-upstream-to",
+                                "--edit-description",
+                            ],
+                        )
+                }),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Whether `words` (one simple command) is on the allowlist: a listed program, spelled exactly,
+/// with a listed subcommand or a plain script file where the table says so, and none of its
+/// guarded options. Everything not listed is `false`: the call escalates.
+pub fn safe_call(words: &[String]) -> bool {
+    let Some(first) = words.first() else {
+        return false;
+    };
+    if !plain_program(first) {
+        return false;
+    }
+    let args = &words[1..];
+    let Some((_, kind)) = SAFE.iter().find(|(n, _)| n == first) else {
+        return false;
+    };
+    let shape = match kind {
+        Safe::Sub(subs) => args.first().is_some_and(|a| subs.contains(&a.as_str())),
+        Safe::Any => true,
+        Safe::Script => args.first().is_some_and(|a| plain_file(a)),
+    };
+    shape && !guard(first, args)
+}
+
 /// Whether a stored rule's `prefix` words cover the stage `words` of a call: the stage starts with
-/// them, word for word, and is not [`hard_escalate`]d. The ONE place a rule meets a command: both
+/// them, word for word, is on the allowlist ([`safe_call`]) and is not [`hard_escalate`]d. The ONE place a rule meets a command: both
 /// [`allows`] and the runner's chain check go through it, so they cannot drift.
 pub fn covers(prefix: &[String], words: &[String]) -> bool {
-    !prefix.is_empty() && words.starts_with(prefix) && !hard_escalate(words)
+    !prefix.is_empty() && words.starts_with(prefix) && safe_call(words) && !hard_escalate(words)
 }
 
 /// A rule entry's prefix as words, or `None` when the entry is not a usable `<tool>:<prefix>`
@@ -1008,7 +1155,9 @@ pub fn rule_problem(rule: &str) -> Option<&'static str> {
         let bare_shell = SHELL_TOOLS.contains(&rule);
         return match (rule.is_empty() || rule.trim() != rule, bare_shell) {
             (true, _) => Some("a rule is <tool> or <tool>:<command prefix>"),
-            (_, true) => Some("a shell needs a command prefix, not the whole tool"),
+            (_, true) => Some(
+                "a shell needs a safe command prefix, not the whole tool; approve this call once instead",
+            ),
             _ => None,
         };
     };
@@ -1034,13 +1183,18 @@ pub fn rule_problem(rule: &str) -> Option<&'static str> {
         Some("a rule cannot start with a shell, wrapper or interpreter that runs another command")
     } else if hard_escalate(&words) {
         Some("that command always goes to a reviewer")
+    } else if !safe_call(&words) {
+        Some(
+            "only the listed safe commands can be allowed for an issue; approve this call once instead",
+        )
     } else {
         None
     }
 }
 
 /// The rule an "allow for this issue" of this call stores when none is given: `<tool>:<the first
-/// two plain words of the command that really runs>`, else the bare tool.
+/// two (or one) plain words of the command that really runs>` when the allowlist accepts it, else
+/// the bare tool (which a shell refuses).
 pub fn default_rule(tool: &str, input: &Value) -> String {
     let parsed;
     let input = match input {
@@ -1062,19 +1216,21 @@ pub fn default_rule(tool: &str, input: &Value) -> String {
             && w.chars()
                 .all(|c| c.is_ascii_alphanumeric() || "._/=:@%+,-".contains(c) && c != ':')
     };
-    if words.first().is_some_and(|w| is_assignment(w)) {
-        return tool.to_owned();
+    // Only a rule the allowlist accepts is offered (two words, then one); otherwise the bare tool,
+    // which a shell refuses: the call can only be approved once.
+    for n in [2, 1] {
+        let kept: Vec<&str> = words
+            .iter()
+            .take(n)
+            .take_while(|w| plain(w))
+            .map(String::as_str)
+            .collect();
+        let rule = format!("{tool}:{}", kept.join(" "));
+        if kept.len() == n && rule_problem(&rule).is_none() {
+            return rule;
+        }
     }
-    let kept: Vec<&str> = words
-        .iter()
-        .take(2)
-        .take_while(|w| plain(w))
-        .map(String::as_str)
-        .collect();
-    match kept.is_empty() {
-        true => tool.to_owned(),
-        false => format!("{tool}:{}", kept.join(" ")),
-    }
+    tool.to_owned()
 }
 
 /// Whether allowlist `entry` covers the call: a tool name, or `<tool>:<prefix>` for a call whose

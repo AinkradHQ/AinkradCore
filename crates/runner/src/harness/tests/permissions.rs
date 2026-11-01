@@ -217,7 +217,6 @@ fn a_chain_goes_ahead_when_every_part_is_allowed() {
     let cwd = Path::new("/w/run-7");
     let rules = [
         "Bash:grep",
-        "Bash:npm run",
         "Bash:php artisan",
         "Bash:git status",
         "Bash:git log",
@@ -241,11 +240,10 @@ fn a_chain_goes_ahead_when_every_part_is_allowed() {
         "cat a | tr -d '\\n' | tail -c 10",
         "git status\nls\n",
         "git status || ls",
-        "npm run build; php artisan route:list | grep api",
+        "php artisan migrate; php artisan route:list | grep api",
         "grep 'a;b && c > d $(x)' src",
         "ls; echo; git status",
         "git status; citadel get_issue '{}' | jq .title",
-        "npm run",
         "cat apps/web/.env.example 2>/dev/null; grep -rn X a.yml b.yml 2>/dev/null | head -20",
         "ls missing 2> /dev/null || git status",
         "grep x '2>/dev/null' src",
@@ -281,8 +279,8 @@ fn a_chain_goes_ahead_when_every_part_is_allowed() {
         "ls; cat 'a",
         "ls &&",
         "git status | head /etc/passwd",
-        "npm runx build",
-        "npm runx; ls",
+        "npm run build; ls",
+        "ls; npm run x",
         "git statusx; ls",
         "echo hi; ls",
         "ls; rm -rf /tmp/a",
@@ -295,7 +293,7 @@ fn a_chain_goes_ahead_when_every_part_is_allowed() {
         "cat is Bash's only"
     );
     // A simple command matches word for word too.
-    assert!(!ok("Bash", "npm runx"));
+    assert!(!ok("Bash", "npm run x"));
     assert!(!ok("Bash", "git statusx"));
 }
 
@@ -602,4 +600,64 @@ fn a_rule_never_covers_a_destructive_or_wrapped_call_on_either_path() {
         .collect();
     assert!(chain_allowed(&rules, "cargo test -p x && cargo test -p y"));
     assert!(!chain_allowed(&rules, "cargo test -p x && cargo build"));
+}
+
+/// The review's list of spellings that run something else: none is on the allowlist, so on both
+/// matching paths (whole call and chain) they only ever escalate, whatever rules exist.
+#[test]
+fn what_is_not_on_the_allowlist_escalates_on_both_paths() {
+    use super::super::policy::chain_allowed;
+    let ex = HarnessExecutor::new(PathBuf::from("/w"), PathBuf::from("/c"));
+    let cwd = Path::new("/w/run-7");
+    let rules = [
+        "Bash:ls",
+        "Bash:cargo test",
+        "Bash:git status",
+        "Bash:echo",
+        "Bash:python3 a.py",
+        "Bash:grep",
+    ];
+    let p = policy(PermissionMode::Ask, &rules);
+    let usable: Vec<Vec<String>> = rules
+        .iter()
+        .filter_map(|r| ainkrad_proto::runner::rule_prefix(r, "Bash"))
+        .collect();
+    assert_eq!(usable.len(), rules.len());
+    for c in [
+        "=bash -c ls",
+        "=ls",
+        "- rm -rf x",
+        "noglob rm x",
+        "nocorrect rm x",
+        "then rm -rf x",
+        "npm exec rm",
+        "bundle exec rm",
+        "docker run x",
+        "rg --pre rm x",
+        "fd -x rm",
+        "git grep -O rm x",
+        "git clone --template=x u",
+        "python3 -X importtime -c x",
+        "python3 -c x",
+        "\u{17f}udo ls",
+        "ls\u{1}",
+        "ls\u{1b}[2J",
+        "ls; \u{1}",
+        "LS",
+        "Ls -la",
+        "CARGO test",
+        "FOO=1 ls",
+        "/bin/ls",
+        "rm -rf x",
+        "make",
+        "sudo ls",
+        "env ls",
+        "ls; =ls",
+        "ls && noglob rm x",
+        "echo hi | sh",
+    ] {
+        let covered_by_allows = ex.decide(&p, "Bash", &json!({"command": c}), cwd).is_ok();
+        assert!(!covered_by_allows, "decide: {c:?}");
+        assert!(!chain_allowed(&usable, c), "chain: {c:?}");
+    }
 }

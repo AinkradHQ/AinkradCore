@@ -13,6 +13,13 @@ pub enum Token {
 /// words, quotes, `2>/dev/null` and `;` `&&` `||` `|`: redirections, expansions, substitutions, globs,
 /// backgrounding, grouping, escapes outside double quotes, or an unterminated quote.
 pub fn tokens(command: &str) -> Option<Vec<Token>> {
+    // A control character (NUL, ESC, CR, ...) is never plain shell text; a tab and a newline are.
+    if command
+        .chars()
+        .any(|c| c.is_control() && c != '\t' && c != '\n')
+    {
+        return None;
+    }
     let mut out = vec![];
     let mut word: Option<String> = None;
     let mut chars = command.chars().peekable();
