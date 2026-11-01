@@ -771,6 +771,7 @@
       "type": "object"
     },
     "Egress": {
+      "additionalProperties": false,
       "description": "Destinations a session may (`allow`) or may not (`deny`) reach, as IP literals or CIDR\nblocks. Host names are refused: they are the runner operator's, resolved only by the\negress proxy outside the sandbox. A session's rules can only narrow what the runner allows.",
       "properties": {
         "allow": {
@@ -1287,6 +1288,7 @@
       ]
     },
     "Policy": {
+      "additionalProperties": false,
       "description": "A project's harness permission policy (1.3). Never full-auto by default.",
       "properties": {
         "allow": {

@@ -57,3 +57,28 @@ fn an_unknown_tier_or_workspace_mode_is_refused_not_defaulted() {
         );
     }
 }
+
+#[test]
+fn a_misspelt_field_is_refused_not_read_as_absent() {
+    // A typo in a new field would otherwise mean "no cap" or "no rule": refused instead.
+    for bad in [
+        json!({"mode":"ask","wal_secs":60}),
+        json!({"mode":"ask","memory":512}),
+        json!({"mode":"ask","min_isolaton":"process"}),
+        json!({"mode":"ask","egress":{"alow":["10.0.0.0/8"]}}),
+        json!({"mode":"ask","egress":{"allow":[],"extra":1}}),
+    ] {
+        assert!(
+            serde_json::from_value::<Policy>(bad.clone()).is_err(),
+            "{bad}"
+        );
+    }
+    // The old shape and every field spelt right still parse.
+    for ok in [
+        json!({"mode":"ask"}),
+        json!({"mode":"ask","allow":["Edit"],"sandboxed":true}),
+        json!({"mode":"ask","wall_secs":60,"egress":{"allow":["10.0.0.0/8"]}}),
+    ] {
+        assert!(serde_json::from_value::<Policy>(ok.clone()).is_ok(), "{ok}");
+    }
+}

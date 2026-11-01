@@ -795,3 +795,61 @@ async fn a_module_credential_is_refused_while_the_broker_is_off() {
     r.halt().await;
     let _ = std::fs::remove_dir_all(&st.0);
 }
+
+/// A policy with isolation fields is never sent to a runner that has not advertised that it
+/// enforces them (an old runner would parse the frame and drop the fields): the start is refused
+/// at the Core and the runner never hears of the session.
+#[tokio::test]
+async fn isolation_fields_are_not_sent_to_a_runner_that_has_not_advertised_them() {
+    let core = Core::start("agents-unadvertised", hub_quick()).await;
+    let base = format!("http://{}", core.host);
+    let st = state("agents-unadvertised");
+    let e = paired(&core, &base, None, &st).await;
+    let r = run_runner(&core, &base, &st, script("echo ran")).await;
+    make_admin(&core, &e.device_id).await;
+    for field in [
+        json!({"min_isolation": "process"}),
+        json!({"image": format!("sha256:{}", "ab".repeat(32))}),
+        json!({"vcpus": 2}),
+        json!({"memory_mb": 512}),
+        json!({"disk_mb": 512}),
+        json!({"wall_secs": 60}),
+        json!({"egress": {"allow": ["10.0.0.0/8"]}}),
+        json!({"workspace": "copy"}),
+    ] {
+        let mut policy = json!({"mode": "ask"});
+        policy
+            .as_object_mut()
+            .unwrap()
+            .extend(field.as_object().unwrap().clone());
+        let new = NewSession {
+            runner: &r.id,
+            harness: "fake",
+            model: None,
+            prompt: Some("go"),
+            workspace: None,
+            policy: &policy,
+            secrets: &[],
+            created_by: &r.id,
+        };
+        let s = sessions::create(
+            &core.app.pool,
+            &new,
+            AuditActor::System,
+            &core.app.clock.now(),
+        )
+        .await
+        .unwrap();
+        service::authorize_for_tests(&core.app, &s.id);
+        let refused = service::start(&core.app, &s).await.unwrap_err();
+        assert!(
+            service::describe(&refused).contains("advertised"),
+            "{field}"
+        );
+        // The runner was never sent it: the Core's row ended, with nothing running there.
+        assert!(!state_of(&core, &s.id).await.live(), "{field}");
+    }
+    // Control: a plain policy still starts.
+    assert!(!session(&core, &r.id, &[]).await.is_empty());
+    r.halt().await;
+}

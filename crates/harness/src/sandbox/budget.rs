@@ -120,6 +120,10 @@ pub(crate) struct Watch {
     tracker: Tracker,
 }
 impl Watch {
+    /// The tree this watch tracks, for a kill that reaches `setsid` escapees too.
+    pub(crate) fn tracker(&self) -> Tracker {
+        self.tracker.clone()
+    }
     pub(crate) fn stop(&self) {
         self.tracker.kill();
         self.handle.abort();

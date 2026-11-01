@@ -54,6 +54,7 @@ impl Isolation {
 /// blocks. Host names are refused: they are the runner operator's, resolved only by the
 /// egress proxy outside the sandbox. A session's rules can only narrow what the runner allows.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Egress {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow: Vec<String>,
