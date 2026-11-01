@@ -2,6 +2,7 @@
 //! `ainkrad-core-citadel citadel seed <db> <file>`. Applying the same seed twice is idempotent.
 
 use serde::Deserialize;
+use sha2::Digest;
 use sqlx::SqlitePool;
 
 /// The seed carries names and kinds only. An unknown field (a `password`, a `token`) is refused,
@@ -25,6 +26,10 @@ fn own() -> String {
     "own".to_owned()
 }
 
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// The most a seed file may be.
 const MAX_SEED_BYTES: u64 = 64 * 1024;
 
@@ -43,35 +48,57 @@ fn parse(text: &str) -> Result<Seed, BoxErr> {
     Ok(seed)
 }
 
-async fn insert(tx: &mut sqlx::SqliteConnection, seed: Seed) -> Result<usize, BoxErr> {
-    let mut changed = 0;
+/// Rows added, and companies named in the seed that already exist under another kind (left as
+/// they are, and counted so the operator is told).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Applied {
+    added: usize,
+    kind_mismatch: usize,
+}
+
+async fn insert(tx: &mut sqlx::SqliteConnection, seed: Seed) -> Result<Applied, BoxErr> {
+    let mut applied = Applied::default();
     for company in seed.companies {
         let result = sqlx::query(
             "INSERT INTO citadel_companies (name, kind) SELECT ?1, ?2 \
              WHERE NOT EXISTS (SELECT 1 FROM citadel_companies WHERE name = ?1)",
         )
         .bind(company.name.trim())
-        .bind(company.kind)
+        .bind(&company.kind)
         .execute(&mut *tx)
         .await?;
-        changed += result.rows_affected() as usize;
+        if result.rows_affected() > 0 {
+            applied.added += 1;
+        } else {
+            let kind: String = sqlx::query_scalar("SELECT kind FROM citadel_companies WHERE name = ?")
+                .bind(company.name.trim())
+                .fetch_one(&mut *tx)
+                .await?;
+            applied.kind_mismatch += usize::from(kind != company.kind);
+        }
     }
-    Ok(changed)
+    Ok(applied)
 }
 
 /// Applies the seed in one transaction (all or nothing); returns how many rows it added.
 pub async fn apply_seed(pool: &SqlitePool, text: &str) -> Result<usize, BoxErr> {
     let seed = parse(text)?;
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
-    let changed = insert(&mut tx, seed).await?;
+    let applied = insert(&mut tx, seed).await?;
     tx.commit().await?;
-    Ok(changed)
+    Ok(applied.added)
 }
 
 /// The text of a regular file of at most `MAX_SEED_BYTES`. A FIFO, a device (`/dev/zero`) or a
 /// link to one is refused before it is opened, and the read is bounded whatever the size says.
 pub fn read_seed(path: &std::path::Path) -> Result<String, BoxErr> {
+    read_seed_owned(path).map(|(text, _)| text)
+}
+
+/// `read_seed` and the uid that owns the file (the audit row records it).
+fn read_seed_owned(path: &std::path::Path) -> Result<(String, u32), BoxErr> {
     use std::io::Read;
+    use std::os::unix::fs::MetadataExt;
     if !std::fs::metadata(path)?.is_file() {
         return Err("seed is not a regular file".into());
     }
@@ -79,12 +106,13 @@ pub fn read_seed(path: &std::path::Path) -> Result<String, BoxErr> {
     if !file.metadata()?.is_file() {
         return Err("seed is not a regular file".into());
     }
+    let uid = file.metadata()?.uid();
     let mut text = String::new();
     file.take(MAX_SEED_BYTES + 1).read_to_string(&mut text)?;
     if text.len() as u64 > MAX_SEED_BYTES {
         return Err(format!("seed file is over {MAX_SEED_BYTES} bytes").into());
     }
-    Ok(text)
+    Ok((text, uid))
 }
 
 pub async fn apply_seed_file(pool: &SqlitePool, path: &std::path::Path) -> Result<usize, BoxErr> {
@@ -92,28 +120,36 @@ pub async fn apply_seed_file(pool: &SqlitePool, path: &std::path::Path) -> Resul
 }
 
 /// `ainkrad-core-citadel citadel seed <db> <file>`: the Core hook (`Module::admin`). The audit
-/// row (the system, the count and the size) is written in the seed's own transaction.
+/// row is written in the seed's own transaction and holds counts, the size, the SHA-256 of the
+/// file and the uid that owns it: never a name or any of the file's text.
 pub async fn seed_command(pool: &SqlitePool, args: &[&str]) -> Result<String, String> {
     let [file] = args else {
         return Err("usage: citadel seed <db> <seed file>".to_owned());
     };
     let run = async {
-        let text = read_seed(std::path::Path::new(file))?;
+        let (text, uid) = read_seed_owned(std::path::Path::new(file))?;
         let seed = parse(&text)?;
+        let sha256 = hex(&sha2::Sha256::digest(text.as_bytes()));
         let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
-        let added = insert(&mut tx, seed).await?;
+        let applied = insert(&mut tx, seed).await?;
         let entry = ainkrad_core::audit::NewAuditEvent {
             actor: ainkrad_core::audit::AuditActor::System,
             action: "citadel.seed.applied".to_owned(),
             entity: None,
-            details: serde_json::json!({"added": added, "bytes": text.len()}).to_string(),
+            details: serde_json::json!({"added": applied.added, "kind_mismatch": applied.kind_mismatch,
+                                "bytes": text.len(), "sha256": sha256, "file_uid": uid})
+            .to_string(),
         };
         ainkrad_core_server::store::audit::append(&mut tx, &entry).await?;
         tx.commit().await?;
-        Ok::<_, BoxErr>(added)
+        Ok::<_, BoxErr>(applied)
     };
-    let added = run.await.map_err(|e| e.to_string())?;
-    Ok(format!("seed applied: {added} added"))
+    let applied = run.await.map_err(|e| e.to_string())?;
+    let note = match applied.kind_mismatch {
+        0 => String::new(),
+        n => format!(", {n} left as they are (a different kind already exists)"),
+    };
+    Ok(format!("seed applied: {} added{note}", applied.added))
 }
 
 #[cfg(test)]
@@ -150,6 +186,42 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[tokio::test]
+    async fn the_seed_audit_row_holds_a_hash_and_a_uid_and_no_content() {
+        use std::os::unix::fs::MetadataExt;
+        let db = crate::testing::db().await;
+        let dir = std::env::temp_dir().join(format!("citadel-seed-audit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("seed.toml");
+        let text = "[[companies]]\nname = \"Distinctive Name Ltd\"\nkind = \"own\"\n";
+        std::fs::write(&file, text).unwrap();
+        seed_command(&db.pool, &[file.to_str().unwrap()]).await.unwrap();
+        // The same name under another kind is reported, not silently skipped.
+        let other = dir.join("other.toml");
+        std::fs::write(&other, "[[companies]]\nname = \"Distinctive Name Ltd\"\nkind = \"client\"\n")
+            .unwrap();
+        let said = seed_command(&db.pool, &[other.to_str().unwrap()]).await.unwrap();
+        assert!(said.contains("1 left as they are"), "{said}");
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT details FROM audit_events WHERE action = 'citadel.seed.applied' ORDER BY seq",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 2);
+        let first: serde_json::Value = serde_json::from_str(&rows[0]).unwrap();
+        assert_eq!(first["sha256"], hex(&sha2::Sha256::digest(text.as_bytes())));
+        assert_eq!(first["file_uid"], std::fs::metadata(&file).unwrap().uid());
+        assert_eq!(first["added"], 1);
+        let second: serde_json::Value = serde_json::from_str(&rows[1]).unwrap();
+        assert_eq!(second["kind_mismatch"], 1);
+        for row in &rows {
+            assert!(!row.contains("Distinctive"), "no content in the row: {row}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
