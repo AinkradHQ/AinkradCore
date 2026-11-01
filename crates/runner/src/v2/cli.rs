@@ -320,6 +320,43 @@ fn core_url(state: &super::key::State) -> Option<String> {
         .or_else(|| url.strip_prefix("http://").map(|r| format!("ws://{r}")))
 }
 
+/// `AINKRAD_AGENT_NETWORK=filtered` (E8a-01): parses the egress policy and proves the filter works
+/// on this host before any session can use it. Any failure stops the agent driver from starting:
+/// there is no fallback to another network mode. `true` when the filter is on and proven.
+async fn egress_filter(executor: &mut crate::HarnessExecutor) -> Result<bool, String> {
+    let mode = std::env::var("AINKRAD_AGENT_NETWORK").unwrap_or_default();
+    if mode != "filtered" {
+        let stray = ["ALLOW", "HOSTS", "PORTS"]
+            .iter()
+            .any(|k| std::env::var_os(format!("AINKRAD_AGENT_EGRESS_{k}")).is_some());
+        return match stray {
+            true => Err(
+                "AINKRAD_AGENT_EGRESS_* is set but AINKRAD_AGENT_NETWORK is not filtered".into(),
+            ),
+            false => Ok(false),
+        };
+    }
+    if !cfg!(target_os = "linux") {
+        return Err("AINKRAD_AGENT_NETWORK=filtered is Linux only".into());
+    }
+    let policy =
+        crate::egress::Policy::from_env()?.with_host_addresses(crate::egress::host_addresses()?);
+    let exe =
+        std::env::current_exe().map_err(|_| "cannot find the runner executable".to_owned())?;
+    crate::egress::selftest(&policy, &exe)
+        .await
+        .map_err(|why| format!("the egress filter failed its start-up check: {why}"))?;
+    let (cidrs, hosts, ports) = policy.counts();
+    tracing::info!(
+        cidrs,
+        hosts,
+        ports,
+        "egress filter proven; agent sessions may run filtered"
+    );
+    executor.egress = Some(Arc::new(policy));
+    Ok(true)
+}
+
 /// The agent driver over `<state>/agents`, driving the real harnesses (`HarnessExecutor`).
 /// Delivered secrets go to `$XDG_RUNTIME_DIR` (a tmpfs on most Linux hosts), in a dir named
 /// for this state dir so two runners never sweep each other's; else `<state>/secrets`.
@@ -337,6 +374,7 @@ async fn agents(
 ) -> Result<super::agent::AgentDriver, String> {
     let [secrets, work] = runtime_paths(state);
     let mut executor = crate::HarnessExecutor::new(work, state.join("agents-config"));
+    let egress_ready = egress_filter(&mut executor).await?;
     // The Citadel MCP server at the Core this runner is enrolled with: without it a run's harness
     // is given no MCP config, whatever token the Core minted.
     executor.mcp_url = core_url.and_then(|u| crate::core_mcp_url(&u));
@@ -357,10 +395,13 @@ async fn agents(
     }
     super::agent::AgentDriver::new(config, executor)
         .map(|d| {
-            d.with_sandbox(Arc::new(super::sandbox::ProcessSandbox::new(
-                state.to_path_buf(),
-                secrets,
-            )))
+            let sandbox = super::sandbox::ProcessSandbox::new(state.to_path_buf(), secrets)
+                .with_network(std::env::var("AINKRAD_AGENT_NETWORK").ok());
+            d.with_sandbox(Arc::new(if egress_ready {
+                sandbox.with_egress_ready()
+            } else {
+                sandbox
+            }))
         })
         .map_err(|e| e.to_string())
 }

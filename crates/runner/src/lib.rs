@@ -68,6 +68,7 @@ use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 mod connect;
+pub mod egress;
 mod executor;
 mod harness;
 pub mod load;

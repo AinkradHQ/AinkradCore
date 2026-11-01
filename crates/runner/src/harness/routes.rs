@@ -148,17 +148,22 @@ impl HarnessExecutor {
             .mcp_url
             .as_deref()
             .filter(|_| !token.expose().is_empty());
-        // A Linux session with no network (the default) reaches the MCP route through a bridge.
-        let denied = cfg!(target_os = "linux")
-            && self
-                .run_env
-                .lock()
-                .expect("run env lock")
-                .get(&job.run)
-                .is_some_and(|e| {
-                    e.iter()
-                        .any(|(n, v)| n == "AINKRAD_SANDBOX_NETWORK" && v == "deny")
-                });
+        // A Linux session with no network (`deny`, the default) or only the egress proxy (`filtered`)
+        // reaches the MCP route through a bridge.
+        let network = |want: &str| {
+            cfg!(target_os = "linux")
+                && self
+                    .run_env
+                    .lock()
+                    .expect("run env lock")
+                    .get(&job.run)
+                    .is_some_and(|e| {
+                        ainkrad_harness::last_env(e, "AINKRAD_SANDBOX_NETWORK")
+                            .is_some_and(|v| v == want)
+                    })
+        };
+        let filtered = network("filtered");
+        let denied = network("deny") || filtered;
         let bridged = mcp.filter(|_| denied).and_then(crate::mcp_bridge::parse);
         let mcp = match (&bridged, mcp) {
             (Some((_, local)), _) => Some((local.as_str(), token)),
@@ -196,6 +201,24 @@ impl HarnessExecutor {
                 ),
             ]);
         }
+        // The egress proxy of a filtered run: no policy or no socket refuses the run, never opens it.
+        let mut egress = None;
+        if filtered {
+            let Some(policy) = self.egress.clone() else {
+                return failed("this runner has no egress policy".to_owned(), "sandbox");
+            };
+            let sock = crate::egress::socket_in(&files.dir);
+            match crate::egress::start(&sock, policy) {
+                Ok(p) => egress = Some(p),
+                Err(e) => return failed(format!("the egress proxy: {e}"), "sandbox"),
+            }
+            let exe = self
+                .forwarder
+                .clone()
+                .or_else(|| std::env::current_exe().ok())
+                .unwrap_or_default();
+            bridge_env.extend(crate::egress::sandbox_env(&sock, &exe));
+        }
         let config_dir = match self.config_dir(job) {
             Ok(dir) => dir,
             Err(why) => return failed(why, "account"),
@@ -204,10 +227,14 @@ impl HarnessExecutor {
             return failed(format!("{}: {e}", config_dir.display()), "account");
         }
         let mut env_allow = self.env_allow.clone();
-        // The runner's `--env` first: everything the runner sets after it wins over it.
+        // The runner's `--env` first. A variable set more than once takes its LAST value (the
+        // sandbox builder and `Command::envs` both read it that way), so everything the runner
+        // sets after this wins over it. No `AINKRAD_*` name comes from `--env` at all: those are
+        // the runner's own control variables (the sandbox and its network mode).
         let mut env: Vec<(String, std::ffi::OsString)> = self
             .harness_env
             .iter()
+            .filter(|(name, _)| !name.starts_with("AINKRAD_"))
             .map(|(name, value)| (name.clone(), value.into()))
             .collect();
         env.extend(self.workspaces.env());
@@ -270,6 +297,7 @@ impl HarnessExecutor {
         };
         let reports = reports.clone();
         let _bridge = bridge; // held until the run ends
+        let _egress = egress;
         let outcome = match job.harness.as_str() {
             "claude" => self.work::<Claude>(job, spec, reports, meter).await,
             "codex" => self.work::<Codex>(job, spec, reports, meter).await,
@@ -281,14 +309,19 @@ impl HarnessExecutor {
             ),
         };
         if denied {
-            return no_network_note(outcome);
+            return no_network_note(outcome, filtered);
         }
         outcome
     }
 }
 
 /// A failure that looks like an unreachable model API, said plainly for a session with no network.
-fn no_network_note(outcome: Outcome) -> Outcome {
+fn no_network_note(outcome: Outcome, filtered: bool) -> Outcome {
+    let why = if filtered {
+        "this session reaches only the destinations AINKRAD_AGENT_EGRESS_ALLOW and AINKRAD_AGENT_EGRESS_HOSTS list, through a CONNECT proxy"
+    } else {
+        "this session has no network: AINKRAD_AGENT_NETWORK=deny is the Linux default, so the harness cannot reach its model API; stage 1 uses a local mock model"
+    };
     const SIGNS: [&str; 7] = [
         "connect",
         "network",
@@ -303,9 +336,7 @@ fn no_network_note(outcome: Outcome) -> Outcome {
             reason,
             fingerprint,
         } if SIGNS.iter().any(|s| reason.to_lowercase().contains(s)) => Outcome::Failed {
-            reason: format!(
-                "{reason} (this session has no network: AINKRAD_AGENT_NETWORK=deny is the Linux default, so the harness cannot reach its model API; stage 1 uses a local mock model)"
-            ),
+            reason: format!("{reason} ({why})"),
             fingerprint,
         },
         other => other,

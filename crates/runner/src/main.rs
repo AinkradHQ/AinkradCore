@@ -45,6 +45,9 @@ only in the harness's environment; the runner's own CLAUDE_CODE_OAUTH_TOKEN/ANTH
 are then withheld. A missing file fails the run with the path in its reason.
 Agent sessions have no network on Linux by default (AINKRAD_AGENT_NETWORK=allow lifts that for sessions
 without secrets, stage-1 hosts only); their MCP route is bridged in, so stage 1 runs a local mock model.
+AINKRAD_AGENT_NETWORK=filtered (`connect`, Linux) keeps them off the network but lets a CONNECT proxy outside the
+sandbox reach AINKRAD_AGENT_EGRESS_ALLOW (CIDRs), AINKRAD_AGENT_EGRESS_HOSTS (host names only the proxy resolves)
+and AINKRAD_AGENT_EGRESS_PORTS (default 443); the runner checks the filter at start and refuses to start without it.
 Each run's harness reaches the server's MCP tools at <server>/token/citadel/v1/mcp (https://, or http:// to
 loopback) with the run's token, from a 0600 config file in $TMPDIR/citadel-runs/private/run-<id>
 removed when the run ends. Tool calls follow each project's permission policy (default: ask);
@@ -75,10 +78,11 @@ struct Args {
     env: Vec<(String, String)>,
 }
 
-/// `KEY=VAL` as `--env` takes it; `None` without a `=` or with an empty key.
+/// `KEY=VAL` as `--env` takes it; `None` without a `=`, with an empty key, or with an `AINKRAD_*`
+/// key: those are the runner's own control variables (sandbox and network mode), never a harness's.
 fn env_pair(pair: &str) -> Option<(String, String)> {
     let (key, value) = pair.split_once('=')?;
-    (!key.is_empty()).then(|| (key.to_owned(), value.to_owned()))
+    (!key.is_empty() && !key.starts_with("AINKRAD_")).then(|| (key.to_owned(), value.to_owned()))
 }
 
 /// `None` on anything it does not know.
@@ -330,5 +334,13 @@ mod tests {
         assert!(parse(&["wss://x", "--env", "FOO"]).is_none(), "no =");
         assert!(parse(&["wss://x", "--env", "=bar"]).is_none(), "no key");
         assert!(parse(&["wss://x", "--env"]).is_none(), "no value");
+        for key in [
+            "AINKRAD_SANDBOX_NETWORK",
+            "AINKRAD_SANDBOX_EGRESS_SOCK",
+            "AINKRAD_X",
+        ] {
+            let pair = format!("{key}=allow");
+            assert!(parse(&["wss://x", "--env", &pair]).is_none(), "{key}");
+        }
     }
 }
