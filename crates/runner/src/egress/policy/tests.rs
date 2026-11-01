@@ -218,7 +218,7 @@ fn an_ipv4_inside_nat64_or_6to4_gets_the_ipv4_checks() {
     );
     assert!(
         p.check_ip(ip("64:ff9b::b00:1"), false).is_ok(),
-        "11.0.0.1 is routable"
+        "a routable embedded address"
     );
     assert!(p.check_ip(ip("2002:b00:1::"), false).is_ok());
     // A v4 CIDR inside the reserved range names it, and then the translated form is allowed too.
@@ -229,13 +229,15 @@ fn an_ipv4_inside_nat64_or_6to4_gets_the_ipv4_checks() {
 
 #[test]
 fn the_hosts_own_addresses_are_never_destinations() {
-    let own = [public(), ip("2a0f:ffff::7"), ip("::ffff:11.0.0.2")];
+    let v4 = |d| IpAddr::V4(Ipv4Addr::new(11, 0, 0, d));
+    let mapped = |d| IpAddr::V6(Ipv4Addr::new(11, 0, 0, d).to_ipv6_mapped());
+    let own = [v4(1), ip("2a0f:ffff::7"), mapped(2)];
     let p = policy("0.0.0.0/0,::/0", "").with_host_addresses(own);
-    for a in ["11.0.0.1", "2a0f:ffff::7", "11.0.0.2", "::ffff:11.0.0.1"] {
-        assert_eq!(p.check_ip(ip(a), false), Err(Deny::HostAddress), "{a}");
-        assert_eq!(p.check_ip(ip(a), true), Err(Deny::HostAddress), "{a}");
+    for a in [v4(1), ip("2a0f:ffff::7"), v4(2), mapped(1)] {
+        assert_eq!(p.check_ip(a, false), Err(Deny::HostAddress), "{a}");
+        assert_eq!(p.check_ip(a, true), Err(Deny::HostAddress), "{a}");
     }
-    assert!(p.check_ip(ip("11.0.0.3"), false).is_ok());
+    assert!(p.check_ip(v4(3), false).is_ok());
 }
 
 #[test]
