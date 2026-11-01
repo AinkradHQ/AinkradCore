@@ -19,6 +19,10 @@ pub const INVENTORY: &[(&str, &str)] = &[
     ("getuid", "libc::getuid: no arguments, cannot fail"),
     ("wait_exited", "libc::waitid into a zeroed siginfo_t we own"),
     ("reap", "libc::waitpid with a null status pointer"),
+    (
+        "close_fds_on_exec",
+        "pre_exec closure: one raw close_range syscall with integer arguments",
+    ),
 ];
 
 /// Makes the calling process the leader of a new session and process group, with no
@@ -32,6 +36,31 @@ pub fn setsid() -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+
+/// Marks every descriptor above 2 close-on-exec in the child just before it execs `cmd`, so a
+/// descriptor the parent leaked (a connected socket, a listener) does not reach the program, which
+/// bubblewrap otherwise passes through. Linux only. Kernels before 5.9 have no `close_range`, and
+/// 5.9 to 5.10 have it but reject the CLOEXEC flag (EINVAL): the call is then ignored, and the
+/// sandbox script, which closes the descriptors itself, is what covers those kernels.
+#[allow(unsafe_code)]
+pub fn close_fds_on_exec(cmd: &mut std::process::Command) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: `pre_exec` is unsafe because its closure runs between fork and exec. This one
+        // makes a single raw close_range(2) syscall with integer arguments (CLOSE_RANGE_CLOEXEC is
+        // 4): it allocates nothing, takes no lock and touches no memory of ours, so it is
+        // async-signal-safe. An error (an old kernel without the call) is ignored on purpose.
+        unsafe {
+            cmd.pre_exec(|| {
+                let _ = libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 4u32);
+                Ok(())
+            });
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = cmd;
 }
 
 /// Sends `signal` to every process in the group `pgid`. `Ok(false)` when the group is gone
@@ -196,6 +225,14 @@ mod tests {
         for (name, _) in INVENTORY {
             assert!(src.contains(&format!("pub fn {name}(")), "{name}");
         }
+    }
+
+    #[test]
+    fn closing_descriptors_on_exec_leaves_the_spawn_working() {
+        let mut cmd = std::process::Command::new("/bin/sh");
+        cmd.args(["-c", "exit 7"]);
+        close_fds_on_exec(&mut cmd);
+        assert_eq!(cmd.status().unwrap().code(), Some(7));
     }
 
     #[test]
