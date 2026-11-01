@@ -294,20 +294,20 @@ mod tests {
     #[test]
     fn cidrs_parse_and_match() {
         let c = Cidr::parse("10.1.2.3/8").unwrap();
-        assert!(c.contains(ip("10.200.0.1")) && !c.contains(ip("11.0.0.1")));
+        assert!(c.contains(ip("10.200.0.1")) && !c.contains(ip("172.16.0.1")));
         assert!(Cidr::parse("0.0.0.0/0").unwrap().contains(public()));
         assert!(!Cidr::parse("0.0.0.0/0").unwrap().contains(ip("::1")));
         assert!(Cidr::parse("::/0").unwrap().contains(ip("2606:4700::1")));
         assert!(Cidr::parse("127.0.0.1").unwrap().contains(ip("127.0.0.1")));
         for bad in [
             "",
-            "1.2.3.4/33",
+            "203.0.113.4/33",
             "::/129",
             "1.2.3/24",
             "a/8",
-            "1.2.3.4/",
-            "1.2.3.4/+8",
-            "::ffff:1.2.3.4/128",
+            "203.0.113.4/",
+            "203.0.113.4/+8",
+            "::ffff:203.0.113.4/128",
             "example.test",
         ] {
             assert!(Cidr::parse(bad).is_none(), "{bad}");
@@ -434,7 +434,7 @@ mod tests {
             "a-.test",
             "*.test",
             "a_b.test",
-            "1.2.3.4",
+            "203.0.113.4",
             "0x7f.1",
             "a.0x1",
             "h\u{e9}.test",
@@ -448,7 +448,7 @@ mod tests {
         assert!(host_name(&long).is_none());
         let e = Policy::parse("not-a-cidr-secret", "", "").unwrap_err();
         assert!(!e.contains("secret") && e.contains("entry 1"), "{e}");
-        let e = Policy::parse("", "api.model.test,1.2.3.4", "").unwrap_err();
+        let e = Policy::parse("", "api.model.test,203.0.113.4", "").unwrap_err();
         assert!(e.contains("HOSTS") && e.contains("entry 2"), "{e}");
         assert!(Policy::parse("", "", "0").is_err());
         assert!(Policy::parse("", "", "70000").is_err());
