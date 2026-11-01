@@ -120,8 +120,14 @@ impl Sandbox for ProcessSandbox {
         }
     }
 
+    /// Process isolation while the sandbox program works; none when its probe fails. Probed on
+    /// every call, never cached, so the answer is what the host does now.
     fn tier(&self) -> Isolation {
-        Isolation::Process
+        if Self::available() {
+            Isolation::Process
+        } else {
+            Isolation::None
+        }
     }
 
     fn prepare(&self, start: &AgentStart, env: &mut Vec<(String, String)>) -> Result<(), String> {

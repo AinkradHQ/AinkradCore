@@ -271,7 +271,40 @@ fn v2_frames_are_pinned() {
                 avg1: 1.5,
                 cores: 8,
             }),
+            ..Default::default()
         }),
+    );
+    // The isolation a runner offers now (E8a-09), in its heartbeat and in its hello.
+    v2(
+        "heartbeat_isolation",
+        CONTROL_STREAM,
+        1,
+        Body::Heartbeat(Heartbeat {
+            isolation: Some(IsolationCaps::of(runner::Isolation::Process, Kvm::Absent)),
+            ..Default::default()
+        }),
+    );
+    v2(
+        "hello_isolation",
+        CONTROL_STREAM,
+        0,
+        Body::Control(Control::Hello(RunnerHello {
+            protocol: PROTOCOL_VERSION.to_owned(),
+            runner_version: "0.1.0".to_owned(),
+            drivers: vec![DriverInfo {
+                name: "agent".to_owned(),
+                commands: vec!["agent.start".to_owned()],
+                capacity: 2,
+                ..Default::default()
+            }],
+            os: Some("linux".to_owned()),
+            arch: Some("x86_64".to_owned()),
+            isolation: Some(IsolationCaps {
+                tiers: vec!["process".to_owned(), "microvm".to_owned()],
+                kvm: Kvm::Usable,
+            }),
+            ..Default::default()
+        })),
     );
     v2("command_noop", 1, 0, Body::Command(Command::Noop));
     v2("result_noop", 1, 0, Body::Result(Reply::Noop));

@@ -34,6 +34,13 @@ impl Isolation {
         self.rank() >= required.rank()
     }
 
+    /// The tier named `name` (`none`, `process`, `microvm`).
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Self::None, Self::Process, Self::Microvm]
+            .into_iter()
+            .find(|t| t.as_str() == name)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",

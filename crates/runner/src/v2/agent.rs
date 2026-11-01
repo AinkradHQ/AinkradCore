@@ -33,7 +33,7 @@ use ainkrad_proto::redact::Redactor;
 use ainkrad_proto::runner::{Isolation, Outcome, RunToken, Tokens, Workspace};
 use ainkrad_proto::v2::{
     AGENT_DRIVER, AGENT_OPS, AgentDecide, AgentEvents, AgentRead, AgentStart, AgentState,
-    AgentStop, DriverInfo, ErrorCode, StreamError, TranscriptEntry,
+    AgentStop, DriverInfo, ErrorCode, IsolationCaps, Kvm, StreamError, TranscriptEntry,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -112,6 +112,10 @@ pub trait Sandbox: Send + Sync {
     /// to say is never trusted with more than nothing.
     fn tier(&self) -> Isolation {
         Isolation::None
+    }
+    /// `/dev/kvm` as far as this sandbox knows, for the capability a runner advertises.
+    fn kvm(&self) -> Kvm {
+        Kvm::NotApplicable
     }
     fn prepare(&self, start: &AgentStart, env: &mut Vec<(String, String)>) -> Result<(), String>;
 }
@@ -224,6 +228,9 @@ struct Live {
     approvals: HashMap<String, crate::Reply>,
     /// The task working it, while it runs.
     task: Option<tokio::task::JoinHandle<()>>,
+    /// The isolation its policy requires, so the watch can end it if the sandbox stops
+    /// providing it (E8a-09).
+    required: Option<Isolation>,
 }
 
 pub struct AgentDriver {
@@ -395,7 +402,9 @@ impl AgentDriver {
             redactor: Redactor::new(),
             approvals: HashMap::new(),
             task: None,
+            required: None,
         });
+        live.required = req.policy.min_isolation;
         live.meta.state = AgentState::Running;
         live.meta.outcome = None;
         live.run = run;
@@ -677,6 +686,14 @@ impl AgentDriver {
     /// Aborts run `run` of the session (its harness is killed with it, and its secret files
     /// removed): ended as cancelled. A later run of the session is left alone.
     fn kill(self: &Arc<Self>, session: &str, run: i64) {
+        let cancelled = Outcome::Cancelled {
+            reason: "killed".to_owned(),
+        };
+        self.end_run(session, run, cancelled);
+    }
+
+    /// Aborts run `run` like `kill`, ending the session with `outcome`.
+    fn end_run(self: &Arc<Self>, session: &str, run: i64, outcome: Outcome) {
         let task = {
             let mut all = self.sessions.lock().unwrap();
             match all.get_mut(session) {
@@ -693,13 +710,50 @@ impl AgentDriver {
             }
             me.harness.session_env(run, None);
             me.harness.cleanup_agent_workspace(&session, run).await;
-            me.end(
-                &session,
-                Outcome::Cancelled {
-                    reason: "killed".to_owned(),
-                },
-            );
+            me.end(&session, outcome);
         });
+    }
+
+    /// The isolation this runner offers now, for its hello and heartbeats: what the sandbox
+    /// provides this moment (a probe, not a setting), so a tier that goes away stops being offered.
+    pub fn isolation(&self) -> IsolationCaps {
+        IsolationCaps::of(self.sandbox.tier(), self.sandbox.kvm())
+    }
+
+    /// Ends, loudly, every running session whose policy requires more isolation than the
+    /// sandbox gives now. It is never carried on at a weaker tier. Returns how many it ended.
+    pub fn check_isolation(self: &Arc<Self>) -> usize {
+        let offered = self.sandbox.tier();
+        let lost: Vec<(String, i64, Isolation)> = {
+            let all = self.sessions.lock().unwrap();
+            all.iter()
+                .filter(|(_, l)| l.meta.state == AgentState::Running)
+                .filter_map(|(s, l)| Some((s.clone(), l.run, l.required?)))
+                .filter(|(_, _, required)| !offered.satisfies(*required))
+                .collect()
+        };
+        for (session, run, required) in &lost {
+            tracing::error!(session, "the isolation tier went away; ending the session");
+            let why = format!(
+                "the {} isolation tier this session requires is no longer available on this runner (it offers {}); the session was ended, not continued at a weaker tier",
+                required.as_str(),
+                offered.as_str()
+            );
+            self.end_run(session, *run, failed(why, "isolation"));
+        }
+        lost.len()
+    }
+
+    /// Re-checks the sandbox every `every` for as long as the driver lives (E8a-09.3).
+    pub fn watch_isolation(self: &Arc<Self>, every: Duration) -> tokio::task::JoinHandle<()> {
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(every).await;
+                let Some(me) = weak.upgrade() else { return };
+                me.check_isolation();
+            }
+        })
     }
 
     fn running(
@@ -893,6 +947,7 @@ fn reload(cfg: &AgentConfig) -> HashMap<String, Live> {
             redactor: Redactor::new(),
             approvals: HashMap::new(),
             task: None,
+            required: None,
         };
         if live.meta.state == AgentState::Running {
             tracing::warn!(

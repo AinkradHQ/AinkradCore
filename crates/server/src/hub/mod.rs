@@ -36,8 +36,8 @@ use std::time::Duration;
 
 use ainkrad_proto::v2::{
     Body, Close, Command, Control, Credit, DriverInfo, ErrorCode, Frame, Heartbeat, HostLoad,
-    OP_AGENT_READ, OP_PTY_ATTACH, OP_PTY_OPEN, RunnerHello, STREAM_WINDOW, StreamError,
-    StreamState,
+    IsolationCaps, OP_AGENT_READ, OP_PTY_ATTACH, OP_PTY_OPEN, RunnerHello, STREAM_WINDOW,
+    StreamError, StreamState,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -243,6 +243,11 @@ pub struct RunnerState {
     /// The host's load as last reported; `None` until a hello or heartbeat carries one
     /// (E2-15.2).
     pub host_load: Option<HostLoad>,
+    /// The isolation the runner offers now (E8a-09): its hello's, then its latest heartbeat's.
+    /// `None` for a runner that never reported any, which offers no guarantee.
+    pub isolation: Option<IsolationCaps>,
+    /// The CPU architecture it said in its hello (`aarch64`, `x86_64`).
+    pub arch: Option<String>,
 }
 
 pub struct Hub {
@@ -508,6 +513,8 @@ impl Hub {
                     capacity: r.capacity(self.config.max_inflight),
                     load: r.inflight.len(),
                     host_load: r.load,
+                    isolation: r.hello.isolation.clone(),
+                    arch: r.hello.arch.clone(),
                 };
                 (id.clone(), state)
             })
@@ -641,10 +648,14 @@ impl Hub {
     /// Updates `device`'s host load from a heartbeat (E2-15.2).
     fn load(&self, device: &str, heartbeat: Heartbeat) {
         let mut all = self.runners.lock().unwrap();
-        if let Some(r) = all.get_mut(device)
-            && let Some(load) = heartbeat.load
-        {
+        let Some(r) = all.get_mut(device) else { return };
+        if let Some(load) = heartbeat.load {
             r.load = Some(load);
+        }
+        // The runner's latest word on what it offers replaces its hello's: a tier that went away
+        // is gone from the next placement (E8a-09).
+        if let Some(isolation) = heartbeat.isolation {
+            r.hello.isolation = Some(isolation);
         }
     }
 
