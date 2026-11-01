@@ -74,7 +74,7 @@ async fn every_new_tool_counts_against_the_cap_is_off_when_mcp_is_off_and_dies_w
 }
 
 #[tokio::test]
-async fn done_needs_a_real_result_on_this_issue() {
+async fn comments_and_questions_are_not_done_evidence_only_a_forge_pr_is() {
     let (w, a, ta, _, _) = two().await;
     ok(&w, &ta, "transition", json!({"transition": "start"})).await;
     // A short comment, a question to a human, and a long comment on another issue do not count.
@@ -99,7 +99,7 @@ async fn done_needs_a_real_result_on_this_issue() {
     )
     .await;
     let why = refused(&w, &ta, "transition", json!({"transition": "done"})).await;
-    assert!(why.contains("submit_for_review"), "{why}");
+    assert!(why.contains("pull request opened on the forge"), "{why}");
 }
 
 /// A `cit_run_` token shape an agent might paste into anything it writes.

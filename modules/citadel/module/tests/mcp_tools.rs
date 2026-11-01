@@ -519,15 +519,15 @@ async fn org_chart_and_requirement_tools_are_the_runs_companys() {
     );
 }
 
-/// B-M3: `done` skips the review gate, so it is refused with or without evidence, and the
-/// issue stays in progress.
+/// B-M3: with no pull request opened on the forge, `done` is refused for that reason, whatever
+/// comments the run wrote, and the issue stays in progress.
 #[tokio::test]
-async fn done_is_refused_even_with_a_result_comment() {
+async fn done_without_a_forge_pr_is_refused_even_with_a_result_comment() {
     let (w, a, ta, _, _) = two().await;
     ok(&w, &ta, "transition", json!({"transition": "start"})).await;
     for _ in 0..2 {
         let why = refused(&w, &ta, "transition", json!({"transition": "done"})).await;
-        assert!(why.contains("submit_for_review"), "{why}");
+        assert!(why.contains("pull request opened on the forge"), "{why}");
     }
     ok(
         &w,
@@ -537,7 +537,7 @@ async fn done_is_refused_even_with_a_result_comment() {
     )
     .await;
     let why = refused(&w, &ta, "transition", json!({"transition": "done"})).await;
-    assert!(why.contains("submit_for_review"), "{why}");
+    assert!(why.contains("pull request opened on the forge"), "{why}");
     let issue = work::get_issue(
         &w.fx.app.pool,
         citadel_module::domain::work::IssueId(a.seed.issue),
@@ -557,6 +557,12 @@ struct Pr {
     checks: &'static str,
     unpushed_at: Option<&'static str>,
     push_held: Option<&'static str>,
+    last_error: Option<&'static str>,
+    pushed_sha: Option<&'static str>,
+    /// Minutes since the poller last wrote the row.
+    age_min: u32,
+    /// Authored by another agent.
+    foreign: bool,
 }
 
 const GOOD: Pr = Pr {
@@ -566,35 +572,51 @@ const GOOD: Pr = Pr {
     checks: "success",
     unpushed_at: None,
     push_held: None,
+    last_error: None,
+    pushed_sha: Some("abc"),
+    age_min: 0,
+    foreign: false,
 };
 
-/// Inserts repo `repo` in `project` and a PR of `issue` on it.
-async fn pr_of(w: &W, project: i64, repo: i64, issue: i64, pr: Pr) {
+/// Inserts repo `repo` in `project` and a PR of `issue` on it, authored by `agent` (or, if
+/// `foreign`, by nobody who is running).
+async fn pr_of(w: &W, (project, repo): (i64, i64), issue: i64, agent: i64, pr: Pr) {
     let pool = app_pool(w);
-    sqlx::query(
-        "INSERT INTO citadel_project_repos (id, project_id, name, url) VALUES (?, ?, 'app', 'x')",
-    )
-    .bind(repo)
-    .bind(project)
-    .execute(pool)
-    .await
-    .unwrap();
+    let _ = sqlx::query("INSERT INTO citadel_project_repos (id, project_id, name, url) VALUES (?1, ?2, 'r' || ?1, 'x' || ?1)")
+        .bind(repo)
+        .bind(project)
+        .execute(pool)
+        .await;
     sqlx::query(
         "INSERT INTO citadel_issue_prs (issue_id, repo_id, state, number, url, title, body, head, \
-         base, head_sha, checks, unpushed_at, push_held) \
-         VALUES (?, ?, ?, 7, ?, 't', 'b', 'feat', 'main', ?, ?, ?, ?)",
+         base, head_sha, checks, unpushed_at, push_held, last_error, pushed_sha, author_agent_id, \
+         updated_at) VALUES (?, ?, ?, ?, ?, 't', 'b', 'feat', 'main', \
+         ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-' || ? || ' minutes'))",
     )
     .bind(issue)
     .bind(repo)
     .bind(pr.state)
+    .bind((pr.state != "requested").then_some(7))
     .bind(pr.url)
     .bind(pr.head_sha)
     .bind(pr.checks)
     .bind(pr.unpushed_at)
     .bind(pr.push_held)
+    .bind(pr.last_error)
+    .bind(pr.pushed_sha)
+    .bind((!pr.foreign).then_some(agent))
+    .bind(pr.age_min)
     .execute(pool)
     .await
     .unwrap();
+}
+
+async fn state_of(w: &W, issue: i64) -> String {
+    sqlx::query_scalar("SELECT state FROM citadel_issues WHERE id = ?")
+        .bind(issue)
+        .fetch_one(app_pool(w))
+        .await
+        .unwrap()
 }
 
 /// KAN-289: MCP `done` is a submission to QA that needs a pull request the forge opened. Each
@@ -617,6 +639,13 @@ async fn done_needs_a_forge_opened_pr_and_only_ever_reaches_review() {
             },
         ),
         (
+            "only requested",
+            Pr {
+                state: "requested",
+                ..GOOD
+            },
+        ),
+        (
             "no head on the forge",
             Pr {
                 head_sha: None,
@@ -628,6 +657,13 @@ async fn done_needs_a_forge_opened_pr_and_only_ever_reaches_review() {
             "failing checks",
             Pr {
                 checks: "failure",
+                ..GOOD
+            },
+        ),
+        (
+            "checks still running",
+            Pr {
+                checks: "pending",
                 ..GOOD
             },
         ),
@@ -645,10 +681,38 @@ async fn done_needs_a_forge_opened_pr_and_only_ever_reaches_review() {
                 ..GOOD
             },
         ),
+        (
+            "the last forge sync failed",
+            Pr {
+                last_error: Some("403"),
+                ..GOOD
+            },
+        ),
+        (
+            "the poller went quiet",
+            Pr {
+                age_min: 30,
+                ..GOOD
+            },
+        ),
+        (
+            "head is not the pushed head",
+            Pr {
+                pushed_sha: Some("zzz"),
+                ..GOOD
+            },
+        ),
+        (
+            "another agent's PR on this issue",
+            Pr {
+                foreign: true,
+                ..GOOD
+            },
+        ),
     ] {
         let (w, a, ta, _, _) = two().await;
         ok(&w, &ta, "transition", json!({"transition": "start"})).await;
-        pr_of(&w, a.seed.project, 1, a.seed.issue, pr).await;
+        pr_of(&w, (a.seed.project, 1), a.seed.issue, a.seed.agent, pr).await;
         // A comment says so, too: it is not evidence either.
         ok(
             &w,
@@ -657,48 +721,81 @@ async fn done_needs_a_forge_opened_pr_and_only_ever_reaches_review() {
             json!({"body": "the PR is open and passing, trust me"}),
         )
         .await;
-        refused(&w, &ta, "transition", json!({"transition": "done"})).await;
-        let state: String = sqlx::query_scalar("SELECT state FROM citadel_issues WHERE id = ?")
-            .bind(a.seed.issue)
-            .fetch_one(app_pool(&w))
-            .await
-            .unwrap();
-        assert_eq!(state, "in_progress", "{case}");
+        let why = refused(&w, &ta, "transition", json!({"transition": "done"})).await;
+        assert!(!why.is_empty(), "{case}");
+        assert_eq!(state_of(&w, a.seed.issue).await, "in_progress", "{case}");
     }
 }
 
 #[tokio::test]
 async fn a_forge_opened_pr_sends_done_to_qa_never_to_done() {
-    let (w, a, ta, _, _) = two().await;
-    ok(&w, &ta, "transition", json!({"transition": "start"})).await;
-    pr_of(&w, a.seed.project, 1, a.seed.issue, GOOD).await;
-    let moved = ok(&w, &ta, "transition", json!({"transition": "done"})).await;
-    assert_eq!(moved["state"], "in_review", "{moved}");
-    assert_ne!(moved["next_actor"], json!({"agent": a.seed.agent}));
-    // It is not the agent's to move any more, so a second `done` or any other move is refused.
-    refused(&w, &ta, "transition", json!({"transition": "done"})).await;
-    // The agent is not its own reviewer: the issue waits on someone else.
-    let waits: Option<i64> =
-        sqlx::query_scalar("SELECT next_agent_id FROM citadel_issues WHERE id = ?")
-            .bind(a.seed.issue)
-            .fetch_one(app_pool(&w))
-            .await
-            .unwrap();
-    assert_ne!(waits, Some(a.seed.agent));
-    let state: String = sqlx::query_scalar("SELECT state FROM citadel_issues WHERE id = ?")
-        .bind(a.seed.issue)
-        .fetch_one(app_pool(&w))
-        .await
-        .unwrap();
-    assert_eq!(state, "in_review");
+    // A forge with no checks (`none`) passes too: QA judges the PR.
+    for checks in ["success", "none"] {
+        let (w, a, ta, _, _) = two().await;
+        ok(&w, &ta, "transition", json!({"transition": "start"})).await;
+        pr_of(
+            &w,
+            (a.seed.project, 1),
+            a.seed.issue,
+            a.seed.agent,
+            Pr { checks, ..GOOD },
+        )
+        .await;
+        let moved = ok(&w, &ta, "transition", json!({"transition": "done"})).await;
+        assert_eq!(moved["state"], "in_review", "{moved}");
+        assert_ne!(moved["next_actor"], json!({"agent": a.seed.agent}));
+        // It is not the agent's to move any more, so a second `done` is refused.
+        refused(&w, &ta, "transition", json!({"transition": "done"})).await;
+        let waits: Option<i64> =
+            sqlx::query_scalar("SELECT next_agent_id FROM citadel_issues WHERE id = ?")
+                .bind(a.seed.issue)
+                .fetch_one(app_pool(&w))
+                .await
+                .unwrap();
+        assert_ne!(waits, Some(a.seed.agent));
+        assert_eq!(state_of(&w, a.seed.issue).await, "in_review");
+    }
+}
+
+/// Two repos: one PR is not enough while the other is still only requested, or has none.
+#[tokio::test]
+async fn every_repo_of_the_issue_needs_its_pr_opened() {
+    for second in [
+        Some(Pr {
+            state: "requested",
+            ..GOOD
+        }),
+        None,
+    ] {
+        let (w, a, ta, _, _) = two().await;
+        ok(&w, &ta, "transition", json!({"transition": "start"})).await;
+        pr_of(&w, (a.seed.project, 1), a.seed.issue, a.seed.agent, GOOD).await;
+        match second {
+            Some(pr) => pr_of(&w, (a.seed.project, 2), a.seed.issue, a.seed.agent, pr).await,
+            None => {
+                sqlx::query("INSERT INTO citadel_project_repos (id, project_id, name, url) VALUES (2, ?, 'r2', 'x2')")
+                    .bind(a.seed.project)
+                    .execute(app_pool(&w))
+                    .await
+                    .unwrap();
+                sqlx::query("INSERT INTO citadel_issue_repos (issue_id, repo_id, state) VALUES (?, 2, 'approved')")
+                    .bind(a.seed.issue)
+                    .execute(app_pool(&w))
+                    .await
+                    .unwrap();
+            }
+        }
+        refused(&w, &ta, "transition", json!({"transition": "done"})).await;
+        assert_eq!(state_of(&w, a.seed.issue).await, "in_progress");
+    }
 }
 
 #[tokio::test]
 async fn another_issues_or_companys_pr_is_not_evidence() {
-    let (w, _a, ta, b, _) = two().await;
+    let (w, a, ta, b, _) = two().await;
     ok(&w, &ta, "transition", json!({"transition": "start"})).await;
     // The PR is on company B's issue, which A's agent names.
-    pr_of(&w, b.seed.project, 1, b.seed.issue, GOOD).await;
+    pr_of(&w, (b.seed.project, 1), b.seed.issue, a.seed.agent, GOOD).await;
     refused(&w, &ta, "transition", json!({"transition": "done"})).await;
     refused(
         &w,

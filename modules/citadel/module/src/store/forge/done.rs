@@ -140,10 +140,10 @@ pub async fn submit_for_qa(
 
 /// An agent's `done` over MCP: `submit_for_qa`, but only on evidence the forge produced, and a
 /// refusal otherwise (`DoneError::Refused`). Never moves an issue to `done`: that happens when the
-/// owner-approved PR is merged. The evidence (B-M3, checked in the transaction that moves the
-/// issue) is every live PR of the issue opened on the forge (a number, a URL and a head, so not
-/// one that is merely asked for), none with failing checks, a refused push or commits since the
-/// last push. A comment, a claim or a PR the agent asked for are not evidence.
+/// owner-approved PR is merged. The evidence (B-M3), checked in the transaction that moves the
+/// issue, is `evidence_problem`: every live PR opened on the forge by this agent, fresh, with
+/// checks neither failing nor running and everything pushed. A comment, a claim or a PR the agent
+/// merely asked for are not evidence.
 pub async fn submit_with_evidence(
     pool: &SqlitePool,
     issue: IssueId,
@@ -157,42 +157,71 @@ pub async fn submit_with_evidence(
 const NO_EVIDENCE: &str = "done needs a pull request opened on the forge for this issue; \
     without one, use submit_for_review";
 
-/// Why the live `prs` are not evidence of finished work, if they are not.
+/// How old the poller's last word on a PR may be (minutes) before it is not evidence: the poll
+/// runs every minute, so ten is a poller that has stopped.
+const EVIDENCE_MAX_AGE_MIN: f64 = 10.0;
+
+/// Why the live `prs` of `issue` are not evidence of `dev`'s finished work, if they are not. The
+/// forge poller's rows are the only source, so each is checked for what makes it untrustworthy:
+/// not opened on the forge (number, URL, head), authored by another agent, a poll that failed or
+/// went quiet (`last_error`, an old `updated_at`), checks failing or still running (`none`, a
+/// forge with no checks, passes: QA then judges it), a head that is not the head pushed, a refused
+/// push, commits made after the last push, or an approved repo of the issue with no PR.
 async fn evidence_problem(
     conn: &mut SqliteConnection,
     issue: IssueId,
+    dev: AgentId,
     prs: &[IssuePr],
 ) -> Result<Option<String>, Error> {
+    let missing: Option<String> = sqlx::query_scalar(
+        "SELECT r.name FROM citadel_issue_repos ir JOIN citadel_project_repos r ON r.id = ir.repo_id \
+         WHERE ir.issue_id = ?1 AND ir.state = 'approved' AND NOT EXISTS (SELECT 1 FROM \
+         citadel_issue_prs p WHERE p.issue_id = ?1 AND p.repo_id = ir.repo_id \
+         AND p.state <> 'closed') LIMIT 1",
+    )
+    .bind(issue.0)
+    .fetch_optional(&mut *conn)
+    .await?;
+    if let Some(repo) = missing {
+        return Ok(Some(format!(
+            "the repo {repo} of this issue has no pull request"
+        )));
+    }
     for pr in prs.iter().filter(|p| p.phase.is_live()) {
-        let opened = pr.phase != PrPhase::Requested
-            && pr.number.is_some()
-            && pr.url.is_some()
-            && pr.head_sha.is_some();
-        let unpushed: bool = sqlx::query_scalar(
-            "SELECT unpushed_at IS NOT NULL FROM citadel_issue_prs WHERE issue_id = ? AND repo_id = ?",
+        let (unpushed, pushed_sha, age): (bool, Option<String>, f64) = sqlx::query_as(
+            "SELECT unpushed_at IS NOT NULL, pushed_sha, \
+             (julianday('now') - julianday(updated_at)) * 1440.0 \
+             FROM citadel_issue_prs WHERE issue_id = ? AND repo_id = ?",
         )
         .bind(issue.0)
         .bind(pr.repo_id)
         .fetch_one(&mut *conn)
         .await?;
-        if !opened {
-            return Ok(Some(format!(
-                "the PR of {} is not opened on the forge yet",
-                pr.head
-            )));
-        }
-        if pr.checks == "failure" {
-            return Ok(Some(format!(
-                "the checks of the PR of {} are failing",
-                pr.head
-            )));
-        }
-        if pr.push_held.is_some() || unpushed {
-            return Ok(Some(format!(
-                "the branch {} has work that is not pushed",
-                pr.head
-            )));
-        }
+        let head = &pr.head;
+        let problem = if pr.phase == PrPhase::Requested
+            || pr.number.is_none()
+            || pr.url.is_none()
+            || pr.head_sha.is_none()
+        {
+            "is not opened on the forge yet"
+        } else if pr.author != Some(dev) {
+            "was not opened by you"
+        } else if pr.last_error.is_some() {
+            "failed its last forge sync"
+        } else if !(age <= EVIDENCE_MAX_AGE_MIN) {
+            "has not been seen on the forge lately"
+        } else if pr.checks == "failure" {
+            "has failing checks"
+        } else if pr.checks == "pending" {
+            "has checks still running"
+        } else if pushed_sha.is_some() && pushed_sha != pr.head_sha {
+            "is not at the head that was pushed"
+        } else if pr.push_held.is_some() || unpushed {
+            "has work that is not pushed"
+        } else {
+            continue;
+        };
+        return Ok(Some(format!("the PR of {head} {problem}")));
     }
     Ok(None)
 }
@@ -207,7 +236,7 @@ async fn submit_in(
     let Some((_, prs)) = live_prs(&mut tx, issue).await? else {
         return Ok(None);
     };
-    if evidence && let Some(why) = evidence_problem(&mut tx, issue, &prs).await? {
+    if evidence && let Some(why) = evidence_problem(&mut tx, issue, dev, &prs).await? {
         return Err(DoneError::Refused(why));
     }
     let project: i64 = sqlx::query_scalar("SELECT project_id FROM citadel_issues WHERE id = ?")

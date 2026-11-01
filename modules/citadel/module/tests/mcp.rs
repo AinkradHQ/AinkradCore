@@ -756,19 +756,27 @@ async fn call_at(fx: &Fx, uri: &str) -> (StatusCode, Value) {
 }
 
 #[tokio::test]
-async fn mcp_text_is_redacted_and_done_is_refused() {
+async fn mcp_text_is_redacted_and_done_without_a_forge_pr_is_refused() {
     let w = world().await;
     let a = w.co("A", "AAA").await;
     let t = w.token(a.run.id).await;
     let app = &w.fx.app;
     // B-M2: a key an agent writes never reaches a comment, an issue or an approval as sent.
     let key = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789";
-    let (_, r) = rpc(app, Some(&t), tool("comment", json!({"body": format!("key {key}")}))).await;
+    let (_, r) = rpc(
+        app,
+        Some(&t),
+        tool("comment", json!({"body": format!("key {key}")})),
+    )
+    .await;
     assert!(!answer(&r).0, "{}", answer(&r).1);
     let (_, r) = rpc(
         app,
         Some(&t),
-        tool("create_subtask", json!({"title": "t", "body": format!("key {key}")})),
+        tool(
+            "create_subtask",
+            json!({"title": "t", "body": format!("key {key}")}),
+        ),
     )
     .await;
     assert!(!answer(&r).0, "{}", answer(&r).1);
@@ -789,7 +797,8 @@ async fn mcp_text_is_redacted_and_done_is_refused() {
     ] {
         assert_eq!(count(app, sql).await, 0, "{sql}");
     }
-    // B-M3: `done` skips the review gate, so it is refused and the issue stays as it was.
+    // B-M3: no PR is opened on the forge for the issue, so `done` is refused for that reason and
+    // the issue stays as it was.
     let (_, r) = rpc(
         app,
         Some(&t),
@@ -797,7 +806,10 @@ async fn mcp_text_is_redacted_and_done_is_refused() {
     )
     .await;
     let (failed, text) = answer(&r);
-    assert!(failed && text.contains("submit_for_review"), "{text}");
+    assert!(
+        failed && text.contains("pull request opened on the forge"),
+        "{text}"
+    );
     let done = format!(
         "SELECT count(*) FROM citadel_issues WHERE id = {} AND state = 'done'",
         a.seed.issue
