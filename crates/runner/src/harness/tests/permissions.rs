@@ -200,7 +200,7 @@ fn only_citadel_cli_commands_go_ahead() {
         "citadel x | jq --rawfile f /etc/passwd .",
         "citadel x | tail --lines=5",
         "bash -c 'citadel x; rm f'",
-        "bash -c citadel x",
+        "bash -c 'rm x' citadel",
         "/tmp/bash -c 'citadel x'",
         "",
     ] {
@@ -513,4 +513,93 @@ async fn allowed_without_asking(
     );
     let _ = std::fs::remove_dir_all(&dir);
     types
+}
+
+/// Every command a rule can never cover is refused by BOTH ways a rule can allow a call: the
+/// whole-call match (`allows`) and the chain check (`chain_allowed`); a stored rule that is not a
+/// legal rule is re-checked at use on both. The controls prove each path does allow a covered call.
+#[test]
+fn a_rule_never_covers_a_destructive_or_wrapped_call_on_either_path() {
+    use super::super::policy::chain_allowed;
+    let ex = HarnessExecutor::new(PathBuf::from("/w"), PathBuf::from("/c"));
+    let cwd = Path::new("/w/run-7");
+    // (rule, tool, command)
+    let cases = [
+        ("Bash:git push", "Bash", "git push --force"),
+        ("Bash:git push", "Bash", "git push --del origin x"),
+        ("Bash:git push", "Bash", "git push --mirr"),
+        ("Bash:git push", "Bash", "GIT_SSH_COMMAND=x git push"),
+        ("Bash:git push", "Bash", "git push origin +main"),
+        ("Bash:git", "Bash", "git -c core.sshCommand=x push"),
+        ("Bash:rm", "Bash", "rm -rf /"),
+        ("Bash:rm", "Bash", "RM -rf x"),
+        ("Bash:rm", "Bash", "rm --recur x"),
+        ("Bash:cargo", "Bash", "RUSTC_WRAPPER=x cargo build"),
+        ("Bash:cargo", "Bash", "cargo -Zunstable-options build"),
+        ("Bash:cargo", "Bash", "cargo build --conf x=y"),
+        ("Bash:sudo", "Bash", "sudo ls"),
+        ("Bash:cargo test", "Bash", "SUDO ls"),
+        ("Bash:cargo test", "Bash", "BASH -c 'rm -rf x'"),
+        // Stored before the check existed, or inserted directly.
+        (
+            "commandExecution:bash -lc",
+            "commandExecution",
+            "bash -lc 'rm -rf ~' x",
+        ),
+        (
+            "commandExecution:bash -lc",
+            "commandExecution",
+            "bash -lc ls",
+        ),
+        ("Bash:sh -c", "Bash", "sh -c ls"),
+        ("Bash:env", "Bash", "env ls"),
+        ("Bash:xargs", "Bash", "xargs ls"),
+        ("Bash:python3 -c", "Bash", "python3 -c x"),
+        ("Bash:FOO=1 git", "Bash", "FOO=1 git status"),
+        ("Bash:git push --force", "Bash", "git push --force"),
+        ("Bash:rm -rf", "Bash", "rm -rf x"),
+    ];
+    for (rule, tool, command) in cases {
+        let p = policy(PermissionMode::Ask, &[rule]);
+        let input = json!({"command": command});
+        assert!(
+            ex.decide(&p, tool, &input, cwd).is_err(),
+            "decide: {rule} {command}"
+        );
+        let rules: Vec<Vec<String>> = ainkrad_proto::runner::rule_prefix(rule, tool)
+            .into_iter()
+            .collect();
+        assert!(!chain_allowed(&rules, command), "chain: {rule} {command}");
+        // Chained after a covered command, a destructive part still stops the chain.
+        let chained = format!("{command} && ls");
+        let rules: Vec<Vec<String>> = ainkrad_proto::runner::rule_prefix(rule, tool)
+            .into_iter()
+            .collect();
+        assert!(
+            !chain_allowed(&rules, &chained),
+            "chain&&: {rule} {command}"
+        );
+    }
+    // Controls.
+    for (rule, command) in [
+        ("Bash:git push", "git push origin main"),
+        ("Bash:cargo test", "cargo test -p x"),
+        ("Bash:cargo test", "bash -lc 'cargo test -p x' y"),
+    ] {
+        let p = policy(PermissionMode::Ask, &[rule]);
+        assert!(
+            ex.decide(&p, "Bash", &json!({"command": command}), cwd)
+                .is_ok(),
+            "{command}"
+        );
+        let rules: Vec<Vec<String>> = ainkrad_proto::runner::rule_prefix(rule, "Bash")
+            .into_iter()
+            .collect();
+        assert!(chain_allowed(&rules, command), "chain: {command}");
+    }
+    let rules: Vec<Vec<String>> = ainkrad_proto::runner::rule_prefix("Bash:cargo test", "Bash")
+        .into_iter()
+        .collect();
+    assert!(chain_allowed(&rules, "cargo test -p x && cargo test -p y"));
+    assert!(!chain_allowed(&rules, "cargo test -p x && cargo build"));
 }

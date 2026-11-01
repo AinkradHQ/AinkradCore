@@ -320,8 +320,12 @@ mod authority_tests {
             "Bash:cargo test",
             "bash:git status",
             "Bash:git push",
-            "Bash:python3 tool.py",
             "Bash:cargo",
+            "Bash:python3 tool.py",
+            "Bash:python3.12 x.py",
+            "Bash:node18 a.js",
+            "Bash:php artisan route:list",
+            "Bash:tsx a.ts",
         ] {
             assert_eq!(rule_problem(ok), None, "{ok}");
         }
@@ -337,6 +341,29 @@ mod authority_tests {
             "Bash:cargo\ntest",
             "Bash:cargo\0",
             &format!("Bash:{}", "a".repeat(300)),
+            "Bash:FOO=1 git",
+            "Bash:RM -r",
+            "Bash:SUDO",
+            "Bash:swift build",
+            "Bash:sed -n",
+            "Bash:ssh host",
+            "Bash:uv run",
+            "Bash:bunx x",
+            "Bash:arch -x86_64 ls",
+            "Bash:caffeinate ls",
+            "Bash:flock x ls",
+            "Bash:script -c ls",
+            "Bash:python3.12 -c x",
+            "Bash:node18 -e a",
+            "Bash:pythonw",
+            "Bash:deno eval x",
+            "Bash:php -r x",
+            "Bash:perl -Mx a.pl",
+            "Bash:tar --to-command=x",
+            "Bash:rsync -e ssh",
+            "Bash:git push --forc",
+            "Bash:cargo -Zfoo build",
+            "Bash:cargo --conf x",
             "Bash:sh -c",
             "Bash:bash -lc",
             "commandExecution:bash -lc",
@@ -376,6 +403,172 @@ mod authority_tests {
             "commandExecution",
             &call
         ));
+    }
+
+    #[test]
+    fn case_settings_prefixes_and_runners_do_not_get_past_the_list() {
+        use serde_json::json;
+        let call = |c: &str| json!({"command": c});
+        let no = |rule: &str, c: &str| !allows(rule, "Bash", &call(c));
+        // macOS looks programs up without regard to case; versions and paths do not matter.
+        for c in [
+            "RM -rf x",
+            "Rm -fr x",
+            "/bin/RM -r x",
+            "SUDO ls",
+            "Git push --force",
+            "GIT -c x push",
+            "CHMOD -R 7 .",
+        ] {
+            assert!(
+                no("Bash:rm", c) && no("Bash:sudo", c) && no("Bash:git", c) && no("Bash:chmod", c),
+                "{c}"
+            );
+        }
+        for c in [
+            "BASH -c 'ls'",
+            "Python3.12 -c x",
+            "NODE18 -e x",
+            "Env ls",
+            "XARGS ls",
+            "pythonw x.py",
+        ] {
+            assert!(
+                no("Bash:bash", c) && no("Bash:python3", c) && no("Bash:env", c),
+                "{c}"
+            );
+        }
+        // An interpreter with a named script is a script run; its arguments are the script's.
+        assert!(allows(
+            "Bash:php artisan",
+            "Bash",
+            &call("php artisan migrate -n -r")
+        ));
+        assert!(allows(
+            "Bash:python3 tool.py",
+            "Bash",
+            &call("python3 tool.py -c x")
+        ));
+        assert!(!allows(
+            "Bash:python3 tool.py",
+            "Bash",
+            &call("python3 -c x tool.py")
+        ));
+        assert!(!allows(
+            "Bash:python3 tool.py",
+            "Bash",
+            &call("python3 -m tool.py")
+        ));
+        assert!(!allows(
+            "Bash:node a.js",
+            "Bash",
+            &call("node --require x a.js")
+        ));
+        // A leading assignment changes how the program runs: never covered.
+        for c in [
+            "GIT_SSH_COMMAND=x git push",
+            "RUSTC_WRAPPER=x cargo build",
+            "FOO=1 cargo test",
+            "PATH=/tmp cargo test",
+            "LD_PRELOAD=x cargo test",
+            "BASH_ENV=x ls",
+            "A=b",
+        ] {
+            assert!(
+                no("Bash:git push", c) && no("Bash:cargo", c) && no("Bash:FOO=1 cargo", c),
+                "{c}"
+            );
+        }
+        // Abbreviated long options are the same option.
+        for c in [
+            "git push --del origin x",
+            "git push --mirr",
+            "git push --forc",
+            "git push --force-w",
+            "git push --f",
+            "git fetch --upload-pack=x",
+            "git fetch --upl=x",
+            "git pull --rece=x",
+            "git ls-remote --exe=x",
+            "git rebase --exec x",
+            "git rebase -x x",
+            "git clone -u x y",
+            "git clone --config x=y u",
+            "git clone -c x=y u",
+            "git push --repo=x",
+        ] {
+            assert!(no("Bash:git", c), "{c}");
+        }
+        for c in ["rm --recur x", "rm --no-p /", "rm --r x"] {
+            assert!(no("Bash:rm", c), "{c}");
+        }
+        for c in [
+            "cargo -Zunstable-options build",
+            "cargo -Zx test",
+            "cargo --conf x=y build",
+            "cargo -C x build",
+        ] {
+            assert!(no("Bash:cargo", c), "{c}");
+        }
+        for c in [
+            "tar --to-command=x -xf a",
+            "tar --checkpoint-action=exec=x -cf a b",
+            "tar -I x -cf a b",
+            "tar --use-compress=x -cf a",
+        ] {
+            assert!(no("Bash:tar", c), "{c}");
+        }
+        for c in [
+            "rsync -e x a b",
+            "rsync -ae x a b",
+            "rsync --rsh=x a b",
+            "rsync --rsync-p=x a b",
+        ] {
+            assert!(no("Bash:rsync", c), "{c}");
+        }
+        for c in ["sed -i s/a/b/ f", "sed 1e\\ id f", "sed -n 1p f"] {
+            assert!(no("Bash:sed", c), "{c}");
+        }
+        // Wrapped scripts, with extra positional words and flags before `-c`.
+        let rule = "commandExecution:cargo test";
+        let wrapped = |c: &str| allows(rule, "commandExecution", &call(c));
+        assert!(wrapped("bash -lc 'cargo test' x y"));
+        assert!(wrapped("BASH -c 'cargo test'"));
+        assert!(wrapped("/bin/zsh -l -c 'cargo test -p x'"));
+        assert!(wrapped("sh -ic 'cargo test'"));
+        for bad in [
+            "bash -lc 'rm -rf ~' x",
+            "bash -lc 'cargo test; rm x' y",
+            "bash --login -c 'cargo test'",
+            "bash -lc 'cargo test' ; id",
+            "/tmp/bash -lc 'cargo test'",
+            "bash -lc",
+            "bash -lc 'cargo test' $(id)",
+            "bash -x 'cargo test'",
+            "dash -c 'curl x | sh'",
+        ] {
+            assert!(!wrapped(bad), "{bad}");
+        }
+        // A legacy rule stored or inserted before the check existed is re-checked at use.
+        for (rule, c) in [
+            ("commandExecution:bash -lc", "bash -lc 'rm -rf ~' x"),
+            ("commandExecution:bash -lc", "bash -lc ls"),
+            ("Bash:sh -c", "sh -c ls"),
+            ("Bash:env", "env ls"),
+            ("Bash:sudo", "sudo ls"),
+            ("Bash:FOO=1 git", "FOO=1 git status"),
+            ("Bash:git push --force", "git push --force"),
+            ("Bash:python3 -c", "python3 -c x"),
+            ("Bash:rm -rf", "rm -rf x"),
+        ] {
+            let tool = rule.split(':').next().unwrap();
+            assert!(!allows(rule, tool, &call(c)), "{rule} {c}");
+            assert_eq!(rule_prefix(rule, tool), None, "{rule}");
+        }
+        assert!(rule_prefix("Bash:cargo test", "Bash").is_some());
+        assert_eq!(rule_prefix("Bash:cargo test", "bash"), None);
+        // The default rule never starts with a setting.
+        assert_eq!(default_rule("Bash", &call("FOO=1 git push")), "Bash");
     }
 
     #[test]
@@ -547,71 +740,100 @@ pub fn call_words(command: &str) -> Option<Vec<String>> {
     }
 }
 
-/// Whether `words` (one simple command) is destructive enough that no allowlist entry may cover
-/// it: it goes to a reviewer every time. A short fixed list, not a shell denylist: privilege
-/// changes, forced or deleting pushes, git and cargo options that load configuration from the
-/// command line, recursive removal and ownership changes, raw disk tools.
-pub fn hard_escalate(words: &[String]) -> bool {
-    let Some(name) = words.first() else {
-        return true;
-    };
-    let name = name.rsplit('/').next().unwrap_or("");
-    let args = &words[1..];
-    let cluster = |a: &String, letters: &str| {
-        a.len() > 1
-            && a.starts_with('-')
-            && !a.starts_with("--")
-            && a[1..].chars().any(|c| letters.contains(c))
-    };
-    match name {
-        "sudo" | "su" | "doas" | "dd" | "shred" | "mkfs" | "fdisk" | "mount" | "umount" => true,
-        n if n.starts_with("mkfs.") => true,
-        "rm" => args
-            .iter()
-            .any(|a| cluster(a, "rR") || a == "--recursive" || a == "--no-preserve-root"),
-        "chmod" | "chown" | "chgrp" => args.iter().any(|a| cluster(a, "R") || a == "--recursive"),
-        "cargo" => args
-            .iter()
-            .any(|a| a == "--config" || a.starts_with("--config=") || a == "-C" || a == "-Z"),
-        "git" => {
-            // A global option before the subcommand (`-c`, `-C`, `--exec-path`, ...) can load
-            // configuration or run another program.
-            let Some(sub) = args.iter().position(|a| !a.starts_with('-')) else {
-                return true;
-            };
-            sub > 0
-                || (args[sub] == "push"
-                    && args[sub + 1..].iter().any(|a| {
-                        cluster(a, "fd")
-                            || a.starts_with("--force")
-                            || a.starts_with("--delete")
-                            || a.starts_with("--mirror")
-                            || a.starts_with("--prune")
-                            || a.starts_with("--receive-pack")
-                            || a.starts_with("--exec")
-                            || a.starts_with('+')
-                            || a.starts_with(':')
-                    }))
-                || matches!(
-                    args[sub].as_str(),
-                    "filter-branch" | "config" | "submodule" | "daemon"
-                )
-        }
-        _ => false,
+/// A program's name as the system will look it up: its last path part, lower-cased (macOS file
+/// lookup ignores case), without a trailing version (`python3.12` is `python`, `node18` is `node`).
+fn program(word: &str) -> String {
+    let base = word.rsplit('/').next().unwrap_or("").to_ascii_lowercase();
+    match base.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.') {
+        "" => base,
+        trimmed => trimmed.to_owned(),
     }
 }
 
-/// Programs whose first word makes a rule cover anything: shells, wrappers that run another
-/// command, and programs that execute their arguments.
-const WRAPPERS: [&str; 33] = [
-    "sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh", "env", "xargs", "sudo", "su",
-    "doas", "nohup", "time", "command", "exec", "nice", "timeout", "ionice", "setsid", "stdbuf",
-    "watch", "busybox", "builtin", "eval", "source", ".", "find", "awk", "gawk", "npx", "chroot",
+/// Whether `word` is a `NAME=value` environment assignment, which the shell runs the command under.
+fn is_assignment(word: &str) -> bool {
+    let name = word.split('=').next().unwrap_or("");
+    word.contains('=')
+        && name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Whether `arg` is `--option` or an unambiguous abbreviation of one of `full` (GNU tools and git
+/// take any unique prefix of a long option), with or without `=value`.
+fn long(arg: &str, full: &[&str]) -> bool {
+    let name = arg.split('=').next().unwrap_or("");
+    name.len() > 2 && name.starts_with("--") && full.iter().any(|f| f.starts_with(name))
+}
+
+/// Whether the short-option cluster `arg` (`-rf`, not `--x`) holds one of `letters`.
+fn cluster(arg: &str, letters: &str) -> bool {
+    arg.len() > 1
+        && arg.starts_with('-')
+        && !arg.starts_with("--")
+        && arg[1..].chars().any(|c| letters.contains(c))
+}
+
+/// Programs that run another command (shells, wrappers, remote and scheduling tools, programs
+/// that execute their arguments). A call to one is never covered by a rule: what runs is in its
+/// arguments.
+const RUNNERS: &[&str] = &[
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "ksh",
+    "fish",
+    "csh",
+    "tcsh",
+    "env",
+    "xargs",
+    "sudo",
+    "su",
+    "doas",
+    "nohup",
+    "time",
+    "command",
+    "exec",
+    "nice",
+    "timeout",
+    "ionice",
+    "setsid",
+    "stdbuf",
+    "watch",
+    "busybox",
+    "builtin",
+    "eval",
+    "source",
+    ".",
+    "find",
+    "awk",
+    "gawk",
+    "npx",
+    "chroot",
+    "arch",
+    "script",
+    "flock",
+    "caffeinate",
+    "sandbox-exec",
+    "ssh",
+    "scp",
+    "sftp",
+    "uv",
+    "bunx",
+    "swift",
+    "sed",
+    "at",
+    "batch",
+    "crontab",
+    "open",
 ];
-/// Interpreters: a rule for one must name a script, never reach `-c`, `-e` or `-m`.
-const INTERPRETERS: [&str; 10] = [
+
+/// Interpreters: a rule may name one only with the script or subcommand it runs, and a call is
+/// escalated when the interpreter's own options (those before the script) run inline code, load
+/// code, or read the program from stdin or a prompt.
+const INTERPRETERS: &[&str] = &[
     "python",
-    "python3",
+    "pythonw",
     "node",
     "ruby",
     "perl",
@@ -619,13 +841,165 @@ const INTERPRETERS: [&str; 10] = [
     "lua",
     "deno",
     "bun",
+    "tsx",
+    "ts-node",
     "osascript",
 ];
 
+/// Whether `args` of the interpreter `name` make it run something other than a named script.
+fn runs_inline_code(name: &str, args: &[String]) -> bool {
+    let Some(script) = args.iter().position(|a| !a.starts_with('-') || a == "-") else {
+        return true;
+    };
+    let long = |a: &String| {
+        long(
+            a,
+            &[
+                "--eval",
+                "--print",
+                "--exec",
+                "--command",
+                "--require",
+                "--import",
+                "--loader",
+                "--interactive",
+                "--preload",
+                "--run",
+                "--input-type",
+            ],
+        )
+    };
+    args[script] == "-"
+        || args[..script]
+            .iter()
+            .any(|a| cluster(a, "cemprxEMRBFnilaCIs") || long(a))
+        || (["deno", "bun"].contains(&name)
+            && ["eval", "repl", "x"].contains(&args[script].as_str()))
+}
+
+/// Whether `words` (one simple command) must go to a reviewer whatever an allowlist says: it
+/// starts with an environment assignment (`GIT_SSH_COMMAND=x git ...`), it runs another program
+/// ([`RUNNERS`]), or it is destructive: privilege changes, forced or deleting pushes, git and
+/// cargo options that load configuration or run a program, recursive removal and ownership
+/// changes, raw disk tools, and the options of `tar` and `rsync` that run a command. Names are
+/// compared lower-cased and without a version, long options by unique prefix.
+pub fn hard_escalate(words: &[String]) -> bool {
+    let Some(first) = words.first() else {
+        return true;
+    };
+    if is_assignment(first) {
+        return true;
+    }
+    let name = program(first);
+    let args = &words[1..];
+    if RUNNERS.contains(&name.as_str()) {
+        return true;
+    }
+    if INTERPRETERS.contains(&name.as_str()) {
+        return runs_inline_code(&name, args);
+    }
+    match name.as_str() {
+        "dd" | "shred" | "fdisk" | "mount" | "umount" | "mkfs" | "diskutil" | "launchctl" => true,
+        n if n.starts_with("mkfs.") => true,
+        "rm" => args
+            .iter()
+            .any(|a| cluster(a, "rR") || long(a, &["--recursive", "--no-preserve-root"])),
+        "chmod" | "chown" | "chgrp" => args
+            .iter()
+            .any(|a| cluster(a, "R") || long(a, &["--recursive"])),
+        "cargo" => args
+            .iter()
+            .any(|a| a == "-C" || a.starts_with("-Z") || long(a, &["--config"])),
+        "tar" => args.iter().any(|a| {
+            cluster(a, "I")
+                || long(
+                    a,
+                    &[
+                        "--to-command",
+                        "--checkpoint-action",
+                        "--use-compress-program",
+                        "--rsh-command",
+                        "--info-script",
+                        "--new-volume-script",
+                    ],
+                )
+        }),
+        "rsync" => args
+            .iter()
+            .any(|a| cluster(a, "e") || long(a, &["--rsh", "--rsync-path", "--daemon"])),
+        "git" => {
+            // A global option before the subcommand (`-c`, `-C`, `--exec-path`, ...) can load
+            // configuration or run another program.
+            let Some(sub) = args.iter().position(|a| !a.starts_with('-')) else {
+                return true;
+            };
+            let rest = &args[sub + 1..];
+            let dangerous = |a: &String| {
+                long(
+                    a,
+                    &[
+                        "--force",
+                        "--force-with-lease",
+                        "--force-if-includes",
+                        "--delete",
+                        "--mirror",
+                        "--prune",
+                        "--receive-pack",
+                        "--upload-pack",
+                        "--exec",
+                        "--exec-path",
+                        "--config",
+                        "--repo",
+                    ],
+                )
+            };
+            sub > 0
+                || rest.iter().any(dangerous)
+                || (args[sub] == "push"
+                    && rest
+                        .iter()
+                        .any(|a| cluster(a, "fd") || a.starts_with('+') || a.starts_with(':')))
+                || (args[sub] == "rebase" && rest.iter().any(|a| cluster(a, "x")))
+                || (args[sub] == "clone" && rest.iter().any(|a| cluster(a, "uc")))
+                || matches!(
+                    args[sub].as_str(),
+                    "filter-branch" | "config" | "submodule" | "daemon" | "difftool" | "mergetool"
+                )
+        }
+        _ => false,
+    }
+}
+
+/// Whether a stored rule's `prefix` words cover the stage `words` of a call: the stage starts with
+/// them, word for word, and is not [`hard_escalate`]d. The ONE place a rule meets a command: both
+/// [`allows`] and the runner's chain check go through it, so they cannot drift.
+pub fn covers(prefix: &[String], words: &[String]) -> bool {
+    !prefix.is_empty() && words.starts_with(prefix) && !hard_escalate(words)
+}
+
+/// A rule entry's prefix as words, or `None` when the entry is not a usable `<tool>:<prefix>`
+/// rule for `tool`: another tool, an empty prefix, a prefix that is not plain words, or an entry
+/// [`rule_problem`] finds fault with. Stored rules are checked again here, at USE time: an entry
+/// stored or inserted before a check existed covers nothing.
+pub fn rule_prefix(entry: &str, tool: &str) -> Option<Vec<String>> {
+    let (name, prefix) = entry.split_once(':')?;
+    if name != tool || rule_problem(entry).is_some() {
+        return None;
+    }
+    let words = shell::tokens(prefix)?
+        .into_iter()
+        .map(|t| match t {
+            shell::Token::Word(w) => Some(w),
+            shell::Token::Op(_) => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!words.is_empty()).then_some(words)
+}
+
 /// Why an allow rule (`<tool>` or `<tool>:<command prefix>`, as "allow for this issue" stores
 /// it) must not exist, if it must not: it is not short printable text, it names a whole shell,
-/// its prefix is not plain words, or it would cover a wrapper, an interpreter's inline code or
-/// something [`hard_escalate`]s.
+/// its prefix is not plain words, or it starts with a setting, a program that runs another
+/// ([`RUNNERS`]), an interpreter without a script, or something [`hard_escalate`]s.
 pub fn rule_problem(rule: &str) -> Option<&'static str> {
     if rule.len() > 256 || rule.chars().any(char::is_control) {
         return Some("a rule is short printable text");
@@ -654,13 +1028,10 @@ pub fn rule_problem(rule: &str) -> Option<&'static str> {
     let Some(words) = words else {
         return Some("a rule's command prefix is plain words");
     };
-    let first = words[0].rsplit('/').next().unwrap_or("");
-    if WRAPPERS.contains(&first) {
-        Some("a rule cannot start with a shell or a wrapper that runs another command")
-    } else if INTERPRETERS.contains(&first)
-        && (words.len() < 2 || words[1].starts_with('-') || words[1].contains('='))
-    {
-        Some("an interpreter's rule must name a script, not inline code")
+    if is_assignment(&words[0]) {
+        Some("a rule cannot start with a setting")
+    } else if RUNNERS.contains(&program(&words[0]).as_str()) {
+        Some("a rule cannot start with a shell, wrapper or interpreter that runs another command")
     } else if hard_escalate(&words) {
         Some("that command always goes to a reviewer")
     } else {
@@ -691,6 +1062,9 @@ pub fn default_rule(tool: &str, input: &Value) -> String {
             && w.chars()
                 .all(|c| c.is_ascii_alphanumeric() || "._/=:@%+,-".contains(c) && c != ':')
     };
+    if words.first().is_some_and(|w| is_assignment(w)) {
+        return tool.to_owned();
+    }
     let kept: Vec<&str> = words
         .iter()
         .take(2)
@@ -708,23 +1082,14 @@ pub fn default_rule(tool: &str, input: &Value) -> String {
 /// with the prefix's words, word for word (`npm run` covers `npm run x`, never `npm runx`), and is
 /// not [`hard_escalate`]d. Quoted words are single words. Anything unclear is not covered.
 pub fn allows(entry: &str, tool: &str, input: &Value) -> bool {
-    let Some((name, prefix)) = entry.split_once(':') else {
+    if !entry.contains(':') {
         return entry == tool;
-    };
-    let rule: Option<Vec<String>> = shell::tokens(prefix).and_then(|t| {
-        t.into_iter()
-            .map(|t| match t {
-                shell::Token::Word(w) => Some(w),
-                shell::Token::Op(_) => None,
-            })
-            .collect()
-    });
-    let Some(rule) = rule.filter(|r| !r.is_empty()) else {
+    }
+    let Some(rule) = rule_prefix(entry, tool) else {
         return false;
     };
-    name == tool
-        && commands_of(input).is_some_and(|all| {
-            all.iter()
-                .all(|c| call_words(c).is_some_and(|w| w.starts_with(&rule) && !hard_escalate(&w)))
-        })
+    commands_of(input).is_some_and(|all| {
+        all.iter()
+            .all(|c| call_words(c).is_some_and(|w| covers(&rule, &w)))
+    })
 }

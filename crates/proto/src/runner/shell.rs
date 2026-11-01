@@ -64,18 +64,48 @@ pub fn tokens(command: &str) -> Option<Vec<Token>> {
     Some(out)
 }
 
+/// The script of `<shell> [-flags] -c <script> [$0 $1 ...]`, when `tokens` is exactly that: Codex
+/// hands over the whole `bash -lc '<script>'` it is about to run. The shell is `sh`, `bash`, `zsh`,
+/// `dash` or `ksh` (any case, by bare name or under `/bin` or `/usr/bin`), the flags are short
+/// letter groups, one of which holds `c`; the words after the script only become `$0`, `$1`, ...,
+/// which a script that [`tokens`] accepts cannot expand. Any other shape is not looked through, so
+/// the shell stays the command's first word.
+fn shell_script(tokens: &[Token]) -> Option<String> {
+    let mut words = tokens.iter().map(|t| match t {
+        Token::Word(w) => Some(w.as_str()),
+        Token::Op(_) => None,
+    });
+    let shell = words.next()??;
+    let name = shell.rsplit('/').next().unwrap_or("").to_ascii_lowercase();
+    let known = ["sh", "bash", "zsh", "dash", "ksh"].contains(&name.as_str());
+    let placed =
+        shell.starts_with("/bin/") || shell.starts_with("/usr/bin/") || !shell.contains('/');
+    if !known || !placed {
+        return None;
+    }
+    loop {
+        let flag = words.next()??;
+        let letters = flag.len() > 1
+            && flag.starts_with('-')
+            && flag[1..].bytes().all(|b| b.is_ascii_alphabetic());
+        match (letters, flag.contains('c')) {
+            (true, true) => break,
+            (true, false) => {}
+            _ => return None,
+        }
+    }
+    let script = words.next()??;
+    // Whatever follows must be words, not operators.
+    words.all(|w| w.is_some()).then(|| script.to_owned())
+}
+
 /// The pipelines of `command` joined by `;`, `&&`, `||` or newlines, each a list of simple
 /// commands (its words) joined by `|`, or `None` for anything [`tokens`] refuses or a dangling
 /// operator. Codex's `bash -lc '<script>'` wrapper is looked through.
 pub fn pipelines(command: &str) -> Option<Vec<Vec<Vec<String>>>> {
     let tokens = tokens(command)?;
-    // Codex may hand over the whole `bash -lc '<script>'` it is about to run.
-    if let [Token::Word(shell), Token::Word(flag), Token::Word(script)] = &tokens[..]
-        && ["sh", "bash", "zsh"].contains(&shell.rsplit('/').next().unwrap_or(""))
-        && (shell.starts_with("/bin/") || shell.starts_with("/usr/bin/") || !shell.contains('/'))
-        && (flag == "-c" || flag == "-lc")
-    {
-        return pipelines(script);
+    if let Some(script) = shell_script(&tokens) {
+        return pipelines(&script);
     }
     let mut out = vec![];
     let mut stages: Vec<Vec<String>> = vec![vec![]];

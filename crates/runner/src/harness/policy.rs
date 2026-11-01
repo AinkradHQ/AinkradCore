@@ -4,8 +4,8 @@ use std::path::{Component, Path};
 use std::time::Duration;
 
 use ainkrad_harness::Decision;
-use ainkrad_proto::runner::shell::{Token, pipelines, tokens};
-use ainkrad_proto::runner::{PermissionMode, Policy, allows, commands_of};
+use ainkrad_proto::runner::shell::pipelines;
+use ainkrad_proto::runner::{PermissionMode, Policy, allows, commands_of, covers, rule_prefix};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -29,10 +29,10 @@ impl HarnessExecutor {
         if citadel_call(tool, input) {
             return Ok(());
         }
-        let rules: Vec<&str> = (policy.allow.iter())
-            .filter_map(|entry| entry.split_once(':'))
-            .filter(|(name, prefix)| *name == tool && !prefix.is_empty())
-            .map(|(_, prefix)| prefix)
+        // The usable rules for this tool: an entry that `rule_problem` finds fault with (a shell,
+        // a wrapper, a destructive command, stored before the check existed) covers nothing.
+        let rules: Vec<Vec<String>> = (policy.allow.iter())
+            .filter_map(|entry| rule_prefix(entry, tool))
             .collect();
         // A shell's harmless waits (`sleep`, `date`) need no rule; another tool's need one.
         let chain = !rules.is_empty() || SHELLS.contains(&tool);
@@ -154,27 +154,13 @@ pub(super) fn citadel_cli(command: &str) -> bool {
 }
 
 /// Whether every simple command in `command` would go ahead on its own: it starts with the
-/// words of one of `rules` (allowlist prefixes) or is [`harmless`], it is a bare `echo`, or it
+/// words of one of `rules` (allowlist prefixes, `covers`) or is [`harmless`], it is a bare `echo`, or it
 /// is piped into as a read-only filter; a run-scoped `citadel` pipeline goes ahead whole. The
 /// condition and body of an `until`/`while … do … done` loop are checked the same way. One that
 /// would not, or a command [`pipelines`] or [`unlooped`] refuses, leaves the whole command to a
 /// reviewer.
-pub(super) fn chain_allowed(rules: &[&str], command: &str) -> bool {
-    let rules: Vec<Vec<String>> = rules
-        .iter()
-        .filter_map(|r| tokens(r))
-        // A rule that is not plain words matches no chain.
-        .filter_map(|t| {
-            t.into_iter()
-                .map(|t| match t {
-                    Token::Word(w) => Some(w),
-                    Token::Op(_) => None,
-                })
-                .collect::<Option<Vec<_>>>()
-        })
-        .filter(|r| !r.is_empty())
-        .collect();
-    let listed = |stage: &[String]| rules.iter().any(|r| stage.starts_with(r));
+pub(super) fn chain_allowed(rules: &[Vec<String>], command: &str) -> bool {
+    let listed = |stage: &[String]| rules.iter().any(|r| covers(r, stage));
     pipelines(command).and_then(unlooped).is_some_and(|ps| {
         !ps.is_empty()
             && ps.iter().all(|p| {
