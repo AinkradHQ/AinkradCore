@@ -50,14 +50,16 @@ fn nothing_is_allowed_by_default_and_the_internet_is_not_reserved_space() {
 #[test]
 fn a_broad_allow_never_opens_reserved_space() {
     let p = policy("0.0.0.0/0,::/0", "");
+    // Loopback is a host address: refused as one unless an exact entry names it.
+    for r in ["127.0.0.1", "127.9.9.9", "::1"] {
+        assert_eq!(p.check_ip(ip(r), false), Err(Deny::HostAddress), "{r}");
+    }
     for r in [
-        "127.0.0.1",
         "10.0.0.1",
         "172.16.5.5",
         "192.168.1.1",
         "169.254.1.1",
         "0.0.0.0",
-        "::1",
         "::",
         "fd12::1",
         "fe80::1",
@@ -81,7 +83,7 @@ fn a_broad_allow_never_opens_reserved_space() {
 fn a_cidr_inside_a_reserved_range_names_just_that_space() {
     let p = policy("127.0.0.2/32,10.9.0.0/16", "");
     assert_eq!(p.check_ip(ip("127.0.0.2"), false), Ok(ip("127.0.0.2")));
-    assert_eq!(p.check_ip(ip("127.0.0.1"), false), Err(Deny::NotListed));
+    assert_eq!(p.check_ip(ip("127.0.0.1"), false), Err(Deny::HostAddress));
     assert_eq!(p.check_ip(ip("10.9.4.4"), false), Ok(ip("10.9.4.4")));
     assert_eq!(p.check_ip(ip("10.8.4.4"), false), Err(Deny::NotListed));
     // A listed name that resolves into reserved space is still refused unless a CIDR names it.
@@ -114,7 +116,7 @@ fn mapped_addresses_are_checked_as_ipv4() {
     let p = policy("0.0.0.0/0", "");
     assert_eq!(
         p.check_ip(ip("::ffff:127.0.0.1"), false),
-        Err(Deny::Reserved)
+        Err(Deny::HostAddress)
     );
     assert_eq!(
         p.check_ip(ip("::ffff:10.0.0.1"), false),
@@ -209,7 +211,7 @@ fn an_ipv4_inside_nat64_or_6to4_gets_the_ipv4_checks() {
     );
     assert_eq!(
         p.check_ip(ip("64:ff9b::7f00:1"), false),
-        Err(Deny::Reserved)
+        Err(Deny::HostAddress)
     );
     assert_eq!(p.check_ip(ip("64:ff9b::a00:1"), false), Err(Deny::Reserved));
     assert_eq!(
