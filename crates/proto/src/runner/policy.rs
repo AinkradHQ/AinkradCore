@@ -49,6 +49,21 @@ pub struct Policy {
 }
 
 impl Policy {
+    /// The weakest isolation this policy can run in, the one definition the Core's placement and
+    /// the runner's start and watch share so they cannot drift: its `min_isolation`, and at least
+    /// `process` when it sets any isolation field (only a sandbox enforces them) or is a legacy
+    /// sandboxed policy (the `sandboxed` flag or `mode: sandboxed`). `None` needs no sandbox.
+    pub fn required_tier(&self) -> Option<Isolation> {
+        let explicit = self.min_isolation.filter(|m| *m != Isolation::None);
+        let legacy = self.sandboxed || self.mode == PermissionMode::Sandboxed;
+        let implied = (self.asks_for_isolation() || legacy).then_some(Isolation::Process);
+        match (explicit, implied) {
+            (Some(a), Some(b)) => Some(a.stricter(b)),
+            (a, None) => a,
+            (None, b) => b,
+        }
+    }
+
     /// Why this policy must not be run, if it must not: a resource out of bounds, a malformed
     /// digest, an egress rule that is not an IP or CIDR. Checked where a policy enters (the Core,
     /// the runner), so no side relies on the other.

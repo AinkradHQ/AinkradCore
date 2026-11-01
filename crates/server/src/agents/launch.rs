@@ -96,6 +96,24 @@ fn start_command(s: &Session, secrets: Vec<SecretGrant>, resume: bool) -> Result
     }))
 }
 
+/// Whether `s` may go to its runner now.
+pub enum Placement {
+    Ok,
+    /// The hub does not know the runner or it is not connected.
+    Away,
+    Refused(String),
+}
+
+/// The runner as the hub sees it this moment, against what the session's policy needs.
+pub fn placement(app: &App, s: &Session) -> Placement {
+    let live = app.hub.runners();
+    match live.get(&s.runner) {
+        None => Placement::Away,
+        Some(r) if !r.online => Placement::Away,
+        Some(r) => tier_refusal(r, &s.policy).map_or(Placement::Ok, Placement::Refused),
+    }
+}
+
 /// Starts (or resumes) `s` on its runner with fresh leases; its state moves to `running`.
 /// A refusal that retrying cannot fix ends the session as failed.
 pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), Refusal> {
@@ -105,17 +123,6 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
         return Err(Refusal::Runner(StreamError::new(ErrorCode::Offline, why)));
     }
     if let Err(e) = start_command(s, Vec::new(), resume) {
-        fail(app, s, &describe(&e)).await;
-        return Err(e);
-    }
-    // A restart or resume is placed again: the runner may have lost the tier since (E8a-09).
-    let refused = app
-        .hub
-        .runners()
-        .get(&s.runner)
-        .and_then(|r| tier_refusal(r, &s.policy));
-    if let Some(why) = refused {
-        let e = Refusal::Runner(StreamError::new(ErrorCode::InvalidArgs, why));
         fail(app, s, &describe(&e)).await;
         return Err(e);
     }
@@ -161,6 +168,21 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
                 &format!("minting its credentials: {}", describe(&e)),
             )
             .await;
+            return Err(e);
+        }
+    }
+    // A restart or resume is placed again, as late as possible: the runner may have lost the tier
+    // since, or an old runner may have reconnected under the same id while the leases were made.
+    // A runner the hub does not know, or that is not connected, is a refusal, never a pass.
+    match placement(app, s) {
+        Placement::Ok => {}
+        Placement::Away => {
+            let why = "the runner is not connected";
+            return Err(Refusal::Runner(StreamError::new(ErrorCode::Offline, why)));
+        }
+        Placement::Refused(why) => {
+            let e = Refusal::Runner(StreamError::new(ErrorCode::InvalidArgs, why));
+            fail(app, s, &describe(&e)).await;
             return Err(e);
         }
     }

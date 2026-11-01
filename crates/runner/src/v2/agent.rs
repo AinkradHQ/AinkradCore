@@ -346,7 +346,7 @@ impl AgentDriver {
         if let Some(why) = req.policy.problem() {
             return Err(refuse(ErrorCode::InvalidArgs, why));
         }
-        if let Some(min) = req.policy.min_isolation
+        if let Some(min) = req.policy.required_tier()
             && !self.sandbox.tier().satisfies(min)
         {
             return Err(refuse(
@@ -412,7 +412,7 @@ impl AgentDriver {
             task: None,
             required: None,
         });
-        live.required = req.policy.min_isolation;
+        live.required = req.policy.required_tier();
         live.meta.state = AgentState::Running;
         live.meta.outcome = None;
         live.run = run;

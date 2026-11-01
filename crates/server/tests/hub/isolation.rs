@@ -500,3 +500,53 @@ fn legacy_sandbox_sessions_need_the_process_tier_at_placement() {
         None
     );
 }
+
+#[tokio::test]
+async fn placement_at_launch_refuses_a_runner_the_hub_does_not_know_or_that_lost_the_tier() {
+    use ainkrad_core_server::agents::{Placement, placement};
+    let core = Core::start("iso-launch", quick()).await;
+    let r = runner(&core, "iso-launch", 1).await;
+    let mk = |runner: String, policy: Value| {
+        let core = &core;
+        async move {
+            make_admin(core, &runner).await;
+            let new = NewSession {
+                runner: &runner,
+                harness: "fake",
+                model: None,
+                prompt: Some("go"),
+                workspace: None,
+                policy: &policy,
+                secrets: &[],
+                created_by: &runner,
+            };
+            sessions::create(
+                &core.app.pool,
+                &new,
+                AuditActor::System,
+                &core.app.clock.now(),
+            )
+            .await
+            .unwrap()
+        }
+    };
+    // A runner the hub never saw is not a pass (it used to be, through a missing entry).
+    let ghost = "d_00000000000000000000000000".to_owned();
+    let s = mk(ghost, needs("process")).await;
+    assert!(matches!(placement(&core.app, &s), Placement::Away));
+    // A connected one with the tier is placed; without it, refused with the reason.
+    let s = mk(r.id.clone(), needs("process")).await;
+    assert!(matches!(placement(&core.app, &s), Placement::Ok));
+    r.tier.store(0, Ordering::SeqCst);
+    until("the Core to see the loss", || {
+        r.offered(&core) == Some(IsolationCaps::of(Isolation::None, Kvm::NotApplicable))
+    })
+    .await;
+    match placement(&core.app, &s) {
+        Placement::Refused(why) => {
+            assert!(why.contains("process") && why.contains("none"), "{why}")
+        }
+        _ => panic!("a runner that lost the tier must refuse"),
+    }
+    r.halt().await;
+}

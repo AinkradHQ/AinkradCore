@@ -1059,3 +1059,48 @@ async fn a_running_session_is_ended_loudly_when_its_tier_goes_away_and_others_ar
     .unwrap();
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[tokio::test]
+async fn a_session_that_needs_the_tier_only_through_a_field_or_the_legacy_flag_ends_when_it_goes() {
+    let (root, config) = dirs("tier-loss-implied");
+    let flag = Arc::new(std::sync::atomic::AtomicU8::new(1));
+    let d = Arc::new(
+        AgentDriver::new(
+            AgentConfig {
+                capacity: 8,
+                ..config
+            },
+            script("echo up; sleep 30"),
+        )
+        .unwrap()
+        .with_sandbox(Arc::new(Switch(flag.clone()))),
+    );
+    let mut wall = start("as_wall", "fake");
+    wall.policy.wall_secs = Some(600);
+    let mut legacy = start("as_legacy", "fake");
+    legacy.policy.sandboxed = true;
+    let mut mode = start("as_mode", "fake");
+    mode.policy.mode = ainkrad_proto::runner::PermissionMode::Sandboxed;
+    for request in [wall, legacy, mode, start("as_plain", "fake")] {
+        d.start(request).unwrap();
+    }
+    until("all up", || {
+        d.states().values().all(|s| *s == AgentState::Running)
+    })
+    .await;
+    flag.store(0, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(d.check_isolation(), 3);
+    for session in ["as_wall", "as_legacy", "as_mode"] {
+        until("the end", || d.states()[session] == AgentState::Ended).await;
+    }
+    assert_eq!(d.states()["as_plain"], AgentState::Running);
+    // The runner and the Core derive the requirement from one function.
+    use ainkrad_proto::runner::Policy;
+    assert_eq!(Policy::default().required_tier(), None);
+    d.stop(AgentStop {
+        session: "as_plain".into(),
+        kill: true,
+    })
+    .unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}

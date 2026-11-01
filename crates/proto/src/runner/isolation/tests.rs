@@ -139,3 +139,41 @@ fn a_stronger_tier_meets_a_weaker_requirement_and_never_the_reverse() {
         );
     }
 }
+
+#[test]
+fn the_required_tier_is_one_definition_for_every_way_a_policy_asks_for_a_sandbox() {
+    use crate::runner::PermissionMode;
+    let with = |f: fn(&mut Policy)| {
+        let mut p = Policy::default();
+        f(&mut p);
+        p.required_tier()
+    };
+    assert_eq!(Policy::default().required_tier(), None);
+    assert_eq!(with(|p| p.min_isolation = Some(Isolation::None)), None);
+    assert_eq!(
+        with(|p| p.min_isolation = Some(Isolation::Process)),
+        Some(Isolation::Process)
+    );
+    assert_eq!(
+        with(|p| p.min_isolation = Some(Isolation::Microvm)),
+        Some(Isolation::Microvm)
+    );
+    // Any field implies at least `process`, and never lowers an explicit microvm.
+    for set in [
+        (|p: &mut Policy| p.wall_secs = Some(5)) as fn(&mut Policy),
+        |p| p.memory_mb = Some(128),
+        |p| p.disk_mb = Some(128),
+        |p| p.vcpus = Some(1),
+        |p| p.image = Some(format!("sha256:{}", "ab".repeat(32))),
+        |p| p.egress = Some(Egress::default()),
+        |p| p.workspace = Some(WorkspaceMode::Bind),
+        |p| p.sandboxed = true,
+        |p| p.mode = PermissionMode::Sandboxed,
+    ] {
+        assert_eq!(with(set), Some(Isolation::Process));
+        let mut p = Policy::default();
+        set(&mut p);
+        p.min_isolation = Some(Isolation::Microvm);
+        assert_eq!(p.required_tier(), Some(Isolation::Microvm));
+    }
+}

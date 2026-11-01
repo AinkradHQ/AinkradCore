@@ -19,13 +19,13 @@
 
 mod launch;
 use launch::launch;
+pub use launch::{Placement, placement};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_core::audit::AuditActor;
-use ainkrad_proto::runner::Isolation;
 use ainkrad_proto::v2::{
     AGENT_DRIVER, AgentEvents, AgentRead, AgentStart, AgentState, Body, Command, ErrorCode, Reply,
     SecretGrant, StreamError,
@@ -195,18 +195,7 @@ pub fn tier_refusal(runner: &RunnerState, policy: &serde_json::Value) -> Option<
                 .to_owned(),
         );
     }
-    // What the session needs, whichever way it says so: an explicit tier, any isolation field
-    // (which only a sandbox enforces, so at least `process`), or the legacy sandbox flag and mode.
-    let legacy =
-        policy.sandboxed || policy.mode == ainkrad_proto::runner::PermissionMode::Sandboxed;
-    let explicit = policy.min_isolation.filter(|m| *m != Isolation::None);
-    let implied = (policy.asks_for_isolation() || legacy).then_some(Isolation::Process);
-    let required = match (explicit, implied) {
-        (Some(a), Some(b)) => Some(a.stricter(b)),
-        (a, None) => a,
-        (None, b) => b,
-    };
-    let required = required?;
+    let required = policy.required_tier()?;
     let name = required.as_str();
     // Never sent to a runner that has not said what it enforces: an old runner would parse the
     // frame and drop the fields it does not know.
