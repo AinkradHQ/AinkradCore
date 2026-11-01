@@ -37,6 +37,13 @@ pub fn sandbox_command(
     sandbox::command(program, args, spec)
 }
 
+/// The value of `key` in an environment list that may repeat a name: the LAST one, which is what
+/// `Command::envs` gives the child. The sandbox builder and the runner both read the network mode
+/// through this, so they can never disagree about it.
+pub fn last_env<'a, V>(env: &'a [(String, V)], key: &str) -> Option<&'a V> {
+    env.iter().rev().find(|(n, _)| n == key).map(|(_, v)| v)
+}
+
 pub use classify::{DROPPED, ErrorClass, PROTOCOL, classify};
 pub use meter::{Meter, tokens, weighted_tokens};
 

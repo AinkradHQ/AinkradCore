@@ -16,8 +16,22 @@ const DEFAULT_PROCESSES: u32 = 64;
 /// bubblewrap would share the host network (cloud metadata, LAN, loopback) with no filter;
 /// macOS Seatbelt limits egress to TCP 443, DNS and loopback. Without secrets the default is
 /// `allow` on macOS; on Linux it is `deny` too, unless an admin sets `allow` for a stage-1 host.
-fn network_for(requested: Option<&str>, holds: bool, linux: bool) -> Result<&'static str, String> {
+///
+/// `filtered` (Linux, E8a-01) is the enforceable middle: the sandbox has no network interface and
+/// reaches only the destinations the runner's egress policy lists, through a proxy outside it.
+/// It is offered only by a runner whose start-up self-test passed (`ready`), never maps to
+/// `allow`, and is refused (not downgraded) anywhere else.
+fn network_for(
+    requested: Option<&str>,
+    holds: bool,
+    linux: bool,
+    ready: bool,
+) -> Result<&'static str, String> {
     match (requested, holds) {
+        (Some("filtered"), _) if linux && ready => Ok("filtered"),
+        (Some("filtered"), _) => Err("AINKRAD_AGENT_NETWORK=filtered needs a Linux runner whose \
+            egress filter passed its start-up check"
+            .into()),
         (None, true) | (Some("deny"), _) => Ok("deny"),
         // Linux has no egress filter: even a run holding only its MCP token gets no host
         // network by default (the MCP route is bridged in, see `mcp_bridge`).
@@ -25,20 +39,43 @@ fn network_for(requested: Option<&str>, holds: bool, linux: bool) -> Result<&'st
         (None, false) | (Some("allow"), false) => Ok("allow"),
         (Some("allow"), true) if !linux => Ok("allow"),
         (Some("allow"), true) => Err("this host cannot filter egress for an agent network: a \
-            session that holds secrets runs with AINKRAD_AGENT_NETWORK=deny"
+            session that holds secrets runs with AINKRAD_AGENT_NETWORK=deny or filtered"
             .into()),
-        _ => Err("AINKRAD_AGENT_NETWORK must be allow or deny".into()),
+        _ => Err("AINKRAD_AGENT_NETWORK must be allow, deny or filtered".into()),
     }
 }
 
 pub struct ProcessSandbox {
     state: PathBuf,
     secrets: PathBuf,
+    /// The egress filter passed its start-up self-test (`egress::selftest`).
+    egress_ready: bool,
+    /// `AINKRAD_AGENT_NETWORK`, read once when the driver started: a later change of the
+    /// process environment does not change what a session gets.
+    requested: Option<String>,
 }
 
 impl ProcessSandbox {
     pub fn new(state: PathBuf, secrets: PathBuf) -> Self {
-        Self { state, secrets }
+        Self {
+            state,
+            secrets,
+            egress_ready: false,
+            requested: None,
+        }
+    }
+
+    /// The runner's `AINKRAD_AGENT_NETWORK` (`allow`, `deny`, `filtered`); `None` is the default.
+    pub fn with_network(mut self, requested: Option<String>) -> Self {
+        self.requested = requested;
+        self
+    }
+
+    /// Marks the egress filter as proven on this host: `filtered` sessions are accepted and the
+    /// `egress-filter` capability is advertised.
+    pub fn with_egress_ready(mut self) -> Self {
+        self.egress_ready = true;
+        self
     }
 
     fn available() -> bool {
@@ -124,6 +161,14 @@ impl Sandbox for ProcessSandbox {
         Isolation::Process
     }
 
+    fn capabilities(&self) -> &'static [&'static str] {
+        if self.egress_ready {
+            &["egress-filter"]
+        } else {
+            &[]
+        }
+    }
+
     fn prepare(&self, start: &AgentStart, env: &mut Vec<(String, String)>) -> Result<(), String> {
         if !Self::available() {
             return Err(format!(
@@ -166,8 +211,13 @@ impl Sandbox for ProcessSandbox {
             .secrets
             .iter()
             .any(|g| g.var != super::agent::RUN_TOKEN_VAR);
-        let requested = std::env::var("AINKRAD_AGENT_NETWORK").ok();
-        let network = network_for(requested.as_deref(), holds, cfg!(target_os = "linux"))?;
+        let requested = self.requested.clone();
+        let network = network_for(
+            requested.as_deref(),
+            holds,
+            cfg!(target_os = "linux"),
+            self.egress_ready,
+        )?;
         if network == "allow" && requested.is_some() {
             tracing::warn!(session = %session, holds, "AINKRAD_AGENT_NETWORK=allow: this agent session has the host network");
         }
@@ -202,20 +252,48 @@ impl Sandbox for ProcessSandbox {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_policy, network_for};
+    use super::{ProcessSandbox, apply_policy, network_for};
+    use crate::v2::agent::Sandbox;
     use ainkrad_proto::runner::{Egress, Policy, WorkspaceMode};
 
     #[test]
     fn secrets_default_to_deny_and_linux_refuses_unfiltered_allow() {
-        assert_eq!(network_for(None, true, true), Ok("deny"));
-        assert_eq!(network_for(None, true, false), Ok("deny"));
-        assert_eq!(network_for(Some("deny"), true, true), Ok("deny"));
-        assert!(network_for(Some("allow"), true, true).is_err());
-        assert_eq!(network_for(Some("allow"), true, false), Ok("allow"));
-        assert_eq!(network_for(None, false, true), Ok("deny"));
-        assert_eq!(network_for(None, false, false), Ok("allow"));
-        assert_eq!(network_for(Some("allow"), false, true), Ok("allow"));
-        assert!(network_for(Some("lan"), false, false).is_err());
+        assert_eq!(network_for(None, true, true, false), Ok("deny"));
+        assert_eq!(network_for(None, true, false, false), Ok("deny"));
+        assert_eq!(network_for(Some("deny"), true, true, false), Ok("deny"));
+        assert!(network_for(Some("allow"), true, true, false).is_err());
+        assert_eq!(network_for(Some("allow"), true, false, false), Ok("allow"));
+        assert_eq!(network_for(None, false, true, false), Ok("deny"));
+        assert_eq!(network_for(None, false, false, false), Ok("allow"));
+        assert_eq!(network_for(Some("allow"), false, true, false), Ok("allow"));
+        assert!(network_for(Some("lan"), false, false, false).is_err());
+    }
+
+    #[test]
+    fn filtered_is_offered_only_on_a_proven_linux_runner_and_never_becomes_allow() {
+        for holds in [true, false] {
+            assert_eq!(
+                network_for(Some("filtered"), holds, true, true),
+                Ok("filtered")
+            );
+            // Not proven, or not Linux: refused, never downgraded to deny or allow.
+            assert!(network_for(Some("filtered"), holds, true, false).is_err());
+            assert!(network_for(Some("filtered"), holds, false, true).is_err());
+            assert!(network_for(Some("filtered"), holds, false, false).is_err());
+        }
+        // The default stays `deny` even on a proven runner: filtered is an explicit choice.
+        assert_eq!(network_for(None, true, true, true), Ok("deny"));
+        assert_eq!(network_for(None, false, true, true), Ok("deny"));
+    }
+
+    #[test]
+    fn the_capability_is_advertised_only_when_proven() {
+        let sandbox = ProcessSandbox::new("/state".into(), "/secrets".into());
+        assert!(sandbox.capabilities().is_empty());
+        assert_eq!(
+            sandbox.with_egress_ready().capabilities(),
+            ["egress-filter"]
+        );
     }
 
     fn runner_env() -> Vec<(String, String)> {

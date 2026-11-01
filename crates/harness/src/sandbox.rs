@@ -11,11 +11,9 @@ pub(crate) mod tree;
 pub(crate) use budget::configure as configure_budget;
 pub(crate) use budget::{Budget, Watch};
 
+/// The value of `key`; when it is set more than once the LAST one wins (`crate::last_env`).
 fn env<'a>(spec: &'a Spec, key: &str) -> &'a OsStr {
-    spec.env
-        .iter()
-        .find(|(n, _)| n == key)
-        .map_or(OsStr::new(""), |(_, v)| v)
+    crate::last_env(&spec.env, key).map_or(OsStr::new(""), |v| v.as_os_str())
 }
 fn writable(spec: &Spec) -> Vec<PathBuf> {
     [&spec.cwd, &spec.config_dir]
@@ -236,6 +234,8 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
         c.arg("-p").arg(profile(spec, program));
     } else {
         c = Command::new("/usr/bin/bwrap");
+        // bubblewrap passes inherited descriptors through to the program it runs.
+        ainkrad_sys::close_fds_on_exec(c.as_std_mut());
         c.args([
             "--die-with-parent",
             "--unshare-user",
@@ -264,13 +264,18 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
         for p in TOOLS.iter().filter(|p| Path::new(p).exists()) {
             c.args(["--ro-bind", p, p]);
         }
-        // Only resolver/CA data, never all of /etc (which can contain credentials).
+        // Only resolver/CA data, never all of /etc (which can contain credentials). A filtered
+        // sandbox gets no resolver config: names are resolved by the egress proxy, outside.
+        let filtered = env(spec, "AINKRAD_SANDBOX_NETWORK") == "filtered";
         for p in [
             "/etc/resolv.conf",
             "/etc/hosts",
             "/etc/ssl/certs",
             "/etc/ld.so.cache",
         ] {
+            if filtered && matches!(p, "/etc/resolv.conf" | "/etc/hosts") {
+                continue;
+            }
             if Path::new(p).exists() {
                 c.args(["--ro-bind", p, p]);
             }
@@ -287,6 +292,8 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
         // Network: the default is none. A run's MCP route comes in through a unix socket the
         // runner bridges to the Core, and a forwarder (the runner itself) on the namespace's
         // own loopback; the host's loopback and the metadata address stay unreachable.
+        // Every value but the literal `allow` gets a network namespace of its own: `filtered` is
+        // never mapped to `allow`, and a filtered sandbox without its egress socket is refused.
         if env(spec, "AINKRAD_SANDBOX_NETWORK") != "allow" {
             c.arg("--unshare-net");
             let (sock, fwd, port) = (
@@ -305,6 +312,40 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
                     c.arg("--setenv").arg(k).arg(v);
                 }
             }
+            if filtered {
+                let (sock, fwd, port) = (
+                    env(spec, "AINKRAD_SANDBOX_EGRESS_SOCK"),
+                    env(spec, "AINKRAD_SANDBOX_EGRESS_FWD"),
+                    env(spec, "AINKRAD_SANDBOX_EGRESS_PORT"),
+                );
+                if [sock, fwd, port].iter().any(|v| v.is_empty()) {
+                    return Err(io::Error::other(
+                        "a filtered sandbox needs its egress socket",
+                    ));
+                }
+                c.arg("--bind").arg(sock).arg(sock);
+                if fwd != env(spec, "AINKRAD_SANDBOX_MCP_FWD") {
+                    c.arg("--ro-bind").arg(fwd).arg(fwd);
+                }
+                for (k, v) in [
+                    ("AINKRAD_EGRESS_SOCK", sock),
+                    ("AINKRAD_EGRESS_FWD", fwd),
+                    ("AINKRAD_EGRESS_PORT", port),
+                ] {
+                    c.arg("--setenv").arg(k).arg(v);
+                }
+                // Clients reach the proxy on the namespace's own loopback. The MCP route is on
+                // loopback too and is not proxied; a client that sends it to the proxy is refused.
+                let proxy = format!("http://127.0.0.1:{}", port.to_string_lossy());
+                for k in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+                    c.arg("--setenv").arg(k).arg(&proxy);
+                }
+                for k in ["NO_PROXY", "no_proxy"] {
+                    c.arg("--setenv").arg(k).arg("127.0.0.1,localhost");
+                }
+                // Node's fetch ignores the proxy variables without this.
+                c.args(["--setenv", "NODE_USE_ENV_PROXY", "1"]);
+            }
         }
         c.args(["--remount-ro", "/dev", "--remount-ro", "/"])
             .arg("--chdir")
@@ -321,8 +362,10 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
             Err(io::Error::other("invalid sandbox limit"))
         }
     };
-    // Starts the MCP forwarder (when bwrap was given one) before the harness; it dies with the sandbox.
-    const FORWARDER: &str = "[ -z \"$AINKRAD_MCP_FWD\" ] || \"$AINKRAD_MCP_FWD\" mcp-forward \"$AINKRAD_MCP_PORT\" \"$AINKRAD_MCP_SOCK\" </dev/null >/dev/null 2>&1 & ";
+    // Starts the MCP and egress forwarders (when bwrap was given them) before the harness; they die
+    // with the sandbox. Descriptors above 2 that the runner leaked are closed first, so a connected
+    // socket inherited from the host is not reachable from inside.
+    const FORWARDER: &str = "for f in /proc/$$/fd/*; do n=${f##*/}; [ \"$n\" -gt 2 ] 2>/dev/null && eval \"exec $n>&-\"; done; if [ -n \"$AINKRAD_MCP_FWD\" ]; then \"$AINKRAD_MCP_FWD\" mcp-forward \"$AINKRAD_MCP_PORT\" \"$AINKRAD_MCP_SOCK\" </dev/null >/dev/null 2>&1 & fi; if [ -n \"$AINKRAD_EGRESS_SOCK\" ]; then \"$AINKRAD_EGRESS_FWD\" mcp-forward \"$AINKRAD_EGRESS_PORT\" \"$AINKRAD_EGRESS_SOCK\" </dev/null >/dev/null 2>&1 & fi; ";
     let script = if cfg!(target_os = "macos") {
         "ulimit -S -u \"$1\" && ulimit -H -u \"$1\" && ulimit -S -t \"$2\" && ulimit -H -t \"$2\" && ulimit -S -f \"$3\" && ulimit -H -f \"$3\" || exit 125; shift 4; exec \"$@\""
     } else {
@@ -416,6 +459,9 @@ pub fn identity(pid: u32) -> io::Result<String> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod egress_tests;
 
 #[cfg(test)]
 mod orphan_tests;

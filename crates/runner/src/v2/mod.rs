@@ -38,6 +38,7 @@ mod session;
 pub mod termbox;
 pub use exec::{ExecConfig, ExecDriver};
 pub use pty::{PtyConfig, PtyDriver};
+pub use sandbox::ProcessSandbox;
 pub use session::Session;
 
 /// What the runner proves itself with on one connection.

@@ -43,7 +43,7 @@ const BAD: Refusal = Refusal(400, "Bad Request");
 const TOO_BIG: Refusal = Refusal(431, "Request Header Fields Too Large");
 
 /// One line including its CRLF, at most `MAX_LINE` bytes: never buffers past the cap.
-async fn line<R: AsyncBufRead + Unpin>(r: &mut R, buf: &mut Vec<u8>) -> Result<usize, Refusal> {
+pub async fn line<R: AsyncBufRead + Unpin>(r: &mut R, buf: &mut Vec<u8>) -> Result<usize, Refusal> {
     buf.clear();
     let n = (&mut *r)
         .take(MAX_LINE as u64 + 1)
