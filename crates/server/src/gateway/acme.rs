@@ -85,6 +85,15 @@ impl Acme {
         Ok(cert)
     }
 
+    /// The account file as a sealed key file: its home is the state directory above `tls/`.
+    fn key_file<'a>(&'a self, path: &'a Path) -> sealed::KeyFile<'a> {
+        sealed::KeyFile {
+            path,
+            home: self.dir.parent().unwrap_or(Path::new(".")),
+            label: sealed::ACME_LABEL,
+        }
+    }
+
     /// The stored account, or a new one, stored.
     async fn account(&self) -> Result<Account, Error> {
         let builder = || match &self.ca_root {
@@ -95,7 +104,7 @@ impl Acme {
         // Sealed under the master key; a legacy plaintext file is sealed here, once, in place.
         // A file that is there but will not open stops the order: never a silent new account.
         if path.exists() {
-            let text = sealed::read(&path, &self.seal, sealed::ACME_LABEL, true, |b| {
+            let text = sealed::read(self.key_file(&path), &self.seal, true, |b| {
                 serde_json::from_slice::<AccountCredentials>(b).is_ok()
             })?;
             let creds: AccountCredentials = serde_json::from_slice(&text)?;
@@ -117,11 +126,11 @@ impl Acme {
             .recursive(true)
             .mode(0o700)
             .create(&self.dir)?;
+        let json = zeroize::Zeroizing::new(serde_json::to_vec(&creds)?);
         sealed::replace(
-            &self.dir.join("account.json"),
+            self.key_file(&self.dir.join("account.json")),
             &self.seal,
-            sealed::ACME_LABEL,
-            serde_json::to_string(&creds)?.as_bytes(),
+            &json,
         )?;
         tracing::info!(directory = self.directory, "ACME account created");
         Ok(account)

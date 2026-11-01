@@ -826,13 +826,13 @@ fn put_state(h: &Home) -> String {
     let fp = Identity::load_or_create(&h.root, &seal).unwrap().fp;
     let tls = h.root.join("tls");
     std::fs::create_dir_all(&tls).unwrap();
-    sealed::create(
-        &tls.join("account.json"),
-        &seal,
-        sealed::ACME_LABEL,
-        b"{\"stand-in\":1}",
-    )
-    .unwrap();
+    let account = tls.join("account.json");
+    let kf = sealed::KeyFile {
+        path: &account,
+        home: &h.root,
+        label: sealed::ACME_LABEL,
+    };
+    sealed::create(kf, &seal, b"{\"stand-in\":1}").unwrap();
     fp
 }
 
@@ -967,4 +967,39 @@ async fn backups_carry_the_sealed_identity_and_restore_it_before_during_and_afte
         );
         assert_eq!(mode(&to.join("core-identity.p8")), 0o600);
     }
+}
+
+#[tokio::test]
+async fn purge_refuses_to_guess_when_a_sealed_file_cannot_be_read() {
+    let d = dir("sealed-purge");
+    let h = home(&d.0.join("home"), 0, 0).await;
+    put_state(&h);
+    let old_id = h.master().key_id().to_owned();
+    go(&h, Stop::BeforeFiles).await.unwrap_err();
+    let retired = h.keys().join(format!("master.{old_id}.key.retired"));
+    assert!(retired.exists());
+    // The identity file's key id is damaged: the file still names the retired key, but a purge
+    // cannot tell, so it must not delete anything.
+    let file = h.root.join("core-identity.p8");
+    let good = std::fs::read(&file).unwrap();
+    let mut bad = good.clone();
+    bad[5] = b'Z';
+    std::fs::write(&file, &bad).unwrap();
+    let e = purge_retired(&h.db(), &h.keys(), 0)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("unreadable key id"), "{e}");
+    assert!(retired.exists(), "nothing was purged");
+    assert!(go(&h, Stop::Never).await.is_err(), "rotation refuses too");
+    // Repaired, the file names the retired key and the purge keeps it.
+    std::fs::write(&file, &good).unwrap();
+    assert!(
+        purge_retired(&h.db(), &h.keys(), 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(retired.exists());
+    h.pool.close().await;
 }

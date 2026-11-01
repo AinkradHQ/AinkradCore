@@ -84,9 +84,9 @@ impl Identity {
         })
     }
 
-    pub(crate) fn generate_pkcs8() -> std::io::Result<Vec<u8>> {
+    pub(crate) fn generate_pkcs8() -> std::io::Result<zeroize::Zeroizing<Vec<u8>>> {
         EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &SystemRandom::new())
-            .map(|d| d.as_ref().to_vec())
+            .map(|d| zeroize::Zeroizing::new(d.as_ref().to_vec()))
             .map_err(|_| std::io::Error::other("generating the Core identity key failed"))
     }
 
@@ -110,20 +110,24 @@ impl Identity {
         if let Some(r) = &pending
             && announced.is_some_and(|at| now >= r.not_before.max(at.saturating_add(WINDOW)))
         {
-            // The window is over: the next key becomes the identity. A crash after the rename
-            // leaves the statement, which the next start removes (the key already matches).
+            // The window is over: the next key becomes the identity (sealed anew under the
+            // identity label, then the next file is removed). A crash in between leaves both,
+            // and the statement, which the next start finishes (the keys already match).
             let next = dir.join(NEXT);
             if next.exists() {
-                let fp = Self::from_pkcs8(&read_key(&next, seal, true)?)?.fp;
+                let der = read_key(dir, &next, sealed::IDENTITY_NEXT_LABEL, seal, true)?;
+                let fp = Self::from_pkcs8(&der)?.fp;
                 if fp != r.new_fp {
                     return Err(std::io::Error::other(format!(
                         "{} is not the key {ROTATION} announces; nothing changed",
                         next.display()
                     )));
                 }
-                std::fs::rename(&next, &path)?;
+                sealed::replace(key_file(dir, &path, sealed::IDENTITY_LABEL), seal, &der)?;
+                std::fs::remove_file(&next)?;
             }
-            let mut current = Self::from_pkcs8(&read_key(&path, seal, true)?)?;
+            let mut current =
+                Self::from_pkcs8(&read_key(dir, &path, sealed::IDENTITY_LABEL, seal, true)?)?;
             if current.fp != r.new_fp {
                 return Err(std::io::Error::other(format!(
                     "{ROTATION} names {} but {FILE} is {}; nothing changed",
@@ -140,16 +144,15 @@ impl Identity {
             // Sealed, written whole to a private temp file and linked into place: the key file
             // is either absent or complete, and a racing creator's key is kept, never replaced.
             match sealed::create(
-                &path,
+                key_file(dir, &path, sealed::IDENTITY_LABEL),
                 seal,
-                sealed::IDENTITY_LABEL,
                 &Self::generate_pkcs8()?,
             ) {
                 Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e),
                 _ => {}
             }
         }
-        let mut me = Self::from_pkcs8(&read_key(&path, seal, true)?)?;
+        let mut me = Self::from_pkcs8(&read_key(dir, &path, sealed::IDENTITY_LABEL, seal, true)?)?;
         if let Some(r) = pending {
             // Fail closed: a statement that is not this key's own is never sent.
             let sig = super::crypto::unb64(&r.sig, 86).unwrap_or_default();
@@ -162,7 +165,7 @@ impl Identity {
             // The key the statement announces must be here for the switch, checked before
             // anything is announced (re-review L1).
             let next = dir.join(NEXT);
-            let fp = read_key(&next, seal, true)
+            let fp = read_key(dir, &next, sealed::IDENTITY_NEXT_LABEL, seal, true)
                 .and_then(|der| Self::from_pkcs8(&der))
                 .map_err(|e| {
                     std::io::Error::other(format!(
@@ -190,7 +193,13 @@ impl Identity {
     /// when it is this key's own.
     pub fn load_readonly(dir: &Path, seal: &SecretBox) -> std::io::Result<Self> {
         // A legacy plaintext file is read as it is and not sealed here: `serve` migrates it.
-        let mut me = Self::from_pkcs8(&read_key(&dir.join(FILE), seal, false)?)?;
+        let mut me = Self::from_pkcs8(&read_key(
+            dir,
+            &dir.join(FILE),
+            sealed::IDENTITY_LABEL,
+            seal,
+            false,
+        )?)?;
         me.rotation = read_rotation(dir)?.filter(|r| r.old_fp == me.fp);
         Ok(me)
     }
@@ -231,7 +240,11 @@ impl Identity {
         let current = Self::load_at(dir, now, seal)?;
         let der = Self::generate_pkcs8()?;
         let next = Self::from_pkcs8(&der)?;
-        sealed::create(&dir.join(NEXT), seal, sealed::IDENTITY_LABEL, &der)?;
+        sealed::create(
+            key_file(dir, &dir.join(NEXT), sealed::IDENTITY_NEXT_LABEL),
+            seal,
+            &der,
+        )?;
         let mut r = Rotation {
             old_fp: current.fp.clone(),
             new_fp: next.fp,
@@ -309,13 +322,19 @@ fn unix_now() -> i64 {
 /// The PKCS#8 of the identity key file at `path`: opened with the master key, or (legacy) a
 /// plaintext file, which `migrate` seals in place. See [`sealed`].
 fn read_key(
+    home: &Path,
     path: &Path,
+    label: &str,
     seal: &SecretBox,
     migrate: bool,
 ) -> std::io::Result<zeroize::Zeroizing<Vec<u8>>> {
-    sealed::read(path, seal, sealed::IDENTITY_LABEL, migrate, |b| {
+    sealed::read(key_file(home, path, label), seal, migrate, |b| {
         Identity::from_pkcs8(b).is_ok()
     })
+}
+
+fn key_file<'a>(home: &'a Path, path: &'a Path, label: &'a str) -> sealed::KeyFile<'a> {
+    sealed::KeyFile { path, home, label }
 }
 
 /// Reads a file only this user may read.
@@ -504,7 +523,13 @@ mod tests {
             .to_string();
         assert!(e.contains(NEXT), "{e}");
         let other = Identity::generate_pkcs8().unwrap();
-        write_private(&dir.join(NEXT), &other, true).unwrap();
+        let next = dir.join(NEXT);
+        sealed::create(
+            key_file(&dir, &next, sealed::IDENTITY_NEXT_LABEL),
+            &seal(),
+            &other,
+        )
+        .unwrap();
         let e = Identity::load_at(&dir, 1_001, &seal())
             .unwrap_err()
             .to_string();

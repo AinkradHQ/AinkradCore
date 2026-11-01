@@ -133,7 +133,7 @@ pub async fn rotate(
         let keyring = current.with_extra(spares);
         let state = keys.parent().unwrap_or(Path::new("."));
         let mut named = row_key_ids(&pool).await?;
-        named.extend(sealed::file_key_ids(state));
+        named.extend(sealed::file_key_ids(state)?);
         for id in named {
             if !keyring.holds(&id) {
                 return Err(format!(
@@ -183,11 +183,16 @@ pub async fn rotate(
             ),
             (
                 state.join(crate::auth::identity::NEXT),
-                sealed::IDENTITY_LABEL,
+                sealed::IDENTITY_NEXT_LABEL,
             ),
             (state.join("tls").join("account.json"), sealed::ACME_LABEL),
         ] {
-            sealed::reseal(&file, label, &keyring, &target)?;
+            let kf = sealed::KeyFile {
+                path: &file,
+                home: state,
+                label,
+            };
+            sealed::reseal(kf, &keyring, &target)?;
         }
         if stop == Stop::BeforeSwitch {
             return Err("stopped after the commit, before the switch (test)".into());
@@ -232,7 +237,7 @@ pub async fn purge_retired(
     // A key a sealed key file still names is in use too.
     named.extend(sealed::file_key_ids(
         keys.parent().unwrap_or(Path::new(".")),
-    ));
+    )?);
     let limit = Duration::from_secs(older_than_days.saturating_mul(86_400));
     let mut gone = Vec::new();
     for (id, path, retired) in key_files(keys)? {

@@ -137,9 +137,12 @@ async fn build(
             std::fs::rename(&identity, h.identity())?;
             // A legacy plaintext identity is sealed under the restored master key now.
             let seal = SecretBox::for_home(&h.0)?;
-            sealed::read(&h.identity(), &seal, sealed::IDENTITY_LABEL, true, |b| {
-                Identity::from_pkcs8(b).is_ok()
-            })?;
+            let kf = sealed::KeyFile {
+                path: &h.identity(),
+                home: &h.0,
+                label: sealed::IDENTITY_LABEL,
+            };
+            sealed::read(kf, &seal, true, |b| Identity::from_pkcs8(b).is_ok())?;
         }
         store::restore(&files.join("core.db"), &h.db(), false).await?;
         migrate(&h).await?;
@@ -188,7 +191,7 @@ async fn unheld_keys(h: &Home) -> Result_ {
     let mut held = vec![SecretBox::from_file(&h.master_key())?.key_id().to_owned()];
     held.extend(key_files(&h.keys())?.into_iter().map(|f| f.0));
     let mut named = named?;
-    named.extend(sealed::file_key_ids(&h.0));
+    named.extend(sealed::file_key_ids(&h.0)?);
     let missing: Vec<String> = named.into_iter().filter(|id| !held.contains(id)).collect();
     match missing.is_empty() {
         true => Ok(()),

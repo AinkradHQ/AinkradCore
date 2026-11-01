@@ -198,7 +198,9 @@ impl SecretBox {
             std::io::Error::new(
                 e.kind(),
                 format!(
-                    "master key {}: {e}; the Core identity and the ACME account are sealed under                      it, so the Core will not start without it (restore keys/master.key from a                      backup)",
+                    "master key {}: {e}; the Core identity and the ACME account are sealed under \
+                     it, so the Core will not start without it (restore keys/master.key from a \
+                     backup)",
                     path.display()
                 ),
             )

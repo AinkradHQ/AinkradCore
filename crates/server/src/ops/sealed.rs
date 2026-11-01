@@ -9,20 +9,26 @@
 //! it still has to move. The file name stays the same as before (`core-identity.p8`,
 //! `tls/account.json`): a file that does not start with the magic is a legacy plaintext one.
 //!
+//! The outer header (magic, version, key id) is bound into the associated data together with the
+//! label, so neither can be edited without failing the open; each file kind has its own label.
+//!
 //! Migration of a legacy file ([`read`] with `migrate`): the plaintext must first validate (a
 //! corrupt file is refused and left alone), is sealed to a private temp file in the same
-//! directory (0600, synced), read back and compared, renamed over the original (atomic) and the
-//! directory synced. A crash before the rename leaves the plaintext file, loadable and migrated
-//! on the next start; after it, the sealed one. The key is never only in memory. Afterwards the
-//! file starts with the magic and is only ever opened with the master key.
+//! directory (0600, synced), the TEMP FILE is read back from disk and decrypted, then it is
+//! renamed over the original (atomic) and the directory synced. A crash before the rename leaves
+//! the plaintext file (loadable, migrated on the next start, a stray temp file is cleaned up); after
+//! it, the sealed one. The key is never only in memory. Afterwards a durable marker
+//! (`keys/.sealed.<label>`) records that the file kind is sealed: a plaintext file that shows up
+//! later is refused unless `AINKRAD_ALLOW_PLAINTEXT_KEYFILES=1` is set (a restored legacy backup).
+//! Symlinks are refused.
 //!
 //! Honest scope: the master key is a file on the same host, so this protects copies of the data
 //! directory (a disk snapshot, a stray backup of `core.db`'s directory), not an attacker who can
 //! read the home as its owner or root.
 
 use std::io::{self, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::Path;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 
 use zeroize::Zeroizing;
 
@@ -31,9 +37,54 @@ use super::secretbox::SecretBox;
 const MAGIC: &[u8; 5] = b"ACSF\x01";
 const ID_LEN: usize = 16;
 const HEADER: usize = MAGIC.len() + ID_LEN;
+/// Set to `1` to accept (and seal) a plaintext key file although its kind was sealed before.
+pub const ALLOW_PLAIN_ENV: &str = "AINKRAD_ALLOW_PLAINTEXT_KEYFILES";
 
 pub const IDENTITY_LABEL: &str = "core.identity";
+pub const IDENTITY_NEXT_LABEL: &str = "core.identity.next";
 pub const ACME_LABEL: &str = "acme.account";
+
+/// A key file: where it is, the home it belongs to (the marker lives in `<home>/keys`) and its
+/// label.
+#[derive(Clone, Copy)]
+pub struct KeyFile<'a> {
+    pub path: &'a Path,
+    pub home: &'a Path,
+    pub label: &'a str,
+}
+
+impl KeyFile<'_> {
+    fn marker(&self) -> PathBuf {
+        self.home
+            .join("keys")
+            .join(format!(".sealed.{}", self.label))
+    }
+
+    /// Records, durably, that this kind of file is sealed.
+    fn mark(&self) -> io::Result<()> {
+        let m = self.marker();
+        if m.exists() {
+            return Ok(());
+        }
+        let keys = self.home.join("keys");
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&keys)?;
+        write_atomic(&m, b"sealed\n", true, Stop::Never, |_| true)?;
+        Ok(())
+    }
+}
+
+/// Crash injection for tests; real callers use `Never`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Stop {
+    Never,
+    /// After the sealed temp file is synced and verified, before the rename (temp file left).
+    AfterTempSync,
+    /// After the rename, before the directory is synced.
+    AfterRename,
+}
 
 fn err(msg: impl Into<String>) -> io::Error {
     io::Error::other(msg.into())
@@ -54,13 +105,20 @@ pub fn key_id_of(bytes: &[u8]) -> Option<String> {
         .then(|| id.to_owned())
 }
 
+/// The label as the AEAD sees it: the caller's label and the whole outer header.
+fn bound(label: &str, header: &[u8]) -> Vec<u8> {
+    [label.as_bytes(), b"\0", header].concat()
+}
+
+fn bound_str(label: &str, header: &[u8]) -> String {
+    // Header bytes are ASCII (magic, 0x01, hex), so this is lossless.
+    String::from_utf8_lossy(&bound(label, header)).into_owned()
+}
+
 pub fn seal_bytes(seal: &SecretBox, label: &str, plain: &[u8]) -> io::Result<Vec<u8>> {
-    let env = seal.seal(label, plain)?;
-    let mut out = Vec::with_capacity(HEADER + env.len());
-    out.extend_from_slice(MAGIC);
-    out.extend_from_slice(seal.key_id().as_bytes());
-    out.extend_from_slice(&env);
-    Ok(out)
+    let header = [MAGIC.as_slice(), seal.key_id().as_bytes()].concat();
+    let env = seal.seal(&bound_str(label, &header), plain)?;
+    Ok([header, env].concat())
 }
 
 /// Opens a sealed file's bytes under the key they name (current or spare). Every failure says
@@ -73,14 +131,20 @@ pub fn open_bytes(seal: &SecretBox, label: &str, bytes: &[u8]) -> io::Result<Zer
              keys/master.{id}.key.retired): restore it from a backup; nothing was changed"
         )));
     }
-    seal.open_as(&id, label, &bytes[HEADER..])
+    seal.open_as(&id, &bound_str(label, &bytes[..HEADER]), &bytes[HEADER..])
         .map_err(|e| err(format!("cannot be opened ({e})")))
 }
 
-/// Writes `bytes` to `path`: private temp file in the same directory (0600, synced), then
-/// `rename` over `path` (`replace`) or a hard link that never replaces (`!replace`, an existing
-/// file is kept: `AlreadyExists`), then the directory synced.
-pub fn write_atomic(path: &Path, bytes: &[u8], replace: bool) -> io::Result<()> {
+/// Writes `bytes` to `path`: private temp file in the same directory (0600, synced), re-read from
+/// disk and checked with `verify`, then `rename` over `path` (`replace`) or a hard link that never
+/// replaces (`!replace`: an existing file is kept, `AlreadyExists`), then the directory synced.
+fn write_atomic(
+    path: &Path,
+    bytes: &[u8],
+    replace: bool,
+    stop: Stop,
+    verify: impl Fn(&[u8]) -> bool,
+) -> io::Result<()> {
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
     let dir = dir.unwrap_or(Path::new("."));
     let mut rnd = [0u8; 8];
@@ -98,39 +162,68 @@ pub fn write_atomic(path: &Path, bytes: &[u8], replace: bool) -> io::Result<()> 
             .open(&tmp)?;
         f.write_all(bytes)?;
         f.sync_all()?;
+        // What is on disk, not what is in memory.
+        if !verify(&std::fs::read(&tmp)?) {
+            return Err(err(
+                "the written key file did not verify; nothing was changed",
+            ));
+        }
+        if stop == Stop::AfterTempSync {
+            return Err(err("stopped after the temp file (test)"));
+        }
         if replace {
             std::fs::rename(&tmp, path)
         } else {
             std::fs::hard_link(&tmp, path)
         }
     })();
-    let _ = std::fs::remove_file(&tmp);
+    // An injected stop leaves the temp file behind, as a crash would.
+    if stop != Stop::AfterTempSync || done.is_ok() {
+        let _ = std::fs::remove_file(&tmp);
+    }
     done?;
+    if stop == Stop::AfterRename {
+        return Err(err("stopped after the rename (test)"));
+    }
     std::fs::File::open(dir)?.sync_all()
 }
 
-/// Seals `plain` as a new file at `path` (never over an existing one).
-pub fn create(path: &Path, seal: &SecretBox, label: &str, plain: &[u8]) -> io::Result<()> {
-    write_atomic(path, &seal_bytes(seal, label, plain)?, false)
-}
-
-/// Seals `plain` over `path`.
-pub fn replace(path: &Path, seal: &SecretBox, label: &str, plain: &[u8]) -> io::Result<()> {
-    write_atomic(path, &seal_bytes(seal, label, plain)?, true)
-}
-
-/// The plaintext of the key file at `path` (mode 0600 or tighter). A sealed file is opened. A
-/// file without the magic is a legacy plaintext one: it must satisfy `valid` (else refused,
-/// untouched) and, with `migrate`, is sealed in place first (see the module docs); without it
-/// (a read-only caller) it is returned as it is and left alone.
-pub fn read(
-    path: &Path,
+/// Seals `plain` under `seal` into `kf.path` (`replace`, else only as a new file), verified from
+/// disk before it is put in place, and records that the kind is sealed.
+pub fn write_sealed(
+    kf: KeyFile,
     seal: &SecretBox,
-    label: &str,
-    migrate: bool,
-    valid: impl Fn(&[u8]) -> bool,
-) -> io::Result<Zeroizing<Vec<u8>>> {
-    let mode = std::fs::metadata(path)?.permissions().mode();
+    plain: &[u8],
+    replace: bool,
+    stop: Stop,
+) -> io::Result<()> {
+    let sealed = seal_bytes(seal, kf.label, plain)?;
+    write_atomic(kf.path, &sealed, replace, stop, |disk| {
+        open_bytes(seal, kf.label, disk).is_ok_and(|p| p.as_slice() == plain)
+    })?;
+    kf.mark()
+}
+
+/// Seals `plain` as a new file at `kf.path` (never over an existing one).
+pub fn create(kf: KeyFile, seal: &SecretBox, plain: &[u8]) -> io::Result<()> {
+    write_sealed(kf, seal, plain, false, Stop::Never)
+}
+
+/// Seals `plain` over `kf.path`.
+pub fn replace(kf: KeyFile, seal: &SecretBox, plain: &[u8]) -> io::Result<()> {
+    write_sealed(kf, seal, plain, true, Stop::Never)
+}
+
+/// Mode check without following a symlink: a key file must be a regular file, 0600 or tighter.
+fn checked_meta(path: &Path) -> io::Result<()> {
+    let md = std::fs::symlink_metadata(path)?;
+    if !md.file_type().is_file() {
+        return Err(err(format!(
+            "{} is not a regular file (a symlink?); refusing it",
+            path.display()
+        )));
+    }
+    let mode = md.permissions().mode();
     if mode & 0o077 != 0 {
         return Err(err(format!(
             "{} is readable by others (mode {:o}); chmod 600 it",
@@ -138,10 +231,73 @@ pub fn read(
             mode & 0o777
         )));
     }
+    Ok(())
+}
+
+/// Removes temp files a crashed write left beside `path` (older than a minute, so a writer in
+/// another process is never raced).
+fn clean_stale(path: &Path) {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else {
+        return;
+    };
+    let prefix = format!(".{name}.");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let n = e.file_name();
+        let n = n.to_string_lossy();
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| t.elapsed().is_ok_and(|a| a.as_secs() > 60));
+        if n.starts_with(&prefix) && n.ends_with(".tmp") && old {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// The plaintext of the key file `kf` (mode 0600 or tighter, a regular file). A sealed file is
+/// opened. A file without the magic is a legacy plaintext one: refused when this kind was sealed
+/// before (unless [`ALLOW_PLAIN_ENV`] is `1`), else it must satisfy `valid` (else refused,
+/// untouched) and, with `migrate`, is sealed in place first (see the module docs); without it (a
+/// read-only caller) it is returned as it is and left alone.
+pub fn read(
+    kf: KeyFile,
+    seal: &SecretBox,
+    migrate: bool,
+    valid: impl Fn(&[u8]) -> bool,
+) -> io::Result<Zeroizing<Vec<u8>>> {
+    let allow = std::env::var(ALLOW_PLAIN_ENV).is_ok_and(|v| v == "1");
+    read_with(kf, seal, migrate, allow, valid)
+}
+
+/// [`read`] with the override given instead of read from the environment.
+pub fn read_with(
+    kf: KeyFile,
+    seal: &SecretBox,
+    migrate: bool,
+    allow_plain: bool,
+    valid: impl Fn(&[u8]) -> bool,
+) -> io::Result<Zeroizing<Vec<u8>>> {
+    let path = kf.path;
+    checked_meta(path)?;
     let bytes = Zeroizing::new(std::fs::read(path)?);
     let named = |e: io::Error| err(format!("{}: {e}", path.display()));
     if is_sealed(&bytes) {
-        return open_bytes(seal, label, &bytes).map_err(named);
+        let plain = open_bytes(seal, kf.label, &bytes).map_err(named)?;
+        if migrate {
+            kf.mark()?;
+            clean_stale(path);
+        }
+        return Ok(plain);
+    }
+    if kf.marker().exists() && !allow_plain {
+        return Err(err(format!(
+            "{} is plaintext but this kind of file was sealed before: a planted or restored old \
+             file? Refusing it (set {ALLOW_PLAIN_ENV}=1 to accept and seal it)",
+            path.display()
+        )));
     }
     if !valid(&bytes) {
         return Err(err(format!(
@@ -150,56 +306,58 @@ pub fn read(
         )));
     }
     if migrate {
-        let sealed = seal_bytes(seal, label, &bytes)?;
-        if open_bytes(seal, label, &sealed)?.as_slice() != bytes.as_slice() {
-            return Err(err(
-                "sealing did not round-trip; the plaintext file is kept",
-            ));
-        }
-        write_atomic(path, &sealed, true)?;
+        clean_stale(path);
+        write_sealed(kf, seal, &bytes, true, Stop::Never)?;
         tracing::info!(file = %path.display(), key_id = seal.key_id(), "key file sealed under the master key");
     }
     Ok(bytes)
 }
 
-/// Re-seals the sealed file at `path` under `target`, opening it with `keyring` (which holds
+/// Re-seals the sealed file at `kf.path` under `target`, opening it with `keyring` (which holds
 /// the key it names). `Ok(false)`: absent, legacy plaintext (the next load migrates it) or
 /// already under `target`. Idempotent, so an interrupted rotation just runs it again.
-pub fn reseal(
-    path: &Path,
-    label: &str,
-    keyring: &SecretBox,
-    target: &SecretBox,
-) -> io::Result<bool> {
-    let bytes = match std::fs::read(path) {
-        Ok(b) => Zeroizing::new(b),
+pub fn reseal(kf: KeyFile, keyring: &SecretBox, target: &SecretBox) -> io::Result<bool> {
+    match std::fs::symlink_metadata(kf.path) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(e),
-    };
+        Ok(_) => checked_meta(kf.path)?,
+    }
+    let bytes = Zeroizing::new(std::fs::read(kf.path)?);
     if !is_sealed(&bytes) || key_id_of(&bytes).as_deref() == Some(target.key_id()) {
         return Ok(false);
     }
-    let plain =
-        open_bytes(keyring, label, &bytes).map_err(|e| err(format!("{}: {e}", path.display())))?;
-    let sealed = seal_bytes(target, label, &plain)?;
-    if open_bytes(target, label, &sealed)?.as_slice() != plain.as_slice() {
-        return Err(err("re-sealing did not round-trip; nothing was changed"));
-    }
-    write_atomic(path, &sealed, true)?;
+    let plain = open_bytes(keyring, kf.label, &bytes)
+        .map_err(|e| err(format!("{}: {e}", kf.path.display())))?;
+    write_sealed(kf, target, &plain, true, Stop::Never)?;
     Ok(true)
 }
 
 /// The master key ids named by the sealed key files in `state` (the home): identity, the next
 /// identity of a rotation, the ACME account. Purge and rotate treat them like a secret's row.
-pub fn file_key_ids(state: &Path) -> Vec<String> {
-    [
+/// Anything but a missing file that cannot be read, or a sealed file whose key id cannot be
+/// parsed, is an error: a purge must never go ahead on a guess.
+pub fn file_key_ids(state: &Path) -> io::Result<Vec<String>> {
+    let mut ids = Vec::new();
+    for p in [
         state.join(crate::auth::identity::FILE),
         state.join(crate::auth::identity::NEXT),
         state.join("tls").join("account.json"),
-    ]
-    .iter()
-    .filter_map(|p| key_id_of(&std::fs::read(p).ok()?))
-    .collect()
+    ] {
+        let bytes = match std::fs::read(&p) {
+            Ok(b) => b,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(err(format!("{}: {e}", p.display()))),
+        };
+        if is_sealed(&bytes) {
+            ids.push(key_id_of(&bytes).ok_or_else(|| {
+                err(format!(
+                    "{}: a sealed key file with an unreadable key id",
+                    p.display()
+                ))
+            })?);
+        }
+    }
+    Ok(ids)
 }
 
 #[cfg(test)]
