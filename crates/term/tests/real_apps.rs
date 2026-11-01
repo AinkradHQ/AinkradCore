@@ -87,10 +87,14 @@ fn vim_split_has_two_status_lines_and_scrolled() {
     let s = stream("real_vim_split_scroll");
     // a scroll region (DECSTBM) was set by the split
     let lossy = String::from_utf8_lossy(&s);
-    assert!(
-        lossy.contains('r') && lossy.matches("\x1b[").count() > 20,
-        "stream"
-    );
+    let has_region = lossy.split("\x1b[").skip(1).any(|t| {
+        let (args, tail) = t.split_at(
+            t.find(|c: char| !c.is_ascii_digit() && c != ';')
+                .unwrap_or(0),
+        );
+        tail.starts_with('r') && args.contains(';')
+    });
+    assert!(has_region, "no ESC[top;bottomr in the vim split stream");
     let text = screen_text(&before_exit("real_vim_split_scroll").dump());
     assert_eq!(text.matches("notes.txt").count(), 2, "{text}");
     assert!(text.contains("of the notes file"), "{text}");
@@ -179,6 +183,27 @@ fn less_returns_to_the_shell_screen() {
     );
 }
 
+/// What the apps that clear their screen on exit had on it just before: pinned in
+/// `tests/corpus/<name>.screen` (`BLESS=1` rewrites; review the diff by eye).
+#[test]
+fn last_picture_of_each_full_screen_app_is_pinned() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus");
+    for name in [
+        "real_vim_edit",
+        "real_vim_split_scroll",
+        "real_htop",
+        "real_tmux_splits",
+    ] {
+        let got = before_exit(name).dump();
+        let path = dir.join(format!("{name}.screen"));
+        if std::env::var_os("BLESS").is_some() {
+            fs::write(&path, &got).expect("bless");
+        }
+        let want = fs::read_to_string(&path).expect("screen golden (BLESS=1 to create)");
+        assert_eq!(got, want, "{name}");
+    }
+}
+
 const REAL: [&str; 7] = [
     "real_vim_edit",
     "real_vim_split_scroll",
@@ -212,6 +237,7 @@ fn reattach_from_every_point_of_every_stream() {
             cuts += 1;
         }
     }
+    println!("cut points: {cuts}");
     assert!(cuts > 150, "only {cuts} cut points");
 }
 
