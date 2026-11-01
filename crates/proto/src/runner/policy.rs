@@ -9,6 +9,8 @@ use super::isolation::{
 
 /// A project's harness permission policy (1.3). Never full-auto by default.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+// A misspelt isolation field (`wal_secs`) must be refused, not read as "no cap".
+#[serde(deny_unknown_fields)]
 pub struct Policy {
     pub mode: PermissionMode,
     /// Tools the harness may use without asking: a tool name (`Edit`, `fileChange`), or

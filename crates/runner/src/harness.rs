@@ -307,13 +307,12 @@ impl Executor for HarnessExecutor {
         }
         // The agent driver's sandbox marks the run's environment once it has applied the policy's
         // isolation fields; without that mark nothing has, and the run is refused.
-        let isolated = self.sandboxed
-            || self
-                .run_env
-                .lock()
-                .expect("run env lock")
-                .get(&job.run)
-                .is_some_and(|e| e.iter().any(|(n, _)| n == "AINKRAD_SANDBOX"));
+        let isolated = self
+            .run_env
+            .lock()
+            .expect("run env lock")
+            .get(&job.run)
+            .is_some_and(|e| e.iter().any(|(n, _)| n == "AINKRAD_SANDBOX"));
         if job.policy.asks_for_isolation() && !isolated {
             return Err(
                 "the policy sets isolation fields, and this runner has no sandbox".to_owned(),

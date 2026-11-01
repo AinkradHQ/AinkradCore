@@ -262,6 +262,10 @@ pub enum Invalid {
     Forbidden(&'static str),
 }
 
+/// Why a policy with isolation fields is not placed: no runner advertises that it enforces them
+/// yet, and one that does not know them would drop them and run the session without.
+pub(crate) const UNADVERTISED: &str = "the policy sets isolation fields, which cannot be sent to a runner that has not advertised that it enforces them";
+
 fn harness_ok(h: &str) -> bool {
     (1..=32).contains(&h.len())
         && h.bytes()
@@ -314,6 +318,9 @@ pub fn validate_new(new: &store::NewSession<'_>, admin: bool) -> Result<(), Inva
              disk_mb 16-1048576, wall_secs 1-86400, image sha256:<64 hex>, egress rules IP \
              addresses or CIDR blocks (no host names, at most 64 each)",
         ));
+    }
+    if policy.asks_for_isolation() {
+        return Err(Invalid::Bad(UNADVERTISED));
     }
     if has_destructive_allow(&policy) && !admin {
         return Err(Invalid::Forbidden(

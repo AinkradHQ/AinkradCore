@@ -680,7 +680,7 @@ async fn an_agent_device_cannot_drive_or_read_a_session_that_holds_secrets() {
 
 /// The policy's isolation fields (E8a-08) are bounded at the Core, before any runner is asked:
 /// out-of-range resources, a malformed digest and a host name in an egress rule are a 400, an
-/// in-bounds policy reaches the runner check (not connected here), and an unknown tier is refused.
+/// in-bounds policy is still not sent to a runner that has not advertised the capability, and an unknown tier is refused.
 #[tokio::test]
 async fn isolation_fields_are_checked_at_the_boundary() {
     let fx = fx().await;
@@ -712,6 +712,7 @@ async fn isolation_fields_are_checked_at_the_boundary() {
         .await;
         assert_eq!(r.0, StatusCode::BAD_REQUEST, "{why}: {}", r.1);
     }
+    // In bounds, but no runner can be told to enforce the fields yet: refused, not sent.
     let good = json!({"mode": "ask", "min_isolation": "process", "memory_mb": 512,
                       "wall_secs": 60, "egress": {"allow": ["10.0.0.0/8"]}});
     let r = call(
@@ -720,6 +721,17 @@ async fn isolation_fields_are_checked_at_the_boundary() {
         Method::POST,
         "/api/v1/agent-sessions",
         create(good),
+    )
+    .await;
+    assert_eq!(r.0, StatusCode::BAD_REQUEST, "{}", r.1);
+    assert!(r.1.to_string().contains("advertised"), "{}", r.1);
+    // A policy with none of the fields places as before (the runner is not connected here).
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::POST,
+        "/api/v1/agent-sessions",
+        create(json!({"mode": "ask"})),
     )
     .await;
     assert_eq!(
