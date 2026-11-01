@@ -42,6 +42,18 @@ pub fn parse(url: &str) -> Option<(Target, String)> {
         _ => return None,
     };
     let (authority, path) = rest.split_once('/').map_or((rest, ""), |(a, p)| (a, p));
+    // The authority becomes a `Host:` header line and the path a request line: a control
+    // character, a space or a non-ASCII byte in either would split or forge a header. Anything
+    // but visible ASCII refuses the bridge (the caller then gives the sandbox no route), and a
+    // userinfo (`user@`) is never part of a `Host`.
+    if !authority
+        .bytes()
+        .chain(path.bytes())
+        .all(|b| b.is_ascii_graphic())
+        || authority.contains('@')
+    {
+        return None;
+    }
     let (host, port) = match authority.rsplit_once(':') {
         Some((h, p)) if !h.ends_with(']') || h.starts_with('[') => (h, p.parse().ok()?),
         _ => (authority, if tls { 443 } else { 80 }),
@@ -124,10 +136,13 @@ async fn serve(
     target: &Target,
     tls: &Arc<rustls::ClientConfig>,
     client: UnixStream,
+    first_line: Duration,
 ) -> io::Result<()> {
     let (cr, mut cw) = split(client);
     let mut reader = BufReader::new(cr);
-    let first = match filter::read_request(&mut reader, &target.authority, &target.path).await {
+    let first = match filter::read_request(&mut reader, &target.authority, &target.path, first_line)
+        .await
+    {
         Ok(Some(q)) => q,
         Ok(None) => return Ok(()),
         Err(refusal) => {
@@ -145,7 +160,9 @@ async fn serve(
             uw.write_all(&q.head).await?;
             filter::forward_body(&mut reader, &mut uw, q.body).await?;
             uw.flush().await?;
-            match filter::read_request(&mut reader, &target.authority, &target.path).await {
+            match filter::read_request(&mut reader, &target.authority, &target.path, filter::IDLE)
+                .await
+            {
                 Ok(Some(next)) => q = next,
                 Ok(None) => return uw.shutdown().await, // the client is done; let responses finish
                 Err(_) => return Err(io::Error::other("refused a later request")),
@@ -162,6 +179,16 @@ pub fn start(
     sock: &Path,
     target: Target,
     tls: Option<Arc<rustls::ClientConfig>>,
+) -> io::Result<Bridge> {
+    start_with(sock, target, tls, filter::FIRST_LINE)
+}
+
+/// `start` with the wait for a connection's first request line given (the tests shorten it).
+fn start_with(
+    sock: &Path,
+    target: Target,
+    tls: Option<Arc<rustls::ClientConfig>>,
+    first_line: Duration,
 ) -> io::Result<Bridge> {
     let listener = UnixListener::bind(sock)?;
     std::fs::set_permissions(sock, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
@@ -180,7 +207,7 @@ pub fn start(
                     let (target, tls) = (target.clone(), tls.clone());
                     conns.spawn(async move {
                         let _held = (mine, global);
-                        match timeout(LIFETIME, serve(&target, &tls, client)).await {
+                        match timeout(LIFETIME, serve(&target, &tls, client, first_line)).await {
                             Ok(Err(e)) => tracing::debug!(error = %e, "mcp bridge connection ended"),
                             Err(_) => tracing::debug!("mcp bridge connection reached its lifetime cap"),
                             Ok(Ok(())) => {}
@@ -223,6 +250,10 @@ mod tests {
 
     /// A counting upstream and a bridge to it; the socket lives in a fresh temp dir.
     async fn rig(name: &str) -> (Bridge, PathBuf, Arc<AtomicUsize>) {
+        rig_with(name, filter::FIRST_LINE).await
+    }
+
+    async fn rig_with(name: &str, first_line: Duration) -> (Bridge, PathBuf, Arc<AtomicUsize>) {
         let up = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = up.local_addr().unwrap().port();
         let hits = Arc::new(AtomicUsize::new(0));
@@ -251,7 +282,11 @@ mod tests {
             authority: format!("127.0.0.1:{port}"),
             path: "/token/citadel/v1/mcp".into(),
         };
-        (start(&sock, target, None).unwrap(), sock, hits)
+        (
+            start_with(&sock, target, None, first_line).unwrap(),
+            sock,
+            hits,
+        )
     }
 
     async fn status(sock: &Path, raw: &[u8]) -> String {
@@ -314,6 +349,49 @@ mod tests {
                 .expect("a connection outlived the bridge");
             assert!(matches!(n, Ok(0) | Err(_)));
         }
+    }
+
+    #[test]
+    fn a_control_character_or_userinfo_in_the_url_gets_no_bridge() {
+        for bad in [
+            "https://core.example\r\nX-Evil: 1/x",
+            "https://core.example:8443\n/x",
+            "https://user@core.example/x",
+            "https://core .example/x",
+            "https://core.example/x\r\nHost: evil",
+            "https://core.exämple/x",
+        ] {
+            assert!(parse(bad).is_none(), "{bad:?}");
+        }
+    }
+
+    /// Real time and a short first-line wait: paused time would let the clock jump before the
+    /// bridge has accepted the connections (a real socket's readiness is not a task the paused
+    /// clock waits for), which made this race on macOS.
+    #[tokio::test]
+    async fn a_silent_client_does_not_hold_a_slot() {
+        let (_bridge, sock, _) = rig_with("silent", Duration::from_millis(300)).await;
+        let mut held = Vec::new();
+        for _ in 0..PER_RUN {
+            held.push(UnixStream::connect(&sock).await.unwrap());
+        }
+        // Every slot is taken by a silent client (an extra one is closed unanswered)...
+        let mut extra = UnixStream::connect(&sock).await.unwrap();
+        let mut buf = [0; 8];
+        let n = timeout(Duration::from_secs(5), extra.read(&mut buf))
+            .await
+            .expect("the extra connection hung");
+        assert!(matches!(n, Ok(0)), "all slots should be held: {n:?}");
+        // ...and after the first-line wait they are free again: poll, bounded.
+        let mut served = false;
+        for _ in 0..100 {
+            if status(&sock, REQ.as_bytes()).await.contains("200") {
+                served = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(served, "silent clients still hold the slots after 10 s");
     }
 
     #[test]

@@ -614,6 +614,58 @@ pub async fn open_for_module(
     Ok(value)
 }
 
+/// Opens the secrets `names` so a Core-side redactor can mask their values in text an agent
+/// sends or reads (E2-29). Nothing leaves the Core, so there is no lease and no audit row (one
+/// per tool call would drown the trail); it works while the broker is off, because a value
+/// leased earlier is still in the agent's hands. Fails closed, with `secrets_unavailable`, for
+/// every case where the value the agent holds may not be the one on file: a secret that no
+/// longer exists (deleted), one rotated, or deleted and created again, at or after `since` (when the session
+/// began, so the agent may hold the superseded value), or one that does not open.
+pub async fn open_for_masking(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    names: &[String],
+    since: &str,
+) -> Result<Vec<(String, Zeroizing<String>)>, Error> {
+    let gone = || {
+        refused(
+            "secrets_unavailable",
+            "a secret leased to this session was deleted, rotated or cannot be opened",
+        )
+    };
+    let mut out = Vec::with_capacity(names.len());
+    for name in names {
+        let row = sqlx::query(
+            "SELECT version, key_id, sealed, updated_at FROM core_secrets WHERE name = ?",
+        )
+        .bind(name)
+        .fetch_optional(pool)
+        .await?;
+        let Some(row) = row else { return gone() };
+        let version: i64 = row.try_get("version")?;
+        let updated_at: String = row.try_get("updated_at")?;
+        if updated_at.as_str() >= since {
+            return gone();
+        }
+        let key_id: String = row.try_get("key_id")?;
+        let sealed: Vec<u8> = row.try_get("sealed")?;
+        let value = sealer
+            .holds(&key_id)
+            .then(|| sealer.open_as(&key_id, &label(name, version), &sealed).ok())
+            .flatten()
+            .and_then(|p| {
+                std::str::from_utf8(&p)
+                    .ok()
+                    .map(|v| Zeroizing::new(v.to_owned()))
+            });
+        match value {
+            Some(v) => out.push((name.clone(), v)),
+            None => return gone(),
+        }
+    }
+    Ok(out)
+}
+
 /// What a master-key rotation did: the secrets held and how many it moved to the new key.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Resealed {

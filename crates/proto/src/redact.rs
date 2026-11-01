@@ -116,7 +116,25 @@ impl Redactor {
         let hexed = hex(value);
         let b64 = base64(value);
         let percent = percent(value);
-        for encoded in [
+        let mut shifted: Vec<String> = Vec::new();
+        for k in 1..=2 {
+            let s = shifted_base64(value, k);
+            if s.len() >= MIN_KNOWN {
+                shifted.push(s.replace('+', "-").replace('/', "_"));
+                shifted.push(s);
+            }
+        }
+        // Aligned at the start: when the value does not fill its last group, the last character
+        // depends on what follows, so only the characters before it are stable.
+        if !value.len().is_multiple_of(3) {
+            let s = b64[..value.len() * 8 / 6].to_owned();
+            if s.len() >= MIN_KNOWN {
+                shifted.push(s.replace('+', "-").replace('/', "_"));
+                shifted.push(s);
+            }
+        }
+        let (upper, lower) = (value.to_uppercase(), value.to_lowercase());
+        for encoded in shifted.into_iter().chain([upper, lower]).chain([
             hexed.clone(),
             hexed.to_uppercase(),
             b64.clone(),
@@ -133,7 +151,7 @@ impl Redactor {
                 .map(|b| format!("\\u{b:04x}"))
                 .collect(),
             json[1..json.len() - 1].to_owned(),
-        ] {
+        ]) {
             if !self.known.iter().any(|(_, v)| v == &encoded) {
                 self.known.push((name.to_owned(), encoded));
             }
@@ -175,8 +193,16 @@ impl Redactor {
         // cannot disable boundary filtering. Only a preceding withheld prefix authorizes
         // masking the next event's beginning, so ordinary labels stay intact.
         for (name, value) in &self.known {
-            for n in (1..value.len().min(rest.len() + 1)).rev() {
-                if value.is_char_boundary(n) && rest.ends_with(&value[..n]) {
+            // The longest suffix of `rest` that is a proper prefix of `value`: the first start
+            // that matches. Each start fails on its first differing byte, so a chunk costs about
+            // its own length, not the square of the secret's.
+            let from = rest.len().saturating_sub(value.len() - 1);
+            for i in from..rest.len() {
+                let n = rest.len() - i;
+                if rest.is_char_boundary(i)
+                    && value.is_char_boundary(n)
+                    && value.as_bytes().starts_with(&rest.as_bytes()[i..])
+                {
                     self.pending.push((name.clone(), value[n..].to_owned()));
                     // A short edge (one stray character) is only tracked, so ordinary text
                     // that merely ends like a secret begins is not mangled: if the rest
@@ -268,6 +294,18 @@ fn base64(value: &str) -> String {
         });
     }
     out
+}
+
+/// The base64 of `value` as it appears inside a longer string (`user:VALUE`) that began `k`
+/// bytes (1 or 2) off a three-byte boundary: the characters the preceding bytes share bits
+/// with, and the last one when the value does not fill it, depend on what surrounds the value,
+/// so they are left out; what remains is the same in every context.
+fn shifted_base64(value: &str, k: usize) -> String {
+    let padded = format!("{}{value}", "A".repeat(k));
+    let full = base64(&padded);
+    let whole = (padded.len() * 8) / 6;
+    let skip = (k * 8).div_ceil(6);
+    full.get(skip..whole).unwrap_or_default().to_owned()
 }
 
 fn lower_percent_escapes(value: &str) -> String {
