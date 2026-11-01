@@ -6,7 +6,7 @@
 //! Least privilege: the type allow-list, the per-file limit and the company's quota are the
 //! store's (`check_artifact`), checked before the text is decoded; the name must be a plain file
 //! name (no path); a run publishes at most `mcp.max_artifacts_per_run`; text is redacted of the
-//! run token's shape on the way in; reads are limited to the run's own issue and requirement
+//! run token's shape and the values of the run's leased secrets on the way in; reads are limited to the run's own issue and requirement
 //! of its own company. Publishing by a worktree path (the runner reads the file) is not ported:
 //! the runner side of that handshake does not exist in the Core yet.
 
@@ -51,6 +51,7 @@ pub(super) async fn publish_artifact(
     app: &App,
     scope: RunScope,
     args: &JsonObject,
+    red: &Redactor,
 ) -> Result<Value> {
     if args.contains_key("path") {
         return Err(ToolError::Invalid(
@@ -89,7 +90,7 @@ pub(super) async fn publish_artifact(
         .decode(b64.trim())
         .map_err(|_| ToolError::Invalid("content is not standard base64".to_owned()))?;
     let root = artifact_root(&app.pool).await?;
-    match publish(&app.pool, &root, &new, &bytes, &Redactor::new()).await {
+    match publish(&app.pool, &root, &new, &bytes, red).await {
         Ok(a) => Ok(
             json!({"artifact_id": a.id.0, "name": a.name, "kind": a.kind.as_str(),
                            "mime": a.mime, "size": a.size, "sha256": a.sha256,
@@ -117,7 +118,12 @@ fn meta(a: &Artifact) -> Value {
 /// `get_artifact {artifact_id?}`: an artifact published on the run's requirement (or issue): its
 /// metadata and, for text, its content (capped). Without `artifact_id`, the requirement's
 /// artifacts, newest first. Another requirement's or company's look like none.
-pub(super) async fn get_artifact(app: &App, scope: RunScope, args: &JsonObject) -> Result<Value> {
+pub(super) async fn get_artifact(
+    app: &App,
+    scope: RunScope,
+    args: &JsonObject,
+    red: &Redactor,
+) -> Result<Value> {
     let own = match scope.issue_id {
         Some(i) => get_issue(&app.pool, i).await?,
         None => None,
@@ -148,7 +154,8 @@ pub(super) async fn get_artifact(app: &App, scope: RunScope, args: &JsonObject) 
     if preview_of(&a.mime) == Preview::Text {
         let bytes = std::fs::read(blob_path(&artifact_root(&app.pool).await?, &a.sha256))
             .map_err(|e| ToolError::Failed(e.to_string()))?;
-        let (body, cut) = clip(&String::from_utf8_lossy(&bytes), MAX_TEXT_READ);
+        // Masked before it is cut: a cut inside a value would leave part of it unmatched.
+        let (body, cut) = clip(&red.text(&String::from_utf8_lossy(&bytes)), MAX_TEXT_READ);
         v["content"] = body.into();
         v["truncated"] = cut.into();
     }

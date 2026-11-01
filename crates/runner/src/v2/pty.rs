@@ -57,6 +57,9 @@ pub struct PtyConfig {
     pub hide: Option<Vec<PathBuf>>,
     /// With the sandbox: paths the shell may read but not write (the runner binary, launchers).
     pub readonly: Vec<PathBuf>,
+    /// `--terminal-user`: run every shell as this other account through `sudo -n` (E2-25). With
+    /// it set a shell is never started as the runner's own user.
+    pub user: Option<String>,
 }
 
 impl PtyConfig {
@@ -74,6 +77,7 @@ impl PtyConfig {
             // On by default: a terminal is a shell as the runner's user.
             hide: Some(Vec::new()),
             readonly: Vec::new(),
+            user: None,
         }
     }
 }
@@ -332,7 +336,7 @@ impl PtyDriver {
             self.set_budget(b);
         }
         self.enforce_budget().await;
-        if let Some(hide) = &self.config.hide {
+        if self.config.hide.is_some() || self.config.user.is_some() {
             // The shell the host would start by default is named here, so the wrapper can run it.
             let program = spec
                 .program
@@ -342,15 +346,33 @@ impl PtyDriver {
             // `term new <runner> sh` names a program the way the unsandboxed host takes it.
             let program =
                 super::termbox::resolve(&program, spec.env.get("PATH").map(String::as_str));
+            // Another user cannot be expected to reach the runner's home: it starts in `/`.
+            let home = spec
+                .env
+                .get("HOME")
+                .cloned()
+                .filter(|_| self.config.user.is_none());
             let cwd = spec
                 .cwd
                 .clone()
-                .or_else(|| spec.env.get("HOME").cloned())
+                .or(home)
                 .filter(|c| c.starts_with('/'))
                 .unwrap_or_else(|| "/".to_owned());
-            let (launcher, args) =
-                super::termbox::wrap(hide, &self.config.readonly, &program, &spec.args, &cwd)
-                    .map_err(|e| invalid(&e))?;
+            let (mut launcher, mut args) = match &self.config.hide {
+                Some(hide) => {
+                    super::termbox::wrap(hide, &self.config.readonly, &program, &spec.args, &cwd)
+                        .map_err(|e| invalid(&e))?
+                }
+                None => (program, spec.args.clone()),
+            };
+            if let Some(user) = &self.config.user {
+                if !super::termbox::valid_user(user) || !launcher.starts_with('/') {
+                    return Err(invalid(
+                        "a terminal user needs an account name and an absolute program",
+                    ));
+                }
+                (launcher, args) = super::termbox::as_user(user, launcher, args);
+            }
             spec.program = Some(launcher);
             spec.args = args;
             spec.cwd.get_or_insert(cwd);

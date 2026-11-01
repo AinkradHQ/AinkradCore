@@ -17,6 +17,8 @@ pub const MAX_HEADERS: usize = 64;
 pub const MAX_BODY: u64 = 8 * 1024 * 1024;
 /// Waiting for the next request on an open connection.
 pub const IDLE: Duration = Duration::from_secs(3600);
+/// A new connection's first request line must start and end within this.
+pub const FIRST_LINE: Duration = Duration::from_secs(15);
 /// From the first byte of a request line to the blank line ending its head.
 pub const HEAD_TIMEOUT: Duration = Duration::from_secs(15);
 /// A whole request body.
@@ -73,14 +75,17 @@ fn token(name: &str) -> bool {
 }
 
 /// The next request, rewritten for the Core (`Host` set, hop-by-hop headers dropped), or `None`
-/// when the client closed between requests.
+/// when the client closed between requests. `wait` bounds the time to its first byte of a line:
+/// `FIRST_LINE` for a connection's first request (a client that connects and says nothing must
+/// not hold a slot), `IDLE` between requests of a kept-alive connection.
 pub async fn read_request<R: AsyncBufRead + Unpin>(
     r: &mut R,
     authority: &str,
     path: &str,
+    wait: Duration,
 ) -> Result<Option<Request>, Refusal> {
     let mut first = Vec::new();
-    let n = timeout(IDLE, line(r, &mut first))
+    let n = timeout(wait, line(r, &mut first))
         .await
         .map_err(|_| Refusal(408, "Request Timeout"))??;
     if n == 0 {

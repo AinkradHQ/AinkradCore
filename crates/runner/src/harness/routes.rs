@@ -167,6 +167,9 @@ impl HarnessExecutor {
         let bridged = mcp.filter(|_| denied).and_then(crate::mcp_bridge::parse);
         let mcp = match (&bridged, mcp) {
             (Some((_, local)), _) => Some((local.as_str(), token)),
+            // No route into a sandbox without network (an URL the bridge refuses to parse
+            // included): the run goes without MCP rather than with a URL it cannot or should not use.
+            (None, _) if denied => None,
             (None, url) => url.map(|url| (url, token)),
         };
         let private = self.work_root.join("private");

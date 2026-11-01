@@ -111,7 +111,7 @@ pub async fn pair_main(args: &[&str]) -> ExitCode {
 pub const CONNECT_USAGE: &str = "usage:
   ainkrad-runner connect [--state <dir>] [--ca <pem>] [--enable-exec] [--enable-pty]
                          [--enable-agents] [--terminal-sandbox=on|off]
-                         [--terminal-hide <path>]…
+                         [--terminal-hide <path>]… [--terminal-user <account>]
 
 Serves the Core it paired with (`ainkrad-runner pair`) over protocol v2, reconnecting with a
 jittered backoff and resuming commands in flight. Stops on SIGTERM or Ctrl-C; commands still
@@ -139,6 +139,15 @@ every route to launchd); a Core's default state dirs (/var/lib/ainkrad, /var/lib
 /run/ainkrad) are hidden without a flag; a signal sent through the API goes to the sandbox
 wrapper. --terminal-hide <path> (repeatable) hides a Core kept elsewhere (its admin.sock);
 running the Core and the runner as different users is better.
+--terminal-user <account> (E2-25) runs every shell, and its sandbox wrapper, as that other,
+unprivileged account through `sudo -n`, so the `terminal` scope no longer reaches what the
+runner's user owns. It needs --enable-pty, the sandbox on (it is refused with
+--terminal-sandbox=off), a state dir only the runner's user can enter (made 0700 at start) and an account that exists and is neither root nor
+the runner's user, plus a sudoers rule that lets the runner's user run the sandbox launcher
+(bwrap, or sandbox-exec on macOS) and /usr/bin/true as that account without a password. The
+runner checks all of this at start and refuses to start when any of it is missing; once on,
+a shell is never started as the runner's user (a failing sudo means the terminal fails). Shells
+start in / and with sudo's cleaned environment. See the security posture runbook.
 --enable-agents offers agent sessions (the harnesses on PATH, as this runner's user, each
 in a process sandbox, refused when it cannot run): transcripts in <dir>/agents, delivered secrets in $XDG_RUNTIME_DIR (else
 <dir>/secrets), emptied at start.
@@ -186,9 +195,14 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         .collect();
     let args = args.as_slice();
     if !args.len().is_multiple_of(2)
-        || args
-            .chunks(2)
-            .any(|f| !matches!(f[0], "--state" | "--ca" | "--terminal-hide"))
+        || args.chunks(2).any(|f| {
+            !matches!(
+                f[0],
+                "--state" | "--ca" | "--terminal-hide" | "--terminal-user"
+            )
+        })
+        || args.iter().filter(|a| **a == "--terminal-user").count() > 1
+        || (args.contains(&"--terminal-user") && (!pty_enabled || !terminal_sandbox))
     {
         eprintln!("{CONNECT_USAGE}");
         return ExitCode::from(2);
@@ -228,6 +242,14 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         eprintln!("ainkrad-runner: WARNING: {m}");
         tracing::warn!("{m}");
     }
+    let terminal_user = flag(args, "--terminal-user").map(str::to_owned);
+    if let Some(user) = &terminal_user
+        && let Err(e) = super::termbox::probe_user(user, terminal_sandbox)
+            .and_then(|()| super::termbox::private_state(&state.0))
+    {
+        eprintln!("ainkrad-runner: terminals: --terminal-user: {e}");
+        return ExitCode::FAILURE;
+    }
     if pty_enabled
         && terminal_sandbox
         && let Err(e) = super::termbox::probe()
@@ -260,6 +282,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             enabled: true,
             hide: hidden.clone(),
             readonly: super::termbox::readonly_paths(&host),
+            user: terminal_user.clone(),
             ..super::PtyConfig::new(state.0.join("terminals"))
         }));
         d.spawn_budget_loop();
