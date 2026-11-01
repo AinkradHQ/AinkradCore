@@ -193,6 +193,15 @@ async fn a_runner_advertises_its_tier_and_the_core_places_by_it_with_a_reason() 
     assert!(why.contains("microvm") && why.contains("process"), "{why}");
     let why = refusal(&core, &none.id, &needs("process")).await.unwrap();
     assert!(why.contains("process") && why.contains("none"), "{why}");
+    // An isolation field alone (no min_isolation) needs a sandbox too: refused on the unsandboxed one.
+    let why = refusal(&core, &none.id, &json!({"mode": "ask", "wall_secs": 60}))
+        .await
+        .unwrap();
+    assert!(why.contains("process") && why.contains("none"), "{why}");
+    // The legacy sandbox flag and mode need `process` as well.
+    let legacy = json!({"mode": "sandboxed", "sandboxed": true});
+    assert!(refusal(&core, &none.id, &legacy).await.is_some());
+    assert_eq!(refusal(&core, &process.id, &legacy).await, None);
     // Controls: the tier it offers, a weaker one, and a policy with no requirement place.
     assert_eq!(refusal(&core, &process.id, &needs("process")).await, None);
     assert_eq!(refusal(&core, &process.id, &needs("none")).await, None);
@@ -374,7 +383,10 @@ fn placement_refuses_a_degraded_silent_unreported_or_short_runner_and_an_unreada
 fn egress_rules_are_placed_only_on_a_runner_that_advertises_the_filter() {
     use ainkrad_proto::v2::{AGENT_DRIVER, DriverInfo};
     let with = |commands: &[&str]| {
-        let mut r = state_of(None, false);
+        let mut r = state_of(
+            Some(IsolationCaps::of(Isolation::Process, Kvm::NotApplicable)),
+            false,
+        );
         r.drivers = vec![DriverInfo {
             name: AGENT_DRIVER.to_owned(),
             commands: commands.iter().map(|c| (*c).to_owned()).collect(),
@@ -394,6 +406,97 @@ fn egress_rules_are_placed_only_on_a_runner_that_advertises_the_filter() {
     assert!(tier_refusal(&state_of(None, false), &rules).is_some());
     assert_eq!(
         tier_refusal(&with(&["agent.start"]), &json!({"mode": "ask"})),
+        None
+    );
+}
+
+fn only(field: Value) -> Value {
+    let mut policy = json!({"mode": "ask"});
+    policy
+        .as_object_mut()
+        .unwrap()
+        .extend(field.as_object().unwrap().clone());
+    policy
+}
+
+fn each_field() -> Vec<Value> {
+    vec![
+        only(json!({"min_isolation": "process"})),
+        only(json!({"image": format!("sha256:{}", "ab".repeat(32))})),
+        only(json!({"vcpus": 2})),
+        only(json!({"memory_mb": 512})),
+        only(json!({"disk_mb": 512})),
+        only(json!({"wall_secs": 60})),
+        only(json!({"workspace": "copy"})),
+        only(json!({"egress": {"allow": ["10.0.0.0/8"]}})),
+    ]
+}
+
+#[test]
+fn any_isolation_field_alone_is_never_sent_to_a_runner_that_has_not_advertised_or_is_silent() {
+    use ainkrad_proto::v2::{AGENT_DRIVER, DriverInfo};
+    let filtered = |mut r: RunnerState| {
+        r.drivers = vec![DriverInfo {
+            name: AGENT_DRIVER.to_owned(),
+            commands: vec!["agent.start".to_owned(), "egress-filter".to_owned()],
+            capacity: 1,
+            ..Default::default()
+        }];
+        r
+    };
+    let process = Some(IsolationCaps::of(Isolation::Process, Kvm::NotApplicable));
+    for policy in each_field() {
+        // Never reported: refused (an old runner would drop the field and run without it).
+        let why = tier_refusal(&filtered(state_of(None, false)), &policy).unwrap();
+        assert!(why.contains("not reported"), "{policy}: {why}");
+        // Silent: refused.
+        let why = tier_refusal(&filtered(state_of(process.clone(), true)), &policy).unwrap();
+        assert!(why.contains("silent"), "{policy}: {why}");
+        // Offering `none` (an unsandboxed runner): refused.
+        let none = Some(IsolationCaps::of(Isolation::None, Kvm::NotApplicable));
+        assert!(
+            tier_refusal(&filtered(state_of(none, false)), &policy).is_some(),
+            "{policy}"
+        );
+        // Control: a fresh runner that offers the sandbox is placed (it enforces or refuses itself).
+        assert_eq!(
+            tier_refusal(&filtered(state_of(process.clone(), false)), &policy),
+            None,
+            "{policy}"
+        );
+    }
+}
+
+#[test]
+fn legacy_sandbox_sessions_need_the_process_tier_at_placement() {
+    let process = Some(IsolationCaps::of(Isolation::Process, Kvm::NotApplicable));
+    let none = Some(IsolationCaps::of(Isolation::None, Kvm::NotApplicable));
+    for policy in [
+        json!({"mode": "ask", "sandboxed": true}),
+        json!({"mode": "sandboxed"}),
+        json!({"mode": "sandboxed", "sandboxed": true}),
+    ] {
+        assert!(
+            tier_refusal(&state_of(None, false), &policy).is_some(),
+            "{policy}"
+        );
+        assert!(
+            tier_refusal(&state_of(none.clone(), false), &policy).is_some(),
+            "{policy}"
+        );
+        assert!(
+            tier_refusal(&state_of(process.clone(), true), &policy).is_some(),
+            "{policy}"
+        );
+        assert_eq!(
+            tier_refusal(&state_of(process.clone(), false), &policy),
+            None,
+            "{policy}"
+        );
+    }
+    // A plain policy still places on a runner that reported nothing.
+    assert_eq!(
+        tier_refusal(&state_of(None, false), &json!({"mode": "ask"})),
         None
     );
 }

@@ -2,6 +2,9 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::time::Duration;
 
 use ainkrad_proto::runner::{Isolation, Policy, WorkspaceMode};
 use ainkrad_proto::v2::AgentStart;
@@ -53,15 +56,59 @@ pub struct ProcessSandbox {
     /// `AINKRAD_AGENT_NETWORK`, read once when the driver started: a later change of the
     /// process environment does not change what a session gets.
     requested: Option<String>,
+    /// Whether the sandbox program works, from a probe thread; read by `tier`.
+    probe: Arc<Probe>,
+}
+
+/// Seconds between probes of the sandbox program.
+const PROBE_EVERY: Duration = Duration::from_secs(2);
+
+/// What the probes saw. The probe forks a program, so it runs on a thread of its own, never on
+/// the async runtime, and one failure (a transient fork error under load) is not "the tier is
+/// gone": two in a row are. Starting a session still probes afresh (`prepare`), failing closed.
+struct Probe {
+    up: AtomicBool,
+    fails: AtomicU32,
+}
+
+impl Probe {
+    fn record(&self, ok: bool) {
+        if ok {
+            self.fails.store(0, Ordering::SeqCst);
+            self.up.store(true, Ordering::SeqCst);
+        } else if self.fails.fetch_add(1, Ordering::SeqCst) + 1 >= 2 {
+            self.up.store(false, Ordering::SeqCst);
+        }
+    }
 }
 
 impl ProcessSandbox {
     pub fn new(state: PathBuf, secrets: PathBuf) -> Self {
+        let first = Self::available();
+        let probe = Arc::new(Probe {
+            up: AtomicBool::new(first),
+            fails: AtomicU32::new(if first { 0 } else { 2 }),
+        });
+        let weak = Arc::downgrade(&probe);
+        let spawned = std::thread::Builder::new()
+            .name("sandbox-probe".to_owned())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(PROBE_EVERY);
+                    let Some(probe) = weak.upgrade() else { return };
+                    probe.record(Self::available());
+                }
+            });
+        if spawned.is_err() {
+            // Nothing would ever notice the tier going away: do not offer it.
+            probe.up.store(false, Ordering::SeqCst);
+        }
         Self {
             state,
             secrets,
             egress_ready: false,
             requested: None,
+            probe,
         }
     }
 
@@ -157,10 +204,10 @@ impl Sandbox for ProcessSandbox {
         }
     }
 
-    /// Process isolation while the sandbox program works; none when its probe fails. Probed on
-    /// every call, never cached, so the answer is what the host does now.
+    /// Process isolation while the sandbox program works, as the probe thread last saw it; none
+    /// after two failed probes in a row.
     fn tier(&self) -> Isolation {
-        if Self::available() {
+        if self.probe.up.load(Ordering::SeqCst) {
             Isolation::Process
         } else {
             Isolation::None
@@ -258,7 +305,7 @@ impl Sandbox for ProcessSandbox {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProcessSandbox, apply_policy, network_for};
+    use super::{Probe, ProcessSandbox, apply_policy, network_for};
     use crate::v2::agent::Sandbox;
     use ainkrad_proto::runner::{Egress, Policy, WorkspaceMode};
 
@@ -388,5 +435,29 @@ mod tests {
             ..Policy::default()
         };
         assert!(apply_policy(&bind, &mut runner_env()).is_ok());
+    }
+
+    #[test]
+    fn one_failed_probe_is_not_a_lost_tier_but_two_in_a_row_are() {
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+        let probe = Probe {
+            up: AtomicBool::new(true),
+            fails: AtomicU32::new(0),
+        };
+        probe.record(false);
+        assert!(probe.up.load(Ordering::SeqCst), "a transient failure");
+        probe.record(true);
+        probe.record(false);
+        assert!(
+            probe.up.load(Ordering::SeqCst),
+            "the success reset the count"
+        );
+        probe.record(false);
+        assert!(!probe.up.load(Ordering::SeqCst), "two in a row");
+        probe.record(true);
+        assert!(
+            probe.up.load(Ordering::SeqCst),
+            "it recovers on a good probe"
+        );
     }
 }

@@ -34,6 +34,15 @@ impl Isolation {
         self.rank() >= required.rank()
     }
 
+    /// The stronger of two tiers: what a session needs when it needs both.
+    pub fn stricter(self, other: Self) -> Self {
+        if self.rank() >= other.rank() {
+            self
+        } else {
+            other
+        }
+    }
+
     /// The tier named `name` (`none`, `process`, `microvm`).
     pub fn from_name(name: &str) -> Option<Self> {
         [Self::None, Self::Process, Self::Microvm]

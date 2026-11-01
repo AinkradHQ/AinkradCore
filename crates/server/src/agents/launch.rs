@@ -84,14 +84,6 @@ fn start_command(s: &Session, secrets: Vec<SecretGrant>, resume: bool) -> Result
     if policy.problem().is_some() {
         return Err(bad());
     }
-    // An old runner parses the policy and drops fields it does not know, so it would run the
-    // session without them. Until a runner advertises that it enforces them, they are not sent.
-    if policy.asks_for_isolation() {
-        return Err(Refusal::Runner(StreamError::new(
-            ErrorCode::InvalidArgs,
-            UNADVERTISED,
-        )));
-    }
     Ok(Command::AgentStart(AgentStart {
         session: s.id.clone(),
         harness: s.harness.clone(),

@@ -91,6 +91,11 @@ fn tiers_have_no_ordering_but_satisfies_and_only_the_known_places_compare() {
         ["proto/src/v2/mod.rs", "runner/src/v2/agent.rs"]
     );
     assert_eq!(files_containing(&src, ".meets("), ["server/src/agents.rs"]);
+    // Two requirements combine to the stricter one only in the Core's placement.
+    assert_eq!(
+        files_containing(&src, ".stricter("),
+        ["server/src/agents.rs"]
+    );
 }
 
 #[test]

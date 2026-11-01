@@ -172,8 +172,9 @@ pub async fn admit_with(
     Ok(())
 }
 
-/// Why `runner` may not take a session with `policy`, when its isolation does not meet the
-/// policy's `min_isolation` (E8a-09). Fails closed, and there is no weaker tier to fall back to:
+/// Why `runner` may not take a session with `policy`, when its isolation does not meet what the
+/// policy needs: its `min_isolation`, any isolation field (at least `process`), or the legacy
+/// `sandboxed` flag and mode (E8a-09). Fails closed, and there is no weaker tier to fall back to:
 /// a policy that does not parse, a runner that never reported its isolation, one that is silent
 /// (`degraded`), one whose offer does not reach the tier, and one offering a tier it names but
 /// this Core does not know are all refused. `None` when the policy needs no isolation.
@@ -194,8 +195,21 @@ pub fn tier_refusal(runner: &RunnerState, policy: &serde_json::Value) -> Option<
                 .to_owned(),
         );
     }
-    let required = policy.min_isolation.filter(|m| *m != Isolation::None)?;
+    // What the session needs, whichever way it says so: an explicit tier, any isolation field
+    // (which only a sandbox enforces, so at least `process`), or the legacy sandbox flag and mode.
+    let legacy =
+        policy.sandboxed || policy.mode == ainkrad_proto::runner::PermissionMode::Sandboxed;
+    let explicit = policy.min_isolation.filter(|m| *m != Isolation::None);
+    let implied = (policy.asks_for_isolation() || legacy).then_some(Isolation::Process);
+    let required = match (explicit, implied) {
+        (Some(a), Some(b)) => Some(a.stricter(b)),
+        (a, None) => a,
+        (None, b) => b,
+    };
+    let required = required?;
     let name = required.as_str();
+    // Never sent to a runner that has not said what it enforces: an old runner would parse the
+    // frame and drop the fields it does not know.
     let Some(caps) = &runner.isolation else {
         return Some(format!(
             "the session needs {name} isolation and the runner has not reported what it offers"
@@ -329,10 +343,6 @@ pub enum Invalid {
     Forbidden(&'static str),
 }
 
-/// Why a policy with isolation fields is not placed: no runner advertises that it enforces them
-/// yet, and one that does not know them would drop them and run the session without.
-pub(crate) const UNADVERTISED: &str = "the policy sets isolation fields, which cannot be sent to a runner that has not advertised that it enforces them";
-
 fn harness_ok(h: &str) -> bool {
     (1..=32).contains(&h.len())
         && h.bytes()
@@ -385,9 +395,6 @@ pub fn validate_new(new: &store::NewSession<'_>, admin: bool) -> Result<(), Inva
              disk_mb 16-1048576, wall_secs 1-86400, image sha256:<64 hex>, egress rules IP \
              addresses or CIDR blocks (no host names, at most 64 each)",
         ));
-    }
-    if policy.asks_for_isolation() {
-        return Err(Invalid::Bad(UNADVERTISED));
     }
     if has_destructive_allow(&policy) && !admin {
         return Err(Invalid::Forbidden(
