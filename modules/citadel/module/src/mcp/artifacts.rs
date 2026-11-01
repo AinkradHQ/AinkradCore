@@ -6,7 +6,7 @@
 //! Least privilege: the type allow-list, the per-file limit and the company's quota are the
 //! store's (`check_artifact`), checked before the text is decoded; the name must be a plain file
 //! name (no path); a run publishes at most `mcp.max_artifacts_per_run`; text is redacted of the
-//! run token's shape on the way in; reads are limited to the run's own issue and requirement
+//! run token's shape and the values of the run's leased secrets on the way in; reads are limited to the run's own issue and requirement
 //! of its own company. Publishing by a worktree path (the runner reads the file) is not ported:
 //! the runner side of that handshake does not exist in the Core yet.
 
@@ -51,6 +51,7 @@ pub(super) async fn publish_artifact(
     app: &App,
     scope: RunScope,
     args: &JsonObject,
+    red: &Redactor,
 ) -> Result<Value> {
     if args.contains_key("path") {
         return Err(ToolError::Invalid(
@@ -89,7 +90,7 @@ pub(super) async fn publish_artifact(
         .decode(b64.trim())
         .map_err(|_| ToolError::Invalid("content is not standard base64".to_owned()))?;
     let root = artifact_root(&app.pool).await?;
-    match publish(&app.pool, &root, &new, &bytes, &Redactor::new()).await {
+    match publish(&app.pool, &root, &new, &bytes, red).await {
         Ok(a) => Ok(
             json!({"artifact_id": a.id.0, "name": a.name, "kind": a.kind.as_str(),
                            "mime": a.mime, "size": a.size, "sha256": a.sha256,

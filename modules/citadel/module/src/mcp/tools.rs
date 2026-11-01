@@ -17,6 +17,7 @@ use super::{artifacts, hub, org, plan, read, repos, requirements, write};
 use crate::domain::work::{Issue, IssueId, NextActor};
 use crate::store::audit::{self, Event};
 use crate::store::exec::RunScope;
+use ainkrad_core_server::store::{agents as sessions, secrets};
 use crate::store::work::{get_issue, get_project, issue_key};
 use ainkrad_core_server::api::App;
 
@@ -101,17 +102,59 @@ pub(super) async fn reserve(
     reserved.map(drop).ok_or_else(refused)
 }
 
-/// The arguments with every string passed through the redactor, so no secret shape an agent
-/// writes (its own token, a provider key) reaches a comment, a question, a proposal, an issue or
-/// the audit. `content` (base64 of a file) is left for the artifact store, which redacts the
-/// decoded text.
-/// ponytail: the shapes the proto redactor knows; the values of the run's leased secrets live
-/// only on its runner, so they are not matched here (a Core API for them is the upgrade).
-fn redacted(args: &JsonObject) -> JsonObject {
+/// The shortest value the redactor can mask (`proto::redact`): a shorter leased value cannot be
+/// matched, so a run holding one gets no tools rather than an unmasked channel.
+const MIN_MASKABLE: usize = 8;
+
+/// The redactor for this run: the known secret shapes plus the values of every secret leased
+/// to the run's session (E2-29), in the encodings the redactor knows. Built per call, so a
+/// rotation or a deletion is seen at once and no value is kept in memory between calls.
+/// Fails closed: a session that cannot be read, a master key that is missing, a secret that
+/// does not open or a value too short to match is an error, never a redactor that lacks it.
+async fn run_redactor(app: &App, scope: RunScope) -> Result<Redactor> {
+    let mut red = Redactor::new();
+    let session: Option<Option<String>> =
+        sqlx::query_scalar("SELECT session_id FROM citadel_runs WHERE id = ?")
+            .bind(scope.run_id.0)
+            .fetch_optional(&app.pool)
+            .await?;
+    let Some(session) = session.flatten() else {
+        return Ok(red);
+    };
+    let Some(session) = sessions::get(&app.pool, &session).await? else {
+        return Err(ToolError::Failed("the run's session is gone".to_owned()));
+    };
+    if session.secrets.is_empty() {
+        return Ok(red);
+    }
+    let sealer = app.secrets.as_deref().ok_or_else(|| {
+        ToolError::Failed("the run holds leased secrets but the Core has no master key".to_owned())
+    })?;
+    let names: Vec<String> = session.secrets.into_iter().map(|s| s.name).collect();
+    let values = secrets::open_for_masking(&app.pool, sealer, &names)
+        .await
+        .map_err(|e| ToolError::Failed(format!("leased secrets did not open: {e:?}")))?;
+    for (name, value) in values {
+        if value.trim().len() < MIN_MASKABLE {
+            return Err(ToolError::Refused(format!(
+                "secret {name} is leased to this run but is too short to mask \
+                 (under {MIN_MASKABLE} bytes)"
+            )));
+        }
+        red.known(&name, &value);
+    }
+    Ok(red)
+}
+
+/// The arguments with every string passed through the redactor, so no secret shape or leased
+/// value an agent writes reaches a comment, a question, a proposal, an issue or the audit.
+/// `content` (base64 of a file) is left for the artifact store, which redacts the decoded text
+/// with the same redactor.
+fn redacted(red: &Redactor, args: &JsonObject) -> JsonObject {
     let mut args = args.clone();
     let content = args.remove("content");
     let mut v = Value::Object(args);
-    Redactor::new().json(&mut v);
+    red.json(&mut v);
     let Value::Object(mut args) = v else {
         unreachable!("an object stays one")
     };
@@ -133,6 +176,44 @@ async fn unknown_audited(app: &App, scope: RunScope) -> bool {
     .unwrap_or(true)
 }
 
+/// Runs the named tool.
+async fn dispatch(
+    app: &App,
+    scope: RunScope,
+    name: &str,
+    args: &JsonObject,
+    red: &Redactor,
+) -> Result<Value> {
+    match name {
+    "get_issue" => read::get_issue(app, scope, args).await,
+    "get_context" => read::get_context(app, scope).await,
+    "get_approval" => read::get_approval(app, scope, args).await,
+    "comment" => write::comment(app, scope, args).await,
+    "transition" => write::transition(app, scope, args).await,
+    "create_subtask" => write::create_subtask(app, scope, args).await,
+    "report_blocker" => write::report_blocker(app, scope, args).await,
+    "request_approval" => write::request_approval(app, scope, args).await,
+    "list_backlog" => read::list_backlog(app, scope, args).await,
+    "org_chart" => org::org_chart(app, scope).await,
+    "plan_requirement" => requirements::plan_requirement(app, scope, args).await,
+    "apply_plan" => requirements::apply_plan(app, scope, args).await,
+    "post_to_requirement" => hub::post_to_requirement(app, scope, args).await,
+    "ask_human" => hub::ask_human(app, scope, args).await,
+    "publish_artifact" => artifacts::publish_artifact(app, scope, args, red).await,
+    "get_artifact" => artifacts::get_artifact(app, scope, args).await,
+    "request_repo" => repos::request_repo(app, scope, args).await,
+    "propose_knowledge" => write::propose_knowledge(app, scope, args).await,
+    "plan_sprint" => plan::plan_sprint(app, scope, args).await,
+    "sprint_add_issue" => plan::sprint_add_issue(app, scope, args).await,
+    "sprint_remove_issue" => plan::sprint_remove_issue(app, scope, args).await,
+    "set_sprint_issues" => plan::set_sprint_issues(app, scope, args).await,
+    "estimate_issue" => plan::estimate_issue(app, scope, args).await,
+    "sprint_report" => plan::sprint_report(app, scope, args).await,
+    "propose_retro_items" => plan::propose_retro_items(app, scope, args).await,
+    _ => Err(ToolError::Invalid("no such tool".to_owned())),
+    }
+}
+
 /// Runs tool `name` for `scope` and audits the call as the run's agent, refused or not.
 pub(super) async fn call(
     app: &App,
@@ -141,41 +222,31 @@ pub(super) async fn call(
     args: &JsonObject,
 ) -> Result<Value> {
     let known = TOOLS.contains(&name);
-    let args = &redacted(args);
     // Every name counts, an unknown one too: the cap bounds what a run can make the Core do.
-    let result = if let Err(e) = count(app, scope).await {
-        Err(e)
-    } else if !known {
-        Err(ToolError::Invalid("no such tool".to_owned()))
-    } else {
-        match name {
-            "get_issue" => read::get_issue(app, scope, args).await,
-            "get_context" => read::get_context(app, scope).await,
-            "get_approval" => read::get_approval(app, scope, args).await,
-            "comment" => write::comment(app, scope, args).await,
-            "transition" => write::transition(app, scope, args).await,
-            "create_subtask" => write::create_subtask(app, scope, args).await,
-            "report_blocker" => write::report_blocker(app, scope, args).await,
-            "request_approval" => write::request_approval(app, scope, args).await,
-            "list_backlog" => read::list_backlog(app, scope, args).await,
-            "org_chart" => org::org_chart(app, scope).await,
-            "plan_requirement" => requirements::plan_requirement(app, scope, args).await,
-            "apply_plan" => requirements::apply_plan(app, scope, args).await,
-            "post_to_requirement" => hub::post_to_requirement(app, scope, args).await,
-            "ask_human" => hub::ask_human(app, scope, args).await,
-            "publish_artifact" => artifacts::publish_artifact(app, scope, args).await,
-            "get_artifact" => artifacts::get_artifact(app, scope, args).await,
-            "request_repo" => repos::request_repo(app, scope, args).await,
-            "propose_knowledge" => write::propose_knowledge(app, scope, args).await,
-            "plan_sprint" => plan::plan_sprint(app, scope, args).await,
-            "sprint_add_issue" => plan::sprint_add_issue(app, scope, args).await,
-            "sprint_remove_issue" => plan::sprint_remove_issue(app, scope, args).await,
-            "set_sprint_issues" => plan::set_sprint_issues(app, scope, args).await,
-            "estimate_issue" => plan::estimate_issue(app, scope, args).await,
-            "sprint_report" => plan::sprint_report(app, scope, args).await,
-            "propose_retro_items" => plan::propose_retro_items(app, scope, args).await,
-            _ => Err(ToolError::Invalid("no such tool".to_owned())),
+    let counted = count(app, scope).await;
+    // No redactor, no tool: nothing is written, read, returned or audited unmasked.
+    let prepared = match counted {
+        Err(e) => Err(e),
+        Ok(()) => run_redactor(app, scope).await,
+    };
+    let (red, result) = match prepared {
+        Err(e) => (Redactor::new(), Err(e)),
+        Ok(red) if !known => (red, Err(ToolError::Invalid("no such tool".to_owned()))),
+        Ok(red) => {
+            let result = dispatch(app, scope, name, &redacted(&red, args), &red).await;
+            (red, result)
         }
+    };
+    // What goes back to the agent, into the log and into the audit is masked too: a row read
+    // from the store may hold a value written before the secret was leased.
+    let result = match result {
+        Ok(mut v) => {
+            red.json(&mut v);
+            Ok(v)
+        }
+        Err(ToolError::Refused(m)) => Err(ToolError::Refused(red.text(&m))),
+        Err(ToolError::Invalid(m)) => Err(ToolError::Invalid(red.text(&m))),
+        Err(ToolError::Failed(m)) => Err(ToolError::Failed(red.text(&m))),
     };
     if let Err(ToolError::Failed(detail)) = &result {
         tracing::error!(tool = name, run = scope.run_id.0, %detail, "tool failed");
