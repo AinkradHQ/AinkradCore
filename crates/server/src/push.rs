@@ -142,8 +142,10 @@ impl PushProvider for LogProvider {
         "log"
     }
 
-    fn handles(&self, _: &str) -> bool {
-        true
+    /// Only APNs tokens: an FCM or web-push token with no transport must reach its stub and
+    /// fail closed (`unsupported`), not be logged as sent.
+    fn handles(&self, provider: &str) -> bool {
+        provider == "apns"
     }
 
     fn send<'a>(&'a self, to: &'a PushTarget, n: &'a Notification) -> Sent<'a> {
@@ -375,7 +377,7 @@ impl Pusher {
             "status": status, "pruned": pruned,
         });
         if let Err(PushError::Failed(why) | PushError::InvalidToken(why)) = result {
-            event["reason"] = json!(why.chars().take(120).collect::<String>());
+            event["reason"] = json!(safe_reason(why));
         }
         append(&mut tx, "notify.delivery", &event).await?;
         if pruned {
@@ -410,6 +412,20 @@ impl Pusher {
                 }
             }
         }
+    }
+}
+
+/// What may go in a delivery event (readable by any `read` device): the gateway's own answer
+/// (`APNs 410 Unregistered`), or a fixed phrase. Provider error text is never copied, since a
+/// transport error can carry the request URL and with it the device token.
+fn safe_reason(why: &str) -> String {
+    let apns = why
+        .strip_prefix("APNs ")
+        .filter(|r| r.len() <= 60 && r.bytes().all(|b| b.is_ascii_alphanumeric() || b == b' '));
+    match apns {
+        Some(_) => why.to_owned(),
+        None if why.contains("timed out") => "timed out".to_owned(),
+        None => "send failed".to_owned(),
     }
 }
 

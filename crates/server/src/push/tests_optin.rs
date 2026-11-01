@@ -221,3 +221,94 @@ async fn an_apns_gateway_that_never_answers_times_out() {
     assert!(started.elapsed() < Duration::from_secs(5));
     fx.done().await;
 }
+
+/// A refused connection and a hung gateway both fail the send; the delivery event (readable
+/// by any `read` device) carries no part of the token, which is in the request URL.
+#[tokio::test]
+async fn a_failed_send_never_puts_the_token_in_the_delivery_event() {
+    let refused = {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        format!("http://{}", l.local_addr().unwrap())
+    };
+    let hung = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let hung_url = format!("http://{}", hung.local_addr().unwrap());
+    tokio::spawn(async move {
+        let mut held = vec![];
+        while let Ok((sock, _)) = hung.accept().await {
+            held.push(sock);
+        }
+    });
+    for (name, url) in [("refused", refused), ("hung", hung_url)] {
+        let (pem, _) = super::tests::p8();
+        let apns = ApnsNotifier::from_secret(&Key(pem), "k", "KEY1", "TEAM1", "com.ainkrad.app")
+            .unwrap()
+            .with_gateways(&url, &url)
+            .with_timeout(Duration::from_millis(300))
+            .unwrap();
+        let fx = fx(name).await;
+        let (_, token) = fx.device("phone", &["approve"], 7).await;
+        let mut pusher = fx.pusher(vec![Arc::new(apns)]);
+        pusher.retry.attempts = 1;
+        pusher
+            .deliver(vec![Notification::approval_needed("a1")])
+            .await
+            .unwrap();
+        let events = fx.deliveries().await;
+        assert_eq!(events.len(), 1, "{name}");
+        assert_eq!(events[0]["status"], "failed", "{name}");
+        let json = events[0].to_string();
+        assert!(
+            !json.contains(&token[..16]),
+            "{name}: the token is in {json}"
+        );
+        assert!(
+            !json.contains(&token[1..17]),
+            "{name}: the token is in {json}"
+        );
+        assert!(!json.contains("/3/device"), "{name}: the URL is in {json}");
+        fx.done().await;
+    }
+}
+
+#[tokio::test]
+async fn without_an_apns_key_other_providers_fail_closed_and_are_not_logged_as_sent() {
+    let fx = fx("failclosed").await;
+    let (phone, _) = fx.device("phone", &["approve"], 1).await;
+    assert!(
+        crate::store::gov::set_token(&fx.pool, &phone, "fcm", Some(("fcm-token-abcdef", false)))
+            .await
+            .unwrap()
+    );
+    let pusher = Pusher::new(
+        fx.pool.clone(),
+        providers(None),
+        Arc::new(Silent),
+        Duration::from_secs(1),
+        Arc::new(crate::scheduler::SystemClock),
+    );
+    pusher
+        .deliver(vec![Notification::approval_needed("a1")])
+        .await
+        .unwrap();
+    let mut by_provider: Vec<(String, String)> = fx
+        .deliveries()
+        .await
+        .iter()
+        .map(|e| {
+            (
+                e["provider"].as_str().unwrap().to_owned(),
+                e["status"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    by_provider.sort();
+    assert_eq!(
+        by_provider,
+        [
+            ("apns".to_owned(), "sent".to_owned()),
+            ("fcm".to_owned(), "unsupported".to_owned())
+        ],
+        "the log provider takes APNs tokens only"
+    );
+    fx.done().await;
+}

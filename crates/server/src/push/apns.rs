@@ -33,8 +33,10 @@ fn client(timeout: Duration) -> Result<reqwest::Client, String> {
         .http2_prior_knowledge()
         .connect_timeout(timeout.min(Duration::from_secs(5)))
         .timeout(timeout)
+        // Never follow a redirect: the request carries the provider token.
+        .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.without_url().to_string())
 }
 
 /// Where a secret's value comes from by name: the secrets broker when it lands (E2-07), a
@@ -163,7 +165,8 @@ impl ApnsNotifier {
         if let Some(key) = n.collapse.as_deref().filter(|k| k.is_ascii()) {
             req = req.header("apns-collapse-id", &key[..key.len().min(64)]);
         }
-        req.build().map_err(|e| e.to_string())
+        // Errors drop the URL: it ends in the device token.
+        req.build().map_err(|e| e.without_url().to_string())
     }
 }
 
@@ -194,7 +197,7 @@ impl PushProvider for ApnsNotifier {
                 .client
                 .execute(req)
                 .await
-                .map_err(|e| PushError::Failed(e.to_string()))?;
+                .map_err(|e| PushError::Failed(e.without_url().to_string()))?;
             let status = res.status();
             if status.is_success() {
                 return Ok(());
