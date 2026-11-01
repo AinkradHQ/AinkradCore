@@ -50,9 +50,17 @@ async fn rig(secrets_to_lease: &[(&str, &str)]) -> Rig {
             runners: None,
             delivery: None,
         };
-        secrets::create(&app.pool, &sealer, name, &new, &w.fx.dev.id, AuditActor::System, &now)
-            .await
-            .unwrap();
+        secrets::create(
+            &app.pool,
+            &sealer,
+            name,
+            &new,
+            &w.fx.dev.id,
+            AuditActor::System,
+            &now,
+        )
+        .await
+        .unwrap();
         leased.push(json!({"name": name, "var": "LEASED_VAR"}));
     }
     let co = w.co("A", "AAA").await;
@@ -114,35 +122,73 @@ async fn a_leased_value_is_masked_in_what_an_agent_writes_in_every_form() {
     let r = rig(&[("citadel.plain", VALUE)]).await;
     let app = &r.w.fx.app;
     let (hex_form, pct) = (
-        VALUE.bytes().map(|b| format!("{b:02x}")).collect::<String>(),
-        VALUE.bytes().map(|b| format!("%{b:02X}")).collect::<String>(),
+        VALUE
+            .bytes()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>(),
+        VALUE
+            .bytes()
+            .map(|b| format!("%{b:02X}"))
+            .collect::<String>(),
     );
     for (i, text) in [
         format!("the key is {VALUE} ok"),
         format!("base64 {}", b64_of(VALUE)),
         format!("hex {hex_form}"),
         format!("percent {pct}"),
-        format!("json {}", serde_json::to_string(&json!({"k": VALUE})).unwrap()),
+        // Inside a longer string (HTTP basic auth), at the other two alignments, and shouted.
+        format!("auth {}", b64_of(&format!("user:{VALUE}"))),
+        format!("auth {}", b64_of(&format!("u:{VALUE}"))),
+        format!("shout {}", VALUE.to_uppercase()),
+        format!(
+            "json {}",
+            serde_json::to_string(&json!({"k": VALUE})).unwrap()
+        ),
     ]
     .into_iter()
     .enumerate()
     {
-        ok(&r.w, &r.token, "comment", json!({"body": text, "idempotency_key": format!("k{i}")}))
-            .await;
+        ok(
+            &r.w,
+            &r.token,
+            "comment",
+            json!({"body": text, "idempotency_key": format!("k{i}")}),
+        )
+        .await;
     }
     // A question and a proposal take the same chokepoint.
-    ok(&r.w, &r.token, "ask_human", json!({"question": format!("is {VALUE} right?")})).await;
+    ok(
+        &r.w,
+        &r.token,
+        "ask_human",
+        json!({"question": format!("is {VALUE} right?")}),
+    )
+    .await;
     // Even an invalid call that echoes its arguments back.
-    let (failed, echoed) =
-        invoke(&r.w, &r.token, "get_issue", json!({"issue_id": VALUE})).await;
+    let (failed, echoed) = invoke(&r.w, &r.token, "get_issue", json!({"issue_id": VALUE})).await;
     assert!(failed);
     assert!(!echoed.contains(VALUE), "{echoed}");
-    for needle in [VALUE.to_owned(), b64_of(VALUE), hex_form, pct] {
+    for needle in [
+        VALUE.to_owned(),
+        VALUE.to_uppercase(),
+        b64_of(VALUE),
+        b64_of(&format!("user:{VALUE}")),
+        b64_of(&format!("u:{VALUE}")),
+        hex_form,
+        pct,
+    ] {
         let hit = rows_holding(app, &needle).await;
         assert!(hit.is_empty(), "{needle} is in {hit:?}");
     }
     // The audit trail says what happened, not what was said.
-    assert!(count(app, "SELECT count(*) FROM audit_events WHERE action = 'citadel.mcp.comment'").await >= 5);
+    assert!(
+        count(
+            app,
+            "SELECT count(*) FROM audit_events WHERE action = 'citadel.mcp.comment'"
+        )
+        .await
+            >= 8
+    );
 }
 
 #[tokio::test]
@@ -174,7 +220,10 @@ async fn a_value_already_stored_is_masked_on_the_way_back_to_the_agent() {
         json!({"name": "report.md", "kind": "report", "content": b64_of(&report)}),
     )
     .await;
-    assert!(published["redactions"].as_i64().unwrap() >= 1, "{published}");
+    assert!(
+        published["redactions"].as_i64().unwrap() >= 1,
+        "{published}"
+    );
     let read = ok(&r.w, &r.token, "get_artifact", json!({})).await;
     assert!(!read.to_string().contains(VALUE), "{read}");
 }
@@ -186,7 +235,13 @@ async fn a_run_that_cannot_be_masked_gets_no_tools_and_writes_nothing() {
     let before = count(&r.w.fx.app, "SELECT count(*) FROM citadel_comments").await;
     r.w.fx.app.secrets = None;
     for name in ["comment", "get_issue", "ask_human"] {
-        let (failed, text) = invoke(&r.w, &r.token, name, json!({"body": VALUE, "question": VALUE})).await;
+        let (failed, text) = invoke(
+            &r.w,
+            &r.token,
+            name,
+            json!({"body": VALUE, "question": VALUE}),
+        )
+        .await;
         assert!(failed, "{name}: {text}");
         assert!(!text.contains(VALUE), "{text}");
     }
@@ -213,4 +268,75 @@ async fn a_run_with_nothing_leased_is_unchanged() {
     let c = ok(&r.w, &r.token, "comment", json!({"body": "plain progress"})).await;
     assert!(c["comment_id"].is_number());
     let _: Value = ok(&r.w, &r.token, "get_issue", json!({})).await;
+}
+
+#[tokio::test]
+async fn a_secret_rotated_or_deleted_after_the_lease_refuses_the_call() {
+    for delete in [false, true] {
+        let r = rig(&[("citadel.plain", VALUE)]).await;
+        let app = &r.w.fx.app;
+        ok(&r.w, &r.token, "comment", json!({"body": "before"})).await;
+        let sealer = app.secrets.clone().unwrap();
+        if delete {
+            secrets::delete(
+                &app.pool,
+                "citadel.plain",
+                &r.w.fx.dev.id,
+                AuditActor::System,
+            )
+            .await
+            .unwrap();
+        } else {
+            let new = NewValue {
+                value: "rotated-value-after-the-lease-77",
+                runners: None,
+                delivery: None,
+            };
+            secrets::rotate(
+                &app.pool,
+                &sealer,
+                "citadel.plain",
+                &new,
+                &r.w.fx.dev.id,
+                AuditActor::System,
+                &app.clock.now(),
+            )
+            .await
+            .unwrap();
+        }
+        // The agent still holds the old value: nothing may carry it, so nothing runs.
+        let before = count(app, "SELECT count(*) FROM citadel_comments").await;
+        let (failed, text) = invoke(&r.w, &r.token, "comment", json!({"body": VALUE})).await;
+        assert!(failed, "delete={delete}: {text}");
+        assert!(!text.contains(VALUE));
+        assert_eq!(
+            before,
+            count(app, "SELECT count(*) FROM citadel_comments").await
+        );
+        assert!(rows_holding(app, VALUE).await.is_empty(), "delete={delete}");
+    }
+}
+
+#[tokio::test]
+async fn a_value_cut_by_the_reply_size_is_not_left_half_visible() {
+    let r = rig(&[("citadel.plain", VALUE)]).await;
+    // A stored comment that puts the value across the 4 KiB cut of one reply entry.
+    let body = format!("{}{VALUE}{}", "a".repeat(4096 - 12), "b".repeat(200));
+    create_comment(
+        &r.w.fx.app.pool,
+        &NewComment {
+            issue_id: citadel_module::domain::work::IssueId(r.co.seed.issue),
+            author: Actor::Agent(citadel_module::domain::org::AgentId(r.co.seed.agent)),
+            body,
+            run_id: None,
+            idempotency_key: None,
+        },
+    )
+    .await
+    .unwrap();
+    let got = ok(&r.w, &r.token, "get_issue", json!({})).await.to_string();
+    assert!(
+        !got.contains(&VALUE[..8]),
+        "a piece of the value is visible: {got}"
+    );
 }

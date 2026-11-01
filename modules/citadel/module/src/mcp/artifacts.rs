@@ -118,7 +118,12 @@ fn meta(a: &Artifact) -> Value {
 /// `get_artifact {artifact_id?}`: an artifact published on the run's requirement (or issue): its
 /// metadata and, for text, its content (capped). Without `artifact_id`, the requirement's
 /// artifacts, newest first. Another requirement's or company's look like none.
-pub(super) async fn get_artifact(app: &App, scope: RunScope, args: &JsonObject) -> Result<Value> {
+pub(super) async fn get_artifact(
+    app: &App,
+    scope: RunScope,
+    args: &JsonObject,
+    red: &Redactor,
+) -> Result<Value> {
     let own = match scope.issue_id {
         Some(i) => get_issue(&app.pool, i).await?,
         None => None,
@@ -149,7 +154,8 @@ pub(super) async fn get_artifact(app: &App, scope: RunScope, args: &JsonObject) 
     if preview_of(&a.mime) == Preview::Text {
         let bytes = std::fs::read(blob_path(&artifact_root(&app.pool).await?, &a.sha256))
             .map_err(|e| ToolError::Failed(e.to_string()))?;
-        let (body, cut) = clip(&String::from_utf8_lossy(&bytes), MAX_TEXT_READ);
+        // Masked before it is cut: a cut inside a value would leave part of it unmatched.
+        let (body, cut) = clip(&red.text(&String::from_utf8_lossy(&bytes)), MAX_TEXT_READ);
         v["content"] = body.into();
         v["truncated"] = cut.into();
     }

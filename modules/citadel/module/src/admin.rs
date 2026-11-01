@@ -70,10 +70,11 @@ async fn insert(tx: &mut sqlx::SqliteConnection, seed: Seed) -> Result<Applied, 
         if result.rows_affected() > 0 {
             applied.added += 1;
         } else {
-            let kind: String = sqlx::query_scalar("SELECT kind FROM citadel_companies WHERE name = ?")
-                .bind(company.name.trim())
-                .fetch_one(&mut *tx)
-                .await?;
+            let kind: String =
+                sqlx::query_scalar("SELECT kind FROM citadel_companies WHERE name = ?")
+                    .bind(company.name.trim())
+                    .fetch_one(&mut *tx)
+                    .await?;
             applied.kind_mismatch += usize::from(kind != company.kind);
         }
     }
@@ -136,9 +137,10 @@ pub async fn seed_command(pool: &SqlitePool, args: &[&str]) -> Result<String, St
             actor: ainkrad_core::audit::AuditActor::System,
             action: "citadel.seed.applied".to_owned(),
             entity: None,
-            details: serde_json::json!({"added": applied.added, "kind_mismatch": applied.kind_mismatch,
+            details:
+                serde_json::json!({"added": applied.added, "kind_mismatch": applied.kind_mismatch,
                                 "bytes": text.len(), "sha256": sha256, "file_uid": uid})
-            .to_string(),
+                .to_string(),
         };
         ainkrad_core_server::store::audit::append(&mut tx, &entry).await?;
         tx.commit().await?;
@@ -198,12 +200,19 @@ mod tests {
         let file = dir.join("seed.toml");
         let text = "[[companies]]\nname = \"Distinctive Name Ltd\"\nkind = \"own\"\n";
         std::fs::write(&file, text).unwrap();
-        seed_command(&db.pool, &[file.to_str().unwrap()]).await.unwrap();
+        seed_command(&db.pool, &[file.to_str().unwrap()])
+            .await
+            .unwrap();
         // The same name under another kind is reported, not silently skipped.
         let other = dir.join("other.toml");
-        std::fs::write(&other, "[[companies]]\nname = \"Distinctive Name Ltd\"\nkind = \"client\"\n")
+        std::fs::write(
+            &other,
+            "[[companies]]\nname = \"Distinctive Name Ltd\"\nkind = \"client\"\n",
+        )
+        .unwrap();
+        let said = seed_command(&db.pool, &[other.to_str().unwrap()])
+            .await
             .unwrap();
-        let said = seed_command(&db.pool, &[other.to_str().unwrap()]).await.unwrap();
         assert!(said.contains("1 left as they are"), "{said}");
         let rows: Vec<String> = sqlx::query_scalar(
             "SELECT details FROM audit_events WHERE action = 'citadel.seed.applied' ORDER BY seq",

@@ -116,7 +116,16 @@ impl Redactor {
         let hexed = hex(value);
         let b64 = base64(value);
         let percent = percent(value);
-        for encoded in [
+        let mut shifted: Vec<String> = Vec::new();
+        for k in 1..=2 {
+            let s = shifted_base64(value, k);
+            if s.len() >= MIN_KNOWN {
+                shifted.push(s.replace('+', "-").replace('/', "_"));
+                shifted.push(s);
+            }
+        }
+        let upper = value.to_uppercase();
+        for encoded in shifted.into_iter().chain([upper]).chain([
             hexed.clone(),
             hexed.to_uppercase(),
             b64.clone(),
@@ -133,7 +142,7 @@ impl Redactor {
                 .map(|b| format!("\\u{b:04x}"))
                 .collect(),
             json[1..json.len() - 1].to_owned(),
-        ] {
+        ]) {
             if !self.known.iter().any(|(_, v)| v == &encoded) {
                 self.known.push((name.to_owned(), encoded));
             }
@@ -268,6 +277,18 @@ fn base64(value: &str) -> String {
         });
     }
     out
+}
+
+/// The base64 of `value` as it appears inside a longer string (`user:VALUE`) that began `k`
+/// bytes (1 or 2) off a three-byte boundary: the characters the preceding bytes share bits
+/// with, and the last one when the value does not fill it, depend on what surrounds the value,
+/// so they are left out; what remains is the same in every context.
+fn shifted_base64(value: &str, k: usize) -> String {
+    let padded = format!("{}{value}", "A".repeat(k));
+    let full = base64(&padded);
+    let whole = (padded.len() * 8) / 6;
+    let skip = (k * 8).div_ceil(6);
+    full.get(skip..whole).unwrap_or_default().to_owned()
 }
 
 fn lower_percent_escapes(value: &str) -> String {

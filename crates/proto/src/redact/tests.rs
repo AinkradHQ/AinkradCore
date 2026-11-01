@@ -173,3 +173,26 @@ fn text_ending_in_a_secrets_first_characters_is_not_mangled() {
     // A real prefix is still withheld.
     assert!(!r.stream_text("x sk-l").contains("sk-l"));
 }
+
+#[test]
+fn base64_inside_a_longer_string_and_an_uppercase_copy_are_redacted() {
+    // 17 bytes: not a multiple of 3, so every alignment gives different characters.
+    let value = "zq83-plain-val-44";
+    let mut r = Redactor::new();
+    r.known("leased", value);
+    for prefix in ["", "u:", "us:", "user:", "basic user:", "x"] {
+        for suffix in ["", "!", "?x"] {
+            let raw = format!("{prefix}{value}{suffix}");
+            for enc in [
+                base64(&raw),
+                base64(&raw).trim_end_matches('=').to_owned(),
+                base64(&raw).replace('+', "-").replace('/', "_"),
+            ] {
+                let out = r.text(&format!("Authorization: {enc} end"));
+                assert!(out.contains("[redacted:leased]"), "{raw:?}: {enc} -> {out}");
+            }
+        }
+    }
+    let shouted = r.text(&format!("{} here", value.to_uppercase()));
+    assert!(!shouted.contains(&value.to_uppercase()), "{shouted}");
+}

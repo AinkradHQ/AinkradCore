@@ -617,22 +617,36 @@ pub async fn open_for_module(
 /// Opens the secrets `names` so a Core-side redactor can mask their values in text an agent
 /// sends or reads (E2-29). Nothing leaves the Core, so there is no lease and no audit row (one
 /// per tool call would drown the trail); it works while the broker is off, because a value
-/// leased earlier is still in the agent's hands. A name that no longer exists is skipped (there
-/// is nothing left to match against); a secret that cannot be opened is an error, so the caller
-/// fails closed instead of carrying on unmasked.
+/// leased earlier is still in the agent's hands. Fails closed, with `secrets_unavailable`, for
+/// every case where the value the agent holds may not be the one on file: a secret that no
+/// longer exists (deleted), one rotated at or after `since` (when the session began, so the
+/// agent may hold the superseded value), or one that does not open.
 pub async fn open_for_masking(
     pool: &SqlitePool,
     sealer: &SecretBox,
     names: &[String],
+    since: &str,
 ) -> Result<Vec<(String, Zeroizing<String>)>, Error> {
+    let gone = || {
+        refused(
+            "secrets_unavailable",
+            "a secret leased to this session was deleted, rotated or cannot be opened",
+        )
+    };
     let mut out = Vec::with_capacity(names.len());
     for name in names {
-        let row = sqlx::query("SELECT version, key_id, sealed FROM core_secrets WHERE name = ?")
-            .bind(name)
-            .fetch_optional(pool)
-            .await?;
-        let Some(row) = row else { continue };
+        let row = sqlx::query(
+            "SELECT version, key_id, sealed, updated_at FROM core_secrets WHERE name = ?",
+        )
+        .bind(name)
+        .fetch_optional(pool)
+        .await?;
+        let Some(row) = row else { return gone() };
         let version: i64 = row.try_get("version")?;
+        let updated_at: String = row.try_get("updated_at")?;
+        if version > 1 && updated_at.as_str() >= since {
+            return gone();
+        }
         let key_id: String = row.try_get("key_id")?;
         let sealed: Vec<u8> = row.try_get("sealed")?;
         let value = sealer
@@ -646,9 +660,7 @@ pub async fn open_for_masking(
             });
         match value {
             Some(v) => out.push((name.clone(), v)),
-            None => {
-                return refused("secrets_unavailable", "a leased secret did not open");
-            }
+            None => return gone(),
         }
     }
     Ok(out)

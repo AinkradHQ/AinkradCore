@@ -17,9 +17,9 @@ use super::{artifacts, hub, org, plan, read, repos, requirements, write};
 use crate::domain::work::{Issue, IssueId, NextActor};
 use crate::store::audit::{self, Event};
 use crate::store::exec::RunScope;
-use ainkrad_core_server::store::{agents as sessions, secrets};
 use crate::store::work::{get_issue, get_project, issue_key};
 use ainkrad_core_server::api::App;
+use ainkrad_core_server::store::{agents as sessions, secrets};
 
 /// Every tool a run may call. Nothing else is dispatched.
 pub(super) const TOOLS: &[&str] = &[
@@ -130,8 +130,8 @@ async fn run_redactor(app: &App, scope: RunScope) -> Result<Redactor> {
     let sealer = app.secrets.as_deref().ok_or_else(|| {
         ToolError::Failed("the run holds leased secrets but the Core has no master key".to_owned())
     })?;
-    let names: Vec<String> = session.secrets.into_iter().map(|s| s.name).collect();
-    let values = secrets::open_for_masking(&app.pool, sealer, &names)
+    let names: Vec<String> = session.secrets.iter().map(|s| s.name.clone()).collect();
+    let values = secrets::open_for_masking(&app.pool, sealer, &names, &session.created_at)
         .await
         .map_err(|e| ToolError::Failed(format!("leased secrets did not open: {e:?}")))?;
     for (name, value) in values {
@@ -185,32 +185,32 @@ async fn dispatch(
     red: &Redactor,
 ) -> Result<Value> {
     match name {
-    "get_issue" => read::get_issue(app, scope, args).await,
-    "get_context" => read::get_context(app, scope).await,
-    "get_approval" => read::get_approval(app, scope, args).await,
-    "comment" => write::comment(app, scope, args).await,
-    "transition" => write::transition(app, scope, args).await,
-    "create_subtask" => write::create_subtask(app, scope, args).await,
-    "report_blocker" => write::report_blocker(app, scope, args).await,
-    "request_approval" => write::request_approval(app, scope, args).await,
-    "list_backlog" => read::list_backlog(app, scope, args).await,
-    "org_chart" => org::org_chart(app, scope).await,
-    "plan_requirement" => requirements::plan_requirement(app, scope, args).await,
-    "apply_plan" => requirements::apply_plan(app, scope, args).await,
-    "post_to_requirement" => hub::post_to_requirement(app, scope, args).await,
-    "ask_human" => hub::ask_human(app, scope, args).await,
-    "publish_artifact" => artifacts::publish_artifact(app, scope, args, red).await,
-    "get_artifact" => artifacts::get_artifact(app, scope, args).await,
-    "request_repo" => repos::request_repo(app, scope, args).await,
-    "propose_knowledge" => write::propose_knowledge(app, scope, args).await,
-    "plan_sprint" => plan::plan_sprint(app, scope, args).await,
-    "sprint_add_issue" => plan::sprint_add_issue(app, scope, args).await,
-    "sprint_remove_issue" => plan::sprint_remove_issue(app, scope, args).await,
-    "set_sprint_issues" => plan::set_sprint_issues(app, scope, args).await,
-    "estimate_issue" => plan::estimate_issue(app, scope, args).await,
-    "sprint_report" => plan::sprint_report(app, scope, args).await,
-    "propose_retro_items" => plan::propose_retro_items(app, scope, args).await,
-    _ => Err(ToolError::Invalid("no such tool".to_owned())),
+        "get_issue" => read::get_issue(app, scope, args, red).await,
+        "get_context" => read::get_context(app, scope).await,
+        "get_approval" => read::get_approval(app, scope, args).await,
+        "comment" => write::comment(app, scope, args).await,
+        "transition" => write::transition(app, scope, args).await,
+        "create_subtask" => write::create_subtask(app, scope, args).await,
+        "report_blocker" => write::report_blocker(app, scope, args).await,
+        "request_approval" => write::request_approval(app, scope, args).await,
+        "list_backlog" => read::list_backlog(app, scope, args).await,
+        "org_chart" => org::org_chart(app, scope).await,
+        "plan_requirement" => requirements::plan_requirement(app, scope, args).await,
+        "apply_plan" => requirements::apply_plan(app, scope, args).await,
+        "post_to_requirement" => hub::post_to_requirement(app, scope, args).await,
+        "ask_human" => hub::ask_human(app, scope, args).await,
+        "publish_artifact" => artifacts::publish_artifact(app, scope, args, red).await,
+        "get_artifact" => artifacts::get_artifact(app, scope, args, red).await,
+        "request_repo" => repos::request_repo(app, scope, args).await,
+        "propose_knowledge" => write::propose_knowledge(app, scope, args).await,
+        "plan_sprint" => plan::plan_sprint(app, scope, args).await,
+        "sprint_add_issue" => plan::sprint_add_issue(app, scope, args).await,
+        "sprint_remove_issue" => plan::sprint_remove_issue(app, scope, args).await,
+        "set_sprint_issues" => plan::set_sprint_issues(app, scope, args).await,
+        "estimate_issue" => plan::estimate_issue(app, scope, args).await,
+        "sprint_report" => plan::sprint_report(app, scope, args).await,
+        "propose_retro_items" => plan::propose_retro_items(app, scope, args).await,
+        _ => Err(ToolError::Invalid("no such tool".to_owned())),
     }
 }
 

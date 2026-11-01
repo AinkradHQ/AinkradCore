@@ -1,6 +1,7 @@
 //! The read tools: `get_issue`, `get_context`, `list_backlog` and `get_approval`. Every text they return is
 //! size-capped, and comments come a page at a time, so one call cannot flood the agent's context.
 
+use ainkrad_proto::redact::Redactor;
 use rmcp::model::JsonObject;
 use serde_json::{Value, json};
 
@@ -35,7 +36,12 @@ fn author(a: Actor) -> Value {
 
 /// The issue (default: the run's own) or one of its subtasks, a page of its comments, its
 /// blockers and subtasks.
-pub(super) async fn get_issue(app: &App, scope: RunScope, args: &JsonObject) -> Result<Value> {
+pub(super) async fn get_issue(
+    app: &App,
+    scope: RunScope,
+    args: &JsonObject,
+    red: &Redactor,
+) -> Result<Value> {
     let issue = target(app, scope, int(args, "issue_id")?).await?;
     let after = int(args, "comments_after")?;
     let before = int(args, "comments_before")?;
@@ -67,7 +73,7 @@ pub(super) async fn get_issue(app: &App, scope: RunScope, args: &JsonObject) -> 
     let comments: Vec<Value> = page
         .iter()
         .map(|c| {
-            let (body, truncated) = clip(&c.body, MAX_ENTRY);
+            let (body, truncated) = clip(&red.text(&c.body), MAX_ENTRY);
             json!({"id": c.id.0, "author": author(c.author), "body": body, "truncated": truncated})
         })
         .collect();
@@ -83,7 +89,7 @@ pub(super) async fn get_issue(app: &App, scope: RunScope, args: &JsonObject) -> 
             subtasks.push(summary(app, &s).await?);
         }
     }
-    let (body, body_truncated) = clip(&issue.body, MAX_BODY);
+    let (body, body_truncated) = clip(&red.text(&issue.body), MAX_BODY);
     Ok(json!({
         "id": issue.id.0,
         "key": issue_key(pool, issue.id).await?,
