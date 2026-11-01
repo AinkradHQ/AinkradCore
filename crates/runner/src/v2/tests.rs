@@ -208,7 +208,11 @@ impl Core {
 
     /// The answer on `stream`: its only frame, numbered 0.
     async fn answer(&mut self, stream: u64) -> Body {
-        let f = self.recv().await;
+        // Another stream's late frame (a shell's exit result, say) is not this answer.
+        let mut f = self.recv().await;
+        while f.stream_id != stream {
+            f = self.recv().await;
+        }
         assert_eq!((f.stream_id, f.seq), (stream, 0), "{f:?}");
         f.body().unwrap().unwrap()
     }
@@ -1064,17 +1068,26 @@ mod pty {
         out: &mut String,
         done: impl Fn(&str, &Body) -> bool,
     ) -> Body {
-        loop {
-            let f = core.recv().await;
-            if f.stream_id != stream {
-                continue;
+        // A wait that never ends hangs the whole run with no log; bounded, it fails with what it saw.
+        let wait = async {
+            loop {
+                let f = core.recv().await;
+                if f.stream_id != stream {
+                    continue;
+                }
+                let b = f.body().unwrap().unwrap();
+                if let Body::Output(Output { data }) = &b {
+                    out.push_str(&String::from_utf8_lossy(&STANDARD.decode(data).unwrap()));
+                }
+                if done(out, &b) {
+                    return b;
+                }
             }
-            let b = f.body().unwrap().unwrap();
-            if let Body::Output(Output { data }) = &b {
-                out.push_str(&String::from_utf8_lossy(&STANDARD.decode(data).unwrap()));
-            }
-            if done(out, &b) {
-                return b;
+        };
+        match tokio::time::timeout(Duration::from_secs(120), wait).await {
+            Ok(b) => b,
+            Err(_) => {
+                panic!("stream {stream}: the expected frame never came; output so far: {out:?}")
             }
         }
     }

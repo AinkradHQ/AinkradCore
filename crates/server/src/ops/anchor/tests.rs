@@ -171,15 +171,31 @@ async fn bad_anchors_are_refused() {
 async fn a_key_rotation_keeps_verifying_and_a_missing_or_forged_statement_does_not() {
     let fake = fake().await;
     let h = home(3).await;
-    let old = Identity::load_at(&h.dir, 1_000).unwrap();
+    let old = Identity::load_at(
+        &h.dir,
+        1_000,
+        &crate::ops::secretbox::SecretBox::new(&[7; 32]),
+    )
+    .unwrap();
     let s = sinks(&fake);
     anchored(&h, &old, &s).await;
-    Identity::rotate(&h.dir, 1_000).unwrap();
-    let pending = Identity::load_readonly(&h.dir).unwrap();
+    Identity::rotate(
+        &h.dir,
+        1_000,
+        &crate::ops::secretbox::SecretBox::new(&[7; 32]),
+    )
+    .unwrap();
+    let pending =
+        Identity::load_readonly(&h.dir, &crate::ops::secretbox::SecretBox::new(&[7; 32])).unwrap();
     assert!(pending.rotation.is_some());
     anchored(&h, &pending, &s).await; // files the statement under anchors/rotations.json
     Identity::announce(&h.dir, 1_000).unwrap();
-    let new = Identity::load_at(&h.dir, 1_000 + WINDOW).unwrap();
+    let new = Identity::load_at(
+        &h.dir,
+        1_000 + WINDOW,
+        &crate::ops::secretbox::SecretBox::new(&[7; 32]),
+    )
+    .unwrap();
     assert_ne!(new.fp, old.fp);
     add(&h, 4).await;
     let third = anchored(&h, &new, &s).await;

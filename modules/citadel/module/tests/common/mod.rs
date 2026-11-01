@@ -43,7 +43,7 @@ pub async fn fx() -> Fx {
     let pool = connect(&dir.join("core.db")).await.unwrap();
     let modules: Vec<Arc<dyn Module>> = vec![Arc::new(Citadel::default())];
     migrate::migrate_modules(&pool, &modules).await.unwrap();
-    let identity = Arc::new(Identity::load_or_create(&dir).unwrap());
+    let identity = Arc::new(Identity::load_or_create(&dir, &ainkrad_core_server::ops::secretbox::SecretBox::new(&[7; 32])).unwrap());
     let clock = Arc::new(SystemClock);
     let mut app = App::new(pool, clock.clone(), HOST.to_owned(), identity);
     app.modules = Arc::from(modules);

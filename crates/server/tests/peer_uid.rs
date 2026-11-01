@@ -110,7 +110,13 @@ async fn another_uid_on_the_admin_socket_cannot_claim_a_bootstrap_pairing() {
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     let pool = store::connect(&dir.join("core.db")).await.unwrap();
-    let identity = Arc::new(Identity::load_or_create(&dir).unwrap());
+    let identity = Arc::new(
+        Identity::load_or_create(
+            &dir,
+            &ainkrad_core_server::ops::secretbox::SecretBox::new(&[7; 32]),
+        )
+        .unwrap(),
+    );
     let sock = dir.join("admin.sock");
     let gateway = Gateway::bind(Listen::Tcp("127.0.0.1:0".to_owned()), Limits::default())
         .await

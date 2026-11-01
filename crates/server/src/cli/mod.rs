@@ -7,6 +7,7 @@ use ainkrad_core::audit::AuditActor;
 use ainkrad_core::ids::UserId;
 use ainkrad_core_server::api::{App, router};
 use ainkrad_core_server::module::Module;
+use ainkrad_core_server::ops::secretbox::SecretBox;
 use ainkrad_core_server::scheduler::{Clock, Scheduler, SystemClock};
 use ainkrad_core_server::store::{self, gov};
 use ainkrad_core_server::{gateway, push};
@@ -54,7 +55,9 @@ serves TLS 1.3 on :443 with a certificate from ACME (Let's Encrypt production un
 --acme-directory says otherwise, kept in <db dir>/tls) and needs --hostname and --acme-contact;
 the challenge is TLS-ALPN-01 on :443, or HTTP-01 on :80 with --acme-http01. Unsigned, only
 /handshake, pairing and /healthz answer. The Core identity key is <db dir>/core-identity.p8
-(0600), made on first start; its fingerprint is what /handshake shows and every request signs.
+(0600), made on first start and sealed under keys/master.key (as is the ACME account in
+<db dir>/tls); without that key serve refuses to start. Its fingerprint is what /handshake
+shows and every request signs.
 --host is the Host header clients must send (default: localhost on a socket, the address on loopback, the hostname in public); --trusted-proxy the
 proxies whose X-Forwarded-For names the client for the lockouts and logs (default: none; the
 Core terminates TLS itself). --passkeys turns on passkeys for the web client (E1-08): the
@@ -247,7 +250,8 @@ async fn rotate_identity(db: &Path) -> Result_ {
     // before the key files change.
     admin::bootstrap::owner_only(db)?;
     let pool = store::connect(db).await?;
-    let r = Identity::rotate(state_dir(db), SystemClock.unix())?;
+    let seal = SecretBox::for_home(state_dir(db))?;
+    let r = Identity::rotate(state_dir(db), SystemClock.unix(), &seal)?;
     let details = serde_json::json!({"old_fp": r.old_fp, "new_fp": r.new_fp,
         "not_before": r.not_before, "by": "local-admin"});
     audit(&pool, "started", details).await.map_err(|e| {
@@ -514,6 +518,7 @@ fn listen(db: &Path, flags: &Serve) -> Result<gateway::Listen, String> {
                     http01: flags.acme_http01,
                     ca_root: None,
                     dir: state.join("tls"),
+                    seal: Arc::new(SecretBox::for_home(state).map_err(|e| e.to_string())?),
                 },
             }
         }
@@ -698,8 +703,12 @@ async fn serve(
     });
     let ticking =
         tokio::spawn(async move { scheduler.run(async { drop(stopped.changed().await) }).await });
+    // The Core identity is sealed under the master key: without it the Core does not start
+    // (no plaintext fallback, no new identity: pinned clients would see core_identity_mismatch).
+    let seal = SecretBox::for_home(state_dir(db))?;
     let identity = Arc::new(ainkrad_core_server::auth::Identity::load_or_create(
         state_dir(db),
+        &seal,
     )?);
     tracing::info!(core_fp = identity.fp, "Core identity");
     ainkrad_core_server::auth::identity::audit_switch(&pool, &identity).await;

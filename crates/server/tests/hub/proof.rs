@@ -180,6 +180,9 @@ pub async fn tls_core(name: &str) -> Tls {
         http01: false,
         ca_root: None,
         dir: dir.join("tls"),
+        seal: std::sync::Arc::new(ainkrad_core_server::ops::secretbox::SecretBox::new(
+            &[7; 32],
+        )),
     };
     acme.store_cert(&cert.pem(), &key.serialize_pem()).unwrap();
     let listen = Listen::Public {

@@ -309,7 +309,11 @@ async fn a_restored_home_keeps_the_core_identity() {
     let home = d.0.join("home");
     let fp = home_with_state(&home).await;
     // What serve makes on first start.
-    let core = ainkrad_core_server::auth::Identity::load_or_create(&home).unwrap();
+    let core = ainkrad_core_server::auth::Identity::load_or_create(
+        &home,
+        &ainkrad_core_server::ops::secretbox::SecretBox::for_home(&home).unwrap(),
+    )
+    .unwrap();
     let der = std::fs::read(home.join("core-identity.p8")).unwrap();
     let keygen = ok(&["backup-keygen"], &[]);
     let identity = d.0.join("identity.txt");
@@ -352,7 +356,11 @@ async fn a_restored_home_keeps_the_core_identity() {
         der,
         "the same key, not a new one"
     );
-    let again = ainkrad_core_server::auth::Identity::load_or_create(&fresh).unwrap();
+    let again = ainkrad_core_server::auth::Identity::load_or_create(
+        &fresh,
+        &ainkrad_core_server::ops::secretbox::SecretBox::for_home(&fresh).unwrap(),
+    )
+    .unwrap();
     assert_eq!(again.fp, core.fp);
     assert_eq!(again.spki, core.spki);
 
@@ -545,4 +553,95 @@ async fn an_export_never_carries_secrets_and_a_backup_does() {
     .unwrap();
     assert_eq!(got.value.as_str(), VALUE);
     pool.close().await;
+}
+
+/// The identity is sealed under the master key: an archive that carries it without that key
+/// is refused (nothing written), and a legacy plaintext one is sealed in the new home.
+#[tokio::test]
+async fn a_sealed_identity_needs_its_master_key_and_a_legacy_one_is_sealed_on_restore() {
+    use ainkrad_core_server::auth::Identity;
+    use ainkrad_core_server::ops::{archive, sealed, secretbox::SecretBox};
+    let d = dir("seal-restore");
+    let home = d.0.join("home");
+    let fp = home_with_state(&home).await;
+    let signer =
+        archive::load_signer(&std::fs::read(home.join("keys/backup-signing.p8")).unwrap()).unwrap();
+    let core = Identity::load_or_create(&home, &SecretBox::for_home(&home).unwrap()).unwrap();
+    let (db, master, sealed_id) = (
+        home.join("core.db"),
+        home.join("keys/master.key"),
+        home.join("core-identity.p8"),
+    );
+    assert!(sealed::is_sealed(&std::fs::read(&sealed_id).unwrap()));
+    let make = |name: &str, files: &[(&str, &Path)]| -> PathBuf {
+        let p = d.0.join(name);
+        let mut f = std::fs::File::create(&p).unwrap();
+        archive::write(&mut f, &signer, "export", "2026-11-01T00:00:00.000Z", files).unwrap();
+        p
+    };
+
+    // Sealed identity, no master key in the archive: refused, nothing left behind.
+    let a = make(
+        "a.export",
+        &[("core.db", &db), ("core-identity.p8", &sealed_id)],
+    );
+    let ra = d.0.join("ra");
+    let e = run(&["import", s(&a), "--signer", &fp, s(&ra)], &[]).unwrap_err();
+    assert!(e.contains("sealed") && e.contains("no master key"), "{e}");
+    assert!(!ra.exists());
+
+    // Sealed identity with a DIFFERENT master key: refused too, never a new identity.
+    let other = d.0.join("other.key");
+    std::fs::write(&other, [5u8; 32]).unwrap();
+    let b = make(
+        "b.export",
+        &[
+            ("core.db", &db),
+            ("keys/master.key", &other),
+            ("core-identity.p8", &sealed_id),
+        ],
+    );
+    let rb = d.0.join("rb");
+    let e = run(&["import", s(&b), "--signer", &fp, s(&rb)], &[]).unwrap_err();
+    assert!(e.contains("does not hold"), "{e}");
+    assert!(!rb.exists());
+
+    // The same key set restores it, still sealed.
+    let c = make(
+        "c.export",
+        &[
+            ("core.db", &db),
+            ("keys/master.key", &master),
+            ("core-identity.p8", &sealed_id),
+        ],
+    );
+    let rc = d.0.join("rc");
+    ok(&["import", s(&c), "--signer", &fp, s(&rc)], &[]);
+    let seal = SecretBox::for_home(&rc).unwrap();
+    assert_eq!(Identity::load_or_create(&rc, &seal).unwrap().fp, core.fp);
+
+    // A legacy plaintext identity (a backup made before sealing) is sealed on restore.
+    let der = ring::signature::EcdsaKeyPair::generate_pkcs8(
+        &ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+        &ring::rand::SystemRandom::new(),
+    )
+    .unwrap();
+    let legacy = d.0.join("legacy.p8");
+    std::fs::write(&legacy, der.as_ref()).unwrap();
+    let want = Identity::from_pkcs8(der.as_ref()).unwrap().fp;
+    let l = make(
+        "l.export",
+        &[
+            ("core.db", &db),
+            ("keys/master.key", &master),
+            ("core-identity.p8", &legacy),
+        ],
+    );
+    let rl = d.0.join("rl");
+    ok(&["import", s(&l), "--signer", &fp, s(&rl)], &[]);
+    let raw = std::fs::read(rl.join("core-identity.p8")).unwrap();
+    assert!(sealed::is_sealed(&raw));
+    assert!(!raw.windows(der.as_ref().len()).any(|w| w == der.as_ref()));
+    let seal = SecretBox::for_home(&rl).unwrap();
+    assert_eq!(Identity::load_or_create(&rl, &seal).unwrap().fp, want);
 }

@@ -36,7 +36,13 @@ impl Fx {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let pool = store::connect(&dir.join("core.db")).await.unwrap();
-        let identity = Arc::new(Identity::load_or_create(&dir).unwrap());
+        let identity = Arc::new(
+            Identity::load_or_create(
+                &dir,
+                &ainkrad_core_server::ops::secretbox::SecretBox::new(&[7; 32]),
+            )
+            .unwrap(),
+        );
         let dev = TestDevice::enroll(
             &pool,
             "mac",

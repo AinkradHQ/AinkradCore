@@ -106,7 +106,9 @@ pub(super) async fn fx() -> Fx {
     ];
     crate::store::kinds::allow(&pool, &["ops.line", "ops.blob"], &actions).await;
     let clock = Arc::new(FixedClock(Mutex::new(NOW.to_owned())));
-    let identity = Arc::new(Identity::load_or_create(&dir).unwrap());
+    let identity = Arc::new(
+        Identity::load_or_create(&dir, &crate::ops::secretbox::SecretBox::new(&[7; 32])).unwrap(),
+    );
     let app = App::new(pool, clock.clone(), HOST.to_owned(), identity);
     let dev = enroll(&app, &clock, "test", &ALL).await;
     Fx {
