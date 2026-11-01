@@ -221,6 +221,7 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/agent-sessions/{id}/cancel", post(agents::cancel))
         .route("/api/v1/agent-sessions/{id}/kill", post(agents::kill))
         .route("/api/v1/agent-sessions/{id}/resume", post(agents::resume))
+        .route("/api/v1/agent-sessions/{id}/wake", post(agents::wake))
         // Modules sit inside the same gate: they never authenticate for themselves.
         .merge(crate::module::mount(&app.modules))
         // `Deprecation`/`Sunset` on deprecated routes (`deprecation`).

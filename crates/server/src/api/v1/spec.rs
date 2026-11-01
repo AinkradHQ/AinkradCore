@@ -102,6 +102,7 @@ use super::{
         agents::cancel,
         agents::kill,
         agents::resume,
+        agents::wake,
     ),
     components(schemas(types::ErrorBody, events::Event))
 )]

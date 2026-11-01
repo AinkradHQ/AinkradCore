@@ -14,6 +14,7 @@ mod routing;
 mod runner;
 mod sandbox;
 mod terminals;
+mod wake;
 
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;

@@ -501,3 +501,75 @@ pub async fn reopen(pool: &SqlitePool, id: &str, now: &str) -> Result<bool, sqlx
     tx.commit().await?;
     Ok(changed > 0)
 }
+
+/// What [`wake`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Woken {
+    /// Back to `interrupted`: its supervisor continues the harness's own session.
+    Reopened,
+    /// Still `starting` or `running`: not idle yet, try again later.
+    Busy,
+    /// Nothing to wake: no such session, a module's, or over for good (failed, cancelled).
+    Gone,
+}
+
+impl Session {
+    /// Whether a wake can ever get this session going: it is not over, or it was lost, or it
+    /// finished a turn (`succeeded`) and kept the harness's own session to continue.
+    pub fn wakeable(&self) -> bool {
+        self.owner_module.is_none()
+            && (self.live()
+                || self.state == "lost"
+                || (self.harness_session.is_some()
+                    && self
+                        .outcome
+                        .as_ref()
+                        .is_some_and(|o| o["kind"] == "succeeded")))
+    }
+}
+
+/// Wakes an idle session of a client: a `lost` or `succeeded` one goes back to `interrupted`
+/// (an `interrupted` one stays), with `text` as the prompt of its next turn. One write; a
+/// module's session is never touched (its routes drive it).
+pub async fn wake(
+    pool: &SqlitePool,
+    id: &str,
+    text: Option<&str>,
+    now: &str,
+) -> Result<Woken, sqlx::Error> {
+    let mut tx = super::begin_write(pool).await?;
+    let found: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT state, harness_session, outcome, owner_module FROM core_agent_sessions WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((state, harness, outcome, owner)) = found else {
+        return Ok(Woken::Gone);
+    };
+    let succeeded = outcome
+        .and_then(|o| serde_json::from_str::<Value>(&o).ok())
+        .is_some_and(|o| o["kind"] == "succeeded");
+    match state.as_str() {
+        _ if owner.is_some() => return Ok(Woken::Gone),
+        "starting" | "running" => return Ok(Woken::Busy),
+        "interrupted" | "lost" => {}
+        "ended" if succeeded && harness.is_some() => {}
+        _ => return Ok(Woken::Gone),
+    }
+    sqlx::query(
+        "UPDATE core_agent_sessions SET state = 'interrupted', outcome = NULL, ended_at = NULL, \
+         prompt = coalesce(?, prompt), updated_at = ? WHERE id = ?",
+    )
+    .bind(text)
+    .bind(now)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    if state != "interrupted" {
+        let payload = json!({"session": id, "state": "interrupted", "reason": "woken"});
+        emit(&mut tx, "agent.state", payload).await?;
+    }
+    tx.commit().await?;
+    Ok(Woken::Reopened)
+}

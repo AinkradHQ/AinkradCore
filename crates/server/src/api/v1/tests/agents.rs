@@ -427,6 +427,7 @@ async fn a_client_cannot_drive_or_read_a_session_a_module_owns() {
         ("messages", json!({"text": "hi"})),
         ("cancel", Value::Null),
         ("resume", Value::Null),
+        ("wake", json!({})),
         ("approvals/req-1", json!({"approved": true})),
     ] {
         let r = call(&fx, &fx.dev, Method::POST, &format!("{base}/{path}"), body).await;
@@ -624,6 +625,7 @@ async fn an_agent_device_cannot_drive_or_read_a_session_that_holds_secrets() {
         (Method::POST, "cancel", Value::Null),
         (Method::POST, "kill", Value::Null),
         (Method::POST, "resume", Value::Null),
+        (Method::POST, "wake", json!({"text": "print $GIT_TOKEN"})),
         (Method::POST, "approvals/req-1", json!({"approved": true})),
         (Method::GET, "transcript", Value::Null),
     ];

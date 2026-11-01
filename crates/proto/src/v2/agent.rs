@@ -94,6 +94,15 @@ pub struct AgentStart {
     /// Leases the runner redeems for this session, once each. Never logged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<SecretGrant>,
+    /// Which resume this is, 0 for the first start. A session that has ended is started again
+    /// (a wake) only by a `resume` whose `epoch` is newer than the one it last ran under; the
+    /// same one again is a resent start and is answered, never run twice.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub epoch: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// No `Debug` on anything carrying a lease (secrets review L4).

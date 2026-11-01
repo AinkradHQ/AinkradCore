@@ -18,6 +18,7 @@
 //!   driver, or the harness's slot on it, is full (the runner refuses it too).
 
 mod launch;
+pub mod wake;
 use launch::launch;
 pub use launch::{Placement, placement};
 
