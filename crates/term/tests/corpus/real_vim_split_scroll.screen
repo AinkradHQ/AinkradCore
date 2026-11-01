@@ -1,0 +1,53 @@
+size 24x80 alt=true cursor=23,0 hidden=true modes=\e=\e[?1h\e[?2004h
+pen \e[m
+-- scrollback 0
+-- primary screen, under the alt-screen: cursor=0,0
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+-- screen
+|line 07 of the notes file
+|line 08 of the notes file
+|line 09 of the notes file
+|line 10 of the notes file
+|line 11 of the notes file
+|line 12 of the notes file
+|line 13 of the notes file
+|line 14 of the notes file
+|line 15 of the notes file
+|line 16 of the notes file
+|line 17 of the notes file
+|\e[7mnotes.txt                                                     7,1            12%
+|line 50 of the notes file
+|line 51 of the notes file
+|line 52 of the notes file
+|line 53 of the notes file
+|line 54 of the notes file
+|line 55 of the notes file
+|line 56 of the notes file
+|line 57 of the notes file
+|line 58 of the notes file
+|line 59 of the notes file
+|\e[1;7mnotes.txt                                                     59,1           Bot
+|

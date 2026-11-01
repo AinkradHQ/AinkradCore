@@ -1,0 +1,5 @@
+ascii | plain
+cjk   | 你好世界 こんにちは 한글
+emoji | 😀🚀👨‍👩‍👧 ❤️ 🇩🇪
+comb  | é ä ñ नमस्ते
+mixed | a你b😀cxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx你好 wraps

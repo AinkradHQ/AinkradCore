@@ -9,6 +9,21 @@ fuzz_target!(|data: &[u8]| {
     // The first two bytes pick the size; 0xFF in the stream marks a chunk boundary, and a
     // boundary followed by two bytes `r c` with r < 8 also resizes (small sizes reach edge cases).
     let [rows, cols, rest @ ..] = data else { return };
+    // `dump()` shows ESC as the two characters `\e`, so a literal backslash in the stream would be
+    // read back by `normal()` as an escape (found by the 1 h run: a false positive, not an
+    // emulator bug). A backslash after ESC is ST and never reaches the text, so it stays; any other
+    // backslash becomes `/`. (0xFF chunk boundaries do not count as a byte here.)
+    let mut prev = 0u8;
+    let rest: Vec<u8> = rest
+        .iter()
+        .map(|&b| {
+            let out = if b == b'\\' && prev != 0x1b { b'/' } else { b };
+            if b != 0xff {
+                prev = b;
+            }
+            out
+        })
+        .collect();
     let limits = Limits { scrollback_lines: 64, scrollback_bytes: 4096, replay_bytes: 1024 };
     let mut t = Terminal::new(Size { rows: u16::from(rows % 40), cols: u16::from(cols % 120).max(2) }, limits);
     for chunk in rest.split(|&b| b == 0xff) {

@@ -1,0 +1,53 @@
+size 24x80 alt=true cursor=23,79 hidden=true modes=\e=\e[?1h\e[?2004l\e[?1000h\e[?1006h
+pen \e[m\e[30;46m
+-- scrollback 0
+-- primary screen, under the alt-screen: cursor=0,0
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+-- screen
+|
+|  \e[36m  0\e[39;1m[\e[90m         0.0%\e[39m]\e[m \e[36m  4\e[39;1m[\e[90m         0.0%\e[39m]\e[m \e[36m  8\e[39;1m[\e[90m          0.0%\e[39m]\e[36;22m 12\e[39;1m[\e[90m          0.0%\e[39m]
+|\e[2C\e[36m  1\e[39;1m[\e[90m         0.0%\e[39m]\e[m \e[36m  5\e[39;1m[\e[90m         0.0%\e[39m]\e[m \e[36m  9\e[39;1m[\e[90m          0.0%\e[39m]\e[36;22m 13\e[39;1m[\e[90m          0.0%\e[39m]
+|\e[2C\e[36m  2\e[39;1m[\e[90m         0.0%\e[39m]\e[m \e[36m  6\e[39;1m[\e[90m         0.0%\e[39m]\e[m \e[36m 10\e[39;1m[\e[90m          0.0%\e[39m]\e[36;22m 14\e[39;1m[\e[90m          0.0%\e[39m]
+|\e[2C\e[36m  3\e[39;1m[\e[31;22m|||||||100.0%\e[39;1m]\e[m \e[36m  7\e[39;1m[\e[90m         0.0%\e[39m]\e[m \e[36m 11\e[39;1m[\e[90m          0.0%\e[39m]\e[36;22m 15\e[39;1m[\e[90m          0.0%\e[39m]
+|\e[2C\e[36mMem\e[39;1m[\e[32;22m|\e[35m|\e[34;1m|\e[33;22m|\e[90;1m\e[18X\e[18C529M/62.8G\e[39m]\e[m \e[36mTasks: \e[1m32\e[90m, 57 thr, 219 kthr\e[36;22m; \e[32;1m1\e[36;22m running
+|\e[2C\e[36mSwp\e[39;1m[\e[90m\e[27X\e[27C0K/0K\e[39m]\e[m \e[36mLoad average: \e[39;1m0.20 \e[36m0.27 \e[22m0.15 
+|\e[40C\e[36mUptime: \e[1m00:05:56
+|
+|\e[30;42m    PID USER       PRI  NI  VIRT   RES   SHR S \e[46m CPU%▽\e[42mMEM%   TIME+  Command\e[K
+|\e[30;46m\e[5X\e[5C 1 root        20   0 22224 13884  9916 S   0.0  0.0  0:01.09 /sbin/init\e[K
+|\e[4C236 \e[90;1mroot       \e[m 19 \e[31m -1 \e[36m66\e[m848 \e[36m17\e[m808 \e[36m16\e[m612 \e[90;1mS   0.0  0.0 \e[m 0:00.13 /usr/lib/syst
+|\e[4C303 \e[90;1mroot       \e[m RT \e[90;1m  0 \e[36;22m 282M 27\e[m300 \e[36m 8\e[m768 \e[90;1mS   0.0  0.0 \e[m 0:00.01 /sbin/multipa
+|\e[4C307 \e[90;1mroot       \e[m 20 \e[90;1m  0 \e[36;22m28\e[m608 \e[36m 7\e[m888 \e[36m 5\e[m316 \e[90;1mS   0.0  0.0 \e[m 0:00.08 /usr/lib/syst
+|\e[4C404 \e[90;1mroot       \e[m 20 \e[90;1m  0 \e[36;22m 3\e[m728 \e[36m 2\e[m796 \e[36m 2\e[m048 \e[90;1mS   0.0  0.0 \e[m 0:00.03 /usr/lib/linu
+|\e[4C646 \e[35msystemd-re \e[m 20 \e[90;1m  0 \e[36;22m21\e[m484 \e[36m13\e[m368 \e[36m11\e[m184 \e[90;1mS   0.0  0.0 \e[m 0:00.04 /usr/lib/syst
+|\e[4C699 \e[35msystemd-ne \e[m 20 \e[90;1m  0 \e[36;22m19\e[m148 \e[36m 9\e[m836 \e[36m 8\e[m508 \e[90;1mS   0.0  0.0 \e[m 0:00.02 /usr/lib/syst
+|\e[4C748 \e[35mmessagebus \e[m 20 \e[90;1m  0 \e[36;22m 9\e[m800 \e[36m 5\e[m648 \e[36m 4\e[m812 \e[90;1mS   0.0  0.0 \e[m 0:00.02 @dbus-daemon
+|\e[4C754 \e[90;1mroot       \e[m 20 \e[90;1m  0 \e[36;22m32\e[m444 \e[36m20\e[m900 \e[36m10\e[m636 \e[90;1mS   0.0  0.0 \e[m 0:00.05 /usr/bin/pyth
+|\e[4C756 \e[90;1mpolkitd    \e[m 20 \e[90;1m  0 \e[36;22m 300M  8\e[m180 \e[36m 7\e[m276 \e[90;1mS   0.0  0.0 \e[m 0:00.03 /usr/lib/polk
+|\e[4C762 \e[90;1mroot       \e[m 20 \e[90;1m  0 \e[36;22m18\e[m168 \e[36m 8\e[m956 \e[36m 7\e[m884 \e[90;1mS   0.0  0.0 \e[m 0:00.03 /usr/lib/syst
+|\e[4C765 \e[90;1mroot       \e[m 20 \e[90;1m  0 \e[36;22m 458M 13\e[m832 \e[36m11\e[m672 \e[90;1mS   0.0  0.0 \e[m 0:00.03 /usr/libexec/
+|\e[4C766 \e[90;1mroot       \e[m 20 \e[90;1m  0 \e[36;22m39\e[m480 \e[36m30\e[m984 \e[36m12\e[m852 \e[90;1mS   0.0  0.0 \e[m 0:00.12 /usr/bin/pyth
+|F1\e[30;46mHelp  \e[mF2\e[30;46mSetup \e[mF3\e[30;46mSearch\e[mF4\e[30;46mFilter\e[mF5\e[30;46mTree  \e[mF6\e[30;46mSortBy\e[mF7\e[30;46mNice -\e[mF8\e[30;46mNice +\e[mF9\e[30;46mKill  \e[mF10\e[30;46mQuit
