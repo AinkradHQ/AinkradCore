@@ -34,7 +34,12 @@ pub const JOB: &str = "session_wake";
 pub const CAP: Cap = Cap {
     total: 256,
     per_session: 4,
+    per_requester: 32,
 };
+
+/// Attempts a wake gets while the session is still busy, and the wait after the first.
+const ATTEMPTS: u32 = 6;
+const BACKOFF_SECS: u32 = 30;
 
 /// The longest wake text, in bytes.
 pub const MAX_TEXT: usize = 16 * 1024;
@@ -68,9 +73,10 @@ impl Module for WakeJobs {
             Schedule::Wake,
             Arc::new(Handler(Arc::clone(&self.app))),
         );
-        // A wake that finds the session still busy waits 10 s, 20 s, ... and is dead after six.
-        job.max_attempts = 6;
-        job.backoff_secs = 10;
+        // A wake that finds the session still busy waits 30 s, 60 s, ... (about a quarter of an
+        // hour in all); the last attempt audits the drop.
+        job.max_attempts = ATTEMPTS;
+        job.backoff_secs = BACKOFF_SECS;
         vec![job]
     }
 
@@ -101,10 +107,13 @@ async fn wake(app: &App, run: &Run) -> Result<(), String> {
     let by = crate::store::gov::get_device(&app.pool, &p.by)
         .await
         .map_err(db)?;
-    let allowed =
-        by.is_some_and(|d| d.usable() && d.scopes.iter().any(|x| x == "agent" || x == "admin"));
-    if !allowed {
+    let has = |d: &crate::store::gov::Device, scope: &str| d.scopes.iter().any(|x| x == scope);
+    let Some(by) = by.filter(|d| d.usable() && (has(d, "agent") || has(d, "admin"))) else {
         return dropped(app, &s, &p.by, "requester_not_allowed").await;
+    };
+    // The route's secrets rule, with the requester's scopes as they are now.
+    if !s.secrets.is_empty() && s.created_by != by.id && !has(&by, "admin") {
+        return dropped(app, &s, &p.by, "requester_not_owner").await;
     }
     let now = app.clock.now();
     match store::wake(&app.pool, &s.id, p.text.as_deref(), &now)
@@ -122,10 +131,14 @@ async fn wake(app: &App, run: &Run) -> Result<(), String> {
             store::action(&app.pool, &s, by, "agent.woken", None, details, &p.by)
                 .await
                 .map_err(db)?;
-            super::supervise(app, &s.id);
-            Ok(())
+            // The old supervisor may still be finishing: retry until a new one has started.
+            match super::supervise(app, &s.id) {
+                true => Ok(()),
+                false => Err("the session's previous supervisor is still finishing".to_owned()),
+            }
         }
-        // Not idle yet: the run is retried after its backoff.
+        // Not idle yet: retried after the backoff, and dropped (audited) on the last attempt.
+        Woken::Busy if run.attempt >= ATTEMPTS => dropped(app, &s, &p.by, "busy_timeout").await,
         Woken::Busy => Err("the session is not idle yet".to_owned()),
         Woken::Gone => dropped(app, &s, &p.by, "not_wakeable").await,
     }

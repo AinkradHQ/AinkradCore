@@ -18,7 +18,7 @@ use super::{Core, quick};
 const TEXT: &str = "carry on with the second part 41ac";
 
 /// The platform's wake job on `core`, as `serve` mounts it, and an engine for it that ticks fast.
-async fn queue(core: &Core) -> Arc<Engine> {
+async fn queue(core: &Core) -> (Arc<Engine>, Arc<Skew>) {
     let wake_jobs = Arc::new(WakeJobs::default());
     wake_jobs.attach(&core.app);
     let modules: Vec<Arc<dyn Module>> = vec![wake_jobs];
@@ -29,12 +29,22 @@ async fn queue(core: &Core) -> Arc<Engine> {
         every: Duration::from_millis(50),
         ..Config::default()
     };
-    Engine::new(
-        core.app.pool.clone(),
-        Arc::new(SystemClock),
-        &modules,
-        config,
+    let clock = Arc::new(Skew::default());
+    (
+        Engine::new(core.app.pool.clone(), clock.clone(), &modules, config),
+        clock,
     )
+}
+
+/// The real clock, moved forward by hand so a backoff passes without waiting.
+#[derive(Default)]
+struct Skew(std::sync::atomic::AtomicI64);
+
+impl Clock for Skew {
+    fn now(&self) -> String {
+        let ahead = self.0.load(std::sync::atomic::Ordering::SeqCst);
+        ainkrad_core_server::scheduler::iso_of_unix(SystemClock.unix() + ahead)
+    }
 }
 
 async fn ask(core: &Core, id: &str, by: &str, key: &str, text: Option<&str>) -> Queued {
@@ -69,7 +79,7 @@ async fn a_wake_resumes_an_idle_session_and_not_one_whose_requester_lost_access(
     );
     assert_eq!(first.resumes, 0);
 
-    let engine = queue(&core).await;
+    let (engine, _clock) = queue(&core).await;
     assert_eq!(ask(&core, &id, &r.id, "w1", Some(TEXT)).await, Queued::New);
     assert_eq!(engine.tick().await.unwrap(), 1);
     // The idle session is going again, on its own harness session, with the wake as its prompt.
@@ -112,7 +122,7 @@ async fn a_wake_resumes_an_idle_session_and_not_one_whose_requester_lost_access(
 }
 
 #[tokio::test]
-async fn a_wake_for_a_running_session_waits_until_it_is_idle() {
+async fn a_wake_for_a_busy_session_is_retried_then_dropped_audited_and_a_later_wake_fires() {
     let core = Core::start("wake-busy", quick()).await;
     let base = format!("http://{}", core.host);
     let st = state("wake-busy");
@@ -125,7 +135,7 @@ async fn a_wake_for_a_running_session_waits_until_it_is_idle() {
     let r = run_runner(&core, &base, &st, exec).await;
     let id = session(&core, &r.id, &[]).await;
     assert_eq!(state_of(&core, &id).await.state, "running");
-    let engine = queue(&core).await;
+    let (engine, clock) = queue(&core).await;
     assert_eq!(ask(&core, &id, &r.id, "busy", None).await, Queued::New);
     engine.tick().await.unwrap();
     let rows: Vec<(String, i64)> = sqlx::query_as("SELECT status, attempt FROM core_job_runs")
@@ -142,9 +152,32 @@ async fn a_wake_for_a_running_session_waits_until_it_is_idle() {
         0,
         "a running session is not touched"
     );
+    assert!(
+        !ainkrad_core_server::agents::supervise(&core.app, &id),
+        "a session is supervised once, and a wake that finds it so is told"
+    );
+    // The session stays busy through every attempt: the last one drops the wake, audited.
+    for _ in 0..6 {
+        clock.0.fetch_add(4000, std::sync::atomic::Ordering::SeqCst);
+        engine.tick().await.unwrap();
+    }
+    assert_eq!(actions(&core).await, ["agent.wake_dropped"]);
+    let why: String =
+        sqlx::query_scalar("SELECT details FROM audit_events WHERE action = 'agent.wake_dropped'")
+            .fetch_one(&core.app.pool)
+            .await
+            .unwrap();
+    assert!(why.contains("busy_timeout"), "{why}");
+    assert_eq!(state_of(&core, &id).await.resumes, 0);
+    // Once the turn is over, a wake fires.
     std::fs::write(&gate, "").unwrap();
     let (s, _) = finished(&core, &id).await;
     assert_eq!(s.resumes, 0);
+    assert_eq!(ask(&core, &id, &r.id, "after", None).await, Queued::New);
+    clock.0.fetch_add(4000, std::sync::atomic::Ordering::SeqCst);
+    engine.tick().await.unwrap();
+    let (s, _) = finished(&core, &id).await;
+    assert_eq!(s.resumes, 1, "the wake after the turn resumed the session");
     r.halt().await;
     let _ = std::fs::remove_dir_all(&st.0);
 }

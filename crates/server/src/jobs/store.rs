@@ -184,6 +184,8 @@ pub enum Queued {
 pub struct Cap {
     pub total: i64,
     pub per_session: i64,
+    /// Waiting wakes one requesting device (`payload.by`) may hold.
+    pub per_requester: i64,
 }
 
 /// [`wake`] for the platform's own job `name`, refusing (`Full`) past `cap`. Only the platform
@@ -234,7 +236,15 @@ async fn queue(
     let Some(job) = job else {
         return refuse(format!("no job {owner}.{name} is registered"));
     };
-    let idem = format!("wake:{key}");
+    // A platform key is the requester's own per session: a key used on one session never
+    // suppresses the same key on another.
+    let idem = match cap {
+        Some(_) => format!(
+            "wake:{}:{key}",
+            payload["session"].as_str().unwrap_or_default()
+        ),
+        None => format!("wake:{key}"),
+    };
     if let Some(cap) = cap {
         let seen: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM core_job_runs WHERE job_id = ? AND idem_key = ?",
@@ -256,7 +266,15 @@ async fn queue(
         .bind(payload["session"].as_str().unwrap_or_default())
         .fetch_one(&mut *tx)
         .await?;
-        if seen == 0 && (all >= cap.total || mine >= cap.per_session) {
+        let by: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) {waiting} AND json_extract(payload, '$.by') = ?2"
+        )))
+        .bind(job)
+        .bind(payload["by"].as_str().unwrap_or_default())
+        .fetch_one(&mut *tx)
+        .await?;
+        let full = all >= cap.total || mine >= cap.per_session || by >= cap.per_requester;
+        if seen == 0 && full {
             return Ok(Queued::Full);
         }
     }

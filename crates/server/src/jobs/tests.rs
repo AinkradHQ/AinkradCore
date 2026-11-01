@@ -532,6 +532,7 @@ async fn the_platform_queue_is_closed_to_modules_bounded_and_forgets_its_payload
     let cap = Cap {
         total: 3,
         per_session: 2,
+        per_requester: 3,
     };
     // A module's `wake` cannot reach it.
     let r = wake(&fx.pool, &now, "core", name, "k", &json!({}), None).await;

@@ -514,10 +514,10 @@ impl ModuleAgents {
     }
 }
 
-/// Starts supervising `id`, unless this process already does.
-pub fn supervise(app: &App, id: &str) {
+/// Starts supervising `id`, unless this process already does; whether it started one.
+pub fn supervise(app: &App, id: &str) -> bool {
     if !app.agents.supervised.lock().unwrap().insert(id.to_owned()) {
-        return;
+        return false;
     }
     let (app, id) = (app.clone(), id.to_owned());
     tokio::spawn(async move {
@@ -528,6 +528,7 @@ pub fn supervise(app: &App, id: &str) {
         }
         app.agents.supervised.lock().unwrap().remove(&id);
     });
+    true
 }
 
 /// Supervises every session not over: what a starting Core does (a Core restart re-claims).

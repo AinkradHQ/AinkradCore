@@ -211,4 +211,10 @@ async fn the_queue_is_bounded_per_session_and_a_used_key_is_still_answered() {
     let other = session(&fx, &vm.id, None).await;
     let r = call(&fx, &fx.dev, &wake_uri(&other), json!({"key": "k0"})).await;
     assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    // The key is per session: the same key on another session is a wake of its own.
+    assert_eq!(
+        r.1["queued"].as_bool(),
+        Some(true),
+        "a key on A must not suppress B"
+    );
 }
