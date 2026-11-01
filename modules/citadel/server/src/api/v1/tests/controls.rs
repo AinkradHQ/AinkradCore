@@ -239,7 +239,7 @@ async fn allow_for_issue_approves_and_lets_the_same_call_through_until_it_expire
     let pool = &fx.app.pool;
     let a = seed(pool, "A", "AAA", ProjectMode::Kanban).await;
     let run = get_run(pool, a.run.id).await.unwrap().unwrap();
-    let input = json!({"command": "cargo add tokio-tungstenite@0.26"});
+    let input = json!({"command": "cargo test -p one"});
     let approval = escalate(pool, &run, "r1", "Bash", &input, Some(900), NOW)
         .await
         .unwrap();
@@ -256,11 +256,11 @@ async fn allow_for_issue_approves_and_lets_the_same_call_through_until_it_expire
     );
 
     // The same command prefix goes ahead without asking; another does not.
-    let same = json!({"command": "cargo add serde"});
+    let same = json!({"command": "cargo test -p two"});
     let rule = allowed_by_rule(pool, &run, "r2", "Bash", &same, NOW)
         .await
         .unwrap();
-    assert_eq!(rule.as_deref(), Some("Bash:cargo add"));
+    assert_eq!(rule.as_deref(), Some("Bash:cargo test"));
     let other = json!({"command": "curl https://example.com"});
     let none = allowed_by_rule(pool, &run, "r3", "Bash", &other, NOW)
         .await
