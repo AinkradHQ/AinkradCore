@@ -88,6 +88,7 @@ src/Ainkrad.Client/Model/RotateSecret.cs
 src/Ainkrad.Client/Model/Runner.cs
 src/Ainkrad.Client/Model/RunnerDriver.cs
 src/Ainkrad.Client/Model/RunnerHostLoad.cs
+src/Ainkrad.Client/Model/RunnerIsolation.cs
 src/Ainkrad.Client/Model/SecretDeleted.cs
 src/Ainkrad.Client/Model/SecretInfo.cs
 src/Ainkrad.Client/Model/SessionGrant.cs

@@ -2151,6 +2151,10 @@ extension Components {
         ///
         /// - Remark: Generated from `#/components/schemas/Runner`.
         public struct Runner: Codable, Hashable, Sendable {
+            /// The CPU architecture it reported (`aarch64`, `x86_64`), once connected.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/arch`.
+            public var arch: Swift.String?
             /// Commands it takes at once.
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/capacity`.
@@ -2171,6 +2175,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/id`.
             public var id: Swift.String
+            /// The isolation it offers now (E8a-09): absent until it reports, and then no tier can be
+            /// assumed.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/isolation`.
+            public var isolation: Components.Schemas.RunnerIsolation?
             /// Its last frame or request; null if never seen.
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/last_seen`.
@@ -2192,33 +2201,39 @@ extension Components {
             /// Creates a new `Runner`.
             ///
             /// - Parameters:
+            ///   - arch: The CPU architecture it reported (`aarch64`, `x86_64`), once connected.
             ///   - capacity: Commands it takes at once.
             ///   - degraded: Connected but silent past two heartbeats.
             ///   - drivers: What it last advertised (empty until it first connected since the Core started).
             ///   - hostLoad: The host's load as its runner last reported it (E2-15.2), if it has.
             ///   - id: The runner's device id, `d_…`.
+            ///   - isolation: The isolation it offers now (E8a-09): absent until it reports, and then no tier can be
             ///   - lastSeen: Its last frame or request; null if never seen.
             ///   - load: Commands in flight.
             ///   - name:
             ///   - online: Connected to this Core now.
             ///   - version: Its `ainkrad-runner` version, once connected.
             public init(
+                arch: Swift.String? = nil,
                 capacity: Swift.Int32? = nil,
                 degraded: Swift.Bool? = nil,
                 drivers: [Components.Schemas.RunnerDriver]? = nil,
                 hostLoad: Components.Schemas.RunnerHostLoad? = nil,
                 id: Swift.String,
+                isolation: Components.Schemas.RunnerIsolation? = nil,
                 lastSeen: Components.Schemas.Timestamp? = nil,
                 load: Swift.Int32? = nil,
                 name: Swift.String,
                 online: Swift.Bool? = nil,
                 version: Swift.String? = nil
             ) {
+                self.arch = arch
                 self.capacity = capacity
                 self.degraded = degraded
                 self.drivers = drivers
                 self.hostLoad = hostLoad
                 self.id = id
+                self.isolation = isolation
                 self.lastSeen = lastSeen
                 self.load = load
                 self.name = name
@@ -2226,11 +2241,13 @@ extension Components {
                 self.version = version
             }
             public enum CodingKeys: String, CodingKey {
+                case arch
                 case capacity
                 case degraded
                 case drivers
                 case hostLoad = "host_load"
                 case id
+                case isolation
                 case lastSeen = "last_seen"
                 case load
                 case name
@@ -2330,6 +2347,35 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case avg1
                 case cores
+            }
+        }
+        /// The isolation tiers a runner offers and the state of its `/dev/kvm` (E8a-09).
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunnerIsolation`.
+        public struct RunnerIsolation: Codable, Hashable, Sendable {
+            /// `not_applicable`, `absent`, `usable` or `unusable`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerIsolation/kvm`.
+            public var kvm: Swift.String?
+            /// Tiers offered now, by name: `none`, `process`, `microvm`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerIsolation/tiers`.
+            public var tiers: [Swift.String]?
+            /// Creates a new `RunnerIsolation`.
+            ///
+            /// - Parameters:
+            ///   - kvm: `not_applicable`, `absent`, `usable` or `unusable`.
+            ///   - tiers: Tiers offered now, by name: `none`, `process`, `microvm`.
+            public init(
+                kvm: Swift.String? = nil,
+                tiers: [Swift.String]? = nil
+            ) {
+                self.kvm = kvm
+                self.tiers = tiers
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kvm
+                case tiers
             }
         }
         /// What a delete answers.
