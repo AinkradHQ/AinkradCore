@@ -2,6 +2,7 @@
 //! against it. Every ctl run's output is kept, so a test can prove no secret was printed.
 
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Output, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -150,6 +151,14 @@ impl Core {
     ) -> Self {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        // The master key the server seals its identity under (it refuses to start without).
+        std::fs::create_dir_all(dir.join("keys")).unwrap();
+        std::fs::write(dir.join("keys/master.key"), [9u8; 32]).unwrap();
+        std::fs::set_permissions(
+            dir.join("keys/master.key"),
+            PermissionsExt::from_mode(0o600),
+        )
+        .unwrap();
         prepare(&dir);
         assert!(
             sock.as_os_str().len() < 100,

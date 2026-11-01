@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use super::config::Home;
 use super::init::{fresh, lay_out, migrate, undo};
 use super::s3::Bucket;
+use super::sealed;
 use super::secretbox::{SecretBox, key_files};
 use super::{Result_, archive, private_dir, random_hex};
 use crate::auth::Identity;
@@ -84,24 +85,44 @@ async fn build(
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(e.into()),
         };
-        // The Core identity, checked before the home is touched: a key that does not load would
-        // only fail later, at serve.
-        let identity = files.join(archive::IDENTITY);
-        let core_fp = match std::fs::read(&identity) {
-            Ok(der) => Some(Identity::from_pkcs8(&der)?.fp),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e.into()),
-        };
         // The spare master keys (a rotation's retired and pending ones), checked like the
         // master key before the home is touched: each must be 32 bytes and named by its id.
         let mut spares = Vec::new();
+        let mut spare_keys = Vec::new();
         for (id, path, _) in super::secretbox::key_files(&files.join("keys"))? {
             let key = super::secretbox::SecretBox::from_file(&path)?;
             if key.key_id() != id {
                 return Err(format!("{} is not the key it is named for", path.display()).into());
             }
             spares.push(path);
+            spare_keys.push(key);
         }
+        // The Core identity, checked before the home is touched: a key that does not load would
+        // only fail later, at serve. It is sealed under the archive's master key (or a spare):
+        // an archive without that key cannot restore it, and does not pretend to.
+        let identity = files.join(archive::IDENTITY);
+        let core_fp = match std::fs::read(&identity) {
+            Ok(bytes) if sealed::is_sealed(&bytes) => {
+                let key: [u8; 32] = master
+                    .as_deref()
+                    .ok_or(
+                        "the archive's Core identity is sealed but it carries no master key; \
+                         nothing was written",
+                    )?
+                    .try_into()
+                    .map_err(|_| "the archive's master key is not 32 bytes")?;
+                let keyring = SecretBox::new(&key).with_extra(spare_keys);
+                let der =
+                    sealed::open_bytes(&keyring, sealed::IDENTITY_LABEL, &bytes).map_err(|e| {
+                        format!("the archive's Core identity: {e}; nothing was written")
+                    })?;
+                Some(Identity::from_pkcs8(&der)?.fp)
+            }
+            // A backup made before the identity was sealed: sealed below, in the new home.
+            Ok(der) => Some(Identity::from_pkcs8(&der)?.fp),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        };
         created = true;
         let (h, fp) = lay_out(home, master.as_deref())?;
         for path in spares {
@@ -114,6 +135,14 @@ async fn build(
         if core_fp.is_some() {
             // Staged 0600 beside the home (same filesystem), so a rename keeps it private.
             std::fs::rename(&identity, h.identity())?;
+            // A legacy plaintext identity is sealed under the restored master key now.
+            let seal = SecretBox::for_home(&h.0)?;
+            let kf = sealed::KeyFile {
+                path: &h.identity(),
+                home: &h.0,
+                label: sealed::IDENTITY_LABEL,
+            };
+            sealed::read(kf, &seal, true, |b| Identity::from_pkcs8(b).is_ok())?;
         }
         store::restore(&files.join("core.db"), &h.db(), false).await?;
         migrate(&h).await?;
@@ -161,7 +190,9 @@ async fn unheld_keys(h: &Home) -> Result_ {
     pool.close().await;
     let mut held = vec![SecretBox::from_file(&h.master_key())?.key_id().to_owned()];
     held.extend(key_files(&h.keys())?.into_iter().map(|f| f.0));
-    let missing: Vec<String> = named?.into_iter().filter(|id| !held.contains(id)).collect();
+    let mut named = named?;
+    named.extend(sealed::file_key_ids(&h.0)?);
+    let missing: Vec<String> = named.into_iter().filter(|id| !held.contains(id)).collect();
     match missing.is_empty() {
         true => Ok(()),
         false => Err(format!(

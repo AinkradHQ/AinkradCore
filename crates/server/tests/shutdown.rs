@@ -22,7 +22,19 @@ async fn sigterm_closes_event_sockets_checkpoints_and_exits_zero() {
     let db = dir.join("core.db");
     let db_arg = db.to_str().unwrap();
     // A device enrolled before the server starts, signing for the identity it will load.
-    let identity = Identity::load_or_create(&dir).unwrap();
+    // The master key the spawned server loads (it seals the identity).
+    std::fs::create_dir_all(dir.join("keys")).unwrap();
+    std::fs::write(dir.join("keys/master.key"), [7u8; 32]).unwrap();
+    std::fs::set_permissions(
+        dir.join("keys/master.key"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )
+    .unwrap();
+    let identity = Identity::load_or_create(
+        &dir,
+        &ainkrad_core_server::ops::secretbox::SecretBox::new(&[7; 32]),
+    )
+    .unwrap();
     let pool = ainkrad_core_server::store::connect(&db).await.unwrap();
     let clock = Arc::new(SystemClock);
     let mac = TestDevice::enroll(&pool, "mac", "device", &["read"], &identity.fp, clock).await;

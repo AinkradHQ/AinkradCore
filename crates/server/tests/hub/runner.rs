@@ -238,8 +238,18 @@ async fn a_rotated_core_keeps_its_runners() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let now = SystemClock.unix();
-    let old = Identity::load_at(&dir, now).unwrap();
-    let r = Identity::rotate(&dir, now).unwrap();
+    let old = Identity::load_at(
+        &dir,
+        now,
+        &ainkrad_core_server::ops::secretbox::SecretBox::new(&[7; 32]),
+    )
+    .unwrap();
+    let r = Identity::rotate(
+        &dir,
+        now,
+        &ainkrad_core_server::ops::secretbox::SecretBox::new(&[7; 32]),
+    )
+    .unwrap();
     // What `serve` does on loading the statement: the window starts now.
     Identity::announce(&dir, now).unwrap();
     let tcp = || Listen::Tcp("127.0.0.1:0".to_owned());
@@ -279,7 +289,12 @@ async fn a_rotated_core_keeps_its_runners() {
     first.abort();
 
     // The window is over: the next start of the Core is the new key.
-    Identity::load_at(&dir, now + ainkrad_core_server::auth::identity::WINDOW).unwrap();
+    Identity::load_at(
+        &dir,
+        now + ainkrad_core_server::auth::identity::WINDOW,
+        &ainkrad_core_server::ops::secretbox::SecretBox::new(&[7; 32]),
+    )
+    .unwrap();
     let b = Core::start_on("rotate-b", quick(), tcp(), Some(&dir), None).await;
     assert_eq!(b.app.auth.identity.fp, r.new_fp);
     assert!(b.app.auth.identity.rotation.is_none());

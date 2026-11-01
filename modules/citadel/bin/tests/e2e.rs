@@ -243,7 +243,19 @@ async fn rig() -> Rig {
     std::fs::set_permissions(&claude, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
 
     let db = home.join("core.db");
-    let identity = Identity::load_or_create(&home).unwrap();
+    // The master key the spawned server seals its identity under (it refuses to start without).
+    std::fs::create_dir_all(home.join("keys")).unwrap();
+    std::fs::write(home.join("keys/master.key"), [7u8; 32]).unwrap();
+    std::fs::set_permissions(
+        home.join("keys/master.key"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )
+    .unwrap();
+    let identity = Identity::load_or_create(
+        &home,
+        &ainkrad_core_server::ops::secretbox::SecretBox::for_home(&home).unwrap(),
+    )
+    .unwrap();
     let pool = ainkrad_core_server::store::connect(&db).await.unwrap();
     let all = ["read", "approve", "terminal", "agent", "admin", "runner"];
     let admin = TestDevice::enroll(&pool, "mac", "device", &all, &identity.fp, Arc::new(SystemClock)).await;

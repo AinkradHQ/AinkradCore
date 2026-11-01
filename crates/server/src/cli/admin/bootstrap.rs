@@ -139,7 +139,10 @@ pub async fn recover(db: &Path, name: &str, keep_devices: bool, revoke_runners: 
 
 /// Creates the host's pairing, waits for its claim, shows the SAS and approves on `y`.
 async fn enrol(pool: &SqlitePool, db: &Path, name: &str, recovery: bool) -> Result_ {
-    let identity = Identity::load_or_create(state_dir(db))?;
+    let identity = Identity::load_or_create(
+        state_dir(db),
+        &ainkrad_core_server::ops::secretbox::SecretBox::for_home(state_dir(db))?,
+    )?;
     ainkrad_core_server::auth::identity::audit_switch(pool, &identity).await;
     let scopes: Vec<String> = gov::SCOPES.iter().map(|s| (*s).to_owned()).collect();
     let new = gov::NewPairing {

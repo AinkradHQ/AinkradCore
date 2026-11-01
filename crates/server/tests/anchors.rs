@@ -51,7 +51,12 @@ async fn anchor_then_verify_exits_0_and_a_truncated_chain_exits_3() {
         )
         .await;
     }
-    let fp = Identity::load_or_create(&home).unwrap().fp;
+    let fp = Identity::load_or_create(
+        &home,
+        &ainkrad_core_server::ops::secretbox::SecretBox::for_home(&home).unwrap(),
+    )
+    .unwrap()
+    .fp;
     let file = d.0.join("anchors.jsonl");
 
     let none = bin(&["audit", "anchor", s(&home)]);
