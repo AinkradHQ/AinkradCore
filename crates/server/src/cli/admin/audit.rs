@@ -9,6 +9,7 @@ use ainkrad_core_server::auth::Identity;
 use ainkrad_core_server::ops::anchor::{self, Sinks};
 use ainkrad_core_server::ops::config::Home;
 use ainkrad_core_server::ops::s3::Bucket;
+use ainkrad_core_server::ops::secretbox::SecretBox;
 use ainkrad_core_server::scheduler::SystemClock;
 use ainkrad_core_server::store::audit::chain::{self, Verified};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -107,7 +108,7 @@ async fn anchor(home: &Path, rest: &[&str]) -> Result_ {
     }
     let home = Home(home.to_path_buf());
     let pool = open(&home.db()).await?;
-    let id = Identity::load_readonly(&home.0)?;
+    let id = Identity::load_readonly(&home.0, &SecretBox::for_home(&home.0)?)?;
     let sinks = Sinks { bucket, file };
     match anchor::anchor_once(&pool, &home.0, &id, &sinks, &SystemClock).await? {
         Some(s) => {
@@ -143,7 +144,8 @@ async fn verify_anchors(home: &Path, rest: &[&str]) -> Result_ {
     let pin = match get("--core-fp") {
         Some(fp) => Some(fp.to_owned()),
         None => Some(
-            Identity::load_readonly(&home.0)
+            SecretBox::for_home(&home.0)
+                .and_then(|seal| Identity::load_readonly(&home.0, &seal))
                 .map_err(|e| {
                     format!(
                         "cannot read this host's identity key to pin the signer ({e}); pass \

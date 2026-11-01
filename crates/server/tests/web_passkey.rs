@@ -140,7 +140,13 @@ async fn run() {
     let pool = ainkrad_core_server::store::connect(&dir.join("core.db"))
         .await
         .unwrap();
-    let identity = Arc::new(Identity::load_or_create(&dir).unwrap());
+    let identity = Arc::new(
+        Identity::load_or_create(
+            &dir,
+            &ainkrad_core_server::ops::secretbox::SecretBox::new(&[7; 32]),
+        )
+        .unwrap(),
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let host = format!("localhost:{}", listener.local_addr().unwrap().port());
     let clock = Arc::new(SystemClock);

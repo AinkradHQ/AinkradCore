@@ -65,6 +65,9 @@ pub fn acme(fx: &Fx) -> Acme {
         http01: false,
         ca_root: None,
         dir: fx.dir.join("tls"),
+        seal: std::sync::Arc::new(ainkrad_core_server::ops::secretbox::SecretBox::new(
+            &[7; 32],
+        )),
     }
 }
 

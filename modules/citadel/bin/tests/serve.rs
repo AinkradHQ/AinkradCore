@@ -35,7 +35,19 @@ async fn boot(name: &str, extra: &[&str]) -> Server {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let db = dir.join("core.db");
-    let identity = Identity::load_or_create(&dir).unwrap();
+    // The master key the spawned server seals its identity under (it refuses to start without).
+    std::fs::create_dir_all(dir.join("keys")).unwrap();
+    std::fs::write(dir.join("keys/master.key"), [7u8; 32]).unwrap();
+    std::fs::set_permissions(
+        dir.join("keys/master.key"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )
+    .unwrap();
+    let identity = Identity::load_or_create(
+        &dir,
+        &ainkrad_core_server::ops::secretbox::SecretBox::for_home(&dir).unwrap(),
+    )
+    .unwrap();
     let pool = ainkrad_core_server::store::connect(&db).await.unwrap();
     let clock = Arc::new(SystemClock);
     let all = ["read", "approve", "terminal", "agent", "admin"];
