@@ -237,4 +237,51 @@ mod tests {
         );
         fs::remove_dir_all(&dir).unwrap();
     }
+
+    /// KAN-253: a blob sealed by the stock crates.io age 0.11.5, before the localisation-free fork was patched in,
+    /// must still open, and a blob sealed now must open with the same key. A wrong key must not open it.
+    #[test]
+    fn age_blob_sealed_before_the_fork_still_opens() {
+        use std::io::{Read, Write};
+        const OLD_BLOB_HEX: &str = concat!(
+            "6167652d656e6372797074696f6e2e6f72672f76310a2d3e20583235353139204d7343482b63346b5337736e7845315a",
+            "7a4e35724e56506275647658314831796f584f683077616d6e6b770a572f73786c7a38646e6c713861487836637a4b58",
+            "54714d75694736366266353570584334506253546a42730a2d3e20632d677265617365207229366f2220775a63520a4a",
+            "7a770a2d2d2d20393449717a773463312b527576436d58564172484c344578564c4a3268526b344a3055333961494c49",
+            "78630a034f7fb10bb3689db35dd47e094317fc8af18c33230293ab4d5bbf549a9f3e684c6cfb5d9a02fd0092b92fcaa4",
+            "23d62b4fdccaafbe64547849df7bd1c3e7c5abf4",
+        );
+        let old: Vec<u8> = (0..OLD_BLOB_HEX.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&OLD_BLOB_HEX[i..i + 2], 16).unwrap())
+            .collect();
+        // Test-only throwaway key for the fixed blob above; never a real recipient.
+        let identity: age::x25519::Identity =
+            "AGE-SECRET-KEY-1LUAHR44JF4ZQSH8XDE2DDWMYKC2M86N3CDNFAC2AT88CFYL0C69SDF3K5Y"
+                .parse()
+                .unwrap();
+        let open = |blob: &[u8], id: &age::x25519::Identity| -> Result<Vec<u8>, String> {
+            let d = age::Decryptor::new(blob).map_err(|e| e.to_string())?;
+            let mut r = d
+                .decrypt(std::iter::once(id as &dyn age::Identity))
+                .map_err(|e| e.to_string())?;
+            let mut out = vec![];
+            r.read_to_end(&mut out).map_err(|e| e.to_string())?;
+            Ok(out)
+        };
+        assert_eq!(
+            open(&old, &identity).unwrap(),
+            b"ainkrad age compatibility fixture"
+        );
+        assert!(open(&old, &age::x25519::Identity::generate()).is_err());
+
+        let rec = identity.to_public();
+        let enc =
+            age::Encryptor::with_recipients(std::iter::once(&rec as &dyn age::Recipient)).unwrap();
+        let mut sealed = vec![];
+        let mut w = enc.wrap_output(&mut sealed).unwrap();
+        w.write_all(b"round trip").unwrap();
+        w.finish().unwrap();
+        assert_eq!(open(&sealed, &identity).unwrap(), b"round trip");
+    }
 }
