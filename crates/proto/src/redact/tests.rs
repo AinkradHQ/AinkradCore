@@ -181,7 +181,7 @@ fn base64_inside_a_longer_string_and_an_uppercase_copy_are_redacted() {
     let mut r = Redactor::new();
     r.known("leased", value);
     for prefix in ["", "u:", "us:", "user:", "basic user:", "x"] {
-        for suffix in ["", "!", "?x"] {
+        for suffix in ["", "!", "?x", "a", "Z", "~~"] {
             let raw = format!("{prefix}{value}{suffix}");
             for enc in [
                 base64(&raw),
@@ -195,4 +195,20 @@ fn base64_inside_a_longer_string_and_an_uppercase_copy_are_redacted() {
     }
     let shouted = r.text(&format!("{} here", value.to_uppercase()));
     assert!(!shouted.contains(&value.to_uppercase()), "{shouted}");
+}
+
+#[test]
+fn a_lowercase_copy_of_a_mixed_case_value_is_redacted() {
+    let mut r = Redactor::new();
+    r.known("leased", "AbCd-EfGh-1234");
+    assert!(!r.text("abcd-efgh-1234").contains("abcd"));
+    assert!(!r.text("ABCD-EFGH-1234").contains("ABCD"));
+    // And a long stream of near-misses stays linear: no quadratic prefix scan.
+    let mut r = Redactor::new();
+    r.known("leased", &"ab".repeat(2000));
+    let started = std::time::Instant::now();
+    for _ in 0..200 {
+        let _ = r.stream_text(&"ab".repeat(1500));
+    }
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }

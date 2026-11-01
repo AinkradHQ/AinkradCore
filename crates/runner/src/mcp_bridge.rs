@@ -136,16 +136,12 @@ async fn serve(
     target: &Target,
     tls: &Arc<rustls::ClientConfig>,
     client: UnixStream,
+    first_line: Duration,
 ) -> io::Result<()> {
     let (cr, mut cw) = split(client);
     let mut reader = BufReader::new(cr);
-    let first = match filter::read_request(
-        &mut reader,
-        &target.authority,
-        &target.path,
-        filter::FIRST_LINE,
-    )
-    .await
+    let first = match filter::read_request(&mut reader, &target.authority, &target.path, first_line)
+        .await
     {
         Ok(Some(q)) => q,
         Ok(None) => return Ok(()),
@@ -184,6 +180,16 @@ pub fn start(
     target: Target,
     tls: Option<Arc<rustls::ClientConfig>>,
 ) -> io::Result<Bridge> {
+    start_with(sock, target, tls, filter::FIRST_LINE)
+}
+
+/// `start` with the wait for a connection's first request line given (the tests shorten it).
+fn start_with(
+    sock: &Path,
+    target: Target,
+    tls: Option<Arc<rustls::ClientConfig>>,
+    first_line: Duration,
+) -> io::Result<Bridge> {
     let listener = UnixListener::bind(sock)?;
     std::fs::set_permissions(sock, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
     let tls = tls_config(tls);
@@ -201,7 +207,7 @@ pub fn start(
                     let (target, tls) = (target.clone(), tls.clone());
                     conns.spawn(async move {
                         let _held = (mine, global);
-                        match timeout(LIFETIME, serve(&target, &tls, client)).await {
+                        match timeout(LIFETIME, serve(&target, &tls, client, first_line)).await {
                             Ok(Err(e)) => tracing::debug!(error = %e, "mcp bridge connection ended"),
                             Err(_) => tracing::debug!("mcp bridge connection reached its lifetime cap"),
                             Ok(Ok(())) => {}
@@ -244,6 +250,10 @@ mod tests {
 
     /// A counting upstream and a bridge to it; the socket lives in a fresh temp dir.
     async fn rig(name: &str) -> (Bridge, PathBuf, Arc<AtomicUsize>) {
+        rig_with(name, filter::FIRST_LINE).await
+    }
+
+    async fn rig_with(name: &str, first_line: Duration) -> (Bridge, PathBuf, Arc<AtomicUsize>) {
         let up = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = up.local_addr().unwrap().port();
         let hits = Arc::new(AtomicUsize::new(0));
@@ -272,7 +282,11 @@ mod tests {
             authority: format!("127.0.0.1:{port}"),
             path: "/token/citadel/v1/mcp".into(),
         };
-        (start(&sock, target, None).unwrap(), sock, hits)
+        (
+            start_with(&sock, target, None, first_line).unwrap(),
+            sock,
+            hits,
+        )
     }
 
     async fn status(sock: &Path, raw: &[u8]) -> String {
@@ -351,16 +365,33 @@ mod tests {
         }
     }
 
-    #[tokio::test(start_paused = true)]
+    /// Real time and a short first-line wait: paused time would let the clock jump before the
+    /// bridge has accepted the connections (a real socket's readiness is not a task the paused
+    /// clock waits for), which made this race on macOS.
+    #[tokio::test]
     async fn a_silent_client_does_not_hold_a_slot() {
-        let (_bridge, sock, _) = rig("silent").await;
+        let (_bridge, sock, _) = rig_with("silent", Duration::from_millis(300)).await;
         let mut held = Vec::new();
         for _ in 0..PER_RUN {
             held.push(UnixStream::connect(&sock).await.unwrap());
         }
-        // They say nothing: after the first-line wait every slot is free again.
-        tokio::time::sleep(filter::FIRST_LINE + Duration::from_secs(5)).await;
-        assert!(status(&sock, REQ.as_bytes()).await.contains("200"));
+        // Every slot is taken by a silent client (an extra one is closed unanswered)...
+        let mut extra = UnixStream::connect(&sock).await.unwrap();
+        let mut buf = [0; 8];
+        let n = timeout(Duration::from_secs(5), extra.read(&mut buf))
+            .await
+            .expect("the extra connection hung");
+        assert!(matches!(n, Ok(0)), "all slots should be held: {n:?}");
+        // ...and after the first-line wait they are free again: poll, bounded.
+        let mut served = false;
+        for _ in 0..100 {
+            if status(&sock, REQ.as_bytes()).await.contains("200") {
+                served = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(served, "silent clients still hold the slots after 10 s");
     }
 
     #[test]

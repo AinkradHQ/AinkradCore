@@ -124,8 +124,17 @@ impl Redactor {
                 shifted.push(s);
             }
         }
-        let upper = value.to_uppercase();
-        for encoded in shifted.into_iter().chain([upper]).chain([
+        // Aligned at the start: when the value does not fill its last group, the last character
+        // depends on what follows, so only the characters before it are stable.
+        if !value.len().is_multiple_of(3) {
+            let s = b64[..value.len() * 8 / 6].to_owned();
+            if s.len() >= MIN_KNOWN {
+                shifted.push(s.replace('+', "-").replace('/', "_"));
+                shifted.push(s);
+            }
+        }
+        let (upper, lower) = (value.to_uppercase(), value.to_lowercase());
+        for encoded in shifted.into_iter().chain([upper, lower]).chain([
             hexed.clone(),
             hexed.to_uppercase(),
             b64.clone(),
@@ -184,8 +193,16 @@ impl Redactor {
         // cannot disable boundary filtering. Only a preceding withheld prefix authorizes
         // masking the next event's beginning, so ordinary labels stay intact.
         for (name, value) in &self.known {
-            for n in (1..value.len().min(rest.len() + 1)).rev() {
-                if value.is_char_boundary(n) && rest.ends_with(&value[..n]) {
+            // The longest suffix of `rest` that is a proper prefix of `value`: the first start
+            // that matches. Each start fails on its first differing byte, so a chunk costs about
+            // its own length, not the square of the secret's.
+            let from = rest.len().saturating_sub(value.len() - 1);
+            for i in from..rest.len() {
+                let n = rest.len() - i;
+                if rest.is_char_boundary(i)
+                    && value.is_char_boundary(n)
+                    && value.as_bytes().starts_with(&rest.as_bytes()[i..])
+                {
                     self.pending.push((name.clone(), value[n..].to_owned()));
                     // A short edge (one stray character) is only tracked, so ordinary text
                     // that merely ends like a secret begins is not mangled: if the rest

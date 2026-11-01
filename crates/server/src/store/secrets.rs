@@ -619,8 +619,8 @@ pub async fn open_for_module(
 /// per tool call would drown the trail); it works while the broker is off, because a value
 /// leased earlier is still in the agent's hands. Fails closed, with `secrets_unavailable`, for
 /// every case where the value the agent holds may not be the one on file: a secret that no
-/// longer exists (deleted), one rotated at or after `since` (when the session began, so the
-/// agent may hold the superseded value), or one that does not open.
+/// longer exists (deleted), one rotated, or deleted and created again, at or after `since` (when the session
+/// began, so the agent may hold the superseded value), or one that does not open.
 pub async fn open_for_masking(
     pool: &SqlitePool,
     sealer: &SecretBox,
@@ -644,7 +644,7 @@ pub async fn open_for_masking(
         let Some(row) = row else { return gone() };
         let version: i64 = row.try_get("version")?;
         let updated_at: String = row.try_get("updated_at")?;
-        if version > 1 && updated_at.as_str() >= since {
+        if updated_at.as_str() >= since {
             return gone();
         }
         let key_id: String = row.try_get("key_id")?;

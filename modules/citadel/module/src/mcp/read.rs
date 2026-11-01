@@ -111,7 +111,7 @@ pub(super) async fn get_issue(
 
 /// The run's project (with its spec), its profile and its accepted knowledge fitted to the
 /// budget (with what was left out).
-pub(super) async fn get_context(app: &App, scope: RunScope) -> Result<Value> {
+pub(super) async fn get_context(app: &App, scope: RunScope, red: &Redactor) -> Result<Value> {
     let pool = &app.pool;
     let (mut project, mut profile) = (Value::Null, Value::Null);
     let mut knowledge = crate::domain::gov::RunKnowledge::default();
@@ -120,7 +120,7 @@ pub(super) async fn get_context(app: &App, scope: RunScope) -> Result<Value> {
     {
         if let Some(p) = get_project(pool, issue.project_id).await? {
             let spec = project_spec(pool, p.id).await?.unwrap_or_default();
-            let (spec, spec_truncated) = clip(&spec, MAX_BODY);
+            let (spec, spec_truncated) = clip(&red.text(&spec), MAX_BODY);
             project = json!({"id": p.id.0, "key": p.key, "name": p.name, "mode": p.mode.as_str(),
                              "sprint_approval": p.sprint_approval.as_str(), "spec": spec,
                              "spec_truncated": spec_truncated});
@@ -204,7 +204,12 @@ pub(super) async fn list_backlog(app: &App, scope: RunScope, args: &JsonObject) 
 
 /// An approval the run's agent asked for: its kind, status, the decider's reply (or why it
 /// expired), its deadline and subjects. Anyone else's gets the same answer as a missing one.
-pub(super) async fn get_approval(app: &App, scope: RunScope, args: &JsonObject) -> Result<Value> {
+pub(super) async fn get_approval(
+    app: &App,
+    scope: RunScope,
+    args: &JsonObject,
+    red: &Redactor,
+) -> Result<Value> {
     let id = int(args, "approval_id")?
         .ok_or_else(|| ToolError::Invalid("approval_id is required".to_owned()))?;
     let a = stored_approval(&app.pool, ApprovalId(id))
@@ -213,7 +218,7 @@ pub(super) async fn get_approval(app: &App, scope: RunScope, args: &JsonObject) 
         .ok_or_else(|| ToolError::Refused(format!("no approval {id} of yours")))?;
     Ok(
         json!({"approval_id": a.id.0, "kind": a.kind.as_str(), "status": a.status.as_str(),
-              "reply": a.reply.as_deref().map(|r| clip(r, MAX_ENTRY).0),
+              "reply": a.reply.as_deref().map(|r| clip(&red.text(r), MAX_ENTRY).0),
               "expires_at": a.expires_at, "issue_id": a.issue_id.map(|i| i.0)}),
     )
 }

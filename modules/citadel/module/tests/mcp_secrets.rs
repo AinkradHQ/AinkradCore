@@ -272,48 +272,48 @@ async fn a_run_with_nothing_leased_is_unchanged() {
 
 #[tokio::test]
 async fn a_secret_rotated_or_deleted_after_the_lease_refuses_the_call() {
-    for delete in [false, true] {
+    for mode in ["rotate", "delete", "recreate"] {
         let r = rig(&[("citadel.plain", VALUE)]).await;
         let app = &r.w.fx.app;
         ok(&r.w, &r.token, "comment", json!({"body": "before"})).await;
         let sealer = app.secrets.clone().unwrap();
-        if delete {
-            secrets::delete(
-                &app.pool,
-                "citadel.plain",
-                &r.w.fx.dev.id,
-                AuditActor::System,
-            )
-            .await
-            .unwrap();
-        } else {
-            let new = NewValue {
-                value: "rotated-value-after-the-lease-77",
-                runners: None,
-                delivery: None,
-            };
-            secrets::rotate(
-                &app.pool,
-                &sealer,
-                "citadel.plain",
-                &new,
-                &r.w.fx.dev.id,
-                AuditActor::System,
-                &app.clock.now(),
-            )
-            .await
-            .unwrap();
+        let fresh = |value| NewValue {
+            value,
+            runners: None,
+            delivery: None,
+        };
+        let by = &r.w.fx.dev.id;
+        match mode {
+            "rotate" => {
+                let new = fresh("rotated-value-after-the-lease-77");
+                secrets::rotate(&app.pool, &sealer, "citadel.plain", &new, by, AuditActor::System, &app.clock.now())
+                    .await
+                    .unwrap();
+            }
+            _ => {
+                secrets::delete(&app.pool, "citadel.plain", by, AuditActor::System)
+                    .await
+                    .unwrap();
+                if mode == "recreate" {
+                    // Back under the same name as version 1 with another value: the old one is
+                    // still in the agent's hands.
+                    let new = fresh("recreated-value-after-the-lease-88");
+                    secrets::create(&app.pool, &sealer, "citadel.plain", &new, by, AuditActor::System, &app.clock.now())
+                        .await
+                        .unwrap();
+                }
+            }
         }
         // The agent still holds the old value: nothing may carry it, so nothing runs.
         let before = count(app, "SELECT count(*) FROM citadel_comments").await;
         let (failed, text) = invoke(&r.w, &r.token, "comment", json!({"body": VALUE})).await;
-        assert!(failed, "delete={delete}: {text}");
+        assert!(failed, "{mode}: {text}");
         assert!(!text.contains(VALUE));
         assert_eq!(
             before,
             count(app, "SELECT count(*) FROM citadel_comments").await
         );
-        assert!(rows_holding(app, VALUE).await.is_empty(), "delete={delete}");
+        assert!(rows_holding(app, VALUE).await.is_empty(), "{mode}");
     }
 }
 

@@ -186,8 +186,8 @@ async fn dispatch(
 ) -> Result<Value> {
     match name {
         "get_issue" => read::get_issue(app, scope, args, red).await,
-        "get_context" => read::get_context(app, scope).await,
-        "get_approval" => read::get_approval(app, scope, args).await,
+        "get_context" => read::get_context(app, scope, red).await,
+        "get_approval" => read::get_approval(app, scope, args, red).await,
         "comment" => write::comment(app, scope, args).await,
         "transition" => write::transition(app, scope, args).await,
         "create_subtask" => write::create_subtask(app, scope, args).await,
