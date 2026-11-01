@@ -428,5 +428,7 @@ async fn serve(shared: &Shared, client: UnixStream) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+// The proxy tests bind 127.0.0.2 as the allowed target and 127.0.0.1 as the denied canary, which
+// macOS does not provide; filtered networking is Linux only.
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
