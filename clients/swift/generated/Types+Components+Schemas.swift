@@ -2041,6 +2041,26 @@ extension Components {
                 case message
             }
         }
+        /// The notification kinds the calling device is pushed (E2-12.3).
+        ///
+        /// - Remark: Generated from `#/components/schemas/PushKinds`.
+        public struct PushKinds: Codable, Hashable, Sendable {
+            /// The kinds it opted into, e.g. `approval_needed`; `null` is every kind its scopes allow
+            /// (the default). A kind needs its scope on top: a `read` device is never sent an approval.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PushKinds/kinds`.
+            public var kinds: [Swift.String]?
+            /// Creates a new `PushKinds`.
+            ///
+            /// - Parameters:
+            ///   - kinds: The kinds it opted into, e.g. `approval_needed`; `null` is every kind its scopes allow
+            public init(kinds: [Swift.String]? = nil) {
+                self.kinds = kinds
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kinds
+            }
+        }
         /// The calling device's APNs token (E10.4).
         ///
         /// - Remark: Generated from `#/components/schemas/PushToken`.

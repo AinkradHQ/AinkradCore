@@ -10,7 +10,7 @@
 //! it lands. Tests point the gateways at a local fake (`with_gateways`); no key is ever real.
 
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -23,6 +23,21 @@ use crate::store::gov::PushTarget;
 
 /// Seconds a provider token is reused.
 const TOKEN_TTL_SECS: u64 = 50 * 60;
+
+/// How long one request to the gateway may take, connect included: a hung gateway fails the
+/// send instead of stalling the pusher.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn client(timeout: Duration) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .http2_prior_knowledge()
+        .connect_timeout(timeout.min(Duration::from_secs(5)))
+        .timeout(timeout)
+        // Never follow a redirect: the request carries the provider token.
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| e.without_url().to_string())
+}
 
 /// Where a secret's value comes from by name: the secrets broker when it lands (E2-07), a
 /// file or a map until then.
@@ -56,10 +71,7 @@ impl ApnsNotifier {
         let key =
             EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &der, &SystemRandom::new())
                 .map_err(|e| format!("the APNs key is not a P-256 PKCS#8 key: {e}"))?;
-        let client = reqwest::Client::builder()
-            .http2_prior_knowledge()
-            .build()
-            .map_err(|e| e.to_string())?;
+        let client = client(REQUEST_TIMEOUT)?;
         Ok(Self {
             key,
             key_id: key_id.to_owned(),
@@ -93,6 +105,12 @@ impl ApnsNotifier {
     pub fn with_gateways(mut self, sandbox: &str, production: &str) -> Self {
         self.gateways = (sandbox.to_owned(), production.to_owned());
         self
+    }
+
+    /// Gives up on a request after `timeout` instead of ten seconds.
+    pub fn with_timeout(mut self, timeout: Duration) -> Result<Self, String> {
+        self.client = client(timeout)?;
+        Ok(self)
     }
 
     /// The provider token at `now` (seconds since the epoch): reused while fresh.
@@ -147,7 +165,8 @@ impl ApnsNotifier {
         if let Some(key) = n.collapse.as_deref().filter(|k| k.is_ascii()) {
             req = req.header("apns-collapse-id", &key[..key.len().min(64)]);
         }
-        req.build().map_err(|e| e.to_string())
+        // Errors drop the URL: it ends in the device token.
+        req.build().map_err(|e| e.without_url().to_string())
     }
 }
 
@@ -178,7 +197,7 @@ impl PushProvider for ApnsNotifier {
                 .client
                 .execute(req)
                 .await
-                .map_err(|e| PushError::Failed(e.to_string()))?;
+                .map_err(|e| PushError::Failed(e.without_url().to_string()))?;
             let status = res.status();
             if status.is_success() {
                 return Ok(());

@@ -1,5 +1,5 @@
 // swift-tools-version: 6.0
-// The generated Swift client (E1-05.2): `generated/` is written by `make clients`; the rest is by hand.
+// The generated Swift client (E1-05.2): `generated/` is written by `make clients`; `Support/` and the rest are by hand.
 import PackageDescription
 
 let package = Package(
@@ -13,7 +13,8 @@ let package = Package(
         .target(
             name: "AinkradClient",
             dependencies: [.product(name: "OpenAPIRuntime", package: "swift-openapi-runtime")],
-            path: "generated"
+            path: ".",
+            sources: ["generated", "Support"]
         ),
         .testTarget(
             name: "AinkradClientTests",

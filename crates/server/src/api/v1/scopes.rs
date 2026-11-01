@@ -34,6 +34,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/me", "read"),
     ("PUT", "/api/v1/push-token", "read"),
     ("DELETE", "/api/v1/push-token", "read"),
+    ("GET", "/api/v1/push-token/kinds", "read"),
+    ("PUT", "/api/v1/push-token/kinds", "read"),
     ("GET", "/api/v1/events", "read"),
     ("GET", "/api/v1/events/ws", "read"),
     ("GET", "/api/v1/events/latest", "read"),
@@ -277,6 +279,30 @@ pub fn destructive(method: &Method, path: &str, modules: &[Arc<dyn Module>]) -> 
         .any(|(m, t)| *m == method.as_str() && fits(t, path))
 }
 
+/// The declared template of the destructive route `method path` is (a module's with its
+/// `/modules/<id>/v1` prefix), so a per-route key stays bounded however many ids a caller varies.
+/// `None` when no template matches.
+pub fn destructive_template(
+    method: &Method,
+    path: &str,
+    modules: &[Arc<dyn Module>],
+) -> Option<String> {
+    if path.starts_with("/modules/") {
+        let (id, sub) = module_path(path)?;
+        let method = module_method(method.as_str())?;
+        return modules
+            .iter()
+            .filter(|m| m.id() == id)
+            .flat_map(|m| m.destructive())
+            .find(|(mm, t)| mm.eq_ignore_ascii_case(method) && fits(t, sub))
+            .map(|(_, t)| format!("/modules/{id}/v1{t}"));
+    }
+    DESTRUCTIVE
+        .iter()
+        .find(|(m, t)| *m == method.as_str() && fits(t, path))
+        .map(|(_, t)| (*t).to_owned())
+}
+
 /// The scope a request needs; `None` when nothing declares one (refused).
 pub fn required(method: &Method, path: &str, modules: &[Arc<dyn Module>]) -> Option<&'static str> {
     if path.starts_with("/modules/") {
@@ -327,9 +353,9 @@ mod tests {
         assert!(!destructive(&m("DELETE"), "/api/v1/devices/d_x/y", &[]));
     }
 
-    /// Review S3: independent of `DESTRUCTIVE`. Every state-changing route that needs `admin`,
-    /// `terminal`, `agent` or `approve` is destructive, unless it is named here with the reason.
-    /// A new such route nobody flags fails this test.
+    /// Review S3: independent of `DESTRUCTIVE`. Every state-changing route whose scope is not
+    /// `read` or `runner` is destructive, unless it is named here with the reason. The list is
+    /// inverted on purpose: a new scope is covered without anyone remembering to add it here.
     #[test]
     fn every_state_changing_privileged_route_is_destructive_or_excepted() {
         const EXCEPTED: &[(&str, &str)] = &[
@@ -337,7 +363,7 @@ mod tests {
             ("POST", "/api/v1/runners/{id}/noop"),
         ];
         for (m, t, scope) in ROUTES {
-            let privileged = matches!(*scope, "admin" | "terminal" | "agent" | "approve");
+            let privileged = !matches!(*scope, "read" | "runner");
             let writes = *m != "GET";
             // A terminal socket is a GET but is a live shell.
             let shell = t.ends_with("/terminals/{id}/ws");
@@ -355,6 +381,23 @@ mod tests {
                 "{e:?} is excepted but listed"
             );
         }
+    }
+
+    /// Review S5 (KAN-298): the refusal throttle keys on the template, so varying an id adds no key.
+    #[test]
+    fn a_destructive_route_is_keyed_by_its_template() {
+        let m = Method::DELETE;
+        for id in ["d_a", "d_b", "d_c"] {
+            assert_eq!(
+                destructive_template(&m, &format!("/api/v1/devices/{id}"), &[]).as_deref(),
+                Some("/api/v1/devices/{id}")
+            );
+        }
+        assert_eq!(
+            destructive_template(&Method::GET, "/api/v1/devices/d_a", &[]),
+            None
+        );
+        assert_eq!(destructive_template(&m, "/api/v1/nope/x", &[]), None);
     }
 
     #[test]
