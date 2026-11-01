@@ -4,6 +4,12 @@ on:
   pull_request:
   push:
     branches: [development]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  # Only a pull request's superseded run is cancelled; pushes to development always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   test:
     strategy:
