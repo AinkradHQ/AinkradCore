@@ -148,7 +148,13 @@ pub fn wrap(
     cwd: &str,
 ) -> Result<(String, Vec<String>), String> {
     if !program.starts_with('/') {
-        return Err("a terminal program must be an absolute path".to_owned());
+        // A bare name [`resolve`] could not find: say that, not a rule it did not break.
+        let bare = !program.is_empty() && !program.contains('/') && !program.starts_with('-');
+        return Err(if bare {
+            format!("{program:?} was not found on the terminal's PATH (give an absolute path)")
+        } else {
+            "a terminal program must be an absolute path".to_owned()
+        });
     }
     prepare(hidden)?;
     let mut hidden = canonical(hidden, true)?;
@@ -234,6 +240,103 @@ pub fn wrap(
     Ok((launcher.to_owned(), out))
 }
 
+const SUDO: &str = "/usr/bin/sudo";
+
+/// `[a-z_][a-z0-9_-]{0,31}`: an account name that cannot be an option, a path or a second
+/// argument to `sudo`.
+pub fn valid_user(name: &str) -> bool {
+    let b = name.as_bytes();
+    (1..=32).contains(&b.len())
+        && (b[0].is_ascii_lowercase() || b[0] == b'_')
+        && b.iter()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_-".contains(c))
+}
+
+/// `program args` run as `user` through `sudo -n` (E2-25, `--terminal-user`): the shell, and
+/// the sandbox wrapper around it, get another uid than the runner's. There is no fallback: when
+/// `sudo` refuses, the terminal fails to start; it is never started as the runner's own user.
+pub fn as_user(user: &str, program: String, args: Vec<String>) -> (String, Vec<String>) {
+    let mut out = ["-n", "-u", user, "--"].map(str::to_owned).to_vec();
+    out.push(program);
+    out.extend(args);
+    (SUDO.to_owned(), out)
+}
+
+/// The numeric uid of account `name` (`id -u`), `None` when there is no such account.
+fn uid_of(name: &str) -> Option<u32> {
+    let out = Command::new("/usr/bin/id")
+        .args(["-u", "--", name])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().parse().ok())
+        .flatten()
+}
+
+/// The runner's state dir (its key, delivered secrets) must be closed to every other account:
+/// a mode with group or other bits (the umask decides it when the dir is first created) is
+/// made 0700, and a dir the runner's user does not own is refused.
+pub fn private_state(dir: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let m = std::fs::metadata(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    if m.uid() != ainkrad_sys::getuid() {
+        return Err(format!(
+            "{} is not owned by the runner's user",
+            dir.display()
+        ));
+    }
+    if m.permissions().mode() & 0o077 != 0 {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    Ok(())
+}
+
+/// Whether shells can run as `user` here, tried for real: the account exists and is neither root
+/// nor the runner's own uid (that would be no separation at all), and `sudo -n` runs a program
+/// as it (through the sandbox wrapper when `sandbox`). The error says what the owner must set up.
+pub fn probe_user(user: &str, sandbox: bool) -> Result<(), String> {
+    if !valid_user(user) {
+        return Err(format!("{user:?} is not a valid account name"));
+    }
+    let uid = uid_of(user).ok_or_else(|| format!("there is no account {user:?} on this host"))?;
+    if uid == 0 || uid == ainkrad_sys::getuid() {
+        return Err(format!(
+            "{user:?} is {} and gives the shells no separation",
+            if uid == 0 {
+                "root"
+            } else {
+                "the runner's own user"
+            }
+        ));
+    }
+    let (program, args) = if sandbox {
+        wrap(&[], &[], "/usr/bin/true", &[], "/")?
+    } else {
+        ("/usr/bin/true".to_owned(), Vec::new())
+    };
+    let (sudo, args) = as_user(user, program, args);
+    let ok = Command::new(&sudo)
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "this runner cannot run a program as {user} with `sudo -n` (a sudoers rule without a \
+             password, for the sandbox launcher and /usr/bin/true, is required); terminals are \
+             not offered"
+        ))
+    }
+}
+
 /// Whether the sandbox runs here, tried for real (a disabled user namespace shows only then).
 pub fn probe() -> Result<(), String> {
     let (program, args) = wrap(&[], &[], "/usr/bin/true", &[], "/")?;
@@ -279,6 +382,71 @@ mod tests {
             );
         }
         assert_eq!(resolve("sh", None), "sh");
+        // The error names the real problem for a bare name, and the rule for anything else.
+        let missing = wrap(&[], &[], "no-such-program-e2", &[], "/").unwrap_err();
+        assert!(
+            missing.contains("not found on the terminal's PATH"),
+            "{missing}"
+        );
+        let option = wrap(&[], &[], "-f", &[], "/").unwrap_err();
+        assert!(
+            option.contains("absolute path") && !option.contains("not found"),
+            "{option}"
+        );
+    }
+
+    #[test]
+    fn a_shell_user_is_a_plain_account_name_and_sudo_gets_it_before_the_double_dash() {
+        for ok in ["ainkrad-shell", "_svc", "a", "shell1"] {
+            assert!(valid_user(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "-u",
+            "root x",
+            "Root",
+            "a/b",
+            "a:b",
+            "a\nb",
+            "1abc",
+            &"a".repeat(33),
+        ] {
+            assert!(!valid_user(bad), "{bad:?}");
+        }
+        let (sudo, args) = as_user("shell", "/bin/sh".to_owned(), vec!["-c".to_owned()]);
+        assert_eq!(sudo, "/usr/bin/sudo");
+        assert_eq!(args, ["-n", "-u", "shell", "--", "/bin/sh", "-c"]);
+    }
+
+    #[test]
+    fn terminals_as_another_user_fail_closed_before_any_shell_starts() {
+        // Not an account, root, and the runner's own user: each refused with its reason.
+        assert!(
+            probe_user("no-such-account-e2", false)
+                .unwrap_err()
+                .contains("no account")
+        );
+        assert!(probe_user("-n", true).unwrap_err().contains("valid"));
+        assert!(probe_user("root", false).unwrap_err().contains("root"));
+        let me = Command::new("/usr/bin/id").arg("-un").output().unwrap();
+        let me = String::from_utf8_lossy(&me.stdout).trim().to_owned();
+        if valid_user(&me) {
+            assert!(probe_user(&me, false).unwrap_err().contains("own user"));
+        }
+    }
+
+    #[test]
+    fn the_state_dir_is_closed_to_other_accounts_before_shells_run_as_another_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("termbox-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        private_state(&dir).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        assert!(private_state(&dir.join("missing")).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

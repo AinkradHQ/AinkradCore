@@ -215,6 +215,7 @@ dependencies = [
  "ainkrad-harness",
  "ainkrad-proto",
  "ainkrad-ptyhost",
+ "ainkrad-sys",
  "base64 0.22.1",
  "futures-util",
  "reqwest 0.12.28",
