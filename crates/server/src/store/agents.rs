@@ -538,7 +538,9 @@ pub async fn wake(
     now: &str,
 ) -> Result<Woken, sqlx::Error> {
     let mut tx = super::begin_write(pool).await?;
-    let found: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+    // state, harness session, outcome, owner module
+    type Found = (String, Option<String>, Option<String>, Option<String>);
+    let found: Option<Found> = sqlx::query_as(
         "SELECT state, harness_session, outcome, owner_module FROM core_agent_sessions WHERE id = ?",
     )
     .bind(id)
