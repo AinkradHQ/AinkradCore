@@ -39,7 +39,21 @@ async fn host(name: &str) -> Host {
     std::fs::create_dir_all(&dir).unwrap();
     let db = dir.join("core.db");
     let pool = store::connect(&db).await.unwrap();
-    let identity = Arc::new(Identity::load_or_create(&dir).unwrap());
+    // The master key the spawned server loads (it seals the identity).
+    std::fs::create_dir_all(dir.join("keys")).unwrap();
+    std::fs::write(dir.join("keys/master.key"), [7u8; 32]).unwrap();
+    std::fs::set_permissions(
+        dir.join("keys/master.key"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )
+    .unwrap();
+    let identity = Arc::new(
+        Identity::load_or_create(
+            &dir,
+            &ainkrad_core_server::ops::secretbox::SecretBox::new(&[7; 32]),
+        )
+        .unwrap(),
+    );
     let app = App::new(
         pool.clone(),
         Arc::new(SystemClock),

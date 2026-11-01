@@ -138,7 +138,13 @@ impl Core {
             d
         });
         let pool = store::connect(&dir.join("core.db")).await.unwrap();
-        let identity = Arc::new(Identity::load_or_create(&dir).unwrap());
+        let identity = Arc::new(
+            Identity::load_or_create(
+                &dir,
+                &ainkrad_core_server::ops::secretbox::SecretBox::new(&[7; 32]),
+            )
+            .unwrap(),
+        );
         let tls = matches!(listen, Listen::Public { .. });
         let gateway = Gateway::bind(listen, Limits::default()).await.unwrap();
         let port = gateway.local_addr().unwrap().port();

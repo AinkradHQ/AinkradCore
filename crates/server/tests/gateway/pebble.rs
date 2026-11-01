@@ -53,6 +53,9 @@ async fn pebble_issues_by_both_challenges_and_a_reorder_keeps_a_held_connection(
             http01,
             ca_root: Some(minica.clone()),
             dir: fx.dir.join("tls"),
+            seal: std::sync::Arc::new(ainkrad_core_server::ops::secretbox::SecretBox::new(
+                &[7; 32],
+            )),
         };
         let listen = Listen::Public {
             port: tls_port,

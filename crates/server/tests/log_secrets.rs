@@ -69,7 +69,13 @@ async fn no_signature_nonce_challenge_or_key_is_logged() {
     let pool = ainkrad_core_server::store::connect(&dir.join("core.db"))
         .await
         .unwrap();
-    let identity = Arc::new(Identity::load_or_create(&dir).unwrap());
+    let identity = Arc::new(
+        Identity::load_or_create(
+            &dir,
+            &ainkrad_core_server::ops::secretbox::SecretBox::new(&[7; 32]),
+        )
+        .unwrap(),
+    );
     let clock = Arc::new(SystemClock);
     let mut app = App::new(
         pool.clone(),
@@ -92,6 +98,27 @@ async fn no_signature_nonce_challenge_or_key_is_logged() {
     let stranger = TestDevice::new(&identity.fp, clock.clone());
 
     let mut planted = vec![b64(&mac.spki), b64(&stranger.spki)];
+    // A legacy plaintext identity key is sealed on load: the log says so and carries no key bytes.
+    {
+        let legacy = dir.join("legacy-home");
+        std::fs::create_dir_all(&legacy).unwrap();
+        let der = ring::signature::EcdsaKeyPair::generate_pkcs8(
+            &ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+            &ring::rand::SystemRandom::new(),
+        )
+        .unwrap();
+        let file = legacy.join("core-identity.p8");
+        std::fs::write(&file, der.as_ref()).unwrap();
+        std::fs::set_permissions(&file, std::os::unix::fs::PermissionsExt::from_mode(0o600))
+            .unwrap();
+        Identity::load_or_create(
+            &legacy,
+            &ainkrad_core_server::ops::secretbox::SecretBox::new(&[7; 32]),
+        )
+        .unwrap();
+        let hex: String = der.as_ref().iter().map(|x| format!("{x:02x}")).collect();
+        planted.extend([hex, b64(der.as_ref())]);
+    }
     // A challenge, a session from it, then good, replayed and stranger requests.
     let got = send(
         &app,
@@ -212,6 +239,10 @@ async fn no_signature_nonce_challenge_or_key_is_logged() {
     );
     assert!(log.contains("web session issued"), "{log}");
     assert!(log.contains("secrets broker: master key loaded"), "{log}");
+    assert!(
+        log.contains("key file sealed under the master key"),
+        "{log}"
+    );
     // The broker's refusals ran, so their lines are scanned too.
     assert!(
         log.contains("real_secret_refused") && log.contains("lease_expired"),
@@ -353,7 +384,8 @@ async fn rotation_flow(
     let keys = dir.join("keys");
     std::fs::create_dir_all(&keys).unwrap();
     let master = keys.join("master.key");
-    let old = [0xa7u8; 32];
+    // The key the Core identity in `dir` is sealed under: the rotation re-seals it too.
+    let old = [7u8; 32];
     std::fs::write(&master, old).unwrap();
     std::fs::set_permissions(&master, std::fs::Permissions::from_mode(0o600)).unwrap();
     let sealer = SecretBox::for_serve(&master).expect("a 0600 key");

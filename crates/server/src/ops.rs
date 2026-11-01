@@ -17,6 +17,7 @@ pub mod logging;
 pub mod master_rotate;
 pub mod restore;
 pub mod s3;
+pub mod sealed;
 pub mod secretbox;
 
 pub type Result_ = Result<(), Box<dyn std::error::Error>>;
@@ -50,7 +51,8 @@ backup-keygen prints a new age identity and its recipient once: keep the identit
 restore decrypts a backup (a file, or s3:<key> fetched from the bucket), checks the signature
 against --signer before writing anything, and builds a new home in a fresh directory: the
 database (integrity and schema checked, then migrated), the master key and the Core identity
-key (core-identity.p8, 0600; so paired devices and runners still accept it) from the backup, a
+key (core-identity.p8, 0600, sealed under the master key, which the backup carries; so paired
+devices and runners still accept it) from the backup, a
 new config and a new signing key; a backup without the identity restores with a warning that
 everything must be paired again. export writes the same signed archive unencrypted, 0600,
 never over an existing file: it holds the master key, so move it like a private key; it never

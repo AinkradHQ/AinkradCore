@@ -1,5 +1,7 @@
 //! The Core identity key (§3, §13): a P-256 key generated on first start and kept as a PKCS#8
-//! file, mode 0600, beside the database. Its fingerprint (`core_fp`) is what `/handshake`
+//! file, mode 0600, beside the database, sealed under the master key ([`sealed`]: it is
+//! never on disk in the clear, a legacy plaintext file is sealed once, in place, and a Core
+//! without the master key it names refuses to start instead of making a new identity). Its fingerprint (`core_fp`) is what `/handshake`
 //! shows, and every signed request names it, so a request for one Core is refused by another.
 //!
 //! **Rotation** (handshake spec §13, planned rotation; never for a compromised key):
@@ -29,6 +31,8 @@ use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
 use ainkrad_proto::v2::{Rotation, rotation_message};
 
 use super::crypto::{b64, fingerprint, spki_of};
+use crate::ops::sealed;
+use crate::ops::secretbox::SecretBox;
 
 /// The file name beside the database.
 pub const FILE: &str = "core-identity.p8";
@@ -80,9 +84,9 @@ impl Identity {
         })
     }
 
-    fn generate_pkcs8() -> std::io::Result<Vec<u8>> {
+    pub(crate) fn generate_pkcs8() -> std::io::Result<zeroize::Zeroizing<Vec<u8>>> {
         EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &SystemRandom::new())
-            .map(|d| d.as_ref().to_vec())
+            .map(|d| zeroize::Zeroizing::new(d.as_ref().to_vec()))
             .map_err(|_| std::io::Error::other("generating the Core identity key failed"))
     }
 
@@ -94,32 +98,36 @@ impl Identity {
     /// The key in `dir`, created (0600, never overwritten) when there is none. A key file that
     /// others may read is refused rather than used. A pending rotation is attached, or, from
     /// its `not_before` on, completed ([`Identity::load_at`]).
-    pub fn load_or_create(dir: &Path) -> std::io::Result<Self> {
-        Self::load_at(dir, unix_now())
+    pub fn load_or_create(dir: &Path, seal: &SecretBox) -> std::io::Result<Self> {
+        Self::load_at(dir, unix_now(), seal)
     }
 
     /// [`Identity::load_or_create`] at `now` (unix seconds).
-    pub fn load_at(dir: &Path, now: i64) -> std::io::Result<Self> {
+    pub fn load_at(dir: &Path, now: i64, seal: &SecretBox) -> std::io::Result<Self> {
         let path = dir.join(FILE);
         let pending = read_rotation(dir)?;
         let announced = read_announced(dir)?;
         if let Some(r) = &pending
             && announced.is_some_and(|at| now >= r.not_before.max(at.saturating_add(WINDOW)))
         {
-            // The window is over: the next key becomes the identity. A crash after the rename
-            // leaves the statement, which the next start removes (the key already matches).
+            // The window is over: the next key becomes the identity (sealed anew under the
+            // identity label, then the next file is removed). A crash in between leaves both,
+            // and the statement, which the next start finishes (the keys already match).
             let next = dir.join(NEXT);
             if next.exists() {
-                let fp = Self::from_pkcs8(&read_private(&next)?)?.fp;
+                let der = read_key(dir, &next, sealed::IDENTITY_NEXT_LABEL, seal, true)?;
+                let fp = Self::from_pkcs8(&der)?.fp;
                 if fp != r.new_fp {
                     return Err(std::io::Error::other(format!(
                         "{} is not the key {ROTATION} announces; nothing changed",
                         next.display()
                     )));
                 }
-                std::fs::rename(&next, &path)?;
+                sealed::replace(key_file(dir, &path, sealed::IDENTITY_LABEL), seal, &der)?;
+                std::fs::remove_file(&next)?;
             }
-            let mut current = Self::from_pkcs8(&read_private(&path)?)?;
+            let mut current =
+                Self::from_pkcs8(&read_key(dir, &path, sealed::IDENTITY_LABEL, seal, true)?)?;
             if current.fp != r.new_fp {
                 return Err(std::io::Error::other(format!(
                     "{ROTATION} names {} but {FILE} is {}; nothing changed",
@@ -132,31 +140,35 @@ impl Identity {
             current.switched_from = Some(r.old_fp.clone());
             return Ok(current);
         }
-        if !path.exists() {
-            // Written whole to a private temp file, then linked into place: the key file is
-            // either absent or complete, and a racing creator's key is kept, never replaced.
-            let tmp = dir.join(format!(
-                ".{FILE}.{}",
-                super::crypto::random_id("t_").trim_start_matches("t_")
-            ));
-            let der = Self::generate_pkcs8()?;
-            let written = (|| {
-                let mut file = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .mode(0o600)
-                    .open(&tmp)?;
-                file.write_all(&der)?;
-                file.sync_all()?;
-                match std::fs::hard_link(&tmp, &path) {
-                    Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => Err(e),
-                    _ => Ok(()),
-                }
-            })();
-            let _ = std::fs::remove_file(&tmp);
-            written?;
+        let missing = match std::fs::symlink_metadata(&path) {
+            Ok(_) => false,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+            Err(e) => return Err(e),
+        };
+        if missing {
+            // A home that sealed its identity before and lost the file must not make a new
+            // one: pinned clients would see core_identity_mismatch. Nothing is written.
+            // (Only the identity: `rotate` removes the next-key file on purpose.)
+            if key_file(dir, &path, sealed::IDENTITY_LABEL).was_sealed() {
+                return Err(std::io::Error::other(format!(
+                    "{} is missing, but this Core's identity was sealed before: restore it from a \
+                     backup (a new identity would make every paired device and runner refuse this \
+                     Core); nothing was written",
+                    path.display()
+                )));
+            }
+            // Sealed, written whole to a private temp file and linked into place: the key file
+            // is either absent or complete, and a racing creator's key is kept, never replaced.
+            match sealed::create(
+                key_file(dir, &path, sealed::IDENTITY_LABEL),
+                seal,
+                &Self::generate_pkcs8()?,
+            ) {
+                Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e),
+                _ => {}
+            }
         }
-        let mut me = Self::from_pkcs8(&read_private(&path)?)?;
+        let mut me = Self::from_pkcs8(&read_key(dir, &path, sealed::IDENTITY_LABEL, seal, true)?)?;
         if let Some(r) = pending {
             // Fail closed: a statement that is not this key's own is never sent.
             let sig = super::crypto::unb64(&r.sig, 86).unwrap_or_default();
@@ -169,7 +181,7 @@ impl Identity {
             // The key the statement announces must be here for the switch, checked before
             // anything is announced (re-review L1).
             let next = dir.join(NEXT);
-            let fp = read_private(&next)
+            let fp = read_key(dir, &next, sealed::IDENTITY_NEXT_LABEL, seal, true)
                 .and_then(|der| Self::from_pkcs8(&der))
                 .map_err(|e| {
                     std::io::Error::other(format!(
@@ -195,8 +207,15 @@ impl Identity {
     /// The key in `dir` as it is now, read only: nothing is created, switched or removed (a CLI
     /// beside a running Core must not complete its rotation). A pending statement is attached
     /// when it is this key's own.
-    pub fn load_readonly(dir: &Path) -> std::io::Result<Self> {
-        let mut me = Self::from_pkcs8(&read_private(&dir.join(FILE))?)?;
+    pub fn load_readonly(dir: &Path, seal: &SecretBox) -> std::io::Result<Self> {
+        // A legacy plaintext file is read as it is and not sealed here: `serve` migrates it.
+        let mut me = Self::from_pkcs8(&read_key(
+            dir,
+            &dir.join(FILE),
+            sealed::IDENTITY_LABEL,
+            seal,
+            false,
+        )?)?;
         me.rotation = read_rotation(dir)?.filter(|r| r.old_fp == me.fp);
         Ok(me)
     }
@@ -220,7 +239,7 @@ impl Identity {
     /// rotation is pending. The running Core sends the statement from its next start, and the
     /// window counts from then. What an interrupted earlier `rotate` left (a next key or a
     /// stamp with no statement) is cleared first (re-review L2).
-    pub fn rotate(dir: &Path, now: i64) -> std::io::Result<Rotation> {
+    pub fn rotate(dir: &Path, now: i64, seal: &SecretBox) -> std::io::Result<Rotation> {
         if let Some(r) = read_rotation(dir)? {
             return Err(std::io::Error::other(format!(
                 "a rotation to {} is already pending (not before {}, and a full window after the \
@@ -234,10 +253,14 @@ impl Identity {
                 _ => {}
             }
         }
-        let current = Self::load_at(dir, now)?;
+        let current = Self::load_at(dir, now, seal)?;
         let der = Self::generate_pkcs8()?;
         let next = Self::from_pkcs8(&der)?;
-        write_private(&dir.join(NEXT), &der, true)?;
+        sealed::create(
+            key_file(dir, &dir.join(NEXT), sealed::IDENTITY_NEXT_LABEL),
+            seal,
+            &der,
+        )?;
         let mut r = Rotation {
             old_fp: current.fp.clone(),
             new_fp: next.fp,
@@ -312,6 +335,24 @@ fn unix_now() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
+/// The PKCS#8 of the identity key file at `path`: opened with the master key, or (legacy) a
+/// plaintext file, which `migrate` seals in place. See [`sealed`].
+fn read_key(
+    home: &Path,
+    path: &Path,
+    label: &str,
+    seal: &SecretBox,
+    migrate: bool,
+) -> std::io::Result<zeroize::Zeroizing<Vec<u8>>> {
+    sealed::read(key_file(home, path, label), seal, migrate, |b| {
+        Identity::from_pkcs8(b).is_ok()
+    })
+}
+
+fn key_file<'a>(home: &'a Path, path: &'a Path, label: &'a str) -> sealed::KeyFile<'a> {
+    sealed::KeyFile { path, home, label }
+}
+
 /// Reads a file only this user may read.
 fn read_private(path: &Path) -> std::io::Result<Vec<u8>> {
     let mode = std::fs::metadata(path)?.permissions().mode();
@@ -379,22 +420,29 @@ fn read_rotation(dir: &Path) -> std::io::Result<Option<Rotation>> {
 mod tests {
     use super::*;
 
+    fn seal() -> SecretBox {
+        SecretBox::new(&[3; 32])
+    }
+
     #[test]
     fn created_once_0600_and_reloaded() {
         let dir = std::env::temp_dir().join(format!("core-identity-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let a = Identity::load_or_create(&dir).unwrap();
+        let a = Identity::load_or_create(&dir, &seal()).unwrap();
         let mode = std::fs::metadata(dir.join(FILE))
             .unwrap()
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600);
-        let b = Identity::load_or_create(&dir).unwrap();
+        let b = Identity::load_or_create(&dir, &seal()).unwrap();
         assert_eq!(a.fp, b.fp, "the same key after a restart");
         assert!(super::super::crypto::verify(&b.spki, b"x", &a.sign(b"x")));
         std::fs::set_permissions(dir.join(FILE), std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(Identity::load_or_create(&dir).is_err(), "world-readable");
+        assert!(
+            Identity::load_or_create(&dir, &seal()).is_err(),
+            "world-readable"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -406,9 +454,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("core-identity-rot-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let old = Identity::load_at(&dir, 1_000).unwrap();
+        let old = Identity::load_at(&dir, 1_000, &seal()).unwrap();
         assert!(old.rotation.is_none());
-        let r = Identity::rotate(&dir, 1_000).unwrap();
+        let r = Identity::rotate(&dir, 1_000, &seal()).unwrap();
         assert_eq!(
             (r.old_fp.as_str(), r.not_before),
             (old.fp.as_str(), 1_000 + WINDOW)
@@ -424,13 +472,13 @@ mod tests {
             assert_eq!(mode & 0o777, 0o600, "{f}");
         }
         assert!(
-            Identity::rotate(&dir, 2_000).is_err(),
+            Identity::rotate(&dir, 2_000, &seal()).is_err(),
             "one rotation per window"
         );
 
         // Never announced (no serve since `rotate`): past `not_before` the old key stays, so a
         // late first restart strands no runner (re-review M2).
-        let unannounced = Identity::load_at(&dir, 1_000 + 2 * WINDOW).unwrap();
+        let unannounced = Identity::load_at(&dir, 1_000 + 2 * WINDOW, &seal()).unwrap();
         assert_eq!(unannounced.fp, old.fp);
         assert_eq!(unannounced.rotation.as_ref(), Some(&r));
         // The first serve announces it late; the window counts from then, and a second stamp
@@ -438,14 +486,14 @@ mod tests {
         let first = 1_000 + 2 * WINDOW;
         Identity::announce(&dir, first).unwrap();
         Identity::announce(&dir, first + 50).unwrap();
-        let during = Identity::load_at(&dir, first + WINDOW - 1).unwrap();
+        let during = Identity::load_at(&dir, first + WINDOW - 1, &seal()).unwrap();
         assert_eq!(
             during.fp, old.fp,
             "the old key signs through the announced window"
         );
         assert_eq!(during.rotation.as_ref(), Some(&r));
 
-        let after = Identity::load_at(&dir, first + WINDOW).unwrap();
+        let after = Identity::load_at(&dir, first + WINDOW, &seal()).unwrap();
         assert_eq!(after.fp, r.new_fp);
         assert_eq!(after.switched_from.as_deref(), Some(old.fp.as_str()));
         assert_eq!(during.switched_from, None);
@@ -454,7 +502,7 @@ mod tests {
             assert!(!dir.join(f).exists(), "{f}");
         }
         assert_eq!(
-            Identity::load_at(&dir, first + WINDOW).unwrap().fp,
+            Identity::load_at(&dir, first + WINDOW, &seal()).unwrap().fp,
             r.new_fp
         );
 
@@ -466,7 +514,7 @@ mod tests {
         std::fs::write(dir.join(ROTATION), serde_json::to_vec(&forged).unwrap()).unwrap();
         std::fs::set_permissions(dir.join(ROTATION), std::fs::Permissions::from_mode(0o600))
             .unwrap();
-        assert!(Identity::load_at(&dir, 1_000).is_err());
+        assert!(Identity::load_at(&dir, 1_000, &seal()).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -478,23 +526,36 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("core-identity-l12-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let old = Identity::load_at(&dir, 1_000).unwrap();
+        let old = Identity::load_at(&dir, 1_000, &seal()).unwrap();
         // L2: an orphan next key (the crash came before the statement).
         write_private(&dir.join(NEXT), b"not a key", true).unwrap();
-        let r = Identity::rotate(&dir, 1_000).unwrap();
+        let r = Identity::rotate(&dir, 1_000, &seal()).unwrap();
         assert_eq!(r.old_fp, old.fp);
         // L1: the next key goes missing, or is replaced, while the rotation is pending.
         let der = std::fs::read(dir.join(NEXT)).unwrap();
         std::fs::remove_file(dir.join(NEXT)).unwrap();
-        let e = Identity::load_at(&dir, 1_001).unwrap_err().to_string();
+        let e = Identity::load_at(&dir, 1_001, &seal())
+            .unwrap_err()
+            .to_string();
         assert!(e.contains(NEXT), "{e}");
         let other = Identity::generate_pkcs8().unwrap();
-        write_private(&dir.join(NEXT), &other, true).unwrap();
-        let e = Identity::load_at(&dir, 1_001).unwrap_err().to_string();
+        let next = dir.join(NEXT);
+        sealed::create(
+            key_file(&dir, &next, sealed::IDENTITY_NEXT_LABEL),
+            &seal(),
+            &other,
+        )
+        .unwrap();
+        let e = Identity::load_at(&dir, 1_001, &seal())
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("not the key"), "{e}");
         std::fs::remove_file(dir.join(NEXT)).unwrap();
         write_private(&dir.join(NEXT), &der, true).unwrap();
-        assert_eq!(Identity::load_at(&dir, 1_001).unwrap().rotation, Some(r));
+        assert_eq!(
+            Identity::load_at(&dir, 1_001, &seal()).unwrap().rotation,
+            Some(r)
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
@@ -502,6 +563,10 @@ mod tests {
 #[cfg(test)]
 mod audit_tests {
     use super::*;
+
+    fn seal() -> SecretBox {
+        SecretBox::new(&[3; 32])
+    }
 
     /// E1-11.8: each step of a rotation is one audit row by the system, with public fingerprints
     /// only; a plain load, and a repeated announce, write none.
@@ -522,14 +587,14 @@ mod audit_tests {
                 rows
             }
         };
-        let old = Identity::load_at(&dir, 1_000).unwrap();
+        let old = Identity::load_at(&dir, 1_000, &seal()).unwrap();
         audit_switch(&pool, &old).await;
         assert!(
             actions(&pool).await.is_empty(),
             "a plain load audits nothing"
         );
 
-        let r = Identity::rotate(&dir, 1_000).unwrap();
+        let r = Identity::rotate(&dir, 1_000, &seal()).unwrap();
         let details = serde_json::json!({"old_fp": r.old_fp, "new_fp": r.new_fp,
             "not_before": r.not_before});
         audit(&pool, "started", details).await.unwrap();
@@ -538,9 +603,9 @@ mod audit_tests {
         audit(&pool, "announced", serde_json::json!({"new_fp": r.new_fp}))
             .await
             .unwrap();
-        let after = Identity::load_at(&dir, 2_000 + WINDOW).unwrap();
+        let after = Identity::load_at(&dir, 2_000 + WINDOW, &seal()).unwrap();
         audit_switch(&pool, &after).await;
-        let again = Identity::load_at(&dir, 2_000 + WINDOW + 5).unwrap();
+        let again = Identity::load_at(&dir, 2_000 + WINDOW + 5, &seal()).unwrap();
         audit_switch(&pool, &again).await;
 
         let rows = actions(&pool).await;
