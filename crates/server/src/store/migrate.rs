@@ -115,6 +115,12 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../migrations/0013_event_views_scope_index.up.sql"),
         down: include_str!("../../migrations/0013_event_views_scope_index.down.sql"),
     },
+    Migration {
+        version: 14,
+        name: "push_kinds",
+        up: include_str!("../../migrations/0014_push_kinds.up.sql"),
+        down: include_str!("../../migrations/0014_push_kinds.down.sql"),
+    },
 ];
 
 #[derive(Debug)]

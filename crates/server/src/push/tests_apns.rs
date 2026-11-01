@@ -24,7 +24,7 @@ use super::*;
 use crate::auth::testing::TestDevice;
 use crate::scheduler::SystemClock;
 use crate::store::connect;
-use crate::store::gov::{push_targets, revoke_device, set_push_token, set_token};
+use crate::store::gov::{push_targets, revoke_device, set_kinds, set_push_token, set_token};
 
 /// What the fake gateway saw.
 #[derive(Debug, Clone)]
@@ -111,12 +111,12 @@ impl SecretSource for Secrets {
     }
 }
 
-struct Fx {
-    pool: SqlitePool,
+pub(super) struct Fx {
+    pub(super) pool: SqlitePool,
     dir: std::path::PathBuf,
 }
 
-async fn fx(name: &str) -> Fx {
+pub(super) async fn fx(name: &str) -> Fx {
     let dir = std::env::temp_dir().join(format!("core-notify-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -128,7 +128,7 @@ async fn fx(name: &str) -> Fx {
 
 impl Fx {
     /// A device with `scopes` and an APNs token made from `n`, returning its id and token.
-    async fn device(&self, name: &str, scopes: &[&str], n: u8) -> (String, String) {
+    pub(super) async fn device(&self, name: &str, scopes: &[&str], n: u8) -> (String, String) {
         let clock = Arc::new(SystemClock);
         let d = TestDevice::enroll(&self.pool, name, "device", scopes, "fp", clock).await;
         let token = format!("{n:02x}").repeat(32);
@@ -140,7 +140,7 @@ impl Fx {
         (d.id, token)
     }
 
-    fn pusher(&self, providers: Vec<Arc<dyn PushProvider>>) -> Pusher {
+    pub(super) fn pusher(&self, providers: Vec<Arc<dyn PushProvider>>) -> Pusher {
         let every = Duration::from_secs(1);
         Pusher::new(
             self.pool.clone(),
@@ -151,7 +151,7 @@ impl Fx {
         )
     }
 
-    async fn deliveries(&self) -> Vec<Value> {
+    pub(super) async fn deliveries(&self) -> Vec<Value> {
         let all = crate::store::events::list_events(&self.pool, 0, 1000)
             .await
             .unwrap();
@@ -167,7 +167,7 @@ impl Fx {
         all.unwrap().into_iter().map(|e| e.action).collect()
     }
 
-    async fn done(self) {
+    pub(super) async fn done(self) {
         self.pool.close().await;
         std::fs::remove_dir_all(&self.dir).unwrap();
     }
@@ -480,12 +480,9 @@ async fn tokens_belong_to_one_device_and_go_with_its_revocation() {
             "{provider} {bad}"
         );
     }
-    // The same APNs token registered by another device moves there: one token, one device.
-    assert!(
-        set_push_token(&fx.pool, &tablet, Some((&token, false)))
-            .await
-            .unwrap()
-    );
+    // A token another device holds cannot be registered: no takeover, and the holder keeps it.
+    let r = set_push_token(&fx.pool, &tablet, Some((&token, false))).await;
+    assert!(matches!(r, Err(sqlx::Error::InvalidArgument(_))), "{r:?}");
     let by_device: Vec<(String, String)> = push_targets(&fx.pool)
         .await
         .unwrap()
@@ -495,9 +492,21 @@ async fn tokens_belong_to_one_device_and_go_with_its_revocation() {
     assert_eq!(
         by_device,
         [
+            (phone.clone(), "apns".to_owned()),
             (phone.clone(), "fcm".to_owned()),
             (tablet.clone(), "apns".to_owned())
         ]
+    );
+    // The holder re-registering its own token is fine (a reinstall).
+    assert!(
+        set_push_token(&fx.pool, &phone, Some((&token, false)))
+            .await
+            .unwrap()
+    );
+    assert!(
+        set_kinds(&fx.pool, &phone, Some(&["approval_needed".to_owned()]))
+            .await
+            .unwrap()
     );
 
     // Revoking removes every token the device had, and a revoked device cannot register one.
@@ -521,6 +530,11 @@ async fn tokens_belong_to_one_device_and_go_with_its_revocation() {
         rows, 0,
         "the revoked device's tokens are gone, not just skipped"
     );
+    let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM core_push_kinds")
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap();
+    assert_eq!(kept, 0, "and so is its opt-in");
     assert!(
         !set_push_token(&fx.pool, &phone, Some((&token, false)))
             .await

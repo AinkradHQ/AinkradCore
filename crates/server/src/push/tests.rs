@@ -221,6 +221,7 @@ fn the_apns_request_carries_a_valid_es256_token_and_goes_to_the_right_gateway() 
         provider: "apns".to_owned(),
         token: "ab".repeat(32),
         sandbox: false,
+        kinds: None,
     };
     let req = apns.request(&to, &n, 2_000_000).unwrap();
     assert_eq!(req.method(), "POST");
