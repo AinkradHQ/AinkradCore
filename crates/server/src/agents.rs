@@ -308,6 +308,13 @@ pub fn validate_new(new: &store::NewSession<'_>, admin: bool) -> Result<(), Inva
     let Some(policy) = policy.ok().filter(|_| workspace_ok) else {
         return Err(Invalid::Bad("workspace or policy does not have its shape"));
     };
+    if policy.problem().is_some() {
+        return Err(Invalid::Bad(
+            "the policy's isolation fields are out of bounds: vcpus 1-32, memory_mb 64-262144, \
+             disk_mb 16-1048576, wall_secs 1-86400, image sha256:<64 hex>, egress rules IP \
+             addresses or CIDR blocks (no host names, at most 64 each)",
+        ));
+    }
     if has_destructive_allow(&policy) && !admin {
         return Err(Invalid::Forbidden(
             "approval bypasses require the admin scope",

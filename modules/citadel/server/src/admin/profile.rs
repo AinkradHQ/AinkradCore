@@ -76,6 +76,7 @@ fn policy_flags(mut rest: &[&str]) -> Option<Policy> {
         sandboxed: sandboxed || mode == PermissionMode::Sandboxed,
         mode,
         allow,
+        ..Policy::default()
     })
 }
 

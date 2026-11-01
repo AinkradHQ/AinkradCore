@@ -224,6 +224,7 @@ fn policy(row: SqliteRow) -> Result<Policy, Error> {
         mode: mode.parse().map_err(|e: String| Error::Decode(e.into()))?,
         allow: row.try_get::<Json<Vec<String>>, _>("allowed_tools")?.0,
         sandboxed: row.try_get("sandboxed")?,
+        ..Default::default()
     })
 }
 

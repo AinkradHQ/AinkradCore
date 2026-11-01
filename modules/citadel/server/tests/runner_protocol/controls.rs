@@ -106,6 +106,7 @@ async fn controls_reach_the_runner_holding_the_run() {
         mode: PermissionMode::Ask,
         allow: vec!["Bash:git fetch".to_owned()],
         sandboxed: false,
+        ..Policy::default()
     };
     assert!(set_project_policy(pool, p, &policy, ADMIN).await.unwrap());
     let updated = "SELECT count(*) FROM run_events WHERE run_id = 1 AND kind = 'policy_update' \

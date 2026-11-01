@@ -148,9 +148,11 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+mod isolation;
 mod limits;
 mod policy;
 mod workspace;
+pub use isolation::*;
 pub use limits::*;
 pub use policy::*;
 pub use workspace::*;
@@ -408,6 +410,8 @@ pub enum Outcome {
 /// Server → runner.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
+// A policy now carries the isolation fields (E8a-08); boxing it would change every `Assign`.
+#[allow(clippy::large_enum_variant)]
 pub enum ServerMessage {
     Welcome {
         runner: i64,

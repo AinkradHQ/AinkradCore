@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use ainkrad_proto::runner::{Isolation, Policy, WorkspaceMode};
 use ainkrad_proto::v2::AgentStart;
 
 use super::agent::Sandbox;
@@ -63,6 +64,53 @@ impl ProcessSandbox {
     }
 }
 
+/// Applies the session policy's isolation fields to the process sandbox's environment, after the
+/// runner's own limits are in `env`: a cap can only lower the runner's, the wall-clock cap is
+/// the host's, and every field a process sandbox cannot honour refuses the session (it is never
+/// ignored, which would be a weaker sandbox than the policy asked for).
+///
+/// `memory_mb` and `disk_mb` ride the same sampled watchdog as the runner's own caps (a 100 ms
+/// aggregate-RSS and disk walk that kills the tree): a process-level budget, not a quota.
+fn apply_policy(policy: &Policy, env: &mut Vec<(String, String)>) -> Result<(), String> {
+    for (field, set) in [
+        ("image", policy.image.is_some()),
+        ("vcpus", policy.vcpus.is_some()),
+        (
+            "workspace copy",
+            policy.workspace == Some(WorkspaceMode::Copy),
+        ),
+        // The session's rules would narrow the runner's allowlist; until that intersection is
+        // wired, accepting them would be a policy the sandbox does not enforce.
+        ("egress", policy.egress.is_some()),
+    ] {
+        if set {
+            return Err(format!(
+                "the policy sets {field}, which the process sandbox cannot enforce; refusing the session"
+            ));
+        }
+    }
+    for (var, mb) in [
+        ("AINKRAD_SANDBOX_MEMORY", policy.memory_mb),
+        ("AINKRAD_SANDBOX_DISK", policy.disk_mb),
+    ] {
+        let Some(mb) = mb else { continue };
+        let cap = u64::from(mb) * 1024;
+        let entry = env
+            .iter_mut()
+            .find(|(n, _)| n == var)
+            .ok_or_else(|| format!("{var} is missing"))?;
+        let runner = entry
+            .1
+            .parse::<u64>()
+            .map_err(|_| format!("invalid {var}"))?;
+        entry.1 = runner.min(cap).to_string();
+    }
+    if let Some(secs) = policy.wall_secs {
+        env.push(("AINKRAD_SANDBOX_WALL".to_owned(), secs.to_string()));
+    }
+    Ok(())
+}
+
 impl Sandbox for ProcessSandbox {
     fn name(&self) -> &'static str {
         if cfg!(target_os = "macos") {
@@ -70,6 +118,10 @@ impl Sandbox for ProcessSandbox {
         } else {
             "bubblewrap"
         }
+    }
+
+    fn tier(&self) -> Isolation {
+        Isolation::Process
     }
 
     fn prepare(&self, start: &AgentStart, env: &mut Vec<(String, String)>) -> Result<(), String> {
@@ -144,13 +196,14 @@ impl Sandbox for ProcessSandbox {
             }
             Self::add(env, &format!("AINKRAD_SANDBOX_{key}"), value);
         }
-        Ok(())
+        apply_policy(&start.policy, env)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::network_for;
+    use super::{apply_policy, network_for};
+    use ainkrad_proto::runner::{Egress, Policy, WorkspaceMode};
 
     #[test]
     fn secrets_default_to_deny_and_linux_refuses_unfiltered_allow() {
@@ -163,5 +216,93 @@ mod tests {
         assert_eq!(network_for(None, false, false), Ok("allow"));
         assert_eq!(network_for(Some("allow"), false, true), Ok("allow"));
         assert!(network_for(Some("lan"), false, false).is_err());
+    }
+
+    fn runner_env() -> Vec<(String, String)> {
+        [
+            ("AINKRAD_SANDBOX_MEMORY", "4194304"),
+            ("AINKRAD_SANDBOX_DISK", "1048576"),
+        ]
+        .map(|(n, v)| (n.to_owned(), v.to_owned()))
+        .to_vec()
+    }
+
+    fn value(env: &[(String, String)], name: &str) -> Option<String> {
+        env.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone())
+    }
+
+    #[test]
+    fn a_policy_cap_lowers_the_runners_never_raises_it() {
+        let mut env = runner_env();
+        let policy = Policy {
+            memory_mb: Some(512),
+            disk_mb: Some(100_000),
+            wall_secs: Some(90),
+            ..Policy::default()
+        };
+        apply_policy(&policy, &mut env).unwrap();
+        assert_eq!(
+            value(&env, "AINKRAD_SANDBOX_MEMORY").as_deref(),
+            Some("524288")
+        );
+        // 100000 MiB is above the runner's 1 GiB disk cap: the runner's stays.
+        assert_eq!(
+            value(&env, "AINKRAD_SANDBOX_DISK").as_deref(),
+            Some("1048576")
+        );
+        assert_eq!(value(&env, "AINKRAD_SANDBOX_WALL").as_deref(), Some("90"));
+    }
+
+    #[test]
+    fn a_policy_with_no_isolation_fields_changes_nothing() {
+        let mut env = runner_env();
+        apply_policy(&Policy::default(), &mut env).unwrap();
+        assert_eq!(env, runner_env());
+        assert_eq!(value(&env, "AINKRAD_SANDBOX_WALL"), None);
+    }
+
+    #[test]
+    fn a_field_the_process_sandbox_cannot_enforce_refuses_the_session() {
+        for (field, policy) in [
+            (
+                "image",
+                Policy {
+                    image: Some(format!("sha256:{}", "ab".repeat(32))),
+                    ..Policy::default()
+                },
+            ),
+            (
+                "vcpus",
+                Policy {
+                    vcpus: Some(2),
+                    ..Policy::default()
+                },
+            ),
+            (
+                "workspace copy",
+                Policy {
+                    workspace: Some(WorkspaceMode::Copy),
+                    ..Policy::default()
+                },
+            ),
+            (
+                "egress",
+                Policy {
+                    egress: Some(Egress::default()),
+                    ..Policy::default()
+                },
+            ),
+        ] {
+            let mut env = runner_env();
+            let why = apply_policy(&policy, &mut env).unwrap_err();
+            assert!(why.contains(field), "{field}: {why}");
+            assert_eq!(env, runner_env(), "{field}: a refusal leaves the env alone");
+        }
+        // The workspace mode the process tier does have is accepted.
+        let bind = Policy {
+            workspace: Some(WorkspaceMode::Bind),
+            ..Policy::default()
+        };
+        assert!(apply_policy(&bind, &mut runner_env()).is_ok());
     }
 }

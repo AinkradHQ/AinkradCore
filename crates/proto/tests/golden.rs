@@ -538,6 +538,35 @@ fn v2_agent_frames_are_pinned() {
             }],
         })),
     );
+    // A policy with every isolation field set (E8a-08); the frame above pins the unchanged shape.
+    v2(
+        "agent_start_isolated",
+        5,
+        0,
+        Body::Command(Command::AgentStart(AgentStart {
+            session: "as_a".to_owned(),
+            harness: "claude".to_owned(),
+            model: None,
+            prompt: None,
+            workspace: None,
+            policy: Policy {
+                min_isolation: Some(runner::Isolation::Microvm),
+                image: Some(format!("sha256:{}", "ab".repeat(32))),
+                vcpus: Some(2),
+                memory_mb: Some(2048),
+                disk_mb: Some(4096),
+                wall_secs: Some(3600),
+                egress: Some(runner::Egress {
+                    allow: vec!["10.0.0.0/8".to_owned(), "2001:db8::1".to_owned()],
+                    deny: vec!["10.9.0.0/16".to_owned()],
+                }),
+                workspace: Some(runner::WorkspaceMode::Copy),
+                ..Policy::default()
+            },
+            resume: None,
+            secrets: vec![],
+        })),
+    );
     v2(
         "agent_read",
         7,

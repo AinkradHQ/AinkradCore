@@ -102,6 +102,7 @@ pub async fn set_policy(
         sandboxed: p.sandboxed || mode == ainkrad_proto::runner::PermissionMode::Sandboxed,
         allow: p.allow.iter().map(|a| a.trim().to_owned()).collect(),
         mode,
+        ..Default::default()
     };
     if !work::set_project_policy(&app.pool, ProjectId(id), &policy, BY)
         .await

@@ -79,7 +79,11 @@ fn start_command(s: &Session, secrets: Vec<SecretGrant>, resume: bool) -> Result
         Some(w) => Some(serde_json::from_value(w.clone()).map_err(|_| bad())?),
         None => None,
     };
-    let policy = serde_json::from_value(s.policy.clone()).map_err(|_| bad())?;
+    let policy: ainkrad_proto::runner::Policy =
+        serde_json::from_value(s.policy.clone()).map_err(|_| bad())?;
+    if policy.problem().is_some() {
+        return Err(bad());
+    }
     Ok(Command::AgentStart(AgentStart {
         session: s.id.clone(),
         harness: s.harness.clone(),

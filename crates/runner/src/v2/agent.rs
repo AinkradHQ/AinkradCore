@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_proto::redact::Redactor;
-use ainkrad_proto::runner::{Outcome, RunToken, Tokens, Workspace};
+use ainkrad_proto::runner::{Isolation, Outcome, RunToken, Tokens, Workspace};
 use ainkrad_proto::v2::{
     AGENT_DRIVER, AGENT_OPS, AgentDecide, AgentEvents, AgentRead, AgentStart, AgentState,
     AgentStop, DriverInfo, ErrorCode, StreamError, TranscriptEntry,
@@ -107,6 +107,12 @@ impl AgentConfig {
 pub trait Sandbox: Send + Sync {
     /// Shown in logs and the session's `started` entry.
     fn name(&self) -> &'static str;
+    /// The isolation this sandbox provides. A session whose `min_isolation` it does not meet is
+    /// refused before anything starts; the weakest tier is the default, so a sandbox that forgets
+    /// to say is never trusted with more than nothing.
+    fn tier(&self) -> Isolation {
+        Isolation::None
+    }
     fn prepare(&self, start: &AgentStart, env: &mut Vec<(String, String)>) -> Result<(), String>;
 }
 
@@ -120,6 +126,7 @@ impl Sandbox for Unconfined {
     fn prepare(&self, start: &AgentStart, _: &mut Vec<(String, String)>) -> Result<(), String> {
         if start.policy.sandboxed
             || start.policy.mode == ainkrad_proto::runner::PermissionMode::Sandboxed
+            || start.policy.asks_for_isolation()
         {
             return Err("isolation requested without an installed sandbox".into());
         }
@@ -317,6 +324,23 @@ impl AgentDriver {
             return Err(refuse(
                 ErrorCode::InvalidArgs,
                 "a secret's var is [A-Z_][A-Z0-9_]*, and not one the runner sets itself",
+            ));
+        }
+        // The policy's isolation fields are checked here and again by the Core; a session that
+        // needs more isolation than this runner's sandbox gives is refused, never run weaker.
+        if let Some(why) = req.policy.problem() {
+            return Err(refuse(ErrorCode::InvalidArgs, why));
+        }
+        if let Some(min) = req.policy.min_isolation
+            && !self.sandbox.tier().satisfies(min)
+        {
+            return Err(refuse(
+                ErrorCode::InvalidArgs,
+                format!(
+                    "the session needs {} isolation and this runner offers {}",
+                    min.as_str(),
+                    self.sandbox.tier().as_str()
+                ),
             ));
         }
         let slots = &self.config.slots;

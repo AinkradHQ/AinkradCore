@@ -3,6 +3,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::isolation::{
+    DISK_MB, Egress, Isolation, MEMORY_MB, VCPUS, WALL_SECS, WorkspaceMode, digest_problem,
+};
+
 /// A project's harness permission policy (1.3). Never full-auto by default.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Policy {
@@ -15,6 +19,66 @@ pub struct Policy {
     /// Runs must work in a disposable sandbox: only a sandboxed runner may take them.
     #[serde(default)]
     pub sandboxed: bool,
+    /// The weakest isolation the session may run in (E8a-08). Absent: any runner. A runner that
+    /// cannot offer it is never given the session, and refuses it if it is (E8a-09).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_isolation: Option<Isolation>,
+    /// The guest image, by digest (`sha256:` + 64 hex). Only a tier that boots an image takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// Virtual CPUs, 1 to 32. Only a VM tier has them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vcpus: Option<u32>,
+    /// Memory cap in MiB, 64 to 262144. It can only lower the runner's own cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_mb: Option<u32>,
+    /// Disk cap in MiB, 16 to 1048576. It can only lower the runner's own cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk_mb: Option<u32>,
+    /// A hard wall-clock cap in seconds, 1 to 86400: the host kills the sandbox at the deadline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wall_secs: Option<u32>,
+    /// Destinations the session may reach, narrowing the runner's own allowlist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<Egress>,
+    /// How the workspace reaches the sandbox. Absent: `bind`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<WorkspaceMode>,
+}
+
+impl Policy {
+    /// Why this policy must not be run, if it must not: a resource out of bounds, a malformed
+    /// digest, an egress rule that is not an IP or CIDR. Checked where a policy enters (the Core,
+    /// the runner), so no side relies on the other.
+    pub fn problem(&self) -> Option<String> {
+        let bounded = |name: &str, v: Option<u32>, r: &std::ops::RangeInclusive<u32>| {
+            v.filter(|v| !r.contains(v))
+                .map(|_| format!("{name} is {} to {}", r.start(), r.end()))
+        };
+        bounded("vcpus", self.vcpus, &VCPUS)
+            .or_else(|| bounded("memory_mb", self.memory_mb, &MEMORY_MB))
+            .or_else(|| bounded("disk_mb", self.disk_mb, &DISK_MB))
+            .or_else(|| bounded("wall_secs", self.wall_secs, &WALL_SECS))
+            .or_else(|| {
+                self.image
+                    .as_deref()
+                    .and_then(digest_problem)
+                    .map(str::to_owned)
+            })
+            .or_else(|| self.egress.as_ref().and_then(Egress::problem))
+    }
+
+    /// Whether any isolation field is set: a runner with no sandbox honours none of them.
+    pub fn asks_for_isolation(&self) -> bool {
+        self.min_isolation.is_some_and(|m| m != Isolation::None)
+            || self.image.is_some()
+            || self.vcpus.is_some()
+            || self.memory_mb.is_some()
+            || self.disk_mb.is_some()
+            || self.wall_secs.is_some()
+            || self.egress.is_some()
+            || self.workspace.is_some()
+    }
 }
 
 /// Caller-selected approval bypasses authorize code execution, including aliases and

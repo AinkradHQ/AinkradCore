@@ -770,6 +770,24 @@
       ],
       "type": "object"
     },
+    "Egress": {
+      "description": "Destinations a session may (`allow`) or may not (`deny`) reach, as IP literals or CIDR\nblocks. Host names are refused: they are the runner operator's, resolved only by the\negress proxy outside the sandbox. A session's rules can only narrow what the runner allows.",
+      "properties": {
+        "allow": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deny": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ErrorCode": {
       "description": "Machine codes, snake_case like the client API's (handshake spec §14).",
       "oneOf": [
@@ -1048,6 +1066,26 @@
       ],
       "type": "object"
     },
+    "Isolation": {
+      "description": "How strongly a session is isolated from its host, weakest to strongest.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "The harness runs as the runner's user (the default of a runner with no sandbox).",
+          "type": "string"
+        },
+        {
+          "const": "process",
+          "description": "A process sandbox: bubblewrap or Seatbelt.",
+          "type": "string"
+        },
+        {
+          "const": "microvm",
+          "description": "A virtual machine with its own kernel.",
+          "type": "string"
+        }
+      ]
+    },
     "Login": {
       "description": "A login place on a runner host (1.20): `dir` is relative to its config root\n(`claude`, `accounts/claude-a`), or `credentials/<file>` for an account's token file.",
       "properties": {
@@ -1197,6 +1235,53 @@
           },
           "type": "array"
         },
+        "disk_mb": {
+          "description": "Disk cap in MiB, 16 to 1048576. It can only lower the runner's own cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "egress": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Egress"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Destinations the session may reach, narrowing the runner's own allowlist."
+        },
+        "image": {
+          "description": "The guest image, by digest (`sha256:` + 64 hex). Only a tier that boots an image takes it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "memory_mb": {
+          "description": "Memory cap in MiB, 64 to 262144. It can only lower the runner's own cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min_isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Isolation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The weakest isolation the session may run in (E8a-08). Absent: any runner. A runner that\ncannot offer it is never given the session, and refuses it if it is (E8a-09)."
+        },
         "mode": {
           "$ref": "#/$defs/PermissionMode"
         },
@@ -1204,6 +1289,35 @@
           "default": false,
           "description": "Runs must work in a disposable sandbox: only a sandboxed runner may take them.",
           "type": "boolean"
+        },
+        "vcpus": {
+          "description": "Virtual CPUs, 1 to 32. Only a VM tier has them.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "wall_secs": {
+          "description": "A hard wall-clock cap in seconds, 1 to 86400: the host kills the sandbox at the deadline.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkspaceMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the workspace reaches the sandbox. Absent: `bind`."
         }
       },
       "required": [
@@ -2199,6 +2313,21 @@
         "branch"
       ],
       "type": "object"
+    },
+    "WorkspaceMode": {
+      "description": "How the session's workspace reaches the sandbox.",
+      "oneOf": [
+        {
+          "const": "bind",
+          "description": "The worktree is bound into the sandbox (every process tier).",
+          "type": "string"
+        },
+        {
+          "const": "copy",
+          "description": "The worktree is copied in and the result copied out; no host path is shared (a VM).",
+          "type": "string"
+        }
+      ]
     },
     "WorktreeDisk": {
       "description": "One issue's worktree in a `DiskReport`.",

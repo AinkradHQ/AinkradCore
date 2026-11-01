@@ -677,3 +677,53 @@ async fn an_agent_device_cannot_drive_or_read_a_session_that_holds_secrets() {
     .await;
     assert_eq!(r.0, StatusCode::OK, "{}", r.1);
 }
+
+/// The policy's isolation fields (E8a-08) are bounded at the Core, before any runner is asked:
+/// out-of-range resources, a malformed digest and a host name in an egress rule are a 400, an
+/// in-bounds policy reaches the runner check (not connected here), and an unknown tier is refused.
+#[tokio::test]
+async fn isolation_fields_are_checked_at_the_boundary() {
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let create = |policy: Value| json!({"runner": vm.id, "harness": "claude", "prompt": PROMPT, "policy": policy});
+    for (why, policy) in [
+        ("vcpus", json!({"mode": "ask", "vcpus": 0})),
+        ("memory", json!({"mode": "ask", "memory_mb": 999_999_999})),
+        ("disk", json!({"mode": "ask", "disk_mb": 1})),
+        ("wall", json!({"mode": "ask", "wall_secs": 0})),
+        ("digest", json!({"mode": "ask", "image": "ubuntu:latest"})),
+        (
+            "host name",
+            json!({"mode": "ask", "egress": {"allow": ["example.com"]}}),
+        ),
+        (
+            "prefix",
+            json!({"mode": "ask", "egress": {"deny": ["10.0.0.0/33"]}}),
+        ),
+        ("tier", json!({"mode": "ask", "min_isolation": "vm"})),
+    ] {
+        let r = call(
+            &fx,
+            &fx.dev,
+            Method::POST,
+            "/api/v1/agent-sessions",
+            create(policy),
+        )
+        .await;
+        assert_eq!(r.0, StatusCode::BAD_REQUEST, "{why}: {}", r.1);
+    }
+    let good = json!({"mode": "ask", "min_isolation": "process", "memory_mb": 512,
+                      "wall_secs": 60, "egress": {"allow": ["10.0.0.0/8"]}});
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::POST,
+        "/api/v1/agent-sessions",
+        create(good),
+    )
+    .await;
+    assert_eq!(
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::CONFLICT, Some("runner_offline"))
+    );
+}

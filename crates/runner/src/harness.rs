@@ -298,6 +298,20 @@ impl Executor for HarnessExecutor {
         if contained && !self.sandboxed {
             return Err("the project's runs must be sandboxed, and this runner is not".to_owned());
         }
+        // The agent driver's sandbox marks the run's environment once it has applied the policy's
+        // isolation fields; without that mark nothing has, and the run is refused.
+        let isolated = self.sandboxed
+            || self
+                .run_env
+                .lock()
+                .expect("run env lock")
+                .get(&job.run)
+                .is_some_and(|e| e.iter().any(|(n, _)| n == "AINKRAD_SANDBOX"));
+        if job.policy.asks_for_isolation() && !isolated {
+            return Err(
+                "the policy sets isolation fields, and this runner has no sandbox".to_owned(),
+            );
+        }
         let config = self.config_dir(job)?;
         std::fs::create_dir_all(&config).map_err(|e| format!("{}: {e}", config.display()))?;
         // The fallbacks' tokens are read now too, so the run redacts them from the start; one

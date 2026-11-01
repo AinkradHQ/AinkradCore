@@ -900,3 +900,81 @@ fn requested_isolation_never_falls_back_to_unconfined() {
     request.policy.sandboxed = true;
     assert!(Unconfined.prepare(&request, &mut vec![]).is_err());
 }
+
+/// A sandbox that offers a tier and records what it was asked to prepare.
+struct Tiered(Isolation, Arc<Mutex<usize>>);
+
+impl Sandbox for Tiered {
+    fn name(&self) -> &'static str {
+        "tiered"
+    }
+    fn tier(&self) -> Isolation {
+        self.0
+    }
+    fn prepare(&self, _: &AgentStart, _: &mut Vec<(String, String)>) -> Result<(), String> {
+        *self.1.lock().unwrap() += 1;
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_session_needing_more_isolation_than_the_runner_offers_is_refused_before_anything_starts()
+{
+    let (root, config) = dirs("tier");
+    let prepared = Arc::new(Mutex::new(0));
+    let driver = Arc::new(
+        AgentDriver::new(config, script("true"))
+            .unwrap()
+            .with_sandbox(Arc::new(Tiered(Isolation::Process, prepared.clone()))),
+    );
+    let mut vm = start("as_vm", "fake");
+    vm.policy.min_isolation = Some(Isolation::Microvm);
+    let why = driver.start(vm).unwrap_err();
+    assert_eq!(why.code, ErrorCode::InvalidArgs);
+    assert!(
+        why.message.contains("microvm") && why.message.contains("process"),
+        "{why:?}"
+    );
+    assert_eq!(*prepared.lock().unwrap(), 0, "the sandbox was never asked");
+    assert!(driver.info().commands.contains(&"agent.start".to_owned()));
+    // Control: the tier it does offer starts.
+    let mut ok = start("as_ok", "fake");
+    ok.policy.min_isolation = Some(Isolation::Process);
+    assert!(driver.start(ok).is_ok());
+    // A weaker requirement than the offer starts too.
+    let mut weak = start("as_weak", "fake");
+    weak.policy.min_isolation = Some(Isolation::None);
+    assert!(driver.start(weak).is_ok());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn an_unconfined_runner_refuses_every_isolation_field_and_takes_a_plain_policy() {
+    let (root, config) = dirs("unconfined-fields");
+    let driver = Arc::new(AgentDriver::new(config, script("true")).unwrap());
+    let mut min = start("as_min", "fake");
+    min.policy.min_isolation = Some(Isolation::Process);
+    assert!(driver.start(min).is_err());
+    for set in [
+        (|p: &mut ainkrad_proto::runner::Policy| p.wall_secs = Some(5))
+            as fn(&mut ainkrad_proto::runner::Policy),
+        |p| p.memory_mb = Some(128),
+        |p| p.disk_mb = Some(128),
+        |p| p.vcpus = Some(1),
+        |p| p.egress = Some(Default::default()),
+    ] {
+        let mut request = start("as_fields", "fake");
+        set(&mut request.policy);
+        assert!(Unconfined.prepare(&request, &mut vec![]).is_err());
+    }
+    assert!(
+        Unconfined
+            .prepare(&start("as_plain", "fake"), &mut vec![])
+            .is_ok()
+    );
+    // A policy out of bounds is refused by the runner too, whatever the Core said.
+    let mut wild = start("as_wild", "fake");
+    wild.policy.vcpus = Some(0);
+    assert_eq!(driver.start(wild).unwrap_err().code, ErrorCode::InvalidArgs);
+    let _ = std::fs::remove_dir_all(root);
+}
