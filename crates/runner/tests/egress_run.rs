@@ -288,3 +288,21 @@ fn prepare_refuses_filtered_on_a_runner_that_did_not_prove_the_filter() {
     assert!(prepared(&dir, true).is_ok());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The runner and the sandbox builder read a repeated network mode the same way (the last value):
+/// with `deny` last, a run with no egress policy is not refused for a `filtered` earlier in the
+/// list, and nothing is proxied.
+#[tokio::test]
+async fn the_runner_and_the_builder_agree_on_a_repeated_network_mode() {
+    let dir = scratch("last");
+    let ex = executor(&dir, 1, 2);
+    assert!(ex.egress.is_none());
+    let mut env = prepared(&dir, true).unwrap();
+    env.push(("AINKRAD_SANDBOX_NETWORK".to_owned(), "deny".to_owned()));
+    let outcome = run(&ex, Some(env)).await;
+    assert_eq!(outcome, Outcome::Succeeded);
+    let seen = parse(&dir.join("state/private-tmp/as_egress/env"));
+    assert!(!seen.contains_key("HTTPS_PROXY"), "{seen:?}");
+    assert!(!dir.join("state/private-tmp/as_egress/probe").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

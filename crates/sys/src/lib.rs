@@ -40,7 +40,9 @@ pub fn setsid() -> io::Result<()> {
 
 /// Marks every descriptor above 2 close-on-exec in the child just before it execs `cmd`, so a
 /// descriptor the parent leaked (a connected socket, a listener) does not reach the program, which
-/// bubblewrap otherwise passes through. Linux only; a kernel without `close_range` ignores it.
+/// bubblewrap otherwise passes through. Linux only. Kernels before 5.9 have no `close_range`, and
+/// 5.9 to 5.10 have it but reject the CLOEXEC flag (EINVAL): the call is then ignored, and the
+/// sandbox script, which closes the descriptors itself, is what covers those kernels.
 #[allow(unsafe_code)]
 pub fn close_fds_on_exec(cmd: &mut std::process::Command) {
     #[cfg(target_os = "linux")]

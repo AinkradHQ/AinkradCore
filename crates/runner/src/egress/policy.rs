@@ -90,6 +90,11 @@ impl Cidr {
         width == net_width && head(value, width, self.prefix) == head(net, width, self.prefix)
     }
 
+    /// A single-host entry for exactly `ip`.
+    fn is_exact(&self, ip: IpAddr) -> bool {
+        self.addr == ip && self.prefix == bits(ip).1
+    }
+
     /// Every address of `self` is in `outer`.
     fn within(&self, outer: &Cidr) -> bool {
         self.prefix >= outer.prefix && outer.contains(self.addr)
@@ -288,12 +293,21 @@ impl Policy {
         Ok(ip)
     }
 
-    /// Addresses no entry can open.
+    /// Addresses that need more than a covering CIDR. The metadata addresses are never reachable.
+    /// A host address (an interface address of this machine, any of 127.0.0.0/8, ::1) is reachable
+    /// only through an EXACT single-host entry (/32 or /128) naming it: a local model's own entry.
+    /// A broader CIDR that happens to contain one does not open it. The reserved ranges still
+    /// apply afterwards (`gate`), so that entry must also sit inside a reserved range it names.
     fn never(&self, ip: IpAddr) -> Result<(), Deny> {
         if metadata().iter().any(|m| m.contains(ip)) {
             return Err(Deny::Metadata);
         }
-        if self.own.contains(&ip) {
+        let host = self.own.contains(&ip)
+            || match ip {
+                IpAddr::V4(a) => a.is_loopback(),
+                IpAddr::V6(a) => a.is_loopback(),
+            };
+        if host && !self.cidrs.iter().any(|c| c.is_exact(ip)) {
             return Err(Deny::HostAddress);
         }
         Ok(())
@@ -326,8 +340,10 @@ fn embedded_v4(ip: IpAddr) -> Option<IpAddr> {
     Some(IpAddr::V4(Ipv4Addr::new(a, b, c, d)))
 }
 
-/// The host's own interface addresses, from `/proc` (no unsafe, no extra tool). An unreadable
-/// IPv4 table is an error: a runner that cannot list its addresses does not start filtering.
+/// The host's own interface addresses, from `/proc` (no unsafe, no extra tool), read once when the
+/// runner starts: an interface added later (docker0, a VPN) is not covered. A table that cannot be
+/// read, or that does not even list the loopback address, is an error: a runner that cannot list
+/// its addresses does not start filtering.
 pub fn host_addresses() -> Result<Vec<IpAddr>, String> {
     if !cfg!(target_os = "linux") {
         return Ok(vec![]);
@@ -341,6 +357,9 @@ pub fn host_addresses() -> Result<Vec<IpAddr>, String> {
     }
     all.sort();
     all.dedup();
+    if !all.contains(&IpAddr::V4(Ipv4Addr::LOCALHOST)) {
+        return Err("the host's IPv4 address table is empty or unreadable".to_owned());
+    }
     Ok(all)
 }
 

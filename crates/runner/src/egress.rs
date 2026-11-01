@@ -12,11 +12,9 @@
 //! lookup, so no rebinding window). Refusals say no more than a status. Nothing is logged about
 //! the destination or the payload.
 
-use std::future::Future;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -32,9 +30,12 @@ use tokio::time::timeout;
 use crate::mcp_bridge::filter::{self, Refusal};
 
 pub mod policy;
+mod resolve;
 mod selftest;
 
 pub use policy::{Deny, Policy, host_addresses};
+use resolve::MAX_ANSWERS;
+pub use resolve::{Answers, Limited, Resolve, System};
 pub use selftest::selftest;
 
 /// The forwarder's port inside the sandbox (its own network namespace, so a fixed number is safe):
@@ -45,8 +46,7 @@ pub const EGRESS_PORT: u16 = 47832;
 const PER_RUN: usize = 32;
 const GLOBAL: usize = 256;
 static OPEN: Semaphore = Semaphore::const_new(GLOBAL);
-/// Addresses taken from one answer, and dialled for one connection.
-const MAX_ANSWERS: usize = 16;
+/// Addresses dialled for one connection.
 const MAX_DIALS: usize = 4;
 /// Consecutive failed accepts after which the proxy gives up.
 const ACCEPT_FAILURES: u32 = 12;
@@ -74,41 +74,6 @@ impl Default for Limits {
             lifetime: Duration::from_secs(6 * 3600),
             per_run: PER_RUN,
         }
-    }
-}
-
-pub type Answers<'a> = Pin<Box<dyn Future<Output = io::Result<Vec<IpAddr>>> + Send + 'a>>;
-
-/// Looks a name up. Only the proxy, outside the sandbox, ever holds one.
-pub trait Resolve: Send + Sync {
-    fn resolve<'a>(&'a self, name: &'a str) -> Answers<'a>;
-}
-
-/// Lookups in flight across every run. A lookup is a blocking `getaddrinfo` that a timeout cannot
-/// cancel, so each holds its permit until it really ends; a flood of lookups for a name whose
-/// server never answers is refused here instead of using up the runtime's blocking threads.
-static LOOKUPS: Semaphore = Semaphore::const_new(8);
-
-/// The host's resolver.
-pub struct System;
-
-impl Resolve for System {
-    fn resolve<'a>(&'a self, name: &'a str) -> Answers<'a> {
-        Box::pin(async move {
-            let permit = LOOKUPS
-                .try_acquire()
-                .map_err(|_| io::Error::other("too many lookups in flight"))?;
-            let name = name.to_owned();
-            // The permit moves into the task: dropping this future on a timeout leaves the lookup
-            // running, and the permit with it, until the resolver gives up.
-            tokio::spawn(async move {
-                let _held = permit;
-                let found = tokio::net::lookup_host((name.as_str(), 0)).await?;
-                Ok(found.map(|a| a.ip()).take(MAX_ANSWERS).collect())
-            })
-            .await
-            .map_err(|_| io::Error::other("lookup task ended"))?
-        })
     }
 }
 
@@ -141,7 +106,7 @@ impl Drop for Proxy {
 
 /// Listens on `sock` (mode 0600) for this run, with the host resolver and default limits.
 pub fn start(sock: &Path, policy: Arc<Policy>) -> io::Result<Proxy> {
-    start_with(sock, policy, Arc::new(System), Limits::default())
+    start_with(sock, policy, Arc::new(Limited::system()), Limits::default())
 }
 
 pub fn start_with(

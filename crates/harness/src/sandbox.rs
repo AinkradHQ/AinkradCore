@@ -11,14 +11,9 @@ pub(crate) mod tree;
 pub(crate) use budget::configure as configure_budget;
 pub(crate) use budget::{Budget, Watch};
 
-/// The value of `key`; when it is set more than once the LAST one wins, as it does for the
-/// process environment (`Command::envs`), so this builder and the child can never disagree.
+/// The value of `key`; when it is set more than once the LAST one wins (`crate::last_env`).
 fn env<'a>(spec: &'a Spec, key: &str) -> &'a OsStr {
-    spec.env
-        .iter()
-        .rev()
-        .find(|(n, _)| n == key)
-        .map_or(OsStr::new(""), |(_, v)| v)
+    crate::last_env(&spec.env, key).map_or(OsStr::new(""), |v| v.as_os_str())
 }
 fn writable(spec: &Spec) -> Vec<PathBuf> {
     [&spec.cwd, &spec.config_dir]

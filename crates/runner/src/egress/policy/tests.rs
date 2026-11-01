@@ -65,7 +65,7 @@ fn a_broad_allow_never_opens_reserved_space() {
         "2001:db8::1",
         "64:ff9b::808:808",
         "2002:7f00:1::",
-        "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+        "2001:0:c000:221:8000:1234:3fff:fdd2",
     ] {
         assert_eq!(p.check_ip(ip(r), false), Err(Deny::Reserved), "{r}");
     }
@@ -254,4 +254,56 @@ fn the_proc_tables_parse_into_addresses() {
     if cfg!(target_os = "linux") {
         assert!(host_addresses().unwrap().contains(&ip("127.0.0.1")));
     }
+}
+
+#[test]
+fn a_host_address_needs_an_exact_entry_and_a_covering_cidr_does_not_open_it() {
+    let v4 = |d| IpAddr::V4(Ipv4Addr::new(11, 0, 0, d));
+    let own = [v4(1), ip("127.0.0.1")];
+    // The local model: an exact single-host entry opens exactly that address.
+    let p = policy("127.0.0.1/32", "").with_host_addresses(own);
+    assert_eq!(p.check_ip(ip("127.0.0.1"), false), Ok(ip("127.0.0.1")));
+    assert_eq!(p.check_ip(ip("127.0.0.1"), true), Ok(ip("127.0.0.1")));
+    // ... and not its neighbour, which is a host address too (all of 127.0.0.0/8 is).
+    assert_eq!(p.check_ip(ip("127.0.0.2"), false), Err(Deny::HostAddress));
+    assert_eq!(p.check_ip(ip("::1"), false), Err(Deny::HostAddress));
+    // Nothing allowed: 127.0.0.2 is refused as a host address, not slipped through.
+    let none = policy("", "").with_host_addresses(own);
+    assert_eq!(none.check_ip(ip("127.0.0.2"), true), Err(Deny::HostAddress));
+    // A CIDR that merely contains a host address does not open it, however broad.
+    let around = format!("{}/24", v4(0));
+    for wide in ["127.0.0.0/8", "127.0.0.0/24", "0.0.0.0/0", around.as_str()] {
+        let p = policy(wide, "").with_host_addresses(own);
+        for a in [v4(1), ip("127.0.0.1"), ip("127.0.0.2")] {
+            assert_eq!(p.check_ip(a, false), Err(Deny::HostAddress), "{wide} {a}");
+        }
+    }
+    // A public host address with its exact entry works (not a reserved range, so no gate).
+    let p = policy(&format!("{}/32", v4(1)), "").with_host_addresses(own);
+    assert_eq!(p.check_ip(v4(1), false), Ok(v4(1)));
+    assert_eq!(p.check_ip(v4(2), false), Err(Deny::NotListed));
+    // The IPv6 loopback with its exact entry.
+    let p = policy("::1/128", "");
+    assert_eq!(p.check_ip(ip("::1"), false), Ok(ip("::1")));
+}
+
+#[test]
+fn an_exact_entry_never_overrides_the_metadata_or_the_reserved_ranges() {
+    let own = [ip("169.254.169.254"), ip("10.1.2.3")];
+    let p = policy(
+        "169.254.169.254/32,fd00:ec2::254/128,10.1.2.3/32,fe80::1/128",
+        "",
+    )
+    .with_host_addresses(own);
+    assert_eq!(
+        p.check_ip(ip("169.254.169.254"), false),
+        Err(Deny::Metadata)
+    );
+    assert_eq!(p.check_ip(ip("fd00:ec2::254"), true), Err(Deny::Metadata));
+    // An exact entry names that single address inside a reserved range, which is the local-model
+    // rule; a CIDR that is the whole range or wider does not.
+    assert_eq!(p.check_ip(ip("10.1.2.3"), false), Ok(ip("10.1.2.3")));
+    let wide = policy("0.0.0.0/0,::/0", "").with_host_addresses(own);
+    assert_eq!(wide.check_ip(ip("10.1.2.3"), false), Err(Deny::HostAddress));
+    assert_eq!(wide.check_ip(ip("10.1.2.4"), false), Err(Deny::Reserved));
 }

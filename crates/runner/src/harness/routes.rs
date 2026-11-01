@@ -158,8 +158,8 @@ impl HarnessExecutor {
                     .expect("run env lock")
                     .get(&job.run)
                     .is_some_and(|e| {
-                        e.iter()
-                            .any(|(n, v)| n == "AINKRAD_SANDBOX_NETWORK" && v == want)
+                        ainkrad_harness::last_env(e, "AINKRAD_SANDBOX_NETWORK")
+                            .is_some_and(|v| v == want)
                     })
         };
         let filtered = network("filtered");

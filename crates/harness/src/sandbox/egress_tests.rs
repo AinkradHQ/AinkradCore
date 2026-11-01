@@ -145,3 +145,15 @@ fn a_variable_set_twice_takes_the_last_value_so_a_stale_allow_cannot_win() {
     ));
     assert!(!args.iter().any(|a| a == "/tmp/evil.sock"));
 }
+
+#[test]
+fn last_env_takes_the_last_value() {
+    let list = vec![
+        ("A".to_owned(), 1),
+        ("B".to_owned(), 2),
+        ("A".to_owned(), 3),
+    ];
+    assert_eq!(crate::last_env(&list, "A"), Some(&3));
+    assert_eq!(crate::last_env(&list, "B"), Some(&2));
+    assert_eq!(crate::last_env(&list, "C"), None);
+}
