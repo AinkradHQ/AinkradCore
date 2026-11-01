@@ -140,7 +140,23 @@ impl Identity {
             current.switched_from = Some(r.old_fp.clone());
             return Ok(current);
         }
-        if !path.exists() {
+        let missing = match std::fs::symlink_metadata(&path) {
+            Ok(_) => false,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+            Err(e) => return Err(e),
+        };
+        if missing {
+            // A home that sealed its identity before and lost the file must not make a new
+            // one: pinned clients would see core_identity_mismatch. Nothing is written.
+            // (Only the identity: `rotate` removes the next-key file on purpose.)
+            if key_file(dir, &path, sealed::IDENTITY_LABEL).was_sealed() {
+                return Err(std::io::Error::other(format!(
+                    "{} is missing, but this Core's identity was sealed before: restore it from a \
+                     backup (a new identity would make every paired device and runner refuse this \
+                     Core); nothing was written",
+                    path.display()
+                )));
+            }
             // Sealed, written whole to a private temp file and linked into place: the key file
             // is either absent or complete, and a racing creator's key is kept, never replaced.
             match sealed::create(

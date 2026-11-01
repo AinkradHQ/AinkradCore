@@ -60,6 +60,11 @@ impl KeyFile<'_> {
             .join(format!(".sealed.{}", self.label))
     }
 
+    /// Whether this kind of file was sealed before (the marker exists).
+    pub fn was_sealed(&self) -> bool {
+        self.marker().exists()
+    }
+
     /// Records, durably, that this kind of file is sealed.
     fn mark(&self) -> io::Result<()> {
         let m = self.marker();
@@ -348,7 +353,9 @@ pub fn file_key_ids(state: &Path) -> io::Result<Vec<String>> {
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
             Err(e) => return Err(err(format!("{}: {e}", p.display()))),
         };
-        if is_sealed(&bytes) {
+        // Anything that claims to be one of ours but has no readable v1 header is an error:
+        // it cannot be classified, so a purge must not go ahead.
+        if bytes.starts_with(b"ACSF") {
             ids.push(key_id_of(&bytes).ok_or_else(|| {
                 err(format!(
                     "{}: a sealed key file with an unreadable key id",

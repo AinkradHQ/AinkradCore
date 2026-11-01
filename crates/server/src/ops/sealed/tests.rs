@@ -368,3 +368,57 @@ fn a_legacy_plaintext_identity_keeps_its_fingerprint_and_is_sealed_by_the_first_
     // The plaintext is not accepted as a stand-in for a lost key.
     assert!(Identity::load_or_create(&d.0, &key(2)).is_err());
 }
+
+/// A home that sealed its identity and then lost the file does not make a new one (pinned
+/// clients would see `core_identity_mismatch`): an error, and nothing is written.
+#[test]
+fn a_lost_identity_file_is_never_replaced_by_a_new_identity() {
+    let d = dir("identity-lost");
+    let file = d.0.join(crate::auth::identity::FILE);
+    // A fresh home still creates its first identity.
+    Identity::load_or_create(&d.0, &key(1)).unwrap();
+    assert!(file.exists() && d.0.join("keys/.sealed.core.identity").exists());
+    std::fs::remove_file(&file).unwrap();
+    let before: Vec<_> = std::fs::read_dir(&d.0)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    for seal in [key(1), key(2)] {
+        let e = Identity::load_or_create(&d.0, &seal)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("is missing") && e.contains("nothing was written"),
+            "{e}"
+        );
+    }
+    assert!(Identity::load_at(&d.0, 5, &key(1)).is_err());
+    assert!(!file.exists(), "no identity was generated");
+    let after: Vec<_> = std::fs::read_dir(&d.0)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(before, after, "nothing else was written either");
+    assert_eq!(
+        std::fs::read_dir(d.0.join("keys")).unwrap().count(),
+        1,
+        "just the marker"
+    );
+}
+
+#[test]
+fn a_file_that_claims_to_be_ours_but_has_no_readable_header_is_an_error_for_purge() {
+    let d = dir("ids-acsf");
+    let id = d.0.join(crate::auth::identity::FILE);
+    for bad in [
+        &b"ACSF\x02whatever-version-two"[..],
+        b"ACSF",
+        b"ACSF\x01short",
+    ] {
+        private(&id, bad);
+        let e = file_key_ids(&d.0).unwrap_err().to_string();
+        assert!(e.contains("unreadable key id"), "{e}");
+    }
+    private(&id, b"plain legacy bytes");
+    assert!(file_key_ids(&d.0).unwrap().is_empty());
+}
