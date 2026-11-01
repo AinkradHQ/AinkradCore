@@ -1,5 +1,5 @@
 //! Push tokens (E2-12.1): where a device gets pushes. One token per provider per device, bound
-//! to the device that registered it; a token another device held moves to the new one. The row
+//! to the device that registered it; another device cannot register a token that is held. The row
 //! goes when the device is revoked (`revoke_in`) and when the provider says the token is dead or
 //! it fails too often (`note_result`).
 
@@ -27,6 +27,86 @@ pub struct PushTarget {
     pub token: String,
     /// APNs only: a development build's token, for the sandbox gateway.
     pub sandbox: bool,
+    /// The kinds the device opted into; `None` is every kind its scopes allow.
+    pub kinds: Option<Vec<String>>,
+}
+
+/// The most kinds a device can list, and the longest one.
+const MAX_KINDS: usize = 32;
+const MAX_KIND: usize = 64;
+
+/// `kinds` as stored: sorted, once each, each a short id-like name (`approval_needed`,
+/// `citadel.issue_blocked`). A name no code raises is harmless; it just never matches.
+pub fn clean_kinds(kinds: &[String]) -> Result<Vec<String>, Error> {
+    let ok = |k: &String| {
+        !k.is_empty()
+            && k.len() <= MAX_KIND
+            && k.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+    };
+    if kinds.len() > MAX_KINDS || !kinds.iter().all(ok) {
+        return Err(Error::InvalidArgument(format!(
+            "at most {MAX_KINDS} kinds, each 1 to {MAX_KIND} letters, digits, '_', '.' or '-'"
+        )));
+    }
+    let mut out = kinds.to_vec();
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+/// The kinds the device opted into (`None`: every kind its scopes allow).
+pub async fn get_kinds(pool: &SqlitePool, device: &str) -> Result<Option<Vec<String>>, Error> {
+    let raw: Option<String> = sqlx::query_scalar(
+        "SELECT k.kinds FROM core_push_kinds k JOIN core_devices d ON d.seq = k.device_seq \
+         WHERE d.id = ?",
+    )
+    .bind(device)
+    .fetch_optional(pool)
+    .await?;
+    raw.map(|r| serde_json::from_str(&r).map_err(|e| Error::Decode(Box::new(e))))
+        .transpose()
+}
+
+/// Sets (`None` resets to every kind) what the device is pushed; `false` when the device is
+/// gone or not usable. The choice outlives any one token: a pruned token that is registered
+/// again keeps it.
+pub async fn set_kinds(
+    pool: &SqlitePool,
+    device: &str,
+    kinds: Option<&[String]>,
+) -> Result<bool, Error> {
+    let kinds = kinds.map(clean_kinds).transpose()?;
+    let mut tx = begin_write(pool).await?;
+    let seq: Option<i64> = sqlx::query_scalar(
+        "SELECT seq FROM core_devices WHERE id = ? AND status = 'active' AND revoked_at IS NULL",
+    )
+    .bind(device)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(seq) = seq else {
+        return Ok(false);
+    };
+    match kinds {
+        Some(k) => {
+            sqlx::query(
+                "INSERT INTO core_push_kinds (device_seq, kinds) VALUES (?, ?) \
+                 ON CONFLICT (device_seq) DO UPDATE SET kinds = excluded.kinds",
+            )
+            .bind(seq)
+            .bind(serde_json::to_string(&k).map_err(|e| Error::Encode(Box::new(e)))?)
+            .execute(&mut *tx)
+            .await?;
+        }
+        None => {
+            sqlx::query("DELETE FROM core_push_kinds WHERE device_seq = ?")
+                .bind(seq)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// The token as stored, or why it is refused.
@@ -78,11 +158,22 @@ pub async fn set_token(
     };
     match token {
         Some((token, sandbox)) => {
-            sqlx::query("DELETE FROM core_push_tokens WHERE provider = ? AND token = ?")
-                .bind(provider)
-                .bind(&token)
-                .execute(&mut *tx)
-                .await?;
+            // A token is one device's: another device cannot take it over (it would then
+            // receive pushes under its own scopes, and the first would silently get none). A
+            // reinstall on the same device re-registers its own; a revoked device's rows are
+            // already gone.
+            let held: Option<i64> = sqlx::query_scalar(
+                "SELECT device_seq FROM core_push_tokens WHERE provider = ? AND token = ?",
+            )
+            .bind(provider)
+            .bind(&token)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if held.is_some_and(|h| h != seq) {
+                return Err(Error::InvalidArgument(
+                    "that push token cannot be registered".to_owned(),
+                ));
+            }
             sqlx::query(
                 "INSERT INTO core_push_tokens (device_seq, provider, token, sandbox) \
                  VALUES (?, ?, ?, ?) ON CONFLICT (device_seq, provider) DO UPDATE SET \
@@ -119,8 +210,9 @@ pub async fn set_push_token(
 /// Every token of a usable device, oldest device first.
 pub async fn push_targets(pool: &SqlitePool) -> Result<Vec<PushTarget>, Error> {
     let rows = sqlx::query(
-        "SELECT d.seq, d.id, d.scopes, t.provider, t.token, t.sandbox \
+        "SELECT d.seq, d.id, d.scopes, t.provider, t.token, t.sandbox, k.kinds \
          FROM core_push_tokens t JOIN core_devices d ON d.seq = t.device_seq \
+         LEFT JOIN core_push_kinds k ON k.device_seq = d.seq \
          WHERE d.status = 'active' AND d.revoked_at IS NULL ORDER BY d.seq, t.id",
     )
     .fetch_all(pool)
@@ -128,6 +220,7 @@ pub async fn push_targets(pool: &SqlitePool) -> Result<Vec<PushTarget>, Error> {
     rows.into_iter()
         .map(|r| {
             let scopes: String = r.try_get("scopes")?;
+            let kinds: Option<String> = r.try_get("kinds")?;
             Ok(PushTarget {
                 device: DeviceKeyId(r.try_get("seq")?),
                 device_id: r.try_get("id")?,
@@ -135,6 +228,9 @@ pub async fn push_targets(pool: &SqlitePool) -> Result<Vec<PushTarget>, Error> {
                 provider: r.try_get("provider")?,
                 token: r.try_get("token")?,
                 sandbox: r.try_get("sandbox")?,
+                kinds: kinds
+                    .map(|k| serde_json::from_str(&k).map_err(|e| Error::Decode(Box::new(e))))
+                    .transpose()?,
             })
         })
         .collect()

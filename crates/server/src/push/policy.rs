@@ -132,6 +132,7 @@ mod tests {
             provider: "apns".to_owned(),
             token: String::new(),
             sandbox: false,
+            kinds: None,
         }
     }
 
