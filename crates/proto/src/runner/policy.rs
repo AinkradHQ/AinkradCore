@@ -469,6 +469,21 @@ mod authority_tests {
             ("Bash:sed", "sed --expression=1e f"),
             ("Bash:sed", "sed -n 1w x f"),
             ("Bash:uniq", "uniq in out"),
+            ("Bash:tree", "tree -R"),
+            ("Bash:cargo doc", "cargo doc --open"),
+            ("Bash:cargo doc", "cargo doc --op"),
+            ("Bash:node a.js", "node inspect a.js"),
+            ("Bash:git diff", "git diff --no-index a b"),
+            ("Bash:cat", "cat /etc/passwd"),
+            ("Bash:cat", "cat ../x"),
+            ("Bash:cat", "cat a/../../x"),
+            ("Bash:cat", "cat ~/x"),
+            ("Bash:grep", "grep -rn x /"),
+            ("Bash:grep", "grep --file=/etc/passwd x"),
+            ("Bash:find", "find / -name x"),
+            ("Bash:ls", "ls /"),
+            ("Bash:ls", "ls .."),
+            ("Bash:jq", "jq . /etc/hosts"),
             ("Bash:php artisan", "php -r x artisan"),
         ] {
             assert!(!covered(rule, c), "{rule} vs {c}");
@@ -1039,7 +1054,9 @@ fn guard(name: &str, args: &[String]) -> bool {
         }),
         "tree" => args
             .iter()
-            .any(|a| cluster(a, "o") || long(a, &["--output"])),
+            .any(|a| cluster(a, "oR") || long(a, &["--output"])),
+        "cargo" => args.iter().any(|a| long(a, &["--open"])),
+        "node" => args.first().is_some_and(|a| a == "inspect" || a == "debug"),
         // `uniq in out` writes `out`.
         "uniq" => args.iter().filter(|a| !a.starts_with('-')).count() > 1,
         "sed" => {
@@ -1071,9 +1088,10 @@ fn guard(name: &str, args: &[String]) -> bool {
             let sub = args.first().map(String::as_str).unwrap_or("");
             let rest = args.get(1..).unwrap_or(&[]);
             match sub {
-                "diff" | "log" | "show" => rest
-                    .iter()
-                    .any(|a| long(a, &["--output", "--ext-diff", "--textconv"]) || cluster(a, "O")),
+                "diff" | "log" | "show" => rest.iter().any(|a| {
+                    long(a, &["--output", "--ext-diff", "--textconv", "--no-index"])
+                        || cluster(a, "O")
+                }),
                 "branch" => rest.iter().any(|a| {
                     cluster(a, "dDmMcCfu")
                         || long(
@@ -1114,7 +1132,18 @@ pub fn safe_call(words: &[String]) -> bool {
         Safe::Any => true,
         Safe::Script => args.first().is_some_and(|a| plain_file(a)),
     };
-    shape && !guard(first, args)
+    // The read-only tools read whatever path they are given: operands stay inside the workspace.
+    let reads_files = ![
+        "echo", "test", "true", "false", "pwd", "cargo", "git", "node", "python3", "python", "php",
+    ]
+    .contains(&first.as_str());
+    let outside = |a: &String| {
+        let value = a.split_once('=').map_or(a.as_str(), |(_, v)| v);
+        [a.as_str(), value]
+            .iter()
+            .any(|v| v.starts_with(['/', '~']) || v.split('/').any(|p| p == ".."))
+    };
+    shape && !guard(first, args) && !(reads_files && args.iter().any(outside))
 }
 
 /// Whether a stored rule's `prefix` words cover the stage `words` of a call: the stage starts with

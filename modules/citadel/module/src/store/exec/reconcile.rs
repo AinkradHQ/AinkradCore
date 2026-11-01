@@ -416,8 +416,10 @@ async fn scan_approvals<H: Host>(
         let (Some(request), Some(tool)) = (e.body["id"].as_str(), e.body["tool"].as_str()) else {
             continue;
         };
-        let sane =
-            !request.is_empty() && request.len() <= 256 && !request.contains(char::is_control);
+        let sane = !request.is_empty()
+            && request.len() <= 256
+            && tool.len() <= 256
+            && !request.contains(char::is_control);
         let covered = rules
             .iter()
             .find(|(_, rule)| {

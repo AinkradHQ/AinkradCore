@@ -31,6 +31,15 @@ impl HarnessExecutor {
         }
         // The usable rules for this tool: an entry that `rule_problem` finds fault with (a shell,
         // a wrapper, a destructive command, stored before the check existed) covers nothing.
+        for entry in policy
+            .allow
+            .iter()
+            .filter(|e| e.starts_with(tool) && e[tool.len()..].starts_with(':'))
+        {
+            if rule_prefix(entry, tool).is_none() {
+                warn_unusable_rule(entry);
+            }
+        }
         let rules: Vec<Vec<String>> = (policy.allow.iter())
             .filter_map(|entry| rule_prefix(entry, tool))
             .collect();
@@ -262,4 +271,19 @@ fn filter(stage: &[String]) -> bool {
     let others = args.iter().filter(|a| !flag(a, banned)).count();
     let refused = args.iter().any(|a| a.starts_with('-') && !flag(a, banned));
     others <= operands && !refused
+}
+
+/// Says once per rule that a `<tool>:<prefix>` entry is not on the allowlist and so matches nothing:
+/// the call is escalated instead, and the reviewer can approve it once.
+fn warn_unusable_rule(entry: &str) {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let first = SEEN
+        .get_or_init(Default::default)
+        .lock()
+        .is_ok_and(|mut seen| seen.insert(entry.chars().take(256).collect()));
+    if first {
+        tracing::warn!(rule = %entry.chars().take(256).collect::<String>(), "an allow rule is not on the safe-command list and matches nothing");
+    }
 }
