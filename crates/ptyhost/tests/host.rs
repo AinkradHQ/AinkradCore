@@ -215,19 +215,31 @@ async fn a_hundred_open_close_cycles_leave_nothing() {
             && f.get(2).is_some_and(|s| s.starts_with('Z'))
             && line.contains("ainkrad-ptyhos")
     };
-    // Hosts of tests running alongside may be a moment from being reaped: retry briefly.
+    // A closed host's child and the hosts of tests running alongside may be a moment from being
+    // reaped: retry briefly until nothing is left.
+    let left_over = |table: &str| {
+        table.lines().find_map(|line| {
+            if zombie(line) {
+                Some(format!("zombie: {line}"))
+            } else if line.contains(&*dir.to_string_lossy()) {
+                Some(format!("left over: {line}"))
+            } else if line.contains("sleep 997") {
+                Some(format!("child left over: {line}"))
+            } else {
+                None
+            }
+        })
+    };
     let mut table = ps();
-    for _ in 0..30 {
-        if !table.lines().any(zombie) {
+    for _ in 0..50 {
+        if left_over(&table).is_none() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
         table = ps();
     }
-    for line in table.lines() {
-        assert!(!zombie(line), "zombie: {line}");
-        assert!(!line.contains(&*dir.to_string_lossy()), "left over: {line}");
-        assert!(!line.contains("sleep 997"), "child left over: {line}");
+    if let Some(why) = left_over(&table) {
+        panic!("{why}");
     }
 }
 
