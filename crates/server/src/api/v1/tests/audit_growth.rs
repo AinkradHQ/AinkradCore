@@ -173,7 +173,13 @@ async fn step_up_refusals_for_varying_ids_share_one_key() {
     let admin = plain(&fx, "plain", &ALL, true).await;
     let before = fx.app.auth.refusals.len();
     for n in 0..20 {
-        let r = post(&fx, &admin, &format!("/api/v1/pairings/p_{n}/approve"), json!({})).await;
+        let r = post(
+            &fx,
+            &admin,
+            &format!("/api/v1/pairings/p_{n}/approve"),
+            json!({}),
+        )
+        .await;
         assert_eq!(r.1["code"], json!("step_up_required"));
     }
     assert_eq!(
@@ -184,7 +190,11 @@ async fn step_up_refusals_for_varying_ids_share_one_key() {
         20
     );
     // The route's key plus the device's own: two, whatever the number of ids.
-    assert!(fx.app.auth.refusals.len() <= before + 2, "{}", fx.app.auth.refusals.len());
+    assert!(
+        fx.app.auth.refusals.len() <= before + 2,
+        "{}",
+        fx.app.auth.refusals.len()
+    );
 }
 
 #[tokio::test]

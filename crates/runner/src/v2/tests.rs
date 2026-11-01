@@ -1086,7 +1086,9 @@ mod pty {
         };
         match tokio::time::timeout(Duration::from_secs(120), wait).await {
             Ok(b) => b,
-            Err(_) => panic!("stream {stream}: the expected frame never came; output so far: {out:?}"),
+            Err(_) => {
+                panic!("stream {stream}: the expected frame never came; output so far: {out:?}")
+            }
         }
     }
 

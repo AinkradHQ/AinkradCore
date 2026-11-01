@@ -393,7 +393,10 @@ mod tests {
                 Some("/api/v1/devices/{id}")
             );
         }
-        assert_eq!(destructive_template(&Method::GET, "/api/v1/devices/d_a", &[]), None);
+        assert_eq!(
+            destructive_template(&Method::GET, "/api/v1/devices/d_a", &[]),
+            None
+        );
         assert_eq!(destructive_template(&m, "/api/v1/nope/x", &[]), None);
     }
 
