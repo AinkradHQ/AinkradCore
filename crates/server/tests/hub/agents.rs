@@ -853,3 +853,49 @@ async fn a_session_on_a_revoked_runner_is_lost_at_once() {
     }
     let _ = std::fs::remove_dir_all(&st.0);
 }
+
+/// KAN-417: a failed device read says nothing about the runner. With the devices table
+/// unreadable, a session whose runner is away is neither lost at once nor marked revoked: the
+/// supervisor retries, and the runner's revocation is still seen once the table reads again.
+#[tokio::test]
+async fn an_unreadable_device_row_does_not_lose_a_session() {
+    let core = Core::start("agents-unreadable", hub_quick()).await;
+    let base = format!("http://{}", core.host);
+    let st = state("agents-unreadable");
+    paired(&core, &base, None, &st).await;
+    let r = run_runner(
+        &core,
+        &base,
+        &st,
+        script("while :; do echo tick; sleep 0.05; done"),
+    )
+    .await;
+    let id = session(&core, &r.id, &[]).await;
+    while state_of(&core, &id).await.state != "running" {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let rid = r.id.clone();
+    r.halt().await;
+    let away = "ALTER TABLE core_devices RENAME TO core_devices_away";
+    let back = "ALTER TABLE core_devices_away RENAME TO core_devices";
+    sqlx::query(away).execute(&core.app.pool).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let s = state_of(&core, &id).await;
+    assert_eq!(s.state, "running", "an unreadable row is not a revocation");
+    sqlx::query(back).execute(&core.app.pool).await.unwrap();
+    let now = core.app.clock.now();
+    let done = ainkrad_core_server::store::gov::revoke_device(
+        &core.app.pool,
+        &rid,
+        AuditActor::System,
+        None,
+        &now,
+    );
+    assert!(done.await.unwrap());
+    let started = std::time::Instant::now();
+    while state_of(&core, &id).await.state != "lost" {
+        assert!(started.elapsed() < Duration::from_secs(10), "never lost");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let _ = std::fs::remove_dir_all(&st.0);
+}
