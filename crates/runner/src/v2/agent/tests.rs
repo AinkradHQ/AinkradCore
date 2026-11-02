@@ -1180,13 +1180,13 @@ async fn an_account_secret_marks_its_session_and_no_other_secret_does() {
                 .unwrap()
                 .with_redeem(redeem.clone()),
         );
-        let mut req = start("acct_a", "fake");
+        let mut req = start("as_acct", "fake");
         req.secrets = vec![SecretGrant {
             lease: lease.to_owned(),
             var: "KEY".to_owned(),
         }];
         d.start(req).unwrap();
-        let (entries, _) = drain(&d, "acct_a").await;
+        let (entries, _) = drain(&d, "as_acct").await;
         let text = serde_json::to_string(&entries).unwrap();
         assert!(text.contains(&format!("mark={want}")), "{lease}: {text}");
     }

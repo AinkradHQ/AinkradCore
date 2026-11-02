@@ -62,9 +62,8 @@ fn checked(secrets: &[SessionSecret], policy: &Value) -> Result<(), Invalid> {
 fn an_account_session_must_ask_for_a_sandbox_whoever_creates_it() {
     let key = [secret("acct.anthropic.main")];
     for policy in [
-        json!({}),
         json!({"mode": "ask"}),
-        json!({"min_isolation": "none"}),
+        json!({"mode": "ask", "min_isolation": "none"}),
     ] {
         let Err(Invalid::Bad(why)) = checked(&key, &policy) else {
             panic!("{policy} must be refused")
@@ -72,14 +71,14 @@ fn an_account_session_must_ask_for_a_sandbox_whoever_creates_it() {
         assert!(why.contains("provider-account"), "{why}");
     }
     // A malformed acct. name counts as an account too: fail closed.
-    assert!(checked(&[secret("acct.nobody.x")], &json!({})).is_err());
-    assert!(checked(&[secret("acct.")], &json!({})).is_err());
+    assert!(checked(&[secret("acct.nobody.x")], &json!({"mode": "ask"})).is_err());
+    assert!(checked(&[secret("acct.")], &json!({"mode": "ask"})).is_err());
     // Asking for the sandbox passes, and so does a stronger tier.
     assert!(checked(&key, &sandboxed()).is_ok());
-    assert!(checked(&key, &json!({"min_isolation": "microvm"})).is_ok());
+    assert!(checked(&key, &json!({"mode": "ask", "min_isolation": "microvm"})).is_ok());
     // Control: other secrets and no secrets keep needing nothing.
-    assert!(checked(&[secret("git.token")], &json!({})).is_ok());
-    assert!(checked(&[], &json!({})).is_ok());
+    assert!(checked(&[secret("git.token")], &json!({"mode": "ask"})).is_ok());
+    assert!(checked(&[], &json!({"mode": "ask"})).is_ok());
 }
 
 #[test]
@@ -96,7 +95,8 @@ fn an_account_session_is_placed_only_on_a_linux_runner_with_a_proven_filter() {
     assert!(why.contains("egress filter"), "{why}");
     assert!(account_refusal(&runner(Some("linux"), false)).is_some());
     // A stored session whose policy asks for no sandbox is refused at launch too.
-    let why = placement_refusal(&runner(Some("linux"), true), &key, &json!({})).unwrap();
+    let why =
+        placement_refusal(&runner(Some("linux"), true), &key, &json!({"mode": "ask"})).unwrap();
     assert!(why.contains("sandboxed"), "{why}");
     // An unreadable policy is refused, never read as "no requirement".
     assert!(placement_refusal(&runner(Some("linux"), true), &key, &json!({"x": 1})).is_some());
@@ -108,7 +108,11 @@ fn an_account_session_is_placed_only_on_a_linux_runner_with_a_proven_filter() {
     // Control: a session with no account secret is not held to any of it.
     for secrets in [&[][..], &[secret("git.token")][..]] {
         assert_eq!(
-            placement_refusal(&runner(Some("macos"), false), secrets, &json!({})),
+            placement_refusal(
+                &runner(Some("macos"), false),
+                secrets,
+                &json!({"mode": "ask"})
+            ),
             None
         );
     }
