@@ -14,6 +14,10 @@
 //! - **Gate G-SEC** (`secrets.mode`): 0 (the default) refuses every store, rotation, grant and
 //!   redemption; 1 takes throwaway values only (one shaped like a real key is refused); 2 takes
 //!   real ones, once the external review has closed. Listing and deleting always work.
+//! - **Narrow gate** (`secrets.provider_accounts`, default 0): with the broker on (mode 1) it lets
+//!   only a provider-account secret (`acct.<provider>.<label>`, see [`kind_of`]) be real-shaped;
+//!   every other secret keeps the mode 1/2 rule. An `acct.` name with an unknown provider is
+//!   refused whatever the gate says.
 //! - **Bounded**: the value's size, the number of secrets and of live leases, and a lease's
 //!   lifetime are settings (`secrets.*`).
 
@@ -112,6 +116,38 @@ pub fn valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b))
 }
 
+/// Names under this prefix are provider-account secrets: `acct.<provider>.<label>`.
+pub const ACCOUNT_PREFIX: &str = "acct.";
+
+/// The provider kinds an account secret may name. Extending it is a code change on purpose.
+pub const ACCOUNT_PROVIDERS: [&str; 3] = ["anthropic", "openai", "google"];
+
+/// What a secret is for, from its name alone (the account model will mint these names).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A git, forge, Linear or any other secret.
+    Other,
+    /// An AI provider account's key.
+    ProviderAccount,
+}
+
+/// Classifies `name`; fails closed: a name under [`ACCOUNT_PREFIX`] that is not
+/// `acct.<known provider>.<label>` is refused, never treated as `Other`.
+pub fn kind_of(name: &str) -> Result<Kind, Error> {
+    let Some(rest) = name.strip_prefix(ACCOUNT_PREFIX) else {
+        return Ok(Kind::Other);
+    };
+    match rest.split_once('.') {
+        Some((p, label)) if ACCOUNT_PROVIDERS.contains(&p) && !label.is_empty() => {
+            Ok(Kind::ProviderAccount)
+        }
+        _ => refused(
+            "bad_request",
+            "a name under acct. is acct.<provider>.<label> with a known provider",
+        ),
+    }
+}
+
 /// The associated data of a sealed value: its secret and version.
 fn label(name: &str, version: i64) -> String {
     format!("core.secret:{name}:v{version}")
@@ -144,7 +180,8 @@ pub async fn require_enabled(pool: &SqlitePool) -> Result<(), Error> {
 }
 
 /// The checks every value passes before it is sealed.
-async fn check_value(conn: &mut SqliteConnection, value: &str) -> Result<(), Error> {
+async fn check_value(conn: &mut SqliteConnection, name: &str, value: &str) -> Result<(), Error> {
+    let kind = kind_of(name)?;
     let mode = enabled(conn).await?;
     let max = setting(conn, Key::SecretsMaxBytes).await?;
     if value.is_empty() {
@@ -159,7 +196,10 @@ async fn check_value(conn: &mut SqliteConnection, value: &str) -> Result<(), Err
     // Before G-SEC only throwaway values: one the redactor recognises as a real key shape is
     // refused. ponytail: shapes only, as the redactor; a real value with no known prefix gets
     // through, which is why mode 1 is a guard rail and the gate itself is mode 2.
-    if mode < 2 && Redactor::new().text(value) != value {
+    // The narrow gate lifts this for a provider-account secret only, and only when it is on.
+    let account_gate =
+        kind == Kind::ProviderAccount && setting(conn, Key::SecretsProviderAccounts).await? == 1;
+    if mode < 2 && !account_gate && Redactor::new().text(value) != value {
         return refused(
             "real_secret_refused",
             "the value looks like a real credential; real secrets wait for gate G-SEC \
@@ -277,7 +317,7 @@ pub async fn create(
     check_delivery(delivery)?;
     let runners = new.runners.unwrap_or_default();
     let mut tx = super::begin_write(pool).await?;
-    check_value(&mut tx, new.value).await?;
+    check_value(&mut tx, name, new.value).await?;
     check_runners(&mut tx, runners).await?;
     let max = setting(&mut tx, Key::SecretsMaxCount).await?;
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM core_secrets")
@@ -337,7 +377,7 @@ pub async fn rotate(
 ) -> Result<Meta, Error> {
     let mut tx = super::begin_write(pool).await?;
     let old = find(&mut tx, name).await?;
-    check_value(&mut tx, new.value).await?;
+    check_value(&mut tx, name, new.value).await?;
     let delivery = new.delivery.unwrap_or(&old.delivery);
     check_delivery(delivery)?;
     let runners = new.runners.unwrap_or(&old.runners);

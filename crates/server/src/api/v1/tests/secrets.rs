@@ -504,3 +504,131 @@ async fn a_module_opens_only_its_own_secrets_and_it_is_audited() {
     let e = open("citadel", "citadel.forge.tok").await.err().unwrap();
     assert!(e.to_string().starts_with("secrets_disabled"), "{e}");
 }
+
+/// The narrow gate (`secrets.provider_accounts`): only a provider-account secret may be
+/// real-shaped, only while the gate is on, and only in mode 1; everything else is unchanged.
+#[tokio::test]
+async fn the_provider_account_gate_lets_only_account_secrets_be_real() {
+    let (fx, _vm) = broker().await;
+    let real = ainkrad_proto::redact::PLANTED[0].1;
+    let gh = ainkrad_proto::redact::PLANTED[4].1;
+    let refused = (StatusCode::CONFLICT, "real_secret_refused");
+    let account = "acct.anthropic.main";
+    let others = [
+        "git.token",
+        "forge.token",
+        "linear.api",
+        "acctx.anthropic.m",
+    ];
+
+    // Gate off (the default): an account secret is refused like any other.
+    for n in others.iter().chain(&[account]) {
+        assert_eq!(code(&create(&fx, n, real, &[]).await), refused, "{n}");
+    }
+    // Gate on, mode 1: the account secret is accepted, every other real value still refused.
+    set(&fx, Key::SecretsProviderAccounts, 1).await;
+    for n in others {
+        let r = create(&fx, n, gh, &[]).await;
+        assert_eq!(code(&r), refused, "{n}");
+        assert!(!r.1.to_string().contains(gh));
+    }
+    assert_eq!(create(&fx, account, real, &[]).await.0, StatusCode::OK);
+    // A rotation follows the same rule, by name.
+    create(&fx, "git.token", V1, &[]).await;
+    let uri = "/api/v1/secrets/git.token";
+    let r = call(&fx, &fx.dev, Method::PUT, uri, json!({"value": gh})).await;
+    assert_eq!(code(&r), refused);
+    let uri = format!("/api/v1/secrets/{account}");
+    let r = call(&fx, &fx.dev, Method::PUT, &uri, json!({"value": real})).await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    // Fails closed on unknown kinds, gate on or off.
+    for n in [
+        "acct.",
+        "acct.nobody.x",
+        "acct.anthropic",
+        "acct.anthropic.",
+    ] {
+        let r = create(&fx, n, V1, &[]).await;
+        assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_request"), "{n}");
+    }
+    // The gate never turns the broker on.
+    set(&fx, Key::SecretsMode, 0).await;
+    assert_eq!(
+        code(&create(&fx, "acct.openai.b", real, &[]).await),
+        (StatusCode::CONFLICT, "secrets_disabled")
+    );
+    // Gate off again: refused once more.
+    set(&fx, Key::SecretsMode, 1).await;
+    set(&fx, Key::SecretsProviderAccounts, 0).await;
+    assert_eq!(
+        code(&create(&fx, "acct.openai.b", real, &[]).await),
+        refused
+    );
+    assert!(!trail(&fx).await.contains(real));
+}
+
+#[test]
+fn secrets_are_classified_by_name() {
+    use crate::store::secrets::{Kind, kind_of};
+    for n in ["acct.anthropic.a", "acct.openai.work-1", "acct.google.x.y"] {
+        assert_eq!(kind_of(n).unwrap(), Kind::ProviderAccount, "{n}");
+    }
+    for n in [
+        "git.token",
+        "acct",
+        "accts.anthropic.a",
+        "my.acct.anthropic.a",
+    ] {
+        assert_eq!(kind_of(n).unwrap(), Kind::Other, "{n}");
+    }
+    for n in [
+        "acct.",
+        "acct.x",
+        "acct.anthropic",
+        "acct.anthropic.",
+        "acct.Anthropic.a",
+    ] {
+        assert!(kind_of(n).is_err(), "{n}");
+    }
+}
+
+/// Flipping the gate is an admin setting write: it needs a step-up and leaves a `setting.set`
+/// audit row.
+#[tokio::test]
+async fn flipping_the_provider_account_gate_needs_a_step_up_and_is_audited() {
+    let (fx, _vm) = broker().await;
+    let uri = "/api/v1/settings/server/secrets.provider_accounts";
+    let body = json!({"value": 1});
+    let mac = TestDevice::enroll(
+        &fx.app.pool,
+        "mac",
+        "device",
+        &ALL,
+        &fx.app.auth.identity.fp,
+        fx.clock.clone(),
+    )
+    .await;
+    let s = fx.app.auth.issue_session(&mac.id, fx.clock.unix());
+    mac.set_session(Some(s.id));
+    let r = call(&fx, &mac, Method::PUT, uri, body.clone()).await;
+    assert_eq!(code(&r), (StatusCode::FORBIDDEN, "step_up_required"));
+    let reader = fx.enroll("phone", &["read", "approve", "agent"]).await;
+    let r = call(&fx, &reader, Method::PUT, uri, body.clone()).await;
+    assert_eq!(code(&r), (StatusCode::FORBIDDEN, "forbidden_scope"));
+    async fn audited(fx: &Fx) -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM audit_events WHERE action = 'setting.set' \
+             AND details LIKE '%secrets.provider_accounts%'",
+        )
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap()
+    }
+    assert_eq!(audited(&fx).await, 0);
+    let r = call(&fx, &fx.dev, Method::PUT, uri, body).await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    assert_eq!(audited(&fx).await, 1);
+    // Default off, and bounded to 0 or 1.
+    let r = call(&fx, &fx.dev, Method::PUT, uri, json!({"value": 2})).await;
+    assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "out_of_bounds"));
+}
