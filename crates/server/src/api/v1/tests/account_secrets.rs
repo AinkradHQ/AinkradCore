@@ -290,7 +290,6 @@ async fn a_session_naming_an_account_secret_must_be_sandboxed_and_keep_it_in_its
         ("claude", "HTTPS_PROXY"),
         ("claude", "ANTHROPIC_BASE_URL"),
         ("claude", "OPENAI_API_KEY"),
-        ("fake", "ANTHROPIC_API_KEY"),
     ] {
         let r = post(session_body(harness, var, sandboxed())).await;
         assert_eq!(r.0, StatusCode::BAD_REQUEST, "{harness} {var}: {}", r.1);
@@ -299,6 +298,17 @@ async fn a_session_naming_an_account_secret_must_be_sandboxed_and_keep_it_in_its
             "{}",
             r.1
         );
+    }
+    // The secret is Anthropic's: another provider's harness refuses it even in its own variable,
+    // and a harness with no provider takes none.
+    for (harness, var) in [
+        ("codex", "OPENAI_API_KEY"),
+        ("agy", "GEMINI_API_KEY"),
+        ("fake", "ANTHROPIC_API_KEY"),
+    ] {
+        let r = post(session_body(harness, var, sandboxed())).await;
+        assert_eq!(r.0, StatusCode::BAD_REQUEST, "{harness} {var}: {}", r.1);
+        assert!(r.1.to_string().contains("its own provider"), "{}", r.1);
     }
     let mut both = session_body("claude", "ANTHROPIC_API_KEY", sandboxed());
     both["secrets"]

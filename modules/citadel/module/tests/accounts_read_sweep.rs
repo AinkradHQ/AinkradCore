@@ -17,11 +17,11 @@ async fn no_read_route_names_an_accounts_secret_runners_config_dir_or_delivery()
     let phone = enroll(&fx.app, "phone", &["read"], true).await;
     sqlx::query(
         "INSERT INTO core_secrets (name, owner, runners, delivery, version, key_id, sealed, size, \
-         created_at, updated_at) VALUES (?, ?, '[\"runner-1\"]', 'file', 1, '0123456789abcdef', ?, 5, 'now', 'now')",
+         created_at, updated_at) VALUES (?, ?, '[\"runner-1\"]', 'file', 1, '0123456789abcdef', ?, 9, 'now', 'now')",
     )
     .bind(SECRET)
     .bind(&fx.dev.id)
-    .bind(b"x".as_slice())
+    .bind(b"TOPSECRET".as_slice())
     .execute(&fx.app.pool)
     .await
     .unwrap();
