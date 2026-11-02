@@ -444,6 +444,14 @@ pub fn validate_new(new: &store::NewSession<'_>, admin: bool) -> Result<(), Inva
              does not set itself (CITADEL_RUN_TOKEN is reserved for a module's run token)",
         ));
     }
+    if let Some(why) = ainkrad_proto::v2::account_var_problem(
+        new.harness,
+        new.secrets
+            .iter()
+            .map(|s| (s.name.as_str(), s.var.as_str())),
+    ) {
+        return Err(Invalid::Bad(why));
+    }
     if !new.secrets.is_empty() && !admin {
         return Err(Invalid::Forbidden(
             "naming broker secrets requires the admin scope",
