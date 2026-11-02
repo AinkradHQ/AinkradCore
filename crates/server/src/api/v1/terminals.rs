@@ -1123,8 +1123,10 @@ pub async fn attach(
         me.device.id.clone(),
         me.device.scopes.clone(),
     );
-    if !crate::auth::usable_now(&app.pool, &me.device.id).await {
-        return super::gate::auth_failed().into_response();
+    match crate::auth::device_now(&app.pool, &me.device.id, Some(&me.device.scopes)).await {
+        crate::auth::DeviceNow::Usable => {}
+        crate::auth::DeviceNow::Gone => return super::gate::auth_failed().into_response(),
+        crate::auth::DeviceNow::Unknown => return super::events::unavailable().into_response(),
     }
     let t = match row(&app, &id).await {
         Ok(t) => t,
@@ -1211,7 +1213,12 @@ async fn stream(
     let mut pending_resize = None;
     let (mut window, mut spent) = (Instant::now(), 0usize);
     loop {
+        // Biased: a revocation, a rescope and the step-up expiry are looked at before the next
+        // frame is delivered either way. A revocation only in the store (the admin CLI) reaches
+        // this socket through the 2 s database backstop; until then input and output flow (the
+        // accepted bound, spec §10).
         tokio::select! {
+        biased;
         ()=&mut revoked=>{close_socket(&mut socket,4001,"revoked",cap).await;break},
         ()=&mut rescoped=>{close_socket(&mut socket,4003,"scope changed",cap).await;break},
         ()=&mut expiry=>{close_socket(&mut socket,4003,"step-up expired",cap).await;break},

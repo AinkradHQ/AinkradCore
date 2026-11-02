@@ -308,11 +308,31 @@ pub async fn until_rescoped(
     }
 }
 
-/// Whether `device` is usable in the database right now (KAN-417): read after a subscription,
-/// so a revocation committed before it is seen here and one after it reaches the subscription.
-/// A failed read counts as not usable (fail closed).
-pub async fn usable_now(pool: &sqlx::SqlitePool, device: &str) -> bool {
-    matches!(crate::store::gov::get_device(pool, device).await, Ok(Some(d)) if d.usable())
+/// What the database says of a device right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceNow {
+    Usable,
+    /// No row, or revoked or otherwise not usable.
+    Gone,
+    /// The read failed (a busy database): says nothing about the device. A caller that ends
+    /// something for good must not treat this as `Gone`.
+    Unknown,
+}
+
+/// The device's state in the database right now (KAN-417): read after a subscription, so a
+/// revocation committed before it is seen here and one after it reaches the subscription.
+/// With `scopes`, a device whose scopes are no longer exactly those counts as `Gone` (a demotion
+/// between the gate and the subscription is caught; the caller reconnects for a fresh view).
+pub async fn device_now(
+    pool: &sqlx::SqlitePool,
+    device: &str,
+    scopes: Option<&[String]>,
+) -> DeviceNow {
+    match crate::store::gov::get_device(pool, device).await {
+        Ok(Some(d)) if d.usable() && scopes.is_none_or(|s| d.scopes == s) => DeviceNow::Usable,
+        Ok(_) => DeviceNow::Gone,
+        Err(_) => DeviceNow::Unknown,
+    }
 }
 
 /// Resolves once `device` is revoked or otherwise no longer usable: at once on the broadcast,
@@ -354,6 +374,24 @@ mod tests {
 
     fn auth() -> Auth {
         Auth::new(Arc::new(Identity::ephemeral()))
+    }
+
+    #[tokio::test]
+    async fn a_failed_read_is_unknown_not_gone() {
+        let dir = std::env::temp_dir().join(format!("core-now-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = crate::store::connect(&dir.join("core.db")).await.unwrap();
+        assert_eq!(device_now(&pool, "d_nobody", None).await, DeviceNow::Gone);
+        // An injected read error: the table cannot be read at all.
+        sqlx::query("ALTER TABLE core_devices RENAME TO core_devices_away")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            device_now(&pool, "d_nobody", None).await,
+            DeviceNow::Unknown
+        );
     }
 
     #[test]

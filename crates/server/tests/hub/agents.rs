@@ -795,3 +795,61 @@ async fn a_module_credential_is_refused_while_the_broker_is_off() {
     r.halt().await;
     let _ = std::fs::remove_dir_all(&st.0);
 }
+
+/// KAN-417: a session whose runner is revoked while it is away is lost at once, with the reason
+/// said, instead of waiting out `lost_after` (here 60 s). Control: the same session with its
+/// runner merely away is not lost.
+#[tokio::test]
+async fn a_session_on_a_revoked_runner_is_lost_at_once() {
+    let core = Core::start("agents-revoked", hub_quick()).await;
+    let base = format!("http://{}", core.host);
+    let st = state("agents-revoked");
+    paired(&core, &base, None, &st).await;
+    let r = run_runner(
+        &core,
+        &base,
+        &st,
+        script("while :; do echo tick; sleep 0.05; done"),
+    )
+    .await;
+    let id = session(&core, &r.id, &[]).await;
+    while state_of(&core, &id).await.state != "running" {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let rid = r.id.clone();
+    r.halt().await;
+    // Control: away, not revoked: the supervisor waits.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        state_of(&core, &id).await.state,
+        "running",
+        "away is not lost"
+    );
+    let now = core.app.clock.now();
+    let done = ainkrad_core_server::store::gov::revoke_device(
+        &core.app.pool,
+        &rid,
+        AuditActor::System,
+        None,
+        &now,
+    );
+    assert!(done.await.unwrap());
+    let started = std::time::Instant::now();
+    loop {
+        let s = state_of(&core, &id).await;
+        if s.state == "lost" {
+            assert_eq!(
+                s.outcome.as_ref().unwrap()["reason"],
+                "the runner was revoked"
+            );
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "still {}",
+            s.state
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let _ = std::fs::remove_dir_all(&st.0);
+}

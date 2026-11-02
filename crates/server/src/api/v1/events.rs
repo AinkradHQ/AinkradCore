@@ -236,6 +236,7 @@ pub async fn ws(
         me.device.id.clone(),
     );
     let device_id = me.device.id.clone();
+    let scopes = me.device.scopes.clone();
     let rescoped = crate::auth::until_rescoped(
         app.live.devices(&app.pool, app.stream.backstop),
         app.auth.subscribe_rescoped(),
@@ -244,8 +245,10 @@ pub async fn ws(
     );
     // Re-checked once subscribed: a revocation committed between the gate and the
     // subscription is seen here, one after it reaches the subscription.
-    if !crate::auth::usable_now(&app.pool, &device_id).await {
-        return super::gate::auth_failed().into_response();
+    match crate::auth::device_now(&app.pool, &device_id, Some(&scopes)).await {
+        crate::auth::DeviceNow::Usable => {}
+        crate::auth::DeviceNow::Gone => return super::gate::auth_failed().into_response(),
+        crate::auth::DeviceNow::Unknown => return unavailable().into_response(),
     }
     let changed = async move {
         tokio::select! {
@@ -257,6 +260,15 @@ pub async fn ws(
     // answer one it offered.
     ws.protocols([super::ticket::PROTOCOL])
         .on_upgrade(move |socket| stream(app, socket, v, after, device_id, changed))
+}
+
+/// A device check that could not be read: neither refused nor allowed.
+pub(crate) fn unavailable() -> ApiError {
+    ApiError::new(
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        "unavailable",
+        "try again",
+    )
 }
 
 /// Why a socket ended, for the log.
@@ -324,8 +336,10 @@ async fn stream(
                 // Checked after the page is read and before any of it is sent (KAN-417): an event
                 // appended after a revocation committed is read after it, so it is never sent
                 // to the revoked device, through the broadcast or the store alone.
-                if !crate::auth::usable_now(&app.pool, &device).await {
-                    break 'live End::Revoked;
+                match crate::auth::device_now(&app.pool, &device, None).await {
+                    crate::auth::DeviceNow::Usable => {}
+                    crate::auth::DeviceNow::Gone => break 'live End::Revoked,
+                    crate::auth::DeviceNow::Unknown => break 'live End::Failed,
                 }
                 let full = page.events.len() == cfg.page as usize;
                 for (g, e) in page.events {
