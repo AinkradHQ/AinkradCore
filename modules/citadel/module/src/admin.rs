@@ -12,19 +12,35 @@ use utoipa::ToSchema;
 #[serde(deny_unknown_fields)]
 pub struct Seed {
     #[serde(default)]
+    #[schema(max_items = 500)]
     pub companies: Vec<CompanySeed>,
 }
 
 #[derive(Debug, Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CompanySeed {
+    #[schema(min_length = 1, max_length = 200)]
     pub name: String,
-    #[serde(default = "own")]
-    pub kind: String,
+    #[serde(default)]
+    pub kind: SeedKind,
 }
 
-fn own() -> String {
-    "own".to_owned()
+/// The kind of a seeded company.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SeedKind {
+    #[default]
+    Own,
+    Client,
+}
+
+impl SeedKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Own => "own",
+            Self::Client => "client",
+        }
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -49,15 +65,12 @@ fn parse(text: &str) -> Result<Seed, BoxErr> {
 pub const MAX_COMPANIES: usize = 500;
 
 /// The seed's rows are well formed (shared by the file and the endpoint).
-pub fn check(seed: &Seed) -> Result<(), BoxErr> {
+pub(crate) fn check(seed: &Seed) -> Result<(), BoxErr> {
     if seed.companies.len() > MAX_COMPANIES {
         return Err(format!("seed names more than {MAX_COMPANIES} companies").into());
     }
     for company in &seed.companies {
-        if !matches!(company.kind.as_str(), "own" | "client")
-            || company.name.trim().is_empty()
-            || company.name.len() > 200
-        {
+        if company.name.trim().is_empty() || company.name.len() > 200 {
             return Err("seed company has an invalid name or kind".into());
         }
     }
@@ -72,43 +85,63 @@ pub struct Applied {
     pub kind_mismatch: usize,
 }
 
-async fn insert(tx: &mut sqlx::SqliteConnection, seed: Seed) -> Result<Applied, BoxErr> {
+/// Adds the missing companies and appends `company.created` for each, as the normal path does
+/// (`add_company_with`), so live clients see them.
+async fn insert(
+    tx: &mut sqlx::SqliteConnection,
+    seed: Seed,
+    actor: ainkrad_core::audit::AuditActor,
+) -> Result<Applied, BoxErr> {
     let mut applied = Applied::default();
     for company in seed.companies {
-        let result = sqlx::query(
+        let name = company.name.trim();
+        let kind = company.kind.as_str();
+        let id: Option<i64> = sqlx::query_scalar(
             "INSERT INTO citadel_companies (name, kind) SELECT ?1, ?2 \
-             WHERE NOT EXISTS (SELECT 1 FROM citadel_companies WHERE name = ?1)",
+             WHERE NOT EXISTS (SELECT 1 FROM citadel_companies WHERE name = ?1) RETURNING id",
         )
-        .bind(company.name.trim())
-        .bind(&company.kind)
-        .execute(&mut *tx)
+        .bind(name)
+        .bind(kind)
+        .fetch_optional(&mut *tx)
         .await?;
-        if result.rows_affected() > 0 {
+        if let Some(id) = id {
             applied.added += 1;
+            crate::store::org::chart::append_org_event(
+                tx,
+                crate::domain::org::CompanyId(id),
+                actor,
+                "company.created",
+                ("company", id),
+                serde_json::json!({"name": name, "kind": kind}),
+            )
+            .await?;
         } else {
-            let kind: String =
+            let existing: String =
                 sqlx::query_scalar("SELECT kind FROM citadel_companies WHERE name = ?")
-                    .bind(company.name.trim())
+                    .bind(name)
                     .fetch_one(&mut *tx)
                     .await?;
-            applied.kind_mismatch += usize::from(kind != company.kind);
+            applied.kind_mismatch += usize::from(existing != kind);
         }
     }
     Ok(applied)
 }
 
-/// Applies the seed in one transaction (all or nothing); returns how many rows it added.
-pub async fn apply_seed(pool: &SqlitePool, text: &str) -> Result<usize, BoxErr> {
+/// Tests only: applies the seed with no audit row. Nothing outside this file may apply a seed
+/// except through `apply_audited`.
+#[cfg(test)]
+async fn apply_seed(pool: &SqlitePool, text: &str) -> Result<usize, BoxErr> {
     let seed = parse(text)?;
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
-    let applied = insert(&mut tx, seed).await?;
+    let applied = insert(&mut tx, seed, ainkrad_core::audit::AuditActor::System).await?;
     tx.commit().await?;
     Ok(applied.added)
 }
 
 /// The text of a regular file of at most `MAX_SEED_BYTES`. A FIFO, a device (`/dev/zero`) or a
 /// link to one is refused before it is opened, and the read is bounded whatever the size says.
-pub fn read_seed(path: &std::path::Path) -> Result<String, BoxErr> {
+#[cfg(test)]
+fn read_seed(path: &std::path::Path) -> Result<String, BoxErr> {
     read_seed_owned(path).map(|(text, _)| text)
 }
 
@@ -132,20 +165,16 @@ fn read_seed_owned(path: &std::path::Path) -> Result<(String, u32), BoxErr> {
     Ok((text, uid))
 }
 
-pub async fn apply_seed_file(pool: &SqlitePool, path: &std::path::Path) -> Result<usize, BoxErr> {
-    apply_seed(pool, &read_seed(path)?).await
-}
-
 /// Applies a checked seed in one transaction with its audit row (`citadel.seed.applied`): the
 /// counts plus `extra` (where it came from), never a name or any text of the seed.
-pub async fn apply_audited(
+pub(crate) async fn apply_audited(
     pool: &SqlitePool,
     seed: Seed,
     actor: ainkrad_core::audit::AuditActor,
     extra: serde_json::Value,
 ) -> Result<Applied, BoxErr> {
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
-    let applied = insert(&mut tx, seed).await?;
+    let applied = insert(&mut tx, seed, actor).await?;
     let mut details = extra;
     details["added"] = applied.added.into();
     details["kind_mismatch"] = applied.kind_mismatch.into();

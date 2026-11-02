@@ -6,6 +6,7 @@
 
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY, Caller};
+use axum::body::Bytes;
 use axum::extract::State;
 use axum::routing::post;
 use axum::{Extension, Json, Router};
@@ -19,6 +20,9 @@ use crate::admin::{self, Seed};
 pub fn routes() -> Router<App> {
     Router::new().route("/admin/seed", post(apply_seed))
 }
+
+/// The most a request body may be (the CLI caps its file at 64 KiB; 500 long names need more).
+const MAX_BODY: usize = 256 * 1024;
 
 /// Adds companies (and may change nothing else): a bulk write by an operator, so a step-up.
 pub const DESTRUCTIVE: &[(&str, &str)] = &[("POST", "/admin/seed")];
@@ -41,22 +45,26 @@ pub async fn apply_seed(
     State(app): State<App>,
     acting: Acting,
     Extension(me): Extension<Caller>,
-    body: Result<Json<Seed>, axum::extract::rejection::JsonRejection>,
+    body: Bytes,
 ) -> ApiResult<SeedApplied> {
     // A seed is not per company: a request pinned to one company is a mistake.
     if acting.0.is_some() {
         return Err(ApiError::bad_request("a seed is not scoped to a company"));
     }
-    // The rejection text can quote the body (a smuggled field's value): say only that it is bad.
-    let Json(seed) = body.map_err(|_| ApiError::bad_request("invalid Citadel seed"))?;
+    if body.len() > MAX_BODY {
+        return Err(ApiError::bad_request("the seed is too large"));
+    }
+    // Parsed here, not by the `Json` extractor: its rejection text can quote the body (a smuggled
+    // field's value), and the audit row hashes the raw bytes as the CLI hashes the raw file.
+    let seed: Seed =
+        serde_json::from_slice(&body).map_err(|_| ApiError::bad_request("invalid Citadel seed"))?;
     admin::check(&seed).map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let canonical = serde_json::to_vec(&seed).unwrap_or_default();
     let applied = admin::apply_audited(
         &app.pool,
         seed,
         BY,
         serde_json::json!({"via": "api", "by_device": me.device.id,
-            "bytes": canonical.len(), "sha256": hex(&sha2::Sha256::digest(&canonical))}),
+            "bytes": body.len(), "sha256": hex(&sha2::Sha256::digest(&body))}),
     )
     .await
     .map_err(|e| {
@@ -80,6 +88,6 @@ fn hex(bytes: &[u8]) -> String {
 #[derive(OpenApi)]
 #[openapi(
     paths(apply_seed),
-    components(schemas(Seed, admin::CompanySeed, SeedApplied))
+    components(schemas(Seed, admin::CompanySeed, admin::SeedKind, SeedApplied))
 )]
 pub struct Doc;

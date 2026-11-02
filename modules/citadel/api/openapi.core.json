@@ -2648,9 +2648,11 @@
         "additionalProperties": false,
         "properties": {
           "kind": {
-            "type": "string"
+            "$ref": "#/components/schemas/SeedKind"
           },
           "name": {
+            "maxLength": 200,
+            "minLength": 1,
             "type": "string"
           }
         },
@@ -7788,6 +7790,7 @@
             "items": {
               "$ref": "#/components/schemas/CompanySeed"
             },
+            "maxItems": 500,
             "type": "array"
           }
         },
@@ -7811,6 +7814,21 @@
           "kind_mismatch"
         ],
         "type": "object"
+      },
+      "SeedKind": {
+        "anyOf": [
+          {
+            "description": "The kind of a seeded company.",
+            "enum": [
+              "own",
+              "client"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ]
       },
       "SessionGrant": {
         "properties": {
