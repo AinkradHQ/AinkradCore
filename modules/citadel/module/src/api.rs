@@ -22,6 +22,7 @@ pub mod planning;
 pub mod runs;
 pub mod scope;
 pub mod scopes;
+pub mod seed;
 pub mod spec;
 pub mod types;
 pub mod work;
@@ -90,6 +91,7 @@ pub static DESTRUCTIVE: LazyLock<Vec<(&str, &str)>> = LazyLock::new(|| {
         accounts::DESTRUCTIVE,
         runs::DESTRUCTIVE,
         controls::DESTRUCTIVE,
+        seed::DESTRUCTIVE,
         DESTRUCTIVE_AUDIT,
     ]
     .concat()
@@ -104,6 +106,7 @@ pub fn routes() -> Router<App> {
         .merge(accounts::routes())
         .merge(runs::routes())
         .merge(controls::routes())
+        .merge(seed::routes())
         .route(
             "/companies",
             get(org::list_companies).post(org::create_company),
