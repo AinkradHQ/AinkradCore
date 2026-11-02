@@ -615,7 +615,9 @@ impl Hub {
 
     /// The connection `generation` of `device` ended (a newer one is left alone). Its
     /// commands wait `resume` for the runner, then are lost.
-    fn unregister(self: &Arc<Self>, device: &str, generation: u64, now: i64) {
+    /// `revoked`: the runner can never reconnect to resume, so what it had in flight is lost at
+    /// once instead of after the resume window (KAN-417).
+    fn unregister(self: &Arc<Self>, device: &str, generation: u64, now: i64, revoked: bool) {
         let mut all = self.runners.lock().unwrap();
         let Some(r) = all.get_mut(device) else { return };
         if !r.conn.as_ref().is_some_and(|c| c.generation == generation) {
@@ -623,6 +625,9 @@ impl Hub {
         }
         r.conn = None;
         r.last_seen = now;
+        if revoked {
+            r.lose_all();
+        }
         if r.inflight.is_empty() {
             return;
         }

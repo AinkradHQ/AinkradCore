@@ -282,6 +282,35 @@ async fn a_newer_connection_replaces_the_older_whose_commands_are_lost_once() {
     noop.await.unwrap().unwrap();
 }
 
+/// KAN-417: a runner revoked where no broadcast reaches this process (the admin CLI) is closed
+/// with REVOKED by the database backstop within 5 s, and its in-flight command is lost, not hung.
+#[tokio::test]
+async fn a_runner_revoked_through_the_store_only_is_closed_by_the_backstop() {
+    let core = Core::start("ends-store", quick()).await;
+    let dev = core.runner().await;
+    let mut fake = Fake::welcomed(&core, &dev, vec![exec_driver(&[OP_NOOP], 1)]).await;
+    let hub = Arc::clone(&core.app.hub);
+    let id = dev.id.clone();
+    let pending = tokio::spawn(async move { hub.noop(&id).await });
+    let now =
+        ainkrad_core_server::scheduler::Clock::now(&ainkrad_core_server::scheduler::SystemClock);
+    assert!(
+        gov::revoke_device(&core.app.pool, &dev.id, AuditActor::System, None, &now)
+            .await
+            .unwrap()
+    );
+    let started = std::time::Instant::now();
+    assert_eq!(fake.closed().await, close_code::REVOKED);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    // Lost at once, not after the 60 s resume window: a revoked runner can never resume.
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), pending)
+        .await
+        .expect("the in-flight command of a revoked runner is lost promptly")
+        .unwrap();
+    assert!(outcome.is_err(), "the command was answered");
+    assert!(!core.app.hub.online(&dev.id));
+}
+
 #[tokio::test]
 async fn revocation_shutdown_and_silence_close_with_their_codes() {
     let core = Core::start("ends", quick()).await;
