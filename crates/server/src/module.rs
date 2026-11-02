@@ -517,6 +517,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "reserved")]
+    fn the_acct_id_is_reserved_for_agents_too() {
+        let _ = crate::agents::ModuleAgents::of(&Named("acct"));
+    }
+
+    #[test]
     #[should_panic(expected = "duplicate module id")]
     fn duplicate_ids_are_refused() {
         mounted(&["ops", "ops"]);
