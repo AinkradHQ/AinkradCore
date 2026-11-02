@@ -73,7 +73,7 @@ impl Budget {
         let tracker = Tracker::new(pgid);
         let t = tracker.clone();
         let handle = tokio::spawn(async move {
-            let mut cpu_seen = std::collections::HashMap::<u32, f64>::new();
+            let mut cpu = CpuLedger::default();
             loop {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 let Ok(Ok(snap)) = tokio::task::spawn_blocking(tree::snapshot).await else {
@@ -85,10 +85,7 @@ impl Budget {
                     return;
                 }
                 let rss: u64 = members.iter().map(|p| p.rss_kb).sum();
-                for p in &members {
-                    let prior = cpu_seen.entry(p.pid).or_default();
-                    *prior = prior.max(p.cpu_s);
-                }
+                let cpu_spent = cpu.see(&members);
                 let count = members.len() as u64;
                 let paths = self.paths.clone();
                 let disk = tokio::task::spawn_blocking(move || {
@@ -99,7 +96,7 @@ impl Budget {
                 if count > self.processes
                     || rss > self.memory
                     || disk > self.disk
-                    || cpu_seen.values().sum::<f64>() >= self.cpu as f64
+                    || cpu_spent >= self.cpu as f64
                 {
                     tracing::warn!(
                         pgid,
@@ -111,6 +108,33 @@ impl Budget {
             }
         });
         Watch { handle, tracker }
+    }
+}
+
+/// CPU seconds a session has used, across every process it ever had. A process that has left the
+/// tree is folded into one total, so the map holds only live pids and a session that forks
+/// forever does not grow it (KAN-419).
+#[derive(Default)]
+pub(crate) struct CpuLedger {
+    live: std::collections::HashMap<u32, f64>,
+    gone: f64,
+}
+impl CpuLedger {
+    /// Notes the tree's current members; returns the session's total CPU seconds.
+    pub(crate) fn see(&mut self, members: &[&tree::P]) -> f64 {
+        for p in members {
+            let prior = self.live.entry(p.pid).or_default();
+            *prior = prior.max(p.cpu_s);
+        }
+        let gone = &mut self.gone;
+        self.live.retain(|pid, cpu| {
+            let here = members.iter().any(|p| p.pid == *pid);
+            if !here {
+                *gone += *cpu;
+            }
+            here
+        });
+        self.gone + self.live.values().sum::<f64>()
     }
 }
 
@@ -154,4 +178,41 @@ pub(super) fn cpu_seconds(text: &str) -> f64 {
         + rest.split(':').fold(0.0, |total, n| {
             total * 60.0 + n.parse::<f64>().unwrap_or(0.0)
         })
+}
+
+#[cfg(test)]
+mod ledger_tests {
+    use super::*;
+
+    fn proc(pid: u32, cpu_s: f64) -> tree::P {
+        tree::P {
+            pid,
+            ppid: 1,
+            pgid: 1,
+            rss_kb: 0,
+            cpu_s,
+        }
+    }
+
+    #[test]
+    fn a_session_that_forks_forever_keeps_a_bounded_map_and_an_exact_total() {
+        let mut ledger = CpuLedger::default();
+        let long = proc(7, 0.0);
+        let mut total = 0.0;
+        for pid in 1000..11_000u32 {
+            let short = proc(pid, 0.5);
+            total += 0.5;
+            let seen = ledger.see(&[&long, &short]);
+            assert_eq!(seen, total, "dead and live CPU both count");
+            assert!(ledger.live.len() <= 2, "only live pids are kept");
+        }
+    }
+
+    #[test]
+    fn cpu_never_goes_backwards_for_a_live_pid() {
+        let mut ledger = CpuLedger::default();
+        assert_eq!(ledger.see(&[&proc(5, 2.0)]), 2.0);
+        assert_eq!(ledger.see(&[&proc(5, 1.0)]), 2.0);
+        assert_eq!(ledger.see(&[&proc(5, 3.0)]), 3.0);
+    }
 }
