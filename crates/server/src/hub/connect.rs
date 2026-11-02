@@ -87,6 +87,10 @@ pub async fn connect(State(app): State<App>, req: Request) -> Response {
         app.auth.subscribe(),
         device.id.clone(),
     );
+    // Re-checked once subscribed (KAN-417): a revocation before this point is seen here.
+    if !crate::auth::usable_now(&app.pool, &device.id).await {
+        return crate::api::v1::gate::auth_failed().into_response();
+    }
     ws.max_message_size(MAX_MESSAGE)
         .on_upgrade(move |socket| serve(app, socket, device, binding, revoked))
 }

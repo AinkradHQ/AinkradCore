@@ -1110,6 +1110,22 @@ pub async fn attach(
     Query(q): Query<AttachQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
+    // Subscribed before anything is read or dispatched, then re-checked (KAN-417): a revoke
+    // from here on reaches the subscription, one before it is seen by the check.
+    let revoked = crate::auth::until_revoked(
+        app.live.devices(&app.pool, app.stream.backstop),
+        app.auth.subscribe(),
+        me.device.id.clone(),
+    );
+    let rescoped = crate::auth::until_rescoped(
+        app.live.devices(&app.pool, app.stream.backstop),
+        app.auth.subscribe_rescoped(),
+        me.device.id.clone(),
+        me.device.scopes.clone(),
+    );
+    if !crate::auth::usable_now(&app.pool, &me.device.id).await {
+        return super::gate::auth_failed().into_response();
+    }
     let t = match row(&app, &id).await {
         Ok(t) => t,
         Err(e) => return e.into_response(),
@@ -1142,17 +1158,6 @@ pub async fn attach(
     if let Err(e) = event(&app, "terminal.attached", &id, &me.device.id).await {
         return e.into_response();
     }
-    let revoked = crate::auth::until_revoked(
-        app.live.devices(&app.pool, app.stream.backstop),
-        app.auth.subscribe(),
-        me.device.id.clone(),
-    );
-    let rescoped = crate::auth::until_rescoped(
-        app.live.devices(&app.pool, app.stream.backstop),
-        app.auth.subscribe_rescoped(),
-        me.device.id.clone(),
-        me.device.scopes.clone(),
-    );
     let elevation = app
         .auth
         .session(&me.session, &me.device.id, app.clock.unix())

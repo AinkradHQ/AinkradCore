@@ -81,7 +81,7 @@ async fn without_the_broadcast_the_backstop_closes_the_socket_within_five_second
 }
 
 /// KAN-417, agent streams: a device holding `agent` is fed agent events over its socket; once
-/// revoked the socket closes with 4001 and no agent event reaches it afterwards, through the
+/// revoked the socket closes with 4001 and not one agent event reaches it afterwards, through the
 /// broadcast and, as the CLI does it, through the store only. It cannot reconnect either.
 #[tokio::test]
 async fn an_agent_event_stream_ends_when_its_device_is_revoked() {
@@ -128,8 +128,61 @@ async fn an_agent_event_stream_ends_when_its_device_is_revoked() {
         let (events, _, close) = tokio::time::timeout(limit, drain(&mut ws))
             .await
             .expect("closed within the limit");
-        assert!(events <= 1, "an event after the revocation was delivered");
+        assert_eq!(events, 0, "an event after the revocation was delivered");
         assert_eq!(close.map(|c| c.0), Some(CloseCode::Library(4001)));
         assert!(connect(&app, &agent, None).await.is_err(), "reconnected");
+    }
+}
+
+/// KAN-417: a replay in progress ends when the device is revoked: the catch-up loop checks the
+/// fanned-out revocation between frames and the database between pages, so a revoked device
+/// is not sent the rest of a long history.
+#[tokio::test]
+async fn a_replay_in_progress_ends_when_its_device_is_revoked() {
+    use futures_util::StreamExt;
+    const EVENTS: usize = 5000;
+    for broadcast in [true, false] {
+        let fx = fx().await;
+        let reader = fx.enroll("reader", &["read"]).await;
+        sqlx::query(
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?) \
+             INSERT INTO events (kind, payload) \
+             SELECT 'ops.line', json_object('p', hex(zeroblob(2048))) FROM n",
+        )
+        .bind(EVENTS as i64)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+        let app = serve(&fx, quick()).await;
+        let mut ws = connect(&app, &reader, Some("0")).await.unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(5), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(first.is_text());
+        if broadcast {
+            let uri = format!("/api/v1/devices/{}", reader.id);
+            let (status, _) = send(&fx.app, req(Method::DELETE, &uri, Some(&fx.dev), None)).await;
+            assert_eq!(status, StatusCode::OK);
+        } else {
+            let done = crate::store::gov::revoke_device(
+                &fx.app.pool,
+                &reader.id,
+                super::super::BY,
+                None,
+                NOW,
+            );
+            assert!(done.await.unwrap());
+        }
+        let (events, _, close) = tokio::time::timeout(Duration::from_secs(10), drain(&mut ws))
+            .await
+            .expect("closed");
+        // Only what the kernel had already buffered can still arrive: far from the history.
+        assert!(
+            events < EVENTS * 3 / 4,
+            "the replay ran on: {events} frames"
+        );
+        assert_eq!(close.map(|c| c.0), Some(CloseCode::Library(4001)));
     }
 }

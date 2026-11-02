@@ -235,12 +235,18 @@ pub async fn ws(
         app.auth.subscribe(),
         me.device.id.clone(),
     );
+    let device_id = me.device.id.clone();
     let rescoped = crate::auth::until_rescoped(
         app.live.devices(&app.pool, app.stream.backstop),
         app.auth.subscribe_rescoped(),
         me.device.id,
         me.device.scopes,
     );
+    // Re-checked once subscribed: a revocation committed between the gate and the
+    // subscription is seen here, one after it reaches the subscription.
+    if !crate::auth::usable_now(&app.pool, &device_id).await {
+        return super::gate::auth_failed().into_response();
+    }
     let changed = async move {
         tokio::select! {
             () = revoked => End::Revoked,
@@ -250,7 +256,7 @@ pub async fn ws(
     // A browser offers `ainkrad.v1` with its ticket (`ticket`) and drops a socket that does not
     // answer one it offered.
     ws.protocols([super::ticket::PROTOCOL])
-        .on_upgrade(move |socket| stream(app, socket, v, after, changed))
+        .on_upgrade(move |socket| stream(app, socket, v, after, device_id, changed))
 }
 
 /// Why a socket ended, for the log.
@@ -277,6 +283,7 @@ async fn stream(
     mut socket: WebSocket,
     v: View,
     mut after: i64,
+    device: String,
     changed: impl std::future::Future<Output = End>,
 ) {
     tokio::pin!(changed);
@@ -314,8 +321,21 @@ async fn stream(
                         break 'live End::Failed;
                     }
                 };
+                // Checked after the page is read and before any of it is sent (KAN-417): an event
+                // appended after a revocation committed is read after it, so it is never sent
+                // to the revoked device, through the broadcast or the store alone.
+                if !crate::auth::usable_now(&app.pool, &device).await {
+                    break 'live End::Revoked;
+                }
                 let full = page.events.len() == cfg.page as usize;
                 for (g, e) in page.events {
+                    // The catch-up does not wait for the next select: a fanned-out revocation
+                    // or scope change ends it between frames.
+                    tokio::select! {
+                        biased;
+                        end = &mut changed => break 'live end,
+                        () = std::future::ready(()) => {}
+                    }
                     let seq = e.seq;
                     let text = serde_json::to_string(&Event::from(e)).unwrap_or_default();
                     match tokio::time::timeout(

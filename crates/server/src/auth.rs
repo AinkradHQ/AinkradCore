@@ -308,6 +308,13 @@ pub async fn until_rescoped(
     }
 }
 
+/// Whether `device` is usable in the database right now (KAN-417): read after a subscription,
+/// so a revocation committed before it is seen here and one after it reaches the subscription.
+/// A failed read counts as not usable (fail closed).
+pub async fn usable_now(pool: &sqlx::SqlitePool, device: &str) -> bool {
+    matches!(crate::store::gov::get_device(pool, device).await, Ok(Some(d)) if d.usable())
+}
+
 /// Resolves once `device` is revoked or otherwise no longer usable: at once on the broadcast,
 /// or within the backstop by the shared device snapshot (`crate::live`: a revocation by the
 /// CLI, from another process, or a broadcast that lagged). A device with no row counts as
