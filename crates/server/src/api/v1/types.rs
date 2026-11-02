@@ -84,7 +84,9 @@
 ///    `read`); registering a push token another device holds is now refused (400).
 /// 28: the agent wake queue (E2-11.3): `wakeAgentSession` (`POST /agent-sessions/{id}/wake`) and
 ///    `AgentWake`/`AgentWakeRequest`; `AgentStart.epoch` in the runner schema (optional, 0 when absent).
-pub const API_MINOR: u32 = 28;
+/// 29: the Citadel module's `applySeed` (`POST /modules/citadel/v1/admin/seed`, `admin`, step-up) seeds a
+///    live server (KAN-275); the Core's own paths are unchanged.
+pub const API_MINOR: u32 = 29;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

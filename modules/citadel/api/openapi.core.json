@@ -2644,6 +2644,23 @@
           }
         ]
       },
+      "CompanySeed": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/SeedKind"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
       "CompanySkill": {
         "description": "A skill version of a company (`AgentSkill` in the monolith's contract).",
         "properties": {
@@ -7765,6 +7782,54 @@
         ],
         "type": "object"
       },
+      "Seed": {
+        "additionalProperties": false,
+        "description": "The seed carries names and kinds only. An unknown field (a `password`, a `token`) is refused,\nso no seed can smuggle a credential in; credentials go through the Core's secrets broker.",
+        "properties": {
+          "companies": {
+            "items": {
+              "$ref": "#/components/schemas/CompanySeed"
+            },
+            "maxItems": 500,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "SeedApplied": {
+        "properties": {
+          "added": {
+            "description": "Companies added.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind_mismatch": {
+            "description": "Companies named in the seed that exist under another kind (left as they are).",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "added",
+          "kind_mismatch"
+        ],
+        "type": "object"
+      },
+      "SeedKind": {
+        "anyOf": [
+          {
+            "description": "The kind of a seeded company.",
+            "enum": [
+              "own",
+              "client"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
       "SessionGrant": {
         "properties": {
           "elevated_until": {
@@ -9498,7 +9563,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.28.0"
+    "version": "1.29.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -13479,6 +13544,59 @@
         },
         "tags": [
           "governance"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/citadel/v1/admin/seed": {
+      "post": {
+        "operationId": "citadelApplySeed",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Seed"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeedApplied"
+                }
+              }
+            },
+            "description": "The seed, applied in one transaction (audited as `citadel.seed.applied`); applying it again adds nothing"
+          },
+          "400": {
+            "description": "An unknown field, a bad kind or name, or too many companies"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "admin"
         ],
         "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
