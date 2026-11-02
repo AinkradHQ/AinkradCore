@@ -14,10 +14,14 @@
 //! - **Gate G-SEC** (`secrets.mode`): 0 (the default) refuses every store, rotation, grant and
 //!   redemption; 1 takes throwaway values only (one shaped like a real key is refused); 2 takes
 //!   real ones, once the external review has closed. Listing and deleting always work.
-//! - **Narrow gate** (`secrets.provider_accounts`, default 0): with the broker on (mode 1) it lets
-//!   only a provider-account secret (`acct.<provider>.<label>`, see [`kind_of`]) be real-shaped;
-//!   every other secret keeps the mode 1/2 rule. An `acct.` name with an unknown provider is
-//!   refused whatever the gate says.
+//! - **Narrow gate** (`secrets.provider_accounts`, default 0): with the broker on and `secrets.mode`
+//!   below 2 it lets only a provider-account secret (`acct.<provider>.<label>`, see [`kind_of`])
+//!   skip the real-shape refusal, and even then the value may not look like another kind of
+//!   credential (a GitHub token, an AWS key, a PEM block, a Citadel key, or another provider's
+//!   key); it never needs the provider's own shape (OAuth tokens have none). Account secrets
+//!   are never delivered by `askpass`. Every other secret keeps the mode 1/2 rule. Under mode
+//!   1 an `acct.` name that is not `acct.<known provider>.<label>` is refused. The kill switch
+//!   is `secrets.mode` 0 (leases and redemptions check only the mode).
 //! - **Bounded**: the value's size, the number of secrets and of live leases, and a lease's
 //!   lifetime are settings (`secrets.*`).
 
@@ -127,24 +131,55 @@ pub const ACCOUNT_PROVIDERS: [&str; 3] = ["anthropic", "openai", "google"];
 pub enum Kind {
     /// A git, forge, Linear or any other secret.
     Other,
-    /// An AI provider account's key.
-    ProviderAccount,
+    /// An AI provider account's key, with its provider (one of [`ACCOUNT_PROVIDERS`]).
+    ProviderAccount(&'static str),
 }
 
 /// Classifies `name`; fails closed: a name under [`ACCOUNT_PREFIX`] that is not
-/// `acct.<known provider>.<label>` is refused, never treated as `Other`.
+/// `acct.<known provider>.<label>` (a label has a letter or digit) is refused, never treated
+/// as `Other`.
 pub fn kind_of(name: &str) -> Result<Kind, Error> {
     let Some(rest) = name.strip_prefix(ACCOUNT_PREFIX) else {
         return Ok(Kind::Other);
     };
-    match rest.split_once('.') {
-        Some((p, label)) if ACCOUNT_PROVIDERS.contains(&p) && !label.is_empty() => {
-            Ok(Kind::ProviderAccount)
-        }
-        _ => refused(
+    let found = rest.split_once('.').and_then(|(p, label)| {
+        let provider = ACCOUNT_PROVIDERS.iter().find(|k| **k == p)?;
+        label
+            .bytes()
+            .any(|b| b.is_ascii_alphanumeric())
+            .then_some(*provider)
+    });
+    match found {
+        Some(provider) => Ok(Kind::ProviderAccount(provider)),
+        None => refused(
             "bad_request",
             "a name under acct. is acct.<provider>.<label> with a known provider",
         ),
+    }
+}
+
+/// The redactor kind of a provider's own key shape.
+fn own_shape(provider: &str) -> &'static str {
+    match provider {
+        "anthropic" => "anthropic_key",
+        "openai" => "openai_key",
+        _ => "google_key",
+    }
+}
+
+/// Whether `redacted` (a value after the redactor) holds a marker other than `own`.
+fn foreign_shape(redacted: &str, own: &str) -> bool {
+    redacted
+        .split("[redacted:")
+        .skip(1)
+        .any(|r| r.split(']').next() != Some(own))
+}
+
+/// The audit tag of a provider-account secret, merged into its details.
+fn tag_account(details: &mut serde_json::Value, name: &str) {
+    if matches!(kind_of(name), Ok(Kind::ProviderAccount(_))) {
+        details["kind"] = json!("provider_account");
+        details["gate"] = json!("provider_accounts");
     }
 }
 
@@ -180,9 +215,25 @@ pub async fn require_enabled(pool: &SqlitePool) -> Result<(), Error> {
 }
 
 /// The checks every value passes before it is sealed.
-async fn check_value(conn: &mut SqliteConnection, name: &str, value: &str) -> Result<(), Error> {
-    let kind = kind_of(name)?;
+async fn check_value(
+    conn: &mut SqliteConnection,
+    name: &str,
+    value: &str,
+    delivery: &str,
+) -> Result<(), Error> {
     let mode = enabled(conn).await?;
+    // Fail closed on an unknown `acct.` name, but only below mode 2 (which is unchanged).
+    let kind = match kind_of(name) {
+        Ok(kind) => kind,
+        Err(e) if mode < 2 => return Err(e),
+        Err(_) => Kind::Other,
+    };
+    if matches!(kind, Kind::ProviderAccount(_)) && delivery == "askpass" {
+        return refused(
+            "bad_request",
+            "a provider-account secret is not delivered by askpass",
+        );
+    }
     let max = setting(conn, Key::SecretsMaxBytes).await?;
     if value.is_empty() {
         return refused("bad_request", "the value is empty");
@@ -196,15 +247,22 @@ async fn check_value(conn: &mut SqliteConnection, name: &str, value: &str) -> Re
     // Before G-SEC only throwaway values: one the redactor recognises as a real key shape is
     // refused. ponytail: shapes only, as the redactor; a real value with no known prefix gets
     // through, which is why mode 1 is a guard rail and the gate itself is mode 2.
-    // The narrow gate lifts this for a provider-account secret only, and only when it is on.
-    let account_gate =
-        kind == Kind::ProviderAccount && setting(conn, Key::SecretsProviderAccounts).await? == 1;
-    if mode < 2 && !account_gate && Redactor::new().text(value) != value {
-        return refused(
-            "real_secret_refused",
-            "the value looks like a real credential; real secrets wait for gate G-SEC \
-             (secrets.mode 2)",
-        );
+    // The narrow gate lifts the refusal for a provider-account secret, and only when it is on;
+    // such a value still may not look like any other kind of credential.
+    let redacted = Redactor::new().text(value);
+    if mode < 2 && redacted != value {
+        let gate = setting(conn, Key::SecretsProviderAccounts).await? == 1;
+        let allowed = match kind {
+            Kind::ProviderAccount(p) if gate => !foreign_shape(&redacted, own_shape(p)),
+            _ => false,
+        };
+        if !allowed {
+            return refused(
+                "real_secret_refused",
+                "the value looks like a real credential; real secrets wait for gate G-SEC \
+                 (secrets.mode 2), or secrets.provider_accounts for a provider's own key",
+            );
+        }
     }
     Ok(())
 }
@@ -317,7 +375,7 @@ pub async fn create(
     check_delivery(delivery)?;
     let runners = new.runners.unwrap_or_default();
     let mut tx = super::begin_write(pool).await?;
-    check_value(&mut tx, name, new.value).await?;
+    check_value(&mut tx, name, new.value, delivery).await?;
     check_runners(&mut tx, runners).await?;
     let max = setting(&mut tx, Key::SecretsMaxCount).await?;
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM core_secrets")
@@ -355,8 +413,9 @@ pub async fn create(
     .bind(now)
     .fetch_one(&mut *tx)
     .await?;
-    let details = json!({"name": name, "version": 1, "runners": runners, "delivery": delivery,
+    let mut details = json!({"name": name, "version": 1, "runners": runners, "delivery": delivery,
                          "size": new.value.len(), "key_id": sealer.key_id(), "by_device": owner});
+    tag_account(&mut details, name);
     audit(&mut tx, actor, "secret.created", id, details).await?;
     let m = find(&mut tx, name).await?;
     tx.commit().await?;
@@ -377,9 +436,9 @@ pub async fn rotate(
 ) -> Result<Meta, Error> {
     let mut tx = super::begin_write(pool).await?;
     let old = find(&mut tx, name).await?;
-    check_value(&mut tx, name, new.value).await?;
     let delivery = new.delivery.unwrap_or(&old.delivery);
     check_delivery(delivery)?;
+    check_value(&mut tx, name, new.value, delivery).await?;
     let runners = new.runners.unwrap_or(&old.runners);
     check_runners(&mut tx, runners).await?;
     let version = old.version + 1;
@@ -405,10 +464,11 @@ pub async fn rotate(
         .execute(&mut *tx)
         .await?
         .rows_affected();
-    let details = json!({"name": name, "version": version, "runners": runners,
+    let mut details = json!({"name": name, "version": version, "runners": runners,
                          "delivery": delivery, "size": new.value.len(),
                          "key_id": sealer.key_id(), "leases_revoked": dropped,
                          "by_device": by_device});
+    tag_account(&mut details, name);
     audit(&mut tx, actor, "secret.rotated", old.id, details).await?;
     let m = find(&mut tx, name).await?;
     tx.commit().await?;
@@ -614,7 +674,8 @@ pub async fn open_for_module(
     name: &str,
     purpose: &str,
 ) -> Result<Zeroizing<String>, Error> {
-    if !valid_name(name) || name.split_once('.').map(|(m, _)| m) != Some(module) {
+    if !valid_name(name) || module == "acct" || name.split_once('.').map(|(m, _)| m) != Some(module)
+    {
         return refused("not_found", "no such secret");
     }
     let mut tx = super::begin_write(pool).await?;

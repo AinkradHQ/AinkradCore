@@ -449,6 +449,10 @@ pub fn mount(modules: &[Arc<dyn Module>]) -> Router<App> {
     modules.iter().fold(Router::new(), |router, module| {
         let id = module.id();
         assert!(valid_id(id), "illegal module id {id:?}");
+        assert!(
+            id != "acct",
+            "module id \"acct\" is reserved for provider-account secrets"
+        );
         assert!(seen.insert(id), "duplicate module id {id:?}");
         validate(module.as_ref());
         router.nest(&format!("/modules/{id}/v1"), module.routes())
@@ -504,6 +508,12 @@ mod tests {
                 "{id:?} must be refused"
             );
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "reserved for provider-account secrets")]
+    fn the_acct_id_is_reserved() {
+        mounted(&["acct"]);
     }
 
     #[test]

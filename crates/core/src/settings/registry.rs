@@ -82,6 +82,8 @@ registry! {
          (a known provider) hold a real-shaped key while secrets.mode is 1, so git, forge and \
          Linear secrets stay throwaway-only until gate G-SEC closes; 0 (the default) refuses it \
          like any other. It never turns the broker on (secrets.mode 0 still refuses everything) \
-         and mode 2 is unchanged. Setting it needs admin and a step-up and is audited. Read at \
-         each store and rotation.";
+         and mode 2 is unchanged; the value still may not look like another credential (GitHub, AWS, \
+         PEM, Citadel or another provider's key), and askpass delivery is refused. The kill \
+         switch is secrets.mode 0: leases and redemptions check only the mode. Setting it needs \
+         admin and a step-up and is audited. Read at each store and rotation.";
 }

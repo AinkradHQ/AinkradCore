@@ -505,14 +505,23 @@ async fn a_module_opens_only_its_own_secrets_and_it_is_audited() {
     assert!(e.to_string().starts_with("secrets_disabled"), "{e}");
 }
 
+fn planted(kind: &str) -> &'static str {
+    ainkrad_proto::redact::PLANTED
+        .iter()
+        .find(|(k, _)| *k == kind)
+        .unwrap()
+        .1
+}
+
 /// The narrow gate (`secrets.provider_accounts`): only a provider-account secret may be
 /// real-shaped, only while the gate is on, and only in mode 1; everything else is unchanged.
 #[tokio::test]
 async fn the_provider_account_gate_lets_only_account_secrets_be_real() {
     let (fx, _vm) = broker().await;
-    let real = ainkrad_proto::redact::PLANTED[0].1;
-    let gh = ainkrad_proto::redact::PLANTED[4].1;
+    let real = planted("anthropic_key");
+    let gh = planted("github_token");
     let refused = (StatusCode::CONFLICT, "real_secret_refused");
+    let bad = (StatusCode::BAD_REQUEST, "bad_request");
     let account = "acct.anthropic.main";
     let others = [
         "git.token",
@@ -520,17 +529,35 @@ async fn the_provider_account_gate_lets_only_account_secrets_be_real() {
         "linear.api",
         "acctx.anthropic.m",
     ];
+    let unknown = [
+        "acct.",
+        "acct.nobody.x",
+        "acct.anthropic",
+        "acct.anthropic.",
+        "acct.anthropic.-",
+        "acct.anthropic..",
+        "acct.anthropic.-.-",
+    ];
 
-    // Gate off (the default): an account secret is refused like any other.
+    // Gate off (the default): an account secret is refused like any other; unknown kinds fail
+    // closed.
     for n in others.iter().chain(&[account]) {
         assert_eq!(code(&create(&fx, n, real, &[]).await), refused, "{n}");
+    }
+    for n in unknown {
+        assert_eq!(code(&create(&fx, n, V1, &[]).await), bad, "off {n}");
     }
     // Gate on, mode 1: the account secret is accepted, every other real value still refused.
     set(&fx, Key::SecretsProviderAccounts, 1).await;
     for n in others {
-        let r = create(&fx, n, gh, &[]).await;
-        assert_eq!(code(&r), refused, "{n}");
-        assert!(!r.1.to_string().contains(gh));
+        for v in [gh, real] {
+            let r = create(&fx, n, v, &[]).await;
+            assert_eq!(code(&r), refused, "{n}");
+            assert!(!r.1.to_string().contains(v));
+        }
+    }
+    for n in unknown {
+        assert_eq!(code(&create(&fx, n, V1, &[]).await), bad, "on {n}");
     }
     assert_eq!(create(&fx, account, real, &[]).await.0, StatusCode::OK);
     // A rotation follows the same rule, by name.
@@ -541,37 +568,165 @@ async fn the_provider_account_gate_lets_only_account_secrets_be_real() {
     let uri = format!("/api/v1/secrets/{account}");
     let r = call(&fx, &fx.dev, Method::PUT, &uri, json!({"value": real})).await;
     assert_eq!(r.0, StatusCode::OK, "{}", r.1);
-    // Fails closed on unknown kinds, gate on or off.
-    for n in [
-        "acct.",
-        "acct.nobody.x",
-        "acct.anthropic",
-        "acct.anthropic.",
-    ] {
-        let r = create(&fx, n, V1, &[]).await;
-        assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_request"), "{n}");
-    }
     // The gate never turns the broker on.
     set(&fx, Key::SecretsMode, 0).await;
-    assert_eq!(
-        code(&create(&fx, "acct.openai.b", real, &[]).await),
-        (StatusCode::CONFLICT, "secrets_disabled")
-    );
-    // Gate off again: refused once more.
+    for n in ["acct.openai.b", "acct.nobody.b"] {
+        assert_eq!(
+            code(&create(&fx, n, real, &[]).await),
+            (StatusCode::CONFLICT, "secrets_disabled"),
+            "{n}"
+        );
+    }
+    // Gate off again: creating is refused once more, and so is rotating the existing account
+    // secret with a real value.
     set(&fx, Key::SecretsMode, 1).await;
     set(&fx, Key::SecretsProviderAccounts, 0).await;
     assert_eq!(
         code(&create(&fx, "acct.openai.b", real, &[]).await),
         refused
     );
+    let r = call(&fx, &fx.dev, Method::PUT, &uri, json!({"value": real})).await;
+    assert_eq!(code(&r), refused);
+    // Mode 2 is unchanged by the gate, on or off: a real git secret is taken, and so is an
+    // unknown acct. name (it is only fail-closed below mode 2).
+    set(&fx, Key::SecretsMode, 2).await;
+    assert_eq!(
+        create(&fx, "git.token", gh, &[]).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(create(&fx, "git.two", gh, &[]).await.0, StatusCode::OK);
+    set(&fx, Key::SecretsProviderAccounts, 1).await;
+    assert_eq!(create(&fx, "git.three", gh, &[]).await.0, StatusCode::OK);
+    assert_eq!(
+        create(&fx, "acct.nobody.x", gh, &[]).await.0,
+        StatusCode::OK
+    );
     assert!(!trail(&fx).await.contains(real));
+}
+
+/// Review: an account name is not a licence for any credential. Another kind of key under an
+/// account name is refused, on create and rotate; the provider's own shape and a shapeless
+/// token (OAuth, subscription) are taken.
+#[tokio::test]
+async fn an_account_secret_must_not_look_like_another_credential() {
+    let (fx, _vm) = broker().await;
+    set(&fx, Key::SecretsProviderAccounts, 1).await;
+    let refused = (StatusCode::CONFLICT, "real_secret_refused");
+    let foreign = [
+        planted("github_token"),
+        planted("aws_key"),
+        planted("aws_secret"),
+        planted("pem_block"),
+        planted("runner_key"),
+        planted("run_token"),
+        planted("bearer"),
+        planted("openai_key"),
+        planted("google_key"),
+    ];
+    assert_eq!(
+        create(
+            &fx,
+            "acct.anthropic.x",
+            "oauth-token-without-any-known-shape",
+            &[]
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let uri = "/api/v1/secrets/acct.anthropic.x";
+    for (i, v) in foreign.iter().enumerate() {
+        let r = create(&fx, &format!("acct.anthropic.n{i}"), v, &[]).await;
+        assert_eq!(code(&r), refused, "create {i}");
+        assert!(!r.1.to_string().contains(v));
+        let r = call(&fx, &fx.dev, Method::PUT, uri, json!({"value": v})).await;
+        assert_eq!(code(&r), refused, "rotate {i}");
+    }
+    // A foreign key hidden after the provider's own is refused too.
+    let mixed = format!("{} {}", planted("anthropic_key"), planted("github_token"));
+    assert_eq!(
+        code(&create(&fx, "acct.anthropic.m", &mixed, &[]).await),
+        refused
+    );
+    // The provider's own shape is accepted, on create and rotate; each provider its own.
+    let own = [
+        ("anthropic", "anthropic_key"),
+        ("openai", "openai_key"),
+        ("google", "google_key"),
+    ];
+    for (p, k) in own {
+        let r = create(&fx, &format!("acct.{p}.own"), planted(k), &[]).await;
+        assert_eq!(r.0, StatusCode::OK, "{p}: {}", r.1);
+        let uri = format!("/api/v1/secrets/acct.{p}.own");
+        let r = call(
+            &fx,
+            &fx.dev,
+            Method::PUT,
+            &uri,
+            json!({"value": planted(k)}),
+        )
+        .await;
+        assert_eq!(r.0, StatusCode::OK, "{p}: {}", r.1);
+    }
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::PUT,
+        uri,
+        json!({"value": "another-shapeless-token-9"}),
+    )
+    .await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    // askpass is for git: refused for an account secret, create and rotate.
+    let body = json!({"name": "acct.openai.ask", "value": V1, "delivery": "askpass"});
+    let r = call(&fx, &fx.dev, Method::POST, "/api/v1/secrets", body).await;
+    assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_request"));
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::PUT,
+        uri,
+        json!({"value": V2, "delivery": "askpass"}),
+    )
+    .await;
+    assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_request"));
+    // The audit rows are tagged, and hold no value.
+    let tagged: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE action IN ('secret.created', 'secret.rotated') \
+         AND json_extract(details, '$.kind') = 'provider_account' \
+         AND json_extract(details, '$.gate') = 'provider_accounts'",
+    )
+    .fetch_one(&fx.app.pool)
+    .await
+    .unwrap();
+    assert!(tagged >= 8, "{tagged}");
+    let t = trail(&fx).await;
+    for v in foreign.iter().chain(&[mixed.as_str()]) {
+        assert!(!t.contains(v));
+    }
+    assert!(!t.contains(planted("anthropic_key")) && !t.contains("shapeless"));
+    // No open_for_module can reach acct.* names.
+    let sealer = fx.app.secrets.clone().unwrap();
+    let r = crate::store::secrets::open_for_module(
+        &fx.app.pool,
+        &sealer,
+        "acct",
+        "acct.anthropic.x",
+        "test",
+    )
+    .await;
+    assert!(r.is_err(), "a module named acct opened an account secret");
 }
 
 #[test]
 fn secrets_are_classified_by_name() {
     use crate::store::secrets::{Kind, kind_of};
-    for n in ["acct.anthropic.a", "acct.openai.work-1", "acct.google.x.y"] {
-        assert_eq!(kind_of(n).unwrap(), Kind::ProviderAccount, "{n}");
+    for (n, p) in [
+        ("acct.anthropic.a", "anthropic"),
+        ("acct.openai.work-1", "openai"),
+        ("acct.google.x.y", "google"),
+    ] {
+        assert_eq!(kind_of(n).unwrap(), Kind::ProviderAccount(p), "{n}");
     }
     for n in [
         "git.token",
@@ -587,6 +742,9 @@ fn secrets_are_classified_by_name() {
         "acct.anthropic",
         "acct.anthropic.",
         "acct.Anthropic.a",
+        "acct.anthropic.-",
+        "acct.anthropic..",
+        "acct.openai._-.",
     ] {
         assert!(kind_of(n).is_err(), "{n}");
     }
