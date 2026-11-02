@@ -1,20 +1,21 @@
 //! Non-secret Citadel bootstrap, run by the Core's module admin hook (`Module::admin`):
 //! `ainkrad-core-citadel citadel seed <db> <file>`. Applying the same seed twice is idempotent.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use sqlx::SqlitePool;
+use utoipa::ToSchema;
 
 /// The seed carries names and kinds only. An unknown field (a `password`, a `token`) is refused,
 /// so no seed can smuggle a credential in; credentials go through the Core's secrets broker.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Seed {
     #[serde(default)]
     pub companies: Vec<CompanySeed>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CompanySeed {
     pub name: String,
@@ -40,20 +41,35 @@ type BoxErr = Box<dyn std::error::Error + Send + Sync>;
 fn parse(text: &str) -> Result<Seed, BoxErr> {
     let seed: Seed =
         toml::from_str(text).map_err(|e| format!("invalid Citadel seed: {}", e.message()))?;
+    check(&seed)?;
+    Ok(seed)
+}
+
+/// The most companies one seed may name.
+pub const MAX_COMPANIES: usize = 500;
+
+/// The seed's rows are well formed (shared by the file and the endpoint).
+pub fn check(seed: &Seed) -> Result<(), BoxErr> {
+    if seed.companies.len() > MAX_COMPANIES {
+        return Err(format!("seed names more than {MAX_COMPANIES} companies").into());
+    }
     for company in &seed.companies {
-        if !matches!(company.kind.as_str(), "own" | "client") || company.name.trim().is_empty() {
+        if !matches!(company.kind.as_str(), "own" | "client")
+            || company.name.trim().is_empty()
+            || company.name.len() > 200
+        {
             return Err("seed company has an invalid name or kind".into());
         }
     }
-    Ok(seed)
+    Ok(())
 }
 
 /// Rows added, and companies named in the seed that already exist under another kind (left as
 /// they are, and counted so the operator is told).
 #[derive(Debug, Default, PartialEq, Eq)]
-struct Applied {
-    added: usize,
-    kind_mismatch: usize,
+pub struct Applied {
+    pub added: usize,
+    pub kind_mismatch: usize,
 }
 
 async fn insert(tx: &mut sqlx::SqliteConnection, seed: Seed) -> Result<Applied, BoxErr> {
@@ -120,6 +136,30 @@ pub async fn apply_seed_file(pool: &SqlitePool, path: &std::path::Path) -> Resul
     apply_seed(pool, &read_seed(path)?).await
 }
 
+/// Applies a checked seed in one transaction with its audit row (`citadel.seed.applied`): the
+/// counts plus `extra` (where it came from), never a name or any text of the seed.
+pub async fn apply_audited(
+    pool: &SqlitePool,
+    seed: Seed,
+    actor: ainkrad_core::audit::AuditActor,
+    extra: serde_json::Value,
+) -> Result<Applied, BoxErr> {
+    let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
+    let applied = insert(&mut tx, seed).await?;
+    let mut details = extra;
+    details["added"] = applied.added.into();
+    details["kind_mismatch"] = applied.kind_mismatch.into();
+    let entry = ainkrad_core::audit::NewAuditEvent {
+        actor,
+        action: "citadel.seed.applied".to_owned(),
+        entity: None,
+        details: details.to_string(),
+    };
+    ainkrad_core_server::store::audit::append(&mut tx, &entry).await?;
+    tx.commit().await?;
+    Ok(applied)
+}
+
 /// `ainkrad-core-citadel citadel seed <db> <file>`: the Core hook (`Module::admin`). The audit
 /// row is written in the seed's own transaction and holds counts, the size, the SHA-256 of the
 /// file and the uid that owns it: never a name or any of the file's text.
@@ -131,20 +171,13 @@ pub async fn seed_command(pool: &SqlitePool, args: &[&str]) -> Result<String, St
         let (text, uid) = read_seed_owned(std::path::Path::new(file))?;
         let seed = parse(&text)?;
         let sha256 = hex(&sha2::Sha256::digest(text.as_bytes()));
-        let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
-        let applied = insert(&mut tx, seed).await?;
-        let entry = ainkrad_core::audit::NewAuditEvent {
-            actor: ainkrad_core::audit::AuditActor::System,
-            action: "citadel.seed.applied".to_owned(),
-            entity: None,
-            details:
-                serde_json::json!({"added": applied.added, "kind_mismatch": applied.kind_mismatch,
-                                "bytes": text.len(), "sha256": sha256, "file_uid": uid})
-                .to_string(),
-        };
-        ainkrad_core_server::store::audit::append(&mut tx, &entry).await?;
-        tx.commit().await?;
-        Ok::<_, BoxErr>(applied)
+        apply_audited(
+            pool,
+            seed,
+            ainkrad_core::audit::AuditActor::System,
+            serde_json::json!({"bytes": text.len(), "sha256": sha256, "file_uid": uid}),
+        )
+        .await
     };
     let applied = run.await.map_err(|e| e.to_string())?;
     let note = match applied.kind_mismatch {
