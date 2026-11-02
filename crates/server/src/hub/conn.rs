@@ -159,7 +159,8 @@ pub(super) async fn run(
             },
         }
     };
-    hub.unregister(&device.id, generation, app.clock.unix());
+    let revoked_now = matches!(end, End::Revoked);
+    hub.unregister(&device.id, generation, app.clock.unix(), revoked_now);
     mark_used(&app, &device).await;
     let reason = match end {
         End::Gone => "gone",
