@@ -255,11 +255,9 @@ pub fn holds_account(secrets: &[store::SessionSecret]) -> bool {
 /// until the per-session intersection is wired, so the egress proof is demanded of the runner
 /// instead, see [`account_refusal`].)
 pub fn account_policy_problem(policy: &ainkrad_proto::runner::Policy) -> Option<&'static str> {
-    use ainkrad_proto::runner::Isolation;
-    (!policy
-        .required_tier()
-        .is_some_and(|t| t.satisfies(Isolation::Process)))
-    .then_some(
+    // `required_tier` is `Some` only for `process` or stronger (`none` is filtered out), and tiers
+    // are compared nowhere but `meets`, so presence is the whole test.
+    policy.required_tier().is_none().then_some(
         "a session holding a provider-account secret must run sandboxed: set min_isolation to \
          process or stronger",
     )
