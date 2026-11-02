@@ -3,6 +3,7 @@
 //! `routing` covers commands, capabilities, backpressure and connection ends; `proof` the
 //! upgrade's authentication and the channel-bound proof, over loopback and over TLS.
 
+mod account_vars;
 mod agents;
 use ainkrad_core_server::agents::AgentsConfig;
 mod fault;

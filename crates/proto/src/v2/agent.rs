@@ -60,6 +60,81 @@ pub fn valid_secret_var(var: &str) -> bool {
         && !var.starts_with("DYLD_")
 }
 
+/// Names under this prefix are provider-account secrets: `acct.<provider>.<label>`.
+pub const ACCOUNT_PREFIX: &str = "acct.";
+
+/// The variables a harness authenticates with: the ONLY ones a provider-account secret may be
+/// delivered under for it. A harness not listed takes no account secret at all. The runner
+/// crate's tests keep this equal to `ainkrad_harness::auth_env`.
+pub fn account_vars(harness: &str) -> &'static [&'static str] {
+    match harness {
+        "claude" => &["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+        "codex" => &["CODEX_API_KEY", "OPENAI_API_KEY"],
+        "agy" => &["GEMINI_API_KEY"],
+        _ => &[],
+    }
+}
+
+/// Whether a variable can point a program at another endpoint or another trust root: a proxy, a
+/// base URL, an endpoint, a certificate bundle. A session holding an account secret may not be
+/// given one by any other secret either, or the key could be steered to a server of the
+/// creator's choice.
+pub fn redirects_traffic(var: &str) -> bool {
+    const SUFFIXES: [&str; 6] = [
+        "_PROXY",
+        "_BASE_URL",
+        "_API_BASE",
+        "_API_URL",
+        "_ENDPOINT",
+        "_CA_BUNDLE",
+    ];
+    SUFFIXES.iter().any(|s| var.ends_with(s))
+        || var.starts_with("PROXY")
+        || matches!(
+            var,
+            "SSL_CERT_FILE"
+                | "SSL_CERT_DIR"
+                | "NODE_EXTRA_CA_CERTS"
+                | "NODE_TLS_REJECT_UNAUTHORIZED"
+                | "GIT_SSL_NO_VERIFY"
+                | "GIT_SSL_CAINFO"
+        )
+}
+
+/// Why a session of `harness` holding `grants` (each a secret's name and the variable it is
+/// delivered under) may not run, when one of them is a provider-account secret: it sits in a
+/// variable the harness does not authenticate with, or any grant could redirect traffic.
+/// `None` for a session with no account secret. The one rule the Core's broker and the
+/// runner both apply, so they cannot drift.
+pub fn account_var_problem<'a>(
+    harness: &str,
+    grants: impl IntoIterator<Item = (&'a str, &'a str)> + Clone,
+) -> Option<&'static str> {
+    if !grants
+        .clone()
+        .into_iter()
+        .any(|(name, _)| name.starts_with(ACCOUNT_PREFIX))
+    {
+        return None;
+    }
+    let allowed = account_vars(harness);
+    for (name, var) in grants {
+        if name.starts_with(ACCOUNT_PREFIX) && !allowed.contains(&var) {
+            return Some(
+                "a provider-account secret may only be delivered under one of its harness's own \
+                 authentication variables (see account_vars)",
+            );
+        }
+        if redirects_traffic(var) {
+            return Some(
+                "a session holding a provider-account secret may not set a proxy, base URL, \
+                 endpoint or certificate variable: it could redirect the key",
+            );
+        }
+    }
+    None
+}
+
 /// A session id: `as_` and a lowercase alphanumeric tail, at most 64 bytes in all.
 pub fn valid_session_id(id: &str) -> bool {
     id.len() <= 64
