@@ -282,7 +282,7 @@ pub async fn create(
             ApiError::new(StatusCode::FORBIDDEN, "forbidden_scope", why)
         }
     })?;
-    agents::admit_with(&app, &b.runner, &b.harness, &policy).await?;
+    agents::admit_holding(&app, &b.runner, &b.harness, &policy, &secrets).await?;
     let s = store::create(&app.pool, &new, BY, &app.clock.now()).await?;
     agents::authorize_create(&app, &me, &s.id);
     agents::start(&app, &s).await?;

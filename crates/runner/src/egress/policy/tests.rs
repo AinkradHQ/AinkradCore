@@ -309,3 +309,32 @@ fn an_exact_entry_never_overrides_the_metadata_or_the_reserved_ranges() {
     assert_eq!(wide.check_ip(ip("10.1.2.3"), false), Err(Deny::HostAddress));
     assert_eq!(wide.check_ip(ip("10.1.2.4"), false), Err(Deny::Reserved));
 }
+
+#[test]
+fn a_provider_account_policy_drops_forge_names_and_nothing_else() {
+    let p = policy(
+        "11.0.0.0/8",
+        "api.model.test,github.com,api.github.com,raw.githubusercontent.com,gitlab.com,\
+         x.bitbucket.org,notgithub.com,github.com.evil.test,gist.github.com,sr.ht,git.sr.ht",
+    );
+    let q = p.without_forges();
+    for n in [
+        "github.com",
+        "api.github.com",
+        "gist.github.com",
+        "raw.githubusercontent.com",
+        "gitlab.com",
+        "x.bitbucket.org",
+        "sr.ht",
+        "git.sr.ht",
+    ] {
+        assert!(p.host_listed(n) && !q.host_listed(n), "{n}");
+    }
+    // A model host, and look-alikes that are not a forge's domain, stay.
+    for n in ["api.model.test", "notgithub.com", "github.com.evil.test"] {
+        assert!(q.host_listed(n), "{n}");
+    }
+    // The CIDRs and ports are untouched (a CIDR over a forge still reaches it: documented).
+    assert_eq!(q.counts().0, p.counts().0);
+    assert_eq!(q.counts().2, p.counts().2);
+}

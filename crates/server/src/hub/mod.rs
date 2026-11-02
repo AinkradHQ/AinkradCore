@@ -248,6 +248,8 @@ pub struct RunnerState {
     pub isolation: Option<IsolationCaps>,
     /// The CPU architecture it said in its hello (`aarch64`, `x86_64`).
     pub arch: Option<String>,
+    /// The OS it said in its hello (`linux`, `macos`); `None` if it never said.
+    pub os: Option<String>,
 }
 
 pub struct Hub {
@@ -522,6 +524,7 @@ impl Hub {
                     host_load: r.load,
                     isolation: r.hello.isolation.clone(),
                     arch: r.hello.arch.clone(),
+                    os: r.hello.os.clone(),
                 };
                 (id.clone(), state)
             })
