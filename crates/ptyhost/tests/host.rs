@@ -58,16 +58,18 @@ async fn start(dir: &Path, spec: &Spec) -> (String, HostReader, HostWriter) {
     (id, r, w)
 }
 
-/// Output until `until` holds of it (or the exit, which is returned), within 20 s.
+/// Output until `until` holds of it (or the exit, which is returned). The clock is idle time:
+/// 20 s without a frame fails, so a slow, loaded box that keeps moving 10 MiB is not a hang;
+/// 5 minutes in all is the backstop.
 async fn read_until(
     r: &mut HostReader,
     out: &mut Vec<u8>,
     until: impl Fn(&[u8]) -> bool,
 ) -> Option<Exit> {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let backstop = Instant::now() + Duration::from_secs(300);
     while !until(out) {
-        let left = deadline.saturating_duration_since(Instant::now());
-        match tokio::time::timeout(left, r.recv()).await {
+        let left = backstop.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(left.min(Duration::from_secs(20)), r.recv()).await {
             Ok(Ok(Some(FromHost::Out { data, .. }))) => out.extend(STANDARD.decode(data).unwrap()),
             Ok(Ok(Some(FromHost::Exit { exit }))) => return Some(exit),
             Ok(Ok(Some(_))) => {}
@@ -231,10 +233,8 @@ async fn a_hundred_open_close_cycles_leave_nothing() {
         })
     };
     let mut table = ps();
-    for _ in 0..50 {
-        if left_over(&table).is_none() {
-            break;
-        }
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while left_over(&table).is_some() && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(100)).await;
         table = ps();
     }
