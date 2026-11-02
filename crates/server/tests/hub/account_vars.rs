@@ -19,7 +19,8 @@ fn grant(name: &str, var: &str) -> SessionSecret {
 }
 
 fn checked(harness: &str, secrets: &[SessionSecret]) -> Result<(), Invalid> {
-    let policy = json!({"mode": "ask"});
+    // Sandboxed, as KAN-433 requires of a session holding an account secret.
+    let policy = json!({"mode": "ask", "min_isolation": "process"});
     let new = NewSession {
         runner: "d_00000000000000000000000000",
         harness,
@@ -117,7 +118,7 @@ async fn a_stored_session_with_a_misplaced_account_secret_fails_before_any_lease
     )
     .await;
     make_admin(&core, &r.id).await;
-    let policy = json!({"mode": "ask"});
+    let policy = json!({"mode": "ask", "min_isolation": "process"});
     let misplaced = [grant("acct.anthropic.main", "HTTPS_PROXY")];
     let new = NewSession {
         runner: &r.id,
