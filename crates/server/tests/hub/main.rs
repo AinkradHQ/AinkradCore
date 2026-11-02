@@ -5,6 +5,7 @@
 
 mod agents;
 use ainkrad_core_server::agents::AgentsConfig;
+mod account_placement;
 mod fault;
 mod health;
 mod isolation;

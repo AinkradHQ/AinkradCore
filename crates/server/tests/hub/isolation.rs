@@ -340,6 +340,7 @@ fn state_of(isolation: Option<IsolationCaps>, degraded: bool) -> RunnerState {
         host_load: None,
         isolation,
         arch: None,
+        os: None,
     }
 }
 
@@ -553,5 +554,49 @@ async fn placement_at_launch_refuses_a_runner_the_hub_does_not_know_or_that_lost
         }
         _ => panic!("a runner that lost the tier must refuse"),
     }
+    r.halt().await;
+}
+
+#[tokio::test]
+async fn a_stored_account_session_is_refused_before_any_lease_on_a_runner_without_the_filter() {
+    use ainkrad_core_server::store::agents::SessionSecret;
+    let core = Core::start("iso-acct", quick()).await;
+    let r = runner(&core, "iso-acct", 1).await;
+    make_admin(&core, &r.id).await;
+    let policy = needs("process");
+    let key = [SessionSecret {
+        name: "acct.anthropic.main".into(),
+        var: "ANTHROPIC_API_KEY".into(),
+    }];
+    let new = NewSession {
+        runner: &r.id,
+        harness: "fake",
+        model: None,
+        prompt: Some("go"),
+        workspace: None,
+        policy: &policy,
+        secrets: &key,
+        created_by: &r.id,
+    };
+    let s = sessions::create(
+        &core.app.pool,
+        &new,
+        AuditActor::System,
+        &core.app.clock.now(),
+    )
+    .await
+    .unwrap();
+    service::authorize_for_tests(&core.app, &s.id);
+    // The runner's stand-in sandbox advertises no `egress-filter`, so placement refuses; it
+    // does so before leasing (the secret does not even exist), and nothing reaches the runner.
+    let why = service::start(&core.app, &s)
+        .await
+        .err()
+        .map(|e| service::describe(&e));
+    let why = why.expect("the start must be refused");
+    assert!(why.contains("provider-account"), "{why}");
+    assert_eq!(*r.prepared.lock().unwrap(), 0);
+    let stored = sessions::get(&core.app.pool, &s.id).await.unwrap().unwrap();
+    assert!(!stored.live(), "{:?}", stored.state);
     r.halt().await;
 }
