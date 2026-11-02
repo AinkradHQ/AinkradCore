@@ -250,7 +250,6 @@ step5() {
   local cwd rt hp2 sh2 ch2 agentpids before after
   cwd=$(transcript "$AS" | jq -r '.body | tostring' | grep -o 'CWD=[^"]*' | tail -n1 | cut -d= -f2-)
   [ -d "$cwd" ] || { EV="no agent worktree at '$cwd'"; return 1; }
-  before=$(cd "$cwd" && ls tick-* | sort | cksum)
   hp2=$(host_pid "$T2") || { EV="no host pid for $T2"; return 1; }
   hp2=$(tree "$hp2" | tr '\n' ' ')
   agentpids=$(pgrep -f "$W/bin/claude" || true); [ -n "$agentpids" ] || { EV="no agent process to kill"; return 1; }
@@ -260,6 +259,8 @@ step5() {
   gone() { local p; for p in "$@"; do alive "$p" && return 1; done; return 0; }
   # shellcheck disable=SC2086
   wait_for 30 gone $hp2 $agentpids || { EV="processes left after the kills: $(for p in $hp2 $agentpids; do alive "$p" && echo -n "$p "; done)"; return 1; }
+  # The agent writes a tick file every E2_AGENT_TICK s until it dies: the baseline is taken once every process is gone (before, it raced a tick landing between the snapshot and the kill), and the checks below are the time in which a survivor would write again.
+  before=$(cd "$cwd" && ls tick-* | sort | cksum)
   [ "$(agent_state "$AS")" = ended ] || { sleep 3; [ "$(agent_state "$AS")" = ended ] || { EV="agent is $(agent_state "$AS")"; return 1; }; }
   rt=$(ps -axo pid=,ppid=,stat= | awk -v r="$RPID" '$2==r && $3 ~ /^Z/ {print $1}')
   [ -z "$rt" ] || { EV="zombie children of the runner: $rt"; return 1; }
