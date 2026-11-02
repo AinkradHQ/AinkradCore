@@ -1163,6 +1163,8 @@ async fn the_runner_refuses_an_account_secret_in_the_wrong_variable() {
         Box::pin(async move {
             let name = match lease.as_str() {
                 "l_acct" => "acct.anthropic.main",
+                "l_openai" => "acct.openai.main",
+                "l_google" => "acct.google.main",
                 "l_git" => "git.token",
                 _ => return Err("no such lease".to_owned()),
             };
@@ -1177,7 +1179,7 @@ async fn the_runner_refuses_an_account_secret_in_the_wrong_variable() {
         lease: lease.to_owned(),
         var: var.to_owned(),
     };
-    let cases: [(&str, Vec<SecretGrant>, bool); 6] = [
+    let cases: [(&str, Vec<SecretGrant>, bool); 14] = [
         ("claude", vec![grant("l_acct", "ANTHROPIC_API_KEY")], true),
         ("claude", vec![grant("l_acct", "HTTPS_PROXY")], false),
         ("claude", vec![grant("l_acct", "OPENAI_API_KEY")], false),
@@ -1192,6 +1194,24 @@ async fn the_runner_refuses_an_account_secret_in_the_wrong_variable() {
         ),
         // Control: no account secret, the old rule.
         ("claude", vec![grant("l_git", "HTTPS_PROXY")], true),
+        // The provider: each account secret runs only its own harness, even in that harness's
+        // own variable.
+        ("codex", vec![grant("l_openai", "OPENAI_API_KEY")], true),
+        ("agy", vec![grant("l_google", "GEMINI_API_KEY")], true),
+        ("codex", vec![grant("l_acct", "OPENAI_API_KEY")], false),
+        ("agy", vec![grant("l_acct", "GEMINI_API_KEY")], false),
+        (
+            "claude",
+            vec![grant("l_openai", "ANTHROPIC_API_KEY")],
+            false,
+        ),
+        ("agy", vec![grant("l_openai", "GEMINI_API_KEY")], false),
+        (
+            "claude",
+            vec![grant("l_google", "ANTHROPIC_API_KEY")],
+            false,
+        ),
+        ("codex", vec![grant("l_google", "OPENAI_API_KEY")], false),
     ];
     for (n, (harness, grants, runs)) in cases.into_iter().enumerate() {
         let (_root, config) = dirs(&format!("acct-var-{n}"));
@@ -1214,7 +1234,9 @@ async fn the_runner_refuses_an_account_secret_in_the_wrong_variable() {
         if !runs {
             assert!(
                 matches!(&ev.outcome, Some(Outcome::Failed { reason, .. })
-                    if reason.contains("authentication variables") || reason.contains("redirect")),
+                    if reason.contains("authentication variables")
+                        || reason.contains("redirect")
+                        || reason.contains("its own provider")),
                 "case {n}: {:?}",
                 ev.outcome
             );

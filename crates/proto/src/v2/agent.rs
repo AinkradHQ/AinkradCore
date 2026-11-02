@@ -75,6 +75,22 @@ pub fn account_vars(harness: &str) -> &'static [&'static str] {
     }
 }
 
+/// The provider whose account secrets a harness may carry (`acct.<provider>.<label>`). A harness
+/// not listed takes none.
+pub fn harness_provider(harness: &str) -> Option<&'static str> {
+    match harness {
+        "claude" => Some("anthropic"),
+        "codex" => Some("openai"),
+        "agy" => Some("google"),
+        _ => None,
+    }
+}
+
+/// The provider an account secret's name carries: `acct.<provider>.<label>` gives `<provider>`.
+pub fn account_provider(name: &str) -> Option<&str> {
+    name.strip_prefix(ACCOUNT_PREFIX)?.split('.').next()
+}
+
 /// Whether a variable can point a program at another endpoint or another trust root: a proxy, a
 /// base URL, an endpoint, a certificate bundle. A session holding an account secret may not be
 /// given one by any other secret either, or the key could be steered to a server of the
@@ -118,7 +134,16 @@ pub fn account_var_problem<'a>(
         return None;
     }
     let allowed = account_vars(harness);
+    let provider = harness_provider(harness);
     for (name, var) in grants {
+        if name.starts_with(ACCOUNT_PREFIX)
+            && (provider.is_none() || account_provider(name) != provider)
+        {
+            return Some(
+                "a provider-account secret may only be used by its own provider's harness \
+                 (anthropic: claude, openai: codex, google: agy)",
+            );
+        }
         if name.starts_with(ACCOUNT_PREFIX) && !allowed.contains(&var) {
             return Some(
                 "a provider-account secret may only be delivered under one of its harness's own \
