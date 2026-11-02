@@ -137,15 +137,58 @@ pub fn resolve(program: &str, path: Option<&str>) -> String {
         .map_or_else(|| program.to_owned(), |p| p.to_string_lossy().into_owned())
 }
 
-/// `program args` run with `hidden` unreadable and `readonly` unwritable: the command line to
-/// start instead. Fails closed: an absent hidden path, or a `program` that is not an absolute
-/// path (a leading `-` would be read as an option of the launcher, replacing its profile).
+/// The network of a terminal shell (KAN-416, `--terminal-network`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Net {
+    /// The host's network, unfiltered: the accepted scope of an admin-equivalent `terminal`.
+    #[default]
+    Host,
+    /// A network namespace of its own with no interface (Linux: bubblewrap `--unshare-net`;
+    /// macOS: Seatbelt `deny network*`). Also closes the host's abstract unix sockets.
+    None,
+    /// Linux only: no interface either, but `HTTPS_PROXY` reaches the runner's egress proxy
+    /// (the one agent sessions use, same allow policy) through the unix socket in `dir`.
+    Filtered { dir: PathBuf, exe: PathBuf },
+}
+
+impl Net {
+    /// The mode named by `--terminal-network`, `Filtered` needing its socket dir and the runner binary.
+    pub fn parse(mode: &str, dir: PathBuf, exe: PathBuf) -> Option<Net> {
+        match mode {
+            "host" => Some(Net::Host),
+            "none" => Some(Net::None),
+            "filtered" => Some(Net::Filtered { dir, exe }),
+            _ => None,
+        }
+    }
+}
+
+/// Runs the in-namespace forwarder (`mcp-forward <port> <sock>`) in the background, then the shell.
+const FORWARD_THEN_EXEC: &str =
+    "\"$1\" mcp-forward \"$2\" \"$3\" </dev/null >/dev/null 2>&1 & shift 3; exec \"$@\"";
+
+/// [`wrap_net`] on the host network.
 pub fn wrap(
     hidden: &[PathBuf],
     readonly: &[PathBuf],
     program: &str,
     args: &[String],
     cwd: &str,
+) -> Result<(String, Vec<String>), String> {
+    wrap_net(hidden, readonly, program, args, cwd, &Net::Host)
+}
+
+/// `program args` run with `hidden` unreadable and `readonly` unwritable, on `net`: the command
+/// line to start instead. Fails closed: an absent hidden path, or a `program` that is not an
+/// absolute path (a leading `-` would be read as an option of the launcher, replacing its profile),
+/// or a filtered network on a host that is not Linux.
+pub fn wrap_net(
+    hidden: &[PathBuf],
+    readonly: &[PathBuf],
+    program: &str,
+    args: &[String],
+    cwd: &str,
+    net: &Net,
 ) -> Result<(String, Vec<String>), String> {
     if !program.starts_with('/') {
         // A bare name [`resolve`] could not find: say that, not a rule it did not break.
@@ -155,6 +198,9 @@ pub fn wrap(
         } else {
             "a terminal program must be an absolute path".to_owned()
         });
+    }
+    if matches!(net, Net::Filtered { .. }) && cfg!(target_os = "macos") {
+        return Err("a filtered terminal network is Linux only".to_owned());
     }
     prepare(hidden)?;
     let mut hidden = canonical(hidden, true)?;
@@ -177,6 +223,9 @@ pub fn wrap(
         let mut profile = String::from(
             "(version 1)\n(allow default)\n(deny mach-priv-task-port)\n(deny process-info* (target others))\n(deny process-exec (literal \"/bin/launchctl\") (literal \"/usr/bin/osascript\") (literal \"/usr/bin/open\") (literal \"/usr/bin/at\") (literal \"/usr/bin/crontab\"))\n(deny mach-lookup (global-name-prefix \"com.apple.xpc.launchd.domain\"))\n",
         );
+        if *net != Net::Host {
+            profile.push_str("(deny network*)\n");
+        }
         for p in &hidden {
             let q = quote(p);
             profile.push_str(&format!(
@@ -208,6 +257,9 @@ pub fn wrap(
             ]
             .map(str::to_owned),
         );
+        if *net != Net::Host {
+            out.push("--unshare-net".to_owned());
+        }
         // The user's systemd and D-Bus sockets (`systemd-run --user` starts a process outside
         // this sandbox) live in the runtime dir.
         let mut tmpfs = hidden.clone();
@@ -232,7 +284,38 @@ pub fn wrap(
             let p = p.to_string_lossy().into_owned();
             out.extend(["--ro-bind".to_owned(), p.clone(), p]);
         }
-        out.extend(["--chdir".to_owned(), cwd.to_owned(), "--".to_owned()]);
+        if let Net::Filtered { dir, exe } = net {
+            // The socket dir comes back over the hidden state dir (a dir, so a proxy restarted
+            // after a runner restart is still reached through the same mount).
+            let dir = dir
+                .canonicalize()
+                .map_err(|e| format!("{}: {e}", dir.display()))?;
+            let (d, sock) = (
+                dir.to_string_lossy().into_owned(),
+                crate::egress::socket_in(&dir),
+            );
+            out.extend(["--bind".to_owned(), d.clone(), d]);
+            let proxy = format!("http://127.0.0.1:{}", crate::egress::EGRESS_PORT);
+            for k in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+                out.extend(["--setenv".to_owned(), k.to_owned(), proxy.clone()]);
+            }
+            for k in ["NO_PROXY", "no_proxy"] {
+                out.extend([
+                    "--setenv".to_owned(),
+                    k.to_owned(),
+                    "127.0.0.1,localhost".to_owned(),
+                ]);
+            }
+            out.extend(["--chdir".to_owned(), cwd.to_owned(), "--".to_owned()]);
+            out.extend(["/bin/sh", "-c", FORWARD_THEN_EXEC, "ainkrad-terminal"].map(str::to_owned));
+            out.extend([
+                exe.to_string_lossy().into_owned(),
+                crate::egress::EGRESS_PORT.to_string(),
+                sock.to_string_lossy().into_owned(),
+            ]);
+        } else {
+            out.extend(["--chdir".to_owned(), cwd.to_owned(), "--".to_owned()]);
+        }
         BWRAP
     };
     out.push(program.to_owned());
@@ -298,7 +381,7 @@ pub fn private_state(dir: &Path) -> Result<(), String> {
 /// Whether shells can run as `user` here, tried for real: the account exists and is neither root
 /// nor the runner's own uid (that would be no separation at all), and `sudo -n` runs a program
 /// as it (through the sandbox wrapper when `sandbox`). The error says what the owner must set up.
-pub fn probe_user(user: &str, sandbox: bool) -> Result<(), String> {
+pub fn probe_user(user: &str, sandbox: bool, net: &Net) -> Result<(), String> {
     if !valid_user(user) {
         return Err(format!("{user:?} is not a valid account name"));
     }
@@ -314,7 +397,7 @@ pub fn probe_user(user: &str, sandbox: bool) -> Result<(), String> {
         ));
     }
     let (program, args) = if sandbox {
-        wrap(&[], &[], "/usr/bin/true", &[], "/")?
+        wrap_net(&[], &[], "/usr/bin/true", &[], "/", &probe_net(net))?
     } else {
         ("/usr/bin/true".to_owned(), Vec::new())
     };
@@ -337,9 +420,18 @@ pub fn probe_user(user: &str, sandbox: bool) -> Result<(), String> {
     }
 }
 
+/// What a start-up probe tries: a filtered network needs the same namespace as `none` (the
+/// proxy path is proven by the egress self-test).
+fn probe_net(net: &Net) -> Net {
+    match net {
+        Net::Host => Net::Host,
+        _ => Net::None,
+    }
+}
+
 /// Whether the sandbox runs here, tried for real (a disabled user namespace shows only then).
-pub fn probe() -> Result<(), String> {
-    let (program, args) = wrap(&[], &[], "/usr/bin/true", &[], "/")?;
+pub fn probe(net: &Net) -> Result<(), String> {
+    let (program, args) = wrap_net(&[], &[], "/usr/bin/true", &[], "/", &probe_net(net))?;
     let ok = Command::new(&program)
         .args(&args)
         .stdin(Stdio::null())
@@ -359,6 +451,69 @@ pub fn probe() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn argv(net: &Net) -> Result<Vec<String>, String> {
+        wrap_net(&[], &[], "/bin/sh", &["-i".to_owned()], "/", net).map(|(_, a)| a)
+    }
+
+    #[test]
+    fn only_a_named_network_changes_the_shell_network_and_the_program_stays_last() {
+        let has = |a: &[String], x: &str| a.iter().any(|v| v == x);
+        let host = argv(&Net::Host).unwrap();
+        assert!(!has(&host, "--unshare-net") && !has(&host, "(deny network*)\n"));
+        assert!(!host.iter().any(|a| a.contains("deny network")));
+        let none = argv(&Net::None).unwrap();
+        if cfg!(target_os = "linux") {
+            assert!(has(&none, "--unshare-net"));
+        } else {
+            assert!(none.iter().any(|a| a.contains("(deny network*)")));
+        }
+        assert_eq!(none[none.len() - 2..], ["/bin/sh", "-i"]);
+        assert!(Net::parse("allow", PathBuf::new(), PathBuf::new()).is_none());
+        // A program that could be an option is still refused on a locked network.
+        assert!(
+            wrap_net(&[], &[], "-f", &[], "/", &Net::None).is_err(),
+            "option-like program"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_filtered_network_is_refused_where_it_cannot_be_given() {
+        let net = Net::Filtered {
+            dir: PathBuf::from("/tmp"),
+            exe: PathBuf::from("/x"),
+        };
+        assert!(argv(&net).unwrap_err().contains("Linux only"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_filtered_shell_gets_the_proxy_variables_the_socket_dir_and_the_forwarder_first() {
+        let dir = std::env::temp_dir().join(format!("termnet-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let net = Net::Filtered {
+            dir: dir.clone(),
+            exe: PathBuf::from("/runner"),
+        };
+        let a = argv(&net).unwrap();
+        let at = |x: &str| a.iter().position(|v| v == x).unwrap();
+        assert!(a.iter().any(|v| v == "--unshare-net"));
+        let d = dir.canonicalize().unwrap().to_string_lossy().into_owned();
+        assert_eq!(a[at(&d) - 1], "--bind");
+        let proxy = format!("http://127.0.0.1:{}", crate::egress::EGRESS_PORT);
+        assert!(a.contains(&proxy));
+        // forwarder script, then the real program last
+        assert!(at("ainkrad-terminal") > at("--"));
+        assert_eq!(a[a.len() - 2..], ["/bin/sh", "-i"]);
+        // a missing socket dir fails closed rather than starting without a path out
+        let gone = Net::Filtered {
+            dir: dir.join("nope"),
+            exe: PathBuf::from("/runner"),
+        };
+        assert!(argv(&gone).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_program_that_could_be_an_option_or_is_relative_is_refused() {
@@ -422,16 +577,28 @@ mod tests {
     fn terminals_as_another_user_fail_closed_before_any_shell_starts() {
         // Not an account, root, and the runner's own user: each refused with its reason.
         assert!(
-            probe_user("no-such-account-e2", false)
+            probe_user("no-such-account-e2", false, &Net::Host)
                 .unwrap_err()
                 .contains("no account")
         );
-        assert!(probe_user("-n", true).unwrap_err().contains("valid"));
-        assert!(probe_user("root", false).unwrap_err().contains("root"));
+        assert!(
+            probe_user("-n", true, &Net::Host)
+                .unwrap_err()
+                .contains("valid")
+        );
+        assert!(
+            probe_user("root", false, &Net::Host)
+                .unwrap_err()
+                .contains("root")
+        );
         let me = Command::new("/usr/bin/id").arg("-un").output().unwrap();
         let me = String::from_utf8_lossy(&me.stdout).trim().to_owned();
         if valid_user(&me) {
-            assert!(probe_user(&me, false).unwrap_err().contains("own user"));
+            assert!(
+                probe_user(&me, false, &Net::Host)
+                    .unwrap_err()
+                    .contains("own user")
+            );
         }
     }
 

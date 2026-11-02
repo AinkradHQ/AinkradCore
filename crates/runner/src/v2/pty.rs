@@ -60,6 +60,8 @@ pub struct PtyConfig {
     /// `--terminal-user`: run every shell as this other account through `sudo -n` (E2-25). With
     /// it set a shell is never started as the runner's own user.
     pub user: Option<String>,
+    /// `--terminal-network` (KAN-416): the network every shell gets. Needs the sandbox.
+    pub net: super::termbox::Net,
 }
 
 impl PtyConfig {
@@ -78,6 +80,7 @@ impl PtyConfig {
             hide: Some(Vec::new()),
             readonly: Vec::new(),
             user: None,
+            net: super::termbox::Net::Host,
         }
     }
 }
@@ -336,6 +339,10 @@ impl PtyDriver {
             self.set_budget(b);
         }
         self.enforce_budget().await;
+        if self.config.net != super::termbox::Net::Host && self.config.hide.is_none() {
+            // Only the sandbox can change a shell's network: never start one on the host's.
+            return Err(invalid("a terminal network needs the terminal sandbox"));
+        }
         if self.config.hide.is_some() || self.config.user.is_some() {
             // The shell the host would start by default is named here, so the wrapper can run it.
             let program = spec
@@ -359,10 +366,15 @@ impl PtyDriver {
                 .filter(|c| c.starts_with('/'))
                 .unwrap_or_else(|| "/".to_owned());
             let (mut launcher, mut args) = match &self.config.hide {
-                Some(hide) => {
-                    super::termbox::wrap(hide, &self.config.readonly, &program, &spec.args, &cwd)
-                        .map_err(|e| invalid(&e))?
-                }
+                Some(hide) => super::termbox::wrap_net(
+                    hide,
+                    &self.config.readonly,
+                    &program,
+                    &spec.args,
+                    &cwd,
+                    &self.config.net,
+                )
+                .map_err(|e| invalid(&e))?,
                 None => (program, spec.args.clone()),
             };
             if let Some(user) = &self.config.user {

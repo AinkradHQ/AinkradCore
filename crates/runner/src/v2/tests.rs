@@ -691,6 +691,25 @@ mod pty {
         let _ = std::fs::remove_dir_all(&work);
     }
 
+    /// KAN-416: a locked terminal network without the sandbox is refused, never opened on the host's.
+    #[tokio::test]
+    async fn a_terminal_network_without_the_sandbox_is_refused() {
+        let base = tmp();
+        let terminals = base.join("state/terminals");
+        std::fs::create_dir_all(&terminals).unwrap();
+        let driver = Arc::new(PtyDriver::new(PtyConfig {
+            enabled: true,
+            capacity: 4,
+            hide: None,
+            net: super::super::termbox::Net::None,
+            ..PtyConfig::new(terminals.clone())
+        }));
+        let (mut core, _) = Core::start_pty(driver).await;
+        core.send(1, open("true")).await;
+        assert_eq!(error(core.answer(1).await), ErrorCode::InvalidArgs);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// Review PR 66 re-review: the shell cannot write a read-only launcher path, cannot see the
     /// user's runtime dir (bus and systemd sockets, Linux), and (macOS) cannot start a process
     /// through launchd or inspect another process.
