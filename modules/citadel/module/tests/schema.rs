@@ -85,3 +85,96 @@ async fn the_module_declares_its_names_and_they_are_registered() {
     assert_eq!(kinds as usize, citadel_module::kinds::EVENT_KINDS.len());
     assert_eq!(actions as usize, citadel_module::kinds::AUDIT_ACTIONS.len());
 }
+
+/// KAN-178 (E2-13.5): no credential is stored outside the secrets broker. Every column of the
+/// migrated schema (Core and Citadel) whose name looks like credential material is listed here and
+/// reviewed: it is a broker secret *name*, a hash, a public identifier or a delivery address, never
+/// a value. A new column that matches must be added with that review, or the test fails.
+#[tokio::test]
+async fn no_column_outside_the_broker_can_hold_a_credential() {
+    const REVIEWED: &[(&str, &str, &str)] = &[
+        // (table, column, why it is not a credential)
+        ("citadel_accounts", "secret_name", "name of a broker secret"),
+        (
+            "citadel_forge_secret_hosts",
+            "secret",
+            "name of a broker secret",
+        ),
+        (
+            "citadel_project_linear",
+            "secret",
+            "name of a broker secret",
+        ),
+        (
+            "citadel_project_repos",
+            "forge_secret",
+            "name of a broker secret",
+        ),
+        ("citadel_run_tokens", "token_hash", "SHA-256 of a run token"),
+        ("core_pairings", "secret_hash", "hash of a pairing secret"),
+        (
+            "core_passkeys",
+            "credential_id",
+            "public WebAuthn credential id",
+        ),
+        (
+            "core_push_tokens",
+            "token",
+            "device push address, not an account credential",
+        ),
+        (
+            "core_devices",
+            "push_token",
+            "device push address, not an account credential",
+        ),
+        ("core_agent_sessions", "secrets", "names of broker secrets"),
+    ];
+    let db = db().await;
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' \
+         AND name NOT LIKE 'core\\_secret%' ESCAPE '\\'",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    let mut found = vec![];
+    for t in tables {
+        let cols: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT name FROM pragma_table_info('{t}')"
+        )))
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        for c in cols {
+            let l = c.to_lowercase();
+            // Counts of model tokens (`input_tokens`, `token_cap`) are numbers, not credentials.
+            if l.contains("tokens") || l == "token_cap" {
+                continue;
+            }
+            if [
+                "secret",
+                "token",
+                "password",
+                "passwd",
+                "credential",
+                "api_key",
+                "apikey",
+                "private",
+                "bearer",
+                "cert",
+            ]
+            .iter()
+            .any(|w| l.contains(w))
+            {
+                found.push(format!("{t}.{c}"));
+            }
+        }
+    }
+    found.sort();
+    let mut want: Vec<String> = REVIEWED
+        .iter()
+        .map(|(t, c, _)| format!("{t}.{c}"))
+        .collect();
+    want.sort();
+    assert_eq!(found, want, "review the column, then list it in REVIEWED");
+}
