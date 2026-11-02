@@ -201,8 +201,8 @@ async fn a_none_shell_has_no_host_network_and_a_filtered_shell_only_the_policy()
     );
     assert_eq!(
         target_hits.load(Ordering::SeqCst),
-        before.1 + 1,
-        "the listed address is reached once"
+        before.1 + 2,
+        "the listed address is reached once by the filtered shell and once by the tamper shell"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
