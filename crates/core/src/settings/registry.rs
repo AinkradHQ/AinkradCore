@@ -77,4 +77,16 @@ registry! {
     AuditAnchorIntervalSecs "audit.anchor_interval_secs" Seconds 3_600, 300, 86_400, SO,
         "Time between off-box anchors of the audit chain head (E1-10.4), written only when the \
          backup bucket is configured; read at start.";
+    SecretsProviderAccounts "secrets.provider_accounts" Count 0, 0, 1, SO,
+        "The narrow gate for AI provider accounts: 1 lets a secret named acct.<provider>.<label> \
+         (a known provider) be one real key of that provider's own shape, or a value with no \
+         known shape (an OAuth token), while secrets.mode is 1; git, forge and Linear secrets \
+         stay throwaway-only until gate G-SEC closes. 0 (the default) refuses it like any other. \
+         The check is by redactor shape only, as mode 1 itself: base64, hex or percent-encoded \
+         keys, a key with a letter or digit glued before it, keys split by whitespace, \
+         \\u-escaped JSON and formats with no shape stay accepted, for every name. It never turns \
+         the broker on (the kill switch is secrets.mode 0: leases and redemptions check only the \
+         mode); mode 2 behaves as before, except that an acct.* secret is never delivered by \
+         askpass. Setting it needs admin and a step-up and is audited. Read at each store and \
+         rotation.";
 }

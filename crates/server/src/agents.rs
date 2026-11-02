@@ -416,6 +416,7 @@ impl ModuleAgents {
     /// On an illegal module id (`module::mount` refuses it too).
     pub fn of(module: &dyn Module) -> Self {
         assert!(crate::module::valid_id(module.id()), "illegal module id");
+        assert!(module.id() != "acct", "module id \"acct\" is reserved");
         Self {
             module: module.id(),
         }

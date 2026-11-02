@@ -504,3 +504,394 @@ async fn a_module_opens_only_its_own_secrets_and_it_is_audited() {
     let e = open("citadel", "citadel.forge.tok").await.err().unwrap();
     assert!(e.to_string().starts_with("secrets_disabled"), "{e}");
 }
+
+fn planted(kind: &str) -> &'static str {
+    ainkrad_proto::redact::PLANTED
+        .iter()
+        .find(|(k, _)| *k == kind)
+        .unwrap()
+        .1
+}
+
+/// The narrow gate (`secrets.provider_accounts`): only a provider-account secret may be
+/// real-shaped, only while the gate is on, and only in mode 1; everything else is unchanged.
+#[tokio::test]
+async fn the_provider_account_gate_lets_only_account_secrets_be_real() {
+    let (fx, _vm) = broker().await;
+    let real = planted("anthropic_key");
+    let gh = planted("github_token");
+    let refused = (StatusCode::CONFLICT, "real_secret_refused");
+    let bad = (StatusCode::BAD_REQUEST, "bad_request");
+    let account = "acct.anthropic.main";
+    let others = [
+        "git.token",
+        "forge.token",
+        "linear.api",
+        "acctx.anthropic.m",
+    ];
+    let unknown = [
+        "acct.",
+        "acct.nobody.x",
+        "acct.anthropic",
+        "acct.anthropic.",
+        "acct.anthropic.-",
+        "acct.anthropic..",
+        "acct.anthropic.-.-",
+    ];
+
+    // Gate off (the default): an account secret is refused like any other; unknown kinds fail
+    // closed.
+    for n in others.iter().chain(&[account]) {
+        assert_eq!(code(&create(&fx, n, real, &[]).await), refused, "{n}");
+    }
+    for n in unknown {
+        assert_eq!(code(&create(&fx, n, V1, &[]).await), bad, "off {n}");
+    }
+    // Gate on, mode 1: the account secret is accepted, every other real value still refused.
+    set(&fx, Key::SecretsProviderAccounts, 1).await;
+    for n in others {
+        for v in [gh, real] {
+            let r = create(&fx, n, v, &[]).await;
+            assert_eq!(code(&r), refused, "{n}");
+            assert!(!r.1.to_string().contains(v));
+        }
+    }
+    for n in unknown {
+        assert_eq!(code(&create(&fx, n, V1, &[]).await), bad, "on {n}");
+    }
+    assert_eq!(create(&fx, account, real, &[]).await.0, StatusCode::OK);
+    // A rotation follows the same rule, by name.
+    create(&fx, "git.token", V1, &[]).await;
+    let uri = "/api/v1/secrets/git.token";
+    let r = call(&fx, &fx.dev, Method::PUT, uri, json!({"value": gh})).await;
+    assert_eq!(code(&r), refused);
+    let uri = format!("/api/v1/secrets/{account}");
+    let r = call(&fx, &fx.dev, Method::PUT, &uri, json!({"value": real})).await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    // The gate never turns the broker on.
+    set(&fx, Key::SecretsMode, 0).await;
+    for n in ["acct.openai.b", "acct.nobody.b"] {
+        assert_eq!(
+            code(&create(&fx, n, real, &[]).await),
+            (StatusCode::CONFLICT, "secrets_disabled"),
+            "{n}"
+        );
+    }
+    // Gate off again: creating is refused once more, and so is rotating the existing account
+    // secret with a real value.
+    set(&fx, Key::SecretsMode, 1).await;
+    set(&fx, Key::SecretsProviderAccounts, 0).await;
+    assert_eq!(
+        code(&create(&fx, "acct.openai.b", real, &[]).await),
+        refused
+    );
+    let r = call(&fx, &fx.dev, Method::PUT, &uri, json!({"value": real})).await;
+    assert_eq!(code(&r), refused);
+    // Mode 2 is unchanged by the gate, on or off: a real git secret is taken, and so is an
+    // unknown acct. name (it is only fail-closed below mode 2).
+    set(&fx, Key::SecretsMode, 2).await;
+    assert_eq!(
+        code(&create(&fx, "git.token", gh, &[]).await),
+        (StatusCode::CONFLICT, "conflict"),
+        "the name exists; the value is not the reason"
+    );
+    assert_eq!(create(&fx, "git.two", gh, &[]).await.0, StatusCode::OK);
+    set(&fx, Key::SecretsProviderAccounts, 1).await;
+    assert_eq!(create(&fx, "git.three", gh, &[]).await.0, StatusCode::OK);
+    assert_eq!(
+        create(&fx, "acct.nobody.x", gh, &[]).await.0,
+        StatusCode::OK
+    );
+    assert!(!trail(&fx).await.contains(real));
+}
+
+/// Review: an account name is not a licence for any credential. Another kind of key under an
+/// account name is refused, on create and rotate; the provider's own shape and a shapeless
+/// token (OAuth, subscription) are taken.
+#[tokio::test]
+async fn an_account_secret_must_not_look_like_another_credential() {
+    let (fx, _vm) = broker().await;
+    set(&fx, Key::SecretsProviderAccounts, 1).await;
+    let refused = (StatusCode::CONFLICT, "real_secret_refused");
+    let foreign = [
+        planted("github_token"),
+        planted("aws_key"),
+        planted("aws_secret"),
+        planted("pem_block"),
+        planted("runner_key"),
+        planted("run_token"),
+        planted("bearer"),
+        planted("openai_key"),
+        planted("google_key"),
+    ];
+    assert_eq!(
+        create(
+            &fx,
+            "acct.anthropic.x",
+            "oauth-token-without-any-known-shape",
+            &[]
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let uri = "/api/v1/secrets/acct.anthropic.x";
+    for (i, v) in foreign.iter().enumerate() {
+        let r = create(&fx, &format!("acct.anthropic.n{i}"), v, &[]).await;
+        assert_eq!(code(&r), refused, "create {i}");
+        assert!(!r.1.to_string().contains(v));
+        let r = call(&fx, &fx.dev, Method::PUT, uri, json!({"value": v})).await;
+        assert_eq!(code(&r), refused, "rotate {i}");
+    }
+    // A foreign key after the provider's own, with a space or glued on, is refused (the glued
+    // forms are the redactor's one-token trap, `single_own_key` covers them).
+    let mixed = format!("{} {}", planted("anthropic_key"), planted("github_token"));
+    assert_eq!(
+        code(&create(&fx, "acct.anthropic.m", &mixed, &[]).await),
+        refused
+    );
+    // The provider's own shape is accepted, on create and rotate; each provider its own.
+    let own = [
+        ("anthropic", "anthropic_key"),
+        ("openai", "openai_key"),
+        ("google", "google_key"),
+    ];
+    for (p, k) in own {
+        let r = create(&fx, &format!("acct.{p}.own"), planted(k), &[]).await;
+        assert_eq!(r.0, StatusCode::OK, "{p}: {}", r.1);
+        let uri = format!("/api/v1/secrets/acct.{p}.own");
+        let r = call(
+            &fx,
+            &fx.dev,
+            Method::PUT,
+            &uri,
+            json!({"value": planted(k)}),
+        )
+        .await;
+        assert_eq!(r.0, StatusCode::OK, "{p}: {}", r.1);
+    }
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::PUT,
+        uri,
+        json!({"value": "another-shapeless-token-9"}),
+    )
+    .await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    // askpass is for git: refused for an account secret, create and rotate.
+    let body = json!({"name": "acct.openai.ask", "value": V1, "delivery": "askpass"});
+    let r = call(&fx, &fx.dev, Method::POST, "/api/v1/secrets", body).await;
+    assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_request"));
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::PUT,
+        uri,
+        json!({"value": V2, "delivery": "askpass"}),
+    )
+    .await;
+    assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_request"));
+    // The audit rows are tagged, and hold no value.
+    let tagged: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE action IN ('secret.created', 'secret.rotated') \
+         AND json_extract(details, '$.kind') = 'provider_account'",
+    )
+    .fetch_one(&fx.app.pool)
+    .await
+    .unwrap();
+    assert!(tagged >= 8, "{tagged}");
+    // `gate_lifted` marks only the rows where the gate admitted a real-shaped value.
+    let lifted: Vec<String> = sqlx::query_scalar(
+        "SELECT json_extract(details, '$.name') FROM audit_events \
+         WHERE json_extract(details, '$.gate_lifted') = 1",
+    )
+    .fetch_all(&fx.app.pool)
+    .await
+    .unwrap();
+    assert!(lifted.iter().all(|n| n.ends_with(".own")), "{lifted:?}");
+    assert_eq!(lifted.len(), 6, "{lifted:?}");
+    let t = trail(&fx).await;
+    for v in foreign.iter().chain(&[mixed.as_str()]) {
+        assert!(!t.contains(v));
+    }
+    assert!(!t.contains(planted("anthropic_key")) && !t.contains("shapeless"));
+    // No open_for_module can reach acct.* names.
+    let sealer = fx.app.secrets.clone().unwrap();
+    let r = crate::store::secrets::open_for_module(
+        &fx.app.pool,
+        &sealer,
+        "acct",
+        "acct.anthropic.x",
+        "test",
+    )
+    .await;
+    assert!(
+        matches!(
+            r,
+            Err(crate::store::secrets::Error::Refused {
+                code: "not_found",
+                ..
+            })
+        ),
+        "a module named acct opened an account secret"
+    );
+}
+
+/// Straight to the store (the API is rate limited): `Ok` or the refusal's code.
+async fn stored(fx: &Fx, name: &str, value: &str, rotate: bool) -> Result<(), &'static str> {
+    use crate::store::secrets as st;
+    let new = st::NewValue {
+        value,
+        runners: None,
+        delivery: None,
+    };
+    let sealer = fx.app.secrets.clone().unwrap();
+    let by = super::super::BY;
+    let r = match rotate {
+        false => st::create(&fx.app.pool, &sealer, name, &new, &fx.dev.id, by, NOW).await,
+        true => st::rotate(&fx.app.pool, &sealer, name, &new, &fx.dev.id, by, NOW).await,
+    };
+    match r {
+        Ok(_) => Ok(()),
+        Err(st::Error::Refused { code, .. }) => Err(code),
+        Err(e) => panic!("{e}"),
+    }
+}
+
+/// Review: the redactor reads a foreign key glued to the provider's own as one token. Each
+/// glued form, for each provider, is refused on create and rotate; the key alone is not.
+#[tokio::test]
+async fn a_foreign_key_glued_to_the_providers_own_is_refused() {
+    let (fx, _vm) = broker().await;
+    set(&fx, Key::SecretsProviderAccounts, 1).await;
+    let foreign = [
+        planted("github_token"),
+        ainkrad_proto::redact::PLANTED[5].1,
+        planted("aws_key"),
+        planted("runner_key"),
+        planted("pem_block"),
+    ];
+    let providers = [
+        ("anthropic", "anthropic_key"),
+        ("openai", "openai_key"),
+        ("google", "google_key"),
+    ];
+    for (p, k) in providers {
+        let own = planted(k);
+        let name = format!("acct.{p}.g");
+        assert_eq!(stored(&fx, &name, own, false).await, Ok(()), "{p}");
+        for f in foreign {
+            for sep in ["", "-", "_", "\n", " "] {
+                let new = format!("acct.{p}.new");
+                let v = format!("{own}{sep}{f}");
+                let want = Err("real_secret_refused");
+                assert_eq!(stored(&fx, &new, &v, false).await, want, "{p} {sep:?} {f}");
+                assert_eq!(
+                    stored(&fx, &name, &v, true).await,
+                    want,
+                    "{p} rot {sep:?} {f}"
+                );
+                // The foreign key first is refused as well.
+                let v = format!("{f}{sep}{own}");
+                assert_eq!(
+                    stored(&fx, &new, &v, false).await,
+                    want,
+                    "{p} rev {sep:?} {f}"
+                );
+            }
+        }
+        // The key with surrounding whitespace is still the key.
+        let v = format!("  {own}\n");
+        assert_eq!(stored(&fx, &name, &v, true).await, Ok(()), "{p}");
+    }
+}
+
+/// askpass is refused for account names in every mode; the rest of mode 2 is unchanged.
+#[tokio::test]
+async fn account_secrets_are_never_delivered_by_askpass() {
+    let (fx, _vm) = broker().await;
+    set(&fx, Key::SecretsMode, 2).await;
+    let body = json!({"name": "acct.openai.ask", "value": V1, "delivery": "askpass"});
+    let r = call(&fx, &fx.dev, Method::POST, "/api/v1/secrets", body).await;
+    assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_request"));
+    let body = json!({"name": "git.ask", "value": V1, "delivery": "askpass"});
+    let r = call(&fx, &fx.dev, Method::POST, "/api/v1/secrets", body).await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+}
+
+#[test]
+fn secrets_are_classified_by_name() {
+    use crate::store::secrets::{Kind, kind_of};
+    for (n, p) in [
+        ("acct.anthropic.a", "anthropic"),
+        ("acct.openai.work-1", "openai"),
+        ("acct.google.x.y", "google"),
+    ] {
+        let Kind::ProviderAccount { provider, .. } = kind_of(n).unwrap() else {
+            panic!("{n}");
+        };
+        assert_eq!(provider, p, "{n}");
+    }
+    for n in [
+        "git.token",
+        "acct",
+        "accts.anthropic.a",
+        "my.acct.anthropic.a",
+    ] {
+        assert_eq!(kind_of(n).unwrap(), Kind::Other, "{n}");
+    }
+    for n in [
+        "acct.",
+        "acct.x",
+        "acct.anthropic",
+        "acct.anthropic.",
+        "acct.Anthropic.a",
+        "acct.anthropic.-",
+        "acct.anthropic..",
+        "acct.openai._-.",
+    ] {
+        assert!(kind_of(n).is_err(), "{n}");
+    }
+}
+
+/// Flipping the gate is an admin setting write: it needs a step-up and leaves a `setting.set`
+/// audit row.
+#[tokio::test]
+async fn flipping_the_provider_account_gate_needs_a_step_up_and_is_audited() {
+    let (fx, _vm) = broker().await;
+    let uri = "/api/v1/settings/server/secrets.provider_accounts";
+    let body = json!({"value": 1});
+    let mac = TestDevice::enroll(
+        &fx.app.pool,
+        "mac",
+        "device",
+        &ALL,
+        &fx.app.auth.identity.fp,
+        fx.clock.clone(),
+    )
+    .await;
+    let s = fx.app.auth.issue_session(&mac.id, fx.clock.unix());
+    mac.set_session(Some(s.id));
+    let r = call(&fx, &mac, Method::PUT, uri, body.clone()).await;
+    assert_eq!(code(&r), (StatusCode::FORBIDDEN, "step_up_required"));
+    let reader = fx.enroll("phone", &["read", "approve", "agent"]).await;
+    let r = call(&fx, &reader, Method::PUT, uri, body.clone()).await;
+    assert_eq!(code(&r), (StatusCode::FORBIDDEN, "forbidden_scope"));
+    async fn audited(fx: &Fx) -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM audit_events WHERE action = 'setting.set' \
+             AND details LIKE '%secrets.provider_accounts%'",
+        )
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap()
+    }
+    assert_eq!(audited(&fx).await, 0);
+    let r = call(&fx, &fx.dev, Method::PUT, uri, body).await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    assert_eq!(audited(&fx).await, 1);
+    // Default off, and bounded to 0 or 1.
+    let r = call(&fx, &fx.dev, Method::PUT, uri, json!({"value": 2})).await;
+    assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "out_of_bounds"));
+}
