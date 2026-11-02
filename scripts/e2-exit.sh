@@ -109,7 +109,14 @@ if c=\$(cat "$W/canary/id_e2" 2>/dev/null); then say "CANARY-LEAKED \$c"; else s
 if env | grep -q '^E2_ENV_CANARY='; then say ENV-CANARY-PRESENT; else say ENV-CANARY-ABSENT; fi
 cnt="\${CLAUDE_CONFIG_DIR:-.}/e2-ticks-\${sid:-x}"
 n=\$(cat "\$cnt" 2>/dev/null || echo 0)
-while :; do n=\$((n+1)); say "TICK-\$n"; echo \$n > "\$cnt"; echo "tick \$n" > "tick-\$n"; sleep ${E2_AGENT_TICK:-1}; done
+turns=0
+while :; do
+  n=\$((n+1)); say "TICK-\$n"; echo \$n > "\$cnt"; echo "tick \$n" > "tick-\$n"
+  # The soak queues a message, then drops turn-<k> in this directory (the sandbox hides the rig's own dir): a turn ends
+  # only when one is waiting (a result with none ends the session), as a real session's turns do (KAN-419).
+  if [ -e "turn-\$((turns+1))" ]; then turns=\$((turns+1)); printf '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}\n'; fi
+  sleep ${E2_AGENT_TICK:-1}
+done
 EOF
   chmod 755 "$W/bin/claude"
 }
@@ -381,11 +388,20 @@ run_soak() {
   local terms=()
   for i in 1 2 3 4 5; do terms+=("$(new_term sh -c "while :; do echo hb-$i; sleep 60; done")"); done
   local ag1 ag2; ag1=$(agent_run); ag2=$(agent_run)
-  start=$SECONDS; end=$((start + secs))
+  start=$SECONDS; end=$((start + secs)); local next_turn=${E2_SOAK_TURN:-600} turn_no=0
   while [ "$SECONDS" -lt "$end" ]; do
     t=$((SECONDS - start))
     for p in "core:$CORE" "runner:$RPID"; do echo "$t,${p%%:*},$(rss "${p##*:}"),$(fds "${p##*:}")" >>"$csv"; done
     for i in "${terms[@]}"; do p=$(host_pid "$i"); echo "$t,host-$i,$(rss "$p"),$(fds "$p")" >>"$csv"; done
+    # End each agent's turn every E2_SOAK_TURN seconds (default 600) so the runner's per-turn state is cleared as in real use (KAN-419).
+    if [ "$t" -ge "$next_turn" ]; then
+      turn_no=$((turn_no + 1))
+      for i in "$ag1" "$ag2"; do
+        cwd=$(transcript "$i" | jq -r '.body | tostring' | grep -o 'CWD=[^"]*' | head -n1 | cut -d= -f2-)
+        [ -d "$cwd" ] && a agent send "$i" "next turn" >/dev/null 2>&1 && : >"$cwd/turn-$turn_no"
+      done
+      next_turn=$((t + ${E2_SOAK_TURN:-600}))
+    fi
     sleep "$every"
   done
   warm=$((secs / 10)); [ "$warm" -le 600 ] || warm=600
