@@ -583,7 +583,7 @@ mod tests {
         let at = |x: &str| a.iter().position(|v| v == x).unwrap();
         assert!(a.iter().any(|v| v == "--unshare-net"));
         let d = dir.canonicalize().unwrap().to_string_lossy().into_owned();
-        assert_eq!(a[at(&d) - 1], "--bind");
+        assert_eq!(a[at(&d) - 1], "--ro-bind", "the socket dir is read-only");
         let proxy = format!("http://127.0.0.1:{}", crate::egress::EGRESS_PORT);
         assert!(a.contains(&proxy));
         // forwarder script, then the real program last
