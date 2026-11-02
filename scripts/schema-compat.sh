@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Breaking-change gate (E1-05.4): the working tree's api/*.json against the baseline, which is the
-# newest `v*` tag, else origin/development. Two checks, both must pass:
+# BASE_REF if set (CI: the pull request's base commit), else the newest `v*` tag, else origin/development. Two checks, both must pass:
 #   - oasdiff v1.11.7 (pinned image) on openapi.json: removed paths/operations/fields, new required
 #     request fields, narrowed types, removed enum values, ... (`--fail-on ERR`)
 #   - scripts/schema_compat.py on all three files: the same classes plus "a field made required"
@@ -16,7 +16,7 @@ new="$(pwd)/api"
 if [ "${1:-}" = "--base" ]; then
   base="$(cd "$2" && pwd)"; label="$2"; [ -z "${3:-}" ] || new="$(cd "$3" && pwd)"
 else
-  ref="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo origin/development)"
+  ref="${BASE_REF:-$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo origin/development)}"
   base="$(mktemp -d)"; trap 'rm -rf "$base"' EXIT; label="$ref"
   for f in openapi.json events.schema.json runner.schema.json; do
     git show "$ref:api/$f" > "$base/$f" 2>/dev/null || rm -f "$base/$f"
