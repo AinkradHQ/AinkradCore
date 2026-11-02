@@ -109,7 +109,14 @@ if c=\$(cat "$W/canary/id_e2" 2>/dev/null); then say "CANARY-LEAKED \$c"; else s
 if env | grep -q '^E2_ENV_CANARY='; then say ENV-CANARY-PRESENT; else say ENV-CANARY-ABSENT; fi
 cnt="\${CLAUDE_CONFIG_DIR:-.}/e2-ticks-\${sid:-x}"
 n=\$(cat "\$cnt" 2>/dev/null || echo 0)
-while :; do n=\$((n+1)); say "TICK-\$n"; echo \$n > "\$cnt"; echo "tick \$n" > "tick-\$n"; sleep ${E2_AGENT_TICK:-1}; done
+turns=0
+while :; do
+  n=\$((n+1)); say "TICK-\$n"; echo \$n > "\$cnt"; echo "tick \$n" > "tick-\$n"
+  # The soak queues a message, then drops turn-<k> in this directory (the sandbox hides the rig's own dir): a turn ends
+  # only when one is waiting (a result with none ends the session), as a real session's turns do (KAN-419).
+  if [ -e "turn-\$((turns+1))" ]; then turns=\$((turns+1)); printf '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}\n'; fi
+  sleep ${E2_AGENT_TICK:-1}
+done
 EOF
   chmod 755 "$W/bin/claude"
 }
@@ -250,7 +257,6 @@ step5() {
   local cwd rt hp2 sh2 ch2 agentpids before after
   cwd=$(transcript "$AS" | jq -r '.body | tostring' | grep -o 'CWD=[^"]*' | tail -n1 | cut -d= -f2-)
   [ -d "$cwd" ] || { EV="no agent worktree at '$cwd'"; return 1; }
-  before=$(cd "$cwd" && ls tick-* | sort | cksum)
   hp2=$(host_pid "$T2") || { EV="no host pid for $T2"; return 1; }
   hp2=$(tree "$hp2" | tr '\n' ' ')
   agentpids=$(pgrep -f "$W/bin/claude" || true); [ -n "$agentpids" ] || { EV="no agent process to kill"; return 1; }
@@ -260,6 +266,8 @@ step5() {
   gone() { local p; for p in "$@"; do alive "$p" && return 1; done; return 0; }
   # shellcheck disable=SC2086
   wait_for 30 gone $hp2 $agentpids || { EV="processes left after the kills: $(for p in $hp2 $agentpids; do alive "$p" && echo -n "$p "; done)"; return 1; }
+  # The agent writes a tick file every E2_AGENT_TICK s until it dies: the baseline is taken once every process is gone (before, it raced a tick landing between the snapshot and the kill), and the checks below are the time in which a survivor would write again.
+  before=$(cd "$cwd" && ls tick-* | sort | cksum)
   [ "$(agent_state "$AS")" = ended ] || { sleep 3; [ "$(agent_state "$AS")" = ended ] || { EV="agent is $(agent_state "$AS")"; return 1; }; }
   rt=$(ps -axo pid=,ppid=,stat= | awk -v r="$RPID" '$2==r && $3 ~ /^Z/ {print $1}')
   [ -z "$rt" ] || { EV="zombie children of the runner: $rt"; return 1; }
@@ -381,11 +389,20 @@ run_soak() {
   local terms=()
   for i in 1 2 3 4 5; do terms+=("$(new_term sh -c "while :; do echo hb-$i; sleep 60; done")"); done
   local ag1 ag2; ag1=$(agent_run); ag2=$(agent_run)
-  start=$SECONDS; end=$((start + secs))
+  start=$SECONDS; end=$((start + secs)); local next_turn=${E2_SOAK_TURN:-600} turn_no=0
   while [ "$SECONDS" -lt "$end" ]; do
     t=$((SECONDS - start))
     for p in "core:$CORE" "runner:$RPID"; do echo "$t,${p%%:*},$(rss "${p##*:}"),$(fds "${p##*:}")" >>"$csv"; done
     for i in "${terms[@]}"; do p=$(host_pid "$i"); echo "$t,host-$i,$(rss "$p"),$(fds "$p")" >>"$csv"; done
+    # End each agent's turn every E2_SOAK_TURN seconds (default 600) so the runner's per-turn state is cleared as in real use (KAN-419).
+    if [ "$t" -ge "$next_turn" ]; then
+      turn_no=$((turn_no + 1))
+      for i in "$ag1" "$ag2"; do
+        cwd=$(transcript "$i" | jq -r '.body | tostring' | grep -o 'CWD=[^"]*' | head -n1 | cut -d= -f2-)
+        [ -d "$cwd" ] && a agent send "$i" "next turn" >/dev/null 2>&1 && : >"$cwd/turn-$turn_no"
+      done
+      next_turn=$((t + ${E2_SOAK_TURN:-600}))
+    fi
     sleep "$every"
   done
   warm=$((secs / 10)); [ "$warm" -le 600 ] || warm=600
