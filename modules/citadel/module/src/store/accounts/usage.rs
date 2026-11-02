@@ -1,7 +1,6 @@
 //! Account usage report (S9, E15.2): rolling 5-hour and 7-day tokens, messages and cost,
 //! per-company split, configured limit standings, and recent provider drops.
 
-use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnection, SqlitePool};
 use sqlx::{Error, Row};
 
@@ -121,16 +120,13 @@ pub async fn account_usage(
     for row in rows {
         let id = AccountId(row.try_get("id")?);
         let companies = companies_in(&mut tx, id).await?;
+        // A usage report names no secret, no delivery and no runner: nothing built from it can
+        // leak them to a device that only reads (KAN-432). The routing detail is the account
+        // list's, which is `admin`.
         let mut account = account_row(row, companies)?;
-        let broker: Option<(String, String)> =
-            sqlx::query_as("SELECT delivery, runners FROM core_secrets WHERE name = ?")
-                .bind(&account.secret_name)
-                .fetch_optional(&mut *tx)
-                .await?;
-        if let Some((delivery, runners)) = broker {
-            account.delivery = delivery;
-            account.runners = serde_json::from_str(&runners).unwrap_or_default();
-        }
+        account.secret_name.clear();
+        account.delivery.clear();
+        account.runners.clear();
         let (limits, max_utilisation_bps) = utilisation_in(&mut tx, id, now).await?;
         let recent_drops = drops_in(&mut tx, id, now).await?;
         let mut by_company = Vec::new();
@@ -168,58 +164,4 @@ pub async fn account_usage(
     }
     tx.commit().await?;
     Ok(out)
-}
-
-fn window_json(w: &WindowUsage) -> Value {
-    json!({
-        "input_tokens": w.input_tokens,
-        "output_tokens": w.output_tokens,
-        "cache_tokens": w.cache_tokens,
-        "total_tokens": w.total_tokens,
-        "messages": w.messages,
-        "cost_usd_micros": w.cost_usd_micros,
-    })
-}
-
-pub fn usage_json(all: &[AccountUsage]) -> Value {
-    Value::Array(
-        all.iter()
-            .map(|u| {
-                let a = &u.account;
-                json!({
-                    "id": a.id.0,
-                    "harness": a.harness.as_str(),
-                    "label": a.label,
-                    "secret_name": a.secret_name,
-                    "delivery": a.delivery,
-                    "runners": a.runners,
-                    "billing": a.billing.as_str(),
-                    "status": a.status.as_str(),
-                    "status_reason": a.status_reason,
-                    "status_until": a.status_until,
-                    "last_used_at": a.last_used_at,
-                    "plan_tier": a.plan_tier.map(|t| t.as_str()),
-                    "signal": a.signal,
-                    "company_ids": a.company_ids.iter().map(|c| c.0).collect::<Vec<_>>(),
-                    "five_hours": window_json(&u.five_hours),
-                    "seven_days": window_json(&u.seven_days),
-                    "max_utilisation_bps": u.max_utilisation_bps,
-                    "recent_drops": u.recent_drops,
-                    "limits": u.limits.iter().map(|l| json!({
-                        "unit": l.unit.as_str(),
-                        "window_secs": l.window_secs,
-                        "cap": l.cap,
-                        "used": l.used,
-                        "warn_percent": l.warn_percent,
-                        "exhausted": l.exhausted,
-                    })).collect::<Vec<_>>(),
-                    "by_company": u.by_company.iter().map(|s| json!({
-                        "company_id": s.company_id.0,
-                        "five_hours": window_json(&s.five_hours),
-                        "seven_days": window_json(&s.seven_days),
-                    })).collect::<Vec<_>>(),
-                })
-            })
-            .collect(),
-    )
 }
