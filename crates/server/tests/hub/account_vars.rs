@@ -37,14 +37,14 @@ fn checked(harness: &str, secrets: &[SessionSecret]) -> Result<(), Invalid> {
 #[test]
 fn an_account_secret_is_delivered_only_under_its_harnesss_own_variable() {
     // Its own variable: accepted, per harness.
-    for (harness, var) in [
-        ("claude", "ANTHROPIC_API_KEY"),
-        ("claude", "CLAUDE_CODE_OAUTH_TOKEN"),
-        ("codex", "OPENAI_API_KEY"),
-        ("codex", "CODEX_API_KEY"),
-        ("agy", "GEMINI_API_KEY"),
+    for (harness, account, var) in [
+        ("claude", "acct.anthropic.main", "ANTHROPIC_API_KEY"),
+        ("claude", "acct.anthropic.main", "CLAUDE_CODE_OAUTH_TOKEN"),
+        ("codex", "acct.openai.main", "OPENAI_API_KEY"),
+        ("codex", "acct.openai.main", "CODEX_API_KEY"),
+        ("agy", "acct.google.main", "GEMINI_API_KEY"),
     ] {
-        let ok = checked(harness, &[grant("acct.anthropic.main", var)]);
+        let ok = checked(harness, &[grant(account, var)]);
         assert_eq!(ok, Ok(()), "{harness} {var}");
     }
     // Any other variable, another harness's, an invented one, and a harness with no allowlist.
@@ -57,10 +57,67 @@ fn an_account_secret_is_delivered_only_under_its_harnesss_own_variable() {
         ("agy", "OPENAI_BASE_URL"),
         ("fake", "ANTHROPIC_API_KEY"),
     ] {
-        let Err(Invalid::Bad(why)) = checked(harness, &[grant("acct.openai.main", var)]) else {
+        let own = match harness {
+            "codex" => "acct.openai.main",
+            "agy" => "acct.google.main",
+            _ => "acct.anthropic.main",
+        };
+        let Err(Invalid::Bad(why)) = checked(harness, &[grant(own, var)]) else {
             panic!("{harness} {var} must be refused")
         };
-        assert!(why.contains("authentication variables"), "{why}");
+        // A harness with no provider is refused on that ground, whatever the variable.
+        let needle = if harness == "fake" {
+            "its own provider"
+        } else {
+            "authentication variables"
+        };
+        assert!(why.contains(needle), "{why}");
+    }
+}
+
+/// An account secret belongs to its provider's harness: `acct.anthropic.*` is not an OpenAI or
+/// Gemini key, whatever variable that harness reads. Every mismatch, with the harness's own
+/// variable (so only the provider can be what refuses it).
+#[test]
+fn an_account_secret_is_refused_for_another_providers_harness() {
+    let accounts = [
+        ("anthropic", "acct.anthropic.main"),
+        ("openai", "acct.openai.main"),
+        ("google", "acct.google.main"),
+    ];
+    let harnesses = [
+        (
+            "anthropic",
+            "claude",
+            ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+        ),
+        ("openai", "codex", ["OPENAI_API_KEY", "CODEX_API_KEY"]),
+        ("google", "agy", ["GEMINI_API_KEY", "GEMINI_API_KEY"]),
+    ];
+    let mut refused = 0;
+    for (account_provider, account) in accounts {
+        for (harness_provider, harness, vars) in harnesses {
+            for var in vars {
+                let got = checked(harness, &[grant(account, var)]);
+                if account_provider == harness_provider {
+                    assert_eq!(got, Ok(()), "{account} {harness} {var}");
+                } else {
+                    refused += 1;
+                    let Err(Invalid::Bad(why)) = got else {
+                        panic!("{account} must be refused for {harness} under {var}")
+                    };
+                    assert!(why.contains("its own provider"), "{why}");
+                }
+            }
+        }
+    }
+    assert_eq!(refused, 12);
+    // A harness with no provider takes no account secret, under any variable.
+    for harness in ["fake", "opencode", ""] {
+        for (_, account) in accounts {
+            let got = checked(harness, &[grant(account, "ANTHROPIC_API_KEY")]);
+            assert!(matches!(got, Err(Invalid::Bad(_))), "{harness} {account}");
+        }
     }
 }
 
@@ -98,9 +155,26 @@ fn a_session_holding_an_account_secret_may_not_redirect_traffic_with_any_other_s
 
 #[tokio::test]
 async fn a_stored_session_with_a_misplaced_account_secret_fails_before_any_lease() {
-    let core = Core::start("acct-vars", quick()).await;
+    stored_session_is_refused(
+        "acct-vars",
+        "claude",
+        "HTTPS_PROXY",
+        "authentication variables",
+    )
+    .await;
+}
+
+/// The launch re-check holds the provider too: a stored session that carries another provider's
+/// account secret under its own harness's variable fails before any lease.
+#[tokio::test]
+async fn a_stored_session_with_another_providers_account_secret_fails_before_any_lease() {
+    stored_session_is_refused("acct-prov", "codex", "OPENAI_API_KEY", "its own provider").await;
+}
+
+async fn stored_session_is_refused(tag: &str, harness: &str, var: &str, needle: &str) {
+    let core = Core::start(tag, quick()).await;
     let base = format!("http://{}", core.host);
-    let st = state("acct-vars");
+    let st = state(tag);
     let e = paired(&core, &base, None, &st).await;
     throwaway_mode(&core).await;
     secret(
@@ -119,10 +193,10 @@ async fn a_stored_session_with_a_misplaced_account_secret_fails_before_any_lease
     .await;
     make_admin(&core, &r.id).await;
     let policy = json!({"mode": "ask", "min_isolation": "process"});
-    let misplaced = [grant("acct.anthropic.main", "HTTPS_PROXY")];
+    let misplaced = [grant("acct.anthropic.main", var)];
     let new = NewSession {
         runner: &r.id,
-        harness: "claude",
+        harness,
         model: None,
         prompt: Some("go"),
         workspace: None,
@@ -144,7 +218,7 @@ async fn a_stored_session_with_a_misplaced_account_secret_fails_before_any_lease
         .err()
         .map(|e| service::describe(&e))
         .expect("the start must be refused");
-    assert!(why.contains("authentication variables"), "{why}");
+    assert!(why.contains(needle), "{why}");
     let stored = state_of(&core, &s.id).await;
     assert!(!stored.live(), "{:?}", stored.state);
     // Nothing was leased, and so nothing was redeemed.
