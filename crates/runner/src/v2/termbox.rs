@@ -152,6 +152,25 @@ pub enum Net {
 }
 
 impl Net {
+    /// The mode's name, as `--terminal-network` and the per-shell record spell it.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Net::Host => "host",
+            Net::None => "none",
+            Net::Filtered { .. } => "filtered",
+        }
+    }
+
+    /// How much a shell of the mode can reach, least first: `host` 0, `filtered` 1, `none` 2.
+    /// An unknown name is 0 (fail closed: it counts as the weakest).
+    pub fn strength(name: &str) -> u8 {
+        match name {
+            "none" => 2,
+            "filtered" => 1,
+            _ => 0,
+        }
+    }
+
     /// The mode named by `--terminal-network`, `Filtered` needing its socket dir and the runner binary.
     pub fn parse(mode: &str, dir: PathBuf, exe: PathBuf) -> Option<Net> {
         match mode {
@@ -224,7 +243,12 @@ pub fn wrap_net(
             "(version 1)\n(allow default)\n(deny mach-priv-task-port)\n(deny process-info* (target others))\n(deny process-exec (literal \"/bin/launchctl\") (literal \"/usr/bin/osascript\") (literal \"/usr/bin/open\") (literal \"/usr/bin/at\") (literal \"/usr/bin/crontab\"))\n(deny mach-lookup (global-name-prefix \"com.apple.xpc.launchd.domain\"))\n",
         );
         if *net != Net::Host {
-            profile.push_str("(deny network*)\n");
+            // `deny network*` closes sockets of every kind, unix ones included. The services a
+            // process could still ask over Mach (name resolution, URL loading, the network
+            // extension and configuration daemons) are refused by name; Seatbelt cannot list
+            // every service, so a copied client of one this does not name is residual (best
+            // effort, see the sandbox residual-risk spec).
+            profile.push_str("(deny network*)\n(deny mach-lookup (global-name \"com.apple.dnssd.service\") (global-name-prefix \"com.apple.mDNSResponder\") (global-name-prefix \"com.apple.lsd\") (global-name-prefix \"com.apple.coreservices.launchservicesd\") (global-name \"com.apple.nsurlsessiond\") (global-name-prefix \"com.apple.networkd\") (global-name-prefix \"com.apple.nehelper\") (global-name-prefix \"com.apple.networkserviceproxy\") (global-name-prefix \"com.apple.SystemConfiguration\") (global-name-prefix \"com.apple.symptoms\"))\n");
         }
         for p in &hidden {
             let q = quote(p);
@@ -270,8 +294,20 @@ pub fn wrap_net(
                 &[PathBuf::from(format!("/run/user/{uid}"))],
                 false,
             )?);
-            tmpfs.sort_by_key(|p| p.components().count());
         }
+        if *net != Net::Host {
+            // `--unshare-net` closes the abstract and the network sockets, not the unix sockets
+            // that live in the shared filesystem (D-Bus and resolved in /run, docker.sock, tmux
+            // and ssh ControlMaster/agent sockets in /tmp, the user's ssh and gpg dirs): a shell
+            // on a locked network gets an empty /tmp and /run over them (KAN-416).
+            let mut shared: Vec<PathBuf> = SOCKET_DIRS.iter().map(PathBuf::from).collect();
+            if let Some(h) = std::env::var_os("HOME").map(PathBuf::from) {
+                shared.extend([".ssh", ".gnupg", ".docker"].map(|d| h.join(d)));
+            }
+            tmpfs.extend(canonical(&shared, false)?);
+        }
+        tmpfs.sort_by_key(|p| p.components().count());
+        tmpfs.dedup();
         for p in &tmpfs {
             let p = p.to_string_lossy().into_owned();
             if Path::new(&p).is_dir() {
@@ -294,7 +330,9 @@ pub fn wrap_net(
                 dir.to_string_lossy().into_owned(),
                 crate::egress::socket_in(&dir),
             );
-            out.extend(["--bind".to_owned(), d.clone(), d]);
+            // Read-only: a shell can connect to the socket but not remove, move or rebind it (that
+            // would cut or intercept the other terminals' tunnels).
+            out.extend(["--ro-bind".to_owned(), d.clone(), d]);
             let proxy = format!("http://127.0.0.1:{}", crate::egress::EGRESS_PORT);
             for k in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
                 out.extend(["--setenv".to_owned(), k.to_owned(), proxy.clone()]);
@@ -322,6 +360,17 @@ pub fn wrap_net(
     out.extend(args.iter().cloned());
     Ok((launcher.to_owned(), out))
 }
+
+/// Directories of the host's path-socket services, emptied in a shell on a locked network.
+const SOCKET_DIRS: &[&str] = &[
+    "/tmp",
+    "/var/tmp",
+    "/run",
+    "/var/run",
+    "/var/lib/docker",
+    "/var/lib/containerd",
+    "/var/lib/snapd",
+];
 
 const SUDO: &str = "/usr/bin/sudo";
 
@@ -454,6 +503,40 @@ mod tests {
 
     fn argv(net: &Net) -> Result<Vec<String>, String> {
         wrap_net(&[], &[], "/bin/sh", &["-i".to_owned()], "/", net).map(|(_, a)| a)
+    }
+
+    /// The host network's launcher line is what it was before `--terminal-network` existed.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_host_network_launcher_line_is_unchanged() {
+        let a = argv(&Net::Host).unwrap();
+        let fixed = [
+            "--bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--unshare-user",
+            "--unshare-pid",
+            "--die-with-parent",
+            "--cap-drop",
+            "ALL",
+        ];
+        assert_eq!(a[..fixed.len()], fixed);
+        assert_eq!(a[a.len() - 5..], ["--chdir", "/", "--", "/bin/sh", "-i"]);
+        // What lies between is only the per-user runtime dir's tmpfs, when it exists.
+        for w in a[fixed.len()..a.len() - 5].chunks(2) {
+            assert_eq!(w[0], "--tmpfs");
+            assert!(w[1].starts_with("/run/user/"), "{w:?}");
+        }
+        // And a locked network adds the socket dirs' tmpfs on top of that.
+        let none = argv(&Net::None).unwrap();
+        for dir in ["/tmp", "/run"] {
+            let at = none.iter().position(|v| v == dir).expect(dir);
+            assert_eq!(none[at - 1], "--tmpfs");
+        }
     }
 
     #[test]

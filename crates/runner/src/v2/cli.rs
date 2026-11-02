@@ -151,13 +151,21 @@ a shell is never started as the runner's user (a failing sudo means the terminal
 start in / and with sudo's cleaned environment. See the security posture runbook.
 --terminal-network=host|none|filtered (KAN-416) sets the network of every shell; it needs the sandbox.
 `host` (the default) is the host's own network, unfiltered: the accepted scope of an admin-equivalent
-terminal. `none` gives each shell a network namespace with no interface (Linux: bubblewrap
---unshare-net, which also closes the host's abstract unix sockets; macOS: Seatbelt deny network*).
-`filtered` (Linux only, not with --terminal-user) is `none` plus HTTPS_PROXY to the egress proxy
-that agent sessions use, with the same allow policy from AINKRAD_AGENT_EGRESS_ALLOW/_HOSTS/_PORTS
-(and AINKRAD_AGENT_NETWORK=filtered when --enable-agents is on); the runner proves the filter at start.
-It refuses to start, never falls back to `host`, when the mode cannot be given. In a filtered or
-none shell only HTTPS through the proxy works: no DNS, ssh, ping or plain TCP.
+terminal. `none` gives each shell a network namespace with no interface (Linux: bubblewrap --unshare-net,
+which also closes the host's abstract unix sockets) and, because file-path unix sockets of host services
+(D-Bus, resolved, docker, tmux, ssh agents) live in the shared filesystem, an empty /tmp, /var/tmp, /run
+and /var/lib/{docker,containerd,snapd} and an empty ~/.ssh, ~/.gnupg and ~/.docker over them: a shell
+started in one of those directories loses it, and a service socket kept elsewhere stays reachable.
+macOS `none` is best effort: Seatbelt `deny network*` plus a refusal of the name-resolution, URL-loading
+and network daemons over Mach; a copied client of a service it does not name is residual.
+`filtered` (Linux only, not with --terminal-user) is `none` plus HTTPS_PROXY to the egress proxy that
+agent sessions use, read-only inside the shell. It takes the agent sessions' allow entries
+(AINKRAD_AGENT_EGRESS_ALLOW/_HOSTS/_PORTS, and AINKRAD_AGENT_NETWORK=filtered when --enable-agents is
+on), so a terminal can reach whatever an agent can. At start the runner runs the proxy's self-test (the
+filter refuses what the policy lists as refused on this host); that is a check of the proxy, not of each
+shell. The runner refuses to start, never falls back to `host`, when the mode cannot be given. Shells a
+previous runner started with a weaker network than this one requires are closed at start. In a filtered
+or none shell only HTTPS through the proxy works: no DNS, ssh, ping or plain TCP.
 --enable-agents offers agent sessions (the harnesses on PATH, as this runner's user, each
 in a process sandbox, refused when it cannot run): transcripts in <dir>/agents, delivered secrets in $XDG_RUNTIME_DIR (else
 <dir>/secrets), emptied at start.
@@ -346,6 +354,13 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         d.spawn_budget_loop();
         d
     });
+    // Shells left by an earlier runner with a weaker network than this one requires.
+    if let Some(d) = &pty {
+        let n = d.retire_weaker().await;
+        if n > 0 {
+            tracing::warn!(n, "closed shells started with a weaker terminal network");
+        }
+    }
     if agents_enabled && std::env::var("AINKRAD_AGENT_NETWORK").is_ok_and(|v| v == "allow") {
         let m = "AINKRAD_AGENT_NETWORK=allow: agent sessions without secrets get the HOST network (cloud metadata, LAN, loopback services); use only on a stage-1 host with no instance role and nothing on loopback";
         eprintln!("ainkrad-runner: WARNING: {m}");

@@ -64,13 +64,30 @@ async fn a_none_shell_has_no_host_network_and_a_filtered_shell_only_the_policy()
     let (target, target_hits) = listener("127.0.0.2");
     let name = format!("termnet-{}", std::process::id());
     let _abstract = UnixListener::bind_addr(&UnixAddr::from_abstract_name(&name).unwrap()).unwrap();
+    // A host service on a FILE-PATH unix socket (as tmux, ssh ControlMaster, D-Bus or docker
+    // have): the network namespace does not hide it, an empty /tmp over it does.
+    let path_sock = std::env::temp_dir().join(format!("termnet-svc-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&path_sock);
+    let svc = UnixListener::bind(&path_sock).unwrap();
+    let svc_hits = Arc::new(AtomicUsize::new(0));
+    let h = svc_hits.clone();
+    std::thread::spawn(move || {
+        for _ in svc.incoming().flatten() {
+            h.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    let svc_probe = format!(
+        "python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])' {} 2>/dev/null \
+         && echo SVC-OPEN || echo SVC-REFUSED; ",
+        path_sock.display()
+    );
     let tcp = |ip: &str, port: u16| {
         format!(
             "(exec 9<>/dev/tcp/{ip}/{port}) 2>/dev/null && echo OPEN-{port} || echo REFUSED-{port}; "
         )
     };
     let probe = format!(
-        "{}{}echo ABSTRACT=$(grep -c {name} /proc/net/unix); echo IFACES=$(tail -n +3 /proc/net/dev | wc -l)",
+        "{svc_probe}{}{}echo ABSTRACT=$(grep -c {name} /proc/net/unix); echo IFACES=$(tail -n +3 /proc/net/dev | wc -l)",
         tcp("127.0.0.1", canary),
         tcp("127.0.0.2", target),
     );
@@ -80,6 +97,9 @@ async fn a_none_shell_has_no_host_network_and_a_filtered_shell_only_the_policy()
     assert!(host.contains(&format!("OPEN-{canary}")), "{host}");
     assert!(host.contains(&format!("OPEN-{target}")), "{host}");
     assert!(host.contains("ABSTRACT=1"), "{host}");
+    assert!(host.contains("SVC-OPEN"), "control: {host}");
+    assert!(svc_hits.load(Ordering::SeqCst) >= 1);
+    let svc_before = svc_hits.load(Ordering::SeqCst);
     let before = (
         canary_hits.load(Ordering::SeqCst),
         target_hits.load(Ordering::SeqCst),
@@ -90,6 +110,7 @@ async fn a_none_shell_has_no_host_network_and_a_filtered_shell_only_the_policy()
     assert!(none.contains(&format!("REFUSED-{canary}")), "{none}");
     assert!(none.contains(&format!("REFUSED-{target}")), "{none}");
     assert!(none.contains("ABSTRACT=0"), "{none}");
+    assert!(none.contains("SVC-REFUSED"), "{none}");
     assert!(none.contains("IFACES=1"), "{none}");
     assert_eq!(
         before,
@@ -135,6 +156,36 @@ async fn a_none_shell_has_no_host_network_and_a_filtered_shell_only_the_policy()
         "{filtered}"
     );
     assert!(filtered.contains("ABSTRACT=0"), "{filtered}");
+    assert!(filtered.contains("SVC-REFUSED"), "{filtered}");
+    // The proxy socket can be connected to but not removed, moved or replaced from inside.
+    let sock = egress::socket_in(&dir);
+    let tamper = shell(
+        &net,
+        &format!(
+            "rm -f {s} 2>/dev/null; mv {s} {s}.x 2>/dev/null; : > {s}.y 2>/dev/null; \
+             [ -S {s} ] && echo SOCK-INTACT; [ -e {s}.x ] && echo MOVED; [ -e {s}.y ] && echo PLANTED; \
+             {conn}",
+            s = sock.display(),
+            conn = via(target, "127.0.0.2")
+        ),
+    )
+    .await;
+    assert!(tamper.contains("SOCK-INTACT"), "{tamper}");
+    assert!(
+        !tamper.contains("MOVED") && !tamper.contains("PLANTED"),
+        "{tamper}"
+    );
+    assert!(
+        tamper.contains(&format!("VIA-{target}=HTTP/1.1 200")),
+        "{tamper}"
+    );
+    assert!(sock.exists() && !dir.join("egress.sock.x").exists());
+    assert_eq!(
+        svc_hits.load(Ordering::SeqCst),
+        svc_before,
+        "a locked shell reached a host service"
+    );
+    let _ = std::fs::remove_file(&path_sock);
     assert!(
         filtered.contains(&format!("VIA-{target}=HTTP/1.1 200")),
         "{filtered}"
