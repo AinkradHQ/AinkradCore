@@ -1161,7 +1161,7 @@ async fn an_account_secret_marks_its_session_and_no_other_secret_does() {
     let redeem: Redeem = Arc::new(|lease: String| {
         Box::pin(async move {
             let name = match lease.as_str() {
-                "l_acct" => "acct.openai.main",
+                "l_acct" => "acct.anthropic.main",
                 "l_git" => "git.token",
                 _ => return Err("no such lease".to_owned()),
             };
@@ -1180,10 +1180,10 @@ async fn an_account_secret_marks_its_session_and_no_other_secret_does() {
                 .unwrap()
                 .with_redeem(redeem.clone()),
         );
-        let mut req = start("as_acct", "fake");
+        let mut req = start("as_acct", "claude");
         req.secrets = vec![SecretGrant {
             lease: lease.to_owned(),
-            var: "KEY".to_owned(),
+            var: "ANTHROPIC_API_KEY".to_owned(),
         }];
         d.start(req).unwrap();
         let (entries, _) = drain(&d, "as_acct").await;

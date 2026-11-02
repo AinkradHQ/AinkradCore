@@ -570,7 +570,7 @@ async fn a_stored_account_session_is_refused_before_any_lease_on_a_runner_withou
     }];
     let new = NewSession {
         runner: &r.id,
-        harness: "fake",
+        harness: "claude",
         model: None,
         prompt: Some("go"),
         workspace: None,
