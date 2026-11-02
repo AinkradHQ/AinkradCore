@@ -313,7 +313,7 @@ fn an_exact_entry_never_overrides_the_metadata_or_the_reserved_ranges() {
 #[test]
 fn a_provider_account_policy_drops_forge_names_and_nothing_else() {
     let p = policy(
-        "11.0.0.0/8",
+        "198.51.100.0/24",
         "api.model.test,github.com,api.github.com,raw.githubusercontent.com,gitlab.com,\
          x.bitbucket.org,notgithub.com,github.com.evil.test,gist.github.com,sr.ht,git.sr.ht",
     );
