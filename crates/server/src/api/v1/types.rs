@@ -95,7 +95,10 @@
 ///    `deleteAccount`, `listProviders`, `createProvider`, `replaceProvider`, `deleteProvider`, `listPools`,
 ///    `createPool`, `deletePool`, `addPoolMember`, `removePoolMember`, `setDefaultPool`, `listBindings`,
 ///    `bindAgent`, `unbindAgent` (every write `admin` and destructive).
-pub const API_MINOR: u32 = 33;
+/// 34: the cost ledger, prices and account usage (KAN-449): `listCosts`, `listPrices`, `accountsUsage` (scope
+///    `read`), `setPrice`, `setAccountLimit`, `clearAccountLimit` (`admin` and destructive); the `price.set`,
+///    `account.limit_set` and `account.limit_cleared` audit actions. No route writes the ledger.
+pub const API_MINOR: u32 = 34;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

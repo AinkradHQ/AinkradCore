@@ -32,8 +32,8 @@ use crate::module::Module;
 use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{
-    accounts, agents, audit, devices, events, handshake, lockouts, me, pair, pairing, passkey,
-    runners, secrets, session, settings, stepup, terminals, ticket, types, websession,
+    accounts, agents, audit, costs, devices, events, handshake, lockouts, me, pair, pairing,
+    passkey, runners, secrets, session, settings, stepup, terminals, ticket, types, websession,
 };
 
 #[derive(OpenApi)]
@@ -109,6 +109,12 @@ use super::{
         accounts::list_bindings,
         accounts::bind,
         accounts::unbind,
+        costs::list,
+        costs::list_prices,
+        costs::set_price,
+        costs::accounts_usage,
+        costs::set_limit,
+        costs::clear_limit,
         secrets::list,
         secrets::create,
         secrets::rotate,
