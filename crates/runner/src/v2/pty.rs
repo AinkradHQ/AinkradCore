@@ -60,6 +60,8 @@ pub struct PtyConfig {
     /// `--terminal-user`: run every shell as this other account through `sudo -n` (E2-25). With
     /// it set a shell is never started as the runner's own user.
     pub user: Option<String>,
+    /// `--terminal-network` (KAN-416): the network every shell gets. Needs the sandbox.
+    pub net: super::termbox::Net,
 }
 
 impl PtyConfig {
@@ -78,6 +80,7 @@ impl PtyConfig {
             hide: Some(Vec::new()),
             readonly: Vec::new(),
             user: None,
+            net: super::termbox::Net::Host,
         }
     }
 }
@@ -336,6 +339,10 @@ impl PtyDriver {
             self.set_budget(b);
         }
         self.enforce_budget().await;
+        if self.config.net != super::termbox::Net::Host && self.config.hide.is_none() {
+            // Only the sandbox can change a shell's network: never start one on the host's.
+            return Err(invalid("a terminal network needs the terminal sandbox"));
+        }
         if self.config.hide.is_some() || self.config.user.is_some() {
             // The shell the host would start by default is named here, so the wrapper can run it.
             let program = spec
@@ -359,10 +366,15 @@ impl PtyDriver {
                 .filter(|c| c.starts_with('/'))
                 .unwrap_or_else(|| "/".to_owned());
             let (mut launcher, mut args) = match &self.config.hide {
-                Some(hide) => {
-                    super::termbox::wrap(hide, &self.config.readonly, &program, &spec.args, &cwd)
-                        .map_err(|e| invalid(&e))?
-                }
+                Some(hide) => super::termbox::wrap_net(
+                    hide,
+                    &self.config.readonly,
+                    &program,
+                    &spec.args,
+                    &cwd,
+                    &self.config.net,
+                )
+                .map_err(|e| invalid(&e))?,
                 None => (program, spec.args.clone()),
             };
             if let Some(user) = &self.config.user {
@@ -378,10 +390,75 @@ impl PtyDriver {
             spec.cwd.get_or_insert(cwd);
         }
         let id = new_id().map_err(|e| err(ErrorCode::Internal, e.to_string()))?;
-        launch(&self.config.host, &self.config.dir, &id, &spec)
-            .await
-            .map_err(|e| err(ErrorCode::SpawnFailed, e.to_string()))?;
+        // The network this shell gets, recorded before it starts: the host process outlives the
+        // runner, and a later runner must know what an adopted shell was given (`retire_weaker`).
+        // Host mode writes nothing: no record means the host network.
+        if self.config.net != super::termbox::Net::Host {
+            self.record_net(&id)
+                .map_err(|e| err(ErrorCode::Internal, e.to_string()))?;
+        }
+        if let Err(e) = launch(&self.config.host, &self.config.dir, &id, &spec).await {
+            let _ = std::fs::remove_file(self.net_dir().join(&id));
+            return Err(err(ErrorCode::SpawnFailed, e.to_string()));
+        }
         Ok(id)
+    }
+
+    /// Where the per-shell network records live: beside the terminals' dir, in the runner's
+    /// private state (hidden from every shell).
+    fn net_dir(&self) -> PathBuf {
+        self.config
+            .dir
+            .parent()
+            .unwrap_or(&self.config.dir)
+            .join("terminal-net")
+    }
+
+    fn record_net(&self, id: &str) -> std::io::Result<()> {
+        use std::os::unix::fs::DirBuilderExt;
+        let dir = self.net_dir();
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)?;
+        std::fs::write(dir.join(id), self.config.net.name())
+    }
+
+    /// Closes every adopted shell that was started with a weaker network than this runner now
+    /// requires (a runner restarted with `--terminal-network=none` still finds the shells it
+    /// started on the host network, and they would otherwise be re-announced and attached),
+    /// and drops the records of shells that are gone. A shell with no record counts as `host`.
+    /// Returns how many it closed.
+    pub async fn retire_weaker(&self) -> usize {
+        if !self.config.enabled {
+            return 0;
+        }
+        let need = super::termbox::Net::strength(self.config.net.name());
+        let live: Vec<String> = scan(&self.config.dir)
+            .await
+            .into_iter()
+            .map(|h| h.id)
+            .collect();
+        let mut closed = 0;
+        for id in &live {
+            let had = std::fs::read_to_string(self.net_dir().join(id)).unwrap_or_default();
+            if super::termbox::Net::strength(had.trim()) < need {
+                tracing::warn!(
+                    terminal = id.as_str(),
+                    "closing a shell started with a weaker network than this runner requires"
+                );
+                let _ = self.close(id).await;
+                closed += 1;
+            }
+        }
+        if let Ok(rd) = std::fs::read_dir(self.net_dir()) {
+            for e in rd.flatten() {
+                if !live.contains(&e.file_name().to_string_lossy().into_owned()) {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+        closed
     }
 
     /// Whether the host of `terminal` is gone for good: it does not answer and `scan` found

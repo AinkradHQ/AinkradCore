@@ -112,6 +112,7 @@ pub const CONNECT_USAGE: &str = "usage:
   ainkrad-runner connect [--state <dir>] [--ca <pem>] [--enable-exec] [--enable-pty]
                          [--enable-agents] [--terminal-sandbox=on|off]
                          [--terminal-hide <path>]… [--terminal-user <account>]
+                         [--terminal-network=host|none|filtered]
 
 Serves the Core it paired with (`ainkrad-runner pair`) over protocol v2, reconnecting with a
 jittered backoff and resuming commands in flight. Stops on SIGTERM or Ctrl-C; commands still
@@ -148,6 +149,23 @@ the runner's user, plus a sudoers rule that lets the runner's user run the sandb
 runner checks all of this at start and refuses to start when any of it is missing; once on,
 a shell is never started as the runner's user (a failing sudo means the terminal fails). Shells
 start in / and with sudo's cleaned environment. See the security posture runbook.
+--terminal-network=host|none|filtered (KAN-416) sets the network of every shell; it needs the sandbox.
+`host` (the default) is the host's own network, unfiltered: the accepted scope of an admin-equivalent
+terminal. `none` gives each shell a network namespace with no interface (Linux: bubblewrap --unshare-net,
+which also closes the host's abstract unix sockets) and, because file-path unix sockets of host services
+(D-Bus, resolved, docker, tmux, ssh agents) live in the shared filesystem, an empty /tmp, /var/tmp, /run
+and /var/lib/{docker,containerd,snapd} and an empty ~/.ssh, ~/.gnupg and ~/.docker over them: a shell
+started in one of those directories loses it, and a service socket kept elsewhere stays reachable.
+macOS `none` is best effort: Seatbelt `deny network*` plus a refusal of the name-resolution, URL-loading
+and network daemons over Mach; a copied client of a service it does not name is residual.
+`filtered` (Linux only, not with --terminal-user) is `none` plus HTTPS_PROXY to the egress proxy that
+agent sessions use, read-only inside the shell. It takes the agent sessions' allow entries
+(AINKRAD_AGENT_EGRESS_ALLOW/_HOSTS/_PORTS, and AINKRAD_AGENT_NETWORK=filtered when --enable-agents is
+on), so a terminal can reach whatever an agent can. At start the runner runs the proxy's self-test (the
+filter refuses what the policy lists as refused on this host); that is a check of the proxy, not of each
+shell. The runner refuses to start, never falls back to `host`, when the mode cannot be given. Shells a
+previous runner started with a weaker network than this one requires are closed at start. In a filtered
+or none shell only HTTPS through the proxy works: no DNS, ssh, ping or plain TCP.
 --enable-agents offers agent sessions (the harnesses on PATH, as this runner's user, each
 in a process sandbox, refused when it cannot run): transcripts in <dir>/agents, delivered secrets in $XDG_RUNTIME_DIR (else
 <dir>/secrets), emptied at start.
@@ -173,6 +191,20 @@ fn terminal_sandbox(args: &[&str]) -> Option<bool> {
     it.next().is_none().then_some(value)
 }
 
+/// `--terminal-network=host|none|filtered` (KAN-416); absent is `host`. `None` for a bad or repeated value.
+fn terminal_network(args: &[&str]) -> Option<&'static str> {
+    let mut it = args
+        .iter()
+        .filter_map(|a| a.strip_prefix("--terminal-network="));
+    let value = match it.next() {
+        None | Some("host") => "host",
+        Some("none") => "none",
+        Some("filtered") => "filtered",
+        Some(_) => return None,
+    };
+    it.next().is_none().then_some(value)
+}
+
 fn agents_enabled(args: &[&str]) -> bool {
     args.contains(&"--enable-agents")
 }
@@ -185,12 +217,29 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         eprintln!("{CONNECT_USAGE}");
         return ExitCode::from(2);
     };
+    let Some(terminal_network) = terminal_network(args) else {
+        eprintln!("{CONNECT_USAGE}");
+        return ExitCode::from(2);
+    };
+    // A network the sandbox cannot give is refused, never fallen back to the host's; the
+    // filtered proxy's socket is private to the runner's user, so it is not offered with
+    // --terminal-user (another uid could not reach it).
+    if terminal_network != "host"
+        && (!pty_enabled
+            || !terminal_sandbox
+            || (terminal_network == "filtered"
+                && (!cfg!(target_os = "linux") || args.contains(&"--terminal-user"))))
+    {
+        eprintln!("{CONNECT_USAGE}");
+        return ExitCode::from(2);
+    }
     let args: Vec<&str> = args
         .iter()
         .copied()
         .filter(|a| {
             !matches!(*a, "--enable-exec" | "--enable-pty" | "--enable-agents")
                 && !a.starts_with("--terminal-sandbox=")
+                && !a.starts_with("--terminal-network=")
         })
         .collect();
     let args = args.as_slice();
@@ -237,14 +286,30 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         }
         stop.send_replace(true);
     });
+    // Held until the runner stops: the proxy terminals reach through their socket dir.
+    let _terminal_proxy = if pty_enabled && terminal_network == "filtered" {
+        match terminal_proxy(&state.0.join("terminal-egress")).await {
+            Ok(p) => Some(p),
+            Err(e) => {
+                eprintln!("ainkrad-runner: terminals: --terminal-network=filtered: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
     if pty_enabled && !terminal_sandbox {
         let m = "terminal sandbox is OFF: a `terminal` device can read this runner's key, delivered secrets and harness logins; `terminal` scope is admin-equivalent on this host";
         eprintln!("ainkrad-runner: WARNING: {m}");
         tracing::warn!("{m}");
     }
     let terminal_user = flag(args, "--terminal-user").map(str::to_owned);
+    let egress_dir = state.0.join("terminal-egress");
+    let exe = std::env::current_exe().unwrap_or_default();
+    let net = super::termbox::Net::parse(terminal_network, egress_dir.clone(), exe)
+        .expect("a mode terminal_network accepted");
     if let Some(user) = &terminal_user
-        && let Err(e) = super::termbox::probe_user(user, terminal_sandbox)
+        && let Err(e) = super::termbox::probe_user(user, terminal_sandbox, &net)
             .and_then(|()| super::termbox::private_state(&state.0))
     {
         eprintln!("ainkrad-runner: terminals: --terminal-user: {e}");
@@ -252,7 +317,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     }
     if pty_enabled
         && terminal_sandbox
-        && let Err(e) = super::termbox::probe()
+        && let Err(e) = super::termbox::probe(&net)
     {
         eprintln!("ainkrad-runner: terminals: {e}");
         return ExitCode::FAILURE;
@@ -283,11 +348,19 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             hide: hidden.clone(),
             readonly: super::termbox::readonly_paths(&host),
             user: terminal_user.clone(),
+            net: net.clone(),
             ..super::PtyConfig::new(state.0.join("terminals"))
         }));
         d.spawn_budget_loop();
         d
     });
+    // Shells left by an earlier runner with a weaker network than this one requires.
+    if let Some(d) = &pty {
+        let n = d.retire_weaker().await;
+        if n > 0 {
+            tracing::warn!(n, "closed shells started with a weaker terminal network");
+        }
+    }
     if agents_enabled && std::env::var("AINKRAD_AGENT_NETWORK").is_ok_and(|v| v == "allow") {
         let m = "AINKRAD_AGENT_NETWORK=allow: agent sessions without secrets get the HOST network (cloud metadata, LAN, loopback services); use only on a stage-1 host with no instance role and nothing on loopback";
         eprintln!("ainkrad-runner: WARNING: {m}");
@@ -380,6 +453,28 @@ async fn egress_filter(executor: &mut crate::HarnessExecutor) -> Result<bool, St
     Ok(true)
 }
 
+/// The egress proxy of `--terminal-network=filtered` (KAN-416): the policy of the agent sessions
+/// (`AINKRAD_AGENT_EGRESS_*`), proven by the same start-up check, on a socket in `dir` (0700) that
+/// the shells get bound in. A socket left by an earlier runner is replaced.
+async fn terminal_proxy(dir: &std::path::Path) -> Result<crate::egress::Proxy, String> {
+    use std::os::unix::fs::DirBuilderExt;
+    let policy =
+        crate::egress::Policy::from_env()?.with_host_addresses(crate::egress::host_addresses()?);
+    let exe =
+        std::env::current_exe().map_err(|_| "cannot find the runner executable".to_owned())?;
+    crate::egress::selftest(&policy, &exe)
+        .await
+        .map_err(|why| format!("the egress filter failed its start-up check: {why}"))?;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    let sock = crate::egress::socket_in(dir);
+    let _ = std::fs::remove_file(&sock);
+    crate::egress::start(&sock, Arc::new(policy)).map_err(|e| format!("{}: {e}", sock.display()))
+}
+
 /// The agent driver over `<state>/agents`, driving the real harnesses (`HarnessExecutor`).
 /// Delivered secrets go to `$XDG_RUNTIME_DIR` (a tmpfs on most Linux hosts), in a dir named
 /// for this state dir so two runners never sweep each other's; else `<state>/secrets`.
@@ -432,6 +527,27 @@ async fn agents(
 #[cfg(test)]
 mod tests {
     use super::{agents_enabled, terminal_sandbox};
+
+    #[test]
+    fn the_terminal_network_is_the_host_unless_named_and_a_bad_value_is_refused() {
+        use super::terminal_network;
+        assert_eq!(terminal_network(&["--enable-pty"]), Some("host"));
+        for ok in ["host", "none", "filtered"] {
+            let flag = format!("--terminal-network={ok}");
+            assert_eq!(terminal_network(&[flag.as_str()]), Some(ok));
+        }
+        for bad in [
+            "--terminal-network=",
+            "--terminal-network=allow",
+            "--terminal-network=NONE",
+        ] {
+            assert_eq!(terminal_network(&[bad]), None, "{bad}");
+        }
+        assert_eq!(
+            terminal_network(&["--terminal-network=none", "--terminal-network=host"]),
+            None
+        );
+    }
 
     #[test]
     fn the_terminal_sandbox_is_on_unless_switched_off_explicitly() {
