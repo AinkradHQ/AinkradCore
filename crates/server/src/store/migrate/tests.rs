@@ -111,7 +111,8 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
             (11, "terminals"),
             (12, "agent_session_owner_ref"),
             (13, "event_views_scope_index"),
-            (14, "push_kinds")
+            (14, "push_kinds"),
+            (15, "accounts")
         ]
     );
     let sum: Vec<u8> =
