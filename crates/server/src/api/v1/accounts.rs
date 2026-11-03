@@ -4,7 +4,7 @@
 //! destructive (a step-up): storing or replacing a key, enabling or disabling an account, its
 //! cap, a pool's members, a binding, the default, a provider definition's edit.
 //!
-//! A key is written, never read: [`NewAccount`] and [`ReplaceKey`] parse their own body (a
+//! A key is written, never read: [`NewProviderAccount`] and [`ReplaceKey`] parse their own body (a
 //! serde error could quote the key) and have no `Debug`; nothing returns it.
 
 use axum::Json;
@@ -26,7 +26,7 @@ use crate::store::{accounts as acc, pools as pl, providers as prov};
 /// An account as a `read` device sees it: its key's last four characters, never the key, the
 /// broker secret's name or the runners it may be leased to.
 #[derive(Debug, Serialize, ToSchema)]
-pub struct Account {
+pub struct ProviderAccount {
     pub id: i64,
     /// `anthropic`, `openai` or `google`.
     pub provider: String,
@@ -46,7 +46,7 @@ pub struct Account {
     pub updated_at: Timestamp,
 }
 
-impl From<acc::Account> for Account {
+impl From<acc::Account> for ProviderAccount {
     fn from(a: acc::Account) -> Self {
         Self {
             id: a.id,
@@ -68,7 +68,7 @@ impl From<acc::Account> for Account {
 /// What an `admin` write answers: the account and the runners its key may be leased to.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AccountDetail {
-    pub account: Account,
+    pub account: ProviderAccount,
     /// Runner device ids, explicit (never a wildcard).
     pub runners: Vec<String>,
 }
@@ -85,7 +85,7 @@ impl From<acc::Account> for AccountDetail {
 
 /// A new account. Deliberately no `Debug`.
 #[derive(Deserialize, ToSchema)]
-pub struct NewAccount {
+pub struct NewProviderAccount {
     pub provider: String,
     pub label: String,
     /// The API key; written, never read back.
@@ -119,7 +119,7 @@ pub struct SetCap {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
-pub struct Deleted {
+pub struct AccountsDeleted {
     pub deleted: bool,
 }
 
@@ -218,7 +218,7 @@ pub struct Pool {
     pub provider: String,
     /// The provider's default pool serves an agent bound to none.
     pub is_default: bool,
-    /// Account ids, in fallback order.
+    /// ProviderAccount ids, in fallback order.
     pub members: Vec<i64>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
@@ -338,24 +338,24 @@ pub async fn replace_provider(
 #[utoipa::path(delete, path = "/api/v1/accounts/providers/{id}", operation_id = "deleteProvider",
     tag = "accounts", params(("id" = String, Path, description = "The provider's id")),
     responses((status = 200, description = "Deleted (audited as `provider.deleted`); a built-in \
-        or one an account uses is refused", body = Deleted)))]
+        or one an account uses is refused", body = AccountsDeleted)))]
 pub async fn delete_provider(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Path(id): Path<String>,
-) -> ApiResult<Deleted> {
+) -> ApiResult<AccountsDeleted> {
     prov::delete(&app.pool, &id, &me.device.id, BY)
         .await
         .map_err(err)?;
-    Ok(Json(Deleted { deleted: true }))
+    Ok(Json(AccountsDeleted { deleted: true }))
 }
 
 // ----- accounts ---------------------------------------------------------------------------
 
 #[utoipa::path(get, path = "/api/v1/accounts", operation_id = "listAccounts", tag = "accounts",
     responses((status = 200, description = "Every account: its key's last four characters, \
-        never the key, its secret's name or its runner scope", body = Vec<Account>)))]
-pub async fn list(State(app): State<App>) -> ApiResult<Vec<Account>> {
+        never the key, its secret's name or its runner scope", body = Vec<ProviderAccount>)))]
+pub async fn list(State(app): State<App>) -> ApiResult<Vec<ProviderAccount>> {
     Ok(Json(
         acc::list(&app.pool)
             .await?
@@ -367,8 +367,8 @@ pub async fn list(State(app): State<App>) -> ApiResult<Vec<Account>> {
 
 #[utoipa::path(get, path = "/api/v1/accounts/{id}", operation_id = "getAccount", tag = "accounts",
     params(("id" = String, Path, description = "The account's id")),
-    responses((status = 200, description = "One account", body = Account)))]
-pub async fn get(State(app): State<App>, Path(id): Path<String>) -> ApiResult<Account> {
+    responses((status = 200, description = "One account", body = ProviderAccount)))]
+pub async fn get(State(app): State<App>, Path(id): Path<String>) -> ApiResult<ProviderAccount> {
     Ok(Json(
         acc::get(&app.pool, num(&id, "account")?)
             .await
@@ -378,7 +378,7 @@ pub async fn get(State(app): State<App>, Path(id): Path<String>) -> ApiResult<Ac
 }
 
 #[utoipa::path(post, path = "/api/v1/accounts", operation_id = "createAccount", tag = "accounts",
-    request_body = NewAccount,
+    request_body = NewProviderAccount,
     responses((status = 200, description = "Stored with its key in the secrets broker (audited \
         as `account.created`, and the broker's own `secret.created`). 409 `secrets_disabled` \
         (`secrets.mode` 0), `real_secret_refused` (a real key shape while \
@@ -389,7 +389,7 @@ pub async fn create(
     Extension(me): Extension<Caller>,
     body: Bytes,
 ) -> ApiResult<AccountDetail> {
-    let b: NewAccount = parse(&body)?;
+    let b: NewProviderAccount = parse(&body)?;
     let new = acc::NewAccount {
         provider: &b.provider,
         label: &b.label,
@@ -444,13 +444,13 @@ pub async fn replace_secret(
     request_body = SetState,
     responses((status = 200, description = "Enables (`active`) or disables the account, or \
         marks it cooling, limited or unhealthy (audited as `account.state_set`)",
-        body = Account)))]
+        body = ProviderAccount)))]
 pub async fn set_state(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Path(id): Path<String>,
     Json(b): Json<SetState>,
-) -> ApiResult<Account> {
+) -> ApiResult<ProviderAccount> {
     let a = acc::set_state(
         &app.pool,
         num(&id, "account")?,
@@ -470,13 +470,13 @@ pub async fn set_state(
     tag = "accounts", params(("id" = String, Path, description = "The account's id")),
     request_body = SetCap,
     responses((status = 200, description = "The concurrency cap, 0 (no cap) to 64 (audited as \
-        `account.cap_set`)", body = Account)))]
+        `account.cap_set`)", body = ProviderAccount)))]
 pub async fn set_cap(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Path(id): Path<String>,
     Json(b): Json<SetCap>,
-) -> ApiResult<Account> {
+) -> ApiResult<ProviderAccount> {
     let a = acc::set_cap(
         &app.pool,
         num(&id, "account")?,
@@ -493,16 +493,16 @@ pub async fn set_cap(
 #[utoipa::path(delete, path = "/api/v1/accounts/{id}", operation_id = "deleteAccount",
     tag = "accounts", params(("id" = String, Path, description = "The account's id")),
     responses((status = 200, description = "Deleted with its key, its leases and its pool \
-        seats (audited as `account.deleted`)", body = Deleted)))]
+        seats (audited as `account.deleted`)", body = AccountsDeleted)))]
 pub async fn delete(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Path(id): Path<String>,
-) -> ApiResult<Deleted> {
+) -> ApiResult<AccountsDeleted> {
     acc::delete(&app.pool, num(&id, "account")?, &me.device.id, BY)
         .await
         .map_err(err)?;
-    Ok(Json(Deleted { deleted: true }))
+    Ok(Json(AccountsDeleted { deleted: true }))
 }
 
 // ----- pools and bindings -----------------------------------------------------------------
@@ -543,16 +543,16 @@ pub async fn create_pool(
 #[utoipa::path(delete, path = "/api/v1/pools/{id}", operation_id = "deletePool", tag = "accounts",
     params(("id" = String, Path, description = "The pool's id")),
     responses((status = 200, description = "Deleted with its bindings (audited as \
-        `pool.deleted`); the default pool is refused (409)", body = Deleted)))]
+        `pool.deleted`); the default pool is refused (409)", body = AccountsDeleted)))]
 pub async fn delete_pool(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Path(id): Path<String>,
-) -> ApiResult<Deleted> {
+) -> ApiResult<AccountsDeleted> {
     pl::delete(&app.pool, num(&id, "pool")?, &me.device.id, BY)
         .await
         .map_err(err)?;
-    Ok(Json(Deleted { deleted: true }))
+    Ok(Json(AccountsDeleted { deleted: true }))
 }
 
 #[utoipa::path(put, path = "/api/v1/pools/{id}/members/{account}", operation_id = "addPoolMember",
@@ -671,14 +671,14 @@ pub async fn bind(
     params(("agent" = String, Path, description = "The agent's id"),
            ("provider" = String, Path, description = "`anthropic`, `openai` or `google`")),
     responses((status = 200, description = "The agent falls back to the provider's default \
-        pool (audited as `pool.unbound`)", body = Deleted)))]
+        pool (audited as `pool.unbound`)", body = AccountsDeleted)))]
 pub async fn unbind(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Path((agent, provider)): Path<(String, String)>,
-) -> ApiResult<Deleted> {
+) -> ApiResult<AccountsDeleted> {
     pl::unbind(&app.pool, &agent, &provider, &me.device.id, BY)
         .await
         .map_err(err)?;
-    Ok(Json(Deleted { deleted: true }))
+    Ok(Json(AccountsDeleted { deleted: true }))
 }
