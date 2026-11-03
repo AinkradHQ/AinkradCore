@@ -418,6 +418,13 @@ pub async fn delete(
 ) -> Result<(), Error> {
     let mut tx = super::begin_write(pool).await?;
     let a = find(&mut tx, id).await?;
+    // The seats the cascade takes with the row, so the audit trail says which pools lost it.
+    let pools: Vec<i64> = sqlx::query_scalar(
+        "SELECT pool_id FROM core_pool_members WHERE account_id = ? ORDER BY pool_id",
+    )
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
     sqlx::query("DELETE FROM core_accounts WHERE id = ?")
         .bind(id)
         .execute(&mut *tx)
@@ -431,7 +438,7 @@ pub async fn delete(
         actor,
         "account.deleted",
         id,
-        json!({"provider": a.provider, "label": a.label, "by_device": by_device}),
+        json!({"provider": a.provider, "label": a.label, "pools": pools, "by_device": by_device}),
     )
     .await?;
     tx.commit().await?;
