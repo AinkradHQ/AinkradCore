@@ -6,6 +6,48 @@ public import struct Foundation.Date
 extension Components {
     /// Types generated from the `#/components/schemas` section of the OpenAPI document.
     public enum Schemas {
+        /// What an `admin` write answers: the account and the runners its key may be leased to.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AccountDetail`.
+        public struct AccountDetail: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AccountDetail/account`.
+            public var account: Components.Schemas.ProviderAccount
+            /// Runner device ids, explicit (never a wildcard).
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountDetail/runners`.
+            public var runners: [Swift.String]
+            /// Creates a new `AccountDetail`.
+            ///
+            /// - Parameters:
+            ///   - account:
+            ///   - runners: Runner device ids, explicit (never a wildcard).
+            public init(
+                account: Components.Schemas.ProviderAccount,
+                runners: [Swift.String]
+            ) {
+                self.account = account
+                self.runners = runners
+            }
+            public enum CodingKeys: String, CodingKey {
+                case account
+                case runners
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/AccountsDeleted`.
+        public struct AccountsDeleted: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AccountsDeleted/deleted`.
+            public var deleted: Swift.Bool
+            /// Creates a new `AccountsDeleted`.
+            ///
+            /// - Parameters:
+            ///   - deleted:
+            public init(deleted: Swift.Bool) {
+                self.deleted = deleted
+            }
+            public enum CodingKeys: String, CodingKey {
+                case deleted
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/AgentDecision`.
         public struct AgentDecision: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/AgentDecision/approved`.
@@ -546,6 +588,35 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case items
                 case nextBefore = "next_before"
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/Binding`.
+        public struct Binding: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/Binding/agent`.
+            public var agent: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Binding/pool_id`.
+            public var poolId: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/Binding/provider`.
+            public var provider: Swift.String
+            /// Creates a new `Binding`.
+            ///
+            /// - Parameters:
+            ///   - agent:
+            ///   - poolId:
+            ///   - provider:
+            public init(
+                agent: Swift.String,
+                poolId: Swift.Int64,
+                provider: Swift.String
+            ) {
+                self.agent = agent
+                self.poolId = poolId
+                self.provider = provider
+            }
+            public enum CodingKeys: String, CodingKey {
+                case agent
+                case poolId = "pool_id"
+                case provider
             }
         }
         /// - Remark: Generated from `#/components/schemas/Challenge`.
@@ -1441,6 +1512,37 @@ extension Components {
                 case versions
             }
         }
+        /// - Remark: Generated from `#/components/schemas/ModelPrice`.
+        public struct ModelPrice: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ModelPrice/id`.
+            public var id: Swift.String
+            /// List price per million input tokens, in millionths of a dollar.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ModelPrice/input_per_mtok_micro`.
+            public var inputPerMtokMicro: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/ModelPrice/output_per_mtok_micro`.
+            public var outputPerMtokMicro: Swift.Int64
+            /// Creates a new `ModelPrice`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - inputPerMtokMicro: List price per million input tokens, in millionths of a dollar.
+            ///   - outputPerMtokMicro:
+            public init(
+                id: Swift.String,
+                inputPerMtokMicro: Swift.Int64,
+                outputPerMtokMicro: Swift.Int64
+            ) {
+                self.id = id
+                self.inputPerMtokMicro = inputPerMtokMicro
+                self.outputPerMtokMicro = outputPerMtokMicro
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case inputPerMtokMicro = "input_per_mtok_micro"
+                case outputPerMtokMicro = "output_per_mtok_micro"
+            }
+        }
         /// A device: who, by id and name.
         ///
         /// - Remark: Generated from `#/components/schemas/Named`.
@@ -1534,6 +1636,31 @@ extension Components {
                 case workspace
             }
         }
+        /// - Remark: Generated from `#/components/schemas/NewBinding`.
+        public struct NewBinding: Codable, Hashable, Sendable {
+            /// An agent id: 1 to 64 of `[A-Za-z0-9._:-]`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewBinding/agent`.
+            public var agent: Swift.String
+            /// - Remark: Generated from `#/components/schemas/NewBinding/pool_id`.
+            public var poolId: Swift.Int64
+            /// Creates a new `NewBinding`.
+            ///
+            /// - Parameters:
+            ///   - agent: An agent id: 1 to 64 of `[A-Za-z0-9._:-]`.
+            ///   - poolId:
+            public init(
+                agent: Swift.String,
+                poolId: Swift.Int64
+            ) {
+                self.agent = agent
+                self.poolId = poolId
+            }
+            public enum CodingKeys: String, CodingKey {
+                case agent
+                case poolId = "pool_id"
+            }
+        }
         /// A lease to grant.
         ///
         /// - Remark: Generated from `#/components/schemas/NewLease`.
@@ -1616,6 +1743,80 @@ extension Components {
                     "name",
                     "scopes"
                 ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/NewPool`.
+        public struct NewPool: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/NewPool/name`.
+            public var name: Swift.String
+            /// `anthropic`, `openai` or `google`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewPool/provider`.
+            public var provider: Swift.String
+            /// Creates a new `NewPool`.
+            ///
+            /// - Parameters:
+            ///   - name:
+            ///   - provider: `anthropic`, `openai` or `google`.
+            public init(
+                name: Swift.String,
+                provider: Swift.String
+            ) {
+                self.name = name
+                self.provider = provider
+            }
+            public enum CodingKeys: String, CodingKey {
+                case name
+                case provider
+            }
+        }
+        /// A new account. Deliberately no `Debug`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/NewProviderAccount`.
+        public struct NewProviderAccount: Codable, Hashable, Sendable {
+            /// Default 4; 0 is no cap.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProviderAccount/cap`.
+            public var cap: Swift.Int64?
+            /// - Remark: Generated from `#/components/schemas/NewProviderAccount/label`.
+            public var label: Swift.String
+            /// - Remark: Generated from `#/components/schemas/NewProviderAccount/provider`.
+            public var provider: Swift.String
+            /// Runner device ids it may be leased to; default none.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProviderAccount/runners`.
+            public var runners: [Swift.String]?
+            /// The API key; written, never read back.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProviderAccount/value`.
+            public var value: Swift.String
+            /// Creates a new `NewProviderAccount`.
+            ///
+            /// - Parameters:
+            ///   - cap: Default 4; 0 is no cap.
+            ///   - label:
+            ///   - provider:
+            ///   - runners: Runner device ids it may be leased to; default none.
+            ///   - value: The API key; written, never read back.
+            public init(
+                cap: Swift.Int64? = nil,
+                label: Swift.String,
+                provider: Swift.String,
+                runners: [Swift.String]? = nil,
+                value: Swift.String
+            ) {
+                self.cap = cap
+                self.label = label
+                self.provider = provider
+                self.runners = runners
+                self.value = value
+            }
+            public enum CodingKeys: String, CodingKey {
+                case cap
+                case label
+                case provider
+                case runners
+                case value
             }
         }
         /// A new secret. Deliberately no `Debug`.
@@ -2106,6 +2307,258 @@ extension Components {
                 case message
             }
         }
+        /// - Remark: Generated from `#/components/schemas/Pool`.
+        public struct Pool: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/Pool/created_at`.
+            public var createdAt: Components.Schemas.Timestamp
+            /// - Remark: Generated from `#/components/schemas/Pool/id`.
+            public var id: Swift.Int64
+            /// The provider's default pool serves an agent bound to none.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Pool/is_default`.
+            public var isDefault: Swift.Bool
+            /// ProviderAccount ids, in fallback order.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Pool/members`.
+            public var members: [Swift.Int64]
+            /// - Remark: Generated from `#/components/schemas/Pool/name`.
+            public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Pool/provider`.
+            public var provider: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Pool/updated_at`.
+            public var updatedAt: Components.Schemas.Timestamp
+            /// Creates a new `Pool`.
+            ///
+            /// - Parameters:
+            ///   - createdAt:
+            ///   - id:
+            ///   - isDefault: The provider's default pool serves an agent bound to none.
+            ///   - members: ProviderAccount ids, in fallback order.
+            ///   - name:
+            ///   - provider:
+            ///   - updatedAt:
+            public init(
+                createdAt: Components.Schemas.Timestamp,
+                id: Swift.Int64,
+                isDefault: Swift.Bool,
+                members: [Swift.Int64],
+                name: Swift.String,
+                provider: Swift.String,
+                updatedAt: Components.Schemas.Timestamp
+            ) {
+                self.createdAt = createdAt
+                self.id = id
+                self.isDefault = isDefault
+                self.members = members
+                self.name = name
+                self.provider = provider
+                self.updatedAt = updatedAt
+            }
+            public enum CodingKeys: String, CodingKey {
+                case createdAt = "created_at"
+                case id
+                case isDefault = "is_default"
+                case members
+                case name
+                case provider
+                case updatedAt = "updated_at"
+            }
+        }
+        /// A provider definition: a built-in, or user data validated before it is stored.
+        ///
+        /// - Remark: Generated from `#/components/schemas/Provider`.
+        public struct Provider: Codable, Hashable, Sendable {
+            /// The harness's own authentication variable.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Provider/auth_var`.
+            public var authVar: Swift.String
+            /// `https://`, a public DNS name.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Provider/base_url`.
+            public var baseUrl: Swift.String
+            /// Read-only: built-ins cannot be edited.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Provider/builtin`.
+            public var builtin: Swift.Bool?
+            /// `env` and/or `gateway`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Provider/delivery`.
+            public var delivery: [Swift.String]
+            /// `claude`, `codex` or `agy`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Provider/harness`.
+            public var harness: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Provider/id`.
+            public var id: Swift.String
+            /// `paste`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Provider/login_methods`.
+            public var loginMethods: [Swift.String]
+            /// - Remark: Generated from `#/components/schemas/Provider/models`.
+            public var models: [Components.Schemas.ModelPrice]
+            /// - Remark: Generated from `#/components/schemas/Provider/name`.
+            public var name: Swift.String
+            /// When the models' list prices were read.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Provider/priced_at`.
+            public var pricedAt: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/Provider/usage_parser`.
+            public var usageParser: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Provider/version`.
+            public var version: Swift.Int64?
+            /// Creates a new `Provider`.
+            ///
+            /// - Parameters:
+            ///   - authVar: The harness's own authentication variable.
+            ///   - baseUrl: `https://`, a public DNS name.
+            ///   - builtin: Read-only: built-ins cannot be edited.
+            ///   - delivery: `env` and/or `gateway`.
+            ///   - harness: `claude`, `codex` or `agy`.
+            ///   - id:
+            ///   - loginMethods: `paste`.
+            ///   - models:
+            ///   - name:
+            ///   - pricedAt: When the models' list prices were read.
+            ///   - usageParser:
+            ///   - version:
+            public init(
+                authVar: Swift.String,
+                baseUrl: Swift.String,
+                builtin: Swift.Bool? = nil,
+                delivery: [Swift.String],
+                harness: Swift.String,
+                id: Swift.String,
+                loginMethods: [Swift.String],
+                models: [Components.Schemas.ModelPrice],
+                name: Swift.String,
+                pricedAt: Swift.String? = nil,
+                usageParser: Swift.String,
+                version: Swift.Int64? = nil
+            ) {
+                self.authVar = authVar
+                self.baseUrl = baseUrl
+                self.builtin = builtin
+                self.delivery = delivery
+                self.harness = harness
+                self.id = id
+                self.loginMethods = loginMethods
+                self.models = models
+                self.name = name
+                self.pricedAt = pricedAt
+                self.usageParser = usageParser
+                self.version = version
+            }
+            public enum CodingKeys: String, CodingKey {
+                case authVar = "auth_var"
+                case baseUrl = "base_url"
+                case builtin
+                case delivery
+                case harness
+                case id
+                case loginMethods = "login_methods"
+                case models
+                case name
+                case pricedAt = "priced_at"
+                case usageParser = "usage_parser"
+                case version
+            }
+        }
+        /// An account as a `read` device sees it: its key's last four characters, never the key, the
+        /// broker secret's name or the runners it may be leased to.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ProviderAccount`.
+        public struct ProviderAccount: Codable, Hashable, Sendable {
+            /// The provider's base URL when the account was stored.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/base_url`.
+            public var baseUrl: Swift.String
+            /// Sessions that may hold the account at once; 0 is no cap.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/cap`.
+            public var cap: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/created_at`.
+            public var createdAt: Components.Schemas.Timestamp
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/id`.
+            public var id: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/label`.
+            public var label: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/last_used_at`.
+            public var lastUsedAt: Components.Schemas.Timestamp?
+            /// The key's last four characters; empty for a key too short to show any.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/masked_tail`.
+            public var maskedTail: Swift.String
+            /// `anthropic`, `openai` or `google`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/provider`.
+            public var provider: Swift.String
+            /// `active`, `cooling`, `limited`, `unhealthy` or `disabled`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/state`.
+            public var state: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/state_reason`.
+            public var stateReason: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/state_until`.
+            public var stateUntil: Components.Schemas.Timestamp?
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/updated_at`.
+            public var updatedAt: Components.Schemas.Timestamp
+            /// Creates a new `ProviderAccount`.
+            ///
+            /// - Parameters:
+            ///   - baseUrl: The provider's base URL when the account was stored.
+            ///   - cap: Sessions that may hold the account at once; 0 is no cap.
+            ///   - createdAt:
+            ///   - id:
+            ///   - label:
+            ///   - lastUsedAt:
+            ///   - maskedTail: The key's last four characters; empty for a key too short to show any.
+            ///   - provider: `anthropic`, `openai` or `google`.
+            ///   - state: `active`, `cooling`, `limited`, `unhealthy` or `disabled`.
+            ///   - stateReason:
+            ///   - stateUntil:
+            ///   - updatedAt:
+            public init(
+                baseUrl: Swift.String,
+                cap: Swift.Int64,
+                createdAt: Components.Schemas.Timestamp,
+                id: Swift.Int64,
+                label: Swift.String,
+                lastUsedAt: Components.Schemas.Timestamp? = nil,
+                maskedTail: Swift.String,
+                provider: Swift.String,
+                state: Swift.String,
+                stateReason: Swift.String? = nil,
+                stateUntil: Components.Schemas.Timestamp? = nil,
+                updatedAt: Components.Schemas.Timestamp
+            ) {
+                self.baseUrl = baseUrl
+                self.cap = cap
+                self.createdAt = createdAt
+                self.id = id
+                self.label = label
+                self.lastUsedAt = lastUsedAt
+                self.maskedTail = maskedTail
+                self.provider = provider
+                self.state = state
+                self.stateReason = stateReason
+                self.stateUntil = stateUntil
+                self.updatedAt = updatedAt
+            }
+            public enum CodingKeys: String, CodingKey {
+                case baseUrl = "base_url"
+                case cap
+                case createdAt = "created_at"
+                case id
+                case label
+                case lastUsedAt = "last_used_at"
+                case maskedTail = "masked_tail"
+                case provider
+                case state
+                case stateReason = "state_reason"
+                case stateUntil = "state_until"
+                case updatedAt = "updated_at"
+            }
+        }
         /// The notification kinds the calling device is pushed (E2-12.3).
         ///
         /// - Remark: Generated from `#/components/schemas/PushKinds`.
@@ -2199,6 +2652,31 @@ extension Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "name"
                 ])
+            }
+        }
+        /// A replacement key, and optionally a new runner scope. No `Debug`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReplaceKey`.
+        public struct ReplaceKey: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReplaceKey/runners`.
+            public var runners: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/ReplaceKey/value`.
+            public var value: Swift.String
+            /// Creates a new `ReplaceKey`.
+            ///
+            /// - Parameters:
+            ///   - runners:
+            ///   - value:
+            public init(
+                runners: [Swift.String]? = nil,
+                value: Swift.String
+            ) {
+                self.runners = runners
+                self.value = value
+            }
+            public enum CodingKeys: String, CodingKey {
+                case runners
+                case value
             }
         }
         /// A rotation: the new value, and optionally a new scope or delivery. No `Debug`.
@@ -2629,6 +3107,21 @@ extension Components {
                 ])
             }
         }
+        /// - Remark: Generated from `#/components/schemas/SetCap`.
+        public struct SetCap: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SetCap/cap`.
+            public var cap: Swift.Int64
+            /// Creates a new `SetCap`.
+            ///
+            /// - Parameters:
+            ///   - cap:
+            public init(cap: Swift.Int64) {
+                self.cap = cap
+            }
+            public enum CodingKeys: String, CodingKey {
+                case cap
+            }
+        }
         /// A device's new scopes.
         ///
         /// - Remark: Generated from `#/components/schemas/SetScopes`.
@@ -2673,6 +3166,37 @@ extension Components {
             }
             public enum CodingKeys: String, CodingKey {
                 case value
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/SetState`.
+        public struct SetState: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SetState/reason`.
+            public var reason: Swift.String?
+            /// `active`, `cooling`, `limited`, `unhealthy` or `disabled`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SetState/state`.
+            public var state: Swift.String
+            /// - Remark: Generated from `#/components/schemas/SetState/until`.
+            public var until: Swift.String?
+            /// Creates a new `SetState`.
+            ///
+            /// - Parameters:
+            ///   - reason:
+            ///   - state: `active`, `cooling`, `limited`, `unhealthy` or `disabled`.
+            ///   - until:
+            public init(
+                reason: Swift.String? = nil,
+                state: Swift.String,
+                until: Swift.String? = nil
+            ) {
+                self.reason = reason
+                self.state = state
+                self.until = until
+            }
+            public enum CodingKeys: String, CodingKey {
+                case reason
+                case state
+                case until
             }
         }
         /// One setting and its effective value at the scope asked about.
