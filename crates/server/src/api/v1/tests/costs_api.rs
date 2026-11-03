@@ -100,6 +100,16 @@ async fn a_phone_reads_prices_only_and_the_ledger_and_usage_need_admin_and_name_
     assert_eq!(st, StatusCode::OK, "{usage}");
     assert_eq!(usage[0]["five_hours"]["total_tokens"], 1_000_000);
     assert_eq!(usage[0]["by_company"][0]["company"], "7");
+    // An event carrying only Citadel's old account id is not counted for any Core account.
+    let legacy = NewCost {
+        account_id: None,
+        legacy_account_id: Some(77),
+        idempotency_key: "k2",
+        ..c
+    };
+    costs::record(&fx.app.pool, &legacy, NOW).await.unwrap();
+    let (_, again) = call(&fx, &fx.dev, Method::GET, "/api/v1/accounts/usage", Value::Null).await;
+    assert_eq!((again.as_array().map(Vec::len), again[0]["five_hours"]["total_tokens"].as_i64()), (Some(1), Some(1_000_000)));
     let mut keys: Vec<_> = usage[0].as_object().unwrap().keys().cloned().collect();
     keys.sort();
     assert_eq!(
