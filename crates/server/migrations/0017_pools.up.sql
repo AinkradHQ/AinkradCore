@@ -16,6 +16,7 @@ CREATE TABLE core_pools (
 CREATE UNIQUE INDEX core_pools_one_default ON core_pools (provider) WHERE is_default = 1;
 
 CREATE TABLE core_pool_members (
+    user_id    INTEGER NOT NULL DEFAULT 1 REFERENCES users(id),
     pool_id    INTEGER NOT NULL REFERENCES core_pools(id) ON DELETE CASCADE,
     account_id INTEGER NOT NULL REFERENCES core_accounts(id) ON DELETE CASCADE,
     position   INTEGER NOT NULL CHECK (position >= 0),
@@ -25,6 +26,7 @@ CREATE TABLE core_pool_members (
 CREATE INDEX core_pool_members_account ON core_pool_members (account_id);
 
 CREATE TABLE core_pool_bindings (
+    user_id    INTEGER NOT NULL DEFAULT 1 REFERENCES users(id),
     agent      TEXT    NOT NULL CHECK (length(agent) BETWEEN 1 AND 64),
     provider   TEXT    NOT NULL CHECK (provider IN ('anthropic', 'openai', 'google')),
     pool_id    INTEGER NOT NULL REFERENCES core_pools(id) ON DELETE CASCADE,
