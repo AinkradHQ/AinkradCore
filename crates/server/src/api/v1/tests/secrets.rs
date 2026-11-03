@@ -100,7 +100,10 @@ async fn via_store(fx: &Fx, name: &str, body: &Value, create: bool) -> (StatusCo
         false => st::rotate(&fx.app.pool, &sealer, name, &new, &fx.dev.id, by, NOW).await,
     };
     match r {
-        Ok(m) => (StatusCode::OK, json!({"name": m.name, "version": m.version})),
+        Ok(m) => (
+            StatusCode::OK,
+            json!({"name": m.name, "version": m.version}),
+        ),
         Err(e) => {
             let e: super::super::ApiError = e.into();
             (e.status, json!({"code": e.code, "message": e.message}))
