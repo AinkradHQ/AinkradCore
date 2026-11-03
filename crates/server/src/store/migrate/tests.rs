@@ -113,7 +113,8 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
             (13, "event_views_scope_index"),
             (14, "push_kinds"),
             (15, "accounts"),
-            (16, "provider_defs")
+            (16, "provider_defs"),
+            (17, "pools")
         ]
     );
     let sum: Vec<u8> =

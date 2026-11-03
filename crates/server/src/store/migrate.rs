@@ -133,6 +133,12 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../migrations/0016_provider_defs.up.sql"),
         down: include_str!("../../migrations/0016_provider_defs.down.sql"),
     },
+    Migration {
+        version: 17,
+        name: "pools",
+        up: include_str!("../../migrations/0017_pools.up.sql"),
+        down: include_str!("../../migrations/0017_pools.down.sql"),
+    },
 ];
 
 #[derive(Debug)]
