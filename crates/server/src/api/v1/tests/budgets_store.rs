@@ -790,19 +790,36 @@ async fn a_raise_needs_the_key_of_the_budgets_own_period_and_answers_with_that_s
 async fn a_budget_with_no_cap_is_refused_and_a_bigger_cap_re_arms_the_exhaustion_alert() {
     let fx = fx().await;
     assert_eq!(
-        code(budgets::set(&fx.app.pool, &bud("agent", "a1", "day", 0), &fx.dev.id, BY, NOW).await),
+        code(
+            budgets::set(
+                &fx.app.pool,
+                &bud("agent", "a1", "day", 0),
+                &fx.dev.id,
+                BY,
+                NOW
+            )
+            .await
+        ),
         "bad_request"
     );
     let b = set(&fx, &bud("agent", "a1", "total", 100)).await;
     let at = "2026-10-22T10:00:00.000Z";
     assert_eq!(
-        spend(&fx, "e1", 100, None, at, &[]).await.guard.newly_exhausted.len(),
+        spend(&fx, "e1", 100, None, at, &[])
+            .await
+            .guard
+            .newly_exhausted
+            .len(),
         1
     );
     // A smaller or equal cap changes nothing about the alert...
     set(&fx, &bud("agent", "a1", "total", 100)).await;
     assert_eq!(
-        spend(&fx, "e2", 1, None, at, &[]).await.guard.newly_exhausted.len(),
+        spend(&fx, "e2", 1, None, at, &[])
+            .await
+            .guard
+            .newly_exhausted
+            .len(),
         0
     );
     // ...a bigger one re-arms it, so the next time it runs out is heard.
@@ -810,5 +827,8 @@ async fn a_budget_with_no_cap_is_refused_and_a_bigger_cap_re_arms_the_exhaustion
     let g = spend(&fx, "e3", 98, None, at, &[]).await.guard;
     assert_eq!(g.newly_exhausted.len(), 0);
     let g = spend(&fx, "e4", 1, None, at, &[]).await.guard;
-    assert_eq!((g.newly_exhausted.len(), standing(&fx, b.id).await.spent), (1, 200));
+    assert_eq!(
+        (g.newly_exhausted.len(), standing(&fx, b.id).await.spent),
+        (1, 200)
+    );
 }
