@@ -70,7 +70,7 @@ fn code<T>(r: Result<T, st::Error>) -> &'static str {
 #[tokio::test]
 async fn an_account_stores_its_row_and_key_together_with_a_cap_of_four() {
     let (fx, vm, s) = setup().await;
-    let a = make(&fx, &s, "claude-main", V1, &[vm.id.clone()]).await;
+    let a = make(&fx, &s, "claude-main", V1, std::slice::from_ref(&vm.id)).await;
     assert_eq!((a.cap, a.state.as_str()), (4, "active"));
     assert_eq!(a.masked_tail, &V1[V1.len() - 4..]);
     assert_eq!(a.runners, vec![vm.id.clone()]);
@@ -88,7 +88,7 @@ async fn an_account_stores_its_row_and_key_together_with_a_cap_of_four() {
 #[tokio::test]
 async fn no_account_column_or_audit_row_holds_the_value() {
     let (fx, vm, s) = setup().await;
-    let a = make(&fx, &s, "claude-main", V1, &[vm.id.clone()]).await;
+    let a = make(&fx, &s, "claude-main", V1, std::slice::from_ref(&vm.id)).await;
     acc::replace_secret(
         &fx.app.pool,
         &s,
@@ -158,7 +158,7 @@ async fn no_account_column_or_audit_row_holds_the_value() {
 #[tokio::test]
 async fn replacing_the_key_cuts_a_new_tail_and_drops_the_old_leases() {
     let (fx, vm, s) = setup().await;
-    let a = make(&fx, &s, "claude-main", V1, &[vm.id.clone()]).await;
+    let a = make(&fx, &s, "claude-main", V1, std::slice::from_ref(&vm.id)).await;
     st::lease(
         &fx.app.pool,
         &a.secret_name,
@@ -204,7 +204,7 @@ async fn replacing_the_key_cuts_a_new_tail_and_drops_the_old_leases() {
 #[tokio::test]
 async fn deleting_removes_the_row_the_key_and_its_leases() {
     let (fx, vm, s) = setup().await;
-    let a = make(&fx, &s, "claude-main", V1, &[vm.id.clone()]).await;
+    let a = make(&fx, &s, "claude-main", V1, std::slice::from_ref(&vm.id)).await;
     acc::delete(&fx.app.pool, a.id, &fx.dev.id, super::super::BY)
         .await
         .unwrap();
