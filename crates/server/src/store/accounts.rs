@@ -259,6 +259,7 @@ pub async fn create(
 
 /// Replaces the key (and its runner scope, when given): a new broker version, the masked tail
 /// cut again, every outstanding lease on the old one dropped.
+#[allow(clippy::too_many_arguments)]
 pub async fn replace_secret(
     pool: &SqlitePool,
     sealer: &SecretBox,
@@ -298,6 +299,7 @@ pub async fn replace_secret(
 
 /// Sets the state (`disabled` takes the account out of use; `active` brings it back). A reason
 /// and an end are kept only for a state other than `active`.
+#[allow(clippy::too_many_arguments)]
 pub async fn set_state(
     pool: &SqlitePool,
     id: i64,
