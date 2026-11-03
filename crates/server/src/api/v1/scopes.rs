@@ -71,6 +71,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/runners/{id}", "read"),
     ("POST", "/api/v1/runners/{id}/noop", "agent"),
     ("GET", "/api/v1/accounts", "read"),
+    // Before `/accounts/{id}`: the first template that fits a path decides, and `usage` fits `{id}`.
+    ("GET", "/api/v1/accounts/usage", "admin"),
     ("GET", "/api/v1/accounts/{id}", "read"),
     ("GET", "/api/v1/accounts/providers", "read"),
     ("POST", "/api/v1/accounts", "admin"),
@@ -90,7 +92,6 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/bindings", "read"),
     ("PUT", "/api/v1/bindings", "admin"),
     ("DELETE", "/api/v1/bindings/{agent}/{provider}", "admin"),
-    ("GET", "/api/v1/accounts/usage", "admin"),
     ("PUT", "/api/v1/accounts/{id}/limits", "admin"),
     (
         "DELETE",
