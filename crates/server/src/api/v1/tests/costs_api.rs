@@ -115,8 +115,14 @@ async fn a_phone_reads_the_ledger_prices_and_usage_and_nothing_names_a_secret() 
     // The ledger cannot be written over HTTP, by anyone.
     for m in [Method::POST, Method::PUT, Method::DELETE, Method::PATCH] {
         let (st, _) = call(&fx, &fx.dev, m, "/api/v1/costs", json!({"session": "s"})).await;
+        // Not a route: refused by the scope gate (deny by default), never accepted.
         assert!(
-            st == StatusCode::METHOD_NOT_ALLOWED || st == StatusCode::NOT_FOUND,
+            [
+                StatusCode::FORBIDDEN,
+                StatusCode::METHOD_NOT_ALLOWED,
+                StatusCode::NOT_FOUND
+            ]
+            .contains(&st),
             "{st}"
         );
     }

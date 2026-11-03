@@ -90,7 +90,7 @@ pub async fn list(State(app): State<App>, Query(q): Query<CostQuery>) -> ApiResu
 
 /// A price: millionths of a dollar per million tokens, and when the provider's list price was read.
 #[derive(Debug, Serialize, ToSchema)]
-pub struct Price {
+pub struct PriceBookEntry {
     pub provider: String,
     pub model: String,
     pub version: i64,
@@ -101,7 +101,7 @@ pub struct Price {
     pub created_at: Timestamp,
 }
 
-impl From<prices::Price> for Price {
+impl From<prices::Price> for PriceBookEntry {
     fn from(p: prices::Price) -> Self {
         Self {
             provider: p.provider,
@@ -130,8 +130,8 @@ pub struct SetPrice {
 #[utoipa::path(get, path = "/api/v1/prices", operation_id = "listPrices", tag = "costs",
     responses((status = 200, description = "The newest price of every provider and model. There is \
         no built-in rate card: a model with no price here (or in its definition) is unpriced",
-        body = Vec<Price>)))]
-pub async fn list_prices(State(app): State<App>) -> ApiResult<Vec<Price>> {
+        body = Vec<PriceBookEntry>)))]
+pub async fn list_prices(State(app): State<App>) -> ApiResult<Vec<PriceBookEntry>> {
     Ok(Json(
         prices::list(&app.pool)
             .await?
@@ -145,12 +145,12 @@ pub async fn list_prices(State(app): State<App>) -> ApiResult<Vec<Price>> {
     request_body = SetPrice,
     responses((status = 200, description = "The next version of the price, in force from now on \
         (audited as `price.set`). Events already recorded keep the rates that priced them. 400 for \
-        a bad provider, model, rate or timestamp", body = Price)))]
+        a bad provider, model, rate or timestamp", body = PriceBookEntry)))]
 pub async fn set_price(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Json(b): Json<SetPrice>,
-) -> ApiResult<Price> {
+) -> ApiResult<PriceBookEntry> {
     let p = prices::set(
         &app.pool,
         &b.provider,
@@ -195,7 +195,7 @@ impl From<usage::Window> for UsageWindow {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
-pub struct CompanyUsage {
+pub struct UsageByCompany {
     pub company: String,
     pub five_hours: UsageWindow,
     pub seven_days: UsageWindow,
@@ -215,7 +215,7 @@ pub struct LimitStanding {
 
 /// One account's usage. No key, secret name, delivery or runner: it is for a `read` device.
 #[derive(Debug, Serialize, ToSchema)]
-pub struct AccountUsage {
+pub struct AccountSpend {
     pub account_id: i64,
     pub five_hours: UsageWindow,
     pub seven_days: UsageWindow,
@@ -224,10 +224,10 @@ pub struct AccountUsage {
     pub max_utilisation_bps: i64,
     /// Provider drops in the last hour.
     pub recent_drops: i64,
-    pub by_company: Vec<CompanyUsage>,
+    pub by_company: Vec<UsageByCompany>,
 }
 
-impl From<usage::AccountUsage> for AccountUsage {
+impl From<usage::AccountUsage> for AccountSpend {
     fn from(u: usage::AccountUsage) -> Self {
         Self {
             account_id: u.account_id,
@@ -250,7 +250,7 @@ impl From<usage::AccountUsage> for AccountUsage {
             by_company: u
                 .by_company
                 .into_iter()
-                .map(|c| CompanyUsage {
+                .map(|c| UsageByCompany {
                     company: c.company,
                     five_hours: c.five_hours.into(),
                     seven_days: c.seven_days.into(),
@@ -262,8 +262,8 @@ impl From<usage::AccountUsage> for AccountUsage {
 
 #[utoipa::path(get, path = "/api/v1/accounts/usage", operation_id = "accountsUsage", tag = "costs",
     responses((status = 200, description = "Every account's tokens, messages and dollars over the \
-        last five hours and seven days, its limits with their use, and its recent drops", body = Vec<AccountUsage>)))]
-pub async fn accounts_usage(State(app): State<App>) -> ApiResult<Vec<AccountUsage>> {
+        last five hours and seven days, its limits with their use, and its recent drops", body = Vec<AccountSpend>)))]
+pub async fn accounts_usage(State(app): State<App>) -> ApiResult<Vec<AccountSpend>> {
     let all = usage::report(&app.pool, None, &app.clock.now()).await?;
     Ok(Json(all.into_iter().map(Into::into).collect()))
 }

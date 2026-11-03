@@ -114,7 +114,8 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
             (14, "push_kinds"),
             (15, "accounts"),
             (16, "provider_defs"),
-            (17, "pools")
+            (17, "pools"),
+            (18, "cost_ledger")
         ]
     );
     let sum: Vec<u8> =
