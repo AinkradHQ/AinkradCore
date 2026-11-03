@@ -568,6 +568,16 @@ async fn run(app: &App, id: &str) {
         match step {
             Ok(()) => away = None,
             Err(Refusal::Runner(e)) if matches!(e.code, ErrorCode::Offline | ErrorCode::Lost) => {
+                // A revoked runner never comes back: the session is lost now, not after the wait.
+                // Only a runner the database says is gone ends it; an unreadable row falls
+                // through to the retry and its bound.
+                if crate::auth::device_now(&app.pool, &s.runner, None).await
+                    == crate::auth::DeviceNow::Gone
+                {
+                    let outcome = json!({"kind": "lost", "reason": "the runner was revoked"});
+                    let _ = store::end(&app.pool, id, "lost", &outcome, &app.clock.now()).await;
+                    return;
+                }
                 let since = *away.get_or_insert_with(tokio::time::Instant::now);
                 if since.elapsed() >= cfg.lost_after {
                     let outcome = json!({"kind": "lost", "reason": "the runner never came back"});
