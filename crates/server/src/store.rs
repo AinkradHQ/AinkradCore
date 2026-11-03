@@ -22,6 +22,7 @@ pub mod gov;
 pub mod kinds;
 pub mod migrate;
 pub mod modsettings;
+pub mod providers;
 pub mod redact;
 pub mod secrets;
 pub mod settings;
