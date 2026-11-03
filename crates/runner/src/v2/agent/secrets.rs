@@ -43,6 +43,8 @@ pub use ainkrad_proto::v2::valid_secret_var as valid_var;
 
 /// A session's delivered secrets: the variables for its harness, and its dir, removed on drop.
 pub struct Delivered {
+    /// One of the secrets is a provider account's (an `acct.` name).
+    pub account: bool,
     dir: Option<PathBuf>,
     pub env: Vec<(String, String)>,
 }
@@ -229,6 +231,7 @@ pub fn verify_memory_fs(root: &Path) -> io::Result<()> {
 pub fn deliver(root: &Path, session: &str, leased: Vec<(String, Leased)>) -> io::Result<Delivered> {
     if leased.is_empty() {
         return Ok(Delivered {
+            account: false,
             dir: None,
             env: vec![],
         });
@@ -242,6 +245,7 @@ pub fn deliver(root: &Path, session: &str, leased: Vec<(String, Leased)>) -> io:
     private_dir(root)?;
     private_dir(&dir)?;
     let mut out = Delivered {
+        account: leased.iter().any(|(_, s)| s.name.starts_with("acct.")),
         dir: Some(dir.clone()),
         env: vec![],
     };

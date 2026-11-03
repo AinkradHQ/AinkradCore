@@ -182,6 +182,19 @@ pub fn host_name(text: &str) -> Option<String> {
     ok.then_some(name)
 }
 
+/// Git and forge domains (with their sub-domains) a provider-account session never reaches by name.
+const FORGES: [&str; 9] = [
+    "github.com",
+    "githubusercontent.com",
+    "gitlab.com",
+    "bitbucket.org",
+    "codeberg.org",
+    "gitea.com",
+    "sr.ht",
+    "dev.azure.com",
+    "visualstudio.com",
+];
+
 #[derive(Clone, Debug)]
 pub struct Policy {
     cidrs: Vec<Cidr>,
@@ -260,6 +273,20 @@ impl Policy {
 
     pub fn port_ok(&self, port: u16) -> bool {
         self.ports.contains(&port)
+    }
+
+    /// This policy without any git or forge host name: what a session holding a provider-account
+    /// secret gets, so a leaked key cannot be pushed to a repository. A name matches when it is a
+    /// forge's domain or a sub-domain of one. **Only names**: a CIDR that covers a forge's
+    /// addresses still reaches it, and a self-hosted forge is not on the list.
+    pub fn without_forges(&self) -> Policy {
+        let mut p = self.clone();
+        p.hosts.retain(|h| {
+            !FORGES
+                .iter()
+                .any(|f| h == f || h.strip_suffix(f).is_some_and(|rest| rest.ends_with('.')))
+        });
+        p
     }
 
     /// `name` is exactly a listed host name (already lower-case, no trailing dot).
