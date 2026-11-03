@@ -183,8 +183,7 @@ async fn budgets_are_set_in_their_company_only() {
     let mut bad = mine;
     bad["period"] = json!("fortnight");
     assert_eq!(put(&fx, &uri, bad).await.0, StatusCode::BAD_REQUEST);
-    // The Core audits a budget's creation and change (`budget.created`, `budget.set`).
-    let audited = "SELECT count(*) FROM audit_events WHERE action IN ('budget.created', 'budget.set') \
+    let audited = "SELECT count(*) FROM audit_events WHERE action = 'citadel.budget.set' \
                    AND actor_kind = 'user'";
     assert_eq!(count(&fx, audited).await, 2);
 

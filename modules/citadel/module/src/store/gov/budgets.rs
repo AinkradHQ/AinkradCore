@@ -227,6 +227,7 @@ async fn write_budget(
             return Ok(None);
         }
     }
+    let company_id = company;
     let company = company.to_string();
     let new = cb::NewBudget {
         kind,
@@ -241,6 +242,18 @@ async fn write_budget(
     let set = cb::set(pool, &new, DEVICE, actor, &now)
         .await
         .map_err(map)?;
+    // The Core audited the change; Citadel's own row keeps the company's activity as it was.
+    let details = json!({"scope": kind, "scope_id": id, "period": b.period.as_str(),
+                         "token_cap": b.token_cap, "usd_cap_micros": b.usd_cap_micros,
+                         "warn_at_percent": b.warn_at_percent, "hard_stop": b.hard_stop});
+    let action = if replace { "budget.set" } else { "budget.created" };
+    let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
+    let event = Event::new(actor, action)
+        .entity("budget", set.id)
+        .company(company_id)
+        .details(details);
+    append(&mut tx, event).await?;
+    tx.commit().await?;
     Ok(Some(budget(set)?))
 }
 
@@ -251,16 +264,36 @@ pub async fn remove_budget(
     id: BudgetId,
     actor: AuditActor,
 ) -> Result<bool, Error> {
-    if get_budget(pool, id).await?.is_none() {
+    let Some(gone) = get_budget(pool, id).await? else {
+        return Ok(false);
+    };
+    let company = scope_company(pool, &gone.scope).await?;
+    if !cb::remove(pool, id.0, DEVICE, actor).await.map_err(map)? {
         return Ok(false);
     }
-    cb::remove(pool, id.0, DEVICE, actor).await.map_err(map)
+    let (kind, scope_id) = scope_parts(gone.scope);
+    let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
+    let mut event = Event::new(actor, "budget.deleted")
+        .entity("budget", id.0)
+        .details(json!({"scope": kind, "scope_id": scope_id, "period": gone.period.as_str(),
+                        "token_cap": gone.token_cap}));
+    if let Some(c) = company {
+        event = event.company(c);
+    }
+    append(&mut tx, event).await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// Rebuilds every budget's spend counters from the ledger, keeping the raises and warnings, and
 /// audits it. For repair: the Core keeps them in step. Returns how many counters hold spend.
 pub async fn recompute_budget_spend(pool: &SqlitePool, actor: AuditActor) -> Result<u64, Error> {
-    cb::recompute(pool, actor).await.map_err(map)
+    let counters = cb::recompute(pool, actor).await.map_err(map)?;
+    let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
+    let event = Event::new(actor, "budget.recomputed").details(json!({"counters": counters}));
+    append(&mut tx, event).await?;
+    tx.commit().await?;
+    Ok(counters)
 }
 
 /// Deletes the budgets of the entity `scope` names (every period), inside the caller's transaction:
@@ -445,6 +478,17 @@ pub(crate) async fn wake_for_warnings(
 ) -> Result<(), Error> {
     if warned.is_empty() {
         return Ok(());
+    }
+    // The Core appended its own `budget.warning`; Citadel's row carries the company, as it always did.
+    for s in warned {
+        let mut event = Event::new(AuditActor::System, "budget.warning")
+            .entity("budget", s.budget.id)
+            .details(json!({"period": s.period_key, "spent": s.spent,
+                            "token_cap": s.budget.token_cap}));
+        if let Some(c) = s.budget.company.as_deref().and_then(|c| c.parse().ok()) {
+            event = event.company(c);
+        }
+        append(conn, event).await?;
     }
     let po: Option<i64> = sqlx::query_scalar(
         "SELECT m.agent_id FROM citadel_issues i JOIN citadel_projects p ON p.id = i.project_id \

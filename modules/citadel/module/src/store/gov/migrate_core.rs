@@ -9,6 +9,10 @@
 //! - **Idempotent.** An event is copied once, by its idempotency key (the same key the run engine
 //!   uses, so a repeated report after the move is still a no-op); a budget once, by (kind, subject,
 //!   period). Running it again copies only what is new.
+//! - **Run order.** Run it with the engine off, before anything records into the Core: the check
+//!   compares the Core's counters with the frozen source, so once the adapter has recorded a run or a
+//!   raise a later run reports a difference and writes nothing (it fails closed; no data is at risk).
+//!   Deploy with the engine off, run `ledger_to_core` (dry run first), then switch the engine on.
 //! - **Verified before it counts.** One write transaction: copy, rebuild the spend counters from the
 //!   copied ledger, then compare events, tokens, priced dollars, unpriced events, budgets and the
 //!   spend counters against the source. Any difference is an error and nothing is written; `--dry-run`

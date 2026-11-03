@@ -674,7 +674,7 @@ async fn usage_moves_the_budget_once_and_warns_once() {
     assert_eq!(spent, 600);
     let warned = count(
         &w,
-        "SELECT count(*) FROM audit_events WHERE action = 'budget.warning'",
+        "SELECT count(*) FROM audit_events WHERE action = 'citadel.budget.warning'",
     )
     .await;
     assert_eq!(warned, 1, "50% of 1000 was crossed once");
