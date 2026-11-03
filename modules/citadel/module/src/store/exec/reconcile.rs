@@ -165,7 +165,14 @@ async fn follow<H: Host>(
     let Some(s) = sessions::get(pool, &session).await? else {
         return end(pool, &r, RunEvent::RunnerLost, now, report).await;
     };
-    let r = record_usage(pool, &r, &s, now, report).await?;
+    // One run's usage that cannot be recorded must not stop the others: it is tried again next pass.
+    let r = match record_usage(pool, &r, &s, now, report).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(run = r.id.0, error = ?e, "a run's usage was not recorded; trying again next pass");
+            return Ok(());
+        }
+    };
     if r.cancel_requested_at.is_some() {
         // A stop the runner did not take (or a session ended meanwhile): the admin's word stands.
         if s.live()
@@ -291,9 +298,11 @@ pub async fn record_usage(
             .bind(r.agent_id.0)
             .fetch_one(&mut *tx)
             .await?;
+    // The price book keeps the name as given; the Core ledger takes only a clean one.
     let model = model
         .filter(|m| !m.is_empty())
         .unwrap_or_else(|| "unknown".to_owned());
+    let core_model = crate::store::gov::core_model(&model);
     let (cost, pricing): (Option<i64>, Pricing) = match (subscription, reported) {
         (true, _) => (None, Pricing::Unpriced),
         (false, Some(c)) => (Some((c - held).max(0)), Pricing::Unpriced),
@@ -338,7 +347,7 @@ pub async fn record_usage(
         legacy_account_id: None,
         provider,
         harness: r.harness.as_str(),
-        model: &model,
+        model: &core_model,
         input_tokens: delta[0],
         output_tokens: delta[1],
         cache_tokens: delta[2],

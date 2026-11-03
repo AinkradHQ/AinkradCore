@@ -168,9 +168,11 @@ pub async fn company_budgets(
     company: CompanyId,
     now: &str,
 ) -> Result<Vec<Standing>, Error> {
+    // A Core account or pool budget may carry the company binding too; it is not Citadel's to show.
     cb::list(pool, None, None, Some(&company.0.to_string()), now)
         .await?
         .into_iter()
+        .filter(|s| scope_of(&s.budget.kind, &s.budget.subject).is_some())
         .map(standing)
         .collect()
 }
@@ -414,6 +416,7 @@ pub(crate) async fn admit_in(
     for s in &exhausted {
         let asked: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM citadel_approvals WHERE kind = 'budget_overrun' \
+             AND json_extract(payload, '$.core_budget') = 1 \
              AND json_extract(payload, '$.budget') = ? AND json_extract(payload, '$.period') = ?)",
         )
         .bind(s.budget.id.0)
@@ -533,6 +536,21 @@ pub(crate) async fn raise_in(
             a.id.0
         )));
     };
+    // Only an approval the adapter opened names a Core budget id (an old Citadel id would hit another
+    // budget), and only one of the approval's own company.
+    let company: Option<Option<String>> =
+        sqlx::query_scalar("SELECT company FROM core_budgets WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&mut *conn)
+            .await?;
+    if payload["core_budget"].as_bool() != Some(true)
+        || company.flatten().as_deref() != Some(a.company_id.0.to_string().as_str())
+    {
+        return Err(Error::InvalidArgument(format!(
+            "approval {} does not name one of its company's budgets",
+            a.id.0
+        )));
+    }
     // A budget that ran out of dollars is raised in dollars (millionths), else in tokens.
     let usd = payload["unit"].as_str() == Some("usd_micros");
     let (tokens, dollars) = if usd { (0, raise) } else { (raise, 0) };

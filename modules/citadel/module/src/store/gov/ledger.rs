@@ -19,6 +19,18 @@ use crate::domain::org::Harness;
 use crate::store::audit::{Event, append};
 use crate::store::org::text;
 
+/// A free-text model name (an agent's setting, a harness's report such as `claude-opus-4-6[1m]`) as the
+/// Core ledger takes it: 1 to 80 of `[A-Za-z0-9._:/-]`. Every other character becomes `_`, a long
+/// name is cut, and a blank one is `unknown`. The Citadel price book keeps the name as given.
+pub fn core_model(name: &str) -> String {
+    let clean: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || "._:/-".contains(c) { c } else { '_' })
+        .take(80)
+        .collect();
+    if clean.is_empty() { "unknown".to_owned() } else { clean }
+}
+
 /// One version of a harness and model's price, in millionths of a dollar per million tokens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Price {

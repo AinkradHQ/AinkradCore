@@ -2,16 +2,19 @@
 //! `2026-11-02-ai-provider-accounts` §12d), so the Core engine and ledger start with what Citadel
 //! already had. Run by `ainkrad-core-citadel citadel ledger_to_core [--dry-run]`.
 //!
+//! - **One-shot.** It refuses to run once a `citadel.ledger.migrated` audit row exists: after that the
+//!   Core is the only live copy, and a second copy would resurrect budgets deleted since and overwrite
+//!   raises approved since from the frozen source. A dry run, or a copy that fails verification, writes
+//!   nothing (no audit row), so it can be repeated until the real run succeeds. Within that one run an
+//!   event is copied once, by its idempotency key (the key the run engine uses, so a repeated report
+//!   after the move is still a no-op), and a budget once, by (kind, subject, period).
 //! - **Source untouched.** The `citadel_cost_events`, `citadel_budgets` and `citadel_budget_spend` rows
-//!   are only read; they stay as they are until a later migration drops the tables, so the copy can
-//!   be re-run and the old code can be put back. (The Core's ledger is insert-only: what was copied
-//!   stays there; the old tables, not the Core's rows, are what a rollback goes back to.)
-//! - **Idempotent.** An event is copied once, by its idempotency key (the same key the run engine
-//!   uses, so a repeated report after the move is still a no-op); a budget once, by (kind, subject,
-//!   period). Running it again copies only what is new.
+//!   are only read; they stay as they are until a later migration drops them. Rolling back to the old
+//!   code is therefore incomplete: it reads those frozen tables, so every cost, raise and budget change
+//!   made in the Core since the copy is lost to it (the Core's ledger is insert-only and keeps them).
 //! - **Run order.** Run it with the engine off, before anything records into the Core: the check
 //!   compares the Core's counters with the frozen source, so once the adapter has recorded a run or a
-//!   raise a later run reports a difference and writes nothing (it fails closed; no data is at risk).
+//!   raise the run reports a difference and writes nothing (it fails closed; no data is at risk).
 //!   Deploy with the engine off, run `ledger_to_core` (dry run first), then switch the engine on.
 //! - **Verified before it counts.** One write transaction: copy, rebuild the spend counters from the
 //!   copied ledger, then compare events, tokens, priced dollars, unpriced events, budgets and the
@@ -19,7 +22,7 @@
 //!   does the same and rolls back.
 //! - **Ids.** Budget ids change (the Core numbers its own), so a pending `budget_overrun` approval
 //!   has its payload's budget id rewritten to the new one and marked `core_budget` (an approval the
-//!   adapter opens carries the mark from the start, so a re-run never mistakes either for an old id).
+//!   adapter opens carries the mark from the start, so neither is ever mistaken for an old id).
 //!
 //! Subscription events keep their tokens and no dollars (`unpriced`): the Core ledger does not
 //! record a billing mode (decision: API-key accounts only).
@@ -124,6 +127,17 @@ async fn core_counts(conn: &mut SqliteConnection) -> Result<Counts, Error> {
 /// Copies, verifies and (unless `dry_run`) commits. See the module doc.
 pub async fn migrate_to_core(pool: &SqlitePool, dry_run: bool) -> Result<Migrated, Error> {
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
+    let done: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM audit_events WHERE action = 'citadel.ledger.migrated')",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if done {
+        return Err(Error::Protocol(
+            "the ledger was already moved into the Core (citadel.ledger.migrated): it runs once"
+                .to_owned(),
+        ));
+    }
     let source = source_counts(&mut tx).await?;
 
     // Budgets first, so the copied events' spend lands on them.
@@ -160,9 +174,29 @@ pub async fn migrate_to_core(pool: &SqlitePool, dry_run: bool) -> Result<Migrate
     .execute(&mut *tx)
     .await?;
 
+    // The Core ledger takes only a clean model name: map each name the events use (in Rust, so it is
+    // the run engine's own rule) through a temp table the copy joins.
+    sqlx::query("CREATE TEMP TABLE _model_map (raw TEXT PRIMARY KEY, clean TEXT NOT NULL)")
+        .execute(&mut *tx)
+        .await?;
+    let raws: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT coalesce(nullif(r.model_used, ''), nullif(a.model, ''), 'unknown') \
+         FROM citadel_cost_events e JOIN citadel_agents a ON a.id = e.agent_id \
+         LEFT JOIN citadel_runs r ON r.id = e.run_id",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    for raw in raws {
+        sqlx::query("INSERT INTO _model_map (raw, clean) VALUES (?, ?)")
+            .bind(&raw)
+            .bind(super::core_model(&raw))
+            .execute(&mut *tx)
+            .await?;
+    }
     let events_copied = sqlx::query(
         "WITH s AS (SELECT e.*, coalesce(r.harness, a.harness) AS hz, \
-             substr(coalesce(nullif(r.model_used, ''), nullif(a.model, ''), 'unknown'), 1, 80) AS mz, \
+             (SELECT clean FROM _model_map WHERE raw = \
+                 coalesce(nullif(r.model_used, ''), nullif(a.model, ''), 'unknown')) AS mz, \
              CASE WHEN e.cost_usd_micros IS NULL THEN 'unpriced' \
                   WHEN p.id IS NOT NULL THEN 'list_price' ELSE 'provider_reported' END AS bz, \
              p.input_micros_per_mtok AS pi, p.output_micros_per_mtok AS po, \
@@ -213,6 +247,7 @@ pub async fn migrate_to_core(pool: &SqlitePool, dry_run: bool) -> Result<Migrate
             .await?;
     }
     guard::recompute_in(&mut tx, None).await?;
+    sqlx::query("DROP TABLE _model_map").execute(&mut *tx).await?;
 
     // A pending overrun approval names its budget by id; the id is the Core's now.
     let pending: Vec<(i64, i64, i64)> = sqlx::query_as(

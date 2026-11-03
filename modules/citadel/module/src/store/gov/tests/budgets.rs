@@ -5,6 +5,7 @@
 use super::approvals::issue;
 use super::*;
 use crate::domain::gov::BudgetId;
+use serde_json::json;
 use crate::domain::work::IssueId;
 use ainkrad_core_server::store::costs;
 
@@ -161,10 +162,14 @@ async fn old_world(pool: &SqlitePool) -> (CompanyId, AgentId, IssueId) {
 }
 
 #[tokio::test]
-async fn the_old_ledger_and_budgets_move_into_the_core_verified_and_rerunnable() {
+async fn the_old_ledger_and_budgets_move_into_the_core_verified_and_run_only_once() {
     let db = db().await;
     let pool = &db.pool;
     let (c, po, i) = old_world(pool).await;
+    sqlx::query("UPDATE citadel_agents SET model = 'claude-opus-4-6[1m] x@y+z'")
+        .execute(pool)
+        .await
+        .unwrap();
     let count = |sql: &'static str| async move {
         sqlx::query_scalar::<_, i64>(sql)
             .fetch_one(pool)
@@ -257,22 +262,38 @@ async fn the_old_ledger_and_budgets_move_into_the_core_verified_and_rerunnable()
     .unwrap();
     assert_eq!(named, agent_budget.budget.id.0);
     assert_ne!(named, 1);
-    // The source is untouched, and again copies nothing.
+    // The source is untouched, and the copy runs once: a second run (real, dry or by the command) is
+    // refused, so a raise approved since is never overwritten and a budget deleted since never returns.
     assert_eq!(count("SELECT count(*) FROM citadel_cost_events").await, 3);
-    let again = migrate_core::migrate_to_core(pool, false).await.unwrap();
-    assert_eq!(
-        (
-            again.events_copied,
-            again.budgets_copied,
-            again.approvals_rewritten
-        ),
-        (0, 0, 0)
-    );
-    assert_eq!(again.source, again.core);
-    assert_eq!(count("SELECT count(*) FROM core_cost_events").await, 3);
-    let said = migrate_core::command(pool, &["--dry-run"]).await.unwrap();
-    assert!(said.contains("verified equal to the source"), "{said}");
+    sqlx::query("UPDATE core_budget_spend SET raised = raised + 7 WHERE budget_id = ?")
+        .bind(agent_budget.budget.id.0)
+        .execute(pool)
+        .await
+        .unwrap();
+    remove_budget(pool, agent_budget.budget.id, AuditActor::System)
+        .await
+        .unwrap();
+    for dry in [false, true] {
+        let err = migrate_core::migrate_to_core(pool, dry)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("it runs once"), "{err}");
+    }
+    assert!(migrate_core::command(pool, &["--dry-run"]).await.is_err());
     assert!(migrate_core::command(pool, &["--now"]).await.is_err());
+    assert_eq!(count("SELECT count(*) FROM core_cost_events").await, 3);
+    assert_eq!(
+        count("SELECT count(*) FROM core_budgets WHERE subject_kind = 'agent'").await,
+        0,
+        "the deleted budget did not come back"
+    );
+    // A model name the Core ledger would refuse was cleaned on the way in.
+    let model: String =
+        sqlx::query_scalar("SELECT model FROM core_cost_events WHERE idempotency_key = 'old-1'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(model, "claude-opus-4-6_1m__x_y_z");
 }
 
 #[tokio::test]
@@ -375,4 +396,138 @@ async fn deleting_a_department_or_a_sprint_deletes_its_budgets_and_the_seam_only
         .await
         .unwrap();
     assert_eq!(get_budget(pool, spr.id).await.unwrap(), None);
+}
+
+#[test]
+fn a_free_text_model_becomes_a_name_the_core_ledger_takes() {
+    use ainkrad_core_server::store::prices::valid_model;
+    let long = "m".repeat(100);
+    for (given, want) in [
+        ("claude-opus-4-6[1m]", "claude-opus-4-6_1m_"),
+        ("my model", "my_model"),
+        ("a@b", "a_b"),
+        ("c+d", "c_d"),
+        ("gpt-5.1:mini/x", "gpt-5.1:mini/x"),
+        (long.as_str(), &long[..80]),
+        ("", "unknown"),
+        ("é", "_"),
+    ] {
+        let got = core_model(given);
+        assert_eq!(got, want, "{given}");
+        assert!(valid_model(&got), "{got}");
+    }
+}
+
+#[tokio::test]
+async fn a_raise_needs_a_core_budget_id_of_the_approvals_own_company() {
+    let db = db().await;
+    let pool = &db.pool;
+    let (ca, po_a, _pa) = fixture(pool, "A").await;
+    let (cb, po_b, _pb) = fixture(pool, "B").await;
+    let b = set_budget(
+        pool,
+        &NewBudget {
+            scope: BudgetScope::Agent(po_b),
+            period: BudgetPeriod::Total,
+            token_cap: 100,
+            usd_cap_micros: None,
+            warn_at_percent: 50,
+            hard_stop: true,
+        },
+        BY,
+    )
+    .await
+    .unwrap();
+    let approval = |company: CompanyId, by: AgentId, mark: bool| {
+        let payload = json!({"budget": b.id.0, "period": "total", "unit": "tokens",
+                             "core_budget": mark});
+        async move {
+            create_approval(
+                pool,
+                &NewApproval {
+                    company_id: company,
+                    kind: ApprovalKind::BudgetOverrun,
+                    issue_id: None,
+                    sprint_id: None,
+                    agent_id: None,
+                    requested_by: by,
+                    payload: payload.to_string(),
+                },
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let raised = || async move {
+        sqlx::query_scalar::<_, i64>("SELECT coalesce(sum(raised), 0) FROM core_budget_spend")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    };
+    let mut conn = pool.acquire().await.unwrap();
+    // Company A's approval whose number happens to be company B's budget id: refused, nothing raised.
+    let other = approval(ca, po_a, true).await;
+    assert!(raise_in(&mut conn, &other, 50, ADMIN).await.is_err());
+    // An approval of the right company that was never marked as a Core id (an old Citadel number).
+    let old = approval(cb, po_b, false).await;
+    assert!(raise_in(&mut conn, &old, 50, ADMIN).await.is_err());
+    assert_eq!(raised().await, 0);
+    let own = approval(cb, po_b, true).await;
+    raise_in(&mut conn, &own, 50, ADMIN).await.unwrap();
+    assert_eq!(raised().await, 50);
+}
+
+#[tokio::test]
+async fn a_core_budget_tagged_to_the_company_neither_breaks_its_list_nor_stands_in_for_an_approval() {
+    let db = db().await;
+    let pool = &db.pool;
+    let (c, po, p) = fixture(pool, "A").await;
+    let i = issue(pool, &p).await;
+    let b = set_budget(
+        pool,
+        &NewBudget {
+            scope: BudgetScope::Agent(po),
+            period: BudgetPeriod::Total,
+            token_cap: 100,
+            usd_cap_micros: None,
+            warn_at_percent: 50,
+            hard_stop: true,
+        },
+        BY,
+    )
+    .await
+    .unwrap();
+    // A Core account budget bound to the company: not Citadel's, so the company's list skips it.
+    sqlx::query(
+        "INSERT INTO core_budgets (subject_kind, subject_id, company, period, token_cap, created_at, \
+         updated_at) VALUES ('account', '1', ?1, 'day', 1, ?2, ?2)",
+    )
+    .bind(c.0.to_string())
+    .bind(NOW)
+    .execute(pool)
+    .await
+    .unwrap();
+    let listed = company_budgets(pool, c, NOW).await.unwrap();
+    assert_eq!(listed.iter().map(|s| s.budget.id).collect::<Vec<_>>(), [b.id]);
+    // An approval that names the exhausted budget's number but is no adapter's (an old Citadel id)
+    // does not count as the question asked: admission opens its own.
+    spend(pool, po, i, 100).await;
+    create_approval(
+        pool,
+        &NewApproval {
+            company_id: c,
+            kind: ApprovalKind::BudgetOverrun,
+            issue_id: Some(i),
+            sprint_id: None,
+            agent_id: None,
+            requested_by: po,
+            payload: json!({"budget": b.id.0, "period": "total", "unit": "tokens"}).to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    assert!(!admit_in(&mut conn, po, c, Some(i), NOW).await.unwrap());
+    drop(conn);
+    assert_eq!(list_approvals(pool, c).await.unwrap().len(), 2);
 }

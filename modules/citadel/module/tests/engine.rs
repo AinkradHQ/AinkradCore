@@ -681,6 +681,54 @@ async fn usage_moves_the_budget_once_and_warns_once() {
 }
 
 #[tokio::test]
+async fn a_free_text_model_is_cleaned_for_the_ledger_and_one_runs_failure_does_not_stop_the_pass() {
+    let w = world().await;
+    let run = w.running().await;
+    let long = "x".repeat(100);
+    let cases = [
+        ("claude-opus-4-6[1m]", "claude-opus-4-6_1m_".to_owned()),
+        ("my model", "my_model".to_owned()),
+        ("a@b", "a_b".to_owned()),
+        ("c+d", "c_d".to_owned()),
+        (long.as_str(), "x".repeat(80)),
+    ];
+    for (i, (given, want)) in cases.iter().enumerate() {
+        sqlx::query("UPDATE citadel_runs SET model_used = ? WHERE id = ?")
+            .bind(given)
+            .bind(run.id.0)
+            .execute(&w.app().pool)
+            .await
+            .unwrap();
+        let total = 100 * (i as u64 + 1);
+        w.report(&run, AgentState::Running, vec![], tokens(total, 0), None)
+            .await;
+        assert_eq!(w.reconcile().await.cost_events, 1, "{given}");
+        let model: String =
+            sqlx::query_scalar("SELECT model FROM core_cost_events ORDER BY id DESC LIMIT 1")
+                .fetch_one(&w.app().pool)
+                .await
+                .unwrap();
+        assert_eq!(&model, want, "{given}");
+    }
+    // A record the ledger cannot take is logged and left for the next pass; the pass itself goes on.
+    sqlx::query(
+        "CREATE TRIGGER refuse_cost BEFORE INSERT ON core_cost_events \
+         BEGIN SELECT RAISE(ABORT, 'refused for the test'); END",
+    )
+    .execute(&w.app().pool)
+    .await
+    .unwrap();
+    w.report(&run, AgentState::Running, vec![], tokens(900, 0), None)
+        .await;
+    assert_eq!(w.reconcile().await.cost_events, 0);
+    sqlx::query("DROP TRIGGER refuse_cost")
+        .execute(&w.app().pool)
+        .await
+        .unwrap();
+    assert_eq!(w.reconcile().await.cost_events, 1, "tried again, and recorded");
+}
+
+#[tokio::test]
 async fn an_exhausted_hard_stop_budget_kills_the_run_and_blocks_the_next_one() {
     let w = world().await;
     gov::set_budget(&w.app().pool, &budget(&w, 1_000), AuditActor::System)
