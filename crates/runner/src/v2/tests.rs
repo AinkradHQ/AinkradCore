@@ -691,6 +691,93 @@ mod pty {
         let _ = std::fs::remove_dir_all(&work);
     }
 
+    /// KAN-416: a locked terminal network without the sandbox is refused, never opened on the host's.
+    #[tokio::test]
+    async fn a_terminal_network_without_the_sandbox_is_refused() {
+        let base = tmp();
+        let terminals = base.join("state/terminals");
+        std::fs::create_dir_all(&terminals).unwrap();
+        let driver = Arc::new(PtyDriver::new(PtyConfig {
+            enabled: true,
+            capacity: 4,
+            hide: None,
+            net: super::super::termbox::Net::None,
+            ..PtyConfig::new(terminals.clone())
+        }));
+        let (mut core, _) = Core::start_pty(driver).await;
+        core.send(1, open("true")).await;
+        assert_eq!(error(core.answer(1).await), ErrorCode::InvalidArgs);
+        // Control: the same driver on the host network (no sandbox either) does open it.
+        let host = driver_for(&terminals, None, super::super::termbox::Net::Host);
+        let id = host
+            .open(&open_req("sleep 30"))
+            .await
+            .expect("host mode opens");
+        host.close(&id).await.unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn driver_for(
+        dir: &std::path::Path,
+        hide: Option<Vec<std::path::PathBuf>>,
+        net: super::super::termbox::Net,
+    ) -> Arc<PtyDriver> {
+        let host = ainkrad_ptyhost::client::find_host_binary()
+            .expect("ainkrad-ptyhost is built next to the tests (cargo test --workspace)");
+        Arc::new(PtyDriver::new(PtyConfig {
+            enabled: true,
+            capacity: 4,
+            host,
+            grace: Duration::from_millis(200),
+            hide,
+            net,
+            ..PtyConfig::new(dir.to_path_buf())
+        }))
+    }
+
+    fn open_req(script: &str) -> PtyOpen {
+        match open(script) {
+            Body::Command(Command::PtyOpen(o)) => o,
+            _ => unreachable!(),
+        }
+    }
+
+    /// KAN-416: shells a previous runner started with a weaker network are closed when a runner
+    /// requiring a stronger one starts (they would otherwise be re-adopted and attached), shells
+    /// of an equal or stronger network are left, and a runner that requires only the host
+    /// network closes nothing.
+    #[tokio::test]
+    async fn shells_started_with_a_weaker_network_are_retired_by_a_stricter_runner() {
+        use super::super::termbox::Net;
+        let base = tmp();
+        let terminals = base.join("state/terminals");
+        std::fs::create_dir_all(&terminals).unwrap();
+        let old = driver_for(&terminals, None, Net::Host);
+        let weak = old.open(&open_req("sleep 60")).await.unwrap();
+        // Control: a runner that needs nothing more than the host network retires nothing.
+        assert_eq!(old.retire_weaker().await, 0);
+        assert!(old.terminals().await.iter().any(|t| t.terminal == weak));
+        let strict = driver_for(&terminals, Some(Vec::new()), Net::None);
+        let locked = strict.open(&open_req("sleep 60")).await.unwrap();
+        assert_eq!(
+            strict.retire_weaker().await,
+            1,
+            "only the host-network shell"
+        );
+        let live: Vec<_> = strict
+            .terminals()
+            .await
+            .into_iter()
+            .map(|t| t.terminal)
+            .collect();
+        assert!(!live.contains(&weak), "{live:?}");
+        assert!(live.contains(&locked), "{live:?}");
+        // A second start finds nothing weaker.
+        assert_eq!(strict.retire_weaker().await, 0);
+        strict.close(&locked).await.unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// Review PR 66 re-review: the shell cannot write a read-only launcher path, cannot see the
     /// user's runtime dir (bus and systemd sockets, Linux), and (macOS) cannot start a process
     /// through launchd or inspect another process.

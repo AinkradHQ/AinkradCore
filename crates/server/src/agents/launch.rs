@@ -115,7 +115,9 @@ pub fn placement(app: &App, s: &Session) -> Placement {
     match live.get(&s.runner) {
         None => Placement::Away,
         Some(r) if !r.online => Placement::Away,
-        Some(r) => tier_refusal(r, &s.policy).map_or(Placement::Ok, Placement::Refused),
+        Some(r) => {
+            placement_refusal(r, &s.secrets, &s.policy).map_or(Placement::Ok, Placement::Refused)
+        }
     }
 }
 
@@ -155,6 +157,15 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
             fail(app, s, &describe(&e)).await;
             return Err(e);
         }
+    }
+    // A session holding a provider-account secret is placed before any lease is minted, so a
+    // runner that may not take it (macOS, no proven filter) never sees one.
+    if holds_account(&s.secrets)
+        && let Placement::Refused(why) = placement(app, s)
+    {
+        let e = Refusal::Runner(StreamError::new(ErrorCode::InvalidArgs, why));
+        fail(app, s, &describe(&e)).await;
+        return Err(e);
     }
     let cached = { app.agents.leases.lock().unwrap().get(&s.id).cloned() };
     let mut secrets = match cached {

@@ -501,6 +501,9 @@ impl AgentDriver {
             return self.end(&session, failed(redactor.text(&why), "workspace"));
         }
         let mut env = delivered.env.clone();
+        if delivered.account {
+            env.push((crate::egress::ACCOUNT_SESSION.to_owned(), "1".to_owned()));
+        }
         if let Err(why) = self.sandbox.prepare(&req, &mut env) {
             if workspace_prepared {
                 self.harness.cleanup_agent_workspace(&session, run).await;

@@ -210,6 +210,20 @@ impl HarnessExecutor {
             let Some(policy) = self.egress.clone() else {
                 return failed("this runner has no egress policy".to_owned(), "sandbox");
             };
+            // A session holding a provider account's key never reaches a git or forge host by name.
+            let account = self
+                .run_env
+                .lock()
+                .expect("run env lock")
+                .get(&job.run)
+                .is_some_and(|e| {
+                    ainkrad_harness::last_env(e, crate::egress::ACCOUNT_SESSION).is_some()
+                });
+            let policy = if account {
+                std::sync::Arc::new(policy.without_forges())
+            } else {
+                policy
+            };
             let sock = crate::egress::socket_in(&files.dir);
             match crate::egress::start(&sock, policy) {
                 Ok(p) => egress = Some(p),

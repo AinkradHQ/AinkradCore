@@ -1255,3 +1255,41 @@ fn the_shared_account_variable_table_is_the_harnesss_auth_env() {
         );
     }
 }
+
+/// KAN-433: a session holding a provider-account secret (an `acct.` name) is marked in its run
+/// environment, so the filtered proxy drops forge hosts; one holding any other secret is not.
+#[tokio::test]
+async fn an_account_secret_marks_its_session_and_no_other_secret_does() {
+    let redeem: Redeem = Arc::new(|lease: String| {
+        Box::pin(async move {
+            let name = match lease.as_str() {
+                "l_acct" => "acct.anthropic.main",
+                "l_git" => "git.token",
+                _ => return Err("no such lease".to_owned()),
+            };
+            Ok(secrets::Leased {
+                name: name.to_owned(),
+                delivery: "env".to_owned(),
+                value: Zeroizing::new(format!("v-{name}")),
+            })
+        })
+    });
+    for (lease, want) in [("l_acct", "1"), ("l_git", "none")] {
+        let (_root, config) = dirs(&format!("acct-{lease}"));
+        let s = script("echo \"mark=${AINKRAD_ACCOUNT_SESSION:-none}\"");
+        let d = Arc::new(
+            AgentDriver::new(config, s)
+                .unwrap()
+                .with_redeem(redeem.clone()),
+        );
+        let mut req = start("as_acct", "claude");
+        req.secrets = vec![SecretGrant {
+            lease: lease.to_owned(),
+            var: "ANTHROPIC_API_KEY".to_owned(),
+        }];
+        d.start(req).unwrap();
+        let (entries, _) = drain(&d, "as_acct").await;
+        let text = serde_json::to_string(&entries).unwrap();
+        assert!(text.contains(&format!("mark={want}")), "{lease}: {text}");
+    }
+}

@@ -136,6 +136,18 @@ pub async fn admit_with(
     harness: &str,
     policy: &serde_json::Value,
 ) -> Result<(), Refusal> {
+    admit_holding(app, runner, harness, policy, &[]).await
+}
+
+/// [`admit_with`] for a session that will hold `secrets`: one holding a provider-account secret
+/// is also placed only where [`account_refusal`] allows.
+pub async fn admit_holding(
+    app: &App,
+    runner: &str,
+    harness: &str,
+    policy: &serde_json::Value,
+    secrets: &[store::SessionSecret],
+) -> Result<(), Refusal> {
     let live = app.hub.runners();
     let Some(r) = live.get(runner).filter(|r| r.online) else {
         return Err(Refusal::Runner(StreamError::new(
@@ -155,7 +167,7 @@ pub async fn admit_with(
             "the runner offers no slot for that harness",
         )));
     }
-    if let Some(why) = tier_refusal(r, policy) {
+    if let Some(why) = placement_refusal(r, secrets, policy) {
         return Err(Refusal::Runner(StreamError::new(
             ErrorCode::InvalidArgs,
             why,
@@ -183,14 +195,8 @@ pub fn tier_refusal(runner: &RunnerState, policy: &serde_json::Value) -> Option<
     let Ok(policy) = serde_json::from_value::<ainkrad_proto::runner::Policy>(policy.clone()) else {
         return Some("the session's policy does not have its shape".to_owned());
     };
-    // Egress rules are placed only where the host-enforced filter was proven at start-up: the
-    // runner says so with the `egress-filter` op beside the agent driver's own.
-    let filtered = runner
-        .drivers
-        .iter()
-        .filter(|d| d.name == AGENT_DRIVER)
-        .any(|d| d.commands.iter().any(|c| c == "egress-filter"));
-    if policy.egress.is_some() && !filtered {
+    // Egress rules are placed only where the host-enforced filter was proven at start-up.
+    if policy.egress.is_some() && !filters_egress(runner) {
         return Some(
             "the session sets egress rules and the runner does not offer a proven egress filter"
                 .to_owned(),
@@ -221,6 +227,78 @@ pub fn tier_refusal(runner: &RunnerState, policy: &serde_json::Value) -> Option<
         ));
     }
     None
+}
+
+/// Whether the runner proved its host-enforced egress filter at start-up: it says so with the
+/// `egress-filter` op beside the agent driver's own.
+fn filters_egress(runner: &RunnerState) -> bool {
+    runner
+        .drivers
+        .iter()
+        .filter(|d| d.name == AGENT_DRIVER)
+        .any(|d| d.commands.iter().any(|c| c == "egress-filter"))
+}
+
+/// Whether `secrets` include a provider-account secret. By the `acct.` prefix alone, so a
+/// malformed `acct.` name counts too: fail closed.
+pub fn holds_account(secrets: &[store::SessionSecret]) -> bool {
+    secrets
+        .iter()
+        .any(|s| s.name.starts_with(crate::store::secrets::ACCOUNT_PREFIX))
+}
+
+/// What a session holding a provider-account secret must ask for in its policy: a sandbox of at
+/// least the `process` tier. Without one the runner may run the harness unconfined, with the
+/// key in its environment and the host network.
+///
+/// (The design asked for `policy.egress` here. A process sandbox refuses a session that sets it
+/// until the per-session intersection is wired, so the egress proof is demanded of the runner
+/// instead, see [`account_refusal`].)
+pub fn account_policy_problem(policy: &ainkrad_proto::runner::Policy) -> Option<&'static str> {
+    // `required_tier` is `Some` only for `process` or stronger (`none` is filtered out), and tiers
+    // are compared nowhere but `meets`, so presence is the whole test.
+    policy.required_tier().is_none().then_some(
+        "a session holding a provider-account secret must run sandboxed: set min_isolation to \
+         process or stronger",
+    )
+}
+
+/// Why `runner` may not take a session holding a provider-account secret: real accounts are
+/// placed only on a Linux runner that proved its egress filter (never macOS, whose Seatbelt
+/// cannot filter egress; a runner that never said its OS is refused too).
+pub fn account_refusal(runner: &RunnerState) -> Option<String> {
+    if runner.os.as_deref() != Some("linux") {
+        return Some(format!(
+            "a session holding a provider-account secret needs a Linux runner, and this one is {}",
+            runner.os.as_deref().unwrap_or("of an unreported OS")
+        ));
+    }
+    (!filters_egress(runner)).then(|| {
+        "a session holding a provider-account secret needs a runner with a proven egress filter"
+            .to_owned()
+    })
+}
+
+/// [`tier_refusal`] plus, for a session holding a provider-account secret, the policy and runner
+/// rules above. The one question both the create and the launch place a session by.
+pub fn placement_refusal(
+    runner: &RunnerState,
+    secrets: &[store::SessionSecret],
+    policy: &serde_json::Value,
+) -> Option<String> {
+    if holds_account(secrets) {
+        let Ok(parsed) = serde_json::from_value::<ainkrad_proto::runner::Policy>(policy.clone())
+        else {
+            return Some("the session's policy does not have its shape".to_owned());
+        };
+        if let Some(why) = account_policy_problem(&parsed) {
+            return Some(why.to_owned());
+        }
+        if let Some(why) = account_refusal(runner) {
+            return Some(why);
+        }
+    }
+    tier_refusal(runner, policy)
 }
 
 /// Sends `command` to the session's runner and waits (at most `wait`) for its answer.
@@ -394,6 +472,11 @@ pub fn validate_new(new: &store::NewSession<'_>, admin: bool) -> Result<(), Inva
              addresses or CIDR blocks (no host names, at most 64 each)",
         ));
     }
+    if holds_account(new.secrets)
+        && let Some(why) = account_policy_problem(&policy)
+    {
+        return Err(Invalid::Bad(why));
+    }
     if has_destructive_allow(&policy) && !admin {
         return Err(Invalid::Forbidden(
             "approval bypasses require the admin scope",
@@ -465,7 +548,7 @@ impl ModuleAgents {
         if sandbox_without_flag {
             return Err(invalid_args("a sandboxed mode needs the sandbox flag"));
         }
-        admit_with(app, new.runner, new.harness, new.policy).await?;
+        admit_holding(app, new.runner, new.harness, new.policy, new.secrets).await?;
         let s = store::create_owned_ref(
             &app.pool,
             new,
@@ -576,6 +659,16 @@ async fn run(app: &App, id: &str) {
         match step {
             Ok(()) => away = None,
             Err(Refusal::Runner(e)) if matches!(e.code, ErrorCode::Offline | ErrorCode::Lost) => {
+                // A revoked runner never comes back: the session is lost now, not after the wait.
+                // Only a runner the database says is gone ends it; an unreadable row falls
+                // through to the retry and its bound.
+                if crate::auth::device_now(&app.pool, &s.runner, None).await
+                    == crate::auth::DeviceNow::Gone
+                {
+                    let outcome = json!({"kind": "lost", "reason": "the runner was revoked"});
+                    let _ = store::end(&app.pool, id, "lost", &outcome, &app.clock.now()).await;
+                    return;
+                }
                 let since = *away.get_or_insert_with(tokio::time::Instant::now);
                 if since.elapsed() >= cfg.lost_after {
                     let outcome = json!({"kind": "lost", "reason": "the runner never came back"});

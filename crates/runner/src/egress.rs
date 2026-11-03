@@ -31,6 +31,10 @@ use crate::mcp_bridge::filter::{self, Refusal};
 
 pub mod policy;
 mod resolve;
+
+/// Set in a session's run environment by the agent driver when it holds a provider-account
+/// secret (an `acct.` name): its proxy then drops the forge hosts from the runner's allowlist.
+pub const ACCOUNT_SESSION: &str = "AINKRAD_ACCOUNT_SESSION";
 mod selftest;
 
 pub use policy::{Deny, Policy, host_addresses};
