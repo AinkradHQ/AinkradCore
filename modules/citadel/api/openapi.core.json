@@ -1450,6 +1450,11 @@
         ],
         "type": "object",
         "x-audit-actions": [
+          "account.cap_set",
+          "account.created",
+          "account.deleted",
+          "account.secret_replaced",
+          "account.state_set",
           "agent.cancelled",
           "agent.created",
           "agent.decided",
@@ -9563,7 +9568,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.29.0"
+    "version": "1.30.0"
   },
   "openapi": "3.1.0",
   "paths": {

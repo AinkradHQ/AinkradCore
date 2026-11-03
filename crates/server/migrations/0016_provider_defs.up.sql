@@ -3,6 +3,7 @@
 -- validated before it is stored (https base URL, an authentication variable from its harness's own list).
 -- `models` is a JSON array of {id, input_per_mtok_micro, output_per_mtok_micro}; `priced_at` says when its list prices were read.
 CREATE TABLE core_provider_defs (
+    user_id       INTEGER NOT NULL DEFAULT 1 REFERENCES users(id),
     id            TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 32
                       AND substr(id, 1, 1) GLOB '[a-z]' AND id NOT GLOB '*[^a-z0-9-]*'),
     name          TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 64),
