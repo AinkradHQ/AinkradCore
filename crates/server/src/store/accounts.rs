@@ -183,6 +183,13 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<Account>, sqlx::Error> {
         .collect()
 }
 
+async fn secret_exists(conn: &mut SqliteConnection, name: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT count(*) > 0 FROM core_secrets WHERE name = ?")
+        .bind(name)
+        .fetch_one(conn)
+        .await
+}
+
 /// Stores an account and its key together. `owner` is the storing device; `actor` is audited.
 pub async fn create(
     pool: &SqlitePool,
@@ -200,6 +207,8 @@ pub async fn create(
     }
     let cap = new.cap.unwrap_or(DEFAULT_CAP);
     check_cap(cap)?;
+    // A pasted key often carries a trailing newline: neither the sealed value nor the tail keeps it.
+    let key = new.value.trim();
     let mut tx = super::begin_write(pool).await?;
     let taken: i64 = sqlx::query_scalar("SELECT count(*) FROM core_accounts WHERE label = ?")
         .bind(new.label)
@@ -216,7 +225,7 @@ pub async fn create(
     )
     .bind(new.provider)
     .bind(new.label)
-    .bind(tail_of(new.value))
+    .bind(tail_of(key))
     .bind(cap)
     .bind(owner)
     .bind(now)
@@ -225,7 +234,7 @@ pub async fn create(
     .await?;
     let name = format!("{}{}.{id}", secrets::ACCOUNT_PREFIX, new.provider);
     let value = NewValue {
-        value: new.value,
+        value: key,
         runners: Some(new.runners),
         delivery: Some("env"),
     };
@@ -262,6 +271,7 @@ pub async fn replace_secret(
     actor: AuditActor,
     now: &str,
 ) -> Result<Account, Error> {
+    let value = value.trim();
     let mut tx = super::begin_write(pool).await?;
     let a = find(&mut tx, id).await?;
     let new = NewValue {
@@ -269,7 +279,16 @@ pub async fn replace_secret(
         runners,
         delivery: Some("env"),
     };
-    secrets::rotate_in(&mut tx, sealer, &a.secret_name, &new, by_device, actor, now).await?;
+    // A restored backup or an import can leave the row without its broker secret: the new key
+    // then creates it, so the account is never stuck.
+    match secret_exists(&mut tx, &a.secret_name).await? {
+        true => secrets::rotate_in(&mut tx, sealer, &a.secret_name, &new, by_device, actor, now)
+            .await
+            .map(drop)?,
+        false => secrets::create_in(&mut tx, sealer, &a.secret_name, &new, by_device, actor, now)
+            .await
+            .map(drop)?,
+    }
     sqlx::query("UPDATE core_accounts SET masked_tail = ?, updated_at = ? WHERE id = ?")
         .bind(tail_of(value))
         .bind(now)
@@ -395,7 +414,10 @@ pub async fn delete(
         .bind(id)
         .execute(&mut *tx)
         .await?;
-    secrets::delete_in(&mut tx, &a.secret_name, by_device, actor).await?;
+    // Whatever is left of the key goes with it; a key already gone (stripped restore) is no reason to keep the account.
+    if secret_exists(&mut tx, &a.secret_name).await? {
+        secrets::delete_in(&mut tx, &a.secret_name, by_device, actor).await?;
+    }
     audit(
         &mut tx,
         actor,
