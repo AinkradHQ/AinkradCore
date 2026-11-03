@@ -36,6 +36,7 @@ mod modules;
 mod pairing;
 mod pairing_abuse;
 mod passkeys;
+mod pools;
 mod preauth;
 mod providers;
 mod push;
