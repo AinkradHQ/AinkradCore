@@ -10,10 +10,10 @@ use crate::ops::secretbox::SecretBox;
 use crate::store::accounts as acc;
 use crate::store::secrets as st;
 
-const V1: &str = "throwaway-account-value-one-5a91c3";
-const V2: &str = "throwaway-account-value-two-77d0be";
+pub(super) const V1: &str = "throwaway-account-value-one-5a91c3";
+pub(super) const V2: &str = "throwaway-account-value-two-77d0be";
 
-async fn setup() -> (Fx, TestDevice, SecretBox) {
+pub(super) async fn setup() -> (Fx, TestDevice, SecretBox) {
     let fx = fx().await;
     let vm = super::secrets::runner(&fx, "vm").await;
     let sealer = SecretBox::new(&[7; 32]);
@@ -40,7 +40,7 @@ fn new<'a>(label: &'a str, value: &'a str, runners: &'a [String]) -> acc::NewAcc
     }
 }
 
-async fn make(
+pub(super) async fn make(
     fx: &Fx,
     s: &SecretBox,
     label: &str,
@@ -59,7 +59,7 @@ async fn make(
     .unwrap()
 }
 
-fn code<T>(r: Result<T, st::Error>) -> &'static str {
+pub(super) fn code<T>(r: Result<T, st::Error>) -> &'static str {
     match r {
         Err(st::Error::Refused { code, .. }) => code,
         Err(e) => panic!("not a refusal: {e}"),

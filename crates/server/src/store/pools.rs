@@ -75,7 +75,7 @@ async fn audit(
 
 async fn members_in(conn: &mut SqliteConnection, pool: i64) -> Result<Vec<i64>, sqlx::Error> {
     sqlx::query_scalar(
-        "SELECT account_id FROM core_pool_members WHERE pool_id = ? ORDER BY position",
+        "SELECT account_id FROM core_pool_members WHERE pool_id = ? ORDER BY position, account_id",
     )
     .bind(pool)
     .fetch_all(&mut *conn)
@@ -251,12 +251,16 @@ pub async fn add_member(
     if p.members.len() as i64 >= MAX_MEMBERS {
         return refused("limit_reached", "the pool is full");
     }
-    sqlx::query("INSERT INTO core_pool_members (pool_id, account_id, position) VALUES (?, ?, ?)")
-        .bind(id)
-        .bind(account)
-        .bind(p.members.len() as i64)
-        .execute(&mut *tx)
-        .await?;
+    // After the last seat, not the member count: an account deleted elsewhere leaves a gap.
+    sqlx::query(
+        "INSERT INTO core_pool_members (pool_id, account_id, position) \
+         SELECT ?, ?, COALESCE(MAX(position) + 1, 0) FROM core_pool_members WHERE pool_id = ?",
+    )
+    .bind(id)
+    .bind(account)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query("UPDATE core_pools SET updated_at = ? WHERE id = ?")
         .bind(now)
         .bind(id)
