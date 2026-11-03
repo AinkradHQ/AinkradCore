@@ -95,6 +95,7 @@ async fn no_column_outside_the_broker_can_hold_a_credential() {
     const REVIEWED: &[(&str, &str, &str)] = &[
         // (table, column, why it is not a credential)
         ("citadel_accounts", "secret_name", "name of a broker secret"),
+        ("core_accounts", "secret_name", "name of a broker secret"),
         (
             "citadel_forge_secret_hosts",
             "secret",
