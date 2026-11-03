@@ -75,7 +75,7 @@ pub(super) async fn open(
         requested_by: agent,
         payload: json!({"summary": "merge #12", "budget": budget.id.0, "period": "total",
                            "core_budget": true})
-            .to_string(),
+        .to_string(),
     };
     open_approval(pool, &new, NOW).await.unwrap()
 }

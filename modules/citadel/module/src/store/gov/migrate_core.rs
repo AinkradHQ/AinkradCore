@@ -247,7 +247,9 @@ pub async fn migrate_to_core(pool: &SqlitePool, dry_run: bool) -> Result<Migrate
             .await?;
     }
     guard::recompute_in(&mut tx, None).await?;
-    sqlx::query("DROP TABLE _model_map").execute(&mut *tx).await?;
+    sqlx::query("DROP TABLE _model_map")
+        .execute(&mut *tx)
+        .await?;
 
     // A pending overrun approval names its budget by id; the id is the Core's now.
     let pending: Vec<(i64, i64, i64)> = sqlx::query_as(

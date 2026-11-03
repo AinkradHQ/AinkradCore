@@ -25,10 +25,20 @@ use crate::store::org::text;
 pub fn core_model(name: &str) -> String {
     let clean: String = name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || "._:/-".contains(c) { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "._:/-".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
         .take(80)
         .collect();
-    if clean.is_empty() { "unknown".to_owned() } else { clean }
+    if clean.is_empty() {
+        "unknown".to_owned()
+    } else {
+        clean
+    }
 }
 
 /// One version of a harness and model's price, in millionths of a dollar per million tokens.

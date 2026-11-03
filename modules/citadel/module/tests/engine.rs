@@ -725,7 +725,11 @@ async fn a_free_text_model_is_cleaned_for_the_ledger_and_one_runs_failure_does_n
         .execute(&w.app().pool)
         .await
         .unwrap();
-    assert_eq!(w.reconcile().await.cost_events, 1, "tried again, and recorded");
+    assert_eq!(
+        w.reconcile().await.cost_events,
+        1,
+        "tried again, and recorded"
+    );
 }
 
 #[tokio::test]

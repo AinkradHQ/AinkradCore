@@ -5,9 +5,9 @@
 use super::approvals::issue;
 use super::*;
 use crate::domain::gov::{ApprovalId, BudgetId};
-use serde_json::json;
 use crate::domain::work::IssueId;
 use ainkrad_core_server::store::costs;
+use serde_json::json;
 
 const NOW: &str = "2026-10-22T10:00:00.000Z";
 
@@ -274,12 +274,13 @@ async fn the_old_ledger_and_budgets_move_into_the_core_verified_and_run_only_onc
     approve_budget_raise(pool, ApprovalId(pending_id), 500, ADMIN, None, NOW)
         .await
         .unwrap();
-    let raised: i64 =
-        sqlx::query_scalar("SELECT coalesce(sum(raised), 0) FROM core_budget_spend WHERE budget_id = ?")
-            .bind(agent_budget.budget.id.0)
-            .fetch_one(pool)
-            .await
-            .unwrap();
+    let raised: i64 = sqlx::query_scalar(
+        "SELECT coalesce(sum(raised), 0) FROM core_budget_spend WHERE budget_id = ?",
+    )
+    .bind(agent_budget.budget.id.0)
+    .fetch_one(pool)
+    .await
+    .unwrap();
     assert_eq!(raised, 500);
     sqlx::query("UPDATE core_budget_spend SET raised = raised + 7 WHERE budget_id = ?")
         .bind(agent_budget.budget.id.0)
@@ -290,9 +291,7 @@ async fn the_old_ledger_and_budgets_move_into_the_core_verified_and_run_only_onc
         .await
         .unwrap();
     for dry in [false, true] {
-        let err = migrate_core::migrate_to_core(pool, dry)
-            .await
-            .unwrap_err();
+        let err = migrate_core::migrate_to_core(pool, dry).await.unwrap_err();
         assert!(err.to_string().contains("it runs once"), "{err}");
     }
     assert!(migrate_core::command(pool, &["--dry-run"]).await.is_err());
@@ -494,7 +493,8 @@ async fn a_raise_needs_a_core_budget_id_of_the_approvals_own_company() {
 }
 
 #[tokio::test]
-async fn a_core_budget_tagged_to_the_company_neither_breaks_its_list_nor_stands_in_for_an_approval() {
+async fn a_core_budget_tagged_to_the_company_neither_breaks_its_list_nor_stands_in_for_an_approval()
+{
     let db = db().await;
     let pool = &db.pool;
     let (c, po, p) = fixture(pool, "A").await;
@@ -524,7 +524,10 @@ async fn a_core_budget_tagged_to_the_company_neither_breaks_its_list_nor_stands_
     .await
     .unwrap();
     let listed = company_budgets(pool, c, NOW).await.unwrap();
-    assert_eq!(listed.iter().map(|s| s.budget.id).collect::<Vec<_>>(), [b.id]);
+    assert_eq!(
+        listed.iter().map(|s| s.budget.id).collect::<Vec<_>>(),
+        [b.id]
+    );
     // An approval that names the exhausted budget's number but is no adapter's (an old Citadel id)
     // does not count as the question asked: admission opens its own.
     spend(pool, po, i, 100).await;

@@ -248,7 +248,11 @@ async fn write_budget(
     let details = json!({"scope": kind, "scope_id": id, "period": b.period.as_str(),
                          "token_cap": b.token_cap, "usd_cap_micros": b.usd_cap_micros,
                          "warn_at_percent": b.warn_at_percent, "hard_stop": b.hard_stop});
-    let action = if replace { "budget.set" } else { "budget.created" };
+    let action = if replace {
+        "budget.set"
+    } else {
+        "budget.created"
+    };
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
     let event = Event::new(actor, action)
         .entity("budget", set.id)
@@ -277,8 +281,10 @@ pub async fn remove_budget(
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
     let mut event = Event::new(actor, "budget.deleted")
         .entity("budget", id.0)
-        .details(json!({"scope": kind, "scope_id": scope_id, "period": gone.period.as_str(),
-                        "token_cap": gone.token_cap}));
+        .details(
+            json!({"scope": kind, "scope_id": scope_id, "period": gone.period.as_str(),
+                        "token_cap": gone.token_cap}),
+        );
     if let Some(c) = company {
         event = event.company(c);
     }
@@ -546,9 +552,7 @@ pub(crate) async fn raise_in(
     // The adapter writes `true`; the copy marks a re-pointed approval with SQL's `1`.
     let marked = payload["core_budget"].as_bool() == Some(true)
         || payload["core_budget"].as_i64() == Some(1);
-    if !marked
-        || company.flatten().as_deref() != Some(a.company_id.0.to_string().as_str())
-    {
+    if !marked || company.flatten().as_deref() != Some(a.company_id.0.to_string().as_str()) {
         return Err(Error::InvalidArgument(format!(
             "approval {} does not name one of its company's budgets",
             a.id.0
