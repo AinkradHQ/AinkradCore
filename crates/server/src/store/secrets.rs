@@ -17,8 +17,10 @@
 //! - **Narrow gate** (`secrets.provider_accounts`, default 0): with the broker on and `secrets.mode`
 //!   below 2 it lets only a provider-account secret (`acct.<provider>.<label>`, see [`kind_of`])
 //!   skip the real-shape refusal. The value must then be, as a whole, one key of that
-//!   provider's own shape (and nothing glued to it) or nothing the redactor recognises (an
-//!   OAuth token has no shape). Account secrets are never delivered by `askpass`, in any mode.
+//!   provider's own shape (no other recognised shape glued to it) or nothing the redactor
+//!   recognises (an OAuth token has no shape; mode 1 already takes such a value, so the gate
+//!   adds only the real key of the provider's own shape). Any `acct.` name is refused `askpass`
+//!   at store and at redemption, in every mode.
 //!   Every other secret keeps the mode 1/2 rule. Under mode 1 an `acct.` name that is not
 //!   `acct.<known provider>.<label>` is refused. The kill switch is `secrets.mode` 0 (leases
 //!   and redemptions check only the mode).
@@ -26,7 +28,11 @@
 //!   **This is a check by redactor SHAPE only**, the same as mode 1 itself. Still accepted, for
 //!   every name in mode 1 and under the gate: base64, hex or percent-encoded keys, a key with a
 //!   letter or digit glued before it (`xghp_...`), keys split by whitespace or zero-width
-//!   characters, `\u`-escaped JSON, and any credential format with no shape (a Linear key).
+//!   characters, `\u`-escaped JSON, and any credential format with no shape (a Linear key), also
+//!   glued after the key. Also admitted: the shape of `openai` is the bare `sk-` catch-all, so
+//!   any vendor's `sk-` key (an OpenRouter `sk-or-v1-...`) passes under `acct.openai.*`, and
+//!   an Anthropic organisation key (`sk-ant-admin01-...`) under `acct.anthropic.*`: the check says
+//!   "a key shaped like this provider's", not "a key of this provider's API".
 //! - **Bounded**: the value's size, the number of secrets and of live leases, and a lease's
 //!   lifetime are settings (`secrets.*`).
 
@@ -244,7 +250,9 @@ async fn check_value(
         Err(e) if mode < 2 => return Err(e),
         Err(_) => Kind::Other,
     };
-    if matches!(kind, Kind::ProviderAccount { .. }) && delivery == "askpass" {
+    // By the prefix, not the parsed kind: a malformed `acct.` name in mode 2 is `Other` but is
+    // still an account name (KAN-453).
+    if name.starts_with(ACCOUNT_PREFIX) && delivery == "askpass" {
         return refused(
             "bad_request",
             "a provider-account secret is not delivered by askpass",
@@ -278,8 +286,9 @@ async fn check_value(
         }
         _ => refused(
             "real_secret_refused",
-            "the value looks like a real credential; real secrets wait for gate G-SEC \
-             (secrets.mode 2), or secrets.provider_accounts for a provider's own key",
+            "the value contains a recognised credential shape and is not, as a whole, one key \
+             of this provider's own shape. A provider's own key needs secrets.provider_accounts; \
+             every other real secret waits for gate G-SEC (secrets.mode 2)",
         ),
     }
 }
@@ -672,6 +681,14 @@ pub async fn redeem(
         return refused("not_found", "no such lease");
     }
     let (secret, name): (i64, String) = (row.try_get("id")?, row.try_get("name")?);
+    // A secret stored before the rule, or by any path that skipped it, is still never handed
+    // to askpass if it is an account (KAN-453).
+    if name.starts_with(ACCOUNT_PREFIX) && row.try_get::<String, _>("delivery")? == "askpass" {
+        return refused(
+            "bad_request",
+            "a provider-account secret is not delivered by askpass",
+        );
+    }
     let version: i64 = row.try_get("version")?;
     let key_id: String = row.try_get("key_id")?;
     if !sealer.holds(&key_id) {

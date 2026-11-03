@@ -79,9 +79,9 @@ registry! {
          backup bucket is configured; read at start.";
     SecretsProviderAccounts "secrets.provider_accounts" Count 0, 0, 1, SO,
         "The narrow gate for AI provider accounts: 1 lets a secret named acct.<provider>.<label> \
-         (a known provider) be one real key of that provider's own shape, or a value with no \
-         known shape (an OAuth token), while secrets.mode is 1; git, forge and Linear secrets \
-         stay throwaway-only until gate G-SEC closes. 0 (the default) refuses it like any other. \
+         (a known provider) be one real key of that provider's own shape while secrets.mode is \
+         1 (a value with no known shape, such as an OAuth token, mode 1 already takes); git, \
+         forge and Linear secrets stay throwaway-only until gate G-SEC closes. 0 (the default) refuses it like any other. \
          The check is by redactor shape only, as mode 1 itself: base64, hex or percent-encoded \
          keys, a key with a letter or digit glued before it, keys split by whitespace, \
          \\u-escaped JSON and formats with no shape stay accepted, for every name. It never turns \
