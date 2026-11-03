@@ -9,6 +9,8 @@ use crate::store::secrets::Error;
 use crate::store::{accounts as acc, pools, prices, providers as prov, usage};
 
 const BY: ainkrad_core::audit::AuditActor = super::super::BY;
+
+type Mutate = Box<dyn Fn(&mut NewCost<'_>)>;
 const PRICED: &str = "2026-11-01T00:00:00Z";
 
 fn cost<'a>(session: &'a str, epoch: i64, key: &'a str, account: Option<i64>) -> NewCost<'a> {
@@ -357,7 +359,7 @@ async fn an_event_counts_against_its_account_every_pool_it_was_in_and_what_the_c
 #[tokio::test]
 async fn bad_input_is_refused_before_it_is_written() {
     let fx = fx().await;
-    let bad: Vec<Box<dyn Fn(&mut NewCost<'_>)>> = vec![
+    let bad: Vec<Mutate> = vec![
         Box::new(|c| c.input_tokens = -1),
         Box::new(|c| c.epoch = -1),
         Box::new(|c| c.reported_usd_micros = Some(-1)),
