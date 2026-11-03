@@ -34,7 +34,7 @@ async fn a_phone_reads_prices_only_and_the_ledger_and_usage_need_admin_and_name_
         session: "s1",
         epoch: 0,
         account_id: Some(a.id),
-        legacy_account_id: Some(77),
+        legacy_account_id: None,
         provider: "anthropic",
         harness: "claude",
         model: "claude-x",
