@@ -99,7 +99,10 @@ pub async fn recompute_in(
          coalesce(sum(e.cost_usd_micros), 0) FROM core_budgets b \
          JOIN core_cost_subjects s ON s.kind = b.subject_kind AND s.subject_id = b.subject_id \
          JOIN core_cost_events e ON e.id = s.event_id \
-         WHERE ?1 IS NULL OR b.id = ?1 GROUP BY b.id, key \
+         WHERE (?1 IS NULL OR b.id = ?1) \
+         AND (b.subject_kind <> 'pool' OR e.occurred_at >= \
+              (SELECT created_at FROM core_pools WHERE CAST(id AS TEXT) = b.subject_id)) \
+         GROUP BY b.id, key \
          ON CONFLICT (budget_id, period_key) DO UPDATE SET tokens = excluded.tokens, \
          usd_micros = excluded.usd_micros"
     ))

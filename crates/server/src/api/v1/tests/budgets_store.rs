@@ -4,6 +4,7 @@
 
 use super::accounts_store::{V1, make, setup};
 use super::*;
+use crate::store::accounts as acc;
 use crate::store::budgets::guard::{self, Reservation};
 use crate::store::budgets::{self, NewBudget};
 use crate::store::costs::{self, NewCost};
@@ -607,4 +608,70 @@ async fn removing_a_budget_takes_its_counters_and_holds_and_a_list_filters_by_co
     // The ledger is untouched.
     let mut c = fx.app.pool.acquire().await.unwrap();
     assert_eq!(costs::totals(&mut c).await.unwrap().events, 1);
+}
+
+#[tokio::test]
+async fn a_deleted_pool_takes_its_budgets_and_a_pool_that_reuses_its_id_inherits_no_spend() {
+    let (fx, vm, s) = setup().await;
+    let acct = make(&fx, &s, "main", V1, std::slice::from_ref(&vm.id)).await;
+    let p1 = pools::create(&fx.app.pool, "p-one", "anthropic", &fx.dev.id, BY, NOW)
+        .await
+        .unwrap();
+    pools::add_member(&fx.app.pool, p1.id, acct.id, &fx.dev.id, BY, NOW)
+        .await
+        .unwrap();
+    let b = set(&fx, &bud("pool", &p1.id.to_string(), "total", 1000)).await;
+    let by_account = NewCost {
+        session: "s1",
+        epoch: 0,
+        account_id: Some(acct.id),
+        legacy_account_id: None,
+        provider: "anthropic",
+        harness: "claude",
+        model: "m",
+        input_tokens: 400,
+        output_tokens: 0,
+        cache_tokens: 0,
+        reported_usd_micros: None,
+        approximate: false,
+        subjects: &[],
+        idempotency_key: "k1",
+        occurred_at: NOW,
+    };
+    costs::record(&fx.app.pool, &by_account, NOW).await.unwrap();
+    assert_eq!(standing(&fx, b.id).await.spent, 400);
+    pools::delete(&fx.app.pool, p1.id, &fx.dev.id, BY)
+        .await
+        .unwrap();
+    assert!(budgets::get(&fx.app.pool, b.id).await.unwrap().is_none());
+    // Pool ids are reused: the next pool is the same number, and the ledger still names the old pool,
+    // yet a budget set on it counts only what came after the new pool existed.
+    let later = "2026-10-22T12:00:00.000Z";
+    let p2 = pools::create(&fx.app.pool, "p-two", "anthropic", &fx.dev.id, BY, later)
+        .await
+        .unwrap();
+    assert_eq!(p2.id, p1.id, "the premise: the id was reused");
+    let b2 = budgets::set(
+        &fx.app.pool,
+        &bud("pool", &p2.id.to_string(), "total", 1000),
+        &fx.dev.id,
+        BY,
+        later,
+    )
+    .await
+    .unwrap();
+    let fresh = budgets::standing_of(&fx.app.pool, b2.id, later)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fresh.spent, 0);
+    // An account's budgets go with it too.
+    set(&fx, &bud("account", &acct.id.to_string(), "day", 10)).await;
+    acc::delete(&fx.app.pool, acct.id, &fx.dev.id, BY)
+        .await
+        .unwrap();
+    let left = budgets::list(&fx.app.pool, Some("account"), None, None, NOW)
+        .await
+        .unwrap();
+    assert!(left.is_empty());
 }
