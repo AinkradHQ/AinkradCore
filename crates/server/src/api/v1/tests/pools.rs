@@ -285,3 +285,73 @@ async fn names_are_validated_unique_and_bounded_and_every_change_is_audited() {
         "limit_reached"
     );
 }
+
+/// Review: deleting an account takes its seats with it and leaves a gap; the next member must
+/// still get a free, last position (a count would tie), the order must hold, and the deletion's
+/// audit row must name the pools that lost the account.
+#[tokio::test]
+async fn deleting_an_account_leaves_no_tied_seats_and_audits_the_pools() {
+    let fx = setup().await;
+    let p = &fx.app.pool;
+    let (a, b, c, d) = (
+        account(&fx, "anthropic", "a").await,
+        account(&fx, "anthropic", "b").await,
+        account(&fx, "anthropic", "c").await,
+        account(&fx, "anthropic", "d").await,
+    );
+    let pool = pl::create(p, "claude-main", "anthropic", "d_x", BY, NOW)
+        .await
+        .unwrap();
+    let other = pl::create(p, "claude-spare", "anthropic", "d_x", BY, NOW)
+        .await
+        .unwrap();
+    for id in [a, b, c] {
+        pl::add_member(p, pool.id, id, "d_x", BY, NOW)
+            .await
+            .unwrap();
+    }
+    pl::add_member(p, other.id, a, "d_x", BY, NOW)
+        .await
+        .unwrap();
+    acc::delete(p, a, "d_x", BY).await.unwrap();
+    // `a` held seat 0: the remaining seats are 1 and 2, so a count of members (2) would have
+    // handed the next account seat 2 and tied it with `c`.
+    pl::add_member(p, pool.id, d, "d_x", BY, NOW).await.unwrap();
+    assert_eq!(pl::get(p, pool.id).await.unwrap().members, [b, c, d]);
+    let seats: Vec<i64> = sqlx::query_scalar(
+        "SELECT position FROM core_pool_members WHERE pool_id = ? ORDER BY position",
+    )
+    .bind(pool.id)
+    .fetch_all(p)
+    .await
+    .unwrap();
+    assert_eq!(seats.len(), 3);
+    assert!(seats.windows(2).all(|w| w[0] < w[1]), "{seats:?}");
+    // The database refuses a tie outright.
+    let tie = sqlx::query(
+        "UPDATE core_pool_members SET position = ? WHERE pool_id = ? AND account_id = ?",
+    )
+    .bind(seats[0])
+    .bind(pool.id)
+    .bind(d)
+    .execute(p)
+    .await;
+    assert!(tie.is_err(), "positions tied");
+    // Removing a member still closes the gap without tripping the unique seats.
+    pl::remove_member(p, pool.id, b, "d_x", BY, NOW)
+        .await
+        .unwrap();
+    assert_eq!(pl::get(p, pool.id).await.unwrap().members, [c, d]);
+    // The audit row of the deletion names both pools that held `a`.
+    let details: String =
+        sqlx::query_scalar("SELECT details FROM audit_events WHERE action = 'account.deleted'")
+            .fetch_one(p)
+            .await
+            .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&details).unwrap();
+    assert_eq!(
+        v["pools"],
+        serde_json::json!([pool.id, other.id]),
+        "{details}"
+    );
+}

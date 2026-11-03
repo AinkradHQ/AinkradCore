@@ -20,7 +20,10 @@ CREATE TABLE core_pool_members (
     pool_id    INTEGER NOT NULL REFERENCES core_pools(id) ON DELETE CASCADE,
     account_id INTEGER NOT NULL REFERENCES core_accounts(id) ON DELETE CASCADE,
     position   INTEGER NOT NULL CHECK (position >= 0),
-    PRIMARY KEY (pool_id, account_id)
+    PRIMARY KEY (pool_id, account_id),
+    -- Deleting an account cascades its seats away without renumbering, so positions may have gaps;
+    -- they never tie.
+    UNIQUE (pool_id, position)
 );
 
 CREATE INDEX core_pool_members_account ON core_pool_members (account_id);
