@@ -10,6 +10,8 @@
 //! - Agent sessions (E2-08): `agent`; deciding a tool call `approve`.
 //! - Secrets (E2-07): managing them and granting a lease is `admin` (and destructive); the one
 //!   route a `runner` device may call is redeeming a lease granted to it.
+//! - Accounts, pools, bindings and provider definitions (KAN-432): reading is `read`; every write is
+//!   `admin` and destructive.
 //! - `terminal`: opening, attaching, signalling and closing a terminal (listing is `read`).
 //! - A module's routes need the module's own `Module::scope` (`admin` unless it says otherwise),
 //!   or the scope its `Module::route_scopes` declares for that route (`module_scope`).
@@ -64,6 +66,26 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/runners", "read"),
     ("GET", "/api/v1/runners/{id}", "read"),
     ("POST", "/api/v1/runners/{id}/noop", "agent"),
+    ("GET", "/api/v1/accounts", "read"),
+    ("GET", "/api/v1/accounts/{id}", "read"),
+    ("GET", "/api/v1/accounts/providers", "read"),
+    ("POST", "/api/v1/accounts", "admin"),
+    ("PUT", "/api/v1/accounts/{id}/secret", "admin"),
+    ("PUT", "/api/v1/accounts/{id}/state", "admin"),
+    ("PUT", "/api/v1/accounts/{id}/cap", "admin"),
+    ("DELETE", "/api/v1/accounts/{id}", "admin"),
+    ("POST", "/api/v1/accounts/providers", "admin"),
+    ("PUT", "/api/v1/accounts/providers/{id}", "admin"),
+    ("DELETE", "/api/v1/accounts/providers/{id}", "admin"),
+    ("GET", "/api/v1/pools", "read"),
+    ("POST", "/api/v1/pools", "admin"),
+    ("DELETE", "/api/v1/pools/{id}", "admin"),
+    ("PUT", "/api/v1/pools/{id}/members/{account}", "admin"),
+    ("DELETE", "/api/v1/pools/{id}/members/{account}", "admin"),
+    ("PUT", "/api/v1/pools/{id}/default", "admin"),
+    ("GET", "/api/v1/bindings", "read"),
+    ("PUT", "/api/v1/bindings", "admin"),
+    ("DELETE", "/api/v1/bindings/{agent}/{provider}", "admin"),
     ("GET", "/api/v1/secrets", "admin"),
     ("POST", "/api/v1/secrets", "admin"),
     ("PUT", "/api/v1/secrets/{id}", "admin"),
@@ -116,6 +138,22 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("PUT", "/api/v1/secrets/{id}"),
     ("DELETE", "/api/v1/secrets/{id}"),
     ("POST", "/api/v1/secrets/{id}/leases"),
+    // AI provider accounts (KAN-432): every write changes who may spend which key.
+    ("POST", "/api/v1/accounts"),
+    ("PUT", "/api/v1/accounts/{id}/secret"),
+    ("PUT", "/api/v1/accounts/{id}/state"),
+    ("PUT", "/api/v1/accounts/{id}/cap"),
+    ("DELETE", "/api/v1/accounts/{id}"),
+    ("POST", "/api/v1/accounts/providers"),
+    ("PUT", "/api/v1/accounts/providers/{id}"),
+    ("DELETE", "/api/v1/accounts/providers/{id}"),
+    ("POST", "/api/v1/pools"),
+    ("DELETE", "/api/v1/pools/{id}"),
+    ("PUT", "/api/v1/pools/{id}/members/{account}"),
+    ("DELETE", "/api/v1/pools/{id}/members/{account}"),
+    ("PUT", "/api/v1/pools/{id}/default"),
+    ("PUT", "/api/v1/bindings"),
+    ("DELETE", "/api/v1/bindings/{agent}/{provider}"),
     // Opening or attaching a terminal is a shell on the runner (spec §8, E2-01).
     ("POST", "/api/v1/terminals"),
     ("GET", "/api/v1/terminals/{id}/ws"),

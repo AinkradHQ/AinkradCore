@@ -150,6 +150,26 @@
         ],
         "type": "object"
       },
+      "AccountDetail": {
+        "description": "What an `admin` write answers: the account and the runners its key may be leased to.",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/ProviderAccount"
+          },
+          "runners": {
+            "description": "Runner device ids, explicit (never a wildcard).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "account",
+          "runners"
+        ],
+        "type": "object"
+      },
       "AccountLimitBody": {
         "additionalProperties": false,
         "properties": {
@@ -337,6 +357,17 @@
           "recent_drops",
           "limits",
           "by_company"
+        ],
+        "type": "object"
+      },
+      "AccountsDeleted": {
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
         ],
         "type": "object"
       },
@@ -1804,6 +1835,26 @@
             "type": "string"
           }
         ]
+      },
+      "Binding": {
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "pool_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "provider": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent",
+          "provider",
+          "pool_id"
+        ],
+        "type": "object"
       },
       "BudgetBody": {
         "properties": {
@@ -4416,6 +4467,28 @@
         ],
         "type": "object"
       },
+      "ModelPrice": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "input_per_mtok_micro": {
+            "description": "List price per million input tokens, in millionths of a dollar.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "output_per_mtok_micro": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "input_per_mtok_micro",
+          "output_per_mtok_micro"
+        ],
+        "type": "object"
+      },
       "ModelTier": {
         "description": "The (harness, model) an agent's tasks of `tier` start on. Its own harness and model are\nits standard tier, so only `small` and `large` are set here.",
         "properties": {
@@ -4568,6 +4641,23 @@
         "required": [
           "runner",
           "harness"
+        ],
+        "type": "object"
+      },
+      "NewBinding": {
+        "properties": {
+          "agent": {
+            "description": "An agent id: 1 to 64 of `[A-Za-z0-9._:-]`.",
+            "type": "string"
+          },
+          "pool_id": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agent",
+          "pool_id"
         ],
         "type": "object"
       },
@@ -4792,6 +4882,22 @@
         ],
         "type": "object"
       },
+      "NewPool": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "provider": {
+            "description": "`anthropic`, `openai` or `google`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "provider"
+        ],
+        "type": "object"
+      },
       "NewPrice": {
         "properties": {
           "apply_from": {
@@ -4918,6 +5024,45 @@
         "required": [
           "name",
           "key"
+        ],
+        "type": "object"
+      },
+      "NewProviderAccount": {
+        "description": "A new account. Deliberately no `Debug`.",
+        "properties": {
+          "cap": {
+            "description": "Default 4; 0 is no cap.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "runners": {
+            "description": "Runner device ids it may be leased to; default none.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "value": {
+            "description": "The API key; written, never read back.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "label",
+          "value"
         ],
         "type": "object"
       },
@@ -5744,6 +5889,48 @@
           }
         ]
       },
+      "Pool": {
+        "properties": {
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "is_default": {
+            "description": "The provider's default pool serves an agent bound to none.",
+            "type": "boolean"
+          },
+          "members": {
+            "description": "ProviderAccount ids, in fallback order.",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "provider",
+          "is_default",
+          "members",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "Posted": {
         "properties": {
           "comment": {
@@ -6546,6 +6733,142 @@
         ],
         "type": "object"
       },
+      "Provider": {
+        "description": "A provider definition: a built-in, or user data validated before it is stored.",
+        "properties": {
+          "auth_var": {
+            "description": "The harness's own authentication variable.",
+            "type": "string"
+          },
+          "base_url": {
+            "description": "`https://`, a public DNS name.",
+            "type": "string"
+          },
+          "builtin": {
+            "description": "Read-only: built-ins cannot be edited.",
+            "type": "boolean"
+          },
+          "delivery": {
+            "description": "`env` and/or `gateway`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "harness": {
+            "description": "`claude`, `codex` or `agy`.",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "login_methods": {
+            "description": "`paste`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelPrice"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "priced_at": {
+            "description": "When the models' list prices were read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "usage_parser": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "harness",
+          "auth_var",
+          "base_url",
+          "usage_parser",
+          "delivery",
+          "login_methods",
+          "models"
+        ],
+        "type": "object"
+      },
+      "ProviderAccount": {
+        "description": "An account as a `read` device sees it: its key's last four characters, never the key, the\nbroker secret's name or the runners it may be leased to.",
+        "properties": {
+          "base_url": {
+            "description": "The provider's base URL when the account was stored.",
+            "type": "string"
+          },
+          "cap": {
+            "description": "Sessions that may hold the account at once; 0 is no cap.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "label": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "masked_tail": {
+            "description": "The key's last four characters; empty for a key too short to show any.",
+            "type": "string"
+          },
+          "provider": {
+            "description": "`anthropic`, `openai` or `google`.",
+            "type": "string"
+          },
+          "state": {
+            "description": "`active`, `cooling`, `limited`, `unhealthy` or `disabled`.",
+            "type": "string"
+          },
+          "state_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state_until": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "label",
+          "masked_tail",
+          "base_url",
+          "state",
+          "cap",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "PushKinds": {
         "description": "The notification kinds the calling device is pushed (E2-12.3).",
         "properties": {
@@ -6713,6 +7036,27 @@
         },
         "required": [
           "name"
+        ],
+        "type": "object"
+      },
+      "ReplaceKey": {
+        "description": "A replacement key, and optionally a new runner scope. No `Debug`.",
+        "properties": {
+          "runners": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
         ],
         "type": "object"
       },
@@ -7887,6 +8231,18 @@
         ],
         "type": "object"
       },
+      "SetCap": {
+        "properties": {
+          "cap": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cap"
+        ],
+        "type": "object"
+      },
       "SetScopes": {
         "additionalProperties": false,
         "description": "A device's new scopes.",
@@ -7914,6 +8270,30 @@
         },
         "required": [
           "value"
+        ],
+        "type": "object"
+      },
+      "SetState": {
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`active`, `cooling`, `limited`, `unhealthy` or `disabled`.",
+            "type": "string"
+          },
+          "until": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "state"
         ],
         "type": "object"
       },
@@ -9578,10 +9958,615 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.32.0"
+    "version": "1.33.0"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/accounts": {
+      "get": {
+        "operationId": "listAccounts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProviderAccount"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Every account: its key's last four characters, never the key, its secret's name or its runner scope"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "post": {
+        "operationId": "createAccount",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewProviderAccount"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDetail"
+                }
+              }
+            },
+            "description": "Stored with its key in the secrets broker (audited as `account.created`, and the broker's own `secret.created`). 409 `secrets_disabled` (`secrets.mode` 0), `real_secret_refused` (a real key shape while `secrets.provider_accounts` is off), `conflict` or `limit_reached`; 400 for a bad provider, label, cap or runner; 503 `secrets_unavailable`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/accounts/providers": {
+      "get": {
+        "operationId": "listProviders",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Provider"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The built-in providers, then the user definitions"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "post": {
+        "operationId": "createProvider",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Provider"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Provider"
+                }
+              }
+            },
+            "description": "Stored (audited as `provider.created`). 400 for a definition that fails validation (https DNS base URL, the harness's own variable); 409 `conflict` or `limit_reached`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/accounts/providers/{id}": {
+      "delete": {
+        "operationId": "deleteProvider",
+        "parameters": [
+          {
+            "description": "The provider's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountsDeleted"
+                }
+              }
+            },
+            "description": "Deleted (audited as `provider.deleted`); a built-in or one an account uses is refused"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      },
+      "put": {
+        "operationId": "replaceProvider",
+        "parameters": [
+          {
+            "description": "The provider's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Provider"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Provider"
+                }
+              }
+            },
+            "description": "A new version (audited as `provider.updated`). Accounts already stored keep the base URL they were bound to"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/accounts/{id}": {
+      "delete": {
+        "operationId": "deleteAccount",
+        "parameters": [
+          {
+            "description": "The account's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountsDeleted"
+                }
+              }
+            },
+            "description": "Deleted with its key, its leases and its pool seats (audited as `account.deleted`)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      },
+      "get": {
+        "operationId": "getAccount",
+        "parameters": [
+          {
+            "description": "The account's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderAccount"
+                }
+              }
+            },
+            "description": "One account"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/accounts/{id}/cap": {
+      "put": {
+        "operationId": "setAccountCap",
+        "parameters": [
+          {
+            "description": "The account's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCap"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderAccount"
+                }
+              }
+            },
+            "description": "The concurrency cap, 0 (no cap) to 64 (audited as `account.cap_set`)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/accounts/{id}/secret": {
+      "put": {
+        "operationId": "replaceAccountSecret",
+        "parameters": [
+          {
+            "description": "The account's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDetail"
+                }
+              }
+            },
+            "description": "A new key version, its last four characters cut again, every outstanding lease on the old one dropped (audited as `account.secret_replaced`); the refusals of `createAccount`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/accounts/{id}/state": {
+      "put": {
+        "operationId": "setAccountState",
+        "parameters": [
+          {
+            "description": "The account's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetState"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderAccount"
+                }
+              }
+            },
+            "description": "Enables (`active`) or disables the account, or marks it cooling, limited or unhealthy (audited as `account.state_set`)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/api/v1/agent-sessions": {
       "get": {
         "operationId": "listAgentSessions",
@@ -10472,6 +11457,165 @@
         "x-ainkrad-scope": "read"
       }
     },
+    "/api/v1/bindings": {
+      "get": {
+        "operationId": "listBindings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Binding"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Every agent's binding to a pool"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "put": {
+        "operationId": "bindAgent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewBinding"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Binding"
+                }
+              }
+            },
+            "description": "The agent draws its pool's provider from this pool, replacing an earlier binding for that provider (audited as `pool.bound`)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/bindings/{agent}/{provider}": {
+      "delete": {
+        "operationId": "unbindAgent",
+        "parameters": [
+          {
+            "description": "The agent's id",
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`anthropic`, `openai` or `google`",
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountsDeleted"
+                }
+              }
+            },
+            "description": "The agent falls back to the provider's default pool (audited as `pool.unbound`)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/api/v1/devices": {
       "get": {
         "operationId": "listDevices",
@@ -11230,6 +12374,334 @@
         },
         "tags": [
           "pairing"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/pools": {
+      "get": {
+        "operationId": "listPools",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Pool"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Every pool, its members in fallback order"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "post": {
+        "operationId": "createPool",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewPool"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pool"
+                }
+              }
+            },
+            "description": "Created, empty (audited as `pool.created`)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/pools/{id}": {
+      "delete": {
+        "operationId": "deletePool",
+        "parameters": [
+          {
+            "description": "The pool's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountsDeleted"
+                }
+              }
+            },
+            "description": "Deleted with its bindings (audited as `pool.deleted`); the default pool is refused (409)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/pools/{id}/default": {
+      "put": {
+        "operationId": "setDefaultPool",
+        "parameters": [
+          {
+            "description": "The pool's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pool"
+                }
+              }
+            },
+            "description": "Its provider's default pool from now on (audited as `pool.default_set`)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/pools/{id}/members/{account}": {
+      "delete": {
+        "operationId": "removePoolMember",
+        "parameters": [
+          {
+            "description": "The pool's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The account's id",
+            "in": "path",
+            "name": "account",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pool"
+                }
+              }
+            },
+            "description": "Removed (audited as `pool.member_removed`)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      },
+      "put": {
+        "operationId": "addPoolMember",
+        "parameters": [
+          {
+            "description": "The pool's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The account's id",
+            "in": "path",
+            "name": "account",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pool"
+                }
+              }
+            },
+            "description": "Appended to the pool's fallback order (audited as `pool.member_added`); an account of another provider is refused (400)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
         ],
         "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"

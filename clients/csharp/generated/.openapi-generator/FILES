@@ -6,6 +6,7 @@ api/openapi.yaml
 appveyor.yml
 git_push.sh
 src/Ainkrad.Client/Ainkrad.Client.csproj
+src/Ainkrad.Client/Api/AccountsApi.cs
 src/Ainkrad.Client/Api/AgentsApi.cs
 src/Ainkrad.Client/Api/DevicesApi.cs
 src/Ainkrad.Client/Api/EventsApi.cs
@@ -34,6 +35,8 @@ src/Ainkrad.Client/Client/RequestOptions.cs
 src/Ainkrad.Client/Client/RetryConfiguration.cs
 src/Ainkrad.Client/Client/WebRequestPathBuilder.cs
 src/Ainkrad.Client/Model/AbstractOpenAPISchema.cs
+src/Ainkrad.Client/Model/AccountDetail.cs
+src/Ainkrad.Client/Model/AccountsDeleted.cs
 src/Ainkrad.Client/Model/AgentDecision.cs
 src/Ainkrad.Client/Model/AgentMessage.cs
 src/Ainkrad.Client/Model/AgentSecret.cs
@@ -47,6 +50,7 @@ src/Ainkrad.Client/Model/ApiVersion.cs
 src/Ainkrad.Client/Model/ApproveBody.cs
 src/Ainkrad.Client/Model/AuditEntry.cs
 src/Ainkrad.Client/Model/AuditPage.cs
+src/Ainkrad.Client/Model/Binding.cs
 src/Ainkrad.Client/Model/Challenge.cs
 src/Ainkrad.Client/Model/ChallengeRequest.cs
 src/Ainkrad.Client/Model/ClaimBody.cs
@@ -68,10 +72,14 @@ src/Ainkrad.Client/Model/LeaseGrant.cs
 src/Ainkrad.Client/Model/LeasedSecret.cs
 src/Ainkrad.Client/Model/Lockout.cs
 src/Ainkrad.Client/Model/Me.cs
+src/Ainkrad.Client/Model/ModelPrice.cs
 src/Ainkrad.Client/Model/Named.cs
 src/Ainkrad.Client/Model/NewAgentSession.cs
+src/Ainkrad.Client/Model/NewBinding.cs
 src/Ainkrad.Client/Model/NewLease.cs
 src/Ainkrad.Client/Model/NewPairingBody.cs
+src/Ainkrad.Client/Model/NewPool.cs
+src/Ainkrad.Client/Model/NewProviderAccount.cs
 src/Ainkrad.Client/Model/NewSecret.cs
 src/Ainkrad.Client/Model/NewTerminal.cs
 src/Ainkrad.Client/Model/NoopResult.cs
@@ -83,10 +91,14 @@ src/Ainkrad.Client/Model/PasskeyClaimBody.cs
 src/Ainkrad.Client/Model/PasskeyOptionsBody.cs
 src/Ainkrad.Client/Model/PasskeyRegistrationOptions.cs
 src/Ainkrad.Client/Model/PastRetention.cs
+src/Ainkrad.Client/Model/Pool.cs
+src/Ainkrad.Client/Model/Provider.cs
+src/Ainkrad.Client/Model/ProviderAccount.cs
 src/Ainkrad.Client/Model/PushKinds.cs
 src/Ainkrad.Client/Model/PushToken.cs
 src/Ainkrad.Client/Model/RedeemLease.cs
 src/Ainkrad.Client/Model/Rename.cs
+src/Ainkrad.Client/Model/ReplaceKey.cs
 src/Ainkrad.Client/Model/RotateSecret.cs
 src/Ainkrad.Client/Model/Runner.cs
 src/Ainkrad.Client/Model/RunnerDriver.cs
@@ -96,8 +108,10 @@ src/Ainkrad.Client/Model/SecretDeleted.cs
 src/Ainkrad.Client/Model/SecretInfo.cs
 src/Ainkrad.Client/Model/SessionGrant.cs
 src/Ainkrad.Client/Model/SessionRequest.cs
+src/Ainkrad.Client/Model/SetCap.cs
 src/Ainkrad.Client/Model/SetScopes.cs
 src/Ainkrad.Client/Model/SetSetting.cs
+src/Ainkrad.Client/Model/SetState.cs
 src/Ainkrad.Client/Model/Setting.cs
 src/Ainkrad.Client/Model/SettingChange.cs
 src/Ainkrad.Client/Model/SettingScope.cs

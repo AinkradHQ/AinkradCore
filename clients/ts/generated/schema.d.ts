@@ -4,6 +4,118 @@
  */
 
 export interface paths {
+    "/api/v1/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAccounts"];
+        put?: never;
+        post: operations["createAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listProviders"];
+        put?: never;
+        post: operations["createProvider"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/providers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["replaceProvider"];
+        post?: never;
+        delete: operations["deleteProvider"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAccount"];
+        put?: never;
+        post?: never;
+        delete: operations["deleteAccount"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{id}/cap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setAccountCap"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{id}/secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["replaceAccountSecret"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{id}/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setAccountState"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agent-sessions": {
         parameters: {
             query?: never;
@@ -228,6 +340,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listBindings"];
+        put: operations["bindAgent"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bindings/{agent}/{provider}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["unbindAgent"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices": {
         parameters: {
             query?: never;
@@ -416,6 +560,70 @@ export interface paths {
         put?: never;
         post: operations["rejectPairing"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listPools"];
+        put?: never;
+        post: operations["createPool"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pools/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deletePool"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pools/{id}/default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setDefaultPool"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pools/{id}/members/{account}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["addPoolMember"];
+        post?: never;
+        delete: operations["removePoolMember"];
         options?: never;
         head?: never;
         patch?: never;
@@ -857,6 +1065,15 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description What an `admin` write answers: the account and the runners its key may be leased to. */
+        AccountDetail: {
+            account: components["schemas"]["ProviderAccount"];
+            /** @description Runner device ids, explicit (never a wildcard). */
+            runners: string[];
+        };
+        AccountsDeleted: {
+            deleted: boolean;
+        };
         AgentDecision: {
             approved: boolean;
             /** @description Told to the agent; a denial's reason. */
@@ -1017,6 +1234,12 @@ export interface components {
             items: components["schemas"]["AuditEntry"][];
             /** Format: int64 */
             next_before?: number | null;
+        };
+        Binding: {
+            agent: string;
+            /** Format: int64 */
+            pool_id: number;
+            provider: string;
         };
         Challenge: {
             /**
@@ -1271,6 +1494,16 @@ export interface components {
             device: components["schemas"]["Named"];
             versions: components["schemas"]["Versions"];
         };
+        ModelPrice: {
+            id: string;
+            /**
+             * Format: int64
+             * @description List price per million input tokens, in millionths of a dollar.
+             */
+            input_per_mtok_micro: number;
+            /** Format: int64 */
+            output_per_mtok_micro: number;
+        };
         /** @description A device: who, by id and name. */
         Named: {
             /** @description `d_` and 26 characters. */
@@ -1295,6 +1528,12 @@ export interface components {
              */
             workspace?: Record<string, never> | null;
         };
+        NewBinding: {
+            /** @description An agent id: 1 to 64 of `[A-Za-z0-9._:-]`. */
+            agent: string;
+            /** Format: int64 */
+            pool_id: number;
+        };
         /** @description A lease to grant. */
         NewLease: {
             /** @description The runner's device id, `d_…`; it must be in the secret's scope. */
@@ -1312,6 +1551,25 @@ export interface components {
             name: string;
             /** @description What it may do: within the approver's own scopes; a runner gets exactly `runner`. */
             scopes: string[];
+        };
+        NewPool: {
+            name: string;
+            /** @description `anthropic`, `openai` or `google`. */
+            provider: string;
+        };
+        /** @description A new account. Deliberately no `Debug`. */
+        NewProviderAccount: {
+            /**
+             * Format: int64
+             * @description Default 4; 0 is no cap.
+             */
+            cap?: number | null;
+            label: string;
+            provider: string;
+            /** @description Runner device ids it may be leased to; default none. */
+            runners?: string[] | null;
+            /** @description The API key; written, never read back. */
+            value: string;
         };
         /** @description A new secret. Deliberately no `Debug`. */
         NewSecret: {
@@ -1424,6 +1682,68 @@ export interface components {
             floor: number;
             message: string;
         };
+        Pool: {
+            created_at: components["schemas"]["Timestamp"];
+            /** Format: int64 */
+            id: number;
+            /** @description The provider's default pool serves an agent bound to none. */
+            is_default: boolean;
+            /** @description ProviderAccount ids, in fallback order. */
+            members: number[];
+            name: string;
+            provider: string;
+            updated_at: components["schemas"]["Timestamp"];
+        };
+        /** @description A provider definition: a built-in, or user data validated before it is stored. */
+        Provider: {
+            /** @description The harness's own authentication variable. */
+            auth_var: string;
+            /** @description `https://`, a public DNS name. */
+            base_url: string;
+            /** @description Read-only: built-ins cannot be edited. */
+            builtin?: boolean;
+            /** @description `env` and/or `gateway`. */
+            delivery: string[];
+            /** @description `claude`, `codex` or `agy`. */
+            harness: string;
+            id: string;
+            /** @description `paste`. */
+            login_methods: string[];
+            models: components["schemas"]["ModelPrice"][];
+            name: string;
+            /** @description When the models' list prices were read. */
+            priced_at?: string | null;
+            usage_parser: string;
+            /** Format: int64 */
+            version?: number;
+        };
+        /**
+         * @description An account as a `read` device sees it: its key's last four characters, never the key, the
+         *     broker secret's name or the runners it may be leased to.
+         */
+        ProviderAccount: {
+            /** @description The provider's base URL when the account was stored. */
+            base_url: string;
+            /**
+             * Format: int64
+             * @description Sessions that may hold the account at once; 0 is no cap.
+             */
+            cap: number;
+            created_at: components["schemas"]["Timestamp"];
+            /** Format: int64 */
+            id: number;
+            label: string;
+            last_used_at?: components["schemas"]["Timestamp"];
+            /** @description The key's last four characters; empty for a key too short to show any. */
+            masked_tail: string;
+            /** @description `anthropic`, `openai` or `google`. */
+            provider: string;
+            /** @description `active`, `cooling`, `limited`, `unhealthy` or `disabled`. */
+            state: string;
+            state_reason?: string | null;
+            state_until?: components["schemas"]["Timestamp"];
+            updated_at: components["schemas"]["Timestamp"];
+        };
         /** @description The notification kinds the calling device is pushed (E2-12.3). */
         PushKinds: {
             /**
@@ -1447,6 +1767,11 @@ export interface components {
         Rename: {
             /** @description 1 to 64 characters, no control characters; trimmed. */
             name: string;
+        };
+        /** @description A replacement key, and optionally a new runner scope. No `Debug`. */
+        ReplaceKey: {
+            runners?: string[] | null;
+            value: string;
         };
         /** @description A rotation: the new value, and optionally a new scope or delivery. No `Debug`. */
         RotateSecret: {
@@ -1567,6 +1892,10 @@ export interface components {
             /** @description A live challenge issued for the signing device. */
             challenge: string;
         };
+        SetCap: {
+            /** Format: int64 */
+            cap: number;
+        };
         /** @description A device's new scopes. */
         SetScopes: {
             /** @description From the catalogue, each held by the calling device; a runner holds exactly `runner`. */
@@ -1576,6 +1905,12 @@ export interface components {
         SetSetting: {
             /** Format: int64 */
             value: number;
+        };
+        SetState: {
+            reason?: string | null;
+            /** @description `active`, `cooling`, `limited`, `unhealthy` or `disabled`. */
+            state: string;
+            until?: string | null;
         };
         /** @description One setting and its effective value at the scope asked about. */
         Setting: {
@@ -1792,6 +2127,348 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listAccounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every account: its key's last four characters, never the key, its secret's name or its runner scope */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccount"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewProviderAccount"];
+            };
+        };
+        responses: {
+            /** @description Stored with its key in the secrets broker (audited as `account.created`, and the broker's own `secret.created`). 409 `secrets_disabled` (`secrets.mode` 0), `real_secret_refused` (a real key shape while `secrets.provider_accounts` is off), `conflict` or `limit_reached`; 400 for a bad provider, label, cap or runner; 503 `secrets_unavailable` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountDetail"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listProviders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The built-in providers, then the user definitions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Provider"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Provider"];
+            };
+        };
+        responses: {
+            /** @description Stored (audited as `provider.created`). 400 for a definition that fails validation (https DNS base URL, the harness's own variable); 409 `conflict` or `limit_reached` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Provider"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    replaceProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The provider's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Provider"];
+            };
+        };
+        responses: {
+            /** @description A new version (audited as `provider.updated`). Accounts already stored keep the base URL they were bound to */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Provider"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The provider's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted (audited as `provider.deleted`); a built-in or one an account uses is refused */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountsDeleted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The account's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccount"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The account's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted with its key, its leases and its pool seats (audited as `account.deleted`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountsDeleted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setAccountCap: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The account's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetCap"];
+            };
+        };
+        responses: {
+            /** @description The concurrency cap, 0 (no cap) to 64 (audited as `account.cap_set`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccount"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    replaceAccountSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The account's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReplaceKey"];
+            };
+        };
+        responses: {
+            /** @description A new key version, its last four characters cut again, every outstanding lease on the old one dropped (audited as `account.secret_replaced`); the refusals of `createAccount` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountDetail"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setAccountState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The account's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetState"];
+            };
+        };
+        responses: {
+            /** @description Enables (`active`) or disables the account, or marks it cooling, limited or unhealthy (audited as `account.state_set`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccount"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listAgentSessions: {
         parameters: {
             query?: {
@@ -2268,6 +2945,96 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    listBindings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every agent's binding to a pool */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Binding"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    bindAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewBinding"];
+            };
+        };
+        responses: {
+            /** @description The agent draws its pool's provider from this pool, replacing an earlier binding for that provider (audited as `pool.bound`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Binding"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    unbindAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent's id */
+                agent: string;
+                /** @description `anthropic`, `openai` or `google` */
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The agent falls back to the provider's default pool (audited as `pool.unbound`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountsDeleted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listDevices: {
         parameters: {
             query?: never;
@@ -2687,6 +3454,188 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PairingView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listPools: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every pool, its members in fallback order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pool"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createPool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewPool"];
+            };
+        };
+        responses: {
+            /** @description Created, empty (audited as `pool.created`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pool"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deletePool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The pool's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted with its bindings (audited as `pool.deleted`); the default pool is refused (409) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountsDeleted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setDefaultPool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The pool's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Its provider's default pool from now on (audited as `pool.default_set`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pool"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    addPoolMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The pool's id */
+                id: string;
+                /** @description The account's id */
+                account: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Appended to the pool's fallback order (audited as `pool.member_added`); an account of another provider is refused (400) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pool"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    removePoolMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The pool's id */
+                id: string;
+                /** @description The account's id */
+                account: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed (audited as `pool.member_removed`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pool"];
                 };
             };
             400: components["responses"]["BadRequest"];

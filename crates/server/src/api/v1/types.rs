@@ -90,7 +90,12 @@
 ///    `.cap_set` and `.deleted` audit actions. The routes follow (KAN-432).
 /// 31: provider definitions (KAN-429): the `provider.created`, `.updated` and `.deleted` audit actions.
 /// 32: account pools and bindings (KAN-431): the `pool.*` audit actions.
-pub const API_MINOR: u32 = 32;
+/// 33: provider accounts over the API (KAN-432): `listAccounts`, `getAccount` (scope `read`; no key, secret
+///    name or runner scope), `createAccount`, `replaceAccountSecret`, `setAccountState`, `setAccountCap`,
+///    `deleteAccount`, `listProviders`, `createProvider`, `replaceProvider`, `deleteProvider`, `listPools`,
+///    `createPool`, `deletePool`, `addPoolMember`, `removePoolMember`, `setDefaultPool`, `listBindings`,
+///    `bindAgent`, `unbindAgent` (every write `admin` and destructive).
+pub const API_MINOR: u32 = 33;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
