@@ -130,7 +130,7 @@ pub fn url_problem(url: &str) -> Option<&'static str> {
     if rest.contains(['@', '?', '#', '\\']) {
         return Some("a base URL has no credentials, query or fragment");
     }
-    let (authority, path) = rest.split_once('/').map_or((rest, ""), |(a, p)| (a, p));
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
     if path.split('/').any(|s| s == ".." || s == ".") {
         return Some("a base URL path has no dot segments");
     }
