@@ -10203,7 +10203,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// That period's headroom raised and its exhaustion alert cleared (audited as `budget.raised`). 404 for no such budget; 400 for an amount of 0 or a bad period key
+            /// That period's headroom raised and its exhaustion alert cleared (audited as `budget.raised`); the body is the budget's standing for the raised period. 404 for no such budget; 400 for an amount of 0 or a bad period key
             ///
             /// - Remark: Generated from `#/paths//api/v1/budgets/{id}/raise/post(raiseBudget)/responses/200`.
             ///

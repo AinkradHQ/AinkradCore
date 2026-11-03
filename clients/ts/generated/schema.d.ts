@@ -3608,7 +3608,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description That period's headroom raised and its exhaustion alert cleared (audited as `budget.raised`). 404 for no such budget; 400 for an amount of 0 or a bad period key */
+            /** @description That period's headroom raised and its exhaustion alert cleared (audited as `budget.raised`); the body is the budget's standing for the raised period. 404 for no such budget; 400 for an amount of 0 or a bad period key */
             200: {
                 headers: {
                     [name: string]: unknown;
