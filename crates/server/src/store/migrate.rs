@@ -145,6 +145,12 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../migrations/0018_cost_ledger.up.sql"),
         down: include_str!("../../migrations/0018_cost_ledger.down.sql"),
     },
+    Migration {
+        version: 19,
+        name: "budgets",
+        up: include_str!("../../migrations/0019_budgets.up.sql"),
+        down: include_str!("../../migrations/0019_budgets.down.sql"),
+    },
 ];
 
 #[derive(Debug)]

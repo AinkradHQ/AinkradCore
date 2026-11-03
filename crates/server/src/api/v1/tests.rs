@@ -30,6 +30,8 @@ mod accounts_review;
 mod accounts_store;
 mod agents;
 mod audit_growth;
+mod budgets_api;
+mod budgets_store;
 mod costs_api;
 mod costs_store;
 mod devices;

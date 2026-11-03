@@ -98,7 +98,9 @@
 /// 34: the cost ledger, prices and account usage (KAN-449): `listCosts`, `listPrices`, `accountsUsage` (scope
 ///    `read`), `setPrice`, `setAccountLimit`, `clearAccountLimit` (`admin` and destructive); the `price.set`,
 ///    `account.limit_set` and `account.limit_cleared` audit actions. No route writes the ledger.
-pub const API_MINOR: u32 = 34;
+/// 35: the budget engine (KAN-448): `listBudgets` (scope `read`; filter by `kind`, `subject`, `company`),
+///    `setBudget`, `deleteBudget`, `raiseBudget` (`admin` and destructive); the `budget.*` audit actions.
+pub const API_MINOR: u32 = 35;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

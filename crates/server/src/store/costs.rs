@@ -20,6 +20,7 @@
 use sqlx::sqlite::{SqlitePool, SqliteRow};
 use sqlx::{Row, SqliteConnection};
 
+use super::budgets::guard::{self, Guard};
 use super::prices;
 use super::secrets::Error;
 
@@ -88,6 +89,8 @@ pub struct Recorded {
     pub event: CostEvent,
     /// The key was already recorded: nothing was written, `event` is the first row.
     pub duplicate: bool,
+    /// What the budgets said once the event was counted (nothing for a duplicate).
+    pub guard: Guard,
 }
 
 /// The ledger's totals: events, tokens, priced dollars, and how many events have no price.
@@ -191,6 +194,7 @@ pub async fn record_in(
         return Ok(Recorded {
             event: event(&r)?,
             duplicate: true,
+            guard: Guard::default(),
         });
     }
     let rates = match c.reported_usd_micros {
@@ -235,6 +239,17 @@ pub async fn record_in(
     .fetch_one(&mut *conn)
     .await?;
     add_subjects(conn, id, c.account_id, c.subjects).await?;
+    let tokens = c.input_tokens + c.output_tokens + c.cache_tokens;
+    guard::apply_in(
+        conn,
+        id,
+        c.session,
+        tokens,
+        cost.unwrap_or(0),
+        c.occurred_at,
+    )
+    .await?;
+    let guard = guard::check_in(conn, id, c.occurred_at, now).await?;
     let r = sqlx::query(concat!(
         "SELECT ",
         columns!(),
@@ -246,6 +261,7 @@ pub async fn record_in(
     Ok(Recorded {
         event: event(&r)?,
         duplicate: false,
+        guard,
     })
 }
 
@@ -288,14 +304,14 @@ async fn add_subjects(
 /// Records that the provider's bill puts event `id` (and any earlier correction of it) at
 /// `corrected_usd_micros` in all: a new `billing_corrected` row of the difference, counted against
 /// the same account and subjects, so the ledger sums to the corrected cost. `None` when it already
-/// does, or the key was used.
+/// does, or the key was used. The correction counts in the period of the event it corrects.
 pub async fn correct_in(
     conn: &mut SqliteConnection,
     id: i64,
     corrected_usd_micros: i64,
     idempotency_key: &str,
     now: &str,
-) -> Result<Option<CostEvent>, Error> {
+) -> Result<Option<Recorded>, Error> {
     if corrected_usd_micros < 0 || idempotency_key.is_empty() || idempotency_key.len() > 128 {
         return refused("a corrected cost is 0 or more, with a key of 1 to 128 characters");
     }
@@ -342,7 +358,7 @@ pub async fn correct_in(
     .bind(delta)
     .bind(id)
     .bind(idempotency_key)
-    .bind(now)
+    .bind(&o.occurred_at)
     .bind(now)
     .fetch_optional(&mut *conn)
     .await?;
@@ -357,6 +373,8 @@ pub async fn correct_in(
     .bind(id)
     .execute(&mut *conn)
     .await?;
+    guard::apply_in(conn, new, &o.session, 0, delta, &o.occurred_at).await?;
+    let guard = guard::check_in(conn, new, &o.occurred_at, now).await?;
     let r = sqlx::query(concat!(
         "SELECT ",
         columns!(),
@@ -365,7 +383,11 @@ pub async fn correct_in(
     .bind(new)
     .fetch_one(&mut *conn)
     .await?;
-    Ok(Some(event(&r)?))
+    Ok(Some(Recorded {
+        event: event(&r)?,
+        duplicate: false,
+        guard,
+    }))
 }
 
 /// The newest events first, of one session and/or one account, at most `limit`.

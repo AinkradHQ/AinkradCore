@@ -29,6 +29,7 @@ mod agents;
 pub use agents::create as create_agent_for_tests;
 mod accounts;
 mod audit;
+mod budgets;
 mod costs;
 mod deprecation;
 mod devices;
@@ -64,7 +65,8 @@ pub const BY: AuditActor = AuditActor::User(ADMIN);
 
 /// Query parameter names any `/api/v1` route may take; nothing else is let through.
 pub const QUERY: &[&str] = &[
-    "after", "limit", "before", "kind", "target", "actor", "session", "account",
+    "after", "limit", "before", "kind", "target", "actor", "session", "account", "subject",
+    "company",
 ];
 
 /// A page of a list: the cursor to continue after (its meaning is per route) and how many.
@@ -213,6 +215,9 @@ pub fn router(app: App) -> Router {
             delete(costs::clear_limit),
         )
         .route("/api/v1/costs", get(costs::list))
+        .route("/api/v1/budgets", get(budgets::list).put(budgets::set))
+        .route("/api/v1/budgets/{id}", delete(budgets::delete))
+        .route("/api/v1/budgets/{id}/raise", post(budgets::raise))
         .route(
             "/api/v1/prices",
             get(costs::list_prices).put(costs::set_price),

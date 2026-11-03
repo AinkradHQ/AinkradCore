@@ -14,6 +14,7 @@
 //!   `admin` and destructive.
 //! - The cost ledger, prices and account usage (KAN-449): reading is `read`; a price or an account's limit
 //!   is `admin` and destructive. No route writes the ledger.
+//! - Budgets (KAN-448): reading is `read`; setting, deleting or raising one is `admin` and destructive.
 //! - `terminal`: opening, attaching, signalling and closing a terminal (listing is `read`).
 //! - A module's routes need the module's own `Module::scope` (`admin` unless it says otherwise),
 //!   or the scope its `Module::route_scopes` declares for that route (`module_scope`).
@@ -97,6 +98,10 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ),
     ("GET", "/api/v1/costs", "read"),
     ("GET", "/api/v1/prices", "read"),
+    ("GET", "/api/v1/budgets", "read"),
+    ("PUT", "/api/v1/budgets", "admin"),
+    ("DELETE", "/api/v1/budgets/{id}", "admin"),
+    ("POST", "/api/v1/budgets/{id}/raise", "admin"),
     ("PUT", "/api/v1/prices", "admin"),
     ("GET", "/api/v1/secrets", "admin"),
     ("POST", "/api/v1/secrets", "admin"),
@@ -173,6 +178,10 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
         "DELETE",
         "/api/v1/accounts/{id}/limits/{unit}/{window_secs}",
     ),
+    // Budgets (KAN-448): a limit decides what may be spent, and a raise lifts one.
+    ("PUT", "/api/v1/budgets"),
+    ("DELETE", "/api/v1/budgets/{id}"),
+    ("POST", "/api/v1/budgets/{id}/raise"),
     // Opening or attaching a terminal is a shell on the runner (spec §8, E2-01).
     ("POST", "/api/v1/terminals"),
     ("GET", "/api/v1/terminals/{id}/ws"),
