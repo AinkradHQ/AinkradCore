@@ -1,6 +1,6 @@
 //! The cost ledger, prices and account usage over the API (KAN-449; design
-//! `2026-11-02-ai-provider-accounts` §7, §10, §12d). Reading is `read`: the ledger and a usage report
-//! name no key, no secret and no runner. Changing a price or an account's limit is `admin` and
+//! `2026-11-02-ai-provider-accounts` §7, §10, §12d). Reading the price list is `read`; the ledger and the usage report are `admin`
+//! (they show who spent what, per company) but name no key, no secret and no runner. Changing a price or an account's limit is `admin` and
 //! destructive (a step-up). There is NO route that writes the ledger: the run engine and Citadel
 //! record through `store::costs`, so a device cannot forge a cost.
 
@@ -80,7 +80,7 @@ pub struct CostQuery {
 
 #[utoipa::path(get, path = "/api/v1/costs", operation_id = "listCosts", tag = "costs",
     params(CostQuery),
-    responses((status = 200, description = "Cost events, newest first. One event is one attempt of a \
+    responses((status = 200, description = "Cost events, newest first (needs `admin`). One event is one attempt of a \
         session: a delta, never a running total", body = Vec<CostEvent>)))]
 pub async fn list(State(app): State<App>, Query(q): Query<CostQuery>) -> ApiResult<Vec<CostEvent>> {
     let limit = q.limit.unwrap_or(PAGE).clamp(1, PAGE);
@@ -261,8 +261,10 @@ impl From<usage::AccountUsage> for AccountSpend {
 }
 
 #[utoipa::path(get, path = "/api/v1/accounts/usage", operation_id = "accountsUsage", tag = "costs",
-    responses((status = 200, description = "Every account's tokens, messages and dollars over the \
-        last five hours and seven days, its limits with their use, and its recent drops", body = Vec<AccountSpend>)))]
+    responses((status = 200, description = "Needs `admin`. Every account's tokens, messages and dollars over the \
+        last five hours and seven days, its limits with their use, and its recent drops. Events that \
+        carry only a `legacy_account_id` (Citadel's old account id) are not counted here until the \
+        account port lands", body = Vec<AccountSpend>)))]
 pub async fn accounts_usage(State(app): State<App>) -> ApiResult<Vec<AccountSpend>> {
     let all = usage::report(&app.pool, None, &app.clock.now()).await?;
     Ok(Json(all.into_iter().map(Into::into).collect()))
@@ -338,7 +340,7 @@ pub async fn set_limit(
            ("unit" = String, Path, description = "`tokens` or `messages`"),
            ("window_secs" = i64, Path, description = "The limit's window")),
     responses((status = 200, description = "Cleared (audited as `account.limit_cleared`); \
-        `cleared` is false when there was no such limit", body = LimitCleared)))]
+        `cleared` is false when there was no such limit; 404 for no such account", body = LimitCleared)))]
 pub async fn clear_limit(
     State(app): State<App>,
     Extension(me): Extension<Caller>,

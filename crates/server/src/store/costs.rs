@@ -4,7 +4,8 @@
 //!
 //! - **A row is a delta.** One attempt's tokens, never a running total (a runner restarts its meter
 //!   each run), so a restart or a failover cannot lose or double a turn. A retried report with the
-//!   same `idempotency_key` is a no-op that answers the first row.
+//!   same `idempotency_key` is a no-op that answers the first row; the same key with a different
+//!   payload is a `conflict`.
 //! - **Insert-only.** The database refuses an update or a delete. A correction (the provider's bill
 //!   differs from the estimate) is a new `billing_corrected` row holding the difference, so a sum
 //!   over the ledger is always the corrected total.
@@ -148,6 +149,9 @@ fn check(c: &NewCost<'_>) -> Result<(), Error> {
     {
         return refused("a session is 1 to 64 characters and a key 1 to 128");
     }
+    if c.account_id.is_some() && c.legacy_account_id.is_some() {
+        return refused("an event names a Core account or a legacy account, not both");
+    }
     if !HARNESSES.contains(&c.harness) {
         return refused(format!("harness is one of {}", HARNESSES.join(", ")));
     }
@@ -188,8 +192,24 @@ pub async fn record_in(
     .fetch_optional(&mut *conn)
     .await?
     {
+        let first = event(&r)?;
+        let same = first.session == c.session
+            && first.epoch == c.epoch
+            && first.account_id == c.account_id
+            && first.legacy_account_id == c.legacy_account_id
+            && first.provider == c.provider
+            && first.harness == c.harness
+            && first.model == c.model
+            && (first.input_tokens, first.output_tokens, first.cache_tokens)
+                == (c.input_tokens, c.output_tokens, c.cache_tokens);
+        if !same {
+            return Err(Error::Refused {
+                code: "conflict",
+                message: "that idempotency key recorded a different event".to_owned(),
+            });
+        }
         return Ok(Recorded {
-            event: event(&r)?,
+            event: first,
             duplicate: true,
         });
     }

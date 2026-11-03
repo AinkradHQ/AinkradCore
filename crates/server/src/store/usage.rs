@@ -384,6 +384,17 @@ pub async fn clear_limit(
     actor: AuditActor,
 ) -> Result<bool, Error> {
     let mut tx = super::begin_write(pool).await?;
+    if sqlx::query_scalar::<_, i64>("SELECT count(*) FROM core_accounts WHERE id = ?")
+        .bind(account)
+        .fetch_one(&mut *tx)
+        .await?
+        == 0
+    {
+        return Err(Error::Refused {
+            code: "not_found",
+            message: "no such account".to_owned(),
+        });
+    }
     let gone = sqlx::query(
         "DELETE FROM core_account_limits WHERE account_id = ? AND unit = ? AND window_secs = ?",
     )
