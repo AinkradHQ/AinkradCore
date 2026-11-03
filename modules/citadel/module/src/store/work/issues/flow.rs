@@ -260,6 +260,16 @@ pub async fn delete_issue(
     .bind(id.0)
     .fetch_all(&mut *tx)
     .await?;
+    // The issue and its subtasks go; so do their budgets (no foreign key cascades into the Core).
+    let subtasks: Vec<i64> =
+        sqlx::query_scalar("SELECT id FROM citadel_issues WHERE parent_id = ? ORDER BY id")
+            .bind(id.0)
+            .fetch_all(&mut *tx)
+            .await?;
+    for gone in std::iter::once(id.0).chain(subtasks) {
+        let scope = crate::domain::gov::BudgetScope::Issue(IssueId(gone));
+        crate::store::gov::drop_budgets_of(&mut tx, scope, actor).await?;
+    }
     let deleted = sqlx::query("DELETE FROM citadel_issues WHERE id = ?")
         .bind(id.0)
         .execute(&mut *tx)

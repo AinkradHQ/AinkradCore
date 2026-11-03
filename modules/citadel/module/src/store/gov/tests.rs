@@ -228,21 +228,17 @@ async fn budget_crud_and_one_per_scope_and_period() {
     let bad_warn = update_budget(pool, &b).await.unwrap_err();
     assert!(is_constraint(&bad_warn), "{bad_warn}");
 
-    // Only the scope's own column may be set.
-    let two_targets = sqlx::query(
-        "INSERT INTO citadel_budgets (scope, company_id, agent_id, period, token_cap) \
-         VALUES ('agent', ?, ?, 'week', 1)",
-    )
-    .bind(c.0)
-    .bind(po.0)
-    .execute(pool)
-    .await
-    .unwrap_err();
-    assert!(is_constraint(&two_targets), "{two_targets}");
-
     assert!(delete_budget(pool, b.id).await.unwrap());
-    // A budget goes with its scope.
+    // The Core cannot cascade: a company's budgets (and its agents' and projects') go by its binding.
     delete_company(pool, c).await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    assert!(
+        drop_company_budgets(&mut conn, c, AuditActor::System)
+            .await
+            .unwrap()
+            >= 6
+    );
+    drop(conn);
     assert_eq!(
         list_budgets(pool, BudgetScope::Company(c)).await.unwrap(),
         vec![]

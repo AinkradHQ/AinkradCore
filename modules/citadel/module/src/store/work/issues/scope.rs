@@ -101,14 +101,22 @@ pub async fn delete_empty_sprint(
             .bind(sprint.0)
             .fetch_all(&mut *tx)
             .await?;
-    let budgets: Vec<i64> =
-        sqlx::query_scalar("SELECT id FROM citadel_budgets WHERE sprint_id = ? ORDER BY id")
-            .bind(sprint.0)
-            .fetch_all(&mut *tx)
-            .await?;
+    let budgets: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM core_budgets WHERE subject_kind = 'sprint' \
+             AND subject_id = CAST(? AS TEXT) ORDER BY id",
+    )
+    .bind(sprint.0)
+    .fetch_all(&mut *tx)
+    .await?;
     let details = serde_json::json!({"name": s.name, "project": s.project_id.0,
                                      "approvals": approvals, "budgets": budgets});
     append_sprint_event(&mut tx, &s, actor, "sprint.deleted", details).await?;
+    crate::store::gov::drop_budgets_of(
+        &mut tx,
+        crate::domain::gov::BudgetScope::Sprint(sprint),
+        actor,
+    )
+    .await?;
     sqlx::query("DELETE FROM citadel_sprints WHERE id = ?")
         .bind(sprint.0)
         .execute(&mut *tx)

@@ -137,11 +137,10 @@ async fn every_kind_is_decided_once_with_the_reply() {
     assert_eq!(audited(pool, "approval.rejected").await, 2);
     assert_eq!(audited(pool, "approval.pending").await, 4);
     // The approved overrun raised its budget's period by 500 tokens.
-    let raised: i64 =
-        sqlx::query_scalar("SELECT coalesce(sum(raised), 0) FROM citadel_budget_spend")
-            .fetch_one(pool)
-            .await
-            .unwrap();
+    let raised: i64 = sqlx::query_scalar("SELECT coalesce(sum(raised), 0) FROM core_budget_spend")
+        .fetch_one(pool)
+        .await
+        .unwrap();
     assert_eq!(raised, 500);
     assert_eq!(audited(pool, "budget.raised").await, 1);
 }

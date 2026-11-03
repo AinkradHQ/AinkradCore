@@ -1,111 +1,45 @@
-//! Budgets (E7.2): token caps per company, department, project, agent or sprint, each over a
-//! calendar period (UTC day, week from Monday, month, or all time), warning at
-//! `warn_at_percent` and, with `hard_stop`, stopping new runs at the cap.
+//! Budgets (E7.2) as Citadel sees them: an ADAPTER over the Core's budget engine (KAN-448; moved by
+//! KAN-450). The Core owns the limits, the spend counters, the warnings and the reserve; Citadel keeps
+//! agents, companies, projects and work, and this file maps them in and out:
 //!
-//! Spend is kept per budget and period in `citadel_budget_spend`, updated by a trigger in the
-//! same transaction as each cost event, so admission and the mid-run cap read one counter per
-//! budget and never sum the ledger. `recompute_budget_spend` rebuilds the counters from the
-//! ledger for repair. A budget is set (created or changed) through `set_budget`, audited, which
-//! counts the period's spend so far. What a budget does at dispatch and after each cost event
-//! is in `guard`.
+//! - a [`BudgetScope`] is a Core `(kind, subject)` pair (the entity's id as text), and a budget is
+//!   bound to its company (`scope_company`), which is what the company routes filter by;
+//! - what a run counts against is its agent, the agent's company and departments (through its
+//!   teams), and its issue, the issue's project and its sprint ([`subjects_in`]); `reconcile`
+//!   names them when it records a cost, and admission and the mid-run cap read them back;
+//! - admission still opens one `budget_overrun` approval per exhausted budget and period
+//!   (approvals are Citadel's), and an approved one raises the Core budget's period;
+//! - deleting an entity deletes its budgets, because a subject is opaque to the Core and no foreign
+//!   key cascades (`drop_budgets_of`, `drop_company_budgets`): Citadel ids can be reused.
+//!
+//! The old `citadel_budgets` and `citadel_budget_spend` tables are no longer read or written; they
+//! stay, frozen, as the source of `store::gov::migrate_core` until a later migration drops them.
 
 use ainkrad_core::audit::AuditActor;
+use ainkrad_core_server::store::budgets::{self as cb, guard as engine};
+use ainkrad_core_server::store::secrets::Error as CoreError;
 use serde_json::json;
-use sqlx::sqlite::{SqlitePool, SqliteRow};
-use sqlx::{Error, Row, SqliteConnection};
+use sqlx::sqlite::SqlitePool;
+use sqlx::{Error, SqliteConnection};
 
-use super::id_column;
-use crate::domain::gov::{Budget, BudgetId, BudgetScope, NewBudget};
+use crate::domain::gov::{Approval, Budget, BudgetId, BudgetPeriod, BudgetScope, NewBudget};
 use crate::domain::org::{AgentId, CompanyId, DepartmentId};
-use crate::domain::work::{IssueId, ProjectId, SprintId};
+use crate::domain::work::{IssueId, ProjectId, SprintId, UserId};
 use crate::store::audit::{Event, append};
-use crate::store::org::text;
+use crate::store::gov::{open_approval_in, user_actor};
 
-/// SQL: the key of budget `b`'s period that contains the time `$t` (an SQL expression).
-macro_rules! period_key {
-    ($t:literal) => {
-        concat!(
-            "CASE b.period WHEN 'day' THEN date(",
-            $t,
-            ") \
-             WHEN 'week' THEN date(",
-            $t,
-            ", '-6 days', 'weekday 1') \
-             WHEN 'month' THEN strftime('%Y-%m', ",
-            $t,
-            ") ELSE 'total' END"
-        )
-    };
-}
+/// What the Core's audit rows say made the change.
+const DEVICE: &str = "citadel";
 
-/// SQL: whether budget `b` applies to spend by agent `$agent` on issue `$issue` (SQL
-/// expressions): its agent's, the agent's company's and departments' (through its teams), its
-/// issue's project's and sprint's. The `citadel_cost_events_budget_spend` trigger holds the
-/// same rule.
-macro_rules! applies {
-    ($agent:literal, $issue:literal) => {
-        concat!(
-            "(b.agent_id = ",
-            $agent,
-            " OR b.company_id = (SELECT company_id FROM citadel_agents WHERE id = ",
-            $agent,
-            ")",
-            " OR b.department_id IN (SELECT t.department_id FROM citadel_team_memberships m \
-             JOIN citadel_teams t ON t.id = m.team_id WHERE m.agent_id = ",
-            $agent,
-            ")",
-            " OR b.project_id = (SELECT project_id FROM citadel_issues WHERE id = ",
-            $issue,
-            ")",
-            " OR b.sprint_id = (SELECT sprint_id FROM citadel_issues WHERE id = ",
-            $issue,
-            ")",
-            " OR b.issue_id = ",
-            $issue,
-            ")"
-        )
-    };
-}
-
-/// SQL: the company budget `b` belongs to.
-macro_rules! budget_company {
-    () => {
-        "coalesce(b.company_id, \
-         (SELECT company_id FROM citadel_departments WHERE id = b.department_id), \
-         (SELECT company_id FROM citadel_projects WHERE id = b.project_id), \
-         (SELECT company_id FROM citadel_agents WHERE id = b.agent_id), \
-         (SELECT p.company_id FROM citadel_sprints sp JOIN citadel_projects p \
-             ON p.id = sp.project_id WHERE sp.id = b.sprint_id), \
-         (SELECT p.company_id FROM citadel_issues i JOIN citadel_projects p \
-             ON p.id = i.project_id WHERE i.id = b.issue_id))"
-    };
-}
-
-/// SQL: the company budget `?` belongs to (a row of NULL when it has none); no row when there is
-/// no such budget. The seam's `OWNERS` row for `budgets` is this.
+/// SQL: the company budget `?` belongs to (a row of NULL when it has none); no row when there is no
+/// such budget, or it is not one of Citadel's. The seam's `OWNERS` row for `budgets` is this.
 pub const BUDGET_COMPANY: &str = concat!(
-    "SELECT ",
-    budget_company!(),
-    " FROM citadel_budgets b WHERE b.id = ?"
+    "SELECT CAST(company AS INTEGER) FROM core_budgets WHERE id = ? AND subject_kind IN ",
+    "('company', 'department', 'project', 'agent', 'sprint', 'issue')"
 );
 
-macro_rules! budget_columns {
-    () => {
-        "b.id, b.scope, b.company_id, b.department_id, b.project_id, b.agent_id, b.sprint_id, \
-         b.issue_id, b.period, b.token_cap, b.usd_cap_micros, b.warn_at_percent, b.hard_stop"
-    };
-}
-
-/// The same, unqualified, for `RETURNING`.
-macro_rules! returned_columns {
-    () => {
-        "id, scope, company_id, department_id, project_id, agent_id, sprint_id, issue_id, \
-         period, token_cap, usd_cap_micros, warn_at_percent, hard_stop"
-    };
-}
-
-/// (scope text, its id) — the id goes in the column named after the scope.
-fn scope_parts(s: BudgetScope) -> (&'static str, i64) {
+/// (kind, its id) of a scope: the Core's pair, the id as text.
+pub fn scope_parts(s: BudgetScope) -> (&'static str, i64) {
     match s {
         BudgetScope::Company(id) => ("company", id.0),
         BudgetScope::Department(id) => ("department", id.0),
@@ -116,65 +50,42 @@ fn scope_parts(s: BudgetScope) -> (&'static str, i64) {
     }
 }
 
-fn budget(row: SqliteRow) -> Result<Budget, Error> {
-    let scope: String = row.try_get("scope")?;
-    let id = |column: &str| -> Result<i64, Error> {
-        id_column(&row, column)?.ok_or_else(|| Error::ColumnNotFound(column.to_owned()))
-    };
-    let scope = match scope.as_str() {
-        "company" => BudgetScope::Company(CompanyId(id("company_id")?)),
-        "department" => BudgetScope::Department(DepartmentId(id("department_id")?)),
-        "project" => BudgetScope::Project(ProjectId(id("project_id")?)),
-        "agent" => BudgetScope::Agent(AgentId(id("agent_id")?)),
-        "sprint" => BudgetScope::Sprint(SprintId(id("sprint_id")?)),
-        "issue" => BudgetScope::Issue(IssueId(id("issue_id")?)),
-        _ => return Err(Error::ColumnNotFound("scope".to_owned())),
-    };
-    Ok(Budget {
-        id: BudgetId(row.try_get("id")?),
-        scope,
-        period: text(&row, "period")?,
-        token_cap: row.try_get("token_cap")?,
-        usd_cap_micros: row.try_get("usd_cap_micros")?,
-        warn_at_percent: row.try_get("warn_at_percent")?,
-        hard_stop: row.try_get("hard_stop")?,
+fn scope_of(kind: &str, subject: &str) -> Option<BudgetScope> {
+    let id: i64 = subject.parse().ok()?;
+    Some(match kind {
+        "company" => BudgetScope::Company(CompanyId(id)),
+        "department" => BudgetScope::Department(DepartmentId(id)),
+        "project" => BudgetScope::Project(ProjectId(id)),
+        "agent" => BudgetScope::Agent(AgentId(id)),
+        "sprint" => BudgetScope::Sprint(SprintId(id)),
+        "issue" => BudgetScope::Issue(IssueId(id)),
+        _ => return None,
     })
 }
 
-pub async fn get_budget(
-    pool: impl sqlx::SqliteExecutor<'_>,
-    id: BudgetId,
-) -> Result<Option<Budget>, Error> {
-    sqlx::query(concat!(
-        "SELECT ",
-        budget_columns!(),
-        " FROM citadel_budgets b WHERE id = ?"
-    ))
-    .bind(id.0)
-    .fetch_optional(pool)
-    .await?
-    .map(budget)
-    .transpose()
+fn map(e: CoreError) -> Error {
+    match e {
+        CoreError::Db(e) => e,
+        CoreError::Refused { message, .. } => Error::InvalidArgument(message),
+    }
 }
 
-/// Every budget on `scope`, one per period.
-pub async fn list_budgets(
-    pool: impl sqlx::SqliteExecutor<'_>,
-    scope: BudgetScope,
-) -> Result<Vec<Budget>, Error> {
-    let (scope, scope_id) = scope_parts(scope);
-    sqlx::query(concat!(
-        "SELECT ",
-        budget_columns!(),
-        " FROM citadel_budgets b WHERE scope = ? AND scope_id = ? ORDER BY id"
-    ))
-    .bind(scope)
-    .bind(scope_id)
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(budget)
-    .collect()
+fn budget(b: cb::Budget) -> Result<Budget, Error> {
+    let scope =
+        scope_of(&b.kind, &b.subject).ok_or_else(|| Error::ColumnNotFound("scope".into()))?;
+    let period: BudgetPeriod = b
+        .period
+        .parse()
+        .map_err(|_| Error::ColumnNotFound("period".into()))?;
+    Ok(Budget {
+        id: BudgetId(b.id),
+        scope,
+        period,
+        token_cap: b.token_cap,
+        usd_cap_micros: b.usd_cap_micros,
+        warn_at_percent: u8::try_from(b.warn_at_percent).unwrap_or(80),
+        hard_stop: b.hard_stop,
+    })
 }
 
 /// A budget as it stands in the period containing some moment.
@@ -219,21 +130,54 @@ impl Standing {
     }
 }
 
-fn standing(row: SqliteRow) -> Result<Standing, Error> {
+fn standing(s: cb::Standing) -> Result<Standing, Error> {
     Ok(Standing {
-        period_key: row.try_get("period_key")?,
-        spent: row.try_get("spent")?,
-        raised: row.try_get("raised")?,
-        usd_spent: row.try_get("usd_spent")?,
-        raised_usd: row.try_get("raised_usd")?,
-        budget: budget(row)?,
+        period_key: s.period_key,
+        spent: s.spent,
+        raised: s.raised,
+        usd_spent: s.usd_spent,
+        raised_usd: s.raised_usd,
+        budget: budget(s.budget)?,
     })
 }
 
-/// Creates the budget for its scope and period, or changes the cap, warning threshold and
-/// hard stop of the one there, and appends `budget.set` by `actor`; then counts its spend from
-/// the ledger, so a budget set mid-period sees what was spent already. One `BEGIN IMMEDIATE`
-/// transaction.
+fn now() -> String {
+    ainkrad_core_server::scheduler::Clock::now(&ainkrad_core_server::scheduler::SystemClock)
+}
+
+pub async fn get_budget(pool: &SqlitePool, id: BudgetId) -> Result<Option<Budget>, Error> {
+    match cb::get(pool, id.0).await? {
+        Some(b) if scope_of(&b.kind, &b.subject).is_some() => Ok(Some(budget(b)?)),
+        _ => Ok(None),
+    }
+}
+
+/// Every budget on `scope`, one per period.
+pub async fn list_budgets(pool: &SqlitePool, scope: BudgetScope) -> Result<Vec<Budget>, Error> {
+    let (kind, id) = scope_parts(scope);
+    cb::list(pool, Some(kind), Some(&id.to_string()), None, &now())
+        .await?
+        .into_iter()
+        .map(|s| budget(s.budget))
+        .collect()
+}
+
+/// Every budget of the company, as it stands in the period containing `now`, by id.
+pub async fn company_budgets(
+    pool: &SqlitePool,
+    company: CompanyId,
+    now: &str,
+) -> Result<Vec<Standing>, Error> {
+    cb::list(pool, None, None, Some(&company.0.to_string()), now)
+        .await?
+        .into_iter()
+        .map(standing)
+        .collect()
+}
+
+/// Creates the budget for its scope and period, or changes the cap, warning threshold and hard stop of
+/// the one there, and audits it (the Core's `budget.created` / `budget.set`); then the Core counts its
+/// spend from the ledger, so a budget set mid-period sees what was spent already.
 pub async fn set_budget(
     pool: &SqlitePool,
     b: &NewBudget,
@@ -253,45 +197,6 @@ pub async fn add_budget(
     write_budget(pool, b, actor, false).await
 }
 
-/// Deletes the budget (its spend counters go with it) and appends `budget.deleted` by `actor`;
-/// `false` when there is no such budget.
-pub async fn remove_budget(
-    pool: &SqlitePool,
-    id: BudgetId,
-    actor: AuditActor,
-) -> Result<bool, Error> {
-    let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
-    let company: Option<Option<i64>> = sqlx::query_scalar(BUDGET_COMPANY)
-        .bind(id.0)
-        .fetch_optional(&mut *tx)
-        .await?;
-    let Some(company) = company else {
-        return Ok(false);
-    };
-    let b = sqlx::query(concat!(
-        "DELETE FROM citadel_budgets WHERE id = ? RETURNING ",
-        returned_columns!()
-    ))
-    .bind(id.0)
-    .fetch_one(&mut *tx)
-    .await
-    .and_then(budget)?;
-    let (scope, scope_id) = scope_parts(b.scope);
-    let details = json!({"scope": scope, "scope_id": scope_id, "period": b.period.as_str(),
-                         "token_cap": b.token_cap});
-    append_budget_event(
-        &mut tx,
-        id,
-        company.map(CompanyId),
-        actor,
-        "budget.deleted",
-        details,
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(true)
-}
-
 async fn write_budget(
     pool: &SqlitePool,
     b: &NewBudget,
@@ -305,165 +210,335 @@ async fn write_budget(
         let why = "a budget needs a cap of 0 or more tokens (and dollars) and a warning at 1-100%";
         return Err(Error::InvalidArgument(why.to_owned()));
     }
-    let (scope, scope_id) = scope_parts(b.scope);
-    let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
+    let (kind, id) = scope_parts(b.scope);
+    let subject = id.to_string();
+    // The Core cannot see Citadel's tables: the entity must exist here, and its company is the binding.
+    let Some(company) = scope_company(pool, &b.scope).await? else {
+        return Err(Error::InvalidArgument(format!("no such {kind} {id}")));
+    };
+    let now = now();
     if !replace {
-        let taken: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM citadel_budgets WHERE scope = ? AND scope_id = ? \
-             AND period = ?)",
-        )
-        .bind(scope)
-        .bind(scope_id)
-        .bind(b.period.as_str())
-        .fetch_one(&mut *tx)
-        .await?;
+        let taken = cb::list(pool, Some(kind), Some(&subject), None, &now)
+            .await?
+            .iter()
+            .any(|s| s.budget.period == b.period.as_str());
+        // ponytail: check then write; two racing creates both succeed as a set. A create is an admin's click.
         if taken {
             return Ok(None);
         }
     }
-    let set = sqlx::query(concat!(
-        "INSERT INTO citadel_budgets (scope, company_id, department_id, project_id, agent_id, \
-         sprint_id, issue_id, period, token_cap, usd_cap_micros, warn_at_percent, hard_stop) \
-         VALUES (?1, iif(?1 = 'company', ?2, NULL), iif(?1 = 'department', ?2, NULL), \
-         iif(?1 = 'project', ?2, NULL), iif(?1 = 'agent', ?2, NULL), \
-         iif(?1 = 'sprint', ?2, NULL), iif(?1 = 'issue', ?2, NULL), ?3, ?4, ?7, ?5, ?6) \
-         ON CONFLICT (scope, scope_id, period) DO UPDATE SET token_cap = excluded.token_cap, \
-         usd_cap_micros = excluded.usd_cap_micros, warn_at_percent = excluded.warn_at_percent, \
-         hard_stop = excluded.hard_stop RETURNING ",
-        returned_columns!()
-    ))
-    .bind(scope)
-    .bind(scope_id)
-    .bind(b.period.as_str())
-    .bind(b.token_cap)
-    .bind(b.warn_at_percent)
-    .bind(b.hard_stop)
-    .bind(b.usd_cap_micros)
-    .fetch_one(&mut *tx)
-    .await
-    .and_then(budget)?;
-    let company: Option<i64> = sqlx::query_scalar(concat!(
-        "SELECT ",
-        budget_company!(),
-        " FROM citadel_budgets b WHERE b.id = ?"
-    ))
-    .bind(set.id.0)
-    .fetch_one(&mut *tx)
-    .await?;
-    let details = json!({"scope": scope, "scope_id": scope_id, "period": b.period.as_str(),
-                         "token_cap": b.token_cap, "usd_cap_micros": b.usd_cap_micros,
-                         "warn_at_percent": b.warn_at_percent, "hard_stop": b.hard_stop});
-    append_budget_event(
-        &mut tx,
-        set.id,
-        company.map(CompanyId),
-        actor,
-        if replace {
-            "budget.set"
-        } else {
-            "budget.created"
-        },
-        details,
-    )
-    .await?;
-    recompute_in(&mut tx, Some(set.id)).await?;
-    tx.commit().await?;
-    Ok(Some(set))
+    let company = company.to_string();
+    let new = cb::NewBudget {
+        kind,
+        subject: &subject,
+        company: Some(&company),
+        period: b.period.as_str(),
+        token_cap: b.token_cap,
+        usd_cap_micros: b.usd_cap_micros,
+        warn_at_percent: Some(i64::from(b.warn_at_percent)),
+        hard_stop: b.hard_stop,
+    };
+    let set = cb::set(pool, &new, DEVICE, actor, &now)
+        .await
+        .map_err(map)?;
+    Ok(Some(budget(set)?))
 }
 
-/// Every budget of the company, as it stands in the period containing `now`, by id.
-pub async fn company_budgets(
-    pool: impl sqlx::SqliteExecutor<'_>,
-    company: CompanyId,
-    now: &str,
-) -> Result<Vec<Standing>, Error> {
-    sqlx::query(concat!(
-        "SELECT ",
-        budget_columns!(),
-        ", ",
-        period_key!("?2"),
-        " AS period_key, coalesce(s.tokens, 0) AS spent, coalesce(s.raised, 0) AS raised, \
-         coalesce(s.usd_micros, 0) AS usd_spent, \
-         coalesce(s.raised_usd_micros, 0) AS raised_usd \
-         FROM citadel_budgets b LEFT JOIN citadel_budget_spend s ON s.budget_id = b.id \
-         AND s.period_key = ",
-        period_key!("?2"),
-        " WHERE ",
-        budget_company!(),
-        " = ?1 ORDER BY b.id"
-    ))
-    .bind(company.0)
-    .bind(now)
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(standing)
-    .collect()
-}
-
-/// Rebuilds every budget's spend counters from the ledger (as the org stands now), keeping the
-/// raises and warnings, and appends `budget.recomputed` by `actor`. For repair: the trigger
-/// keeps them in step. Returns how many (budget, period) counters hold spend.
-pub async fn recompute_budget_spend(pool: &SqlitePool, actor: AuditActor) -> Result<u64, Error> {
-    let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
-    let counted = recompute_in(&mut tx, None).await?;
-    let event = Event::new(actor, "budget.recomputed").details(json!({"counters": counted}));
-    append(&mut tx, event).await?;
-    tx.commit().await?;
-    Ok(counted)
-}
-
-/// Recounts the spend of budget `only` (every budget with `None`) from the ledger.
-pub(crate) async fn recompute_in(
-    conn: &mut SqliteConnection,
-    only: Option<BudgetId>,
-) -> Result<u64, Error> {
-    let only = only.map(|b| b.0);
-    sqlx::query(
-        "UPDATE citadel_budget_spend SET tokens = 0, usd_micros = 0 \
-         WHERE ?1 IS NULL OR budget_id = ?1",
-    )
-    .bind(only)
-    .execute(&mut *conn)
-    .await?;
-    sqlx::query(concat!(
-        "INSERT INTO citadel_budget_spend (budget_id, period_key, tokens, usd_micros) \
-         SELECT b.id, ",
-        period_key!("c.created_at"),
-        " AS key, sum(c.input_tokens + c.output_tokens + c.cache_tokens), \
-         coalesce(sum(c.cost_usd_micros), 0) \
-         FROM citadel_budgets b JOIN citadel_cost_events c ON ",
-        applies!("c.agent_id", "c.issue_id"),
-        " WHERE ?1 IS NULL OR b.id = ?1 GROUP BY b.id, key \
-         ON CONFLICT (budget_id, period_key) DO UPDATE SET tokens = excluded.tokens, \
-         usd_micros = excluded.usd_micros"
-    ))
-    .bind(only)
-    .execute(&mut *conn)
-    .await
-    .map(|r| r.rows_affected())
-}
-
-/// Appends `action` by `actor` about budget `id`.
-async fn append_budget_event(
-    conn: &mut SqliteConnection,
+/// Deletes the budget (its spend counters go with it) and audits it; `false` when there is no such
+/// budget (or it is not Citadel's).
+pub async fn remove_budget(
+    pool: &SqlitePool,
     id: BudgetId,
-    company: Option<CompanyId>,
     actor: AuditActor,
-    action: &str,
-    details: serde_json::Value,
-) -> Result<(), Error> {
-    let mut event = Event::new(actor, action)
-        .entity("budget", id.0)
-        .details(details);
-    if let Some(c) = company {
-        event = event.company(c.0);
+) -> Result<bool, Error> {
+    if get_budget(pool, id).await?.is_none() {
+        return Ok(false);
     }
+    cb::remove(pool, id.0, DEVICE, actor).await.map_err(map)
+}
+
+/// Rebuilds every budget's spend counters from the ledger, keeping the raises and warnings, and
+/// audits it. For repair: the Core keeps them in step. Returns how many counters hold spend.
+pub async fn recompute_budget_spend(pool: &SqlitePool, actor: AuditActor) -> Result<u64, Error> {
+    cb::recompute(pool, actor).await.map_err(map)
+}
+
+/// Deletes the budgets of the entity `scope` names (every period), inside the caller's transaction:
+/// the deletion's own cascade, which a Core table cannot do.
+pub async fn drop_budgets_of(
+    conn: &mut SqliteConnection,
+    scope: BudgetScope,
+    actor: AuditActor,
+) -> Result<u64, Error> {
+    let (kind, id) = scope_parts(scope);
+    cb::remove_subject_in(conn, kind, &id.to_string(), DEVICE, actor)
+        .await
+        .map_err(map)
+}
+
+/// Deletes every budget of the company and of everything in it (they are all bound to it).
+pub async fn drop_company_budgets(
+    conn: &mut SqliteConnection,
+    company: CompanyId,
+    actor: AuditActor,
+) -> Result<u64, Error> {
+    cb::remove_company_in(conn, &company.0.to_string(), DEVICE, actor)
+        .await
+        .map_err(map)
+}
+
+/// What a run of `agent` on `issue` counts against, as the Core names a subject: the agent, its
+/// company and departments (through its teams), the issue, its project and its sprint.
+pub async fn subjects_in(
+    conn: &mut SqliteConnection,
+    agent: AgentId,
+    issue: Option<IssueId>,
+) -> Result<Vec<(String, String)>, Error> {
+    let mut out = vec![("agent".to_owned(), agent.0.to_string())];
+    let company: Option<i64> =
+        sqlx::query_scalar("SELECT company_id FROM citadel_agents WHERE id = ?")
+            .bind(agent.0)
+            .fetch_optional(&mut *conn)
+            .await?;
+    if let Some(c) = company {
+        out.push(("company".to_owned(), c.to_string()));
+    }
+    let departments: Vec<i64> = sqlx::query_scalar(
+        "SELECT DISTINCT t.department_id FROM citadel_team_memberships m \
+         JOIN citadel_teams t ON t.id = m.team_id WHERE m.agent_id = ? ORDER BY 1",
+    )
+    .bind(agent.0)
+    .fetch_all(&mut *conn)
+    .await?;
+    out.extend(
+        departments
+            .into_iter()
+            .map(|d| ("department".to_owned(), d.to_string())),
+    );
+    if let Some(issue) = issue {
+        out.push(("issue".to_owned(), issue.0.to_string()));
+        let row: Option<(Option<i64>, Option<i64>)> =
+            sqlx::query_as("SELECT project_id, sprint_id FROM citadel_issues WHERE id = ?")
+                .bind(issue.0)
+                .fetch_optional(&mut *conn)
+                .await?;
+        if let Some((project, sprint)) = row {
+            out.extend(project.map(|p| ("project".to_owned(), p.to_string())));
+            out.extend(sprint.map(|s| ("sprint".to_owned(), s.to_string())));
+        }
+    }
+    Ok(out)
+}
+
+/// Every budget that applies to a run of `agent` on `issue`, as it stands in the period containing
+/// `now`; only hard-stop ones with `hard_only`.
+pub async fn standings_in(
+    conn: &mut SqliteConnection,
+    agent: AgentId,
+    issue: Option<IssueId>,
+    now: &str,
+    hard_only: bool,
+) -> Result<Vec<Standing>, Error> {
+    let owned = subjects_in(conn, agent, issue).await?;
+    let subjects: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    engine::standings_for(conn, &subjects, now, "", hard_only)
+        .await?
+        .into_iter()
+        .map(standing)
+        .collect()
+}
+
+/// [`standings_in`] on a connection of the pool.
+pub async fn standings(
+    pool: &SqlitePool,
+    agent: AgentId,
+    issue: Option<IssueId>,
+    now: &str,
+    hard_only: bool,
+) -> Result<Vec<Standing>, Error> {
+    let mut conn = pool.acquire().await?;
+    standings_in(&mut conn, agent, issue, now, hard_only).await
+}
+
+/// Whether a run of `agent` (of `company`) on `issue` may start at `now`: no hard-stop budget that
+/// applies is exhausted. Each exhausted one gets a `budget_overrun` approval for its period unless it
+/// has one already (whatever its status), with `budget.exhausted` appended.
+pub(crate) async fn admit_in(
+    conn: &mut SqliteConnection,
+    agent: AgentId,
+    company: CompanyId,
+    issue: Option<IssueId>,
+    now: &str,
+) -> Result<bool, Error> {
+    let exhausted: Vec<Standing> = standings_in(conn, agent, issue, now, true)
+        .await?
+        .into_iter()
+        .filter(|s| s.exhausted())
+        .collect();
+    for s in &exhausted {
+        let asked: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM citadel_approvals WHERE kind = 'budget_overrun' \
+             AND json_extract(payload, '$.budget') = ? AND json_extract(payload, '$.period') = ?)",
+        )
+        .bind(s.budget.id.0)
+        .bind(&s.period_key)
+        .fetch_one(&mut *conn)
+        .await?;
+        if asked {
+            continue;
+        }
+        let (scope, scope_id) = scope_parts(s.budget.scope);
+        // Dollars when they are what ran out; the decider's raise is in that unit.
+        let usd = s.left() > 0;
+        let summary = match usd {
+            true => format!(
+                "{scope} {scope_id} {} budget exhausted: {} of {} micro-dollars spent",
+                s.budget.period.as_str(),
+                s.usd_spent,
+                s.budget.usd_cap_micros.unwrap_or(0) + s.raised_usd
+            ),
+            false => format!(
+                "{scope} {scope_id} {} budget exhausted: {} of {} tokens spent",
+                s.budget.period.as_str(),
+                s.spent,
+                s.budget.token_cap + s.raised
+            ),
+        };
+        let payload = json!({"budget": s.budget.id.0, "period": s.period_key, "scope": scope,
+                             "scope_id": scope_id, "token_cap": s.budget.token_cap,
+                             "spent": s.spent, "raised": s.raised,
+                             "unit": if usd { "usd_micros" } else { "tokens" },
+                             "usd_cap_micros": s.budget.usd_cap_micros,
+                             "usd_spent": s.usd_spent, "summary": summary});
+        let new = crate::domain::gov::NewApproval {
+            company_id: company,
+            kind: crate::domain::gov::ApprovalKind::BudgetOverrun,
+            issue_id: issue,
+            sprint_id: None,
+            agent_id: None,
+            requested_by: agent,
+            payload: payload.to_string(),
+        };
+        let a = open_approval_in(conn, &new, None, now).await?;
+        let details = json!({"approval": a.id.0, "period": s.period_key, "spent": s.spent,
+                             "blocked_agent": agent.0, "budget": s.budget.id.0});
+        let event = Event::new(AuditActor::System, "budget.exhausted")
+            .entity("budget", s.budget.id.0)
+            .company(company.0)
+            .details(details);
+        append(conn, event).await?;
+    }
+    Ok(exhausted.is_empty())
+}
+
+/// After a cost event by `agent` on `issue`: the product owner of the issue's team is woken, once per
+/// budget and period (the key says which), for each budget the Core warned (`Guard::warned`; the Core
+/// appended the `budget.warning` row).
+pub(crate) async fn wake_for_warnings(
+    conn: &mut SqliteConnection,
+    warned: &[cb::Standing],
+    issue: Option<IssueId>,
+) -> Result<(), Error> {
+    if warned.is_empty() {
+        return Ok(());
+    }
+    let po: Option<i64> = sqlx::query_scalar(
+        "SELECT m.agent_id FROM citadel_issues i JOIN citadel_projects p ON p.id = i.project_id \
+         JOIN citadel_team_memberships m ON m.team_id = p.team_id \
+         AND m.team_role = 'product_owner' WHERE i.id = ?",
+    )
+    .bind(issue.map(|i| i.0))
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some(po) = po else {
+        return Ok(());
+    };
+    for s in warned {
+        let wake = crate::store::exec::NewWakeRequest {
+            agent_id: AgentId(po),
+            issue_id: issue,
+            source: crate::domain::work::WakeSource::Escalation,
+            reason: format!(
+                "a budget reached {}% of its cap ({} of {} tokens)",
+                s.budget.warn_at_percent, s.spent, s.budget.token_cap
+            ),
+            idempotency_key: format!("budget:{}:{}:warning", s.budget.id, s.period_key),
+            not_before: None,
+        };
+        crate::store::exec::enqueue_in(conn, &wake, 1).await?;
+    }
+    Ok(())
+}
+
+/// What an approved `budget_overrun` does, inside the deciding transaction: its budget's period (from
+/// the payload) gets `raise` more tokens (or dollars), and the raise is audited by `by`.
+pub(crate) async fn raise_in(
+    conn: &mut SqliteConnection,
+    a: &Approval,
+    raise: i64,
+    by: UserId,
+) -> Result<(), Error> {
+    let payload: serde_json::Value = serde_json::from_str(&a.payload).unwrap_or_default();
+    let (Some(id), Some(period)) = (payload["budget"].as_i64(), payload["period"].as_str()) else {
+        return Err(Error::InvalidArgument(format!(
+            "approval {} names no budget period",
+            a.id.0
+        )));
+    };
+    // A budget that ran out of dollars is raised in dollars (millionths), else in tokens.
+    let usd = payload["unit"].as_str() == Some("usd_micros");
+    let (tokens, dollars) = if usd { (0, raise) } else { (raise, 0) };
+    engine::raise_in(conn, id, period, tokens, dollars, DEVICE, user_actor(by))
+        .await
+        .map_err(map)?;
+    let unit = if usd { "usd_micros" } else { "tokens" };
+    let details = json!({"approval": a.id.0, "period": period, "raise": raise, "unit": unit});
+    let event = Event::new(user_actor(by), "budget.raised")
+        .entity("budget", id)
+        .company(a.company_id.0)
+        .details(details);
     append(conn, event).await
 }
 
-mod guard;
-pub use guard::*;
+/// A new budget's warning threshold when none is given: the `budget.warn_percent` setting
+/// (E15.17).
+// ponytail: server-wide until the Core settings store has company/project scopes; the monolith
+// read the company that owns `scope`.
+pub async fn default_warn_percent(pool: &SqlitePool, _scope: &BudgetScope) -> Result<u8, Error> {
+    let warn = crate::settings::value(pool, "budget.warn_percent").await?;
+    Ok(warn as u8)
+}
+
+/// The company owning what `scope` names; `None` when it names nothing.
+pub async fn scope_company(
+    pool: impl sqlx::SqliteExecutor<'_>,
+    scope: &BudgetScope,
+) -> Result<Option<i64>, Error> {
+    let (sql, id) = match scope {
+        BudgetScope::Company(c) => ("SELECT id FROM citadel_companies WHERE id = ?", c.0),
+        BudgetScope::Department(d) => (
+            "SELECT company_id FROM citadel_departments WHERE id = ?",
+            d.0,
+        ),
+        BudgetScope::Project(p) => ("SELECT company_id FROM citadel_projects WHERE id = ?", p.0),
+        BudgetScope::Agent(a) => ("SELECT company_id FROM citadel_agents WHERE id = ?", a.0),
+        BudgetScope::Sprint(s) => (
+            "SELECT p.company_id FROM citadel_sprints s JOIN citadel_projects p \
+             ON p.id = s.project_id WHERE s.id = ?",
+            s.0,
+        ),
+        BudgetScope::Issue(i) => (
+            "SELECT p.company_id FROM citadel_issues i JOIN citadel_projects p \
+             ON p.id = i.project_id WHERE i.id = ?",
+            i.0,
+        ),
+    };
+    sqlx::query_scalar(sql).bind(id).fetch_optional(pool).await
+}
+
 #[cfg(any(test, feature = "test-support"))]
 mod raw;
 #[cfg(any(test, feature = "test-support"))]

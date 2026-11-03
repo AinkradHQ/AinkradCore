@@ -293,8 +293,9 @@ pub async fn company_costs(
     let r = sqlx::query_as::<_, (i64, i64, i64, i64, i64, i64)>(
         "SELECT count(*), coalesce(sum(c.input_tokens),0), coalesce(sum(c.output_tokens),0), \
          coalesce(sum(c.cache_tokens),0), coalesce(sum(c.cost_usd_micros),0), \
-         coalesce(sum(CASE WHEN c.priced = 0 THEN c.input_tokens + c.output_tokens + c.cache_tokens ELSE 0 END),0) \
-         FROM citadel_cost_events c JOIN citadel_agents a ON a.id = c.agent_id WHERE a.company_id = ?",
+         coalesce(sum(CASE WHEN c.cost_usd_micros IS NULL THEN c.input_tokens + c.output_tokens + c.cache_tokens ELSE 0 END),0) \
+         FROM core_cost_events c JOIN core_cost_subjects s ON s.event_id = c.id \
+         AND s.kind = 'company' AND s.subject_id = CAST(? AS TEXT)",
     ).bind(id).fetch_one(&app.pool).await?;
     Ok(Json(CostReport {
         company_id: id,
@@ -316,9 +317,13 @@ pub async fn company_ledger(
 ) -> ApiResult<Vec<LedgerEntry>> {
     found(org::get_company(&app.pool, CompanyId(id)).await?, "company")?;
     let rows = sqlx::query(
-        "SELECT c.id, c.agent_id, c.issue_id, c.account_id, c.input_tokens, c.output_tokens, \
-         c.cache_tokens, c.cost_usd_micros, c.priced, c.created_at FROM citadel_cost_events c \
-         JOIN citadel_agents a ON a.id = c.agent_id WHERE a.company_id = ? ORDER BY c.id DESC LIMIT 500",
+        "SELECT c.id, \
+         (SELECT CAST(subject_id AS INTEGER) FROM core_cost_subjects WHERE event_id = c.id AND kind = 'agent') AS agent_id, \
+         (SELECT CAST(subject_id AS INTEGER) FROM core_cost_subjects WHERE event_id = c.id AND kind = 'issue') AS issue_id, \
+         c.legacy_account_id AS account_id, c.input_tokens, c.output_tokens, \
+         c.cache_tokens, c.cost_usd_micros, c.cost_usd_micros IS NOT NULL AS priced, c.occurred_at AS created_at \
+         FROM core_cost_events c JOIN core_cost_subjects s ON s.event_id = c.id \
+         AND s.kind = 'company' AND s.subject_id = CAST(? AS TEXT) ORDER BY c.id DESC LIMIT 500",
     ).bind(id).fetch_all(&app.pool).await?;
     use sqlx::Row;
     Ok(Json(

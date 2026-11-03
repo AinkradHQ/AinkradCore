@@ -489,10 +489,7 @@ async fn a_run_follows_its_session_to_success_and_releases_what_it_held() {
     // Again, and after a restart (a new pass over the same rows): nothing is repeated.
     let again = w.reconcile().await;
     assert_eq!(again, engine::Report::default());
-    assert_eq!(
-        count(&w, "SELECT count(*) FROM citadel_cost_events").await,
-        1
-    );
+    assert_eq!(count(&w, "SELECT count(*) FROM core_cost_events").await, 1);
     assert_eq!(
         count(
             &w,
@@ -669,16 +666,15 @@ async fn usage_moves_the_budget_once_and_warns_once() {
         .await;
     w.reconcile().await;
     w.reconcile().await; // the same totals twice add nothing
-    let spent: i64 =
-        sqlx::query_scalar("SELECT tokens FROM citadel_budget_spend WHERE budget_id = ?")
-            .bind(b.id.0)
-            .fetch_one(&w.app().pool)
-            .await
-            .unwrap();
+    let spent: i64 = sqlx::query_scalar("SELECT tokens FROM core_budget_spend WHERE budget_id = ?")
+        .bind(b.id.0)
+        .fetch_one(&w.app().pool)
+        .await
+        .unwrap();
     assert_eq!(spent, 600);
     let warned = count(
         &w,
-        "SELECT count(*) FROM audit_events WHERE action = 'citadel.budget.warning'",
+        "SELECT count(*) FROM audit_events WHERE action = 'budget.warning'",
     )
     .await;
     assert_eq!(warned, 1, "50% of 1000 was crossed once");
@@ -1317,7 +1313,7 @@ async fn a_cancel_during_session_start_kills_the_session_and_counts_its_spend() 
     assert!(!w.session(&run).await.live());
     let spent = count(
         &w,
-        "SELECT coalesce(sum(input_tokens), 0) FROM citadel_cost_events",
+        "SELECT coalesce(sum(input_tokens), 0) FROM core_cost_events",
     )
     .await;
     assert_eq!(spent, 100, "what it spent before the kill is on the ledger");

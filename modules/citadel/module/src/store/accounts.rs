@@ -455,7 +455,7 @@ pub async fn delete_account(
     .fetch_all(&mut *tx)
     .await?;
     let costs: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM citadel_cost_events WHERE account_id = ?")
+        sqlx::query_scalar("SELECT count(*) FROM core_cost_events WHERE legacy_account_id = ?")
             .bind(account.0)
             .fetch_one(&mut *tx)
             .await?;
