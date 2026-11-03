@@ -74,7 +74,7 @@ impl Module for Citadel {
     }
 
     fn admin_commands(&self) -> &'static [&'static str] {
-        &["seed", "ledger-to-core"]
+        &["seed", "ledger_to_core"]
     }
 
     fn admin<'a>(
@@ -86,7 +86,7 @@ impl Module for Citadel {
         Box::pin(async move {
             match name {
                 "seed" => admin::seed_command(pool, args).await,
-                "ledger-to-core" => store::gov::migrate_core::command(pool, args).await,
+                "ledger_to_core" => store::gov::migrate_core::command(pool, args).await,
                 _ => Err("no such command".to_owned()),
             }
         })

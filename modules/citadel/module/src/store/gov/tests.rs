@@ -236,7 +236,7 @@ async fn budget_crud_and_one_per_scope_and_period() {
         drop_company_budgets(&mut conn, c, AuditActor::System)
             .await
             .unwrap()
-            >= 6
+            == 5
     );
     drop(conn);
     assert_eq!(

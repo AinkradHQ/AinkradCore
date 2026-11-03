@@ -412,7 +412,8 @@ pub(crate) async fn admit_in(
                              "spent": s.spent, "raised": s.raised,
                              "unit": if usd { "usd_micros" } else { "tokens" },
                              "usd_cap_micros": s.budget.usd_cap_micros,
-                             "usd_spent": s.usd_spent, "summary": summary});
+                             "usd_spent": s.usd_spent, "summary": summary,
+                             "core_budget": true});
         let new = crate::domain::gov::NewApproval {
             company_id: company,
             kind: crate::domain::gov::ApprovalKind::BudgetOverrun,

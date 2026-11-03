@@ -1,6 +1,6 @@
 //! Copies Citadel's budgets and cost ledger into the Core's (KAN-450; design
 //! `2026-11-02-ai-provider-accounts` §12d), so the Core engine and ledger start with what Citadel
-//! already had. Run by `ainkrad-core-citadel citadel ledger-to-core [--dry-run]`.
+//! already had. Run by `ainkrad-core-citadel citadel ledger_to_core [--dry-run]`.
 //!
 //! - **Source untouched.** The `citadel_cost_events`, `citadel_budgets` and `citadel_budget_spend` rows
 //!   are only read; they stay as they are until a later migration drops the tables, so the copy can
@@ -14,7 +14,8 @@
 //!   spend counters against the source. Any difference is an error and nothing is written; `--dry-run`
 //!   does the same and rolls back.
 //! - **Ids.** Budget ids change (the Core numbers its own), so a pending `budget_overrun` approval
-//!   has its payload's budget id rewritten to the new one.
+//!   has its payload's budget id rewritten to the new one and marked `core_budget` (an approval the
+//!   adapter opens carries the mark from the start, so a re-run never mistakes either for an old id).
 //!
 //! Subscription events keep their tokens and no dollars (`unpriced`): the Core ledger does not
 //! record a billing mode (decision: API-key accounts only).
@@ -214,18 +215,23 @@ pub async fn migrate_to_core(pool: &SqlitePool, dry_run: bool) -> Result<Migrate
         "SELECT a.id, json_extract(a.payload, '$.budget'), c.id FROM citadel_approvals a \
          JOIN citadel_budgets b ON b.id = json_extract(a.payload, '$.budget') \
          JOIN core_budgets c ON c.subject_kind = b.scope AND c.subject_id = CAST(b.scope_id AS TEXT) \
-         AND c.period = b.period WHERE a.kind = 'budget_overrun' AND a.status = 'pending' ORDER BY a.id",
+         AND c.period = b.period WHERE a.kind = 'budget_overrun' AND a.status = 'pending' \
+         AND json_extract(a.payload, '$.core_budget') IS NULL ORDER BY a.id",
     )
     .fetch_all(&mut *tx)
     .await?;
     let mut approvals_rewritten = 0;
     for (approval, old, new) in pending {
+        // Marked as the Core's id, so a re-run (or an approval opened since) is never read as an old one.
+        sqlx::query(
+            "UPDATE citadel_approvals SET payload = json_set(payload, '$.budget', ?1, \
+             '$.core_budget', 1) WHERE id = ?2",
+        )
+        .bind(new)
+        .bind(approval)
+        .execute(&mut *tx)
+        .await?;
         if old != new {
-            sqlx::query("UPDATE citadel_approvals SET payload = json_set(payload, '$.budget', ?) WHERE id = ?")
-                .bind(new)
-                .bind(approval)
-                .execute(&mut *tx)
-                .await?;
             approvals_rewritten += 1;
         }
     }
@@ -257,12 +263,12 @@ pub async fn migrate_to_core(pool: &SqlitePool, dry_run: bool) -> Result<Migrate
     Ok(done)
 }
 
-/// The admin command: `citadel ledger-to-core [--dry-run]`.
+/// The admin command: `citadel ledger_to_core [--dry-run]`.
 pub async fn command(pool: &SqlitePool, args: &[&str]) -> Result<String, String> {
     let dry_run = match args {
         [] => false,
         ["--dry-run"] => true,
-        _ => return Err("usage: citadel ledger-to-core [--dry-run]".to_owned()),
+        _ => return Err("usage: citadel ledger_to_core [--dry-run]".to_owned()),
     };
     let m = migrate_to_core(pool, dry_run)
         .await
