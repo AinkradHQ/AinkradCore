@@ -96,8 +96,20 @@ pub async fn call_in(
     path: &str,
     body: Option<Value>,
 ) -> (StatusCode, Value) {
-    let uri = format!("{BASE}{path}");
     let bytes = body.map(|v| v.to_string()).unwrap_or_default();
+    call_raw(fx, dev, company, method, path, bytes.into_bytes()).await
+}
+
+/// [`call_in`] with the body's exact bytes, for a test that must control the text sent.
+pub async fn call_raw(
+    fx: &Fx,
+    dev: Option<&TestDevice>,
+    company: Option<&str>,
+    method: Method,
+    path: &str,
+    bytes: Vec<u8>,
+) -> (StatusCode, Value) {
+    let uri = format!("{BASE}{path}");
     let mut b = Request::builder()
         .method(method.clone())
         .uri(&uri)
@@ -106,7 +118,7 @@ pub async fn call_in(
         b = b.header("x-citadel-company", company);
     }
     if let Some(dev) = dev {
-        for (name, value) in dev.headers(method.as_str(), &uri, bytes.as_bytes()) {
+        for (name, value) in dev.headers(method.as_str(), &uri, &bytes) {
             b = b.header(name, value);
         }
     }
