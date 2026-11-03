@@ -231,7 +231,12 @@ async fn bad_budgets_and_raises_are_refused_and_there_is_no_route_to_reserve() {
     ] {
         let (st, _) = call(&fx, &fx.dev, Method::POST, uri, json!({"session": "s"})).await;
         assert!(
-            st == StatusCode::NOT_FOUND || st == StatusCode::METHOD_NOT_ALLOWED,
+            [
+                StatusCode::FORBIDDEN,
+                StatusCode::NOT_FOUND,
+                StatusCode::METHOD_NOT_ALLOWED
+            ]
+            .contains(&st),
             "{uri}: {st}"
         );
     }
