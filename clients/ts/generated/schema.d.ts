@@ -2549,7 +2549,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every account's tokens, messages and dollars over the last five hours and seven days, its limits with their use, and its recent drops */
+            /** @description Needs `admin`. Every account's tokens, messages and dollars over the last five hours and seven days, its limits with their use, and its recent drops. Events that carry only a `legacy_account_id` (Citadel's old account id) are not counted here until the account port lands */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2711,7 +2711,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Cleared (audited as `account.limit_cleared`); `cleared` is false when there was no such limit */
+            /** @description Cleared (audited as `account.limit_cleared`); `cleared` is false when there was no such limit; 404 for no such account */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3379,7 +3379,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Cost events, newest first. One event is one attempt of a session: a delta, never a running total */
+            /** @description Cost events, newest first (needs `admin`). One event is one attempt of a session: a delta, never a running total */
             200: {
                 headers: {
                     [name: string]: unknown;
