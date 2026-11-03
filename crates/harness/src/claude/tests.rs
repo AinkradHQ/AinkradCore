@@ -445,3 +445,58 @@ fn an_unknown_control_request_then_an_exit_is_a_protocol_failure() {
     decoder.decode(&json!({"type": "result", "subtype": "success", "is_error": false}));
     assert_eq!(decoder.ended_early(), None, "a finished turn clears it");
 }
+
+fn assistant(id: &str, input: u64, output: u64) -> Value {
+    json!({"type": "assistant", "message": {"id": id, "content": [],
+        "usage": {"input_tokens": input, "output_tokens": output}}})
+}
+
+/// The `UsageSoFar` events a decoder gives for these messages, last one wins.
+fn so_far(decoder: &mut Decoder, messages: &[Value]) -> Vec<Usage> {
+    messages
+        .iter()
+        .flat_map(|m| decoder.decode(m))
+        .filter_map(|e| match e {
+            HarnessEvent::UsageSoFar(u) => Some(u),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A message repeats on the wire (same use: silent, changed use: replaced, never added); an id
+/// returning after another message is the same message; `result` starts the next turn clean.
+#[test]
+fn usage_so_far_is_the_sum_of_the_latest_use_per_message_id() {
+    let mut d = Decoder::default();
+    let got = so_far(
+        &mut d,
+        &[
+            assistant("a", 10, 1),
+            assistant("a", 10, 1), // identical repeat: no event
+            assistant("a", 10, 5), // same id, newer use: replaces
+            assistant("b", 20, 2), // interleaved sub-agent message
+            assistant("a", 10, 7), // `a` returns after `b`
+        ],
+    );
+    let out: Vec<(u64, u64)> = got.iter().map(|u| (u.input, u.output)).collect();
+    assert_eq!(out, [(10, 1), (10, 5), (30, 7), (30, 9)]);
+
+    d.decode(&json!({"type": "result", "subtype": "success", "is_error": false}));
+    let got = so_far(&mut d, &[assistant("a", 3, 1)]);
+    assert_eq!((got[0].input, got[0].output), (3, 1), "cleared on result");
+}
+
+/// KAN-420: one turn that never ends must not grow the decoder without limit, and the sum
+/// must stay exact for every id that is still live.
+#[test]
+fn a_turn_of_100k_distinct_messages_holds_bounded_state() {
+    let mut d = Decoder::default();
+    let mut last = Usage::default();
+    for i in 0..100_000u64 {
+        for u in so_far(&mut d, &[assistant(&format!("m{i}"), 1, 2)]) {
+            last = u;
+        }
+    }
+    assert_eq!((last.input, last.output), (100_000, 200_000), "sum is exact");
+    assert!(d.messages.len() <= 4096, "held {} ids", d.messages.len());
+}
