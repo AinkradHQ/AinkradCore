@@ -147,6 +147,7 @@ bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --pty --pair https:/
 U=$D/systemd/ainkrad-runner.service
 grep -qx 'KillMode=process' "$U" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: unit lacks KillMode=process" >&2; }
 grep -v '^#' "$U" | grep -q -- '--enable-' && { fail=$((fail + 1)); echo "FAIL: the unit enables a driver" >&2; } || pass=$((pass + 1))
+grep -qx 'Environment=MALLOC_ARENA_MAX=1' "$U" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: unit lacks MALLOC_ARENA_MAX=1" >&2; }
 P=$D/launchd/io.ainkrad.runner.plist
 grep -A1 '<key>AbandonProcessGroup</key>' "$P" | grep -q '<true/>' && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: plist lacks AbandonProcessGroup" >&2; }
 sed '/<!--/,/-->/d' "$P" | grep -q -- '--enable-' && { fail=$((fail + 1)); echo "FAIL: the plist enables a driver" >&2; } || pass=$((pass + 1))
