@@ -545,6 +545,13 @@
           "auth.lockout",
           "auth.lockout_cleared",
           "auth.step_up",
+          "budget.created",
+          "budget.deleted",
+          "budget.exhausted",
+          "budget.raised",
+          "budget.recomputed",
+          "budget.set",
+          "budget.warning",
           "device.enrolled",
           "device.last_admin_refused",
           "device.renamed",
@@ -635,6 +642,17 @@
           "agent",
           "provider",
           "pool_id"
+        ],
+        "type": "object"
+      },
+      "BudgetDeleted": {
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
         ],
         "type": "object"
       },
@@ -2249,6 +2267,34 @@
         ],
         "type": "object"
       },
+      "RaiseBudget": {
+        "properties": {
+          "period_key": {
+            "description": "The period that ran out: `2026-10-22`, a week's Monday, `2026-10` or `total`.",
+            "type": "string"
+          },
+          "tokens": {
+            "description": "Tokens to add (0 when raising dollars).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "usd_micros": {
+            "description": "Millionths of a dollar to add.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "period_key"
+        ],
+        "type": "object"
+      },
       "RedeemLease": {
         "description": "A lease to redeem. No `Debug` (review L4).",
         "properties": {
@@ -2741,6 +2787,59 @@
         ],
         "type": "object"
       },
+      "SetSubjectBudget": {
+        "properties": {
+          "company": {
+            "description": "The owner's company binding; for a company budget it must be the subject (or absent).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hard_stop": {
+            "description": "Default true.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "period": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "token_cap": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "usd_cap_micros": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "warn_at_percent": {
+            "description": "Default 80.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "subject",
+          "period",
+          "token_cap"
+        ],
+        "type": "object"
+      },
       "Setting": {
         "description": "One setting and its effective value at the scope asked about.",
         "properties": {
@@ -2891,6 +2990,115 @@
         },
         "required": [
           "challenge"
+        ],
+        "type": "object"
+      },
+      "SubjectBudget": {
+        "description": "A budget and where it stands in the period containing now.",
+        "properties": {
+          "company": {
+            "description": "The owner's company binding (a company budget's is its subject).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "exhausted": {
+            "description": "Nothing left in tokens or dollars.",
+            "type": "boolean"
+          },
+          "hard_stop": {
+            "description": "Stops new sessions, and a running one, at the cap; else it only warns.",
+            "type": "boolean"
+          },
+          "held": {
+            "description": "Tokens held by sessions that reserved them and have not spent them yet.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "held_usd": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "kind": {
+            "description": "`account`, `pool`, `agent`, `company`, `department`, `project`, `sprint` or `issue`.",
+            "type": "string"
+          },
+          "period": {
+            "description": "`day`, `week` (from Monday), `month` or `total`.",
+            "type": "string"
+          },
+          "period_key": {
+            "description": "The period this standing is for: `2026-10-22`, a week's Monday, `2026-10` or `total`.",
+            "type": "string"
+          },
+          "raised": {
+            "description": "Tokens added for the period by approved overruns.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "raised_usd": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "spent": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "subject": {
+            "description": "The subject's id: an account or pool id, or the owning module's opaque id.",
+            "type": "string"
+          },
+          "token_cap": {
+            "description": "Tokens per period; 0 with a dollar cap is a dollars-only budget.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "usd_cap_micros": {
+            "description": "Millionths of a dollar per period.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "usd_spent": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "warn_at_percent": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "subject",
+          "period",
+          "token_cap",
+          "warn_at_percent",
+          "hard_stop",
+          "period_key",
+          "spent",
+          "raised",
+          "usd_spent",
+          "raised_usd",
+          "held",
+          "held_usd",
+          "exhausted",
+          "created_at",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -3207,7 +3415,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.34.0"
+    "version": "1.35.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -5042,6 +5250,249 @@
         },
         "tags": [
           "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/budgets": {
+      "get": {
+        "operationId": "listBudgets",
+        "parameters": [
+          {
+            "description": "Only this kind of subject.",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only this subject (with `kind`).",
+            "in": "query",
+            "name": "subject",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only budgets bound to this company.",
+            "in": "query",
+            "name": "company",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SubjectBudget"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Every budget with its standing in the current period, by id"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "budgets"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "put": {
+        "operationId": "setBudget",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetSubjectBudget"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubjectBudget"
+                }
+              }
+            },
+            "description": "Created, or its caps changed (audited as `budget.created` or `budget.set`), with the period's spend counted from the ledger. 404 for an account or pool that does not exist; 400 for a bad kind, subject, period or cap"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "budgets"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/budgets/{id}": {
+      "delete": {
+        "operationId": "deleteBudget",
+        "parameters": [
+          {
+            "description": "The budget's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetDeleted"
+                }
+              }
+            },
+            "description": "Deleted with its counters and holds (audited as `budget.deleted`); `deleted` is false when there was no such budget"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "budgets"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/budgets/{id}/raise": {
+      "post": {
+        "operationId": "raiseBudget",
+        "parameters": [
+          {
+            "description": "The budget's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RaiseBudget"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubjectBudget"
+                }
+              }
+            },
+            "description": "That period's headroom raised and its exhaustion alert cleared (audited as `budget.raised`). 404 for no such budget; 400 for an amount of 0 or a bad period key"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "budgets"
         ],
         "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"

@@ -101,6 +101,18 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `DELETE /api/v1/bindings/{agent}/{provider}`.
     /// - Remark: Generated from `#/paths//api/v1/bindings/{agent}/{provider}/delete(unbindAgent)`.
     func unbindAgent(_ input: Operations.UnbindAgent.Input) async throws -> Operations.UnbindAgent.Output
+    /// - Remark: HTTP `GET /api/v1/budgets`.
+    /// - Remark: Generated from `#/paths//api/v1/budgets/get(listBudgets)`.
+    func listBudgets(_ input: Operations.ListBudgets.Input) async throws -> Operations.ListBudgets.Output
+    /// - Remark: HTTP `PUT /api/v1/budgets`.
+    /// - Remark: Generated from `#/paths//api/v1/budgets/put(setBudget)`.
+    func setBudget(_ input: Operations.SetBudget.Input) async throws -> Operations.SetBudget.Output
+    /// - Remark: HTTP `DELETE /api/v1/budgets/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/budgets/{id}/delete(deleteBudget)`.
+    func deleteBudget(_ input: Operations.DeleteBudget.Input) async throws -> Operations.DeleteBudget.Output
+    /// - Remark: HTTP `POST /api/v1/budgets/{id}/raise`.
+    /// - Remark: Generated from `#/paths//api/v1/budgets/{id}/raise/post(raiseBudget)`.
+    func raiseBudget(_ input: Operations.RaiseBudget.Input) async throws -> Operations.RaiseBudget.Output
     /// - Remark: HTTP `GET /api/v1/costs`.
     /// - Remark: Generated from `#/paths//api/v1/costs/get(listCosts)`.
     func listCosts(_ input: Operations.ListCosts.Input) async throws -> Operations.ListCosts.Output
@@ -616,6 +628,52 @@ extension APIProtocol {
         try await unbindAgent(Operations.UnbindAgent.Input(
             path: path,
             headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/budgets`.
+    /// - Remark: Generated from `#/paths//api/v1/budgets/get(listBudgets)`.
+    public func listBudgets(
+        query: Operations.ListBudgets.Input.Query = .init(),
+        headers: Operations.ListBudgets.Input.Headers = .init()
+    ) async throws -> Operations.ListBudgets.Output {
+        try await listBudgets(Operations.ListBudgets.Input(
+            query: query,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `PUT /api/v1/budgets`.
+    /// - Remark: Generated from `#/paths//api/v1/budgets/put(setBudget)`.
+    public func setBudget(
+        headers: Operations.SetBudget.Input.Headers = .init(),
+        body: Operations.SetBudget.Input.Body
+    ) async throws -> Operations.SetBudget.Output {
+        try await setBudget(Operations.SetBudget.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `DELETE /api/v1/budgets/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/budgets/{id}/delete(deleteBudget)`.
+    public func deleteBudget(
+        path: Operations.DeleteBudget.Input.Path,
+        headers: Operations.DeleteBudget.Input.Headers = .init()
+    ) async throws -> Operations.DeleteBudget.Output {
+        try await deleteBudget(Operations.DeleteBudget.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/budgets/{id}/raise`.
+    /// - Remark: Generated from `#/paths//api/v1/budgets/{id}/raise/post(raiseBudget)`.
+    public func raiseBudget(
+        path: Operations.RaiseBudget.Input.Path,
+        headers: Operations.RaiseBudget.Input.Headers = .init(),
+        body: Operations.RaiseBudget.Input.Body
+    ) async throws -> Operations.RaiseBudget.Output {
+        try await raiseBudget(Operations.RaiseBudget.Input(
+            path: path,
+            headers: headers,
+            body: body
         ))
     }
     /// - Remark: HTTP `GET /api/v1/costs`.
