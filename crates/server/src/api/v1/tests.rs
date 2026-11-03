@@ -38,6 +38,7 @@ mod pairing;
 mod pairing_abuse;
 mod passkeys;
 mod preauth;
+mod providers;
 mod push;
 mod revocation;
 mod runners;

@@ -88,7 +88,8 @@
 ///    live server (KAN-275); the Core's own paths are unchanged.
 /// 30: Core-owned provider accounts (KAN-428): the `account.created`, `.secret_replaced`, `.state_set`,
 ///    `.cap_set` and `.deleted` audit actions. The routes follow (KAN-432).
-pub const API_MINOR: u32 = 30;
+/// 31: provider definitions (KAN-429): the `provider.created`, `.updated` and `.deleted` audit actions.
+pub const API_MINOR: u32 = 31;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

@@ -127,6 +127,12 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../migrations/0015_accounts.up.sql"),
         down: include_str!("../../migrations/0015_accounts.down.sql"),
     },
+    Migration {
+        version: 16,
+        name: "provider_defs",
+        up: include_str!("../../migrations/0016_provider_defs.up.sql"),
+        down: include_str!("../../migrations/0016_provider_defs.down.sql"),
+    },
 ];
 
 #[derive(Debug)]

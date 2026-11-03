@@ -44,6 +44,9 @@ pub struct Account {
     pub id: i64,
     pub provider: String,
     pub label: String,
+    /// The provider's base URL when the account was stored; later edits of the definition do not
+    /// move it (KAN-429).
+    pub base_url: String,
     /// The broker secret holding the key. Internal: an API type must not carry it to a client
     /// that has no use for it (11b: the `read` scope saw it before).
     pub secret_name: String,
@@ -73,7 +76,7 @@ pub struct NewAccount<'a> {
     pub cap: Option<i64>,
 }
 
-const COLUMNS: &str = "a.id, a.provider, a.label, a.secret_name, a.masked_tail, a.state, \
+const COLUMNS: &str = "a.id, a.provider, a.label, a.secret_name, a.masked_tail, a.base_url, a.state, \
     a.state_reason, a.state_until, a.cap, a.owner, a.last_used_at, a.created_at, a.updated_at, \
     COALESCE(s.runners, '[]') AS runners";
 
@@ -92,6 +95,7 @@ fn row(r: SqliteRow) -> Result<Account, sqlx::Error> {
         label: r.try_get("label")?,
         secret_name: r.try_get("secret_name")?,
         masked_tail: r.try_get("masked_tail")?,
+        base_url: r.try_get("base_url")?,
         state: r.try_get("state")?,
         state_reason: r.try_get("state_reason")?,
         state_until: r.try_get("state_until")?,
@@ -210,6 +214,9 @@ pub async fn create(
     // A pasted key often carries a trailing newline: neither the sealed value nor the tail keeps it.
     let key = new.value.trim();
     let mut tx = super::begin_write(pool).await?;
+    let base_url = super::providers::get_in(&mut tx, new.provider)
+        .await?
+        .base_url;
     let taken: i64 = sqlx::query_scalar("SELECT count(*) FROM core_accounts WHERE label = ?")
         .bind(new.label)
         .fetch_one(&mut *tx)
@@ -220,12 +227,13 @@ pub async fn create(
     // The secret's name needs the row's id, so the row goes in first and the name follows, in
     // the same transaction; nothing outside it ever sees the placeholder.
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO core_accounts (provider, label, secret_name, masked_tail, cap, owner, \
-         created_at, updated_at) VALUES (?, ?, '', ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO core_accounts (provider, label, secret_name, masked_tail, base_url, cap, \
+         owner, created_at, updated_at) VALUES (?, ?, '', ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(new.provider)
     .bind(new.label)
     .bind(tail_of(key))
+    .bind(&base_url)
     .bind(cap)
     .bind(owner)
     .bind(now)
@@ -250,7 +258,7 @@ pub async fn create(
         "account.created",
         id,
         json!({"provider": new.provider, "label": new.label, "cap": cap,
-               "runners": new.runners, "by_device": owner}),
+               "base_url": base_url, "runners": new.runners, "by_device": owner}),
     )
     .await?;
     let a = find(&mut tx, id).await?;
