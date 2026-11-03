@@ -199,6 +199,38 @@ async fn first(
         > 0)
 }
 
+/// The budgets that name any of `subjects`, each as it stands in the period containing `now`;
+/// only hard-stop ones with `hard_only`. The holds of `exclude_session` are not counted.
+pub async fn standings_for(
+    conn: &mut SqliteConnection,
+    subjects: &[(&str, &str)],
+    now: &str,
+    exclude_session: &str,
+    hard_only: bool,
+) -> Result<Vec<Standing>, sqlx::Error> {
+    let mut all: Vec<Standing> = Vec::new();
+    for (kind, id) in subjects {
+        let found = sqlx::query(concat!(
+            standing_sql!(),
+            " WHERE b.subject_kind = ?3 AND b.subject_id = ?4 AND (?5 = 0 OR b.hard_stop = 1) \
+             ORDER BY b.id"
+        ))
+        .bind(now)
+        .bind(exclude_session)
+        .bind(kind)
+        .bind(id)
+        .bind(hard_only)
+        .fetch_all(&mut *conn)
+        .await?;
+        for r in &found {
+            all.push(standing(r)?);
+        }
+    }
+    all.sort_by_key(|s| s.budget.id);
+    all.dedup_by_key(|s| s.budget.id);
+    Ok(all)
+}
+
 /// Reserves what a new `session` may spend (`tokens` and `usd` micro-dollars) against every hard-stop
 /// budget the subjects name, `ttl_secs` long. Atomic when the caller holds a write transaction
 /// (`begin_write`): the headroom is read and the holds written with nothing between. A session that
@@ -231,22 +263,7 @@ pub async fn reserve_in(
         .bind(now)
         .execute(&mut *conn)
         .await?;
-    let mut all: Vec<Standing> = Vec::new();
-    for (kind, id) in subjects {
-        let found = sqlx::query(concat!(
-            standing_sql!(),
-            " WHERE b.subject_kind = ?3 AND b.subject_id = ?4 AND b.hard_stop = 1 ORDER BY b.id"
-        ))
-        .bind(now)
-        .bind(session)
-        .bind(kind)
-        .bind(id)
-        .fetch_all(&mut *conn)
-        .await?;
-        for r in &found {
-            all.push(standing(r)?);
-        }
-    }
+    let all = standings_for(conn, subjects, now, session, true).await?;
     let blocked: Vec<Standing> = all
         .iter()
         .filter(|s| !s.has_room(tokens, usd))

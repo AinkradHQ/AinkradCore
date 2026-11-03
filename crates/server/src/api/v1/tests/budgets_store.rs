@@ -608,3 +608,66 @@ async fn removing_a_budget_takes_its_counters_and_holds_and_a_list_filters_by_co
     let mut c = fx.app.pool.acquire().await.unwrap();
     assert_eq!(costs::totals(&mut c).await.unwrap().events, 1);
 }
+
+#[tokio::test]
+async fn a_module_removes_a_subjects_or_a_companys_budgets_and_reads_who_owns_one() {
+    let fx = fx().await;
+    let mut a = bud("agent", "a1", "day", 10);
+    a.company = Some("7");
+    let a = set(&fx, &a).await;
+    let mut b = bud("agent", "a1", "month", 10);
+    b.company = Some("7");
+    set(&fx, &b).await;
+    let mut p = bud("project", "p1", "day", 10);
+    p.company = Some("7");
+    set(&fx, &p).await;
+    set(&fx, &bud("project", "p2", "day", 10)).await;
+    assert_eq!(
+        budgets::company_of(&fx.app.pool, a.id).await.unwrap(),
+        Some(Some("7".to_owned()))
+    );
+    assert_eq!(budgets::company_of(&fx.app.pool, 999).await.unwrap(), None);
+    let p2 = budgets::list(&fx.app.pool, Some("project"), Some("p2"), None, NOW)
+        .await
+        .unwrap();
+    assert_eq!(
+        budgets::company_of(&fx.app.pool, p2[0].budget.id)
+            .await
+            .unwrap(),
+        Some(None)
+    );
+    // standings_for reads the budgets any listed subject names, once each.
+    let mut c = fx.app.pool.acquire().await.unwrap();
+    let st = guard::standings_for(
+        &mut c,
+        &[("agent", "a1"), ("agent", "a1"), ("project", "p2")],
+        NOW,
+        "",
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(st.len(), 3);
+    // One subject's budgets, every period; then a company's, with what it owns.
+    assert_eq!(
+        budgets::remove_subject_in(&mut c, "agent", "a1", "test", BY)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        budgets::remove_company_in(&mut c, "7", "test", BY)
+            .await
+            .unwrap(),
+        1
+    );
+    drop(c);
+    let left: Vec<String> = budgets::list(&fx.app.pool, None, None, None, NOW)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| s.budget.subject)
+        .collect();
+    assert_eq!(left, ["p2"]);
+    assert_eq!(actions(&fx, "budget.deleted").await.len(), 3);
+}

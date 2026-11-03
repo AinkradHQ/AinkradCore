@@ -438,6 +438,73 @@ pub async fn remove(
     Ok(true)
 }
 
+/// Deletes every budget of one subject (all its periods) in the caller's transaction, each audited as
+/// `budget.deleted`: what a module calls when it deletes the subject, since a subject is opaque text and
+/// no foreign key cascades. A subject id a module may reuse must not keep another's budget.
+pub async fn remove_subject_in(
+    conn: &mut SqliteConnection,
+    kind: &str,
+    subject: &str,
+    by_device: &str,
+    actor: AuditActor,
+) -> Result<u64, Error> {
+    let ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM core_budgets WHERE subject_kind = ? AND subject_id = ? ORDER BY id",
+    )
+    .bind(kind)
+    .bind(subject)
+    .fetch_all(&mut *conn)
+    .await?;
+    delete_in(conn, &ids, by_device, actor).await
+}
+
+/// Deletes every budget bound to `company` (its own and those of everything it owns), as
+/// [`remove_subject_in`] does.
+pub async fn remove_company_in(
+    conn: &mut SqliteConnection,
+    company: &str,
+    by_device: &str,
+    actor: AuditActor,
+) -> Result<u64, Error> {
+    let ids: Vec<i64> =
+        sqlx::query_scalar("SELECT id FROM core_budgets WHERE company = ? ORDER BY id")
+            .bind(company)
+            .fetch_all(&mut *conn)
+            .await?;
+    delete_in(conn, &ids, by_device, actor).await
+}
+
+async fn delete_in(
+    conn: &mut SqliteConnection,
+    ids: &[i64],
+    by_device: &str,
+    actor: AuditActor,
+) -> Result<u64, Error> {
+    for id in ids {
+        let r = sqlx::query(concat!(
+            "DELETE FROM core_budgets WHERE id = ? RETURNING ",
+            "id, subject_kind, subject_id, company, period, token_cap, usd_cap_micros, \
+             warn_at_percent, hard_stop, created_at, updated_at"
+        ))
+        .bind(id)
+        .fetch_one(&mut *conn)
+        .await?;
+        let b = budget(&r)?;
+        let details = json!({"kind": b.kind, "subject": b.subject, "company": b.company,
+                             "period": b.period, "token_cap": b.token_cap, "by_device": by_device});
+        audit_in(conn, actor, "budget.deleted", *id, details).await?;
+    }
+    Ok(ids.len() as u64)
+}
+
+/// The company binding of budget `id`: no row when there is no such budget, a NULL when it has none.
+pub async fn company_of(pool: &SqlitePool, id: i64) -> Result<Option<Option<String>>, sqlx::Error> {
+    sqlx::query_scalar("SELECT company FROM core_budgets WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+}
+
 /// Rebuilds every budget's spend counters from the ledger, keeping the raises and the alerts already
 /// sent, and appends `budget.recomputed`. For repair: [`guard::apply_in`] keeps them in step.
 pub async fn recompute(pool: &SqlitePool, actor: AuditActor) -> Result<u64, Error> {

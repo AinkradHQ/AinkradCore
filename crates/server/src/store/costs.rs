@@ -181,6 +181,27 @@ pub async fn record_in(
     c: &NewCost<'_>,
     now: &str,
 ) -> Result<Recorded, Error> {
+    record_priced_in(conn, c, Pricing::Book, now).await
+}
+
+/// Where a cost comes from when the provider reported none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pricing {
+    /// The Core's price book (then a user definition's own list).
+    Book,
+    /// The caller's own rates (a module's price book, which has not moved into the Core's yet).
+    Own(prices::Rates),
+    /// Nobody prices it: a harness billed by subscription records tokens only.
+    Unpriced,
+}
+
+/// [`record_in`] with the caller saying how an unreported cost is priced.
+pub async fn record_priced_in(
+    conn: &mut SqliteConnection,
+    c: &NewCost<'_>,
+    pricing: Pricing,
+    now: &str,
+) -> Result<Recorded, Error> {
     check(c)?;
     if let Some(r) = sqlx::query(concat!(
         "SELECT ",
@@ -197,9 +218,10 @@ pub async fn record_in(
             guard: Guard::default(),
         });
     }
-    let rates = match c.reported_usd_micros {
-        Some(_) => None,
-        None => prices::rates_in(conn, c.provider, c.model).await?,
+    let rates = match (c.reported_usd_micros, pricing) {
+        (Some(_), _) | (None, Pricing::Unpriced) => None,
+        (None, Pricing::Own(r)) => Some(r),
+        (None, Pricing::Book) => prices::rates_in(conn, c.provider, c.model).await?,
     };
     let (cost, basis, rates) = match (c.reported_usd_micros, rates) {
         (Some(usd), _) => (Some(usd), "provider_reported", None),
@@ -428,6 +450,39 @@ pub async fn totals(conn: &mut SqliteConnection) -> Result<Totals, sqlx::Error> 
         cost_usd_micros: cost,
         unpriced,
     })
+}
+
+/// What a session has recorded: input, output and cache tokens, and the dollars (corrections
+/// included; unpriced events count 0).
+pub async fn session_totals(
+    conn: &mut SqliteConnection,
+    session: &str,
+) -> Result<[i64; 4], sqlx::Error> {
+    let (i, o, c, usd): (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT coalesce(sum(input_tokens), 0), coalesce(sum(output_tokens), 0), \
+         coalesce(sum(cache_tokens), 0), coalesce(sum(cost_usd_micros), 0) \
+         FROM core_cost_events WHERE session = ?",
+    )
+    .bind(session)
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok([i, o, c, usd])
+}
+
+/// The dollars of everything a session recorded (corrections included), or `None` when any of its
+/// events is unpriced: a session is priced once every one of its events is.
+pub async fn session_cost(
+    conn: &mut SqliteConnection,
+    session: &str,
+) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT iif(NOT EXISTS (SELECT 1 FROM core_cost_events WHERE session = ?1 \
+         AND basis = 'unpriced'), (SELECT coalesce(sum(cost_usd_micros), 0) FROM core_cost_events \
+         WHERE session = ?1), NULL)",
+    )
+    .bind(session)
+    .fetch_one(&mut *conn)
+    .await
 }
 
 /// [`record_in`] in its own write transaction.

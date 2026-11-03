@@ -558,3 +558,66 @@ async fn usage_windows_limits_company_slices_and_drops_read_from_the_ledger() {
         ]
     );
 }
+
+#[tokio::test]
+async fn a_caller_prices_with_its_own_rates_or_not_at_all_and_a_session_is_priced_once_all_its_events_are()
+ {
+    use crate::store::costs::Pricing;
+    use crate::store::prices::Rates;
+    let fx = fx().await;
+    // The Core's book has a price; the caller's own rates beat it, and `Unpriced` ignores it.
+    price(&fx, [9_000_000, 9_000_000, 9_000_000]).await;
+    let own = Rates {
+        input: 1_000_000,
+        output: 2_000_000,
+        cache: 0,
+        priced_at: "2026-10-01T00:00:00.000Z".to_owned(),
+    };
+    let mut conn = fx.app.pool.acquire().await.unwrap();
+    let a = costs::record_priced_in(
+        &mut conn,
+        &cost("s1", 0, "k1", None),
+        Pricing::Own(own),
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (
+            a.event.basis.as_str(),
+            a.event.cost_usd_micros,
+            a.event.priced_at.as_deref()
+        ),
+        (
+            "list_price",
+            Some(1_000_000 + 1_000_000),
+            Some("2026-10-01T00:00:00.000Z")
+        )
+    );
+    assert_eq!(
+        costs::session_cost(&mut conn, "s1").await.unwrap(),
+        Some(2_000_000)
+    );
+    let b = costs::record_priced_in(
+        &mut conn,
+        &cost("s1", 1, "k2", None),
+        Pricing::Unpriced,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (b.event.basis.as_str(), b.event.cost_usd_micros),
+        ("unpriced", None)
+    );
+    // One unpriced event leaves the session unpriced, and its tokens still add up.
+    assert_eq!(costs::session_cost(&mut conn, "s1").await.unwrap(), None);
+    assert_eq!(
+        costs::session_totals(&mut conn, "s1").await.unwrap(),
+        [2_000_000, 1_000_000, 4_000_000, 2_000_000]
+    );
+    assert_eq!(
+        costs::session_totals(&mut conn, "nobody").await.unwrap(),
+        [0, 0, 0, 0]
+    );
+}
