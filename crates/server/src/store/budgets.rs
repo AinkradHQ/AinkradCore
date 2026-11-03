@@ -149,6 +149,21 @@ macro_rules! period_key {
 }
 pub(crate) use period_key;
 
+/// SQL: a pool's budget only counts what happened at or after the pool was created (`$t`, an SQL
+/// expression), so a pool that reuses a deleted pool's id inherits none of its history. Both sides are
+/// compared as instants (`julianday`), not as text; a pool that is gone counts nothing.
+macro_rules! pool_gate {
+    ($t:literal) => {
+        concat!(
+            "(b.subject_kind <> 'pool' OR julianday(",
+            $t,
+            ") >= julianday((SELECT p.created_at FROM core_pools p \
+             WHERE CAST(p.id AS TEXT) = b.subject_id)))"
+        )
+    };
+}
+pub(crate) use pool_gate;
+
 macro_rules! columns {
     () => {
         "b.id, b.subject_kind, b.subject_id, b.company, b.period, b.token_cap, b.usd_cap_micros, \
@@ -274,6 +289,25 @@ pub async fn list(
     .collect()
 }
 
+/// One budget with its standing in the period `period_key` names (the period containing `now` for a
+/// `total` budget).
+pub async fn standing_for(
+    pool: &SqlitePool,
+    id: i64,
+    period_key: &str,
+    now: &str,
+) -> Result<Option<Standing>, sqlx::Error> {
+    let Some(b) = get(pool, id).await? else {
+        return Ok(None);
+    };
+    let at = match b.period.as_str() {
+        "month" => format!("{period_key}-01"),
+        "total" => now.to_owned(),
+        _ => period_key.to_owned(),
+    };
+    standing_of(pool, id, &at).await
+}
+
 /// One budget with its standing in the period containing `now`.
 pub async fn standing_of(
     pool: &SqlitePool,
@@ -296,6 +330,12 @@ fn check(b: &NewBudget<'_>) -> Result<Option<String>, Error> {
         return refused(
             "bad_request",
             "a budget names a kind, a subject of 1 to 64 of [A-Za-z0-9._:-] and a period of day, week, month or total",
+        );
+    }
+    if b.token_cap == 0 && b.usd_cap_micros.is_none() {
+        return refused(
+            "bad_request",
+            "a budget with no token cap needs a dollar cap",
         );
     }
     if b.token_cap < 0
@@ -353,8 +393,9 @@ pub async fn set(
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM core_budgets")
         .fetch_one(&mut *tx)
         .await?;
-    let existed: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM core_budgets WHERE subject_kind = ? AND subject_id = ? AND period = ?",
+    let existed: Option<(i64, i64, Option<i64>)> = sqlx::query_as(
+        "SELECT id, token_cap, usd_cap_micros FROM core_budgets \
+         WHERE subject_kind = ? AND subject_id = ? AND period = ?",
     )
     .bind(b.kind)
     .bind(b.subject)
@@ -387,6 +428,20 @@ pub async fn set(
     .fetch_one(&mut *tx)
     .await?;
     guard::recompute_in(&mut tx, Some(id)).await?;
+    // A cap that grew re-arms the exhaustion alert, so the next time it runs out is heard.
+    if existed.is_some_and(|(_, tokens, usd)| {
+        b.token_cap > tokens
+            || match (usd, b.usd_cap_micros) {
+                (Some(_), None) => true,
+                (Some(old), Some(new)) => new > old,
+                _ => false,
+            }
+    }) {
+        sqlx::query("UPDATE core_budget_spend SET exhausted_at = NULL WHERE budget_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
     let details = json!({"kind": b.kind, "subject": b.subject, "company": company,
                          "period": b.period, "token_cap": b.token_cap,
                          "usd_cap_micros": b.usd_cap_micros, "warn_at_percent": warn,

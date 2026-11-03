@@ -86,6 +86,10 @@ CREATE TABLE core_cost_subjects (
 
 CREATE INDEX core_cost_subjects_subject ON core_cost_subjects (kind, subject_id);
 
+CREATE TRIGGER core_prices_insert_only BEFORE UPDATE ON core_prices
+BEGIN SELECT RAISE(ABORT, 'prices are insert-only: set a new version'); END;
+CREATE TRIGGER core_prices_no_delete BEFORE DELETE ON core_prices
+BEGIN SELECT RAISE(ABORT, 'prices are insert-only: set a new version'); END;
 CREATE TRIGGER core_cost_events_insert_only BEFORE UPDATE ON core_cost_events
 BEGIN SELECT RAISE(ABORT, 'cost events are insert-only'); END;
 CREATE TRIGGER core_cost_events_no_delete BEFORE DELETE ON core_cost_events

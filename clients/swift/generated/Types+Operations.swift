@@ -1744,7 +1744,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Every account's tokens, messages and dollars over the last five hours and seven days, its limits with their use, and its recent drops
+            /// Needs `admin`. Every account's tokens, messages and dollars over the last five hours and seven days, its limits with their use, and its recent drops. Events that carry only a `legacy_account_id` (Citadel's old account id) are not counted here until the account port lands
             ///
             /// - Remark: Generated from `#/paths//api/v1/accounts/usage/get(accountsUsage)/responses/200`.
             ///
@@ -3223,7 +3223,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Cleared (audited as `account.limit_cleared`); `cleared` is false when there was no such limit
+            /// Cleared (audited as `account.limit_cleared`); `cleared` is false when there was no such limit; 404 for no such account
             ///
             /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/limits/{unit}/{window_secs}/delete(clearAccountLimit)/responses/200`.
             ///
@@ -10203,7 +10203,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// That period's headroom raised and its exhaustion alert cleared (audited as `budget.raised`). 404 for no such budget; 400 for an amount of 0 or a bad period key
+            /// That period's headroom raised and its exhaustion alert cleared (audited as `budget.raised`); the body is the budget's standing for the raised period. 404 for no such budget; 400 for an amount of 0 or a bad period key
             ///
             /// - Remark: Generated from `#/paths//api/v1/budgets/{id}/raise/post(raiseBudget)/responses/200`.
             ///
@@ -10508,7 +10508,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Cost events, newest first. One event is one attempt of a session: a delta, never a running total
+            /// Cost events, newest first (needs `admin`). One event is one attempt of a session: a delta, never a running total
             ///
             /// - Remark: Generated from `#/paths//api/v1/costs/get(listCosts)/responses/200`.
             ///

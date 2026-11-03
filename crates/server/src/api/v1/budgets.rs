@@ -193,7 +193,7 @@ pub struct RaiseBudget {
     tag = "budgets", params(("id" = String, Path, description = "The budget's id")),
     request_body = RaiseBudget,
     responses((status = 200, description = "That period's headroom raised and its exhaustion alert \
-        cleared (audited as `budget.raised`). 404 for no such budget; 400 for an amount of 0 or a \
+        cleared (audited as `budget.raised`); the body is the budget's standing for the raised period. 404 for no such budget; 400 for an amount of 0 or a \
         bad period key", body = SubjectBudget)))]
 pub async fn raise(
     State(app): State<App>,
@@ -215,7 +215,7 @@ pub async fn raise(
     .await
     .map_err(ApiError::from)?;
     tx.commit().await?;
-    let standing = budgets::standing_of(&app.pool, id, &app.clock.now())
+    let standing = budgets::standing_for(&app.pool, id, &b.period_key, &app.clock.now())
         .await?
         .ok_or_else(|| ApiError::not_found("no such budget"))?;
     Ok(Json(standing.into()))
