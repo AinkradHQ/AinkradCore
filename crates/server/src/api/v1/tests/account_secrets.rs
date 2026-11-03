@@ -52,7 +52,7 @@ async fn raw_get(fx: &Fx, dev: &TestDevice, uri: &str) -> (StatusCode, String) {
 
 async fn store_account(fx: &Fx, vm: &TestDevice, value: &str) {
     let body = json!({"name": NAME, "value": value, "runners": [vm.id]});
-    let r = call(fx, &fx.dev, Method::POST, "/api/v1/secrets", body).await;
+    let r = super::secrets::post_secret(fx, body).await;
     assert_eq!(r.0, StatusCode::OK, "{}", r.1);
 }
 
@@ -102,14 +102,7 @@ async fn no_api_path_returns_an_account_secrets_value() {
         .await
         .unwrap();
     // Rotated, so both the old and the new value must stay out of every answer.
-    let rotated = call(
-        &fx,
-        &fx.dev,
-        Method::PUT,
-        &format!("/api/v1/secrets/{NAME}"),
-        json!({"value": V2}),
-    )
-    .await;
+    let rotated = super::secrets::put_secret(&fx, NAME, json!({"value": V2})).await;
     assert_eq!(rotated.0, StatusCode::OK, "{}", rotated.1);
     let mut paths: Vec<String> = super::super::scopes::ROUTES
         .iter()

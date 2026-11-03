@@ -25,6 +25,7 @@ use crate::store::connect;
 
 mod abuse;
 mod account_secrets;
+mod accounts_review;
 mod accounts_store;
 mod agents;
 mod audit_growth;
