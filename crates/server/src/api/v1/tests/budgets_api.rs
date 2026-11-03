@@ -146,13 +146,13 @@ async fn every_change_needs_admin_and_a_step_up_and_a_phone_reads_and_filters_by
         &fx.dev,
         Method::POST,
         &format!("/api/v1/budgets/{id}/raise"),
-        json!({"period_key": "2026-10-22", "tokens": 5}),
+        json!({"period_key": "2026-10-21", "tokens": 5}),
     )
     .await;
     assert_eq!(st, StatusCode::OK, "{r}");
     assert_eq!(
         (r["period_key"].as_str(), r["raised"].as_i64()),
-        (Some("2026-10-22"), Some(5))
+        (Some("2026-10-21"), Some(5))
     );
     let (_, listed) = call(
         &fx,
