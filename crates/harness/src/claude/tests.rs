@@ -497,6 +497,10 @@ fn a_turn_of_100k_distinct_messages_holds_bounded_state() {
             last = u;
         }
     }
-    assert_eq!((last.input, last.output), (100_000, 200_000), "sum is exact");
+    assert_eq!(
+        (last.input, last.output),
+        (100_000, 200_000),
+        "sum is exact"
+    );
     assert!(d.messages.len() <= 4096, "held {} ids", d.messages.len());
 }
