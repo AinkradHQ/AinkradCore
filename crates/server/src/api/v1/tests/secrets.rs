@@ -767,7 +767,13 @@ async fn a_foreign_key_glued_to_the_providers_own_is_refused() {
     set(&fx, Key::SecretsProviderAccounts, 1).await;
     let foreign = [
         planted("github_token"),
-        ainkrad_proto::redact::PLANTED[5].1,
+        // The second GitHub shape (the fine-grained token), picked by kind, not by index.
+        ainkrad_proto::redact::PLANTED
+            .iter()
+            .filter(|(k, _)| *k == "github_token")
+            .nth(1)
+            .unwrap()
+            .1,
         planted("aws_key"),
         planted("runner_key"),
         planted("pem_block"),
@@ -777,12 +783,20 @@ async fn a_foreign_key_glued_to_the_providers_own_is_refused() {
         ("openai", "openai_key"),
         ("google", "google_key"),
     ];
-    for (p, k) in providers {
-        let own = planted(k);
+    // Every fixture of the provider's kind: openai has two (`sk-proj-` and the bare `sk-`).
+    let fixtures = providers.iter().flat_map(|(p, k)| {
+        ainkrad_proto::redact::PLANTED
+            .iter()
+            .filter(move |(kind, _)| kind == k)
+            .map(move |(_, v)| (*p, *v))
+    });
+    for (p, own) in fixtures {
         let name = format!("acct.{p}.g");
+        let _ =
+            crate::store::secrets::delete(&fx.app.pool, &name, &fx.dev.id, super::super::BY).await;
         assert_eq!(stored(&fx, &name, own, false).await, Ok(()), "{p}");
         for f in foreign {
-            for sep in ["", "-", "_", "\n", " "] {
+            for sep in ["", "-", "_", "\n", " ", "\t"] {
                 let new = format!("acct.{p}.new");
                 let v = format!("{own}{sep}{f}");
                 let want = Err("real_secret_refused");
@@ -818,6 +832,59 @@ async fn account_secrets_are_never_delivered_by_askpass() {
     let body = json!({"name": "git.ask", "value": V1, "delivery": "askpass"});
     let r = call(&fx, &fx.dev, Method::POST, "/api/v1/secrets", body).await;
     assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+}
+
+/// A malformed `acct.` name is `Other` in mode 2, and was still allowed `askpass`; and a secret
+/// already stored with `askpass` under an account name is not redeemed (KAN-453).
+#[tokio::test]
+async fn askpass_is_refused_for_any_acct_name_at_store_and_at_redeem() {
+    let (fx, vm) = broker().await;
+    set(&fx, Key::SecretsMode, 2).await;
+    for name in ["acct.unknown.x", "acct.", "acct.openai"] {
+        let body = json!({"name": name, "value": V1, "delivery": "askpass"});
+        let r = call(&fx, &fx.dev, Method::POST, "/api/v1/secrets", body).await;
+        assert_eq!(
+            code(&r),
+            (StatusCode::BAD_REQUEST, "bad_request"),
+            "{name}: {}",
+            r.1
+        );
+    }
+    // One stored with env, switched to askpass behind the API's back, is not handed out.
+    let r = create(&fx, "acct.openai.legacy", V1, &[vm.id.as_str()]).await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    sqlx::query("UPDATE core_secrets SET delivery = 'askpass' WHERE name = 'acct.openai.legacy'")
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    let l = lease(&fx, "acct.openai.legacy", &vm.id, None).await;
+    assert_eq!(l.0, StatusCode::OK, "{}", l.1);
+    let r = redeem(&fx, &vm, &l.1).await;
+    assert_eq!(
+        code(&r),
+        (StatusCode::BAD_REQUEST, "bad_request"),
+        "{}",
+        r.1
+    );
+    assert!(!r.1.to_string().contains(V1));
+}
+
+/// The shape check scans at most 512 bytes (it is quadratic): one key of exactly that length is
+/// the provider's own, one byte more is refused as too long to check (KAN-453).
+#[tokio::test]
+async fn the_account_shape_check_pins_its_512_byte_scan_cap() {
+    let (fx, _vm) = broker().await;
+    set(&fx, Key::SecretsProviderAccounts, 1).await;
+    let own = planted("anthropic_key");
+    let pad = |n: usize| format!("{own}{}", "A".repeat(n - own.len()));
+    assert_eq!(
+        stored(&fx, "acct.anthropic.cap", &pad(512), false).await,
+        Ok(())
+    );
+    assert_eq!(
+        stored(&fx, "acct.anthropic.cap2", &pad(513), false).await,
+        Err("real_secret_refused")
+    );
 }
 
 #[test]
