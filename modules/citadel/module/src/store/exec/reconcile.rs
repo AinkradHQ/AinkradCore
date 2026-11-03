@@ -165,12 +165,13 @@ async fn follow<H: Host>(
     let Some(s) = sessions::get(pool, &session).await? else {
         return end(pool, &r, RunEvent::RunnerLost, now, report).await;
     };
-    // One run's usage that cannot be recorded must not stop the others: it is tried again next pass.
+    // Usage that cannot be recorded is logged and tried again next pass; it must not stop this run's
+    // cancel, cap or end, nor the other runs.
     let r = match record_usage(pool, &r, &s, now, report).await {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(run = r.id.0, error = ?e, "a run's usage was not recorded; trying again next pass");
-            return Ok(());
+            tracing::warn!(run = r.id.0, error = ?e, "a run's usage was not recorded");
+            r.clone()
         }
     };
     if r.cancel_requested_at.is_some() {

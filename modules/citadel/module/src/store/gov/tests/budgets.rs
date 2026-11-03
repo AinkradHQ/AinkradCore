@@ -4,7 +4,7 @@
 
 use super::approvals::issue;
 use super::*;
-use crate::domain::gov::BudgetId;
+use crate::domain::gov::{ApprovalId, BudgetId};
 use serde_json::json;
 use crate::domain::work::IssueId;
 use ainkrad_core_server::store::costs;
@@ -265,6 +265,22 @@ async fn the_old_ledger_and_budgets_move_into_the_core_verified_and_run_only_onc
     // The source is untouched, and the copy runs once: a second run (real, dry or by the command) is
     // refused, so a raise approved since is never overwritten and a budget deleted since never returns.
     assert_eq!(count("SELECT count(*) FROM citadel_cost_events").await, 3);
+    // The re-pointed approval (marked with SQL's 1) can still be approved: it raises the Core budget.
+    let pending_id: i64 =
+        sqlx::query_scalar("SELECT id FROM citadel_approvals WHERE kind = 'budget_overrun'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    approve_budget_raise(pool, ApprovalId(pending_id), 500, ADMIN, None, NOW)
+        .await
+        .unwrap();
+    let raised: i64 =
+        sqlx::query_scalar("SELECT coalesce(sum(raised), 0) FROM core_budget_spend WHERE budget_id = ?")
+            .bind(agent_budget.budget.id.0)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(raised, 500);
     sqlx::query("UPDATE core_budget_spend SET raised = raised + 7 WHERE budget_id = ?")
         .bind(agent_budget.budget.id.0)
         .execute(pool)

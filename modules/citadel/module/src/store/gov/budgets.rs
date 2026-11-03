@@ -543,7 +543,10 @@ pub(crate) async fn raise_in(
             .bind(id)
             .fetch_optional(&mut *conn)
             .await?;
-    if payload["core_budget"].as_bool() != Some(true)
+    // The adapter writes `true`; the copy marks a re-pointed approval with SQL's `1`.
+    let marked = payload["core_budget"].as_bool() == Some(true)
+        || payload["core_budget"].as_i64() == Some(1);
+    if !marked
         || company.flatten().as_deref() != Some(a.company_id.0.to_string().as_str())
     {
         return Err(Error::InvalidArgument(format!(
