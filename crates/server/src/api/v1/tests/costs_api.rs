@@ -108,8 +108,21 @@ async fn a_phone_reads_prices_only_and_the_ledger_and_usage_need_admin_and_name_
         ..c
     };
     costs::record(&fx.app.pool, &legacy, NOW).await.unwrap();
-    let (_, again) = call(&fx, &fx.dev, Method::GET, "/api/v1/accounts/usage", Value::Null).await;
-    assert_eq!((again.as_array().map(Vec::len), again[0]["five_hours"]["total_tokens"].as_i64()), (Some(1), Some(1_000_000)));
+    let (_, again) = call(
+        &fx,
+        &fx.dev,
+        Method::GET,
+        "/api/v1/accounts/usage",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(
+        (
+            again.as_array().map(Vec::len),
+            again[0]["five_hours"]["total_tokens"].as_i64()
+        ),
+        (Some(1), Some(1_000_000))
+    );
     let mut keys: Vec<_> = usage[0].as_object().unwrap().keys().cloned().collect();
     keys.sort();
     assert_eq!(
