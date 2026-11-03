@@ -133,6 +133,16 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
         fail(app, s, &describe(&e)).await;
         return Err(e);
     }
+    // An account secret sits only in its harness's own authentication variable, and nothing in
+    // the session can redirect traffic (checked at create, again here for a stored row).
+    if let Some(why) = ainkrad_proto::v2::account_var_problem(
+        &s.harness,
+        s.secrets.iter().map(|x| (x.name.as_str(), x.var.as_str())),
+    ) {
+        let e = Refusal::Runner(StreamError::new(ErrorCode::InvalidArgs, why));
+        fail(app, s, &describe(&e)).await;
+        return Err(e);
+    }
     // A revoked or de-scoped creator gets no fresh secrets, on a restart or a resume either
     // (B-M1): the session ends.
     if !s.secrets.is_empty() {

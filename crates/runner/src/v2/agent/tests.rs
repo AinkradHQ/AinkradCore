@@ -1154,6 +1154,108 @@ async fn a_session_that_needs_the_tier_only_through_a_field_or_the_legacy_flag_e
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// KAN-429: the runner applies the variable allowlist itself. An account secret in a variable
+/// that is not its harness's own, or any variable that redirects traffic beside one, fails the
+/// session before the harness starts; the allowed variable runs it.
+#[tokio::test]
+async fn the_runner_refuses_an_account_secret_in_the_wrong_variable() {
+    let redeem: Redeem = Arc::new(|lease: String| {
+        Box::pin(async move {
+            let name = match lease.as_str() {
+                "l_acct" => "acct.anthropic.main",
+                "l_openai" => "acct.openai.main",
+                "l_google" => "acct.google.main",
+                "l_git" => "git.token",
+                _ => return Err("no such lease".to_owned()),
+            };
+            Ok(secrets::Leased {
+                name: name.to_owned(),
+                delivery: "env".to_owned(),
+                value: Zeroizing::new(format!("v-{name}")),
+            })
+        })
+    });
+    let grant = |lease: &str, var: &str| SecretGrant {
+        lease: lease.to_owned(),
+        var: var.to_owned(),
+    };
+    let cases: [(&str, Vec<SecretGrant>, bool); 14] = [
+        ("claude", vec![grant("l_acct", "ANTHROPIC_API_KEY")], true),
+        ("claude", vec![grant("l_acct", "HTTPS_PROXY")], false),
+        ("claude", vec![grant("l_acct", "OPENAI_API_KEY")], false),
+        ("fake", vec![grant("l_acct", "ANTHROPIC_API_KEY")], false),
+        (
+            "claude",
+            vec![
+                grant("l_acct", "ANTHROPIC_API_KEY"),
+                grant("l_git", "ANTHROPIC_BASE_URL"),
+            ],
+            false,
+        ),
+        // Control: no account secret, the old rule.
+        ("claude", vec![grant("l_git", "HTTPS_PROXY")], true),
+        // The provider: each account secret runs only its own harness, even in that harness's
+        // own variable.
+        ("codex", vec![grant("l_openai", "OPENAI_API_KEY")], true),
+        ("agy", vec![grant("l_google", "GEMINI_API_KEY")], true),
+        ("codex", vec![grant("l_acct", "OPENAI_API_KEY")], false),
+        ("agy", vec![grant("l_acct", "GEMINI_API_KEY")], false),
+        (
+            "claude",
+            vec![grant("l_openai", "ANTHROPIC_API_KEY")],
+            false,
+        ),
+        ("agy", vec![grant("l_openai", "GEMINI_API_KEY")], false),
+        (
+            "claude",
+            vec![grant("l_google", "ANTHROPIC_API_KEY")],
+            false,
+        ),
+        ("codex", vec![grant("l_google", "OPENAI_API_KEY")], false),
+    ];
+    for (n, (harness, grants, runs)) in cases.into_iter().enumerate() {
+        let (_root, config) = dirs(&format!("acct-var-{n}"));
+        let d = Arc::new(
+            AgentDriver::new(config, script("echo ran"))
+                .unwrap()
+                .with_redeem(redeem.clone()),
+        );
+        let mut req = start("as_var", harness);
+        req.secrets = grants;
+        d.start(req).unwrap();
+        let (entries, ev) = drain(&d, "as_var").await;
+        let text = serde_json::to_string(&entries).unwrap();
+        assert_eq!(
+            text.contains(r#""text":"ran""#),
+            runs,
+            "case {n}: {text} {:?}",
+            ev.outcome
+        );
+        if !runs {
+            assert!(
+                matches!(&ev.outcome, Some(Outcome::Failed { reason, .. })
+                    if reason.contains("authentication variables")
+                        || reason.contains("redirect")
+                        || reason.contains("its own provider")),
+                "case {n}: {:?}",
+                ev.outcome
+            );
+        }
+    }
+}
+
+/// The proto table the Core and the runner share is the harness crate's own list.
+#[test]
+fn the_shared_account_variable_table_is_the_harnesss_auth_env() {
+    for harness in ["claude", "codex", "agy", "opencode", "fake", ""] {
+        assert_eq!(
+            ainkrad_proto::v2::account_vars(harness),
+            ainkrad_harness::auth_env(harness),
+            "{harness}"
+        );
+    }
+}
+
 /// KAN-433: a session holding a provider-account secret (an `acct.` name) is marked in its run
 /// environment, so the filtered proxy drops forge hosts; one holding any other secret is not.
 #[tokio::test]

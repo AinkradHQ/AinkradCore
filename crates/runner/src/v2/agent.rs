@@ -566,6 +566,8 @@ impl AgentDriver {
         // value, but kept out of the harness's environment; it goes to the harness's private 0600
         // MCP config only (`harness::files`).
         let mut run_token = String::new();
+        // Each redeemed secret's name beside the variable it was granted under.
+        let mut granted: Vec<(String, String)> = Vec::new();
         if !req.secrets.is_empty() {
             let redeem = self
                 .redeem
@@ -574,12 +576,21 @@ impl AgentDriver {
             for grant in &req.secrets {
                 let secret = redeem(grant.lease.clone()).await?;
                 redactor.known(&secret.name, &secret.value);
+                granted.push((secret.name.clone(), grant.var.clone()));
                 if grant.var == RUN_TOKEN_VAR {
                     run_token = secret.value.to_string();
                     continue;
                 }
                 leased.push((grant.var.clone(), secret));
             }
+        }
+        // The runner applies the broker's rule again, whatever the Core believed: an account
+        // secret only in its harness's own variable, and no variable that redirects traffic.
+        if let Some(why) = ainkrad_proto::v2::account_var_problem(
+            &req.harness,
+            granted.iter().map(|(n, v)| (n.as_str(), v.as_str())),
+        ) {
+            return Err(why.to_owned());
         }
         let delivered = secrets::deliver(&self.config.secrets_dir, &req.session, leased)
             .map_err(|e| format!("delivering the session's secrets: {e}"))?;
