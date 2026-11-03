@@ -59,7 +59,56 @@ async fn call(fx: &Fx, dev: &TestDevice, m: Method, uri: &str, body: Value) -> (
 
 async fn create(fx: &Fx, name: &str, value: &str, runners: &[&str]) -> (StatusCode, Value) {
     let body = json!({"name": name, "value": value, "runners": runners});
-    call(fx, &fx.dev, Method::POST, "/api/v1/secrets", body).await
+    post_secret(fx, body).await
+}
+
+/// `POST /secrets`, except for an `acct.*` name: the general routes refuse those (accounts are
+/// managed through the accounts API), so the broker's own rules are exercised straight at the
+/// store, answering the way the route would.
+pub(super) async fn post_secret(fx: &Fx, body: Value) -> (StatusCode, Value) {
+    match body["name"].as_str().filter(|n| n.starts_with("acct.")) {
+        Some(n) => via_store(fx, n, &body, true).await,
+        None => call(fx, &fx.dev, Method::POST, "/api/v1/secrets", body).await,
+    }
+}
+
+/// `PUT /secrets/{name}`, with the same `acct.*` exception as [`post_secret`].
+pub(super) async fn put_secret(fx: &Fx, name: &str, body: Value) -> (StatusCode, Value) {
+    match name.starts_with("acct.") {
+        true => via_store(fx, name, &body, false).await,
+        false => {
+            let uri = format!("/api/v1/secrets/{name}");
+            call(fx, &fx.dev, Method::PUT, &uri, body).await
+        }
+    }
+}
+
+async fn via_store(fx: &Fx, name: &str, body: &Value, create: bool) -> (StatusCode, Value) {
+    use crate::store::secrets as st;
+    let runners: Option<Vec<String>> = body
+        .get("runners")
+        .and_then(|r| serde_json::from_value(r.clone()).ok());
+    let new = st::NewValue {
+        value: body["value"].as_str().unwrap_or_default(),
+        runners: runners.as_deref(),
+        delivery: body["delivery"].as_str(),
+    };
+    let sealer = fx.app.secrets.clone().unwrap();
+    let by = super::super::BY;
+    let r = match create {
+        true => st::create(&fx.app.pool, &sealer, name, &new, &fx.dev.id, by, NOW).await,
+        false => st::rotate(&fx.app.pool, &sealer, name, &new, &fx.dev.id, by, NOW).await,
+    };
+    match r {
+        Ok(m) => (
+            StatusCode::OK,
+            json!({"name": m.name, "version": m.version}),
+        ),
+        Err(e) => {
+            let e: super::super::ApiError = e.into();
+            (e.status, json!({"code": e.code, "message": e.message}))
+        }
+    }
 }
 
 async fn lease(fx: &Fx, name: &str, runner: &str, ttl: Option<i64>) -> (StatusCode, Value) {
@@ -562,11 +611,9 @@ async fn the_provider_account_gate_lets_only_account_secrets_be_real() {
     assert_eq!(create(&fx, account, real, &[]).await.0, StatusCode::OK);
     // A rotation follows the same rule, by name.
     create(&fx, "git.token", V1, &[]).await;
-    let uri = "/api/v1/secrets/git.token";
-    let r = call(&fx, &fx.dev, Method::PUT, uri, json!({"value": gh})).await;
+    let r = put_secret(&fx, "git.token", json!({"value": gh})).await;
     assert_eq!(code(&r), refused);
-    let uri = format!("/api/v1/secrets/{account}");
-    let r = call(&fx, &fx.dev, Method::PUT, &uri, json!({"value": real})).await;
+    let r = put_secret(&fx, account, json!({"value": real})).await;
     assert_eq!(r.0, StatusCode::OK, "{}", r.1);
     // The gate never turns the broker on.
     set(&fx, Key::SecretsMode, 0).await;
@@ -585,7 +632,7 @@ async fn the_provider_account_gate_lets_only_account_secrets_be_real() {
         code(&create(&fx, "acct.openai.b", real, &[]).await),
         refused
     );
-    let r = call(&fx, &fx.dev, Method::PUT, &uri, json!({"value": real})).await;
+    let r = put_secret(&fx, account, json!({"value": real})).await;
     assert_eq!(code(&r), refused);
     // Mode 2 is unchanged by the gate, on or off: a real git secret is taken, and so is an
     // unknown acct. name (it is only fail-closed below mode 2).
@@ -635,12 +682,12 @@ async fn an_account_secret_must_not_look_like_another_credential() {
         .0,
         StatusCode::OK
     );
-    let uri = "/api/v1/secrets/acct.anthropic.x";
+    let uri = "acct.anthropic.x";
     for (i, v) in foreign.iter().enumerate() {
         let r = create(&fx, &format!("acct.anthropic.n{i}"), v, &[]).await;
         assert_eq!(code(&r), refused, "create {i}");
         assert!(!r.1.to_string().contains(v));
-        let r = call(&fx, &fx.dev, Method::PUT, uri, json!({"value": v})).await;
+        let r = put_secret(&fx, uri, json!({"value": v})).await;
         assert_eq!(code(&r), refused, "rotate {i}");
     }
     // A foreign key after the provider's own, with a space or glued on, is refused (the glued
@@ -659,38 +706,17 @@ async fn an_account_secret_must_not_look_like_another_credential() {
     for (p, k) in own {
         let r = create(&fx, &format!("acct.{p}.own"), planted(k), &[]).await;
         assert_eq!(r.0, StatusCode::OK, "{p}: {}", r.1);
-        let uri = format!("/api/v1/secrets/acct.{p}.own");
-        let r = call(
-            &fx,
-            &fx.dev,
-            Method::PUT,
-            &uri,
-            json!({"value": planted(k)}),
-        )
-        .await;
+        let uri = format!("acct.{p}.own");
+        let r = put_secret(&fx, &uri, json!({"value": planted(k)})).await;
         assert_eq!(r.0, StatusCode::OK, "{p}: {}", r.1);
     }
-    let r = call(
-        &fx,
-        &fx.dev,
-        Method::PUT,
-        uri,
-        json!({"value": "another-shapeless-token-9"}),
-    )
-    .await;
+    let r = put_secret(&fx, uri, json!({"value": "another-shapeless-token-9"})).await;
     assert_eq!(r.0, StatusCode::OK, "{}", r.1);
     // askpass is for git: refused for an account secret, create and rotate.
     let body = json!({"name": "acct.openai.ask", "value": V1, "delivery": "askpass"});
-    let r = call(&fx, &fx.dev, Method::POST, "/api/v1/secrets", body).await;
+    let r = post_secret(&fx, body).await;
     assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_request"));
-    let r = call(
-        &fx,
-        &fx.dev,
-        Method::PUT,
-        uri,
-        json!({"value": V2, "delivery": "askpass"}),
-    )
-    .await;
+    let r = put_secret(&fx, uri, json!({"value": V2, "delivery": "askpass"})).await;
     assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_request"));
     // The audit rows are tagged, and hold no value.
     let tagged: i64 = sqlx::query_scalar(
@@ -813,7 +839,7 @@ async fn account_secrets_are_never_delivered_by_askpass() {
     let (fx, _vm) = broker().await;
     set(&fx, Key::SecretsMode, 2).await;
     let body = json!({"name": "acct.openai.ask", "value": V1, "delivery": "askpass"});
-    let r = call(&fx, &fx.dev, Method::POST, "/api/v1/secrets", body).await;
+    let r = post_secret(&fx, body).await;
     assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_request"));
     let body = json!({"name": "git.ask", "value": V1, "delivery": "askpass"});
     let r = call(&fx, &fx.dev, Method::POST, "/api/v1/secrets", body).await;
