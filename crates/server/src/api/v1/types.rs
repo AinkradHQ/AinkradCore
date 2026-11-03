@@ -86,7 +86,9 @@
 ///    `AgentWake`/`AgentWakeRequest`; `AgentStart.epoch` in the runner schema (optional, 0 when absent).
 /// 29: the Citadel module's `applySeed` (`POST /modules/citadel/v1/admin/seed`, `admin`, step-up) seeds a
 ///    live server (KAN-275); the Core's own paths are unchanged.
-pub const API_MINOR: u32 = 29;
+/// 30: Core-owned provider accounts (KAN-428): the `account.created`, `.secret_replaced`, `.state_set`,
+///    `.cap_set` and `.deleted` audit actions. The routes follow (KAN-432).
+pub const API_MINOR: u32 = 30;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

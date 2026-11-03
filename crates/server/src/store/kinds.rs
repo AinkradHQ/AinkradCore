@@ -74,6 +74,11 @@ pub fn platform_scope(kind: &str) -> &'static str {
 
 /// The platform's audit actions.
 pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
+    "account.cap_set",
+    "account.created",
+    "account.deleted",
+    "account.secret_replaced",
+    "account.state_set",
     "alarm.cleared",
     "alarm.raised",
     "agent.cancelled",

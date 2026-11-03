@@ -159,6 +159,19 @@ fn name(name: &str) -> Result<&str, ApiError> {
     }
 }
 
+/// The general routes never write or delete a provider-account key: an account's key, its
+/// masked tail and its audit trail move together, through the accounts API only.
+fn not_account(name: &str) -> Result<&str, ApiError> {
+    match name.starts_with(store::ACCOUNT_PREFIX) {
+        true => Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "provider-account keys are managed through the accounts API",
+        )),
+        false => Ok(name),
+    }
+}
+
 #[utoipa::path(get, path = "/api/v1/secrets", operation_id = "listSecrets", tag = "secrets",
     responses((status = 200, description = "Every secret, by name, without its value", body = Vec<SecretInfo>)))]
 pub async fn list(State(app): State<App>) -> ApiResult<Vec<SecretInfo>> {
@@ -178,6 +191,7 @@ pub async fn create(
     body: Bytes,
 ) -> ApiResult<SecretInfo> {
     let b: NewSecret = parse(&body)?;
+    not_account(&b.name)?;
     let new = NewValue {
         value: &b.value,
         runners: b.runners.as_deref(),
@@ -208,7 +222,7 @@ pub async fn rotate(
     Path(n): Path<String>,
     body: Bytes,
 ) -> ApiResult<SecretInfo> {
-    let n = name(&n)?;
+    let n = not_account(name(&n)?)?;
     let b: RotateSecret = parse(&body)?;
     let new = NewValue {
         value: &b.value,
@@ -244,7 +258,7 @@ pub async fn delete(
     Extension(me): Extension<Caller>,
     Path(n): Path<String>,
 ) -> ApiResult<SecretDeleted> {
-    store::delete(&app.pool, name(&n)?, &me.device.id, BY).await?;
+    store::delete(&app.pool, not_account(name(&n)?)?, &me.device.id, BY).await?;
     Ok(Json(SecretDeleted { deleted: true }))
 }
 

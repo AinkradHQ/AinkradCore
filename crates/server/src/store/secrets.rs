@@ -385,16 +385,32 @@ pub async fn create(
     actor: AuditActor,
     now: &str,
 ) -> Result<Meta, Error> {
+    let mut tx = super::begin_write(pool).await?;
+    let m = create_in(&mut tx, sealer, name, new, owner, actor, now).await?;
+    tx.commit().await?;
+    Ok(m)
+}
+
+/// [`create`] inside the caller's write transaction (the account model stores its row and its
+/// secret together); the caller commits.
+pub async fn create_in(
+    tx: &mut SqliteConnection,
+    sealer: &SecretBox,
+    name: &str,
+    new: &NewValue<'_>,
+    owner: &str,
+    actor: AuditActor,
+    now: &str,
+) -> Result<Meta, Error> {
     if !valid_name(name) {
         return refused("bad_request", "a name is [a-z][a-z0-9_.-]{0,63}");
     }
     let delivery = new.delivery.unwrap_or("env");
     check_delivery(delivery)?;
     let runners = new.runners.unwrap_or_default();
-    let mut tx = super::begin_write(pool).await?;
-    let lifted = check_value(&mut tx, name, new.value, delivery).await?;
-    check_runners(&mut tx, runners).await?;
-    let max = setting(&mut tx, Key::SecretsMaxCount).await?;
+    let lifted = check_value(&mut *tx, name, new.value, delivery).await?;
+    check_runners(&mut *tx, runners).await?;
+    let max = setting(&mut *tx, Key::SecretsMaxCount).await?;
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM core_secrets")
         .fetch_one(&mut *tx)
         .await?;
@@ -433,9 +449,8 @@ pub async fn create(
     let mut details = json!({"name": name, "version": 1, "runners": runners, "delivery": delivery,
                          "size": new.value.len(), "key_id": sealer.key_id(), "by_device": owner});
     tag_account(&mut details, name, lifted);
-    audit(&mut tx, actor, "secret.created", id, details).await?;
-    let m = find(&mut tx, name).await?;
-    tx.commit().await?;
+    audit(&mut *tx, actor, "secret.created", id, details).await?;
+    let m = find(&mut *tx, name).await?;
     Ok(m)
 }
 
@@ -452,12 +467,27 @@ pub async fn rotate(
     now: &str,
 ) -> Result<Meta, Error> {
     let mut tx = super::begin_write(pool).await?;
-    let old = find(&mut tx, name).await?;
+    let m = rotate_in(&mut tx, sealer, name, new, by_device, actor, now).await?;
+    tx.commit().await?;
+    Ok(m)
+}
+
+/// [`rotate`] inside the caller's write transaction; the caller commits.
+pub async fn rotate_in(
+    tx: &mut SqliteConnection,
+    sealer: &SecretBox,
+    name: &str,
+    new: &NewValue<'_>,
+    by_device: &str,
+    actor: AuditActor,
+    now: &str,
+) -> Result<Meta, Error> {
+    let old = find(&mut *tx, name).await?;
     let delivery = new.delivery.unwrap_or(&old.delivery);
     check_delivery(delivery)?;
-    let lifted = check_value(&mut tx, name, new.value, delivery).await?;
+    let lifted = check_value(&mut *tx, name, new.value, delivery).await?;
     let runners = new.runners.unwrap_or(&old.runners);
-    check_runners(&mut tx, runners).await?;
+    check_runners(&mut *tx, runners).await?;
     let version = old.version + 1;
     let sealed = sealer
         .seal(&label(name, version), new.value.as_bytes())
@@ -486,9 +516,8 @@ pub async fn rotate(
                          "key_id": sealer.key_id(), "leases_revoked": dropped,
                          "by_device": by_device});
     tag_account(&mut details, name, lifted);
-    audit(&mut tx, actor, "secret.rotated", old.id, details).await?;
-    let m = find(&mut tx, name).await?;
-    tx.commit().await?;
+    audit(&mut *tx, actor, "secret.rotated", old.id, details).await?;
+    let m = find(&mut *tx, name).await?;
     Ok(m)
 }
 
@@ -500,14 +529,25 @@ pub async fn delete(
     actor: AuditActor,
 ) -> Result<(), Error> {
     let mut tx = super::begin_write(pool).await?;
-    let old = find(&mut tx, name).await?;
+    delete_in(&mut tx, name, by_device, actor).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`delete`] inside the caller's write transaction; the caller commits.
+pub async fn delete_in(
+    tx: &mut SqliteConnection,
+    name: &str,
+    by_device: &str,
+    actor: AuditActor,
+) -> Result<(), Error> {
+    let old = find(&mut *tx, name).await?;
     sqlx::query("DELETE FROM core_secrets WHERE id = ?")
         .bind(old.id)
         .execute(&mut *tx)
         .await?;
     let details = json!({"name": name, "version": old.version, "by_device": by_device});
-    audit(&mut tx, actor, "secret.deleted", old.id, details).await?;
-    tx.commit().await?;
+    audit(&mut *tx, actor, "secret.deleted", old.id, details).await?;
     Ok(())
 }
 
