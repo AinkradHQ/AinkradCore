@@ -33,6 +33,7 @@ CREATE INDEX core_budgets_company ON core_budgets (company) WHERE company IS NOT
 -- mid-run check read one row and never sum the ledger. `raised` is what approved overruns added.
 -- `usd_micros` has no lower bound: a billing correction may lower it, in the period of the event it corrects.
 CREATE TABLE core_budget_spend (
+    user_id           INTEGER NOT NULL DEFAULT 1 REFERENCES users(id),
     budget_id         INTEGER NOT NULL REFERENCES core_budgets(id) ON DELETE CASCADE,
     period_key        TEXT    NOT NULL CHECK (period_key <> ''),
     tokens            INTEGER NOT NULL DEFAULT 0 CHECK (tokens >= 0),
