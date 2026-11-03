@@ -439,6 +439,87 @@ async fn a_backup_lands_in_the_bucket_and_restores_from_it() {
     assert_eq!(state(&fresh).await, state(&home).await);
 }
 
+/// KAN-449: an export blanks the account rows (the last four characters of a key go with the key and
+/// the account is disabled until a new key is stored); the ledger and the account's configuration stay.
+#[tokio::test]
+async fn an_export_blanks_account_rows_and_keeps_the_ledger() {
+    use ainkrad_core::audit::AuditActor;
+    use ainkrad_core::settings::{Key, Scope};
+    use ainkrad_core_server::ops::secretbox::SecretBox;
+    use ainkrad_core_server::store::{accounts, costs};
+    const VALUE: &str = "export-account-value-qz7x-ZqX7";
+    let d = dir("acct-blank");
+    let home = d.0.join("home");
+    let fp = home_with_state(&home).await;
+    let pool = store::connect(&home.join("core.db")).await.unwrap();
+    let clock = std::sync::Arc::new(ainkrad_core_server::scheduler::SystemClock);
+    use ainkrad_core_server::auth::testing::TestDevice;
+    let owner = TestDevice::enroll(&pool, "owner", "device", &["admin"], "fp", clock).await;
+    let now = "2026-11-03T10:00:00.000Z";
+    store::settings::set(
+        &pool,
+        Key::SecretsMode,
+        Scope::Server,
+        "1",
+        AuditActor::System,
+        now,
+    )
+    .await
+    .unwrap();
+    let sealer = SecretBox::from_file(&home.join("keys/master.key")).unwrap();
+    let new = accounts::NewAccount {
+        provider: "anthropic",
+        label: "main",
+        value: VALUE,
+        runners: &[],
+        cap: None,
+    };
+    let a = accounts::create(&pool, &sealer, &new, &owner.id, AuditActor::System, now)
+        .await
+        .unwrap();
+    assert_eq!(a.masked_tail, "ZqX7");
+    let cost = costs::NewCost {
+        session: "s1",
+        epoch: 0,
+        account_id: Some(a.id),
+        legacy_account_id: None,
+        provider: "anthropic",
+        harness: "claude",
+        model: "m",
+        input_tokens: 10,
+        output_tokens: 5,
+        cache_tokens: 0,
+        reported_usd_micros: Some(42),
+        approximate: false,
+        subjects: &[],
+        idempotency_key: "k1",
+        occurred_at: now,
+    };
+    costs::record(&pool, &cost, now).await.unwrap();
+    pool.close().await;
+
+    let config = home.join("config.toml");
+    let file = d.0.join("core.export");
+    ok(&["export", "--config", s(&config), s(&file)], &[]);
+    let plain = std::fs::read(&file).unwrap();
+    assert!(
+        !plain.windows(4).any(|w| w == b"ZqX7"),
+        "an account's masked tail is in the export"
+    );
+    let imported = d.0.join("imported");
+    ok(&["import", s(&file), "--signer", &fp, s(&imported)], &[]);
+    let pool = store::connect(&imported.join("core.db")).await.unwrap();
+    let blank = accounts::get(&pool, a.id).await.unwrap();
+    assert_eq!(
+        (blank.masked_tail.as_str(), blank.state.as_str()),
+        ("", "disabled")
+    );
+    assert_eq!((blank.label.as_str(), blank.cap), ("main", 4));
+    let events = costs::list(&pool, None, None, 10).await.unwrap();
+    assert_eq!(events.len(), 1);
+    pool.close().await;
+}
+
 /// The secrets broker (E2-07): an export (plaintext, beside the master key) never carries a
 /// secret, sealed or not; an encrypted backup does, and it opens on the restored home.
 #[tokio::test]
