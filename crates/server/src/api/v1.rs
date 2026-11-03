@@ -17,7 +17,7 @@ use axum::Router;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use serde::Deserialize;
 use utoipa::IntoParams;
 
@@ -27,6 +27,7 @@ use super::limit::Limiter;
 mod agents;
 #[cfg(feature = "test-support")]
 pub use agents::create as create_agent_for_tests;
+mod accounts;
 mod audit;
 mod deprecation;
 mod devices;
@@ -197,6 +198,46 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/settings/{scope}/{key}/history",
             get(settings::history),
+        )
+        .route(
+            "/api/v1/accounts",
+            get(accounts::list).post(accounts::create),
+        )
+        .route(
+            "/api/v1/accounts/providers",
+            get(accounts::list_providers).post(accounts::create_provider),
+        )
+        .route(
+            "/api/v1/accounts/providers/{id}",
+            put(accounts::replace_provider).delete(accounts::delete_provider),
+        )
+        .route(
+            "/api/v1/accounts/{id}",
+            get(accounts::get).delete(accounts::delete),
+        )
+        .route(
+            "/api/v1/accounts/{id}/secret",
+            put(accounts::replace_secret),
+        )
+        .route("/api/v1/accounts/{id}/state", put(accounts::set_state))
+        .route("/api/v1/accounts/{id}/cap", put(accounts::set_cap))
+        .route(
+            "/api/v1/pools",
+            get(accounts::list_pools).post(accounts::create_pool),
+        )
+        .route("/api/v1/pools/{id}", delete(accounts::delete_pool))
+        .route(
+            "/api/v1/pools/{id}/members/{account}",
+            put(accounts::add_member).delete(accounts::remove_member),
+        )
+        .route("/api/v1/pools/{id}/default", put(accounts::set_default))
+        .route(
+            "/api/v1/bindings",
+            get(accounts::list_bindings).put(accounts::bind),
+        )
+        .route(
+            "/api/v1/bindings/{agent}/{provider}",
+            delete(accounts::unbind),
         )
         .route("/api/v1/secrets", get(secrets::list).post(secrets::create))
         .route(

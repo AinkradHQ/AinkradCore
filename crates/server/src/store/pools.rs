@@ -459,3 +459,27 @@ pub async fn resolve(
         .fetch_optional(&mut *conn)
         .await
 }
+
+/// One agent's binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Binding {
+    pub agent: String,
+    pub provider: String,
+    pub pool_id: i64,
+}
+
+/// Every binding, by agent then provider.
+pub async fn list_bindings(pool: &SqlitePool) -> Result<Vec<Binding>, sqlx::Error> {
+    sqlx::query("SELECT agent, provider, pool_id FROM core_pool_bindings ORDER BY agent, provider")
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(|r| {
+            Ok(Binding {
+                agent: r.try_get("agent")?,
+                provider: r.try_get("provider")?,
+                pool_id: r.try_get("pool_id")?,
+            })
+        })
+        .collect()
+}
