@@ -1,5 +1,5 @@
-//! The cost ledger routes (KAN-449): reading is `read` and shows no key, secret name or runner; a
-//! price and a limit are `admin` plus a step-up; nothing writes the ledger over HTTP.
+//! The cost ledger routes (KAN-449): the price list is `read`; the ledger and the usage report are `admin`
+//! (no step-up) and show no key, secret name or runner; a price and a limit are `admin` plus a step-up; nothing writes the ledger over HTTP.
 
 use axum::http::{Method, StatusCode};
 use serde_json::{Value, json};
@@ -20,7 +20,7 @@ fn price_body() -> Value {
 }
 
 #[tokio::test]
-async fn a_phone_reads_the_ledger_prices_and_usage_and_nothing_names_a_secret() {
+async fn a_phone_reads_prices_only_and_the_ledger_and_usage_need_admin_and_name_no_secret() {
     let (fx, vm, s) = setup().await;
     let phone = fx.enroll("phone", &["read"]).await;
     let a = make(&fx, &s, "main", V1, std::slice::from_ref(&vm.id)).await;
@@ -34,7 +34,7 @@ async fn a_phone_reads_the_ledger_prices_and_usage_and_nothing_names_a_secret() 
         session: "s1",
         epoch: 0,
         account_id: Some(a.id),
-        legacy_account_id: Some(77),
+        legacy_account_id: None,
         provider: "anthropic",
         harness: "claude",
         model: "claude-x",
@@ -49,9 +49,17 @@ async fn a_phone_reads_the_ledger_prices_and_usage_and_nothing_names_a_secret() 
     };
     costs::record(&fx.app.pool, &c, NOW).await.unwrap();
 
+    for uri in ["/api/v1/costs", "/api/v1/accounts/usage"] {
+        let (st, b) = call(&fx, &phone, Method::GET, uri, Value::Null).await;
+        assert_eq!(
+            (st, b["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("forbidden_scope")),
+            "{uri}: {b}"
+        );
+    }
     let (st, list) = call(
         &fx,
-        &phone,
+        &fx.dev,
         Method::GET,
         "/api/v1/costs?session=s1&limit=5",
         Value::Null,
@@ -71,7 +79,7 @@ async fn a_phone_reads_the_ledger_prices_and_usage_and_nothing_names_a_secret() 
     assert!(e.get("legacy_account_id").is_none(), "{e}");
     let (_, none) = call(
         &fx,
-        &phone,
+        &fx.dev,
         Method::GET,
         "/api/v1/costs?session=other",
         Value::Null,
@@ -83,7 +91,7 @@ async fn a_phone_reads_the_ledger_prices_and_usage_and_nothing_names_a_secret() 
 
     let (st, usage) = call(
         &fx,
-        &phone,
+        &fx.dev,
         Method::GET,
         "/api/v1/accounts/usage",
         Value::Null,
@@ -184,7 +192,7 @@ async fn a_price_and_a_limit_need_admin_and_a_step_up() {
     assert_eq!((st, b["cap"].as_i64()), (StatusCode::OK, Some(100)), "{b}");
     let (_, usage) = call(
         &fx,
-        &phone,
+        &fx.dev,
         Method::GET,
         "/api/v1/accounts/usage",
         Value::Null,
@@ -205,6 +213,15 @@ async fn a_price_and_a_limit_need_admin_and_a_step_up() {
         Method::PUT,
         "/api/v1/accounts/999/limits",
         json!({"unit": "tokens", "window_secs": 60, "cap": 5}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+    let (st, _) = call(
+        &fx,
+        &fx.dev,
+        Method::DELETE,
+        "/api/v1/accounts/999/limits/tokens/60",
+        Value::Null,
     )
     .await;
     assert_eq!(st, StatusCode::NOT_FOUND);

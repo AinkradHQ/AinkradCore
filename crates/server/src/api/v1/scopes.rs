@@ -12,8 +12,9 @@
 //!   route a `runner` device may call is redeeming a lease granted to it.
 //! - Accounts, pools, bindings and provider definitions (KAN-432): reading is `read`; every write is
 //!   `admin` and destructive.
-//! - The cost ledger, prices and account usage (KAN-449): reading is `read`; a price or an account's limit
-//!   is `admin` and destructive. No route writes the ledger.
+//! - The cost ledger, prices and account usage (KAN-449): the price list is `read`; the cost ledger and the
+//!   account usage report (who spent what, in which company) are `admin` without a step-up; a price or an
+//!   account's limit is `admin` and destructive. No route writes the ledger.
 //! - Budgets (KAN-448): reading is `read`; setting, deleting or raising one is `admin` and destructive.
 //! - `terminal`: opening, attaching, signalling and closing a terminal (listing is `read`).
 //! - A module's routes need the module's own `Module::scope` (`admin` unless it says otherwise),
@@ -89,14 +90,14 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/bindings", "read"),
     ("PUT", "/api/v1/bindings", "admin"),
     ("DELETE", "/api/v1/bindings/{agent}/{provider}", "admin"),
-    ("GET", "/api/v1/accounts/usage", "read"),
+    ("GET", "/api/v1/accounts/usage", "admin"),
     ("PUT", "/api/v1/accounts/{id}/limits", "admin"),
     (
         "DELETE",
         "/api/v1/accounts/{id}/limits/{unit}/{window_secs}",
         "admin",
     ),
-    ("GET", "/api/v1/costs", "read"),
+    ("GET", "/api/v1/costs", "admin"),
     ("GET", "/api/v1/prices", "read"),
     ("GET", "/api/v1/budgets", "read"),
     ("PUT", "/api/v1/budgets", "admin"),

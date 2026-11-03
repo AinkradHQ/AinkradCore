@@ -205,6 +205,25 @@ async fn a_retried_report_is_a_no_op_and_each_attempt_is_a_delta() {
 }
 
 #[tokio::test]
+async fn a_key_retried_with_a_different_payload_is_a_conflict_not_the_first_row() {
+    let fx = fx().await;
+    costs::record(&fx.app.pool, &cost("s1", 0, "k1", None), NOW)
+        .await
+        .unwrap();
+    for f in [
+        Box::new(|c: &mut NewCost<'_>| c.input_tokens += 1) as Mutate,
+        Box::new(|c| c.session = "s2"),
+        Box::new(|c| c.model = "claude-y"),
+        Box::new(|c| c.legacy_account_id = Some(5)),
+    ] {
+        let mut c = cost("s1", 0, "k1", None);
+        f(&mut c);
+        assert_eq!(code(costs::record(&fx.app.pool, &c, NOW).await), "conflict");
+    }
+    assert_eq!(totals(&fx).await.events, 1);
+}
+
+#[tokio::test]
 async fn an_interrupted_turn_is_marked_approximate() {
     let fx = fx().await;
     let mut c = cost("s1", 0, "k1", None);
@@ -279,6 +298,16 @@ async fn a_correction_adds_the_difference_and_the_ledger_sums_to_the_bill() {
 #[tokio::test]
 async fn the_ledger_is_insert_only() {
     let fx = fx().await;
+    price(&fx, [1, 2, 3]).await;
+    for sql in [
+        "UPDATE core_prices SET version = 9",
+        "DELETE FROM core_prices",
+    ] {
+        assert!(
+            sqlx::query(sql).execute(&fx.app.pool).await.is_err(),
+            "{sql}"
+        );
+    }
     let mut c = cost("s1", 0, "k1", None);
     c.subjects = &[("agent", "a1")];
     costs::record(&fx.app.pool, &c, NOW).await.unwrap();
@@ -370,6 +399,10 @@ async fn bad_input_is_refused_before_it_is_written() {
         Box::new(|c| c.idempotency_key = ""),
         Box::new(|c| c.subjects = &[("account", "1")]),
         Box::new(|c| c.subjects = &[("agent", "has space")]),
+        Box::new(|c| {
+            c.account_id = Some(1);
+            c.legacy_account_id = Some(2);
+        }),
     ];
     for f in bad {
         let mut c = cost("s1", 0, "k1", None);
