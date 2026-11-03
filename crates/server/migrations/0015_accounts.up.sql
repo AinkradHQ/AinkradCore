@@ -4,9 +4,10 @@
 -- write time) is the only trace of it outside the broker. Which runners may be leased the key is the
 -- broker secret's own scope (`core_secrets.runners`), never copied here. There is no company column:
 -- accounts are global, and Citadel only consumes them.
+-- AUTOINCREMENT: an id (and so a `acct.<provider>.<id>` secret name) is never reused after a delete.
 -- `cap` is the number of sessions that may hold the account at once; 0 turns the cap off (KAN-437 enforces it).
 CREATE TABLE core_accounts (
-    id           INTEGER PRIMARY KEY,
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id      INTEGER NOT NULL DEFAULT 1 REFERENCES users(id),
     provider     TEXT    NOT NULL CHECK (provider IN ('anthropic', 'openai', 'google')),
     label        TEXT    NOT NULL UNIQUE CHECK (length(label) BETWEEN 1 AND 64),
