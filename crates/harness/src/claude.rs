@@ -124,6 +124,9 @@ pub struct Claude {
     exited: bool,
 }
 
+/// How many assistant message ids one turn keeps live in the `Decoder`.
+const LIVE_MESSAGES: usize = 1024;
+
 /// Turns Claude's stdout messages into events, tracking what the protocol needs.
 #[derive(Default)]
 pub struct Decoder {
@@ -134,7 +137,15 @@ pub struct Decoder {
     /// This turn's assistant messages → their use, for `UsageSoFar`. A message repeats on
     /// the wire, so it is keyed. Its `output_tokens` is the count when it started, so output
     /// is undercounted until the turn's `result`.
+    ///
+    /// Bounded (KAN-420): past `LIVE_MESSAGES` ids the oldest is folded into `folded` and
+    /// forgotten. ponytail: an id that returns after it was folded counts as a new message
+    /// (its old use stays in `folded`); 1024 ids of slack makes that a non-case for real turns.
     messages: HashMap<String, Usage>,
+    /// First-seen order of `messages`, to find the oldest.
+    order: VecDeque<String>,
+    /// The use of messages folded out of `messages` this turn.
+    folded: Usage,
     totals: Usage,
     /// Messages owed to the CLI, e.g. refusals of control requests we do not serve.
     replies: Vec<Value>,
@@ -296,14 +307,29 @@ impl Decoder {
             cost_usd: None,
         };
         let id = text(&message["id"]);
-        if self.messages.insert(id, step) == Some(step) {
-            return None;
+        match self.messages.insert(id.clone(), step) {
+            Some(old) if old == step => return None,
+            Some(_) => {}
+            None => self.order.push_back(id),
         }
-        Some(HarnessEvent::UsageSoFar(sum_tokens(self.messages.values())))
+        while self.order.len() > LIVE_MESSAGES {
+            if let Some(old) = self
+                .order
+                .pop_front()
+                .and_then(|id| self.messages.remove(&id))
+            {
+                self.folded = sum_tokens([&self.folded, &old]);
+            }
+        }
+        Some(HarnessEvent::UsageSoFar(sum_tokens(
+            self.messages.values().chain([&self.folded]),
+        )))
     }
 
     fn result(&mut self, m: &Value) -> Vec<HarnessEvent> {
         self.messages.clear();
+        self.order.clear();
+        self.folded = Usage::default();
         self.refused = None;
         let u = &m["usage"];
         let usage = Usage {
