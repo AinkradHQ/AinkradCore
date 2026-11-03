@@ -68,9 +68,18 @@ async fn a_missing_broker_secret_does_not_strand_the_account() {
         .execute(p)
         .await
         .unwrap();
-    let b = acc::replace_secret(p, &s, a.id, V2, Some(&[vm.id.clone()]), by.0, by.1, NOW)
-        .await
-        .unwrap();
+    let b = acc::replace_secret(
+        p,
+        &s,
+        a.id,
+        V2,
+        Some(std::slice::from_ref(&vm.id)),
+        by.0,
+        by.1,
+        NOW,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         (b.masked_tail.as_str(), b.runners),
         (&V2[V2.len() - 4..], vec![vm.id])
