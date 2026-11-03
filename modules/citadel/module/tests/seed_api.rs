@@ -115,10 +115,8 @@ async fn a_seed_applies_once_audits_counts_and_refuses_credentials() {
     assert_eq!(first["added"], 2);
     assert_eq!(first["via"], "api");
     assert_eq!(first["by_device"], fx.dev.id);
-    // The hash and size are of the raw request body, as the CLI hashes the raw file.
-    let raw = seed.to_string();
-    assert_eq!(first["bytes"], raw.len());
-    assert_eq!(first["sha256"], hex(&sha2::Sha256::digest(raw.as_bytes())));
+    // The hash and size are of the raw request body, as the CLI hashes the raw file (see
+    // `the_audit_hash_is_of_the_raw_body_bytes`, which sends text a re-serialisation would change).
     // A `company.created` event per created company, none for an existing one.
     assert_eq!(count(&fx, "citadel.company.created").await, 2);
     for row in &rows {
@@ -135,6 +133,7 @@ async fn a_seed_applies_once_audits_counts_and_refuses_credentials() {
         json!({"companies": [{"name": "Good"}, {"name": "Bad", "kind": "evil"}]}),
         json!({"companies": [{"name": "  "}]}),
         json!({"companies": [{"name": "x".repeat(201)}]}),
+        json!({"companies": [{"name": format!(" {} ", "x".repeat(201))}]}),
         json!({"companies": (0..501).map(|i| json!({"name": format!("c{i}")})).collect::<Vec<_>>()}),
     ] {
         let (s, b) = call(&fx, Some(&fx.dev), Method::POST, PATH, Some(bad)).await;
@@ -152,6 +151,65 @@ async fn a_seed_applies_once_audits_counts_and_refuses_credentials() {
         n as usize, audits,
         "a refused seed is not audited as applied"
     );
+}
+
+/// The audit row's size and SHA-256 are of the bytes sent, whitespace and key order included.
+#[tokio::test]
+async fn the_audit_hash_is_of_the_raw_body_bytes() {
+    let fx = fx().await;
+    let raw = "{ \"companies\" :\n [ { \"kind\":\"own\",   \"name\" : \"Raw Body Ltd\" } ] }\n";
+    let (s, a) = call_raw(
+        &fx,
+        Some(&fx.dev),
+        None,
+        Method::POST,
+        PATH,
+        raw.as_bytes().to_vec(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{a}");
+    let row: String = sqlx::query_scalar(
+        "SELECT details FROM audit_events WHERE action = 'citadel.seed.applied'",
+    )
+    .fetch_one(&fx.app.pool)
+    .await
+    .unwrap();
+    let row: Value = serde_json::from_str(&row).unwrap();
+    assert_eq!(row["bytes"], raw.len());
+    assert_eq!(row["sha256"], hex(&sha2::Sha256::digest(raw.as_bytes())));
+}
+
+/// A name's limit is 200 characters, after trimming: multibyte names and padding are judged as
+/// the contract's `maxLength` judges them.
+#[tokio::test]
+async fn a_name_is_measured_in_characters_after_trimming() {
+    let fx = fx().await;
+    let before = companies(&fx).await;
+    let wide = "é".repeat(200); // 400 bytes, 200 characters: allowed
+    let padded = format!("   {}   ", "x".repeat(200)); // 206 characters, 200 once trimmed: allowed
+    let seed = json!({"companies": [{"name": wide}, {"name": padded}]});
+    let (s, a) = call(&fx, Some(&fx.dev), Method::POST, PATH, Some(seed)).await;
+    assert_eq!(s, StatusCode::OK, "{a}");
+    assert_eq!(companies(&fx).await, before + 2);
+}
+
+/// The body cap is 256 KiB: one byte over is refused before parsing, one at the cap is parsed.
+#[tokio::test]
+async fn a_body_over_the_cap_is_refused_before_it_is_parsed() {
+    let fx = fx().await;
+    let cap = 256 * 1024;
+    let before = companies(&fx).await;
+    // Valid JSON padded with trailing spaces, so only its size can be the reason.
+    let seed = r#"{"companies":[{"name":"Cap Test Ltd"}]}"#;
+    let pad = |n: usize| format!("{seed}{}", " ".repeat(n - seed.len())).into_bytes();
+    let send = |b: Vec<u8>| call_raw(&fx, Some(&fx.dev), None, Method::POST, PATH, b);
+    let (s, b) = send(pad(cap + 1)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{b}");
+    assert!(b.to_string().contains("too large"), "{b}");
+    assert_eq!(companies(&fx).await, before, "nothing applied");
+    let (s, b) = send(pad(cap)).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert_eq!(companies(&fx).await, before + 1);
 }
 
 fn hex(bytes: &[u8]) -> String {

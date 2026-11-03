@@ -70,7 +70,9 @@ pub(crate) fn check(seed: &Seed) -> Result<(), BoxErr> {
         return Err(format!("seed names more than {MAX_COMPANIES} companies").into());
     }
     for company in &seed.companies {
-        if company.name.trim().is_empty() || company.name.len() > 200 {
+        // Characters of the trimmed name, as the contract's `maxLength` counts them.
+        let name = company.name.trim();
+        if name.is_empty() || name.chars().count() > 200 {
             return Err("seed company has an invalid name or kind".into());
         }
     }
