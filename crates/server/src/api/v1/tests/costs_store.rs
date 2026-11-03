@@ -298,7 +298,10 @@ async fn a_correction_adds_the_difference_and_the_ledger_sums_to_the_bill() {
 async fn the_ledger_is_insert_only() {
     let fx = fx().await;
     price(&fx, [1, 2, 3]).await;
-    for sql in ["UPDATE core_prices SET version = 9", "DELETE FROM core_prices"] {
+    for sql in [
+        "UPDATE core_prices SET version = 9",
+        "DELETE FROM core_prices",
+    ] {
         assert!(
             sqlx::query(sql).execute(&fx.app.pool).await.is_err(),
             "{sql}"
