@@ -215,7 +215,7 @@ pub struct LimitStanding {
 
 /// One account's usage. No key, secret name, delivery or runner: it is for a `read` device.
 #[derive(Debug, Serialize, ToSchema)]
-pub struct AccountUsageReport {
+pub struct AccountSpend {
     pub account_id: i64,
     pub five_hours: UsageWindow,
     pub seven_days: UsageWindow,
@@ -227,7 +227,7 @@ pub struct AccountUsageReport {
     pub by_company: Vec<UsageByCompany>,
 }
 
-impl From<usage::AccountUsage> for AccountUsageReport {
+impl From<usage::AccountUsage> for AccountSpend {
     fn from(u: usage::AccountUsage) -> Self {
         Self {
             account_id: u.account_id,
@@ -262,8 +262,8 @@ impl From<usage::AccountUsage> for AccountUsageReport {
 
 #[utoipa::path(get, path = "/api/v1/accounts/usage", operation_id = "accountsUsage", tag = "costs",
     responses((status = 200, description = "Every account's tokens, messages and dollars over the \
-        last five hours and seven days, its limits with their use, and its recent drops", body = Vec<AccountUsageReport>)))]
-pub async fn accounts_usage(State(app): State<App>) -> ApiResult<Vec<AccountUsageReport>> {
+        last five hours and seven days, its limits with their use, and its recent drops", body = Vec<AccountSpend>)))]
+pub async fn accounts_usage(State(app): State<App>) -> ApiResult<Vec<AccountSpend>> {
     let all = usage::report(&app.pool, None, &app.clock.now()).await?;
     Ok(Json(all.into_iter().map(Into::into).collect()))
 }
