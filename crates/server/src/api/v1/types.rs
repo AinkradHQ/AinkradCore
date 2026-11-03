@@ -89,7 +89,8 @@
 /// 30: Core-owned provider accounts (KAN-428): the `account.created`, `.secret_replaced`, `.state_set`,
 ///    `.cap_set` and `.deleted` audit actions. The routes follow (KAN-432).
 /// 31: provider definitions (KAN-429): the `provider.created`, `.updated` and `.deleted` audit actions.
-pub const API_MINOR: u32 = 31;
+/// 32: account pools and bindings (KAN-431): the `pool.*` audit actions.
+pub const API_MINOR: u32 = 32;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
