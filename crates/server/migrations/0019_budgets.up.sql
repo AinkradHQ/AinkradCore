@@ -9,7 +9,8 @@
 -- filtered by it (KAN-294), and for a company budget it is the subject itself.
 
 CREATE TABLE core_budgets (
-    id              INTEGER PRIMARY KEY,
+    -- AUTOINCREMENT: a deleted budget's id is never reused, so a stale reference cannot reach another's.
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id         INTEGER NOT NULL DEFAULT 1 REFERENCES users(id),
     subject_kind    TEXT    NOT NULL CHECK (subject_kind IN
                     ('account', 'pool', 'agent', 'company', 'department', 'project', 'sprint', 'issue')),

@@ -19,7 +19,9 @@ use ainkrad_core::audit::AuditActor;
 use serde_json::json;
 use sqlx::SqliteConnection;
 
-use super::{Error, Standing, audit_in, columns, period_key, refused, standing, standing_sql};
+use super::{
+    Error, Standing, audit_in, columns, period_key, pool_gate, refused, standing, standing_sql,
+};
 
 /// What the mid-run check found after one cost event.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -56,7 +58,9 @@ pub async fn apply_in(
         period_key!("?2"),
         ", ?3, ?4 FROM core_budgets b WHERE EXISTS (SELECT 1 FROM core_cost_subjects s \
          WHERE s.event_id = ?1 AND s.kind = b.subject_kind AND s.subject_id = b.subject_id) \
-         ON CONFLICT (budget_id, period_key) DO UPDATE SET tokens = tokens + excluded.tokens, \
+         AND ",
+        pool_gate!("?2"),
+        " ON CONFLICT (budget_id, period_key) DO UPDATE SET tokens = tokens + excluded.tokens, \
          usd_micros = usd_micros + excluded.usd_micros"
     ))
     .bind(event_id)
@@ -100,9 +104,9 @@ pub async fn recompute_in(
          JOIN core_cost_subjects s ON s.kind = b.subject_kind AND s.subject_id = b.subject_id \
          JOIN core_cost_events e ON e.id = s.event_id \
          WHERE (?1 IS NULL OR b.id = ?1) \
-         AND (b.subject_kind <> 'pool' OR e.occurred_at >= \
-              (SELECT created_at FROM core_pools WHERE CAST(id AS TEXT) = b.subject_id)) \
-         GROUP BY b.id, key \
+         AND ",
+        pool_gate!("e.occurred_at"),
+        " GROUP BY b.id, key \
          ON CONFLICT (budget_id, period_key) DO UPDATE SET tokens = excluded.tokens, \
          usd_micros = excluded.usd_micros"
     ))
@@ -121,7 +125,9 @@ async fn standings_of_event(
     sqlx::query(concat!(
         standing_sql!(),
         " WHERE EXISTS (SELECT 1 FROM core_cost_subjects c WHERE c.event_id = ?3 \
-         AND c.kind = b.subject_kind AND c.subject_id = b.subject_id) ORDER BY b.id"
+         AND c.kind = b.subject_kind AND c.subject_id = b.subject_id) AND ",
+        pool_gate!("?1"),
+        " ORDER BY b.id"
     ))
     .bind(at)
     .bind("")
@@ -300,21 +306,32 @@ pub async fn raise_in(
     by_device: &str,
     actor: AuditActor,
 ) -> Result<(), Error> {
-    let key_ok = period_key == "total"
-        || ((4..=10).contains(&period_key.len())
-            && period_key.bytes().all(|b| b.is_ascii_digit() || b == b'-'));
-    if tokens < 0 || usd_micros < 0 || (tokens == 0 && usd_micros == 0) || !key_ok {
+    if tokens < 0 || usd_micros < 0 || (tokens == 0 && usd_micros == 0) {
         return refused(
             "bad_request",
             "a raise is tokens or dollars of 1 or more, for a period key like 2026-10-22, 2026-10 or total",
         );
     }
-    let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM core_budgets WHERE id = ?")
-        .bind(budget_id)
-        .fetch_one(&mut *conn)
-        .await?;
-    if exists == 0 {
-        return refused("not_found", "no such budget");
+    // The key is rebuilt from the budget's own period: 2026-10 does not raise a day budget.
+    let key_ok: Option<Option<i64>> = sqlx::query_scalar(concat!(
+        "SELECT CASE b.period WHEN 'total' THEN ?2 = 'total' \
+         WHEN 'month' THEN strftime('%Y-%m', ?2 || '-01') = ?2 ELSE ",
+        period_key!("?2"),
+        " = ?2 END FROM core_budgets b WHERE b.id = ?1"
+    ))
+    .bind(budget_id)
+    .bind(period_key)
+    .fetch_optional(&mut *conn)
+    .await?;
+    match key_ok {
+        None => return refused("not_found", "no such budget"),
+        Some(Some(1)) => {}
+        Some(_) => {
+            return refused(
+                "bad_request",
+                "that period key is not one of the budget's periods",
+            );
+        }
     }
     sqlx::query(
         "INSERT INTO core_budget_spend (budget_id, period_key, raised, raised_usd_micros) \

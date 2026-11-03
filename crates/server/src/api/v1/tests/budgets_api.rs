@@ -150,6 +150,7 @@ async fn every_change_needs_admin_and_a_step_up_and_a_phone_reads_and_filters_by
     )
     .await;
     assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!((r["period_key"].as_str(), r["raised"].as_i64()), (Some("2026-10-22"), Some(5)));
     let (_, listed) = call(
         &fx,
         &phone,
@@ -220,6 +221,7 @@ async fn bad_budgets_and_raises_are_refused_and_there_is_no_route_to_reserve() {
         json!({"period_key": "total"}),
         json!({"period_key": "total", "tokens": 0}),
         json!({"period_key": "x y", "tokens": 1}),
+        json!({"period_key": "2026-10", "tokens": 1}),
     ] {
         let (st, _) = call(&fx, &fx.dev, Method::POST, &uri, bad).await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
