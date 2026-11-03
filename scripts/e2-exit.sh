@@ -234,7 +234,12 @@ step2() {
 }
 
 step3() {
-  attach b "$W/post.bin" 4 "$T1" >/dev/null || true
+  local ap
+  # Not a fixed window: a loaded box took over 4 s to connect (post.bin was 0 bytes in 6 of 8 failures in 40 loaded runs), so
+  # B stays until its snapshot has arrived (the MARK, then the last golden row), up to 30 s, and one more second.
+  bg_attach b "$W/post.bin" 30 "$T1"; ap=$!
+  wait_for 30 grep -aq "MARK-$NONCE" "$W/post.bin" && wait_for 30 grep -aq status "$W/post.bin" || true
+  sleep 1; pkill -f "term attach $T1" 2>/dev/null || true; wait "$ap" 2>/dev/null || true
   render "$W/post.bin" >"$W/post.screen"
   cmp -s "$W/pre.screen" "$W/post.screen" || { EV="screen differs from the pre-kill one: $(diff "$W/pre.screen" "$W/post.screen" | head -n3 | tr '\n' '|')"; return 1; }
   [ "$(sed -n 1p "$W/post.screen")" = ALT=true ] && [ "$(sed -n 4p "$W/post.screen")" = "    E2-GOLDEN-ALT" ] &&
