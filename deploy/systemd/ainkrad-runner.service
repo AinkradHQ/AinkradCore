@@ -46,6 +46,8 @@ EnvironmentFile=-/etc/ainkrad-runner/runner.env
 Environment=HOME=/var/lib/ainkrad-runner
 Environment=TMPDIR=/var/lib/ainkrad-runner-work
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
+# glibc keeps freed memory in per-thread arenas (~20 threads): one arena cut the runner's RSS creep ~2x (KAN-419, KAN-452).
+Environment=MALLOC_ARENA_MAX=1
 ExecStart=/usr/local/bin/ainkrad-runner connect --state /var/lib/ainkrad-runner/core $RUNNER_ARGS
 # SIGTERM stops the runner; commands it still runs are killed, terminal hosts are NOT (see the header).
 KillMode=process
