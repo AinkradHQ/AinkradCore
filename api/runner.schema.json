@@ -121,6 +121,23 @@
       ],
       "type": "object"
     },
+    "AgentLimit": {
+      "description": "Core to runner: set the ceiling of a live gateway session.",
+      "properties": {
+        "ceiling": {
+          "$ref": "#/$defs/Ceiling",
+          "description": "All zero: refuse every request and abort open streams."
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "ceiling"
+      ],
+      "type": "object"
+    },
     "AgentRead": {
       "description": "Core to runner: the transcript after `after`.",
       "properties": {
@@ -172,6 +189,17 @@
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
+        },
+        "gateway": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GatewayGrant"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The API key the runner's gateway serves this session (KAN-435); sent only to a runner\nthat lists the `gateway` command. Never logged."
         },
         "harness": {
           "type": "string"
@@ -295,6 +323,26 @@
         "text",
         "bytes",
         "truncated"
+      ],
+      "type": "object"
+    },
+    "Ceiling": {
+      "description": "What a session may spend through the gateway; `agent.limit` changes it while it runs.",
+      "properties": {
+        "tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "usd_micros": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "tokens",
+        "usd_micros"
       ],
       "type": "object"
     },
@@ -435,6 +483,32 @@
           "properties": {
             "op": {
               "const": "agent.stop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentLimit",
+          "properties": {
+            "op": {
+              "const": "agent.limit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/GatewayTest",
+          "properties": {
+            "op": {
+              "const": "gateway.test",
               "type": "string"
             }
           },
@@ -1016,6 +1090,137 @@
         }
       ]
     },
+    "GatewayAuth": {
+      "description": "The header the gateway puts the key in.",
+      "oneOf": [
+        {
+          "const": "x_api_key",
+          "description": "`x-api-key: <key>`",
+          "type": "string"
+        },
+        {
+          "const": "bearer",
+          "description": "`Authorization: Bearer <key>`",
+          "type": "string"
+        },
+        {
+          "const": "x_goog_api_key",
+          "description": "`x-goog-api-key: <key>`",
+          "type": "string"
+        }
+      ]
+    },
+    "GatewayGrant": {
+      "description": "Core to runner, in `AgentStart`: the key of one account, served to the harness by the runner's\ngateway. `lease` is redeemed into the gateway's memory, never the env or a file. No `Debug`.",
+      "properties": {
+        "account": {
+          "description": "The account id, for the runner's logs; the ledger takes it from the Core's own row.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "ceiling": {
+          "$ref": "#/$defs/Ceiling"
+        },
+        "lease": {
+          "description": "`l_…`, single use, this runner only.",
+          "type": "string"
+        },
+        "models": {
+          "description": "The model ids the session may name.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "prices": {
+          "description": "The list price of each model in `models`, for the per-request reservation.",
+          "items": {
+            "$ref": "#/$defs/ModelPrice"
+          },
+          "type": "array"
+        },
+        "provider": {
+          "default": "",
+          "description": "The account's provider id (`anthropic`, or a user definition's id): the runner runs\n[`key_host_problem`] with it before dialing. Absent reads as empty, which no key passes.",
+          "type": "string"
+        },
+        "rate": {
+          "$ref": "#/$defs/Rate"
+        },
+        "upstream": {
+          "$ref": "#/$defs/Upstream"
+        },
+        "user_key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UserKeyDef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The user definition's key shape and host, for a user-defined provider."
+        }
+      },
+      "required": [
+        "lease",
+        "account",
+        "upstream",
+        "models",
+        "ceiling",
+        "rate"
+      ],
+      "type": "object"
+    },
+    "GatewayTest": {
+      "description": "Core to runner: redeem `lease`, run the dial checks, make one free request.",
+      "properties": {
+        "lease": {
+          "type": "string"
+        },
+        "provider": {
+          "default": "",
+          "description": "As in [`GatewayGrant`].",
+          "type": "string"
+        },
+        "upstream": {
+          "$ref": "#/$defs/Upstream"
+        },
+        "user_key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UserKeyDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "lease",
+        "upstream"
+      ],
+      "type": "object"
+    },
+    "GatewayTested": {
+      "description": "Runner to Core: the status class and latency of a [`GatewayTest`]; never a body.",
+      "properties": {
+        "latency_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "result": {
+          "$ref": "#/$defs/UpstreamStatus"
+        }
+      },
+      "required": [
+        "result",
+        "latency_ms"
+      ],
+      "type": "object"
+    },
     "Heartbeat": {
       "description": "A runner's heartbeat: carries `load` when the runner measured one, and the isolation it\noffers now.",
       "properties": {
@@ -1177,6 +1382,42 @@
       "required": [
         "dir",
         "state"
+      ],
+      "type": "object"
+    },
+    "ModelPrice": {
+      "description": "The list price of one model, in micro-dollars per million tokens, for the gateway's\nper-request reservation (decision: the Core's price book, carried in the grant).",
+      "properties": {
+        "cache_read": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cache_write": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "output": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "model",
+        "input",
+        "output",
+        "cache_read",
+        "cache_write"
       ],
       "type": "object"
     },
@@ -1498,6 +1739,26 @@
       ],
       "type": "object"
     },
+    "Rate": {
+      "description": "How fast a session may call.",
+      "properties": {
+        "concurrent": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "per_minute": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "per_minute",
+        "concurrent"
+      ],
+      "type": "object"
+    },
     "Reply": {
       "description": "Runner to Core, a command's last frame when it ran.",
       "oneOf": [
@@ -1624,6 +1885,32 @@
           "properties": {
             "op": {
               "const": "agent.stop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentEvents",
+          "properties": {
+            "op": {
+              "const": "agent.limit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/GatewayTested",
+          "properties": {
+            "op": {
+              "const": "gateway.test",
               "type": "string"
             }
           },
@@ -2317,6 +2604,73 @@
       ],
       "type": "object"
     },
+    "Upstream": {
+      "description": "Where the gateway dials: from the account row's frozen `base_url`, never from the agent.",
+      "properties": {
+        "auth": {
+          "$ref": "#/$defs/GatewayAuth"
+        },
+        "base_path": {
+          "default": "",
+          "description": "The path the wire's routes hang under (`\"\"`, or `/v1` for the OpenAI wire).",
+          "type": "string"
+        },
+        "host": {
+          "description": "The host name, no scheme, port or trailing dot (443 only).",
+          "type": "string"
+        },
+        "wire": {
+          "$ref": "#/$defs/Wire"
+        }
+      },
+      "required": [
+        "host",
+        "wire",
+        "auth"
+      ],
+      "type": "object"
+    },
+    "UpstreamStatus": {
+      "description": "The outcome class of an upstream request or test: a status class only, never provider text.",
+      "oneOf": [
+        {
+          "enum": [
+            "ok",
+            "rate_limited",
+            "quota",
+            "auth_failed",
+            "server_error",
+            "unreachable",
+            "refused_address",
+            "tls_failed"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A class from a newer runner. Never sent.",
+          "type": "string"
+        }
+      ]
+    },
+    "UserKeyDef": {
+      "description": "A user-defined provider's key shape and frozen host: what the runner needs to run\n[`key_host_problem`] as the broker did. Absent for a built-in provider.",
+      "properties": {
+        "host": {
+          "description": "The definition's frozen host.",
+          "type": "string"
+        },
+        "prefix": {
+          "description": "The definition's declared `key_prefix`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "prefix",
+        "host"
+      ],
+      "type": "object"
+    },
     "V2Payload": {
       "anyOf": [
         {
@@ -2348,6 +2702,15 @@
         }
       ],
       "description": "A v2 Frame's payload by kind: control Control, command Command, result Reply, error StreamError, output Output, credit Credit, close Close, heartbeat Heartbeat."
+    },
+    "Wire": {
+      "description": "The upstream API dialects the gateway speaks: a closed set, so the route table is code.",
+      "enum": [
+        "anthropic-messages",
+        "openai-responses",
+        "gemini-generate"
+      ],
+      "type": "string"
     },
     "Workspace": {
       "description": "Where an issue's run works: a git worktree of `repo` on `branch`, cut from `base`.",

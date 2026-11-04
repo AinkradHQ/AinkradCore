@@ -424,10 +424,13 @@ impl Session {
             | Command::AgentSend(_)
             | Command::AgentDecide(_)
             | Command::AgentStop(_) => self.start_agent(stream, command),
-            Command::Unknown => Some(Body::Error(StreamError::new(
-                ErrorCode::UnsupportedCommand,
-                "no driver of this runner takes that command",
-            ))),
+            // The gateway ops (KAN-435): the runner does not list `gateway` yet.
+            Command::AgentLimit(_) | Command::GatewayTest(_) | Command::Unknown => {
+                Some(Body::Error(StreamError::new(
+                    ErrorCode::UnsupportedCommand,
+                    "no driver of this runner takes that command",
+                )))
+            }
         }
     }
 }

@@ -286,6 +286,64 @@ pub fn placement_refusal(
     secrets: &[store::SessionSecret],
     policy: &serde_json::Value,
 ) -> Option<String> {
+    placement_refusal_with(runner, secrets, policy, false)
+}
+
+/// Whether the runner lists the `gateway` command beside its agent driver's ops (KAN-435).
+fn serves_gateway(runner: &RunnerState) -> bool {
+    runner
+        .drivers
+        .iter()
+        .filter(|d| d.name == AGENT_DRIVER)
+        .any(|d| {
+            d.commands
+                .iter()
+                .any(|c| c == ainkrad_proto::v2::CAP_GATEWAY)
+        })
+}
+
+/// Why `runner` may not take a session that needs the auth gateway: a Linux runner that lists
+/// the `gateway` command (fail closed: an old runner never sees a grant).
+pub fn gateway_refusal(runner: &RunnerState) -> Option<String> {
+    if runner.os.as_deref() != Some("linux") {
+        return Some(format!(
+            "a session served by the auth gateway needs a Linux runner, and this one is {}",
+            runner.os.as_deref().unwrap_or("of an unreported OS")
+        ));
+    }
+    (!serves_gateway(runner)).then(|| {
+        "a session served by the auth gateway needs a runner that offers the gateway".to_owned()
+    })
+}
+
+/// [`placement_refusal`] for a session that `needs_gateway` (it will carry a gateway grant): also
+/// sandboxed at the `process` tier or stronger, and placed only where [`gateway_refusal`] allows.
+/// Its key is not an env secret, so the egress-filter proof is not demanded.
+pub fn placement_refusal_with(
+    runner: &RunnerState,
+    secrets: &[store::SessionSecret],
+    policy: &serde_json::Value,
+    needs_gateway: bool,
+) -> Option<String> {
+    if needs_gateway {
+        let Ok(parsed) = serde_json::from_value::<ainkrad_proto::runner::Policy>(policy.clone())
+        else {
+            return Some("the session's policy does not have its shape".to_owned());
+        };
+        if let Some(why) = account_policy_problem(&parsed) {
+            return Some(why.to_owned());
+        }
+        if let Some(why) = gateway_refusal(runner) {
+            return Some(why);
+        }
+        // Any egress rule needs the proven host filter: fail closed, whatever tier_refusal says.
+        if parsed.egress.is_some() && !filters_egress(runner) {
+            return Some(
+                "the session sets egress rules and the runner does not offer a proven egress filter"
+                    .to_owned(),
+            );
+        }
+    }
     if holds_account(secrets) {
         let Ok(parsed) = serde_json::from_value::<ainkrad_proto::runner::Policy>(policy.clone())
         else {

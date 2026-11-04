@@ -123,6 +123,7 @@ fn start_request() -> AgentStart {
         policy: Default::default(),
         resume: None,
         secrets: vec![],
+        gateway: None,
         epoch: 0,
     }
 }
