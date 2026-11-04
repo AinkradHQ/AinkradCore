@@ -493,6 +493,15 @@ async fn agents(
     let [secrets, work] = runtime_paths(state);
     let mut executor = crate::HarnessExecutor::new(work, state.join("agents-config"));
     let egress_ready = egress_filter(&mut executor).await?;
+    // The auth gateway is offered only once its socket has been seen to answer; a failure
+    // withholds the capability, it does not stop the driver.
+    let gateway_ready = match crate::gateway::selftest().await {
+        Ok(()) => true,
+        Err(why) => {
+            tracing::warn!("the auth gateway is not offered: its start-up check failed: {why}");
+            false
+        }
+    };
     // The Citadel MCP server at the Core this runner is enrolled with: without it a run's harness
     // is given no MCP config, whatever token the Core minted.
     executor.mcp_url = core_url.and_then(|u| crate::core_mcp_url(&u));
@@ -515,8 +524,13 @@ async fn agents(
         .map(|d| {
             let sandbox = super::sandbox::ProcessSandbox::new(state.to_path_buf(), secrets)
                 .with_network(std::env::var("AINKRAD_AGENT_NETWORK").ok());
-            d.with_sandbox(Arc::new(if egress_ready {
+            let sandbox = if egress_ready {
                 sandbox.with_egress_ready()
+            } else {
+                sandbox
+            };
+            d.with_sandbox(Arc::new(if gateway_ready {
+                sandbox.with_gateway_ready()
             } else {
                 sandbox
             }))
