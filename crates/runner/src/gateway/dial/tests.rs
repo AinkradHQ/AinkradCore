@@ -17,7 +17,7 @@ use crate::egress::Answers;
 
 const HOST: &str = "api.example.test";
 
-fn public() -> IpAddr {
+pub(crate) fn public() -> IpAddr {
     IpAddr::V4(Ipv4Addr::new(11, 0, 0, 1))
 }
 
@@ -26,20 +26,20 @@ fn other_public() -> IpAddr {
 }
 
 /// Answers from a script, one entry per lookup; the last repeats. Counts the lookups.
-struct Script {
+pub(crate) struct Script {
     answers: Mutex<VecDeque<io::Result<Vec<IpAddr>>>>,
     lookups: AtomicUsize,
 }
 
 impl Script {
-    fn new(answers: Vec<io::Result<Vec<IpAddr>>>) -> Arc<Script> {
+    pub(crate) fn new(answers: Vec<io::Result<Vec<IpAddr>>>) -> Arc<Script> {
         Arc::new(Script {
             answers: Mutex::new(answers.into()),
             lookups: AtomicUsize::new(0),
         })
     }
 
-    fn of(ips: Vec<IpAddr>) -> Arc<Script> {
+    pub(crate) fn of(ips: Vec<IpAddr>) -> Arc<Script> {
         Script::new(vec![Ok(ips)])
     }
 
@@ -70,10 +70,10 @@ fn copy(r: &io::Result<Vec<IpAddr>>) -> io::Result<Vec<IpAddr>> {
 
 /// Connects every dial to the local server, and records the address it was asked for: what the
 /// dialer pinned. Addresses in `fail` refuse.
-struct ToLocal {
-    server: SocketAddr,
-    asked: Mutex<Vec<SocketAddr>>,
-    fail: Vec<IpAddr>,
+pub(crate) struct ToLocal {
+    pub(crate) server: SocketAddr,
+    pub(crate) asked: Mutex<Vec<SocketAddr>>,
+    pub(crate) fail: Vec<IpAddr>,
 }
 
 impl Connect for ToLocal {
@@ -88,13 +88,13 @@ impl Connect for ToLocal {
     }
 }
 
-struct Ca {
+pub(crate) struct Ca {
     cert: CertificateDer<'static>,
     issuer: Issuer<'static, KeyPair>,
 }
 
 impl Ca {
-    fn new() -> Ca {
+    pub(crate) fn new() -> Ca {
         let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
         params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         let key = KeyPair::generate().unwrap();
@@ -105,13 +105,13 @@ impl Ca {
         }
     }
 
-    fn roots(&self) -> rustls::RootCertStore {
+    pub(crate) fn roots(&self) -> rustls::RootCertStore {
         let mut roots = rustls::RootCertStore::empty();
         roots.add(self.cert.clone()).unwrap();
         roots
     }
 
-    fn server_config(&self, name: &str) -> Arc<rustls::ServerConfig> {
+    pub(crate) fn server_config(&self, name: &str) -> Arc<rustls::ServerConfig> {
         let key = KeyPair::generate().unwrap();
         let leaf = CertificateParams::new(vec![name.to_owned()])
             .unwrap()

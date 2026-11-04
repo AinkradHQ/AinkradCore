@@ -1,24 +1,24 @@
-//! Reading one HTTP/1.1 response from an upstream (KAN-435 G2): strict about the head, exact about
-//! the body's framing, explicit about truncation. Never trusts a close as the end of a body that
-//! was framed by a length or by chunks.
+//! Reading one HTTP/1.1 response from an upstream (KAN-435 G2/G3): strict about the head, exact
+//! about the body's framing, explicit about truncation. Never trusts a close as the end of a body
+//! that was framed by a length or by chunks. The body is read in pieces ([`Body`]), so a stream
+//! can be passed on as it arrives; [`Reply`] is the buffered form of the same read.
 
 use std::time::Duration;
 
 use tokio::io::AsyncReadExt;
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout};
 
+use super::body::{Body, Framing};
 use super::dial::DialError;
 
 /// Nothing read for this long ends the response.
-const IDLE: Duration = Duration::from_secs(30);
+pub(super) const IDLE: Duration = Duration::from_secs(30);
 /// The largest response head kept.
 const MAX_HEAD: usize = 32 * 1024;
 /// The longest chunk-size or trailer line.
-const MAX_LINE: usize = 1024;
+pub(super) const MAX_LINE: usize = 1024;
 /// Interim (1xx) responses skipped before the real one.
 const MAX_INTERIM: usize = 8;
-/// Trailer lines read and dropped after the last chunk.
-const MAX_TRAILERS: usize = 32;
 
 /// What came back from one request: the status, the allow-listed headers, a bounded body.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +30,18 @@ pub struct Reply {
     pub chunked: bool,
     /// The upstream sent more than `max_body` bytes: `body` is the first `max_body`.
     pub truncated: bool,
+}
+
+/// A response whose head is read and whose body is still on the wire.
+pub struct Opened<R> {
+    pub status: u16,
+    /// The allow-listed headers only.
+    pub headers: Vec<(String, String)>,
+    /// The body is chunked on the wire (and [`Body`] yields decoded data).
+    pub chunked: bool,
+    /// The body's length when the upstream gave one.
+    pub length: Option<u64>,
+    pub body: Body<R>,
 }
 
 /// Response headers that may reach the harness. `Location`, `Set-Cookie` and organisation ids
@@ -46,15 +58,14 @@ fn tchar(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
 }
 
-struct Head {
-    status: u16,
-    headers: Vec<(String, String)>,
-}
+/// The first line of a head and its headers.
+pub(super) type Lines<'a> = (&'a str, Vec<(String, String)>);
 
-/// A head with no bare CR, bare LF or NUL, a 3-digit status of 100 to 599, and only
-/// `token: value` lines. Anything else refuses the whole response.
-fn parse_head(raw: &[u8]) -> Result<Head, DialError> {
-    let bad = DialError::Upstream;
+/// One head split into its first line and its `name: value` lines (names lower-cased, values
+/// trimmed). No bare CR, bare LF or NUL anywhere, UTF-8 only, and every header line is
+/// `token: value`, so an obs-fold, a space before the colon or a line without one is refused whole.
+/// Shared by the response head here and the gateway's request head.
+pub(super) fn parse_lines(raw: &[u8]) -> Result<Lines<'_>, ()> {
     for (i, b) in raw.iter().enumerate() {
         let ok = match b {
             0 => false,
@@ -63,12 +74,36 @@ fn parse_head(raw: &[u8]) -> Result<Head, DialError> {
             c => *c == b'\t' || (*c >= 0x20 && *c != 0x7f),
         };
         if !ok {
-            return Err(bad);
+            return Err(());
         }
     }
-    let text = std::str::from_utf8(raw).map_err(|_| bad)?;
+    let text = std::str::from_utf8(raw).map_err(|_| ())?;
     let mut lines = text.split("\r\n");
-    let first = lines.next().ok_or(bad)?;
+    let first = lines.next().ok_or(())?;
+    let mut headers = Vec::new();
+    for line in lines {
+        let (name, value) = line.split_once(':').ok_or(())?;
+        if name.is_empty() || !name.bytes().all(tchar) {
+            return Err(());
+        }
+        headers.push((
+            name.to_ascii_lowercase(),
+            value.trim_matches([' ', '\t']).to_owned(),
+        ));
+    }
+    Ok((first, headers))
+}
+
+struct Head {
+    status: u16,
+    headers: Vec<(String, String)>,
+}
+
+/// A head with a 3-digit status of 100 to 599 and only `token: value` lines. Anything else
+/// refuses the whole response.
+fn parse_head(raw: &[u8]) -> Result<Head, DialError> {
+    let bad = DialError::Upstream;
+    let (first, headers) = parse_lines(raw).map_err(|()| bad)?;
     let code = first.strip_prefix("HTTP/1.1 ").ok_or(bad)?;
     let digits = code.get(..3).ok_or(bad)?;
     if !digits.bytes().all(|b| b.is_ascii_digit())
@@ -80,26 +115,7 @@ fn parse_head(raw: &[u8]) -> Result<Head, DialError> {
     if !(100..=599).contains(&status) {
         return Err(bad);
     }
-    let mut headers = Vec::new();
-    for line in lines {
-        let (name, value) = line.split_once(':').ok_or(bad)?;
-        if name.is_empty() || !name.bytes().all(tchar) {
-            return Err(bad);
-        }
-        headers.push((
-            name.to_ascii_lowercase(),
-            value.trim_matches([' ', '\t']).to_owned(),
-        ));
-    }
     Ok(Head { status, headers })
-}
-
-enum Framing {
-    None,
-    Length(u64),
-    Chunked,
-    /// Until the connection closes cleanly (`Connection: close`).
-    Close,
 }
 
 fn framing(status: u16, headers: &[(String, String)]) -> Result<Framing, DialError> {
@@ -137,18 +153,26 @@ fn framing(status: u16, headers: &[(String, String)]) -> Result<Framing, DialErr
 
 /// A buffered reader whose every wait is bounded and whose read errors (a TLS stream that ends
 /// without `close_notify` included) are errors, never an end of data.
-struct Rd<'a, R> {
-    r: &'a mut R,
+pub(super) struct Rd<R> {
+    r: R,
     buf: Vec<u8>,
     at: usize,
 }
 
-impl<R: AsyncReadExt + Unpin> Rd<'_, R> {
-    fn pending(&self) -> &[u8] {
+impl<R: AsyncReadExt + Unpin> Rd<R> {
+    pub(super) fn new(r: R) -> Rd<R> {
+        Rd {
+            r,
+            buf: Vec::new(),
+            at: 0,
+        }
+    }
+
+    pub(super) fn pending(&self) -> &[u8] {
         &self.buf[self.at..]
     }
 
-    fn consume(&mut self, n: usize) {
+    pub(super) fn consume(&mut self, n: usize) {
         self.at += n;
         if self.at == self.buf.len() {
             self.buf.clear();
@@ -157,8 +181,8 @@ impl<R: AsyncReadExt + Unpin> Rd<'_, R> {
     }
 
     /// Reads more. `Ok(false)` only for a clean end of stream.
-    async fn fill(&mut self) -> Result<bool, DialError> {
-        let mut chunk = [0u8; 4096];
+    pub(super) async fn fill(&mut self) -> Result<bool, DialError> {
+        let mut chunk = [0u8; 8192];
         match timeout(IDLE, self.r.read(&mut chunk)).await {
             Ok(Ok(0)) => Ok(false),
             Ok(Ok(n)) => {
@@ -170,12 +194,12 @@ impl<R: AsyncReadExt + Unpin> Rd<'_, R> {
     }
 
     /// Reads more where an end of stream is an error.
-    async fn need(&mut self) -> Result<(), DialError> {
+    pub(super) async fn need(&mut self) -> Result<(), DialError> {
         self.fill().await?.then_some(()).ok_or(DialError::Upstream)
     }
 
     /// Up to and excluding the next CRLF, at most `max` bytes.
-    async fn line(&mut self, max: usize) -> Result<Vec<u8>, DialError> {
+    pub(super) async fn line(&mut self, max: usize) -> Result<Vec<u8>, DialError> {
         loop {
             if let Some(i) = self.pending().windows(2).position(|w| w == b"\r\n") {
                 let line = self.pending()[..i].to_vec();
@@ -204,91 +228,28 @@ impl<R: AsyncReadExt + Unpin> Rd<'_, R> {
         }
     }
 
-    /// Moves up to `n` pending bytes into `body`, reading more when none are pending.
-    async fn take(&mut self, n: usize, body: &mut Vec<u8>) -> Result<usize, DialError> {
+    /// Up to `n` bytes (at least one), reading more when none are pending.
+    pub(super) async fn take_some(&mut self, n: usize) -> Result<Vec<u8>, DialError> {
         if self.pending().is_empty() {
             self.need().await?;
         }
         let k = n.min(self.pending().len());
-        body.extend_from_slice(&self.pending()[..k]);
+        let out = self.pending()[..k].to_vec();
         self.consume(k);
-        Ok(k)
+        Ok(out)
     }
 }
 
-/// The body, at most `max` bytes, and whether the upstream sent more.
-async fn body<R: AsyncReadExt + Unpin>(
-    rd: &mut Rd<'_, R>,
-    framing: Framing,
-    max: usize,
-) -> Result<(Vec<u8>, bool), DialError> {
-    let mut out = Vec::new();
-    match framing {
-        Framing::None => {}
-        Framing::Length(n) => {
-            let want = usize::try_from(n).unwrap_or(usize::MAX).min(max);
-            while out.len() < want {
-                rd.take(want - out.len(), &mut out).await?;
-            }
-            return Ok((out, n > max as u64));
-        }
-        Framing::Close => {
-            while out.len() < max {
-                if rd.pending().is_empty() && !rd.fill().await? {
-                    return Ok((out, false));
-                }
-                rd.take(max - out.len(), &mut out).await?;
-            }
-            let more = !rd.pending().is_empty() || rd.fill().await?;
-            return Ok((out, more));
-        }
-        Framing::Chunked => loop {
-            let line = rd.line(MAX_LINE).await?;
-            let size = line.split(|b| *b == b';').next().unwrap_or_default();
-            let ok = !size.is_empty() && size.len() <= 15 && size.iter().all(u8::is_ascii_hexdigit);
-            let size = ok
-                .then(|| usize::from_str_radix(std::str::from_utf8(size).ok()?, 16).ok())
-                .flatten()
-                .ok_or(DialError::Upstream)?;
-            if size == 0 {
-                for _ in 0..=MAX_TRAILERS {
-                    if rd.line(MAX_LINE).await?.is_empty() {
-                        return Ok((out, false));
-                    }
-                }
-                return Err(DialError::Upstream);
-            }
-            let mut left = size;
-            while left > 0 {
-                if out.len() >= max {
-                    return Ok((out, true));
-                }
-                left -= rd.take(left.min(max - out.len()), &mut out).await?;
-            }
-            while rd.pending().len() < 2 {
-                rd.need().await?;
-            }
-            if &rd.pending()[..2] != b"\r\n" {
-                return Err(DialError::Upstream);
-            }
-            rd.consume(2);
-        },
-    }
-    Ok((out, false))
-}
-
-/// Reads one response: skips 1xx interim heads, refuses a malformed head whole, frames the body
-/// by `Content-Length` or chunks (a short or cut body is an error) or by a clean close, and
-/// keeps at most `max_body` bytes, saying so when it cut.
-pub(super) async fn read_reply<R: AsyncReadExt + Unpin>(
-    r: &mut R,
+/// Reads one response head: skips 1xx interim heads, refuses a malformed head whole, and returns
+/// the body reader, framed by `Content-Length` or chunks (a short or cut body is an error) or by a
+/// clean close, that yields at most `max_body` bytes and then says so ([`DialError::Truncated`]).
+/// Every wait of the body is bounded by the idle timeout and by `deadline`.
+pub(super) async fn open_reply<R: AsyncReadExt + Unpin>(
+    r: R,
     max_body: usize,
-) -> Result<Reply, DialError> {
-    let mut rd = Rd {
-        r,
-        buf: Vec::new(),
-        at: 0,
-    };
+    deadline: Instant,
+) -> Result<Opened<R>, DialError> {
+    let mut rd = Rd::new(r);
     let mut interim = 0;
     let head = loop {
         let head = parse_head(&rd.head().await?)?;
@@ -300,17 +261,18 @@ pub(super) async fn read_reply<R: AsyncReadExt + Unpin>(
         }
     };
     let framing = framing(head.status, &head.headers)?;
-    let chunked = matches!(framing, Framing::Chunked);
-    let (body, truncated) = body(&mut rd, framing, max_body).await?;
-    Ok(Reply {
+    Ok(Opened {
         status: head.status,
+        chunked: matches!(framing, Framing::Chunked),
+        length: match framing {
+            Framing::Length(n) => Some(n),
+            _ => None,
+        },
         headers: head
             .headers
             .into_iter()
             .filter(|(n, _)| header_ok(n))
             .collect(),
-        body,
-        chunked,
-        truncated,
+        body: Body::new(rd, framing, max_body, deadline),
     })
 }

@@ -312,6 +312,28 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
                     c.arg("--setenv").arg(k).arg(v);
                 }
             }
+            // The auth gateway's slot (KAN-435): a socket into the runner and a forwarder on this
+            // namespace's loopback. It carries no key; the harness's base URL is G6's.
+            let (sock, fwd, port) = (
+                env(spec, "AINKRAD_SANDBOX_GW_SOCK"),
+                env(spec, "AINKRAD_SANDBOX_GW_FWD"),
+                env(spec, "AINKRAD_SANDBOX_GW_PORT"),
+            );
+            if [sock, fwd, port].iter().all(|v| !v.is_empty()) {
+                c.arg("--bind").arg(sock).arg(sock);
+                let shared = fwd == env(spec, "AINKRAD_SANDBOX_MCP_FWD")
+                    || (filtered && fwd == env(spec, "AINKRAD_SANDBOX_EGRESS_FWD"));
+                if !shared {
+                    c.arg("--ro-bind").arg(fwd).arg(fwd);
+                }
+                for (k, v) in [
+                    ("AINKRAD_GW_SOCK", sock),
+                    ("AINKRAD_GW_FWD", fwd),
+                    ("AINKRAD_GW_PORT", port),
+                ] {
+                    c.arg("--setenv").arg(k).arg(v);
+                }
+            }
             if filtered {
                 let (sock, fwd, port) = (
                     env(spec, "AINKRAD_SANDBOX_EGRESS_SOCK"),
@@ -365,7 +387,7 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
     // Starts the MCP and egress forwarders (when bwrap was given them) before the harness; they die
     // with the sandbox. Descriptors above 2 that the runner leaked are closed first, so a connected
     // socket inherited from the host is not reachable from inside.
-    const FORWARDER: &str = "for f in /proc/$$/fd/*; do n=${f##*/}; [ \"$n\" -gt 2 ] 2>/dev/null && eval \"exec $n>&-\"; done; if [ -n \"$AINKRAD_MCP_FWD\" ]; then \"$AINKRAD_MCP_FWD\" mcp-forward \"$AINKRAD_MCP_PORT\" \"$AINKRAD_MCP_SOCK\" </dev/null >/dev/null 2>&1 & fi; if [ -n \"$AINKRAD_EGRESS_SOCK\" ]; then \"$AINKRAD_EGRESS_FWD\" mcp-forward \"$AINKRAD_EGRESS_PORT\" \"$AINKRAD_EGRESS_SOCK\" </dev/null >/dev/null 2>&1 & fi; ";
+    const FORWARDER: &str = "for f in /proc/$$/fd/*; do n=${f##*/}; [ \"$n\" -gt 2 ] 2>/dev/null && eval \"exec $n>&-\"; done; if [ -n \"$AINKRAD_MCP_FWD\" ]; then \"$AINKRAD_MCP_FWD\" mcp-forward \"$AINKRAD_MCP_PORT\" \"$AINKRAD_MCP_SOCK\" </dev/null >/dev/null 2>&1 & fi; if [ -n \"$AINKRAD_EGRESS_SOCK\" ]; then \"$AINKRAD_EGRESS_FWD\" mcp-forward \"$AINKRAD_EGRESS_PORT\" \"$AINKRAD_EGRESS_SOCK\" </dev/null >/dev/null 2>&1 & fi; if [ -n \"$AINKRAD_GW_SOCK\" ]; then \"$AINKRAD_GW_FWD\" mcp-forward \"$AINKRAD_GW_PORT\" \"$AINKRAD_GW_SOCK\" </dev/null >/dev/null 2>&1 & fi; ";
     let script = if cfg!(target_os = "macos") {
         "ulimit -S -u \"$1\" && ulimit -H -u \"$1\" && ulimit -S -t \"$2\" && ulimit -H -t \"$2\" && ulimit -S -f \"$3\" && ulimit -H -f \"$3\" || exit 125; shift 4; exec \"$@\""
     } else {

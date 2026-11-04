@@ -114,3 +114,37 @@ fn the_strict_policy_has_no_operator_input_and_allows_only_the_public_internet_o
         assert!(p.check_ip(ip, true).is_err());
     }
 }
+
+#[tokio::test]
+async fn open_yields_decoded_pieces_then_a_clean_end_and_an_error_is_final() {
+    let f = serve(
+        HOST,
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n3\r\ndef\r\n0\r\n\r\n",
+    )
+    .await;
+    let (d, _) = dialer(&f, Script::of(vec![public()]), vec![]);
+    let mut o = d.open(HOST, "GET", "/x", &[], b"", 4).await.unwrap();
+    assert_eq!((o.status, o.chunked, o.length), (200, true, None));
+    assert_eq!(o.body.next().await, Ok(Some(b"abc".to_vec())));
+    // One byte of budget left: the next chunk is cut, and so is everything after it.
+    assert_eq!(o.body.next().await, Ok(Some(b"d".to_vec())));
+    assert_eq!(o.body.next().await, Err(DialError::Truncated));
+    assert_eq!(o.body.next().await, Err(DialError::Truncated));
+
+    let f = serve_as(
+        HOST,
+        "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nab",
+        End::Notify,
+    )
+    .await;
+    let (d, _) = dialer(&f, Script::of(vec![public()]), vec![]);
+    let mut o = d.open(HOST, "GET", "/x", &[], b"", 16).await.unwrap();
+    assert_eq!(o.length, Some(4));
+    assert_eq!(o.body.next().await, Ok(Some(b"ab".to_vec())));
+    assert_eq!(o.body.next().await, Err(DialError::Upstream));
+    assert_eq!(
+        o.body.next().await,
+        Err(DialError::Upstream),
+        "an error is never followed by a clean end"
+    );
+}
