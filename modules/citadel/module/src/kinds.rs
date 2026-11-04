@@ -120,6 +120,7 @@ pub const AUDIT_ACTIONS: &[&str] = &[
     "citadel.label.created",
     "citadel.label.deleted",
     "citadel.label.renamed",
+    "citadel.ledger.migrated",
     "citadel.linear.conflict",
     "citadel.linear.exported",
     "citadel.linear.imported",

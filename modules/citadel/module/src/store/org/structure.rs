@@ -171,6 +171,12 @@ pub async fn remove_department(
     if teams > 0 {
         return Err(OrgError::HasTeams);
     }
+    crate::store::gov::drop_budgets_of(
+        &mut tx,
+        crate::domain::gov::BudgetScope::Department(id),
+        actor,
+    )
+    .await?;
     sqlx::query("DELETE FROM citadel_departments WHERE id = ?")
         .bind(id.0)
         .execute(&mut *tx)

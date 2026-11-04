@@ -169,9 +169,9 @@ pub(crate) async fn used_in(
         LimitUnit::Tokens => {
             sqlx::query_scalar(
                 "SELECT coalesce(sum(input_tokens + output_tokens + cache_tokens), 0) \
-                 FROM citadel_cost_events WHERE account_id = ? \
-                 AND julianday(created_at) > julianday(?, ?) \
-                 AND julianday(created_at) <= julianday(?)",
+                 FROM core_cost_events WHERE legacy_account_id = ? \
+                 AND julianday(occurred_at) > julianday(?, ?) \
+                 AND julianday(occurred_at) <= julianday(?)",
             )
             .bind(account.0)
             .bind(now)
@@ -334,8 +334,8 @@ async fn reset_at_in(
     let oldest: Option<String> = match unit {
         LimitUnit::Tokens => {
             sqlx::query_scalar(
-                "SELECT min(created_at) FROM citadel_cost_events WHERE account_id = ? \
-                 AND julianday(created_at) > julianday(?, ?)",
+                "SELECT min(occurred_at) FROM core_cost_events WHERE legacy_account_id = ? \
+                 AND julianday(occurred_at) > julianday(?, ?)",
             )
             .bind(account.0)
             .bind(now)

@@ -455,7 +455,7 @@ pub async fn delete_account(
     .fetch_all(&mut *tx)
     .await?;
     let costs: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM citadel_cost_events WHERE account_id = ?")
+        sqlx::query_scalar("SELECT count(*) FROM core_cost_events WHERE legacy_account_id = ?")
             .bind(account.0)
             .fetch_one(&mut *tx)
             .await?;
@@ -544,5 +544,75 @@ mod tests {
             || c.contains("token")
             || c.contains("credential_ref")
             || c.contains("credential_env")));
+    }
+
+    #[tokio::test]
+    async fn usage_and_limits_read_the_core_ledger_by_the_legacy_account_id() {
+        use crate::domain::gov::LimitUnit;
+        let db = crate::testing::db().await;
+        let pool = &db.pool;
+        let company = crate::store::org::create_company(pool, "A").await.unwrap();
+        let new = NewAccount {
+            harness: Harness::Claude,
+            label: "main".to_owned(),
+            billing: Billing::Metered,
+            config_dir: None,
+            secret_name: None,
+            delivery: None,
+            runners: None,
+            require_broker_secret: false,
+        };
+        let account = create_account(pool, &new, AuditActor::System).await.unwrap();
+        // The ledger is the Core's: an event of the account (by Citadel's id) for this company, an hour
+        // ago, and one a week and a day ago that is outside both windows.
+        for (id, key, at) in [
+            (1, "k1", "2026-10-22T09:00:00.000Z"),
+            (2, "k2", "2026-10-14T09:00:00.000Z"),
+        ] {
+            sqlx::query(
+                "INSERT INTO core_cost_events (id, session, epoch, legacy_account_id, provider, harness, \
+                 model, input_tokens, output_tokens, cache_tokens, cost_usd_micros, basis, \
+                 idempotency_key, occurred_at, created_at) VALUES (?1, 'run:1', 0, ?2, 'anthropic', \
+                 'claude', 'm', 100, 50, 0, 150, 'provider_reported', ?3, ?4, ?4)",
+            )
+            .bind(id)
+            .bind(account.id.0)
+            .bind(key)
+            .bind(at)
+            .execute(pool)
+            .await
+            .unwrap();
+            sqlx::query("INSERT INTO core_cost_subjects (event_id, kind, subject_id) VALUES (?, 'company', ?)")
+                .bind(id)
+                .bind(company.id.0.to_string())
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        let limit = AccountLimit {
+            id: 0,
+            account_id: account.id,
+            unit: LimitUnit::Tokens,
+            window_secs: 5 * 3600,
+            cap: 120,
+            warn_percent: None,
+        };
+        set_account_limit(pool, &limit, AuditActor::System).await.unwrap();
+        let now = "2026-10-22T10:00:00.000Z";
+        let all = account_usage(pool, None, now).await.unwrap();
+        let u = &all[0];
+        assert_eq!((u.five_hours.total_tokens, u.five_hours.cost_usd_micros), (150, 150));
+        assert_eq!(u.seven_days.total_tokens, 150);
+        assert_eq!((u.limits[0].used, u.limits[0].exhausted), (150, true));
+        assert_eq!(u.by_company.len(), 1);
+        assert_eq!(u.by_company[0].company_id, company.id);
+        assert_eq!(u.by_company[0].five_hours.total_tokens, 150);
+        // The company's own report names the same account; another company's names none.
+        assert_eq!(account_usage(pool, Some(company.id), now).await.unwrap().len(), 1);
+        let other = crate::store::org::create_company(pool, "B").await.unwrap();
+        assert!(account_usage(pool, Some(other.id), now).await.unwrap().is_empty());
+        // An account with history in the ledger is disabled, never deleted.
+        let err = delete_account(pool, account.id, AuditActor::System).await.unwrap_err();
+        assert!(err.to_string().contains("history"), "{err}");
     }
 }

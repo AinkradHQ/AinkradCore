@@ -271,7 +271,7 @@ async fn an_escalation_wake_is_still_held_by_the_leads_budget() {
     let b = gov::set_budget(&w.app().pool, &cap, AuditActor::System)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO citadel_budget_spend (budget_id, period_key, tokens) VALUES (?, 'total', 1000)")
+    sqlx::query("INSERT INTO core_budget_spend (budget_id, period_key, tokens) VALUES (?, 'total', 1000)")
         .bind(b.id.0)
         .execute(&w.app().pool)
         .await
@@ -285,7 +285,7 @@ async fn an_escalation_wake_is_still_held_by_the_leads_budget() {
     }
     // The escalation raised nothing: the cap stands and the only way past it is an approval.
     let (cap_now, raised): (i64, i64) = sqlx::query_as(
-        "SELECT b.token_cap, s.raised FROM citadel_budgets b JOIN citadel_budget_spend s \
+        "SELECT b.token_cap, s.raised FROM core_budgets b JOIN core_budget_spend s \
          ON s.budget_id = b.id WHERE b.id = ?",
     )
     .bind(b.id.0)
@@ -856,7 +856,7 @@ async fn a_small_task_starts_on_the_agents_small_model_and_is_admitted_like_any_
         .await
         .unwrap();
     sqlx::query(
-        "INSERT INTO citadel_budget_spend (budget_id, period_key, tokens) VALUES (?, 'total', 10)",
+        "INSERT INTO core_budget_spend (budget_id, period_key, tokens) VALUES (?, 'total', 10)",
     )
     .bind(b.id.0)
     .execute(pool)

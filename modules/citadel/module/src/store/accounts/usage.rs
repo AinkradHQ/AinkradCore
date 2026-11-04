@@ -53,9 +53,9 @@ async fn window_in(
             sqlx::query_as(
                 "SELECT coalesce(sum(input_tokens), 0), coalesce(sum(output_tokens), 0), \
                  coalesce(sum(cache_tokens), 0), coalesce(sum(cost_usd_micros), 0) \
-                 FROM citadel_cost_events WHERE account_id = ? \
-                 AND julianday(created_at) > julianday(?, ?) \
-                 AND julianday(created_at) <= julianday(?)",
+                 FROM core_cost_events WHERE legacy_account_id = ? \
+                 AND julianday(occurred_at) > julianday(?, ?) \
+                 AND julianday(occurred_at) <= julianday(?)",
             )
             .bind(account.0)
             .bind(now)
@@ -68,16 +68,16 @@ async fn window_in(
             sqlx::query_as(
                 "SELECT coalesce(sum(c.input_tokens), 0), coalesce(sum(c.output_tokens), 0), \
                  coalesce(sum(c.cache_tokens), 0), coalesce(sum(c.cost_usd_micros), 0) \
-                 FROM citadel_cost_events c JOIN citadel_agents a ON a.id = c.agent_id \
-                 WHERE c.account_id = ? AND a.company_id = ? \
-                 AND julianday(c.created_at) > julianday(?, ?) \
-                 AND julianday(c.created_at) <= julianday(?)",
+                 FROM core_cost_events c JOIN core_cost_subjects s ON s.event_id = c.id \
+                 AND s.kind = 'company' AND s.subject_id = CAST(?2 AS TEXT) \
+                 WHERE c.legacy_account_id = ?1 \
+                 AND julianday(c.occurred_at) > julianday(?3, ?4) \
+                 AND julianday(c.occurred_at) <= julianday(?3)",
             )
             .bind(account.0)
             .bind(c.0)
             .bind(now)
             .bind(&win)
-            .bind(now)
             .fetch_one(&mut *conn)
             .await?
         }
@@ -108,9 +108,9 @@ pub async fn account_usage(
         account_columns!(),
         " FROM citadel_accounts WHERE ?1 IS NULL \
          OR id IN (SELECT account_id FROM citadel_account_companies WHERE company_id = ?1) \
-         OR id IN (SELECT c.account_id FROM citadel_cost_events c \
-                   JOIN citadel_agents a ON a.id = c.agent_id \
-                   WHERE a.company_id = ?1 AND c.account_id IS NOT NULL) \
+         OR id IN (SELECT c.legacy_account_id FROM core_cost_events c \
+                   JOIN core_cost_subjects s ON s.event_id = c.id AND s.kind = 'company' \
+                   AND s.subject_id = CAST(?1 AS TEXT) WHERE c.legacy_account_id IS NOT NULL) \
          ORDER BY id"
     ))
     .bind(company.map(|c| c.0))
@@ -135,9 +135,9 @@ pub async fn account_usage(
             None => {
                 let ids: Vec<i64> = sqlx::query_scalar(
                     "SELECT company_id FROM citadel_account_companies WHERE account_id = ?1 \
-                     UNION SELECT a.company_id FROM citadel_cost_events c \
-                         JOIN citadel_agents a ON a.id = c.agent_id WHERE c.account_id = ?1 \
-                     ORDER BY 1",
+                     UNION SELECT CAST(s.subject_id AS INTEGER) FROM core_cost_events c \
+                         JOIN core_cost_subjects s ON s.event_id = c.id AND s.kind = 'company' \
+                         WHERE c.legacy_account_id = ?1 ORDER BY 1",
                 )
                 .bind(id.0)
                 .fetch_all(&mut *tx)

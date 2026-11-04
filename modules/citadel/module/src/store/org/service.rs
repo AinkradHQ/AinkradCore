@@ -161,6 +161,12 @@ pub async fn remove_department(
     let Some(d) = get_department(&mut *tx, id).await? else {
         return Ok(false);
     };
+    crate::store::gov::drop_budgets_of(
+        &mut tx,
+        crate::domain::gov::BudgetScope::Department(id),
+        actor,
+    )
+    .await?;
     delete_department(&mut *tx, id).await?;
     let details = json!({"company_id": d.company_id.0, "name": d.name});
     record(

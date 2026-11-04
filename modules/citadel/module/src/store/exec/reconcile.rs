@@ -22,7 +22,7 @@ use super::*;
 use crate::domain::exec::RunEvent;
 use crate::domain::gov::{ApprovalKind, NewApproval};
 use crate::store::audit::{self, Event};
-use crate::store::gov::{open_approval_in, standings, warn_in};
+use crate::store::gov::{open_approval_in, standings};
 
 /// What a pass did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -165,7 +165,15 @@ async fn follow<H: Host>(
     let Some(s) = sessions::get(pool, &session).await? else {
         return end(pool, &r, RunEvent::RunnerLost, now, report).await;
     };
-    let r = record_usage(pool, &r, &s, now, report).await?;
+    // Usage that cannot be recorded is logged and tried again next pass; it must not stop this run's
+    // cancel, cap or end, nor the other runs.
+    let r = match record_usage(pool, &r, &s, now, report).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(run = r.id.0, error = ?e, "a run's usage was not recorded");
+            r.clone()
+        }
+    };
     if r.cancel_requested_at.is_some() {
         // A stop the runner did not take (or a session ended meanwhile): the admin's word stands.
         if s.live()
@@ -246,11 +254,13 @@ async fn over_cap(pool: &SqlitePool, r: &Run, now: &str) -> Result<Option<String
 
 /// Turns the session's token totals into one cost event for what grew since the ledger last saw
 /// the run (idempotent: the key names the totals, so a repeated report adds nothing and a lost
-/// one loses nothing), prices it, moves the run's totals and lets the budgets warn.
+/// one loses nothing), prices it, moves the run's totals and lets the budgets warn. The ledger and
+/// the budgets are the Core's (KAN-449, KAN-448): the event is recorded there, in this transaction,
+/// as the session `run:<id>`, naming what it counts against (`subjects_in`).
 ///
 /// Dollars: a subscription harness records tokens only; a metered one costs what the harness
 /// reported (less what the ledger holds) or else its tokens at the latest price of its harness and
-/// model, or else nothing known (NULL, never 0).
+/// model in Citadel's price book, or else nothing known (NULL, never 0).
 pub async fn record_usage(
     pool: &SqlitePool,
     r: &Run,
@@ -258,6 +268,8 @@ pub async fn record_usage(
     now: &str,
     report: &mut Report,
 ) -> Result<Run, Error> {
+    use ainkrad_core_server::store::costs::{self, Pricing};
+    use ainkrad_core_server::store::{prices::Rates, secrets::Error as CoreError};
     let total = [
         s.usage.input,
         s.usage.output,
@@ -266,14 +278,8 @@ pub async fn record_usage(
     .map(|t| i64::try_from(t).unwrap_or(i64::MAX));
     let reported = s.usage.cost_usd_micros.and_then(|c| i64::try_from(c).ok());
     let mut tx = ainkrad_core_server::store::begin_write(pool).await?;
-    let (input, output, cache, held): (i64, i64, i64, i64) = sqlx::query_as(
-        "SELECT coalesce(sum(input_tokens), 0), coalesce(sum(output_tokens), 0), \
-         coalesce(sum(cache_tokens), 0), coalesce(sum(cost_usd_micros), 0) \
-         FROM citadel_cost_events WHERE run_id = ?",
-    )
-    .bind(r.id.0)
-    .fetch_one(&mut *tx)
-    .await?;
+    let session = format!("run:{}", r.id.0);
+    let [input, output, cache, held] = costs::session_totals(&mut tx, &session).await?;
     let delta = [total[0] - input, total[1] - output, total[2] - cache];
     let subscription: bool = sqlx::query_scalar(
         "SELECT coalesce((SELECT billing FROM citadel_harness_billing WHERE harness = ?), 'metered') \
@@ -287,75 +293,83 @@ pub async fn record_usage(
         tx.commit().await?;
         return Ok(r.clone());
     }
-    let (cost, price): (Option<i64>, Option<i64>) = match (subscription, reported) {
-        (true, _) => (None, None),
-        (false, Some(c)) => (Some((c - held).max(0)), None),
-        (false, None) => {
-            let p: Option<(i64, i64, i64, i64)> = sqlx::query_as(
-                "SELECT id, input_micros_per_mtok, output_micros_per_mtok, cache_micros_per_mtok \
-                 FROM citadel_prices WHERE harness = ?1 AND model = coalesce(?2, \
-                 (SELECT model FROM citadel_agents WHERE id = ?3)) ORDER BY version DESC LIMIT 1",
-            )
-            .bind(r.harness.as_str())
+    let model: Option<String> =
+        sqlx::query_scalar("SELECT coalesce(?1, (SELECT model FROM citadel_agents WHERE id = ?2))")
             .bind(&r.model_used)
             .bind(r.agent_id.0)
+            .fetch_one(&mut *tx)
+            .await?;
+    // The price book keeps the name as given; the Core ledger takes only a clean one.
+    let model = model
+        .filter(|m| !m.is_empty())
+        .unwrap_or_else(|| "unknown".to_owned());
+    let core_model = crate::store::gov::core_model(&model);
+    let (cost, pricing): (Option<i64>, Pricing) = match (subscription, reported) {
+        (true, _) => (None, Pricing::Unpriced),
+        (false, Some(c)) => (Some((c - held).max(0)), Pricing::Unpriced),
+        (false, None) => {
+            let p: Option<(i64, i64, i64, String)> = sqlx::query_as(
+                "SELECT input_micros_per_mtok, output_micros_per_mtok, cache_micros_per_mtok, \
+                 created_at FROM citadel_prices WHERE harness = ?1 AND model = ?2 \
+                 ORDER BY version DESC LIMIT 1",
+            )
+            .bind(r.harness.as_str())
+            .bind(&model)
             .fetch_optional(&mut *tx)
             .await?;
-            match p {
-                Some((id, i, o, c)) => {
-                    let micros = i128::from(delta[0]) * i128::from(i)
-                        + i128::from(delta[1]) * i128::from(o)
-                        + i128::from(delta[2]) * i128::from(c);
-                    (
-                        Some(i64::try_from((micros + 500_000) / 1_000_000).unwrap_or(i64::MAX)),
-                        Some(id),
-                    )
-                }
-                None => (None, None),
-            }
+            let own = p.map(|(input, output, cache, priced_at)| Rates {
+                input,
+                output,
+                cache,
+                priced_at,
+            });
+            (None, own.map_or(Pricing::Unpriced, Pricing::Own))
         }
+    };
+    let owned = crate::store::gov::subjects_in(&mut tx, r.agent_id, r.issue_id).await?;
+    let subjects: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let provider = match r.harness.as_str() {
+        "claude" => "anthropic",
+        "codex" => "openai",
+        "agy" => "google",
+        other => other,
     };
     let key = format!(
         "run:{}:usage:{}:{}:{}:{held}",
         r.id.0, total[0], total[1], total[2]
     );
-    let inserted = sqlx::query(
-        "INSERT INTO citadel_cost_events (run_id, agent_id, issue_id, input_tokens, output_tokens, \
-         cache_tokens, cost_usd_micros, priced, idempotency_key, created_at, price_id, billing) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
-         ON CONFLICT (idempotency_key) DO NOTHING",
-    )
-    .bind(r.id.0)
-    .bind(r.agent_id.0)
-    .bind(r.issue_id.map(|i| i.0))
-    .bind(delta[0])
-    .bind(delta[1])
-    .bind(delta[2])
-    .bind(cost)
-    .bind(cost.is_some())
-    .bind(&key)
-    .bind(now)
-    .bind(price)
-    .bind(if subscription {
-        "subscription"
-    } else {
-        "metered"
-    })
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
-    if inserted == 0 {
+    let new = costs::NewCost {
+        session: &session,
+        epoch: 0,
+        account_id: None,
+        legacy_account_id: None,
+        provider,
+        harness: r.harness.as_str(),
+        model: &core_model,
+        input_tokens: delta[0],
+        output_tokens: delta[1],
+        cache_tokens: delta[2],
+        reported_usd_micros: cost,
+        approximate: false,
+        subjects: &subjects,
+        idempotency_key: &key,
+        occurred_at: now,
+    };
+    let recorded = costs::record_priced_in(&mut tx, &new, pricing, now)
+        .await
+        .map_err(|e| match e {
+            CoreError::Db(e) => e,
+            CoreError::Refused { message, .. } => Error::InvalidArgument(message),
+        })?;
+    if recorded.duplicate {
         tx.commit().await?;
         return Ok(r.clone());
     }
     // The run is priced once every one of its events is.
-    let run_cost: Option<i64> = sqlx::query_scalar(
-        "SELECT iif(NOT EXISTS (SELECT 1 FROM citadel_cost_events WHERE run_id = ?1 AND priced = 0), \
-         (SELECT sum(cost_usd_micros) FROM citadel_cost_events WHERE run_id = ?1), NULL)",
-    )
-    .bind(r.id.0)
-    .fetch_one(&mut *tx)
-    .await?;
+    let run_cost = costs::session_cost(&mut tx, &session).await?;
     let updated = sqlx::query(concat!(
         "UPDATE citadel_runs SET input_tokens = ?, output_tokens = ?, cache_tokens = ?, \
          cost_usd_micros = ?, priced = ? WHERE id = ? RETURNING ",
@@ -370,7 +384,7 @@ pub async fn record_usage(
     .fetch_one(&mut *tx)
     .await
     .and_then(run)?;
-    warn_in(&mut tx, r.agent_id, r.issue_id, now).await?;
+    crate::store::gov::wake_for_warnings(&mut tx, &recorded.guard.warned, r.issue_id).await?;
     tx.commit().await?;
     report.cost_events += 1;
     Ok(updated)

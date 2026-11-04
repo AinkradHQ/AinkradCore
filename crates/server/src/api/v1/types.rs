@@ -100,7 +100,9 @@
 ///    `account.limit_set` and `account.limit_cleared` audit actions. No route writes the ledger.
 /// 35: the budget engine (KAN-448): `listBudgets` (scope `read`; filter by `kind`, `subject`, `company`),
 ///    `setBudget`, `deleteBudget`, `raiseBudget` (`admin` and destructive); the `budget.*` audit actions.
-pub const API_MINOR: u32 = 35;
+/// 36: Citadel's budgets and costs live in the Core (KAN-450): the Citadel module's `citadel.ledger.migrated`
+///    audit action; no operation changes.
+pub const API_MINOR: u32 = 36;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
