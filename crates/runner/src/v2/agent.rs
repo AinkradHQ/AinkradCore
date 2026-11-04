@@ -238,6 +238,8 @@ struct Live {
     /// The isolation its policy requires, so the watch can end it if the sandbox stops
     /// providing it (E8a-09).
     required: Option<Isolation>,
+    /// The session's auth gateway (KAN-435), while it runs: closed first on a stop, and on the end.
+    gateway: Option<crate::gateway::Gateway>,
 }
 
 pub struct AgentDriver {
@@ -421,6 +423,7 @@ impl AgentDriver {
             approvals: HashMap::new(),
             task: None,
             required: None,
+            gateway: None,
         });
         live.required = req.policy.required_tier();
         live.meta.state = AgentState::Running;
@@ -477,6 +480,29 @@ impl AgentDriver {
             }
         };
         self.with(&session, |live, _, _| live.redactor = redactor.clone());
+        // The auth gateway: the key goes into its memory, the harness gets only the slot (a socket
+        // and a forwarder). It is held by the session, so a stop or the end closes it.
+        let mut gateway_env = Vec::new();
+        if let Some(grant) = req.gateway.as_deref() {
+            let dir = self.config.dir.join(&session);
+            match crate::gateway::session::open(grant, self.redeem.as_ref(), &dir, &mut redactor)
+                .await
+            {
+                Ok((gateway, env)) => {
+                    gateway_env = env;
+                    self.with(&session, |live, _, _| {
+                        live.redactor = redactor.clone();
+                        live.gateway = Some(gateway);
+                    });
+                }
+                Err(why) => {
+                    if workspace_prepared {
+                        self.harness.cleanup_agent_workspace(&session, run).await;
+                    }
+                    return self.end(&session, failed(redactor.text(&why), "gateway"));
+                }
+            }
+        }
         let hosts = std::env::var("CITADEL_GIT_HOSTS")
             .unwrap_or_default()
             .split(',')
@@ -501,6 +527,7 @@ impl AgentDriver {
             return self.end(&session, failed(redactor.text(&why), "workspace"));
         }
         let mut env = delivered.env.clone();
+        env.extend(gateway_env);
         if delivered.account {
             env.push((crate::egress::ACCOUNT_SESSION.to_owned(), "1".to_owned()));
         }
@@ -654,6 +681,7 @@ impl AgentDriver {
                 *reason = live.redactor.text(reason);
             }
             live.task = None;
+            live.gateway = None;
             live.approvals.clear();
             push(cfg, s, live, json!({"type": "ended", "outcome": outcome}));
             live.meta.state = AgentState::Ended;
@@ -694,11 +722,13 @@ impl AgentDriver {
     /// `stop_grace`), or kills it now.
     pub fn stop(self: &Arc<Self>, req: AgentStop) -> Result<AgentEvents, StreamError> {
         let run = {
-            let all = self.sessions.lock().unwrap();
-            let live = all.get(&req.session).ok_or_else(no_session)?;
+            let mut all = self.sessions.lock().unwrap();
+            let live = all.get_mut(&req.session).ok_or_else(no_session)?;
             if live.meta.state != AgentState::Running {
                 return Ok(events(&req.session, live, live.meta.last_seq));
             }
+            // Closed before the harness is signalled: a stopped session can spend nothing more.
+            live.gateway = None;
             live.run
         };
         if req.kill {
@@ -981,6 +1011,7 @@ fn reload(cfg: &AgentConfig) -> HashMap<String, Live> {
             approvals: HashMap::new(),
             task: None,
             required: None,
+            gateway: None,
         };
         if live.meta.state == AgentState::Running {
             tracing::warn!(

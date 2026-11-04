@@ -53,6 +53,9 @@ pub struct ProcessSandbox {
     secrets: PathBuf,
     /// The egress filter passed its start-up self-test (`egress::selftest`).
     egress_ready: bool,
+    /// The auth gateway passed its start-up self-test (`gateway::selftest`): the `gateway`
+    /// capability is advertised, so the Core may place a session with a grant here.
+    gateway_ready: bool,
     /// `AINKRAD_AGENT_NETWORK`, read once when the driver started: a later change of the
     /// process environment does not change what a session gets.
     requested: Option<String>,
@@ -160,6 +163,7 @@ impl ProcessSandbox {
             state,
             secrets,
             egress_ready: false,
+            gateway_ready: false,
             requested: None,
             probe,
         }
@@ -175,6 +179,12 @@ impl ProcessSandbox {
     /// `egress-filter` capability is advertised.
     pub fn with_egress_ready(mut self) -> Self {
         self.egress_ready = true;
+        self
+    }
+
+    /// Marks the auth gateway as proven on this host (Linux only: the slot is a bubblewrap one).
+    pub fn with_gateway_ready(mut self) -> Self {
+        self.gateway_ready = cfg!(target_os = "linux");
         self
     }
 
@@ -264,10 +274,11 @@ impl Sandbox for ProcessSandbox {
     }
 
     fn capabilities(&self) -> &'static [&'static str] {
-        if self.egress_ready {
-            &["egress-filter"]
-        } else {
-            &[]
+        match (self.egress_ready, self.gateway_ready) {
+            (false, false) => &[],
+            (true, false) => &["egress-filter"],
+            (false, true) => &[ainkrad_proto::v2::CAP_GATEWAY],
+            (true, true) => &["egress-filter", ainkrad_proto::v2::CAP_GATEWAY],
         }
     }
 
@@ -395,6 +406,22 @@ mod tests {
         assert_eq!(
             sandbox.with_egress_ready().capabilities(),
             ["egress-filter"]
+        );
+        // The gateway capability follows its own proof (Linux only), alone or with the egress one.
+        let sandbox = ProcessSandbox::new("/state".into(), "/secrets".into());
+        let want: &[&str] = if cfg!(target_os = "linux") {
+            &["gateway"]
+        } else {
+            &[]
+        };
+        assert_eq!(sandbox.with_gateway_ready().capabilities(), want);
+        let both = ProcessSandbox::new("/state".into(), "/secrets".into())
+            .with_egress_ready()
+            .with_gateway_ready();
+        assert!(both.capabilities().contains(&"egress-filter"));
+        assert_eq!(
+            both.capabilities().contains(&"gateway"),
+            cfg!(target_os = "linux")
         );
     }
 

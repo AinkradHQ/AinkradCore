@@ -1294,3 +1294,124 @@ async fn an_account_secret_marks_its_session_and_no_other_secret_does() {
         assert!(text.contains(&format!("mark={want}")), "{lease}: {text}");
     }
 }
+
+/// KAN-435 G3: a session with a gateway grant gets the gateway slot (a socket and a forwarder,
+/// no key), the gateway closes before the harness is signalled on a stop, and a grant that cannot
+/// be served fails the session without naming the lease or the key.
+#[tokio::test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "OWNER: requires AINKRAD_TEST_RAMDIR on a verified RAM disk"
+)]
+async fn a_gateway_grant_gives_the_harness_a_socket_not_a_key_and_a_stop_closes_it() {
+    use ainkrad_proto::v2::{Ceiling, GatewayAuth, GatewayGrant, ModelPrice, Rate, Upstream, Wire};
+    let key = format!("sk-ant-{}", "k9".repeat(12));
+    let value = key.clone();
+    let redeem: secrets::Redeem = Arc::new(move |lease: String| {
+        let value = value.clone();
+        Box::pin(async move {
+            if lease != "l_gw" {
+                return Err("no such lease".to_owned());
+            }
+            Ok(secrets::Leased {
+                name: "acct.anthropic.1".to_owned(),
+                delivery: "gateway".to_owned(),
+                value: Zeroizing::new(value),
+            })
+        })
+    });
+    let grant = |lease: &str, host: &str| {
+        Box::new(GatewayGrant {
+            lease: lease.to_owned(),
+            account: 1,
+            provider: "anthropic".to_owned(),
+            user_key: None,
+            upstream: Upstream {
+                host: host.to_owned(),
+                base_path: String::new(),
+                wire: Wire::AnthropicMessages,
+                auth: GatewayAuth::XApiKey,
+            },
+            models: vec!["m".to_owned()],
+            prices: vec![ModelPrice {
+                model: "m".to_owned(),
+                input: 1,
+                output: 1,
+                cache_read: 1,
+                cache_write: 1,
+            }],
+            ceiling: Ceiling {
+                tokens: 1,
+                usd_micros: 1,
+            },
+            rate: Rate {
+                per_minute: 1,
+                concurrent: 1,
+            },
+        })
+    };
+    let (root, config) = dirs("gateway");
+    let _ = &root;
+    // The harness reports whether the slot's socket is there, and what the slot names.
+    let s = script(
+        "echo \"sock=$([ -S \"$AINKRAD_SANDBOX_GW_SOCK\" ] && echo yes || echo no)\"; \
+         echo \"slot=$AINKRAD_SANDBOX_GW_SOCK $AINKRAD_SANDBOX_GW_FWD $AINKRAD_SANDBOX_GW_PORT\"; \
+         sleep 30",
+    );
+    let d = Arc::new(
+        AgentDriver::new(config.clone(), s)
+            .unwrap()
+            .with_redeem(redeem),
+    );
+    let mut req = start("as_gw", "fake");
+    req.gateway = Some(grant("l_gw", "api.anthropic.com"));
+    d.start(req).unwrap();
+    let sock = config.dir.join("as_gw").join("gateway.sock");
+    let mut seen = Vec::new();
+    while seen.len() < 3 {
+        let after = seen.last().map_or(0, |e: &TranscriptEntry| e.seq);
+        seen.extend(
+            d.read(&AgentRead {
+                session: "as_gw".into(),
+                after,
+                wait_ms: Some(2000),
+            })
+            .await
+            .unwrap()
+            .entries,
+        );
+    }
+    let text = serde_json::to_string(&seen).unwrap();
+    assert!(text.contains("sock=yes"), "{text}");
+    assert!(
+        text.contains(&format!("slot={} ", sock.display())),
+        "{text}"
+    );
+    assert!(!text.contains(&key), "the key reached the transcript");
+    d.stop(AgentStop {
+        session: "as_gw".into(),
+        kill: false,
+    })
+    .unwrap();
+    // The gateway is closed by the stop itself, before the harness has been signalled or ended.
+    assert!(!sock.exists(), "the gateway socket outlived the stop");
+    let (_, ev) = drain(&d, "as_gw").await;
+    assert_ne!(ev.state, AgentState::Running);
+
+    // A lease the Core did not mint, and a key for another host: failed, no value in the reason.
+    for (name, lease, host) in [
+        ("as_bad", "l_other", "api.anthropic.com"),
+        ("as_host", "l_gw", "api.openai.com"),
+    ] {
+        let mut req = start(name, "fake");
+        req.gateway = Some(grant(lease, host));
+        d.start(req).unwrap();
+        let (_, ev) = drain(&d, name).await;
+        let why = format!("{:?}", ev.outcome);
+        assert!(
+            matches!(&ev.outcome, Some(Outcome::Failed { .. })),
+            "{name}: {why}"
+        );
+        assert!(!why.contains(&key) && !why.contains(lease), "{why}");
+    }
+}

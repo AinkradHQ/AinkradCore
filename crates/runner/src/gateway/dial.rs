@@ -18,7 +18,7 @@ use std::time::Duration;
 use rustls::pki_types::ServerName;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout, timeout_at};
 use tokio_rustls::TlsConnector;
 
 use crate::egress::policy::{Deny, host_name};
@@ -52,6 +52,8 @@ pub enum DialError {
     BadRequest,
     /// The response head is malformed or too large, or the connection broke or stalled.
     Upstream,
+    /// The body is longer than the ceiling given to [`Dialer::open`].
+    Truncated,
 }
 
 pub(crate) type Connecting<'a> = Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send + 'a>>;
@@ -74,8 +76,12 @@ impl Connect for Tcp {
     }
 }
 
-pub use super::reply::Reply;
-use super::reply::read_reply;
+pub use super::body::Body;
+use super::reply::open_reply;
+pub use super::reply::{Opened, Reply};
+
+/// The stream of an opened response.
+pub type Stream = tokio_rustls::client::TlsStream<TcpStream>;
 
 pub struct Dialer {
     resolver: Arc<dyn Resolve>,
@@ -128,9 +134,8 @@ impl Dialer {
         }
     }
 
-    /// The overall cap of one request, for tests.
-    #[cfg(test)]
-    pub(crate) fn with_total(mut self, total: Duration) -> Dialer {
+    /// The overall cap of one request, from the lookup to the last body byte.
+    pub fn with_total(mut self, total: Duration) -> Dialer {
         self.total = total;
         self
     }
@@ -161,9 +166,10 @@ impl Dialer {
 
     /// One request to `host` (port 443): `method path` with `headers` and `body`, sent fresh with
     /// `Host`, `Content-Length`, `Connection: close` and `Accept-Encoding: identity` of the
-    /// dialer's own. Returns the status, the allow-listed headers and at most `max_body` bytes.
-    /// A redirect is returned as it is, never followed.
-    pub async fn request(
+    /// dialer's own. Returns the status, the allow-listed headers and a body reader that yields at
+    /// most `max_body` bytes (then [`DialError::Truncated`]) under the total deadline. A redirect
+    /// is returned as it is, never followed.
+    pub async fn open(
         &self,
         host: &str,
         method: &str,
@@ -171,10 +177,11 @@ impl Dialer {
         headers: &[(&str, &str)],
         body: &[u8],
         max_body: usize,
-    ) -> Result<Reply, DialError> {
+    ) -> Result<Opened<Stream>, DialError> {
         let name = strict_host(host)?;
         let head = build_head(&name, method, path, headers, body.len())?;
-        timeout(self.total, async {
+        let deadline = Instant::now() + self.total;
+        timeout_at(deadline, async {
             let addrs = self.checked(&name).await?;
             let tcp = self.dial(&addrs).await?;
             let server = ServerName::try_from(name.clone()).map_err(|_| DialError::BadHost)?;
@@ -191,10 +198,45 @@ impl Dialer {
                 tls.flush().await
             };
             sent.await.map_err(|_| DialError::Upstream)?;
-            read_reply(&mut tls, max_body).await
+            open_reply(tls, max_body, deadline).await
         })
         .await
         .map_err(|_| DialError::Upstream)?
+    }
+
+    /// [`open`](Self::open), then the whole body in memory: at most `max_body` bytes, and
+    /// `truncated` says the upstream sent more.
+    pub async fn request(
+        &self,
+        host: &str,
+        method: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: &[u8],
+        max_body: usize,
+    ) -> Result<Reply, DialError> {
+        let mut opened = self
+            .open(host, method, path, headers, body, max_body)
+            .await?;
+        let (mut out, mut truncated) = (Vec::new(), false);
+        loop {
+            match opened.body.next().await {
+                Ok(Some(piece)) => out.extend_from_slice(&piece),
+                Ok(None) => break,
+                Err(DialError::Truncated) => {
+                    truncated = true;
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(Reply {
+            status: opened.status,
+            headers: opened.headers,
+            body: out,
+            chunked: opened.chunked,
+            truncated,
+        })
     }
 
     /// Dials the first checked address that answers.
@@ -266,4 +308,4 @@ fn build_head(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
