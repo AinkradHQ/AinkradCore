@@ -103,8 +103,8 @@ fn the_strict_policy_has_no_operator_input_and_allows_only_the_public_internet_o
     // Control: an operator's CIDR does open 10.0.0.1 for the egress proxy; the strict policy
     // is built without any list, so the same address stays refused.
     let operator = Policy::parse("10.0.0.0/8", "", "").unwrap();
-    assert!(operator.check_ip(v4("10.0.0.1"), true).is_ok());
-    for ip in [v4("10.0.0.1"), v4("127.0.0.1"), v4("169.254.169.254")] {
+    assert!(operator.check_ip(ip4(10, 0, 0, 1), true).is_ok());
+    for ip in [ip4(10, 0, 0, 1), ip4(127, 0, 0, 1), ip4(169, 254, 169, 254)] {
         assert!(p.check_ip(ip, true).is_err());
     }
 }

@@ -202,8 +202,8 @@ fn v6(s: &str) -> IpAddr {
     IpAddr::V6(s.parse::<Ipv6Addr>().unwrap())
 }
 
-fn v4(s: &str) -> IpAddr {
-    IpAddr::V4(s.parse().unwrap())
+fn ip4(a: u8, b: u8, c: u8, d: u8) -> IpAddr {
+    IpAddr::V4(Ipv4Addr::new(a, b, c, d))
 }
 
 #[test]
@@ -218,7 +218,7 @@ fn only_a_plain_dns_name_is_a_host() {
         "2130706433",
         "017700000001",
         "0177.0.0.1",
-        "1.1.1.1.",
+        "unnamed.11.0.0.1.",
         "api.example.test.",
         "localhost.",
         "[::1]",
@@ -259,23 +259,23 @@ async fn every_refused_address_class_is_refused_and_nothing_is_dialled() {
     let f = serve(HOST, OK).await;
     let refused = [
         // loopback, private, link-local, metadata, unspecified, multicast, shared, reserved
-        v4("127.0.0.1"),
-        v4("127.255.255.254"),
-        v4("10.0.0.1"),
-        v4("172.16.5.5"),
-        v4("192.168.1.1"),
-        v4("169.254.1.1"),
-        v4("169.254.169.254"),
-        v4("168.63.129.16"),
-        v4("100.100.100.200"),
-        v4("100.64.0.1"),
-        v4("0.0.0.0"),
-        v4("224.0.0.1"),
-        v4("255.255.255.255"),
-        v4("240.0.0.1"),
-        v4("203.0.113.9"),
-        v4("198.51.100.9"),
-        v4("192.0.2.9"),
+        ip4(127, 0, 0, 1),
+        ip4(127, 255, 255, 254),
+        ip4(10, 0, 0, 1),
+        ip4(172, 16, 5, 5),
+        ip4(192, 168, 1, 1),
+        ip4(169, 254, 1, 1),
+        ip4(169, 254, 169, 254),
+        ip4(168, 63, 129, 16),
+        ip4(100, 100, 100, 200),
+        ip4(100, 64, 0, 1),
+        ip4(0, 0, 0, 0),
+        ip4(224, 0, 0, 1),
+        ip4(255, 255, 255, 255),
+        ip4(240, 0, 0, 1),
+        ip4(203, 0, 113, 9),
+        ip4(198, 51, 100, 9),
+        ip4(192, 0, 2, 9),
         // IPv6: loopback, unspecified, ULA, link-local, site-local, multicast, metadata, doc
         v6("::1"),
         v6("::"),
@@ -310,8 +310,8 @@ async fn every_refused_address_class_is_refused_and_nothing_is_dialled() {
 async fn a_mixed_answer_is_refused_whole_in_either_order() {
     let f = serve(HOST, OK).await;
     for answers in [
-        vec![public(), v4("127.0.0.1")],
-        vec![v4("10.0.0.1"), public()],
+        vec![public(), ip4(127, 0, 0, 1)],
+        vec![ip4(10, 0, 0, 1), public()],
         vec![public(), other_public(), v6("::ffff:169.254.169.254")],
     ] {
         let (d, to) = dialer(&f, Script::of(answers), vec![]);
@@ -399,7 +399,7 @@ async fn the_next_checked_address_is_tried_when_the_first_does_not_answer() {
 async fn rebinding_between_two_requests_is_caught_because_each_request_resolves_and_checks() {
     let f = serve(HOST, OK).await;
     // First lookup public, the next ones loopback (what a rebinding server answers).
-    let script = Script::new(vec![Ok(vec![public()]), Ok(vec![v4("127.0.0.1")])]);
+    let script = Script::new(vec![Ok(vec![public()]), Ok(vec![ip4(127, 0, 0, 1)])]);
     let (d, to) = dialer(&f, script.clone(), vec![]);
     assert_eq!(get(&d, HOST).await.unwrap().status, 200);
     assert!(matches!(get(&d, HOST).await, Err(DialError::Refused(_))));
