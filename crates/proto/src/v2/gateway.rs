@@ -73,6 +73,38 @@ pub struct Rate {
     pub concurrent: u32,
 }
 
+/// A user-defined provider's key shape and frozen host: what the runner needs to run
+/// [`key_host_problem`] as the broker did. Absent for a built-in provider.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UserKeyDef {
+    /// The definition's declared `key_prefix`.
+    pub prefix: String,
+    /// The definition's frozen host.
+    pub host: String,
+}
+
+impl UserKeyDef {
+    /// This definition as the rule takes it, under the grant's `provider`.
+    pub fn of<'a>(&'a self, provider: &'a str) -> UserKeyHost<'a> {
+        UserKeyHost {
+            provider,
+            prefix: &self.prefix,
+            host: &self.host,
+        }
+    }
+}
+
+/// The list price of one model, in micro-dollars per million tokens, for the gateway's
+/// per-request reservation (decision: the Core's price book, carried in the grant).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ModelPrice {
+    pub model: String,
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+}
+
 /// Core to runner, in `AgentStart`: the key of one account, served to the harness by the runner's
 /// gateway. `lease` is redeemed into the gateway's memory, never the env or a file. No `Debug`.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -81,9 +113,19 @@ pub struct GatewayGrant {
     pub lease: String,
     /// The account id, for the runner's logs; the ledger takes it from the Core's own row.
     pub account: i64,
+    /// The account's provider id (`anthropic`, or a user definition's id): the runner runs
+    /// [`key_host_problem`] with it before dialing. Absent reads as empty, which no key passes.
+    #[serde(default)]
+    pub provider: String,
+    /// The user definition's key shape and host, for a user-defined provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_key: Option<UserKeyDef>,
     pub upstream: Upstream,
     /// The model ids the session may name.
     pub models: Vec<String>,
+    /// The list price of each model in `models`, for the per-request reservation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prices: Vec<ModelPrice>,
     pub ceiling: Ceiling,
     pub rate: Rate,
 }
@@ -100,14 +142,35 @@ pub struct AgentLimit {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GatewayTest {
     pub lease: String,
+    /// As in [`GatewayGrant`].
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_key: Option<UserKeyDef>,
     pub upstream: Upstream,
+}
+
+/// The outcome class of an upstream request or test: a status class only, never provider text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UpstreamStatus {
+    Ok,
+    RateLimited,
+    Quota,
+    AuthFailed,
+    ServerError,
+    Unreachable,
+    RefusedAddress,
+    TlsFailed,
+    /// A class from a newer runner. Never sent.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Runner to Core: the status class and latency of a [`GatewayTest`]; never a body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GatewayTested {
-    /// `ok`, or one of the `upstream` classes (`auth_failed`, `refused_address`, …).
-    pub result: String,
+    pub result: UpstreamStatus,
     pub latency_ms: u64,
 }
 

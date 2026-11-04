@@ -1132,11 +1132,34 @@
           },
           "type": "array"
         },
+        "prices": {
+          "description": "The list price of each model in `models`, for the per-request reservation.",
+          "items": {
+            "$ref": "#/$defs/ModelPrice"
+          },
+          "type": "array"
+        },
+        "provider": {
+          "default": "",
+          "description": "The account's provider id (`anthropic`, or a user definition's id): the runner runs\n[`key_host_problem`] with it before dialing. Absent reads as empty, which no key passes.",
+          "type": "string"
+        },
         "rate": {
           "$ref": "#/$defs/Rate"
         },
         "upstream": {
           "$ref": "#/$defs/Upstream"
+        },
+        "user_key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UserKeyDef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The user definition's key shape and host, for a user-defined provider."
         }
       },
       "required": [
@@ -1155,8 +1178,23 @@
         "lease": {
           "type": "string"
         },
+        "provider": {
+          "default": "",
+          "description": "As in [`GatewayGrant`].",
+          "type": "string"
+        },
         "upstream": {
           "$ref": "#/$defs/Upstream"
+        },
+        "user_key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UserKeyDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1174,8 +1212,7 @@
           "type": "integer"
         },
         "result": {
-          "description": "`ok`, or one of the `upstream` classes (`auth_failed`, `refused_address`, …).",
-          "type": "string"
+          "$ref": "#/$defs/UpstreamStatus"
         }
       },
       "required": [
@@ -1345,6 +1382,42 @@
       "required": [
         "dir",
         "state"
+      ],
+      "type": "object"
+    },
+    "ModelPrice": {
+      "description": "The list price of one model, in micro-dollars per million tokens, for the gateway's\nper-request reservation (decision: the Core's price book, carried in the grant).",
+      "properties": {
+        "cache_read": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cache_write": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "output": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "model",
+        "input",
+        "output",
+        "cache_read",
+        "cache_write"
       ],
       "type": "object"
     },
@@ -2554,6 +2627,47 @@
         "host",
         "wire",
         "auth"
+      ],
+      "type": "object"
+    },
+    "UpstreamStatus": {
+      "description": "The outcome class of an upstream request or test: a status class only, never provider text.",
+      "oneOf": [
+        {
+          "enum": [
+            "ok",
+            "rate_limited",
+            "quota",
+            "auth_failed",
+            "server_error",
+            "unreachable",
+            "refused_address",
+            "tls_failed"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A class from a newer runner. Never sent.",
+          "type": "string"
+        }
+      ]
+    },
+    "UserKeyDef": {
+      "description": "A user-defined provider's key shape and frozen host: what the runner needs to run\n[`key_host_problem`] as the broker did. Absent for a built-in provider.",
+      "properties": {
+        "host": {
+          "description": "The definition's frozen host.",
+          "type": "string"
+        },
+        "prefix": {
+          "description": "The definition's declared `key_prefix`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "prefix",
+        "host"
       ],
       "type": "object"
     },

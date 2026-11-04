@@ -172,3 +172,15 @@ fn a_gateway_session_is_placed_only_on_a_linux_runner_that_offers_the_gateway() 
         None
     );
 }
+
+#[test]
+fn a_gateway_session_that_asks_for_egress_needs_the_proven_filter() {
+    let policy = json!({"mode": "ask", "min_isolation": "process", "egress": {"allow": ["10.0.0.0/8"], "deny": []}});
+    let gw = |r: &RunnerState| placement_refusal_with(r, &[], &policy, true);
+    // Gateway but no filter: refused. With the filter too: placed.
+    let why = gw(&gw_runner(Some("linux"), true)).unwrap();
+    assert!(why.contains("egress filter"), "{why}");
+    let mut both = gw_runner(Some("linux"), true);
+    both.drivers[0].commands.push("egress-filter".to_owned());
+    assert_eq!(gw(&both), None);
+}

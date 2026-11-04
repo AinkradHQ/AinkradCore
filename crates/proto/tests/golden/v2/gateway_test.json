@@ -1,1 +1,1 @@
-{"stream_id":17,"kind":"command","seq":0,"payload":{"lease":"l_lease","op":"gateway.test","upstream":{"auth":"x_api_key","base_path":"","host":"api.anthropic.com","wire":"anthropic-messages"}}}
+{"stream_id":17,"kind":"command","seq":0,"payload":{"lease":"l_lease","op":"gateway.test","provider":"anthropic","upstream":{"auth":"x_api_key","base_path":"","host":"api.anthropic.com","wire":"anthropic-messages"}}}
