@@ -678,6 +678,21 @@ extension Components {
                 case provider
             }
         }
+        /// - Remark: Generated from `#/components/schemas/BudgetDeleted`.
+        public struct BudgetDeleted: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/BudgetDeleted/deleted`.
+            public var deleted: Swift.Bool
+            /// Creates a new `BudgetDeleted`.
+            ///
+            /// - Parameters:
+            ///   - deleted:
+            public init(deleted: Swift.Bool) {
+                self.deleted = deleted
+            }
+            public enum CodingKeys: String, CodingKey {
+                case deleted
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/Challenge`.
         public struct Challenge: Codable, Hashable, Sendable {
             /// 32 bytes, base64url (43 characters), opaque to the client; spend it once within
@@ -2956,6 +2971,41 @@ extension Components {
                 case token
             }
         }
+        /// - Remark: Generated from `#/components/schemas/RaiseBudget`.
+        public struct RaiseBudget: Codable, Hashable, Sendable {
+            /// The period that ran out: `2026-10-22`, a week's Monday, `2026-10` or `total`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RaiseBudget/period_key`.
+            public var periodKey: Swift.String
+            /// Tokens to add (0 when raising dollars).
+            ///
+            /// - Remark: Generated from `#/components/schemas/RaiseBudget/tokens`.
+            public var tokens: Swift.Int64?
+            /// Millionths of a dollar to add.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RaiseBudget/usd_micros`.
+            public var usdMicros: Swift.Int64?
+            /// Creates a new `RaiseBudget`.
+            ///
+            /// - Parameters:
+            ///   - periodKey: The period that ran out: `2026-10-22`, a week's Monday, `2026-10` or `total`.
+            ///   - tokens: Tokens to add (0 when raising dollars).
+            ///   - usdMicros: Millionths of a dollar to add.
+            public init(
+                periodKey: Swift.String,
+                tokens: Swift.Int64? = nil,
+                usdMicros: Swift.Int64? = nil
+            ) {
+                self.periodKey = periodKey
+                self.tokens = tokens
+                self.usdMicros = usdMicros
+            }
+            public enum CodingKeys: String, CodingKey {
+                case periodKey = "period_key"
+                case tokens
+                case usdMicros = "usd_micros"
+            }
+        }
         /// A lease to redeem. No `Debug` (review L4).
         ///
         /// - Remark: Generated from `#/components/schemas/RedeemLease`.
@@ -3637,6 +3687,71 @@ extension Components {
                 case until
             }
         }
+        /// - Remark: Generated from `#/components/schemas/SetSubjectBudget`.
+        public struct SetSubjectBudget: Codable, Hashable, Sendable {
+            /// The owner's company binding; for a company budget it must be the subject (or absent).
+            ///
+            /// - Remark: Generated from `#/components/schemas/SetSubjectBudget/company`.
+            public var company: Swift.String?
+            /// Default true.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SetSubjectBudget/hard_stop`.
+            public var hardStop: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/SetSubjectBudget/kind`.
+            public var kind: Swift.String
+            /// - Remark: Generated from `#/components/schemas/SetSubjectBudget/period`.
+            public var period: Swift.String
+            /// - Remark: Generated from `#/components/schemas/SetSubjectBudget/subject`.
+            public var subject: Swift.String
+            /// - Remark: Generated from `#/components/schemas/SetSubjectBudget/token_cap`.
+            public var tokenCap: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/SetSubjectBudget/usd_cap_micros`.
+            public var usdCapMicros: Swift.Int64?
+            /// Default 80.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SetSubjectBudget/warn_at_percent`.
+            public var warnAtPercent: Swift.Int64?
+            /// Creates a new `SetSubjectBudget`.
+            ///
+            /// - Parameters:
+            ///   - company: The owner's company binding; for a company budget it must be the subject (or absent).
+            ///   - hardStop: Default true.
+            ///   - kind:
+            ///   - period:
+            ///   - subject:
+            ///   - tokenCap:
+            ///   - usdCapMicros:
+            ///   - warnAtPercent: Default 80.
+            public init(
+                company: Swift.String? = nil,
+                hardStop: Swift.Bool? = nil,
+                kind: Swift.String,
+                period: Swift.String,
+                subject: Swift.String,
+                tokenCap: Swift.Int64,
+                usdCapMicros: Swift.Int64? = nil,
+                warnAtPercent: Swift.Int64? = nil
+            ) {
+                self.company = company
+                self.hardStop = hardStop
+                self.kind = kind
+                self.period = period
+                self.subject = subject
+                self.tokenCap = tokenCap
+                self.usdCapMicros = usdCapMicros
+                self.warnAtPercent = warnAtPercent
+            }
+            public enum CodingKeys: String, CodingKey {
+                case company
+                case hardStop = "hard_stop"
+                case kind
+                case period
+                case subject
+                case tokenCap = "token_cap"
+                case usdCapMicros = "usd_cap_micros"
+                case warnAtPercent = "warn_at_percent"
+            }
+        }
         /// One setting and its effective value at the scope asked about.
         ///
         /// - Remark: Generated from `#/components/schemas/Setting`.
@@ -3929,6 +4044,155 @@ extension Components {
                     "challenge",
                     "stepup_sig"
                 ])
+            }
+        }
+        /// A budget and where it stands in the period containing now.
+        ///
+        /// - Remark: Generated from `#/components/schemas/SubjectBudget`.
+        public struct SubjectBudget: Codable, Hashable, Sendable {
+            /// The owner's company binding (a company budget's is its subject).
+            ///
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/company`.
+            public var company: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/created_at`.
+            public var createdAt: Components.Schemas.Timestamp
+            /// Nothing left in tokens or dollars.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/exhausted`.
+            public var exhausted: Swift.Bool
+            /// Stops new sessions, and a running one, at the cap; else it only warns.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/hard_stop`.
+            public var hardStop: Swift.Bool
+            /// Tokens held by sessions that reserved them and have not spent them yet.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/held`.
+            public var held: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/held_usd`.
+            public var heldUsd: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/id`.
+            public var id: Swift.Int64
+            /// `account`, `pool`, `agent`, `company`, `department`, `project`, `sprint` or `issue`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/kind`.
+            public var kind: Swift.String
+            /// `day`, `week` (from Monday), `month` or `total`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/period`.
+            public var period: Swift.String
+            /// The period this standing is for: `2026-10-22`, a week's Monday, `2026-10` or `total`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/period_key`.
+            public var periodKey: Swift.String
+            /// Tokens added for the period by approved overruns.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/raised`.
+            public var raised: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/raised_usd`.
+            public var raisedUsd: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/spent`.
+            public var spent: Swift.Int64
+            /// The subject's id: an account or pool id, or the owning module's opaque id.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/subject`.
+            public var subject: Swift.String
+            /// Tokens per period; 0 with a dollar cap is a dollars-only budget.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/token_cap`.
+            public var tokenCap: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/updated_at`.
+            public var updatedAt: Components.Schemas.Timestamp
+            /// Millionths of a dollar per period.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/usd_cap_micros`.
+            public var usdCapMicros: Swift.Int64?
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/usd_spent`.
+            public var usdSpent: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/SubjectBudget/warn_at_percent`.
+            public var warnAtPercent: Swift.Int64
+            /// Creates a new `SubjectBudget`.
+            ///
+            /// - Parameters:
+            ///   - company: The owner's company binding (a company budget's is its subject).
+            ///   - createdAt:
+            ///   - exhausted: Nothing left in tokens or dollars.
+            ///   - hardStop: Stops new sessions, and a running one, at the cap; else it only warns.
+            ///   - held: Tokens held by sessions that reserved them and have not spent them yet.
+            ///   - heldUsd:
+            ///   - id:
+            ///   - kind: `account`, `pool`, `agent`, `company`, `department`, `project`, `sprint` or `issue`.
+            ///   - period: `day`, `week` (from Monday), `month` or `total`.
+            ///   - periodKey: The period this standing is for: `2026-10-22`, a week's Monday, `2026-10` or `total`.
+            ///   - raised: Tokens added for the period by approved overruns.
+            ///   - raisedUsd:
+            ///   - spent:
+            ///   - subject: The subject's id: an account or pool id, or the owning module's opaque id.
+            ///   - tokenCap: Tokens per period; 0 with a dollar cap is a dollars-only budget.
+            ///   - updatedAt:
+            ///   - usdCapMicros: Millionths of a dollar per period.
+            ///   - usdSpent:
+            ///   - warnAtPercent:
+            public init(
+                company: Swift.String? = nil,
+                createdAt: Components.Schemas.Timestamp,
+                exhausted: Swift.Bool,
+                hardStop: Swift.Bool,
+                held: Swift.Int64,
+                heldUsd: Swift.Int64,
+                id: Swift.Int64,
+                kind: Swift.String,
+                period: Swift.String,
+                periodKey: Swift.String,
+                raised: Swift.Int64,
+                raisedUsd: Swift.Int64,
+                spent: Swift.Int64,
+                subject: Swift.String,
+                tokenCap: Swift.Int64,
+                updatedAt: Components.Schemas.Timestamp,
+                usdCapMicros: Swift.Int64? = nil,
+                usdSpent: Swift.Int64,
+                warnAtPercent: Swift.Int64
+            ) {
+                self.company = company
+                self.createdAt = createdAt
+                self.exhausted = exhausted
+                self.hardStop = hardStop
+                self.held = held
+                self.heldUsd = heldUsd
+                self.id = id
+                self.kind = kind
+                self.period = period
+                self.periodKey = periodKey
+                self.raised = raised
+                self.raisedUsd = raisedUsd
+                self.spent = spent
+                self.subject = subject
+                self.tokenCap = tokenCap
+                self.updatedAt = updatedAt
+                self.usdCapMicros = usdCapMicros
+                self.usdSpent = usdSpent
+                self.warnAtPercent = warnAtPercent
+            }
+            public enum CodingKeys: String, CodingKey {
+                case company
+                case createdAt = "created_at"
+                case exhausted
+                case hardStop = "hard_stop"
+                case held
+                case heldUsd = "held_usd"
+                case id
+                case kind
+                case period
+                case periodKey = "period_key"
+                case raised
+                case raisedUsd = "raised_usd"
+                case spent
+                case subject
+                case tokenCap = "token_cap"
+                case updatedAt = "updated_at"
+                case usdCapMicros = "usd_cap_micros"
+                case usdSpent = "usd_spent"
+                case warnAtPercent = "warn_at_percent"
             }
         }
         /// - Remark: Generated from `#/components/schemas/Terminal`.

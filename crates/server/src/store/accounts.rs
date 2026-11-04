@@ -429,6 +429,9 @@ pub async fn delete(
         .bind(id)
         .execute(&mut *tx)
         .await?;
+    // Its budgets go with it (an id is never reused, so this is cleanup, not safety).
+    super::budgets::remove_subject_in(&mut tx, "account", &id.to_string(), by_device, actor)
+        .await?;
     // Whatever is left of the key goes with it; a key already gone (stripped restore) is no reason to keep the account.
     if secret_exists(&mut tx, &a.secret_name).await? {
         secrets::delete_in(&mut tx, &a.secret_name, by_device, actor).await?;

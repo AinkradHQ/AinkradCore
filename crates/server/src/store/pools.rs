@@ -206,6 +206,8 @@ pub async fn delete(
         .bind(id)
         .execute(&mut *tx)
         .await?;
+    // Pool ids are reused (no AUTOINCREMENT): a budget left behind would be inherited by the next pool.
+    super::budgets::remove_subject_in(&mut tx, "pool", &id.to_string(), by_device, actor).await?;
     audit(
         &mut tx,
         actor,

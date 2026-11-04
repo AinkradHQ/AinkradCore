@@ -246,6 +246,7 @@ async fn a_correction_adds_the_difference_and_the_ledger_sums_to_the_bill() {
         .await
         .unwrap()
         .unwrap();
+    let fix = fix.event;
     assert_eq!(
         (
             fix.basis.as_str(),

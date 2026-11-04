@@ -17,6 +17,7 @@ pub mod accounts;
 pub mod agents;
 pub mod audit;
 mod backup;
+pub mod budgets;
 pub mod costs;
 pub mod events;
 pub mod gov;

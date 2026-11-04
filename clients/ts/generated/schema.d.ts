@@ -420,6 +420,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/budgets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listBudgets"];
+        put: operations["setBudget"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/budgets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteBudget"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/budgets/{id}/raise": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["raiseBudget"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/costs": {
         parameters: {
             query?: never;
@@ -1340,6 +1388,9 @@ export interface components {
             pool_id: number;
             provider: string;
         };
+        BudgetDeleted: {
+            deleted: boolean;
+        };
         Challenge: {
             /**
              * @description 32 bytes, base64url (43 characters), opaque to the client; spend it once within
@@ -1942,6 +1993,20 @@ export interface components {
             /** @description The device token, hex, as the app got it from APNs. */
             token: string;
         };
+        RaiseBudget: {
+            /** @description The period that ran out: `2026-10-22`, a week's Monday, `2026-10` or `total`. */
+            period_key: string;
+            /**
+             * Format: int64
+             * @description Tokens to add (0 when raising dollars).
+             */
+            tokens?: number | null;
+            /**
+             * Format: int64
+             * @description Millionths of a dollar to add.
+             */
+            usd_micros?: number | null;
+        };
         /** @description A lease to redeem. No `Debug` (review L4). */
         RedeemLease: {
             lease: string;
@@ -2123,6 +2188,24 @@ export interface components {
             state: string;
             until?: string | null;
         };
+        SetSubjectBudget: {
+            /** @description The owner's company binding; for a company budget it must be the subject (or absent). */
+            company?: string | null;
+            /** @description Default true. */
+            hard_stop?: boolean | null;
+            kind: string;
+            period: string;
+            subject: string;
+            /** Format: int64 */
+            token_cap: number;
+            /** Format: int64 */
+            usd_cap_micros?: number | null;
+            /**
+             * Format: int64
+             * @description Default 80.
+             */
+            warn_at_percent?: number | null;
+        };
         /** @description One setting and its effective value at the scope asked about. */
         Setting: {
             /** Format: int64 */
@@ -2180,6 +2263,57 @@ export interface components {
              *     Required for a native device; a passkey device sends `assertion` instead.
              */
             stepup_sig?: string;
+        };
+        /** @description A budget and where it stands in the period containing now. */
+        SubjectBudget: {
+            /** @description The owner's company binding (a company budget's is its subject). */
+            company?: string | null;
+            created_at: components["schemas"]["Timestamp"];
+            /** @description Nothing left in tokens or dollars. */
+            exhausted: boolean;
+            /** @description Stops new sessions, and a running one, at the cap; else it only warns. */
+            hard_stop: boolean;
+            /**
+             * Format: int64
+             * @description Tokens held by sessions that reserved them and have not spent them yet.
+             */
+            held: number;
+            /** Format: int64 */
+            held_usd: number;
+            /** Format: int64 */
+            id: number;
+            /** @description `account`, `pool`, `agent`, `company`, `department`, `project`, `sprint` or `issue`. */
+            kind: string;
+            /** @description `day`, `week` (from Monday), `month` or `total`. */
+            period: string;
+            /** @description The period this standing is for: `2026-10-22`, a week's Monday, `2026-10` or `total`. */
+            period_key: string;
+            /**
+             * Format: int64
+             * @description Tokens added for the period by approved overruns.
+             */
+            raised: number;
+            /** Format: int64 */
+            raised_usd: number;
+            /** Format: int64 */
+            spent: number;
+            /** @description The subject's id: an account or pool id, or the owning module's opaque id. */
+            subject: string;
+            /**
+             * Format: int64
+             * @description Tokens per period; 0 with a dollar cap is a dollars-only budget.
+             */
+            token_cap: number;
+            updated_at: components["schemas"]["Timestamp"];
+            /**
+             * Format: int64
+             * @description Millionths of a dollar per period.
+             */
+            usd_cap_micros?: number | null;
+            /** Format: int64 */
+            usd_spent: number;
+            /** Format: int64 */
+            warn_at_percent: number;
         };
         Terminal: {
             /** Format: int32 */
@@ -3352,6 +3486,135 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountsDeleted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listBudgets: {
+        parameters: {
+            query?: {
+                /** @description Only this kind of subject. */
+                kind?: string;
+                /** @description Only this subject (with `kind`). */
+                subject?: string;
+                /** @description Only budgets bound to this company. */
+                company?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every budget with its standing in the current period, by id */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubjectBudget"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setBudget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetSubjectBudget"];
+            };
+        };
+        responses: {
+            /** @description Created, or its caps changed (audited as `budget.created` or `budget.set`), with the period's spend counted from the ledger. 404 for an account or pool that does not exist; 400 for a bad kind, subject, period or cap */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubjectBudget"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteBudget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The budget's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted with its counters and holds (audited as `budget.deleted`); `deleted` is false when there was no such budget */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetDeleted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    raiseBudget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The budget's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RaiseBudget"];
+            };
+        };
+        responses: {
+            /** @description That period's headroom raised and its exhaustion alert cleared (audited as `budget.raised`); the body is the budget's standing for the raised period. 404 for no such budget; 400 for an amount of 0 or a bad period key */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubjectBudget"];
                 };
             };
             400: components["responses"]["BadRequest"];

@@ -8,6 +8,7 @@ gradlew.bat
 settings.gradle
 src/main/kotlin/ainkrad/client/apis/AccountsApi.kt
 src/main/kotlin/ainkrad/client/apis/AgentsApi.kt
+src/main/kotlin/ainkrad/client/apis/BudgetsApi.kt
 src/main/kotlin/ainkrad/client/apis/CostsApi.kt
 src/main/kotlin/ainkrad/client/apis/DevicesApi.kt
 src/main/kotlin/ainkrad/client/apis/EventsApi.kt
@@ -45,6 +46,7 @@ src/main/kotlin/ainkrad/client/models/ApproveBody.kt
 src/main/kotlin/ainkrad/client/models/AuditEntry.kt
 src/main/kotlin/ainkrad/client/models/AuditPage.kt
 src/main/kotlin/ainkrad/client/models/Binding.kt
+src/main/kotlin/ainkrad/client/models/BudgetDeleted.kt
 src/main/kotlin/ainkrad/client/models/Challenge.kt
 src/main/kotlin/ainkrad/client/models/ChallengeRequest.kt
 src/main/kotlin/ainkrad/client/models/ClaimBody.kt
@@ -95,6 +97,7 @@ src/main/kotlin/ainkrad/client/models/Provider.kt
 src/main/kotlin/ainkrad/client/models/ProviderAccount.kt
 src/main/kotlin/ainkrad/client/models/PushKinds.kt
 src/main/kotlin/ainkrad/client/models/PushToken.kt
+src/main/kotlin/ainkrad/client/models/RaiseBudget.kt
 src/main/kotlin/ainkrad/client/models/RedeemLease.kt
 src/main/kotlin/ainkrad/client/models/Rename.kt
 src/main/kotlin/ainkrad/client/models/ReplaceKey.kt
@@ -113,11 +116,13 @@ src/main/kotlin/ainkrad/client/models/SetPrice.kt
 src/main/kotlin/ainkrad/client/models/SetScopes.kt
 src/main/kotlin/ainkrad/client/models/SetSetting.kt
 src/main/kotlin/ainkrad/client/models/SetState.kt
+src/main/kotlin/ainkrad/client/models/SetSubjectBudget.kt
 src/main/kotlin/ainkrad/client/models/Setting.kt
 src/main/kotlin/ainkrad/client/models/SettingChange.kt
 src/main/kotlin/ainkrad/client/models/SettingScope.kt
 src/main/kotlin/ainkrad/client/models/SettingUnit.kt
 src/main/kotlin/ainkrad/client/models/StepUpRequest.kt
+src/main/kotlin/ainkrad/client/models/SubjectBudget.kt
 src/main/kotlin/ainkrad/client/models/Terminal.kt
 src/main/kotlin/ainkrad/client/models/TerminalSignal.kt
 src/main/kotlin/ainkrad/client/models/TerminalSize.kt
