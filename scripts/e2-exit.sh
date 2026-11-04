@@ -274,8 +274,10 @@ step5() {
   # The agent writes a tick file every E2_AGENT_TICK s until it dies: the baseline is taken once every process is gone (before, it raced a tick landing between the snapshot and the kill), and the checks below are the time in which a survivor would write again.
   before=$(cd "$cwd" && ls tick-* | sort | cksum)
   [ "$(agent_state "$AS")" = ended ] || { sleep 3; [ "$(agent_state "$AS")" = ended ] || { EV="agent is $(agent_state "$AS")"; return 1; }; }
-  rt=$(ps -axo pid=,ppid=,stat= | awk -v r="$RPID" '$2==r && $3 ~ /^Z/ {print $1}')
-  [ -z "$rt" ] || { EV="zombie children of the runner: $rt"; return 1; }
+  # A child that is merely still being reaped shows as Z for a moment: a zombie fails only if it outlasts the bound.
+  zombies() { ps -axo pid=,ppid=,stat= | awk -v r="$RPID" '$2==r && $3 ~ /^Z/ {print $1}'; }
+  no_zombies() { [ -z "$(zombies)" ]; }
+  wait_for 5 no_zombies || { EV="zombie children of the runner: $(zombies | tr '\n' ' ')"; return 1; }
   [ -d "$cwd" ] && after=$(cd "$cwd" && ls tick-* | sort | cksum) && [ "$before" = "$after" ] || { EV="worktree changed after the kill ('$before' vs '$after')"; return 1; }
   [ -z "$(pgrep -f "ainkrad-ptyhost.*$T2" || true)" ] || { EV="a ptyhost for $T2 is left"; return 1; }
   EV="agent killed (state ended) and $T2 closed: host, shell and child ($hp2) and harness gone; no zombie under the runner; worktree $cwd kept ($(ls "$cwd" | wc -l | tr -d ' ') files, unchanged)"
