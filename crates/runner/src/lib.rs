@@ -70,6 +70,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 mod connect;
 pub mod egress;
 mod executor;
+pub mod gateway;
 mod harness;
 pub mod load;
 pub mod mac;

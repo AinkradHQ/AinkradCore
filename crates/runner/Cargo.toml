@@ -38,3 +38,4 @@ zeroize = "1.9.1"
 [dev-dependencies]
 tokio = { version = "1.54.0", features = ["test-util"] }
 ainkrad-gitfixture = { path = "../gitfixture" }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }

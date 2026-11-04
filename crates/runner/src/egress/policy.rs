@@ -267,6 +267,20 @@ impl Policy {
         )
     }
 
+    /// The policy of the auth gateway's upstream dial (KAN-435): no CIDR, no listed host and port
+    /// 443 only, so every answer is checked as a named host's with the metadata addresses, this
+    /// host's own and every reserved range denied. Built here, never from the operator's lists, so
+    /// no allow entry can re-open anything for an upstream.
+    pub fn strict() -> Policy {
+        Policy {
+            cidrs: vec![],
+            hosts: BTreeSet::new(),
+            ports: vec![443],
+            reserved: reserved(),
+            own: vec![],
+        }
+    }
+
     pub fn counts(&self) -> (usize, usize, usize) {
         (self.cidrs.len(), self.hosts.len(), self.ports.len())
     }
