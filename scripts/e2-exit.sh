@@ -277,10 +277,12 @@ step5() {
   # A child that is merely still being reaped shows as Z for a moment: a zombie fails only if it outlasts the bound.
   zombies() { ps -axo pid=,ppid=,stat= | awk -v r="$RPID" '$2==r && $3 ~ /^Z/ {print $1}'; }
   no_zombies() { [ -z "$(zombies)" ]; }
+  seen_z=$(zombies | tr '\n' ' ')
   wait_for 5 no_zombies || { EV="zombie children of the runner: $(zombies | tr '\n' ' ')"; return 1; }
+  zbn=; [ -z "${seen_z// /}" ] || zbn="; note: short-lived zombie(s) ${seen_z% } seen right after the kill, reaped within 5 s"
   [ -d "$cwd" ] && after=$(cd "$cwd" && ls tick-* | sort | cksum) && [ "$before" = "$after" ] || { EV="worktree changed after the kill ('$before' vs '$after')"; return 1; }
   [ -z "$(pgrep -f "ainkrad-ptyhost.*$T2" || true)" ] || { EV="a ptyhost for $T2 is left"; return 1; }
-  EV="agent killed (state ended) and $T2 closed: host, shell and child ($hp2) and harness gone; no zombie under the runner; worktree $cwd kept ($(ls "$cwd" | wc -l | tr -d ' ') files, unchanged)"
+  EV="agent killed (state ended) and $T2 closed: host, shell and child ($hp2) and harness gone; no zombie under the runner; worktree $cwd kept ($(ls "$cwd" | wc -l | tr -d ' ') files, unchanged)$zbn"
 }
 
 step6() {
