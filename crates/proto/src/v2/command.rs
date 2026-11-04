@@ -36,6 +36,10 @@ pub enum Command {
     AgentDecide(super::AgentDecide),
     #[serde(rename = "agent.stop")]
     AgentStop(super::AgentStop),
+    #[serde(rename = "agent.limit")]
+    AgentLimit(super::AgentLimit),
+    #[serde(rename = "gateway.test")]
+    GatewayTest(super::GatewayTest),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -55,6 +59,8 @@ impl Command {
             Self::AgentSend(_) => super::OP_AGENT_SEND,
             Self::AgentDecide(_) => super::OP_AGENT_DECIDE,
             Self::AgentStop(_) => super::OP_AGENT_STOP,
+            Self::AgentLimit(_) => super::OP_AGENT_LIMIT,
+            Self::GatewayTest(_) => super::OP_GATEWAY_TEST,
             Self::Unknown => "unknown",
         }
     }
@@ -120,6 +126,10 @@ pub enum Reply {
     AgentDecide(super::AgentEvents),
     #[serde(rename = "agent.stop")]
     AgentStop(super::AgentEvents),
+    #[serde(rename = "agent.limit")]
+    AgentLimit(super::AgentEvents),
+    #[serde(rename = "gateway.test")]
+    GatewayTest(super::GatewayTested),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

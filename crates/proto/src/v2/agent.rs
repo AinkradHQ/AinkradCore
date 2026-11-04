@@ -194,6 +194,10 @@ pub struct AgentStart {
     /// Leases the runner redeems for this session, once each. Never logged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<SecretGrant>,
+    /// The API key the runner's gateway serves this session (KAN-435); sent only to a runner
+    /// that lists the `gateway` command. Never logged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway: Option<Box<super::GatewayGrant>>,
     /// Which resume this is, 0 for the first start. A session that has ended is started again
     /// (a wake) only by a `resume` whose `epoch` is newer than the one it last ran under; the
     /// same one again is a resent start and is answered, never run twice.
@@ -212,6 +216,7 @@ impl std::fmt::Debug for AgentStart {
             .field("session", &self.session)
             .field("harness", &self.harness)
             .field("secrets", &self.secrets.len())
+            .field("gateway", &self.gateway.is_some())
             .finish_non_exhaustive()
     }
 }

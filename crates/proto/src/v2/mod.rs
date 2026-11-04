@@ -41,10 +41,12 @@ use serde_json::Value;
 mod agent;
 mod auth;
 mod command;
+mod gateway;
 mod terminal;
 pub use agent::*;
 pub use auth::*;
 pub use command::*;
+pub use gateway::*;
 pub use terminal::*;
 
 /// The v2 protocol version, `major.minor`; minors only add optional fields and kinds.

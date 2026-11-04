@@ -1,7 +1,9 @@
 //! Forced filtered placement for a session holding a provider-account secret (KAN-433): the
 //! policy must ask for a sandbox, and the runner must be Linux with a proven egress filter.
 
-use ainkrad_core_server::agents::{Invalid, account_refusal, placement_refusal, validate_new};
+use ainkrad_core_server::agents::{
+    Invalid, account_refusal, placement_refusal, placement_refusal_with, validate_new,
+};
 use ainkrad_core_server::hub::RunnerState;
 use ainkrad_core_server::store::agents::{NewSession, SessionSecret};
 use ainkrad_proto::runner::Isolation;
@@ -116,4 +118,57 @@ fn an_account_session_is_placed_only_on_a_linux_runner_with_a_proven_filter() {
             None
         );
     }
+}
+
+/// A runner of `os` whose agent driver lists the `gateway` command, or not.
+fn gw_runner(os: Option<&str>, gateway: bool) -> RunnerState {
+    let mut r = runner(os, false);
+    if gateway {
+        r.drivers[0].commands.push("gateway".to_owned());
+    }
+    r
+}
+
+#[test]
+fn a_gateway_session_is_placed_only_on_a_linux_runner_that_offers_the_gateway() {
+    let gw = |r: &RunnerState, p: &Value| placement_refusal_with(r, &[], p, true);
+    // An old runner (no `gateway`): refused.
+    let why = gw(&gw_runner(Some("linux"), false), &sandboxed()).unwrap();
+    assert!(why.contains("offers the gateway"), "{why}");
+    // macOS and an unreported OS: refused even with the capability (decision 6).
+    let why = gw(&gw_runner(Some("macos"), true), &sandboxed()).unwrap();
+    assert!(why.contains("Linux") && why.contains("macos"), "{why}");
+    assert!(
+        gw(&gw_runner(None, true), &sandboxed())
+            .unwrap()
+            .contains("unreported")
+    );
+    // No sandbox asked for, or an unreadable policy: refused.
+    let ok = gw_runner(Some("linux"), true);
+    assert!(
+        gw(&ok, &json!({"mode": "ask"}))
+            .unwrap()
+            .contains("sandboxed")
+    );
+    assert!(gw(&ok, &json!({"x": 1})).is_some());
+    // Control: Linux + capability + sandbox is placed, with no egress filter needed.
+    assert_eq!(gw(&ok, &sandboxed()), None);
+    // Control: a session that does not need the gateway ignores the capability.
+    assert_eq!(
+        placement_refusal(
+            &gw_runner(Some("macos"), false),
+            &[],
+            &json!({"mode": "ask"})
+        ),
+        None
+    );
+    assert_eq!(
+        placement_refusal_with(
+            &gw_runner(Some("macos"), false),
+            &[],
+            &json!({"mode": "ask"}),
+            false
+        ),
+        None
+    );
 }

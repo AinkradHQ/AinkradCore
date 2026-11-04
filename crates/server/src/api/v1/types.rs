@@ -102,7 +102,7 @@
 ///    `setBudget`, `deleteBudget`, `raiseBudget` (`admin` and destructive); the `budget.*` audit actions.
 /// 36: Citadel's budgets and costs live in the Core (KAN-450): the Citadel module's `citadel.ledger.migrated`
 ///    audit action; no operation changes.
-pub const API_MINOR: u32 = 36;
+pub const API_MINOR: u32 = 37;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

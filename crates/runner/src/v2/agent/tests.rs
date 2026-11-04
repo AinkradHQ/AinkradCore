@@ -168,6 +168,7 @@ fn start(session: &str, harness: &str) -> AgentStart {
         policy: Default::default(),
         resume: None,
         secrets: vec![],
+        gateway: None,
         epoch: 0,
     }
 }

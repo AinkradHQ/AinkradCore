@@ -235,6 +235,7 @@ async fn a_forged_advertisement_is_caught_by_the_runner_itself() {
         policy: Default::default(),
         resume: None,
         secrets: vec![],
+        gateway: None,
         epoch: 0,
     };
     start.policy.min_isolation = Some(Isolation::Microvm);

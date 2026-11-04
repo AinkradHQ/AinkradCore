@@ -569,6 +569,7 @@ fn v2_agent_frames_are_pinned() {
                 lease: "l_lease".to_owned(),
                 var: "GH_TOKEN".to_owned(),
             }],
+            gateway: None,
             epoch: 0,
         })),
     );
@@ -599,6 +600,7 @@ fn v2_agent_frames_are_pinned() {
             },
             resume: None,
             secrets: vec![],
+            gateway: None,
             epoch: 0,
         })),
     );
@@ -652,6 +654,63 @@ fn v2_agent_frames_are_pinned() {
         Body::Command(Command::AgentStop(AgentStop {
             session: "as_a".to_owned(),
             kill: true,
+        })),
+    );
+    let upstream = Upstream {
+        host: "api.anthropic.com".to_owned(),
+        base_path: String::new(),
+        wire: Wire::AnthropicMessages,
+        auth: GatewayAuth::XApiKey,
+    };
+    v2(
+        "agent_start_gateway",
+        13,
+        0,
+        Body::Command(Command::AgentStart(AgentStart {
+            session: "as_a".to_owned(),
+            harness: "claude".to_owned(),
+            model: None,
+            prompt: None,
+            workspace: None,
+            policy: Policy::default(),
+            resume: None,
+            secrets: vec![],
+            gateway: Some(Box::new(GatewayGrant {
+                lease: "l_lease".to_owned(),
+                account: 7,
+                upstream: upstream.clone(),
+                models: vec!["claude-x".to_owned()],
+                ceiling: Ceiling {
+                    tokens: 1000,
+                    usd_micros: 5_000_000,
+                },
+                rate: Rate {
+                    per_minute: 60,
+                    concurrent: 2,
+                },
+            })),
+            epoch: 0,
+        })),
+    );
+    v2(
+        "agent_limit",
+        15,
+        0,
+        Body::Command(Command::AgentLimit(AgentLimit {
+            session: "as_a".to_owned(),
+            ceiling: Ceiling {
+                tokens: 0,
+                usd_micros: 0,
+            },
+        })),
+    );
+    v2(
+        "gateway_test",
+        17,
+        0,
+        Body::Command(Command::GatewayTest(GatewayTest {
+            lease: "l_lease".to_owned(),
+            upstream,
         })),
     );
 }
