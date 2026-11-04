@@ -12,6 +12,9 @@
 //!   route a `runner` device may call is redeeming a lease granted to it.
 //! - Accounts, pools, bindings and provider definitions (KAN-432): reading is `read`; every write is
 //!   `admin` and destructive.
+//! - The cost ledger, prices and account usage (KAN-449): the price list is `read`; the cost ledger and the
+//!   account usage report (who spent what, in which company) are `admin` without a step-up; a price or an
+//!   account's limit is `admin` and destructive. No route writes the ledger.
 //! - `terminal`: opening, attaching, signalling and closing a terminal (listing is `read`).
 //! - A module's routes need the module's own `Module::scope` (`admin` unless it says otherwise),
 //!   or the scope its `Module::route_scopes` declares for that route (`module_scope`).
@@ -67,6 +70,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/runners/{id}", "read"),
     ("POST", "/api/v1/runners/{id}/noop", "agent"),
     ("GET", "/api/v1/accounts", "read"),
+    // Before `/accounts/{id}`: the first template that fits a path decides, and `usage` fits `{id}`.
+    ("GET", "/api/v1/accounts/usage", "admin"),
     ("GET", "/api/v1/accounts/{id}", "read"),
     ("GET", "/api/v1/accounts/providers", "read"),
     ("POST", "/api/v1/accounts", "admin"),
@@ -86,6 +91,15 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/bindings", "read"),
     ("PUT", "/api/v1/bindings", "admin"),
     ("DELETE", "/api/v1/bindings/{agent}/{provider}", "admin"),
+    ("PUT", "/api/v1/accounts/{id}/limits", "admin"),
+    (
+        "DELETE",
+        "/api/v1/accounts/{id}/limits/{unit}/{window_secs}",
+        "admin",
+    ),
+    ("GET", "/api/v1/costs", "admin"),
+    ("GET", "/api/v1/prices", "read"),
+    ("PUT", "/api/v1/prices", "admin"),
     ("GET", "/api/v1/secrets", "admin"),
     ("POST", "/api/v1/secrets", "admin"),
     ("PUT", "/api/v1/secrets/{id}", "admin"),
@@ -154,6 +168,13 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("PUT", "/api/v1/pools/{id}/default"),
     ("PUT", "/api/v1/bindings"),
     ("DELETE", "/api/v1/bindings/{agent}/{provider}"),
+    // The cost ledger (KAN-449): a price decides what every later turn costs, a limit what an account may spend.
+    ("PUT", "/api/v1/prices"),
+    ("PUT", "/api/v1/accounts/{id}/limits"),
+    (
+        "DELETE",
+        "/api/v1/accounts/{id}/limits/{unit}/{window_secs}",
+    ),
     // Opening or attaching a terminal is a shell on the runner (spec §8, E2-01).
     ("POST", "/api/v1/terminals"),
     ("GET", "/api/v1/terminals/{id}/ws"),

@@ -52,6 +52,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["accountsUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/{id}": {
         parameters: {
             query?: never;
@@ -79,6 +95,38 @@ export interface paths {
         put: operations["setAccountCap"];
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{id}/limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setAccountLimit"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{id}/limits/{unit}/{window_secs}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["clearAccountLimit"];
         options?: never;
         head?: never;
         patch?: never;
@@ -372,6 +420,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/costs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listCosts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices": {
         parameters: {
             query?: never;
@@ -624,6 +688,22 @@ export interface paths {
         put: operations["addPoolMember"];
         post?: never;
         delete: operations["removePoolMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/prices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listPrices"];
+        put: operations["setPrice"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1071,6 +1151,25 @@ export interface components {
             /** @description Runner device ids, explicit (never a wildcard). */
             runners: string[];
         };
+        /** @description One account's usage. No key, secret name, delivery or runner: it is for a `read` device. */
+        AccountSpend: {
+            /** Format: int64 */
+            account_id: number;
+            by_company: components["schemas"]["UsageByCompany"][];
+            five_hours: components["schemas"]["UsageWindow"];
+            limits: components["schemas"]["LimitStanding"][];
+            /**
+             * Format: int64
+             * @description The highest used/cap of any limit, in basis points (10000 is at the cap).
+             */
+            max_utilisation_bps: number;
+            /**
+             * Format: int64
+             * @description Provider drops in the last hour.
+             */
+            recent_drops: number;
+            seven_days: components["schemas"]["UsageWindow"];
+        };
         AccountsDeleted: {
             deleted: boolean;
         };
@@ -1311,6 +1410,47 @@ export interface components {
         Cleared: {
             key: string;
         };
+        CostEvent: {
+            /**
+             * Format: int64
+             * @description The Core account the attempt used, if it was one of Core's.
+             */
+            account_id?: number | null;
+            /** @description The turn was interrupted: the tokens are the meter's last reading. */
+            approximate: boolean;
+            /** @description `list_price`, `provider_reported`, `billing_corrected` or `unpriced`. */
+            basis: string;
+            /** Format: int64 */
+            cache_tokens: number;
+            /**
+             * Format: int64
+             * @description The event a `billing_corrected` row corrects.
+             */
+            corrects_id?: number | null;
+            /**
+             * Format: int64
+             * @description Millionths of a dollar; absent when the event is `unpriced` (never 0).
+             */
+            cost_usd_micros?: number | null;
+            /**
+             * Format: int64
+             * @description The attempt of the session (a restart or a failover starts a new epoch).
+             */
+            epoch: number;
+            harness: string;
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            input_tokens: number;
+            model: string;
+            occurred_at: components["schemas"]["Timestamp"];
+            /** Format: int64 */
+            output_tokens: number;
+            /** @description When the list price that priced a `list_price` event was read. */
+            priced_at?: components["schemas"]["Timestamp"];
+            provider: string;
+            session: string;
+        };
         /** @description A device: who it is and what it may do. Never a key's private half: the Core has none. */
         Device: {
             created_at: components["schemas"]["Timestamp"];
@@ -1477,6 +1617,34 @@ export interface components {
             value: string;
             /** Format: int64 */
             version: number;
+        };
+        LimitCleared: {
+            cleared: boolean;
+        };
+        LimitSet: {
+            /** Format: int64 */
+            account_id: number;
+            /** Format: int64 */
+            cap: number;
+            unit: string;
+            /** Format: int64 */
+            warn_percent?: number | null;
+            /** Format: int64 */
+            window_secs: number;
+        };
+        /** @description A limit and how much of it is used. */
+        LimitStanding: {
+            /** Format: int64 */
+            cap: number;
+            exhausted: boolean;
+            /** @description `tokens` or `messages`. */
+            unit: string;
+            /** Format: int64 */
+            used: number;
+            /** Format: int64 */
+            warn_percent: number;
+            /** Format: int64 */
+            window_secs: number;
         };
         /** @description A key that is locked now. */
         Lockout: {
@@ -1694,6 +1862,21 @@ export interface components {
             provider: string;
             updated_at: components["schemas"]["Timestamp"];
         };
+        /** @description A price: millionths of a dollar per million tokens, and when the provider's list price was read. */
+        PriceBookEntry: {
+            /** Format: int64 */
+            cache_per_mtok_micro: number;
+            created_at: components["schemas"]["Timestamp"];
+            /** Format: int64 */
+            input_per_mtok_micro: number;
+            model: string;
+            /** Format: int64 */
+            output_per_mtok_micro: number;
+            priced_at: components["schemas"]["Timestamp"];
+            provider: string;
+            /** Format: int64 */
+            version: number;
+        };
         /** @description A provider definition: a built-in, or user data validated before it is stored. */
         Provider: {
             /** @description The harness's own authentication variable. */
@@ -1896,6 +2079,34 @@ export interface components {
             /** Format: int64 */
             cap: number;
         };
+        SetLimit: {
+            /** Format: int64 */
+            cap: number;
+            /** @description `tokens` or `messages`. */
+            unit: string;
+            /**
+             * Format: int64
+             * @description Warn at this percent of the cap (1 to 100); default 80.
+             */
+            warn_percent?: number | null;
+            /**
+             * Format: int64
+             * @description 1 to 31622400 seconds.
+             */
+            window_secs: number;
+        };
+        SetPrice: {
+            /** Format: int64 */
+            cache_per_mtok_micro: number;
+            /** Format: int64 */
+            input_per_mtok_micro: number;
+            model: string;
+            /** Format: int64 */
+            output_per_mtok_micro: number;
+            /** @description When the provider's list price was read: a UTC timestamp. */
+            priced_at: string;
+            provider: string;
+        };
         /** @description A device's new scopes. */
         SetScopes: {
             /** @description From the catalogue, each held by the calling device; a runner holds exactly `runner`. */
@@ -2003,6 +2214,28 @@ export interface components {
          *     client's date parser never meets a second one (E0.4).
          */
         Timestamp: string;
+        UsageByCompany: {
+            company: string;
+            five_hours: components["schemas"]["UsageWindow"];
+            seven_days: components["schemas"]["UsageWindow"];
+        };
+        UsageWindow: {
+            /** Format: int64 */
+            cache_tokens: number;
+            /** Format: int64 */
+            cost_usd_micros: number;
+            /** Format: int64 */
+            input_tokens: number;
+            /**
+             * Format: int64
+             * @description Messages counted in the window (an account-wide figure; 0 in a company's slice).
+             */
+            messages: number;
+            /** Format: int64 */
+            output_tokens: number;
+            /** Format: int64 */
+            total_tokens: number;
+        };
         /** @description What the server is and speaks. */
         Versions: {
             api: components["schemas"]["ApiVersion"];
@@ -2307,6 +2540,33 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    accountsUsage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Needs `admin`. Every account's tokens, messages and dollars over the last five hours and seven days, its limits with their use, and its recent drops. Events that carry only a `legacy_account_id` (Citadel's old account id) are not counted here until the account port lands */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountSpend"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     getAccount: {
         parameters: {
             query?: never;
@@ -2390,6 +2650,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderAccount"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setAccountLimit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The account's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetLimit"];
+            };
+        };
+        responses: {
+            /** @description The limit set or changed (audited as `account.limit_set`); 404 for no such account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LimitSet"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    clearAccountLimit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The account's id */
+                id: string;
+                /** @description `tokens` or `messages` */
+                unit: string;
+                /** @description The limit's window */
+                window_secs: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cleared (audited as `account.limit_cleared`); `cleared` is false when there was no such limit; 404 for no such account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LimitCleared"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -3035,6 +3363,40 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    listCosts: {
+        parameters: {
+            query?: {
+                /** @description Only this session's events. */
+                session?: string;
+                /** @description Only this account's events. */
+                account?: number;
+                /** @description At most this many, newest first (default and most 100). */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cost events, newest first (needs `admin`). One event is one attempt of a session: a delta, never a running total */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostEvent"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listDevices: {
         parameters: {
             query?: never;
@@ -3636,6 +3998,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Pool"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listPrices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The newest price of every provider and model. There is no built-in rate card: a model with no price here (or in its definition) is unpriced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PriceBookEntry"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setPrice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetPrice"];
+            };
+        };
+        responses: {
+            /** @description The next version of the price, in force from now on (audited as `price.set`). Events already recorded keep the rates that priced them. 400 for a bad provider, model, rate or timestamp */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PriceBookEntry"];
                 };
             };
             400: components["responses"]["BadRequest"];

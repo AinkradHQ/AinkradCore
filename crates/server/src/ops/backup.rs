@@ -107,6 +107,23 @@ async fn strip_secrets(db: &Path) -> Result_ {
         .execute(&mut conn)
         .await?;
     }
+    // An account row of an export is blanked too (KAN-449): its key is gone, so the last four
+    // characters it showed go with it, and the row is disabled until a new key is stored (the
+    // account's `replace_secret` creates the missing broker secret under the same name; the name is
+    // not a value). Label, provider, cap and the ledger stay: they hold no credential.
+    let accounts: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name = 'core_accounts'")
+            .fetch_one(&mut conn)
+            .await?;
+    if accounts > 0 {
+        sqlx::raw_sql(
+            "PRAGMA secure_delete = ON; UPDATE core_accounts SET masked_tail = '', \
+             state = 'disabled', state_reason = 'exported without its key: store a new key', \
+             state_until = NULL, last_used_at = NULL; VACUUM;",
+        )
+        .execute(&mut conn)
+        .await?;
+    }
     conn.close().await?;
     Ok(())
 }
