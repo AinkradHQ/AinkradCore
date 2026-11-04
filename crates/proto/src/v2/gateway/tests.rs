@@ -113,6 +113,15 @@ fn grants_and_ops_round_trip_and_hide_the_lease() {
     let grant = GatewayGrant {
         lease: "l_secretlease".into(),
         account: 7,
+        provider: "anthropic".into(),
+        user_key: None,
+        prices: vec![ModelPrice {
+            model: "claude-x".into(),
+            input: 3_000_000,
+            output: 15_000_000,
+            cache_read: 300_000,
+            cache_write: 3_750_000,
+        }],
         upstream: Upstream {
             host: "api.anthropic.com".into(),
             base_path: String::new(),
@@ -136,6 +145,8 @@ fn grants_and_ops_round_trip_and_hide_the_lease() {
     assert!(!format!("{grant:?}").contains("secretlease"));
     let test = GatewayTest {
         lease: "l_secretlease".into(),
+        provider: "anthropic".into(),
+        user_key: None,
         upstream: grant.upstream.clone(),
     };
     assert!(!format!("{test:?}").contains("secretlease"));
@@ -151,4 +162,46 @@ fn grants_and_ops_round_trip_and_hide_the_lease() {
         serde_json::from_value(serde_json::to_value(&cmd).unwrap()).unwrap();
     assert_eq!(back, cmd);
     assert_eq!(crate::v2::Command::GatewayTest(test).op(), OP_GATEWAY_TEST);
+}
+
+#[test]
+fn a_grant_carries_what_the_runner_needs_to_run_the_key_rule() {
+    let def = UserKeyDef {
+        prefix: "sk-or-v1-".into(),
+        host: "openrouter.ai".into(),
+    };
+    let user = [def.of("openrouter")];
+    assert_eq!(
+        key_host_problem(OR, "openrouter", "openrouter.ai", &user),
+        None
+    );
+    assert!(key_host_problem(OR, "openrouter", "api.openai.com", &user).is_some());
+    // A frame from before the fields existed reads with an empty provider, which no key passes.
+    let old = serde_json::json!({
+        "lease": "l_x", "account": 1,
+        "upstream": {"host": "api.anthropic.com", "wire": "anthropic-messages", "auth": "x_api_key"},
+        "models": [], "ceiling": {"tokens": 1, "usd_micros": 1}, "rate": {"per_minute": 1, "concurrent": 1}
+    });
+    let grant: GatewayGrant = serde_json::from_value(old).unwrap();
+    assert_eq!(grant.provider, "");
+    assert!(grant.user_key.is_none() && grant.prices.is_empty());
+    assert!(key_host_problem(ANT, &grant.provider, "api.anthropic.com", &[]).is_some());
+}
+
+#[test]
+fn a_test_result_is_a_status_class_and_nothing_else() {
+    let ok = GatewayTested {
+        result: UpstreamStatus::RefusedAddress,
+        latency_ms: 3,
+    };
+    let json = serde_json::to_value(&ok).unwrap();
+    assert_eq!(json["result"], "refused_address");
+    assert!(
+        serde_json::from_value::<GatewayTested>(
+            serde_json::json!({"result": "free text", "latency_ms": 1})
+        )
+        .unwrap()
+        .result
+            == UpstreamStatus::Unknown
+    );
 }

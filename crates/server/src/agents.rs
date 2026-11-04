@@ -336,6 +336,13 @@ pub fn placement_refusal_with(
         if let Some(why) = gateway_refusal(runner) {
             return Some(why);
         }
+        // Any egress rule needs the proven host filter: fail closed, whatever tier_refusal says.
+        if parsed.egress.is_some() && !filters_egress(runner) {
+            return Some(
+                "the session sets egress rules and the runner does not offer a proven egress filter"
+                    .to_owned(),
+            );
+        }
     }
     if holds_account(secrets) {
         let Ok(parsed) = serde_json::from_value::<ainkrad_proto::runner::Policy>(policy.clone())

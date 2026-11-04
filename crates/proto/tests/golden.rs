@@ -678,8 +678,20 @@ fn v2_agent_frames_are_pinned() {
             gateway: Some(Box::new(GatewayGrant {
                 lease: "l_lease".to_owned(),
                 account: 7,
+                provider: "openrouter".to_owned(),
+                user_key: Some(UserKeyDef {
+                    prefix: "sk-or-v1-".to_owned(),
+                    host: "openrouter.example".to_owned(),
+                }),
                 upstream: upstream.clone(),
                 models: vec!["claude-x".to_owned()],
+                prices: vec![ModelPrice {
+                    model: "claude-x".to_owned(),
+                    input: 3_000_000,
+                    output: 15_000_000,
+                    cache_read: 300_000,
+                    cache_write: 3_750_000,
+                }],
                 ceiling: Ceiling {
                     tokens: 1000,
                     usd_micros: 5_000_000,
@@ -710,6 +722,8 @@ fn v2_agent_frames_are_pinned() {
         0,
         Body::Command(Command::GatewayTest(GatewayTest {
             lease: "l_lease".to_owned(),
+            provider: "anthropic".to_owned(),
+            user_key: None,
             upstream,
         })),
     );
