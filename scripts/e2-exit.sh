@@ -421,7 +421,10 @@ run_soak() {
   for i in "$ag1" "$ag2"; do [ "$(agent_state "$i")" = running ] && ticks "$i" | contiguous || bad+="$i "; done
   [ -z "$bad" ] && record "soak end state" PASS "all 5 terminals running, both agents running with gap-free transcripts" ||
     record "soak end state" FAIL "not healthy: $bad"
-  local z; z=$(ps -axo pid=,ppid=,stat= | awk -v r="$RPID" '$2==r && $3 ~ /^Z/' | wc -l | tr -d ' ')
+  # A child still being reaped shows as Z for a moment: bounded wait, as in step 5.
+  zs() { ps -axo pid=,ppid=,stat= | awk -v r="$RPID" '$2==r && $3 ~ /^Z/ {print $1}'; }
+  no_z() { [ -z "$(zs)" ]; }
+  local z; wait_for 5 no_z; z=$(zs | wc -l | tr -d ' ')
   [ "$z" = 0 ] && record "soak zombies" PASS "none under the runner" || record "soak zombies" FAIL "$z zombie(s) under the runner"
 }
 
