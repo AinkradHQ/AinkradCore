@@ -155,6 +155,28 @@ fn reserved() -> Vec<Cidr> {
     ]
 }
 
+/// The reserved ranges plus the special-purpose ranges an upstream may never be in: 6to4 relay
+/// anycast, benchmarking (2001:2::/48), ORCHID and ORCHIDv2 (2001:10::/28, 2001:20::/28), the new
+/// documentation range, SRv6 SIDs, and all of ::/8 (IPv4-translated ::ffff:0:0:0/96, the
+/// IPv4-compatible and unspecified forms included).
+///
+/// Residual, not detectable here: a network-specific NAT64 or DNS64 prefix (RFC 6052 allows any
+/// operator prefix) can translate a public-looking IPv6 address to a private IPv4 one at the
+/// network edge. Only the well-known prefix 64:ff9b::/96 and 6to4 are decoded and refused.
+fn strict_reserved() -> Vec<Cidr> {
+    let mut all = reserved();
+    all.extend([
+        Cidr::v4([192, 88, 99, 0], 24),
+        Cidr::v6([0, 0, 0, 0, 0, 0, 0, 0], 8),
+        Cidr::v6([0x2001, 2, 0, 0, 0, 0, 0, 0], 48),
+        Cidr::v6([0x2001, 0x10, 0, 0, 0, 0, 0, 0], 28),
+        Cidr::v6([0x2001, 0x20, 0, 0, 0, 0, 0, 0], 28),
+        Cidr::v6([0x3fff, 0, 0, 0, 0, 0, 0, 0], 20),
+        Cidr::v6([0x5f00, 0, 0, 0, 0, 0, 0, 0], 16),
+    ]);
+    all
+}
+
 /// An IPv4-mapped IPv6 address is its IPv4 address; every check runs on that.
 pub fn normalise(ip: IpAddr) -> IpAddr {
     match ip {
@@ -276,7 +298,7 @@ impl Policy {
             cidrs: vec![],
             hosts: BTreeSet::new(),
             ports: vec![443],
-            reserved: reserved(),
+            reserved: strict_reserved(),
             own: vec![],
         }
     }

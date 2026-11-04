@@ -59,7 +59,7 @@ async fn a_request_that_could_smuggle_a_header_or_override_the_framing_is_not_se
     let f = serve(HOST, OK).await;
     let script = Script::of(vec![public()]);
     let (d, to) = dialer(&f, script.clone(), vec![]);
-    let cases: [Case; 8] = [
+    let cases: Vec<Case> = vec![
         ("POST", "/x", &[("x-a", "v\r\nHost: evil.test")]),
         ("POST", "/x", &[("x-a\r\nb", "v")]),
         ("POST", "/x", &[("Host", "evil.test")]),
@@ -68,6 +68,11 @@ async fn a_request_that_could_smuggle_a_header_or_override_the_framing_is_not_se
         ("POST", "/x y", &[]),
         ("POST", "x", &[]),
         ("CONNECT", "/x", &[]),
+        ("POST", "/x", &[("Expect", "100-continue")]),
+        ("POST", "/x", &[("TE", "trailers")]),
+        ("POST", "/x", &[("Upgrade", "websocket")]),
+        ("POST", "/x", &[("Trailer", "x")]),
+        ("POST", "/x", &[("Keep-Alive", "timeout=5")]),
     ];
     for (method, path, headers) in cases {
         let got = d.request(HOST, method, path, headers, b"", 16).await;
@@ -86,6 +91,7 @@ async fn the_body_is_bounded_and_a_broken_head_is_an_upstream_error() {
     let (d, _) = dialer(&f, Script::of(vec![public()]), vec![]);
     let reply = d.request(HOST, "GET", "/x", &[], b"", 4).await.unwrap();
     assert_eq!(reply.body, b"0123");
+    assert!(reply.truncated);
     let f = serve(HOST, "garbage\r\n\r\n").await;
     let (d, _) = dialer(&f, Script::of(vec![public()]), vec![]);
     assert_eq!(

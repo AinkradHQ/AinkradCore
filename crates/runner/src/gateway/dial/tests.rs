@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 
@@ -137,7 +138,22 @@ struct Fixture {
     seen: Arc<Mutex<Vec<String>>>,
 }
 
+/// How the server ends a connection after its reply.
+#[derive(Clone, Copy)]
+enum End {
+    /// A TLS `close_notify`, then close: a clean end of data.
+    Notify,
+    /// Drop the socket without `close_notify`: a truncation an attacker or a fault can cause.
+    Abrupt,
+    /// Keep the connection open and silent.
+    Stall,
+}
+
 async fn serve(cert_name: &str, reply: &'static str) -> Fixture {
+    serve_as(cert_name, reply, End::Notify).await
+}
+
+async fn serve_as(cert_name: &str, reply: &'static str, end: End) -> Fixture {
     let ca = Ca::new();
     let acceptor = TlsAcceptor::from(ca.server_config(cert_name));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -166,7 +182,14 @@ async fn serve(cert_name: &str, reply: &'static str) -> Fixture {
                     .unwrap()
                     .push(String::from_utf8_lossy(&got).into_owned());
                 let _ = tls.write_all(reply.as_bytes()).await;
-                let _ = tls.shutdown().await;
+                let _ = tls.flush().await;
+                match end {
+                    End::Notify => {
+                        let _ = tls.shutdown().await;
+                    }
+                    End::Abrupt => drop(tls),
+                    End::Stall => tokio::time::sleep(Duration::from_secs(60)).await,
+                }
             });
         }
     });
@@ -218,6 +241,9 @@ fn only_a_plain_dns_name_is_a_host() {
         "2130706433",
         "017700000001",
         "0177.0.0.1",
+        "localhost",
+        "intranet",
+        "api",
         "unnamed.11.0.0.1.",
         "api.example.test.",
         "localhost.",
@@ -296,6 +322,19 @@ async fn every_refused_address_class_is_refused_and_nothing_is_dialled() {
         v6("2002:7f00:1::"),
         v6("2002:a9fe:a9fe::1"),
         v6("::127.0.0.1"),
+        // Teredo, benchmarking, IETF protocol assignments, and the special ranges of the strict policy.
+        v6("2001:0:4136:e378:8000:63bf:3fff:fdd2"),
+        ip4(198, 18, 0, 1),
+        ip4(198, 19, 255, 255),
+        ip4(192, 0, 0, 8),
+        ip4(192, 88, 99, 1),
+        v6("2001:2::1"),
+        v6("2001:10::1"),
+        v6("2001:20::1"),
+        v6("3fff::1"),
+        v6("5f00::1"),
+        v6("::ffff:0:7f00:1"),
+        v6("::2:1"),
     ];
     for ip in refused {
         let script = Script::of(vec![ip]);
@@ -409,4 +448,5 @@ async fn rebinding_between_two_requests_is_caught_because_each_request_resolves_
     assert_eq!(*to.asked.lock().unwrap(), [SocketAddr::new(public(), 443)]);
 }
 
+mod framing;
 mod more;

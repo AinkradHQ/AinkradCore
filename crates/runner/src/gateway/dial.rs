@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rustls::pki_types::ServerName;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
@@ -31,10 +31,9 @@ const MAX_DIALS: usize = 4;
 const CONNECT: Duration = Duration::from_secs(5);
 const HANDSHAKE: Duration = Duration::from_secs(10);
 const RESOLVE: Duration = Duration::from_secs(5);
-/// Nothing read for this long ends the response.
-const IDLE: Duration = Duration::from_secs(30);
-/// The largest response head kept.
-const MAX_HEAD: usize = 32 * 1024;
+/// The whole request, from the lookup to the last body byte; the per-read idle timeout is in
+/// `reply`.
+const TOTAL: Duration = Duration::from_secs(120);
 
 /// Why a request was not made, or did not finish. Never carries a name, address or key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,15 +54,15 @@ pub enum DialError {
     Upstream,
 }
 
-pub type Connecting<'a> = Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send + 'a>>;
+pub(crate) type Connecting<'a> = Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send + 'a>>;
 
 /// Opens the TCP connection to an address the policy approved. A seam for tests only: the
 /// runner's own is [`Tcp`].
-pub trait Connect: Send + Sync {
+pub(crate) trait Connect: Send + Sync {
     fn connect(&self, addr: SocketAddr) -> Connecting<'_>;
 }
 
-pub struct Tcp;
+pub(crate) struct Tcp;
 
 impl Connect for Tcp {
     fn connect(&self, addr: SocketAddr) -> Connecting<'_> {
@@ -75,19 +74,15 @@ impl Connect for Tcp {
     }
 }
 
-/// What came back from one request: the status, the allow-listed headers, a bounded body.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Reply {
-    pub status: u16,
-    pub headers: Vec<(String, String)>,
-    pub body: Vec<u8>,
-}
+pub use super::reply::Reply;
+use super::reply::read_reply;
 
 pub struct Dialer {
     resolver: Arc<dyn Resolve>,
     policy: Policy,
     connect: Arc<dyn Connect>,
     tls: Arc<rustls::ClientConfig>,
+    total: Duration,
 }
 
 /// The bundled roots only: `SSL_CERT_FILE` and the system store are never read (threat T10).
@@ -118,7 +113,7 @@ impl Dialer {
     }
 
     /// Every part chosen: tests give a fake resolver, a connector and their own CA.
-    pub fn with(
+    pub(crate) fn with(
         resolver: Arc<dyn Resolve>,
         own_addresses: Vec<IpAddr>,
         connect: Arc<dyn Connect>,
@@ -129,7 +124,15 @@ impl Dialer {
             policy: Policy::strict().with_host_addresses(own_addresses),
             connect,
             tls: client_config(roots),
+            total: TOTAL,
         }
+    }
+
+    /// The overall cap of one request, for tests.
+    #[cfg(test)]
+    pub(crate) fn with_total(mut self, total: Duration) -> Dialer {
+        self.total = total;
+        self
     }
 
     /// Resolves `host` and returns the addresses to dial: every answer checked, at most
@@ -171,23 +174,27 @@ impl Dialer {
     ) -> Result<Reply, DialError> {
         let name = strict_host(host)?;
         let head = build_head(&name, method, path, headers, body.len())?;
-        let addrs = self.checked(&name).await?;
-        let tcp = self.dial(&addrs).await?;
-        let server = ServerName::try_from(name.clone()).map_err(|_| DialError::BadHost)?;
-        let mut tls = timeout(
-            HANDSHAKE,
-            TlsConnector::from(self.tls.clone()).connect(server, tcp),
-        )
+        timeout(self.total, async {
+            let addrs = self.checked(&name).await?;
+            let tcp = self.dial(&addrs).await?;
+            let server = ServerName::try_from(name.clone()).map_err(|_| DialError::BadHost)?;
+            let mut tls = timeout(
+                HANDSHAKE,
+                TlsConnector::from(self.tls.clone()).connect(server, tcp),
+            )
+            .await
+            .map_err(|_| DialError::Tls)?
+            .map_err(|_| DialError::Tls)?;
+            let sent = async {
+                tls.write_all(&head).await?;
+                tls.write_all(body).await?;
+                tls.flush().await
+            };
+            sent.await.map_err(|_| DialError::Upstream)?;
+            read_reply(&mut tls, max_body).await
+        })
         .await
-        .map_err(|_| DialError::Tls)?
-        .map_err(|_| DialError::Tls)?;
-        let sent = async {
-            tls.write_all(&head).await?;
-            tls.write_all(body).await?;
-            tls.flush().await
-        };
-        sent.await.map_err(|_| DialError::Upstream)?;
-        read_reply(&mut tls, max_body).await
+        .map_err(|_| DialError::Upstream)?
     }
 
     /// Dials the first checked address that answers.
@@ -202,11 +209,12 @@ impl Dialer {
     }
 }
 
-/// A host the dialer takes: a lower-case DNS name whose last label starts with a letter, so no
-/// IP in any notation (`127.1`, `0x7f000001`, `2130706433`, `017700000001`) reaches a resolver
-/// that would read it as an address; no trailing dot.
+/// A host the dialer takes: a lower-case DNS name of at least two labels whose last label starts
+/// with a letter, so no IP in any notation (`127.1`, `0x7f000001`, `2130706433`,
+/// `017700000001`) reaches a resolver that would read it as an address, and no single-label
+/// name (`localhost`, a search-domain host) either; no trailing dot.
 pub fn strict_host(host: &str) -> Result<String, DialError> {
-    if host.ends_with('.') {
+    if host.ends_with('.') || !host.contains('.') {
         return Err(DialError::BadHost);
     }
     host_name(host).ok_or(DialError::BadHost)
@@ -236,6 +244,11 @@ fn build_head(
                     "connection",
                     "accept-encoding",
                     "transfer-encoding",
+                    "expect",
+                    "te",
+                    "upgrade",
+                    "trailer",
+                    "keep-alive",
                 ]
                 .contains(&n.to_ascii_lowercase().as_str())
         })
@@ -250,65 +263,6 @@ fn build_head(
         "Content-Length: {len}\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n"
     ));
     Ok(head.into_bytes())
-}
-
-/// Response headers that may reach the harness. `Location`, `Set-Cookie` and organisation ids
-/// are not among them.
-fn response_header_ok(name: &str) -> bool {
-    matches!(
-        name,
-        "content-type" | "retry-after" | "request-id" | "x-request-id"
-    ) || name.starts_with("anthropic-ratelimit-")
-        || name.starts_with("x-ratelimit-")
-}
-
-async fn read_reply<R: AsyncReadExt + Unpin>(
-    r: &mut R,
-    max_body: usize,
-) -> Result<Reply, DialError> {
-    let mut buf = Vec::new();
-    let end = loop {
-        if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-            break i;
-        }
-        if buf.len() > MAX_HEAD {
-            return Err(DialError::Upstream);
-        }
-        let mut chunk = [0u8; 4096];
-        match timeout(IDLE, r.read(&mut chunk)).await {
-            Ok(Ok(n)) if n > 0 => buf.extend_from_slice(&chunk[..n]),
-            _ => return Err(DialError::Upstream),
-        }
-    };
-    let head = std::str::from_utf8(&buf[..end]).map_err(|_| DialError::Upstream)?;
-    let mut lines = head.split("\r\n");
-    let status = lines
-        .next()
-        .and_then(|l| l.strip_prefix("HTTP/1.1 "))
-        .and_then(|l| l.get(..3))
-        .and_then(|c| c.parse::<u16>().ok())
-        .ok_or(DialError::Upstream)?;
-    let headers = lines
-        .filter_map(|l| l.split_once(':'))
-        .map(|(n, v)| (n.to_ascii_lowercase(), v.trim().to_owned()))
-        .filter(|(n, _)| response_header_ok(n))
-        .collect();
-    // `Connection: close`: the body is what follows, up to the cap or the end of the stream.
-    let mut body = buf.split_off(end + 4);
-    while body.len() < max_body {
-        let mut chunk = [0u8; 4096];
-        match timeout(IDLE, r.read(&mut chunk)).await {
-            Ok(Ok(n)) if n > 0 => body.extend_from_slice(&chunk[..n]),
-            Ok(_) => break,
-            Err(_) => return Err(DialError::Upstream),
-        }
-    }
-    body.truncate(max_body);
-    Ok(Reply {
-        status,
-        headers,
-        body,
-    })
 }
 
 #[cfg(test)]
