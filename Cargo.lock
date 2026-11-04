@@ -218,6 +218,7 @@ dependencies = [
  "ainkrad-sys",
  "base64 0.22.1",
  "futures-util",
+ "rcgen",
  "reqwest 0.12.28",
  "ring",
  "rustls",

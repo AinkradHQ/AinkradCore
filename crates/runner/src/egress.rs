@@ -38,7 +38,7 @@ pub const ACCOUNT_SESSION: &str = "AINKRAD_ACCOUNT_SESSION";
 mod selftest;
 
 pub use policy::{Deny, Policy, host_addresses};
-use resolve::MAX_ANSWERS;
+pub(crate) use resolve::MAX_ANSWERS;
 pub use resolve::{Answers, Limited, Resolve, System};
 pub use selftest::selftest;
 
