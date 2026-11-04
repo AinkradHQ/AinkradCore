@@ -11,3 +11,8 @@ runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/AgentEvents/prop
 runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/AgentEvents/properties/op
 runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/AgentEvents/properties/op
 runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/AgentEvents/properties/op
+
+# KAN-435 G1: the gateway ops (agent.limit, gateway.test) are added before the trailing unknown-op
+# variant, so the positional comparison sees that variant (#10) as removed. It moved to #12.
+runner.schema.json: variant #10 removed at /$defs/Command/oneOf
+runner.schema.json: variant #10 removed at /$defs/Reply/oneOf
