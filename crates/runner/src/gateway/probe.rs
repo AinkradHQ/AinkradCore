@@ -117,7 +117,7 @@ fn normal(s: &str) -> String {
 /// Also refused: provider-side tools the gateway can neither check against the grant nor price,
 /// when unsure by name: the advisor (a second model run by the provider), code execution and the
 /// server-side tool search.
-pub(super) fn reaches_network(s: &str) -> bool {
+fn reaches_network(s: &str) -> bool {
     let s = normal(s);
     [
         "websearch",
@@ -235,7 +235,7 @@ pub(super) fn with_default_cap(body: &[u8]) -> Option<Vec<u8>> {
 /// agent does not have (MCP connector, web fetch, code execution, the files API), so the list
 /// is a short allowlist in code, not a pass-through. Extend it when a harness's smoke run shows
 /// one it needs.
-const BETAS: [&str; 14] = [
+const BETAS: [&str; 15] = [
     // What Claude Code 2.1.318 sends on an API-key turn (read from a request to a local listener,
     // 2026-11-05), less `advisor-tool-2026-03-01`: it only matters when the advisor tool is in the
     // request, and that tool is refused. None of these gives the provider network reach.
@@ -248,6 +248,8 @@ const BETAS: [&str; 14] = [
     "thinking-token-count-2026-05-13",
     "advanced-tool-use-2025-11-20",
     "effort-2025-11-24",
+    // Added from the adapter-mode run of 2.1.318 (2026-11-05); it only changes how thinking is shown.
+    "thinking-display-updates-2026-08-18",
     // Older ones a harness may still send.
     "fine-grained-tool-streaming-2025-05-14",
     "extended-cache-ttl-2025-04-11",

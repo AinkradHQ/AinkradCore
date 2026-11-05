@@ -220,12 +220,29 @@ async fn the_base_url_and_config_the_runner_writes_reach_the_slot_and_hold_no_ke
     let port = gateway::GW_PORT;
     // What the runner writes for Claude (env) and for Codex (env and `config.toml`), as it does
     // for a gateway session, then handed to the harness's own environment.
-    let (mut vars, mut allow) = (vec![], vec![]);
+    // The agent's own keys, planted where a grant or `--env` might have put them: the wiring must
+    // drop them, so the same key the gateway holds is in no variable inside.
+    let planted = |name: &str| (name.to_owned(), std::ffi::OsString::from(&key));
+    let sandboxed = ("AINKRAD_SANDBOX".to_owned(), std::ffi::OsString::from("1"));
+    let mut vars = vec![
+        planted("ANTHROPIC_API_KEY"),
+        planted("OPENAI_API_KEY"),
+        sandboxed.clone(),
+    ];
+    let mut allow = vec![];
     wiring::wire("claude", port, &config, &mut vars, &mut allow).unwrap();
-    let mut codex = vec![];
+    let mut codex = vec![
+        planted("ANTHROPIC_API_KEY"),
+        planted("OPENAI_API_KEY"),
+        sandboxed,
+    ];
     wiring::wire("codex", port, &config, &mut codex, &mut allow).unwrap();
     vars.extend(codex);
     vars.push(("CODEX_HOME".into(), config.clone().into()));
+    assert!(
+        vars.iter().all(|(_, v)| v.to_str() != Some(key.as_str())),
+        "a planted key survived the wiring"
+    );
     // This grant is for Anthropic and does not name these models, so each request is refused with
     // a 403 before anything is dialled: the status line shows it reached the gateway, on the URL
     // the runner wrote and with the placeholder, which is all that is on the harness's side.

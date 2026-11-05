@@ -23,7 +23,6 @@ mod charge;
 pub mod check;
 pub mod dial;
 pub mod meter;
-mod nested;
 mod probe;
 mod reply;
 mod request;
@@ -36,6 +35,7 @@ mod stored;
 mod stream;
 #[cfg(test)]
 mod tests;
+mod tools;
 mod usage;
 pub mod wiring;
 

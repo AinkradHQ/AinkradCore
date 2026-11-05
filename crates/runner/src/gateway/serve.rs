@@ -268,12 +268,14 @@ async fn serve(sh: &Shared, c: &mut UnixStream) -> Result<(), End> {
     if let Some(code) = probe.refusal() {
         return Err(refuse(403, code).into());
     }
-    // A provider-side tool nested inside a tool (Codex's `namespace`) gives the same network reach.
-    if super::nested::refusal(&body) {
+    // Only a client-side tool is allowed, at any depth: the provider runs none for the agent.
+    if super::tools::refusal(&body) {
         return Err(refuse(403, "tool_not_allowed").into());
     }
-    // A Responses request that names stored state instead of carrying it is priced at its body.
+    // A Responses request may name stored state, or leave some for later: only `store: false`
+    // passes. (Chat completions does not store by default, and has no such fields.)
     if cfg.upstream.wire == Wire::OpenaiResponses
+        && routed.target.ends_with("/responses")
         && let Some(code) = super::stored::refusal(&body)
     {
         return Err(refuse(if code == "bad_json" { 400 } else { 403 }, code).into());

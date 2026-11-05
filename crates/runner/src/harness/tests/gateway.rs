@@ -1,130 +1,122 @@
-//! A gateway session's harness environment (KAN-435 G6), through the executor: the runner's
-//! base URL and placeholder key reach the harness, whatever else the environment held for the
-//! provider is gone, Codex gets its generated `config.toml`, and a harness with no wiring is
-//! refused. (The sandbox slot's port is what marks a session as a gateway's.)
+//! A gateway session through the executor (KAN-435 G6): the slot's variable marks it; it must be
+//! sandboxed and have a valid port or it fails; a sandboxed one gets its Codex config in the
+//! session's own home and never in the runner-wide one. (The child's environment is checked on
+//! `wire` directly and, inside real bubblewrap, in `tests/gateway_netns.rs`: a sandboxed child
+//! cannot be a fake script here.)
 
 use super::env::fake_codex_recording_env;
 use super::*;
 
-const FIXTURE: &str = include_str!("../../../../harness/tests/fixtures/claude/resume.ndjson");
-const PORT: &str = "47833";
-/// What an agent session's grants or the runner's `--env` might have put in: none of it may stay.
-const PLANTED: [(&str, &str); 6] = [
-    ("ANTHROPIC_API_KEY", "planted-agent-key"),
-    ("ANTHROPIC_AUTH_TOKEN", "planted-agent-token"),
-    ("CLAUDE_CODE_OAUTH_TOKEN", "planted-agent-oauth"),
-    ("OPENAI_BASE_URL", "http://planted.invalid/v1"),
-    ("OPENAI_API_KEY", "planted-agent-openai"),
-    ("GOOGLE_GEMINI_BASE_URL", "http://planted.invalid"),
-];
-
-fn slot_env() -> Vec<(String, String)> {
-    [("AINKRAD_SANDBOX_GW_PORT", PORT)]
-        .into_iter()
-        .chain(PLANTED)
-        .map(|(n, v)| (n.to_owned(), v.to_owned()))
-        .collect()
+fn session(extra: &[(&str, &str)]) -> Vec<(String, String)> {
+    [
+        ("AINKRAD_SANDBOX_GW_SOCK", "/s/gateway.sock"),
+        ("AINKRAD_SANDBOX_GW_PORT", "47833"),
+    ]
+    .iter()
+    .chain(extra)
+    .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
+    .collect()
 }
 
-#[tokio::test]
-async fn claude_gets_the_gateway_url_and_a_placeholder_and_nothing_else_of_the_providers() {
-    let dir = scratch("gw-claude");
-    std::fs::write(dir.join("fixture.ndjson"), FIXTURE).unwrap();
-    let bin = dir.join("claude");
-    let d = dir.display();
-    std::fs::write(
-        &bin,
-        format!("#!/bin/sh\nenv > {d}/env\nhead -n 2 > /dev/null\ncat {d}/fixture.ndjson\n"),
-    )
-    .unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let mut ex = HarnessExecutor::new(dir.join("work"), dir.join("config"));
-    ex.bins.insert("claude".to_owned(), bin);
-    let job = job("claude");
-    ex.session_env(job.run, Some(slot_env()));
-    ex.start(&job).await.unwrap();
-    let (tx, _rx) = mpsc::channel(256);
-    let outcome = ex.run(&job, RunToken::new("t".to_owned()), tx).await;
-    assert_eq!(outcome, Outcome::Succeeded);
-
-    let env = std::fs::read_to_string(dir.join("env")).unwrap();
-    let has = |l: &str| env.lines().any(|x| x == l);
-    assert!(
-        has(&format!("ANTHROPIC_BASE_URL=http://127.0.0.1:{PORT}")),
-        "{env}"
-    );
-    assert!(has("ANTHROPIC_API_KEY=placeholder"), "{env}");
-    assert_eq!(env.matches("ANTHROPIC_API_KEY=").count(), 1, "{env}");
-    for (name, value) in PLANTED {
-        assert!(!env.contains(value), "{name} stayed: {env}");
-    }
-    // The slot's own variables are the sandbox's, never the harness's.
-    assert!(!env.contains("AINKRAD_SANDBOX_GW"), "{env}");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[tokio::test]
-async fn codex_gets_a_generated_config_in_its_home_and_a_placeholder_key() {
-    let dir = scratch("gw-codex");
+async fn run_codex(dir: &Path, env: Vec<(String, String)>) -> (HarnessExecutor, Job, Outcome) {
     let mut ex = HarnessExecutor::new(dir.join("work"), dir.join("config"));
     ex.bins
-        .insert("codex".to_owned(), fake_codex_recording_env(&dir));
+        .insert("codex".to_owned(), fake_codex_recording_env(dir));
     let job = Job {
         model: String::new(),
         ..job("codex")
     };
-    ex.session_env(job.run, Some(slot_env()));
+    ex.session_env(job.run, Some(env));
     ex.start(&job).await.unwrap();
     let (tx, _rx) = mpsc::channel(256);
     let outcome = ex.run(&job, RunToken::new("t".to_owned()), tx).await;
-    assert_eq!(outcome, Outcome::Succeeded);
+    (ex, job, outcome)
+}
 
-    let env = std::fs::read_to_string(dir.join("env")).unwrap();
-    assert!(
-        env.lines().any(|l| l == "OPENAI_API_KEY=placeholder"),
-        "{env}"
-    );
-    // Codex ignores `OPENAI_BASE_URL`: the URL is in the config, and the variable is not set.
-    assert!(!env.contains("OPENAI_BASE_URL"), "{env}");
-    for (name, value) in PLANTED {
-        assert!(!env.contains(value), "{name} stayed: {env}");
+fn failed_with(outcome: &Outcome, what: &str) {
+    match outcome {
+        Outcome::Failed { reason, .. } => assert!(reason.contains(what), "{reason}"),
+        other => panic!("{other:?}"),
     }
-    let home = dir.join("config/codex");
+}
+
+#[tokio::test]
+async fn a_gateway_session_that_is_not_sandboxed_fails_and_writes_no_config() {
+    let dir = scratch("gw-unsandboxed");
+    let (ex, job, outcome) =
+        run_codex(&dir, session(&[("OPENAI_BASE_URL", "http://own/v1")])).await;
+    failed_with(&outcome, "sandbox");
+    // Neither the runner-wide home nor a session home got a config, and the harness never ran.
+    for home in [dir.join("config/codex"), ex.config_dir(&job).unwrap()] {
+        assert!(!home.join("config.toml").exists(), "{}", home.display());
+    }
+    assert!(!dir.join("env").exists(), "the harness ran");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_slot_without_a_valid_port_fails_the_session_rather_than_running_it_unwired() {
+    for port in ["", "0", "x", "70000"] {
+        let dir = scratch("gw-port");
+        let env = vec![
+            ("AINKRAD_SANDBOX".to_owned(), "1".to_owned()),
+            (
+                "AINKRAD_SANDBOX_GW_SOCK".to_owned(),
+                "/s/gateway.sock".to_owned(),
+            ),
+            ("AINKRAD_SANDBOX_GW_PORT".to_owned(), port.to_owned()),
+        ];
+        let (_, _, outcome) = run_codex(&dir, env).await;
+        failed_with(&outcome, "port");
+        assert!(
+            !dir.join("env").exists(),
+            "the harness ran with port {port:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    // The slot with no port at all.
+    let dir = scratch("gw-noport");
+    let env = vec![
+        ("AINKRAD_SANDBOX".to_owned(), "1".to_owned()),
+        (
+            "AINKRAD_SANDBOX_GW_SOCK".to_owned(),
+            "/s/gateway.sock".to_owned(),
+        ),
+    ];
+    let (_, _, outcome) = run_codex(&dir, env).await;
+    failed_with(&outcome, "port");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_sandboxed_gateway_session_gets_its_config_in_its_own_home_only() {
+    let dir = scratch("gw-sandboxed");
+    let (ex, job, _) = run_codex(&dir, session(&[("AINKRAD_SANDBOX", "1")])).await;
+    let home = ex.config_dir(&job).unwrap();
     assert!(
-        env.lines()
-            .any(|l| l == format!("CODEX_HOME={}", home.display())),
-        "{env}"
+        home.starts_with(dir.join("config/sessions")),
+        "{}",
+        home.display()
     );
     let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
     assert_eq!(config, crate::codex_config::gateway(47833));
-    assert!(config.contains(&format!("base_url = \"http://127.0.0.1:{PORT}/v1\"")));
+    assert!(
+        !dir.join("config/codex/config.toml").exists(),
+        "the runner-wide Codex home was written"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
 async fn a_harness_with_no_wiring_is_refused_and_a_session_without_the_slot_is_untouched() {
     let dir = scratch("gw-other");
-    let mut ex = HarnessExecutor::new(dir.join("work"), dir.join("config"));
-    ex.bins
-        .insert("codex".to_owned(), fake_codex_recording_env(&dir));
-    // Not a gateway session: the environment is the session's own, as before.
-    let job = Job {
-        model: String::new(),
-        ..job("codex")
-    };
-    ex.session_env(
-        job.run,
-        Some(vec![(
-            "OPENAI_BASE_URL".to_owned(),
-            "http://own/v1".to_owned(),
-        )]),
-    );
-    ex.start(&job).await.unwrap();
-    let (tx, _rx) = mpsc::channel(256);
-    assert_eq!(
-        ex.run(&job, RunToken::new("t".to_owned()), tx).await,
-        Outcome::Succeeded
-    );
+    // Not a gateway session: the environment is the session's own, as before, and no file is made.
+    let (_, _, outcome) = run_codex(
+        &dir,
+        vec![("OPENAI_BASE_URL".to_owned(), "http://own/v1".to_owned())],
+    )
+    .await;
+    assert_eq!(outcome, Outcome::Succeeded);
     let env = std::fs::read_to_string(dir.join("env")).unwrap();
     assert!(
         env.lines().any(|l| l == "OPENAI_BASE_URL=http://own/v1"),
@@ -133,17 +125,18 @@ async fn a_harness_with_no_wiring_is_refused_and_a_session_without_the_slot_is_u
     assert!(!env.contains("placeholder"), "{env}");
     assert!(!dir.join("config/codex/config.toml").exists());
 
-    // A gateway session of a harness the gateway has no wiring for fails, naming why.
+    // A sandboxed gateway session of a harness the gateway has no wiring for fails, naming why.
+    let ex = HarnessExecutor::new(dir.join("work"), dir.join("config"));
     let job = Job {
         run: 8,
         ..self::job("opencode")
     };
-    ex.session_env(job.run, Some(slot_env()));
+    ex.session_env(job.run, Some(session(&[("AINKRAD_SANDBOX", "1")])));
     ex.start(&job).await.unwrap();
     let (tx, _rx) = mpsc::channel(256);
-    match ex.run(&job, RunToken::new("t".to_owned()), tx).await {
-        Outcome::Failed { reason, .. } => assert!(reason.contains("no wiring"), "{reason}"),
-        other => panic!("{other:?}"),
-    }
+    failed_with(
+        &ex.run(&job, RunToken::new("t".to_owned()), tx).await,
+        "no wiring",
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

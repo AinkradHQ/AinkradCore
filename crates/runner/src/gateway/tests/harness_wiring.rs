@@ -1,21 +1,25 @@
 //! The harness side of the gateway (KAN-435 G6): what the runner writes for each harness, and the
 //! request each real harness makes, replayed through the gateway against the fake upstream.
 //!
-//! The replays are requests captured from the real binaries on 2026-11-05, each run against a
-//! local listener with a dummy key and an empty home (`fixtures/*.json`; prompts, schemas and ids
-//! trimmed, every header and field the gateway reads kept): Claude Code 2.1.318 (`claude -p`),
-//! Codex 0.166.0 (`codex app-server`, the mode the runner runs, two turns on one thread) and
-//! agy 1.5.1 (`agy -p`). Running the binaries inside the sandbox is CI's, where they exist.
+//! The replays are requests captured from the real binaries on a Mac on 2026-11-05, each run
+//! under macOS `sandbox-exec` (outbound network denied but for localhost) against a local Python
+//! listener, with a dummy key and an empty home (`fixtures/*.json`; prompts, schemas and ids
+//! trimmed, every header and field the gateway reads kept): Claude Code 2.1.318 (`claude -p` in
+//! the adapter's stream-json mode), Codex 0.166.0 (`codex app-server`, the mode the runner runs)
+//! and agy 1.5.1 (`agy -p` in the adapter's stream-json mode). No Rust gateway or forwarder was in
+//! the loop for those runs, and nothing here runs a real harness binary: the gateway path is
+//! replay only, and a real binary inside bubblewrap is a gap (CI has none; see the PR).
 
 use std::ffi::OsString;
-use std::path::Path;
 
 use ainkrad_proto::v2::{UpstreamStatus, Wire};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::*;
-use crate::gateway::wiring::{PLACEHOLDER, port_in, wire};
-use crate::gateway::{GW_PORT, sandbox_env};
+use crate::gateway::wiring::{PLACEHOLDER, wire};
+
+/// What marks a session as sandboxed, which wiring requires.
+pub(super) const SANDBOX: (&str, &str) = ("AINKRAD_SANDBOX", "1");
 
 fn env(pairs: &[(&str, &str)]) -> Vec<(String, OsString)> {
     pairs
@@ -37,22 +41,6 @@ fn scratch(name: &str) -> std::path::PathBuf {
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
-}
-
-#[test]
-fn the_slot_marks_a_gateway_session_and_names_its_port() {
-    let slot = sandbox_env(Path::new("/s/gateway.sock"), Path::new("/bin/runner"));
-    assert_eq!(port_in(&slot), Some(GW_PORT));
-    assert_eq!(port_in(&env(&[("PATH", "/bin")])), None);
-    assert_eq!(port_in(&env(&[("AINKRAD_SANDBOX_GW_PORT", "x")])), None);
-    assert_eq!(port_in(&env(&[("AINKRAD_SANDBOX_GW_PORT", "0")])), None);
-    assert_eq!(port_in(&env(&[("AINKRAD_SANDBOX_GW_PORT", "99999")])), None);
-    // The last value wins, as it does for the child.
-    let twice = env(&[
-        ("AINKRAD_SANDBOX_GW_PORT", "1111"),
-        ("AINKRAD_SANDBOX_GW_PORT", "2222"),
-    ]);
-    assert_eq!(port_in(&twice), Some(2222));
 }
 
 #[test]
@@ -89,7 +77,7 @@ fn each_harness_is_given_its_base_url_and_the_placeholder_and_no_other_provider_
         ),
         ("codex", vec![("OPENAI_API_KEY", PLACEHOLDER)]),
     ] {
-        let mut e = env(&[("PATH", "/bin"), ("GIT_AUTHOR_NAME", "a")]);
+        let mut e = env(&[("PATH", "/bin"), ("GIT_AUTHOR_NAME", "a"), SANDBOX]);
         e.extend(env(&planted));
         let mut allow: Vec<String> = ["PATH", "HTTPS_PROXY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"]
             .map(str::to_owned)
@@ -142,7 +130,7 @@ fn provider_name(n: &str) -> bool {
 #[test]
 fn codex_gets_its_config_in_codex_home_and_the_others_write_no_file() {
     let dir = scratch("codex");
-    let mut e = env(&[]);
+    let mut e = env(&[SANDBOX]);
     wire("codex", 47833, &dir, &mut e, &mut vec![]).unwrap();
     let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
     assert_eq!(text, crate::codex_config::gateway(47833));
@@ -162,7 +150,7 @@ fn codex_gets_its_config_in_codex_home_and_the_others_write_no_file() {
     );
     let other = scratch("claude-agy");
     for harness in ["claude", "agy"] {
-        wire(harness, 47833, &other, &mut env(&[]), &mut vec![]).unwrap();
+        wire(harness, 47833, &other, &mut env(&[SANDBOX]), &mut vec![]).unwrap();
     }
     assert_eq!(std::fs::read_dir(&other).unwrap().count(), 0);
     let _ = std::fs::remove_dir_all(&dir);
@@ -172,7 +160,7 @@ fn codex_gets_its_config_in_codex_home_and_the_others_write_no_file() {
 #[test]
 fn a_harness_with_no_wiring_is_refused_and_leaves_the_session_as_it_was() {
     let dir = scratch("opencode");
-    let mut e = env(&[("OPENAI_API_KEY", "own"), ("PATH", "/bin")]);
+    let mut e = env(&[("OPENAI_API_KEY", "own"), ("PATH", "/bin"), SANDBOX]);
     let before = names(&e).len();
     let why = wire("opencode", 47833, &dir, &mut e, &mut vec![]).unwrap_err();
     assert!(
@@ -194,7 +182,7 @@ const RESPONSES_SSE: &str = "event: response.created\ndata: {\"type\":\"response
      event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":2,\"total_tokens\":12}}}\n\n";
 const GEMINI_SSE: &str = "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"hello\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":2,\"totalTokenCount\":12}}\n\n";
 
-fn sse(body: &str) -> Vec<Step> {
+pub(super) fn sse(body: &str) -> Vec<Step> {
     let head = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
@@ -203,15 +191,15 @@ fn sse(body: &str) -> Vec<Step> {
 }
 
 /// A captured request ready to send: the request line, the header lines, the body.
-struct Captured {
-    line: String,
-    heads: Vec<String>,
-    body: Value,
+pub(super) struct Captured {
+    pub line: String,
+    pub heads: Vec<String>,
+    pub body: Value,
 }
 
 impl Captured {
     /// `fixture` with its model swapped for the grant's (in the body, or in the Gemini path).
-    fn of(fixture: &str) -> Captured {
+    pub(super) fn of(fixture: &str) -> Captured {
         let v: Value = serde_json::from_str(fixture).unwrap();
         let mut body = v["body"].clone();
         let mut target = v["target"].as_str().unwrap().to_owned();
@@ -237,7 +225,7 @@ impl Captured {
         }
     }
 
-    async fn send(&self, r: &Rig) -> Vec<u8> {
+    pub(super) async fn send(&self, r: &Rig) -> Vec<u8> {
         let heads: Vec<&str> = self.heads.iter().map(String::as_str).collect();
         raw(
             &r.sock,
@@ -247,20 +235,20 @@ impl Captured {
     }
 }
 
-struct Shape {
-    fixture: &'static str,
-    wire: Wire,
-    host: &'static str,
-    base: &'static str,
-    provider: &'static str,
-    prefix: &'static str,
-    reply: &'static str,
+pub(super) struct Shape {
+    pub fixture: &'static str,
+    pub wire: Wire,
+    pub host: &'static str,
+    pub base: &'static str,
+    pub provider: &'static str,
+    pub prefix: &'static str,
+    pub reply: &'static str,
     /// The request line and the key's header the upstream must see.
     upstream: &'static str,
     auth: &'static str,
 }
 
-const SHAPES: [Shape; 3] = [
+pub(super) const SHAPES: [Shape; 3] = [
     Shape {
         fixture: include_str!("fixtures/claude.json"),
         wire: Wire::AnthropicMessages,
@@ -371,125 +359,4 @@ async fn the_anthropic_betas_claude_sends_are_all_kept() {
         sent,
         "a beta Claude Code sends was dropped"
     );
-}
-
-/// What Codex would send with its defaults: the provider-side web search tool.
-#[tokio::test]
-async fn codex_without_web_search_disabled_is_refused_which_is_why_the_config_disables_it() {
-    let s = &SHAPES[1];
-    let r = rig(Opts::of(
-        s.wire,
-        s.host,
-        s.base,
-        s.provider,
-        s.prefix,
-        sse(s.reply),
-    ))
-    .await;
-    let mut c = Captured::of(s.fixture);
-    c.body["tools"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({"type": "web_search"}));
-    let resp = c.send(&r).await;
-    assert_eq!(status(&resp), 403);
-    assert!(body_of(&resp).contains("tool_not_allowed"));
-    assert_eq!(r.up.count(), 0);
-}
-
-#[tokio::test]
-async fn a_responses_request_that_names_stored_state_is_refused_before_anything_is_dialled() {
-    let s = &SHAPES[1];
-    let r = rig(Opts::of(
-        s.wire,
-        s.host,
-        s.base,
-        s.provider,
-        s.prefix,
-        sse(s.reply),
-    ))
-    .await;
-    for (key, value) in [
-        ("previous_response_id", json!("resp_abc")),
-        ("conversation", json!("conv_abc")),
-        ("conversation", json!({"id": "conv_abc"})),
-        ("prompt", json!({"id": "pmpt_abc"})),
-        (
-            "input",
-            json!([{"role": "user", "content": "x"}, {"type": "item_reference", "id": "msg_1"}]),
-        ),
-    ] {
-        let mut c = Captured::of(s.fixture);
-        c.body[key] = value.clone();
-        let resp = c.send(&r).await;
-        assert_eq!(status(&resp), 403, "{key}={value}");
-        assert!(body_of(&resp).contains("param_not_allowed"), "{key}");
-    }
-    assert_eq!(r.up.count(), 0, "a refusal spends nothing");
-    // The same request without them (what Codex sends: the whole input, `store: false`) is served.
-    let c = Captured::of(s.fixture);
-    assert_eq!(c.body["store"], false);
-    assert!(c.body.get("previous_response_id").is_none());
-    assert_eq!(status(&c.send(&r).await), 200);
-    assert_eq!(r.up.count(), 1);
-    // Null means absent, as the provider reads it.
-    let mut c = Captured::of(s.fixture);
-    c.body["previous_response_id"] = Value::Null;
-    assert_eq!(status(&c.send(&r).await), 200);
-}
-
-#[tokio::test]
-async fn the_websocket_transport_codex_would_otherwise_try_is_refused() {
-    let s = &SHAPES[1];
-    let r = rig(Opts::of(
-        s.wire,
-        s.host,
-        s.base,
-        s.provider,
-        s.prefix,
-        sse(s.reply),
-    ))
-    .await;
-    let mut c = Captured::of(s.fixture);
-    c.heads.push("Upgrade: websocket".to_owned());
-    c.heads.push("Connection: Upgrade".to_owned());
-    assert_eq!(status(&c.send(&r).await), 426);
-    assert_eq!(r.up.count(), 0);
-}
-
-#[tokio::test]
-async fn a_web_search_hidden_in_codexs_namespace_tool_is_refused_and_its_real_one_passes() {
-    let s = &SHAPES[1];
-    let r = rig(Opts::of(
-        s.wire,
-        s.host,
-        s.base,
-        s.provider,
-        s.prefix,
-        sse(s.reply),
-    ))
-    .await;
-    // The captured request has a `namespace` tool with function tools in it, and is served.
-    let c = Captured::of(s.fixture);
-    assert!(
-        c.body["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|t| t["type"] == "namespace")
-    );
-    assert_eq!(status(&c.send(&r).await), 200);
-    let mut c = Captured::of(s.fixture);
-    for t in c.body["tools"].as_array_mut().unwrap() {
-        if t["type"] == "namespace" {
-            t["tools"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!({"type": "web_search"}));
-        }
-    }
-    let resp = c.send(&r).await;
-    assert_eq!(status(&resp), 403);
-    assert!(body_of(&resp).contains("tool_not_allowed"));
-    assert_eq!(r.up.count(), 1, "only the first request was dialled");
 }

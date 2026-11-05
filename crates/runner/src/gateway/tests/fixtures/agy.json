@@ -100,7 +100,8 @@
   "x-goog-api-key": "placeholder"
  },
  "method": "POST",
- "source": "real binary, run against a local listener with a dummy key and an empty HOME, 2026-11-05",
+ "mode": "the adapter's argv: stream-json in and out",
+ "source": "real binary on a Mac under sandbox-exec, against a local Python listener, dummy key, empty HOME, 2026-11-05",
  "target": "/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse",
  "version": "1.5.1"
 }

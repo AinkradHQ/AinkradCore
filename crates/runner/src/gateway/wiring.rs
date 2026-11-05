@@ -2,11 +2,21 @@
 //! session's loopback port and a placeholder in the key's place, per harness.
 //!
 //! These are written by the runner, after `account_var_problem` has passed and outside the grant
-//! list: a grant still may not redirect traffic, and the agent cannot set them. They come last, so
-//! they win over anything earlier in the environment, and every other provider variable (a key, a
-//! base URL, a cloud switch) is dropped from the session first, so nothing steers the harness
-//! around the gateway or hands it a key of its own. The placeholder is a constant: the real key
-//! is in the runner's memory only.
+//! list: a grant still may not redirect traffic, and the agent cannot set them through a grant.
+//! They come last, so they win over anything earlier in the environment, and every other provider
+//! variable (a key, a base URL, a cloud switch) is dropped from the session first.
+//!
+//! What this does not do is stop the agent from changing its own harness's configuration: it
+//! can write files the harness reads (Claude's `.claude/settings.local.json` in the workspace,
+//! Codex's `config.toml` in its home, which is writable). Claude's `--settings` flag outranks the
+//! local settings, so the adapter pins the base URL and key there; Codex has no such flag, and
+//! the file is rewritten at each start but not locked. The containment is that there is nothing to
+//! steal and nowhere to go: the only credential in the sandbox is the constant placeholder, the
+//! real key is in the runner's memory, and a session with no network (or only the filtered proxy)
+//! reaches no host of the agent's choosing. A harness pointed elsewhere gets no model, nothing more.
+//!
+//! A session is a gateway session when its sandbox slot is set ([`gateway_port`]); wiring needs it
+//! to be sandboxed too ([`wire`]), so Codex's `config.toml` can never land in the runner-wide home.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -32,10 +42,27 @@ fn provider_var(name: &str) -> bool {
     PROVIDER_PREFIXES.iter().any(|p| name.starts_with(p))
 }
 
-/// The gateway's loopback port when `env` is a gateway session's (its slot is set), else `None`.
-pub fn port_in(env: &[(String, OsString)]) -> Option<u16> {
-    let v = ainkrad_harness::last_env(env, SLOT_PORT)?;
-    v.to_str()?.parse().ok().filter(|p| *p != 0)
+/// The slot's variables (`AINKRAD_SANDBOX_GW_{SOCK,FWD,PORT}`): any of them marks a gateway session.
+const SLOT: [&str; 3] = [
+    "AINKRAD_SANDBOX_GW_SOCK",
+    "AINKRAD_SANDBOX_GW_FWD",
+    SLOT_PORT,
+];
+
+/// The gateway's loopback port when `env` is a gateway session's (any of its slot is set); `None`
+/// for any other session. A slot with no valid port is an error, never a session run unwired.
+pub fn gateway_port(env: &[(String, OsString)]) -> Result<Option<u16>, String> {
+    if !SLOT
+        .iter()
+        .any(|n| ainkrad_harness::last_env(env, n).is_some())
+    {
+        return Ok(None);
+    }
+    ainkrad_harness::last_env(env, SLOT_PORT)
+        .and_then(|v| v.to_str()?.parse::<u16>().ok())
+        .filter(|p| *p != 0)
+        .map(Some)
+        .ok_or_else(|| "the auth gateway's slot has no valid port".to_owned())
 }
 
 /// The variables `harness` is given: its base URL and a placeholder key. `None` is a harness with
@@ -61,8 +88,9 @@ fn vars(harness: &str, port: u16) -> Option<Vec<(&'static str, String)>> {
 
 /// Wires a gateway session's `harness`: drops every other provider variable from `env` and from
 /// the runner variables the child may inherit (`allow`), adds the harness's own, and for Codex
-/// writes `config.toml` into `config_dir` (its `CODEX_HOME`). An `Err` is a reason fit for the
-/// session's failure; it never holds a key.
+/// writes `config.toml` into `config_dir` (its `CODEX_HOME`). Refused unless the session is
+/// sandboxed (`AINKRAD_SANDBOX` set), which is also what gives it a home of its own. An `Err` is a
+/// reason fit for the session's failure; it never holds a key.
 pub fn wire(
     harness: &str,
     port: u16,
@@ -70,6 +98,9 @@ pub fn wire(
     env: &mut Vec<(String, OsString)>,
     allow: &mut Vec<String>,
 ) -> Result<(), String> {
+    if ainkrad_harness::last_env(env, "AINKRAD_SANDBOX").is_none() {
+        return Err("a gateway session must run in the sandbox".to_owned());
+    }
     let own = vars(harness, port)
         .ok_or_else(|| format!("the auth gateway has no wiring for harness {harness:?}"))?;
     env.retain(|(n, _)| !provider_var(n));
