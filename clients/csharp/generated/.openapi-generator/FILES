@@ -38,6 +38,7 @@ src/Ainkrad.Client/Client/RetryConfiguration.cs
 src/Ainkrad.Client/Client/WebRequestPathBuilder.cs
 src/Ainkrad.Client/Model/AbstractOpenAPISchema.cs
 src/Ainkrad.Client/Model/AccountDetail.cs
+src/Ainkrad.Client/Model/AccountLogin.cs
 src/Ainkrad.Client/Model/AccountSpend.cs
 src/Ainkrad.Client/Model/AccountTested.cs
 src/Ainkrad.Client/Model/AccountsDeleted.cs
@@ -81,12 +82,14 @@ src/Ainkrad.Client/Model/LimitCleared.cs
 src/Ainkrad.Client/Model/LimitSet.cs
 src/Ainkrad.Client/Model/LimitStanding.cs
 src/Ainkrad.Client/Model/Lockout.cs
+src/Ainkrad.Client/Model/LoginCode.cs
 src/Ainkrad.Client/Model/Me.cs
 src/Ainkrad.Client/Model/ModelPrice.cs
 src/Ainkrad.Client/Model/Named.cs
 src/Ainkrad.Client/Model/NewAgentSession.cs
 src/Ainkrad.Client/Model/NewBinding.cs
 src/Ainkrad.Client/Model/NewLease.cs
+src/Ainkrad.Client/Model/NewLogin.cs
 src/Ainkrad.Client/Model/NewPairingBody.cs
 src/Ainkrad.Client/Model/NewPool.cs
 src/Ainkrad.Client/Model/NewProviderAccount.cs

@@ -30,6 +30,7 @@ src/main/kotlin/ainkrad/client/infrastructure/HttpResponse.kt
 src/main/kotlin/ainkrad/client/infrastructure/RequestConfig.kt
 src/main/kotlin/ainkrad/client/infrastructure/RequestMethod.kt
 src/main/kotlin/ainkrad/client/models/AccountDetail.kt
+src/main/kotlin/ainkrad/client/models/AccountLogin.kt
 src/main/kotlin/ainkrad/client/models/AccountSpend.kt
 src/main/kotlin/ainkrad/client/models/AccountTested.kt
 src/main/kotlin/ainkrad/client/models/AccountsDeleted.kt
@@ -73,12 +74,14 @@ src/main/kotlin/ainkrad/client/models/LimitCleared.kt
 src/main/kotlin/ainkrad/client/models/LimitSet.kt
 src/main/kotlin/ainkrad/client/models/LimitStanding.kt
 src/main/kotlin/ainkrad/client/models/Lockout.kt
+src/main/kotlin/ainkrad/client/models/LoginCode.kt
 src/main/kotlin/ainkrad/client/models/Me.kt
 src/main/kotlin/ainkrad/client/models/ModelPrice.kt
 src/main/kotlin/ainkrad/client/models/Named.kt
 src/main/kotlin/ainkrad/client/models/NewAgentSession.kt
 src/main/kotlin/ainkrad/client/models/NewBinding.kt
 src/main/kotlin/ainkrad/client/models/NewLease.kt
+src/main/kotlin/ainkrad/client/models/NewLogin.kt
 src/main/kotlin/ainkrad/client/models/NewPairingBody.kt
 src/main/kotlin/ainkrad/client/models/NewPool.kt
 src/main/kotlin/ainkrad/client/models/NewProviderAccount.kt

@@ -93,6 +93,71 @@
         ],
         "type": "object"
       },
+      "AccountLogin": {
+        "description": "Where a sign-in has got to. Never a token or a code.",
+        "properties": {
+          "account_id": {
+            "description": "The new account, once `done`.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "Ten minutes after it began; a sign-in open past it fails."
+          },
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why it `failed` or was `cancelled`; provider text passes the redactor.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runner": {
+            "description": "The runner doing the sign-in.",
+            "type": "string"
+          },
+          "state": {
+            "description": "`starting`, `open_url` (open `url`, then send the code), `waiting_code` (the code is with\nthe runner), `storing`, `done` (see `account_id`), `failed` (see `reason`) or `cancelled`.",
+            "type": "string"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "url": {
+            "description": "The sign-in URL, from `open_url` on.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "label",
+          "runner",
+          "state",
+          "created_at",
+          "updated_at",
+          "expires_at"
+        ],
+        "type": "object"
+      },
       "AccountSpend": {
         "description": "One account's usage. No key, secret name, delivery or runner: it is for a `read` device.",
         "properties": {
@@ -554,6 +619,9 @@
           "account.deleted",
           "account.limit_cleared",
           "account.limit_set",
+          "account.login_cancelled",
+          "account.login_failed",
+          "account.login_started",
           "account.secret_replaced",
           "account.session_limits_set",
           "account.state_set",
@@ -1074,6 +1142,10 @@
         ],
         "type": "object",
         "x-event-kinds": [
+          "account.login.done",
+          "account.login.failed",
+          "account.login.started",
+          "account.login.url",
           "agent.approval_decided",
           "agent.approval_requested",
           "agent.created",
@@ -1096,6 +1168,10 @@
           "terminal.reap_warning"
         ],
         "x-event-scopes": {
+          "account.login.done": "admin",
+          "account.login.failed": "admin",
+          "account.login.started": "admin",
+          "account.login.url": "admin",
           "agent.approval_decided": "approve",
           "agent.approval_requested": "approve",
           "agent.created": "agent",
@@ -1490,6 +1566,20 @@
         ],
         "type": "object"
       },
+      "LoginCode": {
+        "additionalProperties": false,
+        "description": "The approval code the user pasted. No `Debug`: it is a one-time secret.",
+        "properties": {
+          "code": {
+            "description": "8 to 512 of letters, digits and `-_.~#:+/=`; passed to the runner and dropped.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "type": "object"
+      },
       "Me": {
         "description": "The calling device and what the server speaks.",
         "properties": {
@@ -1635,6 +1725,32 @@
         },
         "required": [
           "runner"
+        ],
+        "type": "object"
+      },
+      "NewLogin": {
+        "additionalProperties": false,
+        "description": "Starts a sign-in.",
+        "properties": {
+          "label": {
+            "description": "The new account's label.",
+            "type": "string"
+          },
+          "provider": {
+            "description": "A subscription provider: `claude-sub`.",
+            "type": "string"
+          },
+          "runner": {
+            "description": "A runner device id; absent, the best ready runner that has the provider's harness.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "provider",
+          "label"
         ],
         "type": "object"
       },
@@ -3514,7 +3630,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.40.0"
+    "version": "1.41.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -3584,6 +3700,227 @@
               }
             },
             "description": "Stored with its key in the secrets broker (audited as `account.created`, and the broker's own `secret.created`). 409 `secrets_disabled` (`secrets.mode` 0), `real_secret_refused` (a real key shape while `secrets.provider_accounts` is off), `conflict` or `limit_reached`; 400 for a bad provider, label, cap or runner; 503 `secrets_unavailable`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/accounts/logins": {
+      "post": {
+        "operationId": "startAccountLogin",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewLogin"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountLogin"
+                }
+              }
+            },
+            "description": "A sign-in began on a runner (audited as `account.login_started`, event `account.login.started`); poll it for the URL. 409 `no_runner` (none is ready with the harness and sign-in support), `conflict` (the label is taken or open), `secrets_disabled` or `real_secret_refused` (a gate the stored token would meet is closed), `limit_reached`; 400 for a provider with no browser sign-in or a bad label; 503 `secrets_unavailable`. A step-up"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/accounts/logins/{id}": {
+      "delete": {
+        "operationId": "cancelAccountLogin",
+        "parameters": [
+          {
+            "description": "The sign-in's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountLogin"
+                }
+              }
+            },
+            "description": "Cancelled (audited as `account.login_cancelled`, event `account.login.failed` with the reason `cancelled`) and the runner told to drop it; one that already ended is returned as it is"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "get": {
+        "operationId": "getAccountLogin",
+        "parameters": [
+          {
+            "description": "The sign-in's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountLogin"
+                }
+              }
+            },
+            "description": "Its state: never a token or a code. Only the device that started it sees it; 404 otherwise"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/accounts/logins/{id}/code": {
+      "post": {
+        "operationId": "sendAccountLoginCode",
+        "parameters": [
+          {
+            "description": "The sign-in's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginCode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountLogin"
+                }
+              }
+            },
+            "description": "The code went to the runner (once, never stored or logged); the sign-in is `waiting_code` until the account is stored. 409 `login_state` unless the sign-in is `open_url`; 400 for a code of the wrong shape (never echoed). No step-up beyond the one that started it"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

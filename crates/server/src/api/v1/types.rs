@@ -112,7 +112,7 @@
 ///    gateway) and `setAccountSessionLimits` (`admin` and destructive); `session_limits` and `last_test` on
 ///    `ProviderAccount`; `wire` and `key_prefix` on `Provider`; the `account.session_limits_set` and
 ///    `account.tested` audit actions.
-pub const API_MINOR: u32 = 40;
+pub const API_MINOR: u32 = 41;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

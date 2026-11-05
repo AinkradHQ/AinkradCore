@@ -20,6 +20,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/logins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["startAccountLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/logins/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAccountLogin"];
+        put?: never;
+        post?: never;
+        delete: operations["cancelAccountLogin"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/logins/{id}/code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["sendAccountLoginCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/providers": {
         parameters: {
             query?: never;
@@ -1231,6 +1279,32 @@ export interface components {
             /** @description Runner device ids, explicit (never a wildcard). */
             runners: string[];
         };
+        /** @description Where a sign-in has got to. Never a token or a code. */
+        AccountLogin: {
+            /**
+             * Format: int64
+             * @description The new account, once `done`.
+             */
+            account_id?: number | null;
+            created_at: components["schemas"]["Timestamp"];
+            /** @description Ten minutes after it began; a sign-in open past it fails. */
+            expires_at: components["schemas"]["Timestamp"];
+            id: string;
+            label: string;
+            provider: string;
+            /** @description Why it `failed` or was `cancelled`; provider text passes the redactor. */
+            reason?: string | null;
+            /** @description The runner doing the sign-in. */
+            runner: string;
+            /**
+             * @description `starting`, `open_url` (open `url`, then send the code), `waiting_code` (the code is with
+             *     the runner), `storing`, `done` (see `account_id`), `failed` (see `reason`) or `cancelled`.
+             */
+            state: string;
+            updated_at: components["schemas"]["Timestamp"];
+            /** @description The sign-in URL, from `open_url` on. */
+            url?: string | null;
+        };
         /** @description One account's usage. No key, secret name, delivery or runner: it is for a `read` device. */
         AccountSpend: {
             /** Format: int64 */
@@ -1762,6 +1836,11 @@ export interface components {
              */
             strikes: number;
         };
+        /** @description The approval code the user pasted. No `Debug`: it is a one-time secret. */
+        LoginCode: {
+            /** @description 8 to 512 of letters, digits and `-_.~#:+/=`; passed to the runner and dropped. */
+            code: string;
+        };
         /** @description The calling device and what the server speaks. */
         Me: {
             device: components["schemas"]["Named"];
@@ -1820,6 +1899,15 @@ export interface components {
              * @description Its lifetime; default and most `secrets.lease_secs`.
              */
             ttl_secs?: number | null;
+        };
+        /** @description Starts a sign-in. */
+        NewLogin: {
+            /** @description The new account's label. */
+            label: string;
+            /** @description A subscription provider: `claude-sub`. */
+            provider: string;
+            /** @description A runner device id; absent, the best ready runner that has the provider's harness. */
+            runner?: string | null;
         };
         NewPairingBody: {
             /** @description `device`, `runner`, or `passkey` (a browser, E1-08; only when the Core has passkeys). */
@@ -2647,6 +2735,131 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountDetail"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    startAccountLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewLogin"];
+            };
+        };
+        responses: {
+            /** @description A sign-in began on a runner (audited as `account.login_started`, event `account.login.started`); poll it for the URL. 409 `no_runner` (none is ready with the harness and sign-in support), `conflict` (the label is taken or open), `secrets_disabled` or `real_secret_refused` (a gate the stored token would meet is closed), `limit_reached`; 400 for a provider with no browser sign-in or a bad label; 503 `secrets_unavailable`. A step-up */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountLogin"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAccountLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The sign-in's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Its state: never a token or a code. Only the device that started it sees it; 404 otherwise */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountLogin"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    cancelAccountLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The sign-in's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancelled (audited as `account.login_cancelled`, event `account.login.failed` with the reason `cancelled`) and the runner told to drop it; one that already ended is returned as it is */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountLogin"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    sendAccountLoginCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The sign-in's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginCode"];
+            };
+        };
+        responses: {
+            /** @description The code went to the runner (once, never stored or logged); the sign-in is `waiting_code` until the account is stored. 409 `login_state` unless the sign-in is `open_url`; 400 for a code of the wrong shape (never echoed). No step-up beyond the one that started it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountLogin"];
                 };
             };
             400: components["responses"]["BadRequest"];
