@@ -159,8 +159,11 @@ async fn the_slot_is_reachable_denied_and_filtered_and_the_key_is_nowhere_inside
             _egress = egress::start(&sock, Arc::new(policy)).unwrap();
             extra = egress::sandbox_env(&sock, &exe());
         }
+        // The argument list of this very script holds what it greps for, so the pattern for it is
+        // written with one character in a bracket: it still matches the key, and is not it.
+        let pat = format!("{}[{}]{}", &key[..7], &key[7..8], &key[8..]);
         let script = format!(
-            "{}\nenv | grep -c '{key}' ; cat /proc/*/environ /proc/*/cmdline 2>/dev/null | tr '\\0' '\\n' | grep -c '{key}'; grep -rl '{key}' /tmp /proc/self/cwd 2>/dev/null | wc -l",
+            "{}\nenv | grep -c '{pat}' ; cat /proc/*/environ 2>/dev/null | tr '\\0' '\\n' | grep -c '{pat}'; grep -rl '{pat}' /tmp /proc/self/cwd 2>/dev/null | wc -l; cat /proc/*/cmdline 2>/dev/null | tr '\\0' '\\n' | grep -c '{pat}'",
             ask()
         );
         let said = tokio::task::spawn_blocking({
@@ -171,7 +174,11 @@ async fn the_slot_is_reachable_denied_and_filtered_and_the_key_is_nowhere_inside
         .unwrap();
         assert!(said.contains("gw=HTTP/1.1 403 "), "{mode}: {said}");
         let counts: Vec<&str> = said.lines().skip(1).collect();
-        assert_eq!(counts, ["0", "0", "0"], "{mode}: the key is visible inside");
+        assert_eq!(
+            counts,
+            ["0", "0", "0", "0"],
+            "{mode}: the key is visible inside"
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
