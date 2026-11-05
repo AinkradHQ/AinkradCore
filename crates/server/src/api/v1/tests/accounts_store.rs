@@ -147,7 +147,10 @@ async fn no_account_column_or_audit_row_holds_the_value() {
     assert!(
         !cols
             .iter()
-            .any(|c| c.contains("value") || c.contains("sealed") || c.contains("token"))
+            .any(|c| c.contains("value")
+                || c.contains("sealed")
+                // `session_max_tokens` counts model tokens, a number.
+                || (c.contains("token") && c != "session_max_tokens"))
     );
     assert!(
         !cols.contains(&"company_id".to_owned()),

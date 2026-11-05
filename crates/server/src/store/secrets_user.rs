@@ -55,6 +55,10 @@ pub(super) async fn bind(
         return Ok(());
     };
     let user = !builtin(provider);
+    // A name under no definition is no account of any provider (`kind_of` refuses it below mode 2).
+    if user && !holds(conn, name).await? {
+        return Ok(());
+    }
     let key = value.trim();
     // A built-in provider's throwaway or OAuth token has no shape this rule knows.
     if !user && !(key.starts_with("sk-") || key.starts_with("AIza")) {

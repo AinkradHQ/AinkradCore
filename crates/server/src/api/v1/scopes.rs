@@ -436,6 +436,10 @@ mod tests {
         const EXCEPTED: &[(&str, &str)] = &[
             // Fixed op, no input, changes nothing on the runner (see `DESTRUCTIVE`).
             ("POST", "/api/v1/runners/{id}/noop"),
+            // One fixed, free request to the host the key was bound to when it was stored, through
+            // a runner in the key's scope (design 2026-11-04 section 5.2 says it is not
+            // destructive); its only effect is the account's last-test record.
+            ("POST", "/api/v1/accounts/{id}/test"),
         ];
         for (m, t, scope) in ROUTES {
             let privileged = !matches!(*scope, "read" | "runner");
