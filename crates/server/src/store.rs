@@ -13,6 +13,7 @@ use sqlx::sqlite::{
 use sqlx::{AssertSqlSafe, Transaction};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+pub mod account_keys;
 pub mod accounts;
 pub mod agents;
 pub mod audit;
@@ -27,9 +28,12 @@ pub mod migrate;
 pub mod modsettings;
 pub mod pools;
 pub mod prices;
+pub mod provider_rules;
+mod provider_url;
 pub mod providers;
 pub mod redact;
 pub mod secrets;
+mod secrets_user;
 pub mod settings;
 pub mod usage;
 
