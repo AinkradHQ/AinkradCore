@@ -241,6 +241,14 @@ pub struct AgentRead {
     /// How long to wait for a first entry; absent or 0 answers at once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait_ms: Option<u64>,
+    /// The last `gw_seq` the Core holds (0 for none): gateway reports above it are sent, those at
+    /// or below it may be dropped by the runner (KAN-435).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub gw_after: u64,
+}
+
+fn is_zero_u64(n: &u64) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -310,4 +318,8 @@ pub struct AgentEvents {
     /// Once `ended`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<Outcome>,
+    /// What the session's auth gateway reported after `AgentRead::gw_after` (KAN-435). A channel
+    /// of its own, never the transcript: only the gateway task writes it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gateway: Vec<super::GatewayReport>,
 }

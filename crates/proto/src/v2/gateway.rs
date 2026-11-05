@@ -174,6 +174,59 @@ pub struct GatewayTested {
     pub latency_ms: u64,
 }
 
+/// What a [`GatewayReport`] says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GatewayReportKind {
+    /// One request's tokens: the ledger records it.
+    Usage,
+    /// An upstream signal (rate limit, auth failure, ...): no tokens.
+    Upstream,
+    /// A kind from a newer runner. Never sent.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Runner to Core, in [`AgentEvents::gateway`](super::AgentEvents): what the gateway saw. It has
+/// its own channel and its own `gw_seq` (per session, from 1, by one), acknowledged by
+/// [`AgentRead::gw_after`](super::AgentRead), and only the gateway task writes it: nothing the
+/// harness prints can become one. It names no account and no model the Core did not allow; the
+/// Core takes the account from its own session row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GatewayReport {
+    pub gw_seq: u64,
+    pub kind: GatewayReportKind,
+    /// The model the request named (checked against the grant), for a usage report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Input tokens not served from a cache.
+    #[serde(default)]
+    pub input: u64,
+    #[serde(default)]
+    pub output: u64,
+    /// Input tokens read from a cache.
+    #[serde(default)]
+    pub cache_read: u64,
+    /// Input tokens written to a cache.
+    #[serde(default)]
+    pub cache_write: u64,
+    /// The outcome class of the request.
+    pub status: UpstreamStatus,
+    /// The counts are the gateway's estimate: the stream was cut, dropped or never reported usage.
+    #[serde(default)]
+    pub approximate: bool,
+    /// What the provider itself reported as the cost, when a response header the gateway parsed
+    /// said so. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_usd_micros: Option<u64>,
+    /// Seconds the upstream asked to wait (`retry-after`), for an upstream report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after: Option<u64>,
+    /// When the upstream's limit resets, as it said (an RFC 3339 time), for an upstream report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_at: Option<String>,
+}
+
 // No `Debug` on anything carrying a lease (secrets review L4).
 impl std::fmt::Debug for GatewayGrant {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

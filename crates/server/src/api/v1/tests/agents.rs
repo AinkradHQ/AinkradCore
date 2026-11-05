@@ -155,6 +155,7 @@ async fn sessions_list_read_and_replay_their_transcript_by_seq() {
     let vm = super::secrets::runner(&fx, "vm").await;
     let s = stored(&fx, &vm.id).await;
     let ev = ainkrad_proto::v2::AgentEvents {
+        gateway: vec![],
         session: s.id.clone(),
         state: ainkrad_proto::v2::AgentState::Running,
         last_seq: 4,
@@ -175,6 +176,7 @@ async fn sessions_list_read_and_replay_their_transcript_by_seq() {
         1
     );
     let full = ainkrad_proto::v2::AgentEvents {
+        gateway: vec![],
         entries: (1..=4)
             .map(|seq| ainkrad_proto::v2::TranscriptEntry {
                 seq,
@@ -367,6 +369,7 @@ async fn a_module_drives_only_its_own_live_sessions() {
     );
     // A command that would start or read, and one about another session.
     let read = Command::AgentRead(AgentRead {
+        gw_after: 0,
         session: owned.id.clone(),
         after: 0,
         wait_ms: None,

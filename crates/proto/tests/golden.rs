@@ -609,6 +609,7 @@ fn v2_agent_frames_are_pinned() {
         7,
         0,
         Body::Command(Command::AgentRead(AgentRead {
+            gw_after: 0,
             session: "as_a".to_owned(),
             after: 3,
             wait_ms: Some(20000),
@@ -619,6 +620,7 @@ fn v2_agent_frames_are_pinned() {
         7,
         0,
         Body::Result(Reply::AgentRead(AgentEvents {
+            gateway: vec![],
             session: "as_a".to_owned(),
             state: AgentState::Ended,
             last_seq: 4,
@@ -634,6 +636,62 @@ fn v2_agent_frames_are_pinned() {
                 ..Default::default()
             }),
             outcome: Some(Outcome::Succeeded),
+        })),
+    );
+    // KAN-435 G4: the gateway's reports travel in a field of their own, acknowledged by `gw_after`.
+    v2(
+        "agent_read_gw",
+        7,
+        0,
+        Body::Command(Command::AgentRead(AgentRead {
+            gw_after: 5,
+            session: "as_a".to_owned(),
+            after: 3,
+            wait_ms: None,
+        })),
+    );
+    let report = |gw_seq, kind, status| GatewayReport {
+        gw_seq,
+        kind,
+        model: None,
+        input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        status,
+        approximate: false,
+        reported_usd_micros: None,
+        retry_after: None,
+        reset_at: None,
+    };
+    v2(
+        "agent_events_gateway",
+        7,
+        0,
+        Body::Result(Reply::AgentRead(AgentEvents {
+            gateway: vec![
+                GatewayReport {
+                    model: Some("m-1".to_owned()),
+                    input: 11,
+                    output: 5,
+                    cache_read: 3,
+                    cache_write: 2,
+                    approximate: true,
+                    ..report(6, GatewayReportKind::Usage, UpstreamStatus::Ok)
+                },
+                GatewayReport {
+                    retry_after: Some(30),
+                    reset_at: Some("2026-11-04T10:00:00Z".to_owned()),
+                    ..report(7, GatewayReportKind::Upstream, UpstreamStatus::RateLimited)
+                },
+            ],
+            session: "as_a".to_owned(),
+            state: AgentState::Running,
+            last_seq: 4,
+            entries: vec![],
+            harness_session: None,
+            usage: None,
+            outcome: None,
         })),
     );
     v2(

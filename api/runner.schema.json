@@ -73,6 +73,13 @@
           },
           "type": "array"
         },
+        "gateway": {
+          "description": "What the session's auth gateway reported after `AgentRead::gw_after` (KAN-435). A channel\nof its own, never the transcript: only the gateway task writes it.",
+          "items": {
+            "$ref": "#/$defs/GatewayReport"
+          },
+          "type": "array"
+        },
         "harness_session": {
           "description": "The harness's own session id, once known: what a resume continues.",
           "type": [
@@ -143,6 +150,12 @@
       "properties": {
         "after": {
           "description": "The last `seq` the Core holds (0 for none): entries above it are sent, those at or below\nit may be dropped by the runner.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "gw_after": {
+          "description": "The last `gw_seq` the Core holds (0 for none): gateway reports above it are sent, those at\nor below it may be dropped by the runner (KAN-435).",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -1171,6 +1184,113 @@
         "rate"
       ],
       "type": "object"
+    },
+    "GatewayReport": {
+      "description": "Runner to Core, in [`AgentEvents::gateway`](super::AgentEvents): what the gateway saw. It has\nits own channel and its own `gw_seq` (per session, from 1, by one), acknowledged by\n[`AgentRead::gw_after`](super::AgentRead), and only the gateway task writes it: nothing the\nharness prints can become one. It names no account and no model the Core did not allow; the\nCore takes the account from its own session row.",
+      "properties": {
+        "approximate": {
+          "default": false,
+          "description": "The counts are the gateway's estimate: the stream was cut, dropped or never reported usage.",
+          "type": "boolean"
+        },
+        "cache_read": {
+          "default": 0,
+          "description": "Input tokens read from a cache.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cache_write": {
+          "default": 0,
+          "description": "Input tokens written to a cache.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "gw_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input": {
+          "default": 0,
+          "description": "Input tokens not served from a cache.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/GatewayReportKind"
+        },
+        "model": {
+          "description": "The model the request named (checked against the grant), for a usage report.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reported_usd_micros": {
+          "description": "What the provider itself reported as the cost, when a response header the gateway parsed\nsaid so. Absent otherwise.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reset_at": {
+          "description": "When the upstream's limit resets, as it said (an RFC 3339 time), for an upstream report.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retry_after": {
+          "description": "Seconds the upstream asked to wait (`retry-after`), for an upstream report.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/UpstreamStatus",
+          "description": "The outcome class of the request."
+        }
+      },
+      "required": [
+        "gw_seq",
+        "kind",
+        "status"
+      ],
+      "type": "object"
+    },
+    "GatewayReportKind": {
+      "description": "What a [`GatewayReport`] says.",
+      "oneOf": [
+        {
+          "const": "usage",
+          "description": "One request's tokens: the ledger records it.",
+          "type": "string"
+        },
+        {
+          "const": "upstream",
+          "description": "An upstream signal (rate limit, auth failure, ...): no tokens.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A kind from a newer runner. Never sent.",
+          "type": "string"
+        }
+      ]
     },
     "GatewayTest": {
       "description": "Core to runner: redeem `lease`, run the dial checks, make one free request.",
