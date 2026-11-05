@@ -67,10 +67,17 @@ pub(super) async fn bind(
     let account = account_secret(name).map(|(_, id)| id);
     let frozen: Option<String> = match account {
         Some(id) => {
-            sqlx::query_scalar("SELECT base_url FROM core_accounts WHERE id = ?")
-                .bind(id)
-                .fetch_optional(&mut *conn)
-                .await?
+            // The row the name says: its id, its provider and (once set, `''` while the account is
+            // being created) its secret name, so a name cannot borrow another account's host.
+            sqlx::query_scalar(
+                "SELECT base_url FROM core_accounts WHERE id = ? AND provider = ? \
+                 AND secret_name IN (?, '')",
+            )
+            .bind(id)
+            .bind(provider)
+            .bind(name)
+            .fetch_optional(&mut *conn)
+            .await?
         }
         None => None,
     };
@@ -132,5 +139,34 @@ pub(super) fn single_key(redactor: &Redactor, value: &str) -> bool {
         .text(value)
         .strip_prefix("[redacted:")
         .and_then(|s| s.strip_suffix(']'))
+        // Only a provider's own kind: a GitHub, AWS or Citadel token is no account key, whatever
+        // prefix a definition declared (`key_prefix_problem` refuses those prefixes too).
+        .filter(|shape| ["openai_key", "anthropic_key", "google_key"].contains(shape))
         .is_some_and(|shape| single_own_key(redactor, value, shape))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_providers_own_kind_of_key_is_admitted_for_a_user_provider() {
+        let r = Redactor::new();
+        let body = "A0".repeat(20);
+        for ok in ["sk-or-v1-", "sk-proj-"] {
+            assert!(single_key(&r, &format!("{ok}{body}")), "{ok}");
+        }
+        // A GitHub token, an AWS key, a Citadel token or runner key, a bearer value: other credentials.
+        for bad in [
+            "ghp_",
+            "github_pat_",
+            "AKIA",
+            "cit_run_",
+            "cit_runner_",
+            "bearer ",
+        ] {
+            assert!(!single_key(&r, &format!("{bad}{body}")), "{bad}");
+        }
+        assert!(!single_key(&r, "throwaway-no-shape"));
+    }
 }

@@ -109,6 +109,25 @@ fn a_user_prefix_must_be_long_and_must_not_touch_a_builtin_shape() {
 }
 
 #[test]
+fn a_user_prefix_may_not_start_any_other_kind_of_credential() {
+    // A GitHub token, an AWS key and the Citadel tokens, and a stretch of a longer shape: a key of
+    // that kind would otherwise be admitted as this provider's.
+    for bad in [
+        "ghp_16",
+        "gho_ab",
+        "github_pat_x",
+        "AKIAIO",
+        "ASIAXY",
+        "cit_run_",
+        "cit_runner_",
+        "cit_runner_ab",
+    ] {
+        assert!(key_prefix_problem(bad).is_some(), "{bad:?}");
+    }
+    assert_eq!(key_prefix_problem("gsk_live"), None);
+}
+
+#[test]
 fn grants_and_ops_round_trip_and_hide_the_lease() {
     let grant = GatewayGrant {
         lease: "l_secretlease".into(),
@@ -148,6 +167,7 @@ fn grants_and_ops_round_trip_and_hide_the_lease() {
         provider: "anthropic".into(),
         user_key: None,
         upstream: grant.upstream.clone(),
+        test_path: None,
     };
     assert!(!format!("{test:?}").contains("secretlease"));
     let cmd = crate::v2::Command::AgentLimit(AgentLimit {
