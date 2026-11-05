@@ -268,6 +268,16 @@ async fn serve(sh: &Shared, c: &mut UnixStream) -> Result<(), End> {
     if let Some(code) = probe.refusal() {
         return Err(refuse(403, code).into());
     }
+    // A provider-side tool nested inside a tool (Codex's `namespace`) gives the same network reach.
+    if super::nested::refusal(&body) {
+        return Err(refuse(403, "tool_not_allowed").into());
+    }
+    // A Responses request that names stored state instead of carrying it is priced at its body.
+    if cfg.upstream.wire == Wire::OpenaiResponses
+        && let Some(code) = super::stored::refusal(&body)
+    {
+        return Err(refuse(if code == "bad_json" { 400 } else { 403 }, code).into());
+    }
     let headers = upstream_headers(cfg, &req)?;
     count_rate(sh)?;
     let price = cfg

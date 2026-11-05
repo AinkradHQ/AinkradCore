@@ -276,6 +276,19 @@ impl HarnessExecutor {
         if let Some(c) = credential {
             env.push((c.var, c.value.into()));
         }
+        // A gateway session (its slot is set) talks to the gateway: the harness's base URL and a
+        // placeholder key, after everything else so nothing earlier in the environment wins.
+        if let Some(port) = crate::gateway::wiring::port_in(&env)
+            && let Err(why) = crate::gateway::wiring::wire(
+                &job.harness,
+                port,
+                &config_dir,
+                &mut env,
+                &mut env_allow,
+            )
+        {
+            return failed(why, "gateway");
+        }
         // The `citadel` CLI first on `PATH` (E15.18). The run token stays out of the
         // environment, as before: the CLI reads the run's private token file.
         if let Some(token) = &files.token {

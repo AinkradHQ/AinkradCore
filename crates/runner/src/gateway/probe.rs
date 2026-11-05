@@ -117,7 +117,7 @@ fn normal(s: &str) -> String {
 /// Also refused: provider-side tools the gateway can neither check against the grant nor price,
 /// when unsure by name: the advisor (a second model run by the provider), code execution and the
 /// server-side tool search.
-fn reaches_network(s: &str) -> bool {
+pub(super) fn reaches_network(s: &str) -> bool {
     let s = normal(s);
     [
         "websearch",
