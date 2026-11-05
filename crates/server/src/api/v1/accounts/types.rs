@@ -165,7 +165,7 @@ pub struct Provider {
     /// harness's own, and any other is refused.
     #[serde(default)]
     pub wire: Option<String>,
-    /// The shape this provider's keys start with (at least 6 characters, never a built-in's, such
+    /// The shape this provider's keys start with (6 to 16 characters, never a built-in's, such
     /// as `sk-or-v1-`). A definition that sets it holds keys, and then only through the gateway
     /// (`delivery` is `["gateway"]`): the broker binds each key to the account's host by it.
     #[serde(default)]

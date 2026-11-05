@@ -30,12 +30,14 @@ import kotlinx.serialization.Contextual
  * @param harness `claude`, `codex` or `agy`.
  * @param id 
  * @param loginMethods `paste`.
- * @param models 
+ * @param models Model ids exactly as the provider names them: the gateway compares a request's model with the ids it was granted, as they are, and resolves no alias (`-latest`). `:online` is refused.
  * @param name 
  * @param usageParser 
  * @param builtin Read-only: built-ins cannot be edited.
+ * @param keyPrefix The shape this provider's keys start with (6 to 16 characters, never a built-in's, such as `sk-or-v1-`). A definition that sets it holds keys, and then only through the gateway (`delivery` is `[\"gateway\"]`): the broker binds each key to the account's host by it.
  * @param pricedAt When the models' list prices were read.
  * @param version 
+ * @param wire The API dialect the gateway speaks to this provider: `anthropic-messages` (claude), `openai-responses` (codex) or `gemini-generate` (agy). Optional on write: it is its harness's own, and any other is refused.
  */
 @Serializable
 
@@ -64,6 +66,7 @@ data class Provider (
     @SerialName(value = "login_methods")
     val loginMethods: kotlin.collections.List<kotlin.String>,
 
+    /* Model ids exactly as the provider names them: the gateway compares a request's model with the ids it was granted, as they are, and resolves no alias (`-latest`). `:online` is refused. */
     @SerialName(value = "models")
     val models: kotlin.collections.List<ModelPrice>,
 
@@ -77,12 +80,20 @@ data class Provider (
     @SerialName(value = "builtin")
     val builtin: kotlin.Boolean? = null,
 
+    /* The shape this provider's keys start with (6 to 16 characters, never a built-in's, such as `sk-or-v1-`). A definition that sets it holds keys, and then only through the gateway (`delivery` is `[\"gateway\"]`): the broker binds each key to the account's host by it. */
+    @SerialName(value = "key_prefix")
+    val keyPrefix: kotlin.String? = null,
+
     /* When the models' list prices were read. */
     @SerialName(value = "priced_at")
     val pricedAt: kotlin.String? = null,
 
     @SerialName(value = "version")
-    val version: kotlin.Long? = null
+    val version: kotlin.Long? = null,
+
+    /* The API dialect the gateway speaks to this provider: `anthropic-messages` (claude), `openai-responses` (codex) or `gemini-generate` (agy). Optional on write: it is its harness's own, and any other is refused. */
+    @SerialName(value = "wire")
+    val wire: kotlin.String? = null
 
 ) {
 

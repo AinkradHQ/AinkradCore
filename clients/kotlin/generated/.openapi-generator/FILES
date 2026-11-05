@@ -31,6 +31,7 @@ src/main/kotlin/ainkrad/client/infrastructure/RequestConfig.kt
 src/main/kotlin/ainkrad/client/infrastructure/RequestMethod.kt
 src/main/kotlin/ainkrad/client/models/AccountDetail.kt
 src/main/kotlin/ainkrad/client/models/AccountSpend.kt
+src/main/kotlin/ainkrad/client/models/AccountTested.kt
 src/main/kotlin/ainkrad/client/models/AccountsDeleted.kt
 src/main/kotlin/ainkrad/client/models/AgentDecision.kt
 src/main/kotlin/ainkrad/client/models/AgentMessage.kt
@@ -64,6 +65,7 @@ src/main/kotlin/ainkrad/client/models/EventActorUser.kt
 src/main/kotlin/ainkrad/client/models/Handshake.kt
 src/main/kotlin/ainkrad/client/models/HandshakeBody.kt
 src/main/kotlin/ainkrad/client/models/HandshakeProof.kt
+src/main/kotlin/ainkrad/client/models/LastTest.kt
 src/main/kotlin/ainkrad/client/models/LatestEvent.kt
 src/main/kotlin/ainkrad/client/models/LeaseGrant.kt
 src/main/kotlin/ainkrad/client/models/LeasedSecret.kt
@@ -109,6 +111,7 @@ src/main/kotlin/ainkrad/client/models/RunnerIsolation.kt
 src/main/kotlin/ainkrad/client/models/SecretDeleted.kt
 src/main/kotlin/ainkrad/client/models/SecretInfo.kt
 src/main/kotlin/ainkrad/client/models/SessionGrant.kt
+src/main/kotlin/ainkrad/client/models/SessionLimits.kt
 src/main/kotlin/ainkrad/client/models/SessionRequest.kt
 src/main/kotlin/ainkrad/client/models/SetCap.kt
 src/main/kotlin/ainkrad/client/models/SetLimit.kt
