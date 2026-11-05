@@ -167,6 +167,7 @@ pub(super) async fn run_runner(core: &Core, base: &str, st: &State, exec: Script
         exec: driver(),
         pty: None,
         agents: Some(Arc::new(agents)),
+        login: None,
         tls: None,
         backoff: Backoff {
             min: Duration::from_millis(50),
