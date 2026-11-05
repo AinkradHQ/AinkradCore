@@ -209,6 +209,26 @@ fn a_grant_carries_what_the_runner_needs_to_run_the_key_rule() {
 }
 
 #[test]
+fn a_report_with_a_negative_fractional_or_text_count_does_not_decode() {
+    let base = |k: &str, v: serde_json::Value| serde_json::json!({"gw_seq": 1, "kind": "usage", "status": "ok", k: v});
+    assert!(serde_json::from_value::<GatewayReport>(base("input", 5.into())).is_ok());
+    for (k, v) in [
+        ("input", serde_json::json!(-1)),
+        ("output", serde_json::json!(1.5)),
+        ("cache_read", serde_json::json!("9")),
+        ("cache_write", serde_json::json!(-9)),
+        ("gw_seq", serde_json::json!(-1)),
+        ("reported_usd_micros", serde_json::json!(-1)),
+        ("input", serde_json::json!(18_446_744_073_709_551_616_f64)),
+    ] {
+        assert!(
+            serde_json::from_value::<GatewayReport>(base(k, v.clone())).is_err(),
+            "{k}: {v}"
+        );
+    }
+}
+
+#[test]
 fn a_test_result_is_a_status_class_and_nothing_else() {
     let ok = GatewayTested {
         result: UpstreamStatus::RefusedAddress,

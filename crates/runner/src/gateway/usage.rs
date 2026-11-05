@@ -30,6 +30,11 @@ pub(crate) struct Usage {
 }
 
 impl Usage {
+    /// Whether any input was reported (plain or cached). Never a sum: a hostile count must not wrap.
+    fn has_input(&self) -> bool {
+        self.input > 0 || self.cache_read > 0 || self.cache_write > 0
+    }
+
     fn merge(&mut self, o: Usage) {
         self.input = self.input.max(o.input);
         self.output = self.output.max(o.output);
@@ -279,7 +284,7 @@ impl Scan {
     /// the reply said, and a report of no input at all is partial too; both are estimated.
     pub(crate) fn exact(&self) -> Option<Usage> {
         self.reported()
-            .filter(|u| self.closed && u.input + u.cache_read + u.cache_write > 0 && !self.overflow)
+            .filter(|u| self.closed && u.has_input() && !self.overflow)
     }
 
     /// Output tokens so far by the estimate: streamed characters / 4 (a JSON body, which is not
@@ -301,7 +306,7 @@ impl Scan {
         match self.reported() {
             Some(mut u) => {
                 u.output = u.output.max(self.estimated_output());
-                if u.input + u.cache_read + u.cache_write == 0 {
+                if !u.has_input() {
                     u.input = input_floor;
                 }
                 u
