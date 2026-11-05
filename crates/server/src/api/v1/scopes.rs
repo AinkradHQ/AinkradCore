@@ -446,9 +446,8 @@ mod tests {
             // a runner in the key's scope (design 2026-11-04 section 5.2 says it is not
             // destructive); its only effect is the account's last-test record.
             ("POST", "/api/v1/accounts/{id}/test"),
-            // Ends the caller's own sign-in; it grants nothing.
+            // The caller's own sign-in: a cancel grants nothing, a code acts once on one a step-up began.
             ("DELETE", "/api/v1/accounts/logins/{id}"),
-            // Acts once on the caller's own sign-in, which a step-up began (it outlives the window).
             ("POST", "/api/v1/accounts/logins/{id}/code"),
         ];
         for (m, t, scope) in ROUTES {
