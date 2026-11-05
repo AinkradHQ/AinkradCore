@@ -4,6 +4,7 @@
 
 mod auth;
 mod framing;
+mod harness_wiring;
 mod metering;
 mod stream;
 

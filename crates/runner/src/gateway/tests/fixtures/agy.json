@@ -1,0 +1,106 @@
+{
+ "body": {
+  "contents": [
+   {
+    "parts": [
+     {
+      "text": "<USER_REQUEST>\nsay hello..."
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 65536,
+   "thinkingConfig": {
+    "includeThoughts": true,
+    "thinkingLevel": "LOW"
+   }
+  },
+  "systemInstruction": {
+   "parts": [
+    {
+     "text": "x"
+    }
+   ],
+   "role": "user"
+  },
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "description": "x",
+      "name": "read_file",
+      "parametersJsonSchema": {}
+     },
+     {
+      "description": "x",
+      "name": "run_command",
+      "parametersJsonSchema": {}
+     },
+     {
+      "description": "x",
+      "name": "manage_task",
+      "parametersJsonSchema": {}
+     },
+     {
+      "description": "x",
+      "name": "send_message",
+      "parametersJsonSchema": {}
+     },
+     {
+      "description": "x",
+      "name": "schedule",
+      "parametersJsonSchema": {}
+     },
+     {
+      "description": "x",
+      "name": "invoke_subagent",
+      "parametersJsonSchema": {}
+     },
+     {
+      "description": "x",
+      "name": "define_subagent",
+      "parametersJsonSchema": {}
+     },
+     {
+      "description": "x",
+      "name": "manage_subagents",
+      "parametersJsonSchema": {}
+     },
+     {
+      "description": "x",
+      "name": "write_file",
+      "parametersJsonSchema": {}
+     },
+     {
+      "description": "x",
+      "name": "edit_file",
+      "parametersJsonSchema": {}
+     },
+     {
+      "description": "x",
+      "name": "search_web",
+      "parametersJsonSchema": {}
+     },
+     {
+      "description": "x",
+      "name": "ask_question",
+      "parametersJsonSchema": {}
+     }
+    ]
+   }
+  ]
+ },
+ "harness": "agy",
+ "headers": {
+  "content-type": "application/json",
+  "user-agent": "google-genai-sdk/1.77.0 gl-go/go1.28-20261102-RC00 cl/1012564305 +298f53e483 X:fieldtrack,boringcrypto,simd,nogolistexportnewformat",
+  "x-goog-api-client": "google-genai-sdk/1.77.0 gl-go/go1.28-20261102-RC00 cl/1012564305 +298f53e483 X:fieldtrack,boringcrypto,simd,nogolistexportnewformat",
+  "x-goog-api-key": "placeholder"
+ },
+ "method": "POST",
+ "source": "real binary, run against a local listener with a dummy key and an empty HOME, 2026-11-05",
+ "target": "/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse",
+ "version": "1.5.1"
+}

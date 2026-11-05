@@ -504,3 +504,16 @@ fn a_turn_of_100k_distinct_messages_holds_bounded_state() {
     );
     assert!(d.messages.len() <= 4096, "held {} ids", d.messages.len());
 }
+
+/// KAN-435 G6: the settings Claude is started with (`--settings`) are read over the process
+/// environment, so they must never name the variables the runner points at the auth gateway.
+#[test]
+fn the_settings_flag_does_not_touch_the_gateways_variables() {
+    let argv = args(&Spec::default(), None);
+    let at = argv.iter().position(|a| a == "--settings").unwrap();
+    let settings = &argv[at + 1];
+    assert!(
+        !settings.contains("ANTHROPIC") && !settings.contains("\"env\""),
+        "{settings}"
+    );
+}
