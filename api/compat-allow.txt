@@ -5,14 +5,9 @@
 #
 
 # The merged terminal/agent runner protocol keeps the existing terminal exit and agent event
-# reply shapes wire-compatible; the positional schema comparison sees their op tags as changed.
+# reply shapes wire-compatible; the positional schema comparison sees their op tags as changed. It
+# reports them against any baseline, an unchanged schema included (the same `op` tag recurs in the
+# variants), so these two stay for as long as those replies exist. (KAN-435 G1's two "variant #10
+# removed" lines are gone: the baseline already has the gateway ops in their place.)
 runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/TerminalExit/properties/op
 runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/AgentEvents/properties/op
-runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/AgentEvents/properties/op
-runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/AgentEvents/properties/op
-runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/AgentEvents/properties/op
-
-# KAN-435 G1: the gateway ops (agent.limit, gateway.test) are added before the trailing unknown-op
-# variant, so the positional comparison sees that variant (#10) as removed. It moved to #12.
-runner.schema.json: variant #10 removed at /$defs/Command/oneOf
-runner.schema.json: variant #10 removed at /$defs/Reply/oneOf
