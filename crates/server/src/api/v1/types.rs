@@ -104,7 +104,9 @@
 ///    audit action; no operation changes.
 /// 37: the auth gateway's runner ops and grant (KAN-435 G1): `GatewayGrant`, `AgentLimit`, `GatewayTest` and
 ///    `GatewayTested` in the runner schema; no operation changes.
-pub const API_MINOR: u32 = 37;
+/// 38: the auth gateway's usage reports (KAN-435 G4): `GatewayReport` in `AgentEvents` and `gw_after` in
+///    `AgentRead`, in the runner schema; no operation changes.
+pub const API_MINOR: u32 = 38;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
