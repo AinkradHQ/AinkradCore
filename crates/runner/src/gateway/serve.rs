@@ -272,6 +272,10 @@ async fn serve(sh: &Shared, c: &mut UnixStream) -> Result<(), End> {
     if super::tools::refusal(&body) {
         return Err(refuse(403, "tool_not_allowed").into());
     }
+    // No provider-side web search either: OpenRouter's `web` plugin and `:online` model suffix.
+    if super::online::refusal(&body) {
+        return Err(refuse(403, "web_not_allowed").into());
+    }
     // A Responses request may name stored state, or leave some for later: only `store: false`
     // passes. (Chat completions does not store by default, and has no such fields.)
     if cfg.upstream.wire == Wire::OpenaiResponses
