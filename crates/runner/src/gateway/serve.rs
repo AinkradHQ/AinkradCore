@@ -272,9 +272,13 @@ async fn serve(sh: &Shared, c: &mut UnixStream) -> Result<(), End> {
     if super::tools::refusal(&body) {
         return Err(refuse(403, "tool_not_allowed").into());
     }
-    // No provider-side web search either: OpenRouter's `web` plugin and `:online` model suffix.
+    // No provider-side web search or plugin either (OpenRouter's `web`, `:online`).
     if super::online::refusal(&body) {
         return Err(refuse(403, "web_not_allowed").into());
+    }
+    // A fallback list may not route round the allowlist.
+    if super::online::unlisted(&body, &cfg.models) {
+        return Err(refuse(403, "model_not_allowed").into());
     }
     // A Responses request may name stored state, or leave some for later: only `store: false`
     // passes. (Chat completions does not store by default, and has no such fields.)

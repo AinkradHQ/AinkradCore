@@ -85,3 +85,80 @@ pub(in crate::agents) fn secrets_problem(
             )
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::providers::{Model, built_in};
+
+    fn user(prefix: Option<&str>) -> Definition {
+        Definition {
+            id: "openrouter".to_owned(),
+            name: "OpenRouter".to_owned(),
+            harness: "codex".to_owned(),
+            auth_var: "OPENAI_API_KEY".to_owned(),
+            base_url: "https://openrouter.ai/api/v1".to_owned(),
+            usage_parser: "openai".to_owned(),
+            delivery: vec!["gateway".to_owned()],
+            login_methods: vec!["paste".to_owned()],
+            models: Vec::<Model>::new(),
+            priced_at: None,
+            wire: "openai-responses".to_owned(),
+            key_prefix: prefix.map(str::to_owned),
+            builtin: false,
+            version: 1,
+        }
+    }
+
+    #[test]
+    fn a_built_in_carries_no_key_shape_and_a_user_definition_its_prefix_and_frozen_host() {
+        for d in built_in() {
+            let r = of(&d, &d.base_url).expect("built-ins have a route");
+            assert!(r.user_key.is_none(), "{}", d.id);
+            assert_eq!(r.wire, wire_named(&d.wire).unwrap());
+        }
+        let r = of(&user(Some("sk-or-v1-")), "https://openrouter.ai/api/v1").unwrap();
+        assert_eq!(r.wire, Wire::OpenaiResponses);
+        let k = r.user_key.unwrap();
+        // The host is the account's frozen one, not the definition's current URL.
+        let frozen = of(&user(Some("sk-or-v1-")), "https://old.example.com:443/v1").unwrap();
+        assert_eq!(
+            (k.prefix.as_str(), k.host.as_str()),
+            ("sk-or-v1-", "openrouter.ai")
+        );
+        assert_eq!(frozen.user_key.unwrap().host, "old.example.com");
+    }
+
+    #[test]
+    fn a_definition_without_a_prefix_a_wire_or_the_gateway_has_no_route() {
+        assert!(of(&user(None), "https://openrouter.ai/api/v1").is_err());
+        let mut env = user(Some("sk-or-v1-"));
+        env.delivery = vec!["env".to_owned()];
+        assert!(of(&env, "https://openrouter.ai/api/v1").is_err());
+        let mut none = user(Some("sk-or-v1-"));
+        none.wire = String::new();
+        assert!(of(&none, "https://openrouter.ai/api/v1").is_err());
+    }
+
+    #[test]
+    fn a_session_may_not_hold_an_api_key_account_as_an_env_secret() {
+        use crate::store::agents::SessionSecret;
+        let s = |name: &str| SessionSecret {
+            name: name.to_owned(),
+            var: "OPENAI_API_KEY".to_owned(),
+        };
+        // The account model's own names, of a built-in and of a user definition.
+        assert_eq!(secrets_problem("codex", &[s("acct.openai.7")]), None);
+        assert_eq!(secrets_problem("codex", &[s("acct.openrouter.7")]), None);
+        // Any other label would be leased into the sandbox as a variable.
+        for name in [
+            "acct.openai.main",
+            "acct.openrouter.main",
+            "acct.openai.07",
+            "acct.x",
+        ] {
+            assert!(secrets_problem("codex", &[s(name)]).is_some(), "{name}");
+        }
+        assert_eq!(secrets_problem("codex", &[s("git.token")]), None);
+    }
+}
