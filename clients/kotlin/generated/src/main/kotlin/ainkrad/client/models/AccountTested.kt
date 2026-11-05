@@ -24,8 +24,8 @@ import kotlinx.serialization.Contextual
  * What `POST /accounts/{id}/test` answers: a status class and a latency, never a response body.
  *
  * @param latencyMs 
- * @param result As [`LastTest::result`].
- * @param runner The runner device that made the request.
+ * @param result As [`LastTest::result`], or `inconclusive`: the provider's model list needs no key and its definition declares no `test_path`, so nothing was sent and nothing is known of the key.
+ * @param runner The runner device that made the request (empty when `result` is `inconclusive`).
  */
 @Serializable
 
@@ -34,11 +34,11 @@ data class AccountTested (
     @SerialName(value = "latency_ms")
     val latencyMs: kotlin.Long,
 
-    /* As [`LastTest::result`]. */
+    /* As [`LastTest::result`], or `inconclusive`: the provider's model list needs no key and its definition declares no `test_path`, so nothing was sent and nothing is known of the key. */
     @SerialName(value = "result")
     val result: kotlin.String,
 
-    /* The runner device that made the request. */
+    /* The runner device that made the request (empty when `result` is `inconclusive`). */
     @SerialName(value = "runner")
     val runner: kotlin.String
 

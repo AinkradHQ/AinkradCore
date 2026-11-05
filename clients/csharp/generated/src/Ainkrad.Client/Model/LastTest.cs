@@ -41,7 +41,7 @@ namespace Ainkrad.Client.Model
         /// Initializes a new instance of the <see cref="LastTest" /> class.
         /// </summary>
         /// <param name="at">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4). (required).</param>
-        /// <param name="result">The status class the provider answered: &#x60;ok&#x60;, &#x60;rate_limited&#x60;, &#x60;quota&#x60;, &#x60;auth_failed&#x60;, &#x60;server_error&#x60;, &#x60;unreachable&#x60;, &#x60;refused_address&#x60; or &#x60;tls_failed&#x60;. Never provider text. (required).</param>
+        /// <param name="result">The status class the provider answered: &#x60;ok&#x60;, &#x60;rate_limited&#x60;, &#x60;quota&#x60;, &#x60;auth_failed&#x60;, &#x60;server_error&#x60;, &#x60;unreachable&#x60;, &#x60;refused_address&#x60;, &#x60;tls_failed&#x60;, &#x60;inconclusive&#x60; (see [&#x60;AccountTested&#x60;]) or &#x60;failed&#x60; (the runner did not answer). Never provider text. (required).</param>
         public LastTest(DateTime at = default, string result = default)
         {
             this.At = at;
@@ -61,9 +61,9 @@ namespace Ainkrad.Client.Model
         public DateTime At { get; set; }
 
         /// <summary>
-        /// The status class the provider answered: &#x60;ok&#x60;, &#x60;rate_limited&#x60;, &#x60;quota&#x60;, &#x60;auth_failed&#x60;, &#x60;server_error&#x60;, &#x60;unreachable&#x60;, &#x60;refused_address&#x60; or &#x60;tls_failed&#x60;. Never provider text.
+        /// The status class the provider answered: &#x60;ok&#x60;, &#x60;rate_limited&#x60;, &#x60;quota&#x60;, &#x60;auth_failed&#x60;, &#x60;server_error&#x60;, &#x60;unreachable&#x60;, &#x60;refused_address&#x60;, &#x60;tls_failed&#x60;, &#x60;inconclusive&#x60; (see [&#x60;AccountTested&#x60;]) or &#x60;failed&#x60; (the runner did not answer). Never provider text.
         /// </summary>
-        /// <value>The status class the provider answered: &#x60;ok&#x60;, &#x60;rate_limited&#x60;, &#x60;quota&#x60;, &#x60;auth_failed&#x60;, &#x60;server_error&#x60;, &#x60;unreachable&#x60;, &#x60;refused_address&#x60; or &#x60;tls_failed&#x60;. Never provider text.</value>
+        /// <value>The status class the provider answered: &#x60;ok&#x60;, &#x60;rate_limited&#x60;, &#x60;quota&#x60;, &#x60;auth_failed&#x60;, &#x60;server_error&#x60;, &#x60;unreachable&#x60;, &#x60;refused_address&#x60;, &#x60;tls_failed&#x60;, &#x60;inconclusive&#x60; (see [&#x60;AccountTested&#x60;]) or &#x60;failed&#x60; (the runner did not answer). Never provider text.</value>
         [DataMember(Name = "result", IsRequired = true, EmitDefaultValue = true)]
         public string Result { get; set; }
 

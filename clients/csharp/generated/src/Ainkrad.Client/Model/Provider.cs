@@ -51,10 +51,11 @@ namespace Ainkrad.Client.Model
         /// <param name="models">Model ids exactly as the provider names them: the gateway compares a request&#39;s model with the ids it was granted, as they are, and resolves no alias (&#x60;-latest&#x60;). &#x60;:online&#x60; is refused. (required).</param>
         /// <param name="name">name (required).</param>
         /// <param name="pricedAt">When the models&#39; list prices were read..</param>
+        /// <param name="testPath">The authenticated path (under the base URL, such as &#x60;/key&#x60;) of the one-shot account test, for a provider whose model list needs no key (OpenRouter&#39;s is public: a revoked key would read as &#x60;ok&#x60;). A user definition without one cannot be tested: the answer is &#x60;inconclusive&#x60;. Built-ins use their wire&#39;s own model list..</param>
         /// <param name="usageParser">usageParser (required).</param>
         /// <param name="varVersion">varVersion.</param>
         /// <param name="wire">The API dialect the gateway speaks to this provider: &#x60;anthropic-messages&#x60; (claude), &#x60;openai-responses&#x60; (codex) or &#x60;gemini-generate&#x60; (agy). Optional on write: it is its harness&#39;s own, and any other is refused..</param>
-        public Provider(string authVar = default, string baseUrl = default, bool builtin = default, List<string> delivery = default, string harness = default, string id = default, string keyPrefix = default, List<string> loginMethods = default, List<ModelPrice> models = default, string name = default, string pricedAt = default, string usageParser = default, long varVersion = default, string wire = default)
+        public Provider(string authVar = default, string baseUrl = default, bool builtin = default, List<string> delivery = default, string harness = default, string id = default, string keyPrefix = default, List<string> loginMethods = default, List<ModelPrice> models = default, string name = default, string pricedAt = default, string testPath = default, string usageParser = default, long varVersion = default, string wire = default)
         {
             // to ensure "authVar" is required (not null)
             if (authVar == null)
@@ -113,6 +114,7 @@ namespace Ainkrad.Client.Model
             this.Builtin = builtin;
             this.KeyPrefix = keyPrefix;
             this.PricedAt = pricedAt;
+            this.TestPath = testPath;
             this.VarVersion = varVersion;
             this.Wire = wire;
         }
@@ -193,6 +195,13 @@ namespace Ainkrad.Client.Model
         public string PricedAt { get; set; }
 
         /// <summary>
+        /// The authenticated path (under the base URL, such as &#x60;/key&#x60;) of the one-shot account test, for a provider whose model list needs no key (OpenRouter&#39;s is public: a revoked key would read as &#x60;ok&#x60;). A user definition without one cannot be tested: the answer is &#x60;inconclusive&#x60;. Built-ins use their wire&#39;s own model list.
+        /// </summary>
+        /// <value>The authenticated path (under the base URL, such as &#x60;/key&#x60;) of the one-shot account test, for a provider whose model list needs no key (OpenRouter&#39;s is public: a revoked key would read as &#x60;ok&#x60;). A user definition without one cannot be tested: the answer is &#x60;inconclusive&#x60;. Built-ins use their wire&#39;s own model list.</value>
+        [DataMember(Name = "test_path", EmitDefaultValue = true)]
+        public string TestPath { get; set; }
+
+        /// <summary>
         /// Gets or Sets UsageParser
         /// </summary>
         [DataMember(Name = "usage_parser", IsRequired = true, EmitDefaultValue = true)]
@@ -230,6 +239,7 @@ namespace Ainkrad.Client.Model
             sb.Append("  Models: ").Append(Models).Append("\n");
             sb.Append("  Name: ").Append(Name).Append("\n");
             sb.Append("  PricedAt: ").Append(PricedAt).Append("\n");
+            sb.Append("  TestPath: ").Append(TestPath).Append("\n");
             sb.Append("  UsageParser: ").Append(UsageParser).Append("\n");
             sb.Append("  VarVersion: ").Append(VarVersion).Append("\n");
             sb.Append("  Wire: ").Append(Wire).Append("\n");

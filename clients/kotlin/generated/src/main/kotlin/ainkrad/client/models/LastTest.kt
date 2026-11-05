@@ -24,7 +24,7 @@ import kotlinx.serialization.Contextual
  * The last one-shot test of an account's key.
  *
  * @param at RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
- * @param result The status class the provider answered: `ok`, `rate_limited`, `quota`, `auth_failed`, `server_error`, `unreachable`, `refused_address` or `tls_failed`. Never provider text.
+ * @param result The status class the provider answered: `ok`, `rate_limited`, `quota`, `auth_failed`, `server_error`, `unreachable`, `refused_address`, `tls_failed`, `inconclusive` (see [`AccountTested`]) or `failed` (the runner did not answer). Never provider text.
  */
 @Serializable
 
@@ -34,7 +34,7 @@ data class LastTest (
     @Contextual @SerialName(value = "at")
     val at: java.time.OffsetDateTime,
 
-    /* The status class the provider answered: `ok`, `rate_limited`, `quota`, `auth_failed`, `server_error`, `unreachable`, `refused_address` or `tls_failed`. Never provider text. */
+    /* The status class the provider answered: `ok`, `rate_limited`, `quota`, `auth_failed`, `server_error`, `unreachable`, `refused_address`, `tls_failed`, `inconclusive` (see [`AccountTested`]) or `failed` (the runner did not answer). Never provider text. */
     @SerialName(value = "result")
     val result: kotlin.String
 

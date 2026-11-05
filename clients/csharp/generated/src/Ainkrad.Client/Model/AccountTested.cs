@@ -41,8 +41,8 @@ namespace Ainkrad.Client.Model
         /// Initializes a new instance of the <see cref="AccountTested" /> class.
         /// </summary>
         /// <param name="latencyMs">latencyMs (required).</param>
-        /// <param name="result">As [&#x60;LastTest::result&#x60;]. (required).</param>
-        /// <param name="runner">The runner device that made the request. (required).</param>
+        /// <param name="result">As [&#x60;LastTest::result&#x60;], or &#x60;inconclusive&#x60;: the provider&#39;s model list needs no key and its definition declares no &#x60;test_path&#x60;, so nothing was sent and nothing is known of the key. (required).</param>
+        /// <param name="runner">The runner device that made the request (empty when &#x60;result&#x60; is &#x60;inconclusive&#x60;). (required).</param>
         public AccountTested(long latencyMs = default, string result = default, string runner = default)
         {
             this.LatencyMs = latencyMs;
@@ -67,16 +67,16 @@ namespace Ainkrad.Client.Model
         public long LatencyMs { get; set; }
 
         /// <summary>
-        /// As [&#x60;LastTest::result&#x60;].
+        /// As [&#x60;LastTest::result&#x60;], or &#x60;inconclusive&#x60;: the provider&#39;s model list needs no key and its definition declares no &#x60;test_path&#x60;, so nothing was sent and nothing is known of the key.
         /// </summary>
-        /// <value>As [&#x60;LastTest::result&#x60;].</value>
+        /// <value>As [&#x60;LastTest::result&#x60;], or &#x60;inconclusive&#x60;: the provider&#39;s model list needs no key and its definition declares no &#x60;test_path&#x60;, so nothing was sent and nothing is known of the key.</value>
         [DataMember(Name = "result", IsRequired = true, EmitDefaultValue = true)]
         public string Result { get; set; }
 
         /// <summary>
-        /// The runner device that made the request.
+        /// The runner device that made the request (empty when &#x60;result&#x60; is &#x60;inconclusive&#x60;).
         /// </summary>
-        /// <value>The runner device that made the request.</value>
+        /// <value>The runner device that made the request (empty when &#x60;result&#x60; is &#x60;inconclusive&#x60;).</value>
         [DataMember(Name = "runner", IsRequired = true, EmitDefaultValue = true)]
         public string Runner { get; set; }
 

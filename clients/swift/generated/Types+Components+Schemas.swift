@@ -98,11 +98,12 @@ extension Components {
         public struct AccountTested: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/AccountTested/latency_ms`.
             public var latencyMs: Swift.Int64
-            /// As [`LastTest::result`].
+            /// As [`LastTest::result`], or `inconclusive`: the provider's model list needs no key and its
+            /// definition declares no `test_path`, so nothing was sent and nothing is known of the key.
             ///
             /// - Remark: Generated from `#/components/schemas/AccountTested/result`.
             public var result: Swift.String
-            /// The runner device that made the request.
+            /// The runner device that made the request (empty when `result` is `inconclusive`).
             ///
             /// - Remark: Generated from `#/components/schemas/AccountTested/runner`.
             public var runner: Swift.String
@@ -110,8 +111,8 @@ extension Components {
             ///
             /// - Parameters:
             ///   - latencyMs:
-            ///   - result: As [`LastTest::result`].
-            ///   - runner: The runner device that made the request.
+            ///   - result: As [`LastTest::result`], or `inconclusive`: the provider's model list needs no key and its
+            ///   - runner: The runner device that made the request (empty when `result` is `inconclusive`).
             public init(
                 latencyMs: Swift.Int64,
                 result: Swift.String,
@@ -1586,7 +1587,8 @@ extension Components {
             /// - Remark: Generated from `#/components/schemas/LastTest/at`.
             public var at: Components.Schemas.Timestamp
             /// The status class the provider answered: `ok`, `rate_limited`, `quota`, `auth_failed`,
-            /// `server_error`, `unreachable`, `refused_address` or `tls_failed`. Never provider text.
+            /// `server_error`, `unreachable`, `refused_address`, `tls_failed`, `inconclusive` (see
+            /// [`AccountTested`]) or `failed` (the runner did not answer). Never provider text.
             ///
             /// - Remark: Generated from `#/components/schemas/LastTest/result`.
             public var result: Swift.String
@@ -2840,6 +2842,13 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Provider/priced_at`.
             public var pricedAt: Swift.String?
+            /// The authenticated path (under the base URL, such as `/key`) of the one-shot account test,
+            /// for a provider whose model list needs no key (OpenRouter's is public: a revoked key would
+            /// read as `ok`). A user definition without one cannot be tested: the answer is
+            /// `inconclusive`. Built-ins use their wire's own model list.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Provider/test_path`.
+            public var testPath: Swift.String?
             /// - Remark: Generated from `#/components/schemas/Provider/usage_parser`.
             public var usageParser: Swift.String
             /// - Remark: Generated from `#/components/schemas/Provider/version`.
@@ -2864,6 +2873,7 @@ extension Components {
             ///   - models: Model ids exactly as the provider names them: the gateway compares a request's model with
             ///   - name:
             ///   - pricedAt: When the models' list prices were read.
+            ///   - testPath: The authenticated path (under the base URL, such as `/key`) of the one-shot account test,
             ///   - usageParser:
             ///   - version:
             ///   - wire: The API dialect the gateway speaks to this provider: `anthropic-messages` (claude),
@@ -2879,6 +2889,7 @@ extension Components {
                 models: [Components.Schemas.ModelPrice],
                 name: Swift.String,
                 pricedAt: Swift.String? = nil,
+                testPath: Swift.String? = nil,
                 usageParser: Swift.String,
                 version: Swift.Int64? = nil,
                 wire: Swift.String? = nil
@@ -2894,6 +2905,7 @@ extension Components {
                 self.models = models
                 self.name = name
                 self.pricedAt = pricedAt
+                self.testPath = testPath
                 self.usageParser = usageParser
                 self.version = version
                 self.wire = wire
@@ -2910,6 +2922,7 @@ extension Components {
                 case models
                 case name
                 case pricedAt = "priced_at"
+                case testPath = "test_path"
                 case usageParser = "usage_parser"
                 case version
                 case wire

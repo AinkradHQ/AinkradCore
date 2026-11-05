@@ -3819,7 +3819,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// What one session may spend through this account (audited as `account.session_limits_set`); a dimension left out is cleared. The Core's ceiling for a gateway session honours it beside the budgets. It raises what a session may spend, so it needs a step-up
+            /// What one session may spend through this account (audited as `account.session_limits_set`); a dimension left out is cleared. The Core's ceiling for a gateway session honours it beside the budgets, from the next time a ceiling is set (a session's start, its resume, or the top-up of its ceiling): a session that is running keeps the ceiling it holds until then. It raises what a session may spend, so it needs a step-up
             ///
             /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/session-limits/put(setAccountSessionLimits)/responses/200`.
             ///
@@ -4406,7 +4406,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// One free request (a model list) made through the gateway of a runner that is online, in the key's scope and offers it: the status class and the latency, never a body. Stored on the account and audited as `account.tested`. 409 `no_runner` when none is ready; 429 when the account was tested within a minute or a test is running; 502 when the runner failed
+            /// One free request (a model list) made through the gateway of a runner that is online, in the key's scope and offers it: the status class and the latency, never a body. Stored on the account and audited as `account.tested`. 409 `no_runner` when none is ready; 429 when the account was tested within a minute or a test is running. A provider whose model list needs no key and that declares no `test_path` answers `inconclusive` (nothing is sent), never `ok`
             ///
             /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/test/post(testAccount)/responses/200`.
             ///
@@ -4585,6 +4585,41 @@ public enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "internalServerError",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct BadGateway: Sendable, Hashable {
+                /// Creates a new `BadGateway`.
+                public init() {}
+            }
+            /// The runner failed or did not answer the test (code `runner_failed`); the attempt is recorded as `failed` and counts for the rate limit
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/test/post(testAccount)/responses/502`.
+            ///
+            /// HTTP response code: `502 badGateway`.
+            case badGateway(Operations.TestAccount.Output.BadGateway)
+            /// The runner failed or did not answer the test (code `runner_failed`); the attempt is recorded as `failed` and counts for the rate limit
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/test/post(testAccount)/responses/502`.
+            ///
+            /// HTTP response code: `502 badGateway`.
+            public static var badGateway: Self {
+                .badGateway(.init())
+            }
+            /// The associated value of the enum case if `self` is `.badGateway`.
+            ///
+            /// - Throws: An error if `self` is not `.badGateway`.
+            /// - SeeAlso: `.badGateway`.
+            public var badGateway: Operations.TestAccount.Output.BadGateway {
+                get throws {
+                    switch self {
+                    case let .badGateway(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "badGateway",
                             response: self
                         )
                     }

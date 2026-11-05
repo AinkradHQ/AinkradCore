@@ -3508,6 +3508,8 @@ public struct Client: APIProtocol {
                         preconditionFailure("bestContentType chose an invalid content type.")
                     }
                     return .internalServerError(.init(body: body))
+                case 502:
+                    return .badGateway(.init())
                 default:
                     return .undocumented(
                         statusCode: response.status.code,

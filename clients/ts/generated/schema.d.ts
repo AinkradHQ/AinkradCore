@@ -1254,9 +1254,12 @@ export interface components {
         AccountTested: {
             /** Format: int64 */
             latency_ms: number;
-            /** @description As [`LastTest::result`]. */
+            /**
+             * @description As [`LastTest::result`], or `inconclusive`: the provider's model list needs no key and its
+             *     definition declares no `test_path`, so nothing was sent and nothing is known of the key.
+             */
             result: string;
-            /** @description The runner device that made the request. */
+            /** @description The runner device that made the request (empty when `result` is `inconclusive`). */
             runner: string;
         };
         AccountsDeleted: {
@@ -1682,7 +1685,8 @@ export interface components {
             at: components["schemas"]["Timestamp"];
             /**
              * @description The status class the provider answered: `ok`, `rate_limited`, `quota`, `auth_failed`,
-             *     `server_error`, `unreachable`, `refused_address` or `tls_failed`. Never provider text.
+             *     `server_error`, `unreachable`, `refused_address`, `tls_failed`, `inconclusive` (see
+             *     [`AccountTested`]) or `failed` (the runner did not answer). Never provider text.
              */
             result: string;
         };
@@ -2011,6 +2015,13 @@ export interface components {
             name: string;
             /** @description When the models' list prices were read. */
             priced_at?: string | null;
+            /**
+             * @description The authenticated path (under the base URL, such as `/key`) of the one-shot account test,
+             *     for a provider whose model list needs no key (OpenRouter's is public: a revoked key would
+             *     read as `ok`). A user definition without one cannot be tested: the answer is
+             *     `inconclusive`. Built-ins use their wire's own model list.
+             */
+            test_path?: string | null;
             usage_parser: string;
             /** Format: int64 */
             version?: number;
@@ -3008,7 +3019,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description What one session may spend through this account (audited as `account.session_limits_set`); a dimension left out is cleared. The Core's ceiling for a gateway session honours it beside the budgets. It raises what a session may spend, so it needs a step-up */
+            /** @description What one session may spend through this account (audited as `account.session_limits_set`); a dimension left out is cleared. The Core's ceiling for a gateway session honours it beside the budgets, from the next time a ceiling is set (a session's start, its resume, or the top-up of its ceiling): a session that is running keeps the ceiling it holds until then. It raises what a session may spend, so it needs a step-up */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3072,7 +3083,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One free request (a model list) made through the gateway of a runner that is online, in the key's scope and offers it: the status class and the latency, never a body. Stored on the account and audited as `account.tested`. 409 `no_runner` when none is ready; 429 when the account was tested within a minute or a test is running; 502 when the runner failed */
+            /** @description One free request (a model list) made through the gateway of a runner that is online, in the key's scope and offers it: the status class and the latency, never a body. Stored on the account and audited as `account.tested`. 409 `no_runner` when none is ready; 429 when the account was tested within a minute or a test is running. A provider whose model list needs no key and that declares no `test_path` answers `inconclusive` (nothing is sent), never `ok` */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3088,6 +3099,13 @@ export interface operations {
             409: components["responses"]["Conflict"];
             429: components["responses"]["TooManyRequests"];
             500: components["responses"]["InternalError"];
+            /** @description The runner failed or did not answer the test (code `runner_failed`); the attempt is recorded as `failed` and counts for the rate limit */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     listAgentSessions: {
