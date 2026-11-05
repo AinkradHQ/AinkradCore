@@ -33,6 +33,41 @@ pub const VERSION: &str = "1.4.4";
 /// The runner-owned settings: there is no one to ask, so every tool proceeds.
 pub const SETTINGS: &str = r#"{"toolPermission": "always-proceed"}"#;
 
+/// The settings of a session that reaches Gemini through the runner's auth gateway (KAN-435 G6):
+/// agy takes a Gemini key (`GEMINI_API_KEY`, here a placeholder) only with `modelProvider` set.
+pub const GATEWAY_SETTINGS: &str =
+    r#"{"toolPermission": "always-proceed", "modelProvider": "gemini"}"#;
+
+/// The runner sets `GOOGLE_GEMINI_BASE_URL` for a gateway session only; a session that logs in
+/// keeps its own provider.
+fn settings_for(spec: &Spec) -> &'static str {
+    match crate::last_env(&spec.env, "GOOGLE_GEMINI_BASE_URL") {
+        Some(_) => GATEWAY_SETTINGS,
+        None => SETTINGS,
+    }
+}
+
+/// Writes `dir/name`, replacing what is there. `dir` is in the agent's writable home, so the old
+/// file may be a link to anywhere: a link at the name or at the temp name is removed (not followed),
+/// the temp file is made with `create_new`, and a rename puts it in place.
+fn write_replacing(dir: &std::path::Path, name: &str, text: &str) -> io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let tmp = dir.join(format!("{name}.runner-tmp"));
+    match std::fs::remove_file(&tmp) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    f.write_all(text.as_bytes())?;
+    drop(f);
+    std::fs::rename(&tmp, dir.join(name))
+}
+
 /// The argv: flags only, `-p=` last (`-p` takes the next argument as its prompt).
 pub fn args(spec: &Spec, resume: Option<&str>) -> Vec<String> {
     let mut args: Vec<String> = [
@@ -277,7 +312,7 @@ impl Agy {
         link_files(spec)?;
         let settings = spec.config_dir.join(".gemini/antigravity-cli");
         std::fs::create_dir_all(&settings)?;
-        std::fs::write(settings.join("settings.json"), SETTINGS)?;
+        write_replacing(&settings, "settings.json", settings_for(spec))?;
         Ok(Self {
             proc: Proc::start(spec, launch(spec, resume)).await?,
             decoder: Decoder {
