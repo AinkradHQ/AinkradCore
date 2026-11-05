@@ -4,6 +4,7 @@
 
 mod auth;
 mod framing;
+mod metering;
 mod stream;
 
 use std::net::SocketAddr;
@@ -22,7 +23,7 @@ use zeroize::Zeroizing;
 
 use super::dial::Dialer;
 use super::dial::tests::{Ca, Script, ToLocal, public};
-use super::{Config, Gateway, Key, socket_in, start};
+use super::{Config, Event, Gateway, Key, socket_in, start};
 
 pub(super) const MODEL: &str = "model-a";
 
@@ -36,6 +37,8 @@ pub(super) enum Step {
     Abrupt,
     /// A clean TLS close.
     Close,
+    /// Holds the connection open and sets the flag when the gateway closes it.
+    UntilClosed(Arc<std::sync::atomic::AtomicBool>),
 }
 
 pub(super) struct Seen {
@@ -121,6 +124,13 @@ pub(super) async fn upstream(cert_name: &str, script: Vec<Step>) -> Up {
                             let _ = tls.shutdown().await;
                             return;
                         }
+                        Step::UntilClosed(flag) => {
+                            // Nothing more is sent; a read that ends is the gateway hanging up.
+                            let mut sink = [0u8; 64];
+                            while matches!(tls.read(&mut sink).await, Ok(n) if n > 0) {}
+                            flag.store(true, Ordering::SeqCst);
+                            return;
+                        }
                     }
                 }
                 let _ = tls.shutdown().await;
@@ -175,7 +185,32 @@ pub(super) struct Rig {
     pub key: String,
     pub sock: PathBuf,
     dir: PathBuf,
-    _gw: Gateway,
+    gw: Option<Gateway>,
+    events: tokio::sync::mpsc::UnboundedReceiver<Event>,
+}
+
+impl Rig {
+    /// Drops the gateway, as a stop or the end of the session does.
+    pub(super) fn close(&mut self) {
+        self.gw = None;
+    }
+
+    pub(super) fn meter(&self) -> std::sync::Arc<super::meter::Meter> {
+        self.gw.as_ref().unwrap().meter().clone()
+    }
+
+    /// The next report the gateway made (waits for it).
+    pub(super) async fn report(&mut self) -> ainkrad_proto::v2::GatewayReport {
+        match timeout(Duration::from_secs(5), self.events.recv()).await {
+            Ok(Some(Event::Report(r))) => r,
+            other => panic!("no report: {other:?}"),
+        }
+    }
+
+    /// Whether no report is waiting.
+    pub(super) fn no_report(&mut self) -> bool {
+        self.events.try_recv().is_err()
+    }
 }
 
 impl Drop for Rig {
@@ -250,13 +285,15 @@ pub(super) async fn rig(o: Opts) -> Rig {
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let sock = socket_in(&dir);
-    let gw = start(&sock, cfg).unwrap();
+    let (events_tx, events) = tokio::sync::mpsc::unbounded_channel();
+    let gw = start(&sock, cfg, events_tx).unwrap();
     Rig {
         up,
         key: o.key,
         sock,
         dir,
-        _gw: gw,
+        gw: Some(gw),
+        events,
     }
 }
 

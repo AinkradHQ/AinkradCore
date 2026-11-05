@@ -200,7 +200,7 @@ async fn the_head_and_the_body_are_bounded() {
     assert_eq!(status(&raw(&r.sock, &request(LINE, &[], &body)).await), 413);
     assert_eq!(r.up.count(), 0);
     // At the limit it goes through.
-    let at = "{\"model\":\"model-a\"}";
+    let at = "{\"model\":\"model-a\",\"max_tokens\":8}";
     assert!(at.len() <= 64);
     assert_eq!(status(&raw(&r.sock, &request(LINE, &[], at)).await), 200);
 }
@@ -333,11 +333,16 @@ fn a_grant_that_the_key_rule_or_the_shape_checks_refuse_never_opens_a_gateway() 
     }
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
-async fn the_gateway_capability_rests_on_a_socket_that_answers() {
-    super::super::selftest()
+async fn the_self_test_refuses_clearly_when_a_sessions_socket_path_would_not_fit() {
+    // The real bubblewrap run is `tests/gateway_netns.rs`; this needs none, because the length of
+    // a real session's path is checked first.
+    let long = std::path::PathBuf::from(format!("/{}", "a".repeat(90)));
+    let why = super::super::selftest(&long, std::path::Path::new("/nonexistent"))
         .await
-        .expect("the start-up check passes on this host");
+        .unwrap_err();
+    assert!(why.contains("shorter state directory"), "{why}");
 }
 
 #[tokio::test]

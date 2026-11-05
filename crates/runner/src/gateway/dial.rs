@@ -20,6 +20,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::time::{Instant, timeout, timeout_at};
 use tokio_rustls::TlsConnector;
+use zeroize::Zeroizing;
 
 use crate::egress::policy::{Deny, host_name};
 use crate::egress::{Limited, Policy, Resolve};
@@ -179,7 +180,8 @@ impl Dialer {
         max_body: usize,
     ) -> Result<Opened<Stream>, DialError> {
         let name = strict_host(host)?;
-        let head = build_head(&name, method, path, headers, body.len())?;
+        // The head carries the key: wiped when it is dropped.
+        let head = Zeroizing::new(build_head(&name, method, path, headers, body.len())?);
         let deadline = Instant::now() + self.total;
         timeout_at(deadline, async {
             let addrs = self.checked(&name).await?;

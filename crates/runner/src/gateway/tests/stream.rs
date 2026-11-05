@@ -287,7 +287,7 @@ async fn a_lease_becomes_a_gateway_whose_slot_names_a_socket_and_never_the_key()
     );
     g.lease = "l_gw".to_owned();
     let mut redactor = Redactor::new();
-    let (gw, env) = super::super::session::open(&g, Some(&redeem), &dir, &mut redactor)
+    let (gw, env, _events) = super::super::session::open(&g, Some(&redeem), &dir, &mut redactor)
         .await
         .unwrap();
     let names: Vec<&str> = env.iter().map(|(n, _)| n.as_str()).collect();

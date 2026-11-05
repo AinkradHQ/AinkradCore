@@ -33,7 +33,8 @@ use ainkrad_proto::redact::Redactor;
 use ainkrad_proto::runner::{Isolation, Outcome, RunToken, Tokens, Workspace};
 use ainkrad_proto::v2::{
     AGENT_DRIVER, AGENT_OPS, AgentDecide, AgentEvents, AgentRead, AgentStart, AgentState,
-    AgentStop, DriverInfo, ErrorCode, IsolationCaps, Kvm, StreamError, TranscriptEntry,
+    AgentStop, CAP_GATEWAY, DriverInfo, ErrorCode, IsolationCaps, Kvm, StreamError,
+    TranscriptEntry,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -43,6 +44,7 @@ use crate::{Answer, Control, Executor, Job, Report};
 
 pub mod secrets;
 use secrets::{Delivered, Redeem};
+mod gw;
 
 /// The variable the Core delivers a run's token under (`Module::credentials` of Citadel).
 pub const RUN_TOKEN_VAR: &str = ainkrad_proto::v2::RUN_TOKEN_VAR;
@@ -222,6 +224,9 @@ struct Meta {
     /// The `epoch` of the start it runs under (`AgentStart::epoch`).
     #[serde(default)]
     epoch: u32,
+    /// The newest gateway report the Core holds (`AgentRead::gw_after`).
+    #[serde(default)]
+    gw_acked: u64,
 }
 
 struct Live {
@@ -240,6 +245,15 @@ struct Live {
     required: Option<Isolation>,
     /// The session's auth gateway (KAN-435), while it runs: closed first on a stop, and on the end.
     gateway: Option<crate::gateway::Gateway>,
+    /// A stop arrived: nothing of this run may start after it (a gateway still being opened, a
+    /// harness not yet started). Cleared by the next start.
+    stopped: bool,
+    /// The run was started with a gateway grant, whether or not its gateway is open yet.
+    granted: bool,
+    /// An `agent.limit` that arrived before the gateway opened: applied when it is installed.
+    pending_limit: Option<ainkrad_proto::v2::Ceiling>,
+    /// What the gateway reported, on its own channel and numbering (never the transcript).
+    reports: gw::Reports,
 }
 
 pub struct AgentDriver {
@@ -323,8 +337,13 @@ impl AgentDriver {
                 let mut all = self.sessions.lock().unwrap();
                 let live = all.get_mut(&req.session).ok_or_else(no_session)?;
                 ack(&self.config, &req.session, live, req.after);
+                gw::ack(&self.config, &req.session, live, req.gw_after);
                 let events = events(&req.session, live, req.after);
-                if !events.entries.is_empty() || events.state != AgentState::Running {
+                // Reports the Core has not been shown yet end the wait too; ones it was shown and
+                // has not acknowledged do not, or an unacknowledging Core would spin.
+                let fresh = live.reports.fresh();
+                if !events.entries.is_empty() || events.state != AgentState::Running || fresh {
+                    live.reports.mark_shown();
                     return Ok(events);
                 }
                 if tokio::time::Instant::now() >= deadline {
@@ -344,6 +363,13 @@ impl AgentDriver {
             return Err(refuse(
                 ErrorCode::InvalidArgs,
                 "a secret's var is [A-Z_][A-Z0-9_]*, and not one the runner sets itself",
+            ));
+        }
+        // A grant is served only by a runner that has proven its gateway on this host.
+        if req.gateway.is_some() && !self.sandbox.capabilities().contains(&CAP_GATEWAY) {
+            return Err(refuse(
+                ErrorCode::InvalidArgs,
+                "this runner does not offer the auth gateway",
             ));
         }
         // The policy's isolation fields are checked here and again by the Core; a session that
@@ -416,6 +442,7 @@ impl AgentDriver {
                 usage: None,
                 outcome: None,
                 epoch: 0,
+                gw_acked: 0,
             },
             run,
             entries: VecDeque::new(),
@@ -424,7 +451,14 @@ impl AgentDriver {
             task: None,
             required: None,
             gateway: None,
+            stopped: false,
+            granted: false,
+            pending_limit: None,
+            reports: gw::Reports::default(),
         });
+        live.stopped = false;
+        live.granted = req.gateway.is_some();
+        live.pending_limit = None;
         live.required = req.policy.required_tier();
         live.meta.state = AgentState::Running;
         live.meta.outcome = None;
@@ -488,12 +522,30 @@ impl AgentDriver {
             match crate::gateway::session::open(grant, self.redeem.as_ref(), &dir, &mut redactor)
                 .await
             {
-                Ok((gateway, env)) => {
+                Ok((gateway, env, events)) => {
                     gateway_env = env;
+                    let meter = gateway.meter().clone();
+                    let mut installed = false;
                     self.with(&session, |live, _, _| {
                         live.redactor = redactor.clone();
-                        live.gateway = Some(gateway);
+                        // A stop that arrived while the lease was redeemed wins: the gateway is
+                        // dropped here, and the harness is never started.
+                        if !live.stopped {
+                            if let Some(limit) = live.pending_limit.take() {
+                                gateway.meter().set_ceiling(limit);
+                            }
+                            // Reports a restart found still unacknowledged count from the start.
+                            gateway.meter().set_unreported(live.reports.full());
+                            live.gateway = Some(gateway);
+                            installed = true;
+                        }
                     });
+                    self.forward_gateway(&session, events, meter, req.epoch);
+                    if !installed {
+                        return self
+                            .stopped_before_start(&session, run, workspace_prepared)
+                            .await;
+                    }
                 }
                 Err(why) => {
                     if workspace_prepared {
@@ -528,7 +580,9 @@ impl AgentDriver {
         }
         let mut env = delivered.env.clone();
         env.extend(gateway_env);
-        if delivered.account {
+        // A session that holds an account (a leased key, or a gateway grant) is marked, so the
+        // egress proxy drops forge hosts for it.
+        if delivered.account || req.gateway.is_some() {
             env.push((crate::egress::ACCOUNT_SESSION.to_owned(), "1".to_owned()));
         }
         if let Err(why) = self.sandbox.prepare(&req, &mut env) {
@@ -536,6 +590,11 @@ impl AgentDriver {
                 self.harness.cleanup_agent_workspace(&session, run).await;
             }
             return self.end(&session, failed(why, "sandbox"));
+        }
+        if self.is_stopped(&session) {
+            return self
+                .stopped_before_start(&session, run, workspace_prepared)
+                .await;
         }
         self.harness.session_env(run, Some(env));
         let started = match self.harness.start(&job).await {
@@ -728,6 +787,8 @@ impl AgentDriver {
                 return Ok(events(&req.session, live, live.meta.last_seq));
             }
             // Closed before the harness is signalled: a stopped session can spend nothing more.
+            // The marker keeps a start that is still redeeming its lease from going on after it.
+            live.stopped = true;
             live.gateway = None;
             live.run
         };
@@ -760,7 +821,12 @@ impl AgentDriver {
         let task = {
             let mut all = self.sessions.lock().unwrap();
             match all.get_mut(session) {
-                Some(l) if l.run == run && l.meta.state == AgentState::Running => l.task.take(),
+                Some(l) if l.run == run && l.meta.state == AgentState::Running => {
+                    // The gateway goes before the harness is killed, as on a stop.
+                    l.stopped = true;
+                    l.gateway = None;
+                    l.task.take()
+                }
                 _ => return,
             }
         };
@@ -956,6 +1022,7 @@ fn events(session: &str, live: &Live, after: u64) -> AgentEvents {
         harness_session: live.meta.harness_session.clone(),
         usage: live.meta.usage,
         outcome: live.meta.outcome.clone(),
+        gateway: live.reports.batch(),
     }
 }
 
@@ -1012,7 +1079,14 @@ fn reload(cfg: &AgentConfig) -> HashMap<String, Live> {
             task: None,
             required: None,
             gateway: None,
+            stopped: false,
+            granted: false,
+            pending_limit: None,
+            reports: gw::Reports::default(),
         };
+        live.reports = gw::Reports::load(cfg, &session, &live.meta);
+        // A socket a dead runner left is no gateway: nothing listens on it.
+        let _ = std::fs::remove_file(crate::gateway::socket_in(&d.path()));
         if live.meta.state == AgentState::Running {
             tracing::warn!(
                 session,

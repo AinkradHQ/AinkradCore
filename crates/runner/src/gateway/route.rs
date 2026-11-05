@@ -14,6 +14,11 @@ pub(super) struct Routed {
     pub target: String,
     /// The model named in the path (the Gemini wire), checked like the body's.
     pub path_model: Option<String>,
+    /// The route costs nothing (`count_tokens`): held at nothing, settled at nothing, no report.
+    pub free: bool,
+    /// The route itself streams (`streamGenerateContent`); on the other wires the body's `stream`
+    /// says.
+    pub streams: bool,
 }
 
 /// (agent-facing path, path under the upstream's base path, allowed query items)
@@ -55,6 +60,7 @@ pub(super) fn route(
     target: &str,
 ) -> Result<Routed, Refusal> {
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let mut streams = false;
     let (suffix, allowed, path_model): (String, &[&str], Option<String>) = match wire {
         Wire::GeminiGenerate => {
             let rest = path.strip_prefix(GEMINI_PREFIX);
@@ -64,11 +70,8 @@ pub(super) fn route(
                     model_ok(m) && matches!(*a, "generateContent" | "streamGenerateContent")
                 })
                 .ok_or(refuse(403, "path_not_allowed"))?;
-            let allowed: &[&str] = if action == "streamGenerateContent" {
-                &["alt=sse"]
-            } else {
-                &[]
-            };
+            streams = action == "streamGenerateContent";
+            let allowed: &[&str] = if streams { &["alt=sse"] } else { &[] };
             (path.to_owned(), allowed, Some(model.to_owned()))
         }
         _ => {
@@ -102,5 +105,7 @@ pub(super) fn route(
     Ok(Routed {
         target: out,
         path_model,
+        free: wire == Wire::AnthropicMessages && path == "/v1/messages/count_tokens",
+        streams,
     })
 }

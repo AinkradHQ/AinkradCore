@@ -755,6 +755,7 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
     let after = u64::try_from(s.last_seq).unwrap_or(0);
     let wait = u64::try_from(cfg.read_wait.as_millis()).unwrap_or(u64::MAX);
     let req = Command::AgentRead(AgentRead {
+        gw_after: 0,
         session: s.id.clone(),
         after,
         wait_ms: Some(wait),
@@ -805,6 +806,7 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
             store::end(&app.pool, &s.id, "ended", &outcome, &app.clock.now()).await?;
             // The runner may drop its copy: the Core holds all of it.
             let ack = Command::AgentRead(AgentRead {
+                gw_after: 0,
                 session: s.id.clone(),
                 after: held,
                 wait_ms: None,

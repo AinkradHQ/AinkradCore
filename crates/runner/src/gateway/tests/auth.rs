@@ -257,7 +257,11 @@ async fn a_model_outside_the_priced_grant_is_refused_and_the_body_must_be_one_ob
     assert_eq!(r.up.count(), 0);
     let ok = raw(
         &r.sock,
-        &request("POST /v1/messages HTTP/1.1", &[], "{\"model\":\"model-a\"}"),
+        &request(
+            "POST /v1/messages HTTP/1.1",
+            &[],
+            "{\"model\":\"model-a\",\"max_tokens\":8}",
+        ),
     )
     .await;
     assert_eq!(status(&ok), 200);
@@ -281,7 +285,7 @@ async fn a_model_outside_the_priced_grant_is_refused_and_the_body_must_be_one_ob
         &request(
             "POST /v1beta/models/model-a:generateContent HTTP/1.1",
             &[],
-            "{}",
+            "{\"generationConfig\":{\"maxOutputTokens\":8}}",
         ),
     )
     .await;

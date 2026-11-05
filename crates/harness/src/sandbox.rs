@@ -294,6 +294,17 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
         // own loopback; the host's loopback and the metadata address stay unreachable.
         // Every value but the literal `allow` gets a network namespace of its own: `filtered` is
         // never mapped to `allow`, and a filtered sandbox without its egress socket is refused.
+        // A gateway session never has the host network: its slot lives in a namespace of its own,
+        // and the harness would otherwise reach the provider (and the host) around the gateway.
+        if env(spec, "AINKRAD_SANDBOX_NETWORK") == "allow"
+            && !env(spec, "AINKRAD_SANDBOX_GW_SOCK").is_empty()
+        {
+            return Err(io::Error::other(
+                "a gateway session cannot have the host network",
+            ));
+        }
+        // The forwarder executable, bound once however many slots use it.
+        let mut bound: Vec<&OsStr> = Vec::new();
         if env(spec, "AINKRAD_SANDBOX_NETWORK") != "allow" {
             c.arg("--unshare-net");
             let (sock, fwd, port) = (
@@ -304,6 +315,7 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
             if [sock, fwd, port].iter().all(|v| !v.is_empty()) {
                 c.arg("--bind").arg(sock).arg(sock);
                 c.arg("--ro-bind").arg(fwd).arg(fwd);
+                bound.push(fwd);
                 for (k, v) in [
                     ("AINKRAD_MCP_SOCK", sock),
                     ("AINKRAD_MCP_FWD", fwd),
@@ -321,10 +333,12 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
             );
             if [sock, fwd, port].iter().all(|v| !v.is_empty()) {
                 c.arg("--bind").arg(sock).arg(sock);
-                let shared = fwd == env(spec, "AINKRAD_SANDBOX_MCP_FWD")
-                    || (filtered && fwd == env(spec, "AINKRAD_SANDBOX_EGRESS_FWD"));
-                if !shared {
+                // Bound by the MCP slot only if that slot was itself bound (above); the egress
+                // slot, when filtered, binds the same executable below.
+                let egress_binds = filtered && fwd == env(spec, "AINKRAD_SANDBOX_EGRESS_FWD");
+                if !bound.contains(&fwd) && !egress_binds {
                     c.arg("--ro-bind").arg(fwd).arg(fwd);
+                    bound.push(fwd);
                 }
                 for (k, v) in [
                     ("AINKRAD_GW_SOCK", sock),
@@ -346,8 +360,9 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
                     ));
                 }
                 c.arg("--bind").arg(sock).arg(sock);
-                if fwd != env(spec, "AINKRAD_SANDBOX_MCP_FWD") {
+                if !bound.contains(&fwd) {
                     c.arg("--ro-bind").arg(fwd).arg(fwd);
+                    bound.push(fwd);
                 }
                 for (k, v) in [
                     ("AINKRAD_EGRESS_SOCK", sock),

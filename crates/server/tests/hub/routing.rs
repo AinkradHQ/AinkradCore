@@ -35,6 +35,7 @@ async fn the_noop_runs_end_to_end_and_only_advertised_commands_reach_the_runner(
         .dispatch(
             &dev.id,
             Command::AgentRead(AgentRead {
+                gw_after: 0,
                 session: "as_plain".to_owned(),
                 after: 0,
                 wait_ms: None,
