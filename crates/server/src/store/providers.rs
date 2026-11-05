@@ -68,6 +68,11 @@ pub struct Definition {
     /// gateway-only.
     #[serde(default)]
     pub key_prefix: Option<String>,
+    /// The authenticated path of the one-shot account test, under the base URL (`/key`), for a
+    /// provider whose model list needs no key. A user definition without one cannot be tested: the
+    /// answer is `inconclusive`, never `ok` (design §7.1, Opus review of G7).
+    #[serde(default)]
+    pub test_path: Option<String>,
     #[serde(default)]
     pub builtin: bool,
     #[serde(default)]
@@ -90,6 +95,7 @@ fn builtin(id: &str, name: &str, harness: &str, var: &str, url: &str, parser: &s
         priced_at: None,
         wire: wire_for(harness).to_owned(),
         key_prefix: None,
+        test_path: None,
         builtin: true,
         version: 1,
     }
@@ -237,13 +243,15 @@ fn row(r: SqliteRow) -> Result<Definition, sqlx::Error> {
         priced_at: r.try_get("priced_at")?,
         wire: r.try_get("wire")?,
         key_prefix: r.try_get("key_prefix")?,
+        test_path: r.try_get("test_path")?,
         builtin: false,
         version: r.try_get("version")?,
     })
 }
 
 const COLUMNS: &str = "id, name, harness, auth_var, base_url, usage_parser, delivery, \
-    login_methods, models, priced_at, version, wire, key_prefix";
+    login_methods, models, priced_at, version, wire, key_prefix, \
+    test_path";
 
 /// Every provider: the built-ins, then the user definitions by id.
 pub async fn list(pool: &SqlitePool) -> Result<Vec<Definition>, sqlx::Error> {
@@ -313,13 +321,14 @@ async fn write(
         true => {
             "INSERT INTO core_provider_defs (id, name, harness, auth_var, base_url, \
                  usage_parser, delivery, login_methods, models, priced_at, version, created_at, \
-                 updated_at, wire, key_prefix) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                 updated_at, wire, key_prefix, test_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+                 ?, ?)"
         }
         false => {
             "UPDATE core_provider_defs SET name = ?2, harness = ?3, auth_var = ?4, \
                   base_url = ?5, usage_parser = ?6, delivery = ?7, login_methods = ?8, \
                   models = ?9, priced_at = ?10, version = ?11, updated_at = ?13, wire = ?14, \
-                  key_prefix = ?15 WHERE id = ?1"
+                  key_prefix = ?15, test_path = ?16 WHERE id = ?1"
         }
     };
     sqlx::query(sql)
@@ -338,6 +347,7 @@ async fn write(
         .bind(now)
         .bind(&d.wire)
         .bind(&d.key_prefix)
+        .bind(&d.test_path)
         .execute(&mut *conn)
         .await?;
     Ok(())

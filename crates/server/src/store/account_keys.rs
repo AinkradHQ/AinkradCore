@@ -135,3 +135,14 @@ pub async fn tested_within(
     .await
     .map(|n: Option<bool>| n.unwrap_or(false))
 }
+
+/// Drops lease `lease` if no runner has redeemed it: a test that was sent and never answered must
+/// not leave a live lease against its runner's cap. A redeemed lease is already spent.
+pub async fn revoke_unused_lease(pool: &sqlx::SqlitePool, lease: &str) -> Result<(), sqlx::Error> {
+    let hash = ring::digest::digest(&ring::digest::SHA256, lease.as_bytes());
+    sqlx::query("DELETE FROM core_secret_leases WHERE hash = ? AND used_at IS NULL")
+        .bind(hash.as_ref())
+        .execute(pool)
+        .await
+        .map(drop)
+}

@@ -36,6 +36,7 @@ fn router(id: &str, prefix: Option<&str>) -> Definition {
         priced_at: Some("2026-11-01".to_owned()),
         wire: String::new(),
         key_prefix: prefix.map(str::to_owned),
+        test_path: None,
         builtin: false,
         version: 0,
     }
@@ -456,4 +457,85 @@ async fn the_test_route_needs_admin_and_a_runner_and_is_limited_to_one_a_minute(
         row.contains("\"result\":\"ok\"") && !row.contains(V1),
         "{row}"
     );
+}
+
+#[tokio::test]
+async fn a_test_path_is_a_plain_path_and_a_provider_without_one_cannot_be_tested() {
+    let (fx, _vm, s) = setup().await;
+    open_gate(&fx).await;
+    let p = &fx.app.pool;
+    // Only a plain path under the base URL.
+    for bad in [
+        "key", "/", "/a/../b", "/k?x=1", "//a", "/a b", "/a/./b", "/k#f", "/a%2fb",
+    ] {
+        let mut d = router("a1", Some("sk-or-v1-"));
+        d.test_path = Some(bad.to_owned());
+        assert_eq!(
+            code(prov::create(p, &d, "d_x", BY, NOW).await),
+            "bad_request",
+            "{bad}"
+        );
+    }
+    let mut d = router("openrouter", Some("sk-or-v1-"));
+    assert!(prov::create(p, &d, "d_x", BY, NOW).await.is_ok());
+    let a = store(&fx, &s, "openrouter", "or-main", OR).await.unwrap();
+    // OpenRouter's model list is public: a revoked key would read as `ok`. Without a declared
+    // authenticated path nothing is sent, nothing is leased, and the answer is `inconclusive`.
+    let uri = format!("/api/v1/accounts/{}/test", a.id);
+    let (st, b) = call(&fx, &fx.dev, Method::POST, &uri, Value::Null).await;
+    assert_eq!(st, StatusCode::OK, "{b}");
+    assert_eq!(
+        (b["result"].as_str(), b["runner"].as_str()),
+        (Some("inconclusive"), Some(""))
+    );
+    let leases: i64 = sqlx::query_scalar("SELECT count(*) FROM core_secret_leases")
+        .fetch_one(p)
+        .await
+        .unwrap();
+    assert_eq!(leases, 0);
+    let (_, one) = call(
+        &fx,
+        &fx.dev,
+        Method::GET,
+        &format!("/api/v1/accounts/{}", a.id),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(one["last_test"]["result"], "inconclusive");
+    // Declaring the path is what makes a test mean something (the hub test sends it).
+    d.test_path = Some("/key".to_owned());
+    d.version = 0;
+    assert_eq!(
+        prov::replace(p, &d, "d_x", BY, NOW)
+            .await
+            .unwrap()
+            .test_path
+            .as_deref(),
+        Some("/key")
+    );
+}
+
+#[tokio::test]
+async fn a_secret_name_cannot_borrow_another_accounts_host() {
+    let (fx, _vm, s) = setup().await;
+    open_gate(&fx).await;
+    let p = &fx.app.pool;
+    prov::create(p, &router("openrouter", Some("sk-or-v1-")), "d_x", BY, NOW)
+        .await
+        .unwrap();
+    prov::create(p, &router("other", Some("sk-or-v2-")), "d_x", BY, NOW)
+        .await
+        .unwrap();
+    let a = store(&fx, &s, "openrouter", "or-main", OR).await.unwrap();
+    // `acct.other.<id>` names the OpenRouter account's id, but no account of `other` has it: the
+    // key is not bound to that account's host, so it is refused.
+    let name = format!("acct.other.{}", a.id);
+    let key = "sk-or-v2-0123456789abcdefghijklmnopqrstuvwxyzTESTONLY";
+    let new = crate::store::secrets::NewValue {
+        value: key,
+        runners: Some(&[]),
+        delivery: Some("env"),
+    };
+    let r = crate::store::secrets::create(p, &s, &name, &new, &fx.dev.id, BY, NOW).await;
+    assert_eq!(code(r), "bad_request");
 }

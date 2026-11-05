@@ -380,6 +380,13 @@ async fn check(app: &App, s: &Session, account: i64) -> Result<(), Refusal> {
         }
         return Ok(());
     }
+    // A provider whose model list says nothing about the key can neither confirm nor clear an auth
+    // failure: the signal ends `inconclusive`, and nothing is asked of a runner.
+    let def = providers::get(&app.pool, &a.provider).await.map_err(lift)?;
+    if route::of(&def, &a.base_url).is_ok_and(|r| !r.can_test) {
+        let why = "the provider declares no authenticated test path";
+        return Ok(gw::decide(&app.pool, account, "inconclusive", why, &now).await?);
+    }
     // From here a lease is minted: whatever goes wrong counts as a try, so the signal ends
     // `inconclusive` after a few instead of leasing for ever.
     let asked = async {
@@ -402,6 +409,7 @@ async fn check(app: &App, s: &Session, account: i64) -> Result<(), Refusal> {
             provider: a.provider.clone(),
             user_key: route.user_key,
             upstream: upstream_of(&a.base_url, route.wire)?,
+            test_path: route.test_path,
         };
         let sent = app
             .hub

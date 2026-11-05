@@ -29,6 +29,7 @@ fn def(id: &str) -> Definition {
         priced_at: Some("2026-11-01".to_owned()),
         wire: String::new(),
         key_prefix: None,
+        test_path: None,
         builtin: false,
         version: 0,
     }

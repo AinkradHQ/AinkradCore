@@ -2,7 +2,8 @@
 //! uses, to see whether an account's key and upstream answer. The Core never dials a provider;
 //! it leases the key to a runner and gets back a status class and a latency, never a body.
 //!
-//! The request is a model list call: a route the agent's route table never allows, so a test can
+//! The request is a model list call (or the provider's declared authenticated path, for one whose
+//! model list needs no key): a route the agent's route table never allows, so a test can
 //! not be made to spend anything. The key is checked against its host first, as for a session.
 
 use std::sync::Arc;
@@ -24,6 +25,15 @@ fn list_path(wire: Wire, base: &str) -> String {
         Wire::AnthropicMessages => format!("{base}/v1/models?limit=1"),
         Wire::OpenaiResponses => format!("{base}/models"),
         Wire::GeminiGenerate => format!("{base}/v1beta/models?pageSize=1"),
+    }
+}
+
+/// The path of the one request: the Core's authenticated `test_path` under the base path when the
+/// provider declares one, else the wire's model list.
+fn request_path(req: &GatewayTest) -> String {
+    match &req.test_path {
+        Some(path) => format!("{}{path}", req.upstream.base_path),
+        None => list_path(req.upstream.wire, &req.upstream.base_path),
     }
 }
 
@@ -58,7 +68,7 @@ pub async fn run(
         .request(
             &up.host,
             "GET",
-            &list_path(up.wire, &up.base_path),
+            &request_path(req),
             &headers,
             b"",
             MAX_REPLY,
@@ -79,4 +89,36 @@ pub async fn run(
         result,
         latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use ainkrad_proto::v2::{GatewayTest, Upstream, Wire};
+
+    use super::request_path;
+
+    fn test(wire: Wire, base: &str, path: Option<&str>) -> GatewayTest {
+        GatewayTest {
+            lease: "l_x".to_owned(),
+            provider: "p".to_owned(),
+            user_key: None,
+            upstream: Upstream {
+                host: "h.example.com".to_owned(),
+                base_path: base.to_owned(),
+                wire,
+                auth: wire.auth(),
+            },
+            test_path: path.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn the_declared_path_is_the_request_and_the_wire_model_list_is_the_default() {
+        let req = test(Wire::OpenaiResponses, "/api/v1", Some("/key"));
+        assert_eq!(request_path(&req), "/api/v1/key");
+        let req = test(Wire::OpenaiResponses, "/v1", None);
+        assert_eq!(request_path(&req), "/v1/models");
+        let req = test(Wire::AnthropicMessages, "", None);
+        assert_eq!(request_path(&req), "/v1/models?limit=1");
+    }
 }

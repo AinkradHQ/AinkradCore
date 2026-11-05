@@ -11,7 +11,11 @@ UPDATE core_provider_defs SET wire = CASE harness
     WHEN 'codex' THEN 'openai-responses' WHEN 'agy' THEN 'gemini-generate'
     ELSE 'anthropic-messages' END;
 ALTER TABLE core_provider_defs ADD COLUMN key_prefix TEXT
-    CHECK (key_prefix IS NULL OR length(key_prefix) BETWEEN 6 AND 32);
+    CHECK (key_prefix IS NULL OR length(key_prefix) BETWEEN 6 AND 16);
+-- The path of an authenticated one-shot test, under the base URL (`/key` for OpenRouter), for a
+-- provider whose model list needs no key; NULL: the wire's own model list.
+ALTER TABLE core_provider_defs ADD COLUMN test_path TEXT
+    CHECK (test_path IS NULL OR length(test_path) BETWEEN 2 AND 100);
 
 -- What one session may spend through this account (NULL: only the budgets limit it), and the last
 -- one-shot `gateway.test` of its key: when, and the status class it answered (never provider text).
@@ -27,6 +31,8 @@ ALTER TABLE core_accounts ADD COLUMN last_test_result TEXT
 -- column's own CHECK is dropped with the column; the copy keeps the data and the name (the table is
 -- not rebuilt: the pool seats, limits and events that reference it would be cascaded away by the
 -- implicit delete of a DROP TABLE). The default is only what the ADD needs; every row is set next.
+-- It stays on the column for good (SQLite cannot drop a default without a rebuild), so an insert
+-- that names no provider would read `anthropic`: every writer names one (`accounts::create`).
 ALTER TABLE core_accounts ADD COLUMN provider_id TEXT NOT NULL DEFAULT 'anthropic'
     CHECK (length(provider_id) BETWEEN 1 AND 32 AND substr(provider_id, 1, 1) GLOB '[a-z]'
            AND provider_id NOT GLOB '*[^a-z0-9-]*');

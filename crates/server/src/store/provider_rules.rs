@@ -41,6 +41,12 @@ pub fn problem(d: &Definition) -> Option<String> {
             wire_for(&d.harness)
         ));
     }
+    if let Some(p) = d.test_path.as_deref().filter(|p| !test_path_ok(p)) {
+        return Some(format!(
+            "test_path {p:?} is a path under the base URL: / then 1 to 99 of [A-Za-z0-9._~/-], \
+             with no empty or dot segment"
+        ));
+    }
     let prefix = d.key_prefix.as_deref()?;
     if let Some(why) = key_prefix_problem(prefix) {
         return Some(why.to_owned());
@@ -56,6 +62,17 @@ pub fn problem(d: &Definition) -> Option<String> {
     // host in front of a key in the sandbox.
     (d.delivery.iter().any(|m| m == "env") || !d.delivery.iter().any(|m| m == "gateway"))
         .then(|| "a definition with a key_prefix holds keys through the gateway only: delivery is [\"gateway\"]".to_owned())
+}
+
+/// Whether `p` is a plain path for the one-shot test: no query, no dot segment, no escapes.
+fn test_path_ok(p: &str) -> bool {
+    (2..=100).contains(&p.len())
+        && p.starts_with('/')
+        && p.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._~/-".contains(&b))
+        && p[1..]
+            .split('/')
+            .all(|s| !s.is_empty() && s != "." && s != "..")
 }
 
 /// Why a model id is not acceptable, if it is not. The gateway compares a request's model with the

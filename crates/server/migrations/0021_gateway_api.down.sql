@@ -4,5 +4,6 @@ ALTER TABLE core_accounts DROP COLUMN last_test_result;
 ALTER TABLE core_accounts DROP COLUMN last_test_at;
 ALTER TABLE core_accounts DROP COLUMN session_max_usd_micros;
 ALTER TABLE core_accounts DROP COLUMN session_max_tokens;
+ALTER TABLE core_provider_defs DROP COLUMN test_path;
 ALTER TABLE core_provider_defs DROP COLUMN key_prefix;
 ALTER TABLE core_provider_defs DROP COLUMN wire;

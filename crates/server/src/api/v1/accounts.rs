@@ -260,8 +260,10 @@ pub async fn set_cap(
     request_body = SessionLimits,
     responses((status = 200, description = "What one session may spend through this account \
         (audited as `account.session_limits_set`); a dimension left out is cleared. The Core's \
-        ceiling for a gateway session honours it beside the budgets. It raises what a session \
-        may spend, so it needs a step-up", body = ProviderAccount)))]
+        ceiling for a gateway session honours it beside the budgets, from the next time a \
+        ceiling is set (a session's start, its resume, or the top-up of its ceiling): a session \
+        that is running keeps the ceiling it holds until then. It raises what a session may \
+        spend, so it needs a step-up", body = ProviderAccount)))]
 pub async fn set_session_limits(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
@@ -288,17 +290,20 @@ pub async fn set_session_limits(
         gateway of a runner that is online, in the key's scope and offers it: the status class \
         and the latency, never a body. Stored on the account and audited as `account.tested`. 409 \
         `no_runner` when none is ready; 429 when the account was tested within a minute or a \
-        test is running; 502 when the runner failed", body = AccountTested)))]
+        test is running. A provider whose model list needs no key and that declares no \
+        `test_path` answers `inconclusive` (nothing is sent), never `ok`", body = AccountTested),
+        (status = 502, description = "The runner failed or did not answer the test (code \
+        `runner_failed`); the attempt is recorded as `failed` and counts for the rate limit")))]
 pub async fn test_account(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Path(id): Path<String>,
 ) -> ApiResult<AccountTested> {
-    use crate::agents::gateway::test::{Failed, class_name, run};
+    use crate::agents::gateway::test::{Failed, run};
     let id = num(&id, "account")?;
     match run(&app, &me, id).await {
         Ok(t) => Ok(Json(AccountTested {
-            result: class_name(t.result),
+            result: t.result,
             latency_ms: t.latency_ms,
             runner: t.runner,
         })),

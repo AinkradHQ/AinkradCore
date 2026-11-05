@@ -14,6 +14,12 @@ pub(super) struct Route {
     pub wire: Wire,
     /// Set for a user-defined provider.
     pub user_key: Option<UserKeyDef>,
+    /// The definition's authenticated test path (user definitions only).
+    pub test_path: Option<String>,
+    /// Whether a test of this provider says anything about the key: a built-in's model list is
+    /// authenticated, a user definition's is only if it declares a `test_path`. Otherwise a test
+    /// is `inconclusive`, never `ok`, and never clears an auth failure.
+    pub can_test: bool,
 }
 
 fn wire_named(name: &str) -> Option<Wire> {
@@ -40,7 +46,14 @@ pub(super) fn of(def: &Definition, base_url: &str) -> Result<Route, Refusal> {
         }),
         (false, None) => return Err(refuse("the provider declares no key_prefix")),
     };
-    Ok(Route { wire, user_key })
+    let test_path = def.test_path.clone().filter(|_| !def.builtin);
+    let can_test = def.builtin || test_path.is_some();
+    Ok(Route {
+        wire,
+        user_key,
+        test_path,
+        can_test,
+    })
 }
 
 fn builtin(provider: &str) -> bool {
@@ -72,6 +85,17 @@ pub(in crate::agents) fn secrets_problem(
             .filter(|s| !served_by_gateway(&s.name))
             .map(|s| (s.name.as_str(), s.var.as_str())),
     )
+    .or_else(|| {
+        // Whatever provider the gateway serves, no sibling secret may steer traffic (the env rule
+        // above judges only the secrets it knows a provider for).
+        let gateway = secrets
+            .iter()
+            .any(|s| crate::store::gateway::account_secret(&s.name).is_some());
+        (gateway && secrets.iter().any(|s| ainkrad_proto::v2::redirects_traffic(&s.var))).then_some(
+            "a session holding a provider-account secret may not set a proxy, base URL, endpoint or \
+             certificate variable: it could redirect the key",
+        )
+    })
     .or_else(|| {
         secrets
             .iter()
@@ -105,6 +129,7 @@ mod tests {
             priced_at: None,
             wire: "openai-responses".to_owned(),
             key_prefix: prefix.map(str::to_owned),
+            test_path: None,
             builtin: false,
             version: 1,
         }
@@ -160,5 +185,19 @@ mod tests {
             assert!(secrets_problem("codex", &[s(name)]).is_some(), "{name}");
         }
         assert_eq!(secrets_problem("codex", &[s("git.token")]), None);
+        // A sibling secret may not steer traffic beside a user provider's account either.
+        for var in ["OPENAI_BASE_URL", "HTTPS_PROXY", "SSL_CERT_FILE"] {
+            let both = [
+                s("acct.openrouter.7"),
+                SessionSecret {
+                    name: "git.token".to_owned(),
+                    var: var.to_owned(),
+                },
+            ];
+            let why = secrets_problem("codex", &both).expect(var);
+            assert!(why.contains("redirect"), "{var}: {why}");
+            // The same secret without an account is the old rule.
+            assert_eq!(secrets_problem("codex", &both[1..]), None, "{var}");
+        }
     }
 }

@@ -125,7 +125,8 @@ pub struct SessionLimits {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct LastTest {
     /// The status class the provider answered: `ok`, `rate_limited`, `quota`, `auth_failed`,
-    /// `server_error`, `unreachable`, `refused_address` or `tls_failed`. Never provider text.
+    /// `server_error`, `unreachable`, `refused_address`, `tls_failed`, `inconclusive` (see
+    /// [`AccountTested`]) or `failed` (the runner did not answer). Never provider text.
     pub result: String,
     pub at: Timestamp,
 }
@@ -133,10 +134,11 @@ pub struct LastTest {
 /// What `POST /accounts/{id}/test` answers: a status class and a latency, never a response body.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AccountTested {
-    /// As [`LastTest::result`].
+    /// As [`LastTest::result`], or `inconclusive`: the provider's model list needs no key and its
+    /// definition declares no `test_path`, so nothing was sent and nothing is known of the key.
     pub result: String,
     pub latency_ms: u64,
-    /// The runner device that made the request.
+    /// The runner device that made the request (empty when `result` is `inconclusive`).
     pub runner: String,
 }
 
@@ -170,6 +172,12 @@ pub struct Provider {
     /// (`delivery` is `["gateway"]`): the broker binds each key to the account's host by it.
     #[serde(default)]
     pub key_prefix: Option<String>,
+    /// The authenticated path (under the base URL, such as `/key`) of the one-shot account test,
+    /// for a provider whose model list needs no key (OpenRouter's is public: a revoked key would
+    /// read as `ok`). A user definition without one cannot be tested: the answer is
+    /// `inconclusive`. Built-ins use their wire's own model list.
+    #[serde(default)]
+    pub test_path: Option<String>,
     /// The harness's own authentication variable.
     pub auth_var: String,
     /// `https://`, a public DNS name.
@@ -199,6 +207,7 @@ impl From<Definition> for Provider {
             harness: d.harness,
             wire: Some(d.wire),
             key_prefix: d.key_prefix,
+            test_path: d.test_path,
             auth_var: d.auth_var,
             base_url: d.base_url,
             usage_parser: d.usage_parser,
@@ -228,6 +237,7 @@ impl From<Provider> for Definition {
             harness: p.harness,
             wire: p.wire.unwrap_or_default(),
             key_prefix: p.key_prefix,
+            test_path: p.test_path,
             auth_var: p.auth_var,
             base_url: p.base_url,
             usage_parser: p.usage_parser,

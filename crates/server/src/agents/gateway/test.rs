@@ -10,10 +10,18 @@ use crate::store::account_keys;
 /// A test at most this often per account.
 const EVERY_SECS: i64 = 60;
 
-/// What a test answered.
+/// The class recorded when a test was sent and did not answer (the runner failed or timed out):
+/// the attempt counts for the rate limit, and says so.
+const FAILED: &str = "failed";
+
+/// The class of a test of a provider whose model list says nothing about the key.
+pub const INCONCLUSIVE: &str = "inconclusive";
+
+/// What a test answered. `result` is a status class (`ok`, `auth_failed`, ...), or `inconclusive`.
 pub struct Tested {
-    pub result: UpstreamStatus,
+    pub result: String,
     pub latency_ms: u64,
+    /// The runner that made the request; empty for an `inconclusive` test, which sent none.
     pub runner: String,
 }
 
@@ -65,42 +73,70 @@ pub fn class_name(s: UpstreamStatus) -> String {
 }
 
 /// Tests account `id`'s key through a runner, on behalf of `caller` (an admin), and records the
-/// outcome in the account's test columns and the audit.
+/// outcome in the account's test columns and the audit. A test that was sent and did not answer is
+/// recorded too (`failed`), so a failing runner is limited like a working one. The account stays
+/// marked as under test until the record is written.
 pub async fn run(app: &App, caller: &Caller, id: i64) -> Result<Tested, Failed> {
     let a = accounts::get(&app.pool, id).await.map_err(from_store)?;
-    let now = app.clock.now();
-    if account_keys::tested_within(&app.pool, id, &now, EVERY_SECS).await? {
+    if account_keys::tested_within(&app.pool, id, &app.clock.now(), EVERY_SECS).await? {
         return Err(Failed::Soon("an account is tested at most once a minute"));
     }
     // One test of a key at a time, also against the auth-failure check that shares the set.
     if !app.agents.confirming.lock().unwrap().insert(id) {
         return Err(Failed::Soon("a test of this account is running"));
     }
-    let done = once(app, caller, &a).await;
+    let mut sent_to = None;
+    let done = once(app, caller, &a, &mut sent_to).await;
+    let by = &caller.device.id;
+    let recorded = match (&done, &sent_to) {
+        (Ok(t), _) => record(app, id, &t.result, t.latency_ms, &t.runner, by).await,
+        (Err(_), Some(runner)) => record(app, id, FAILED, 0, runner, by).await,
+        (Err(_), None) => Ok(()),
+    };
     app.agents.confirming.lock().unwrap().remove(&id);
     let tested = done?;
-    let by = &caller.device.id;
-    let result = class_name(tested.result);
-    account_keys::record_test(
-        &app.pool,
-        id,
-        &result,
-        tested.latency_ms,
-        &tested.runner,
-        by,
-        crate::api::v1::BY,
-        &app.clock.now(),
-    )
-    .await
-    .map_err(from_store)?;
+    recorded.map_err(from_store)?;
     Ok(tested)
 }
 
-async fn once(app: &App, caller: &Caller, a: &accounts::Account) -> Result<Tested, Failed> {
+async fn record(
+    app: &App,
+    id: i64,
+    result: &str,
+    latency_ms: u64,
+    runner: &str,
+    by_device: &str,
+) -> Result<(), secrets::Error> {
+    let now = app.clock.now();
+    let actor = crate::api::v1::BY;
+    account_keys::record_test(
+        &app.pool, id, result, latency_ms, runner, by_device, actor, &now,
+    )
+    .await
+    .map(drop)
+}
+
+/// The test itself. `sent_to` is set once a lease was minted for a runner: from there the attempt
+/// is recorded whatever happens, and a lease the runner never redeemed is revoked.
+async fn once(
+    app: &App,
+    caller: &Caller,
+    a: &accounts::Account,
+    sent_to: &mut Option<String>,
+) -> Result<Tested, Failed> {
     let def = providers::get(&app.pool, &a.provider)
         .await
         .map_err(from_store)?;
     let route = route::of(&def, &a.base_url).map_err(describe_refusal)?;
+    // A provider whose model list needs no key (OpenRouter's) cannot say anything about the key
+    // without a declared authenticated path: nothing is leased, and the answer is never `ok`.
+    if !route.can_test {
+        return Ok(Tested {
+            result: INCONCLUSIVE.to_owned(),
+            latency_ms: 0,
+            runner: String::new(),
+        });
+    }
     let upstream = upstream_of(&a.base_url, route.wire).map_err(describe_refusal)?;
     // Only a runner that is there, offers the gateway and is in the key's scope is asked, and
     // nothing is leased for another: a lease nobody redeems counts against the runner's cap.
@@ -128,24 +164,36 @@ async fn once(app: &App, caller: &Caller, a: &accounts::Account) -> Result<Teste
     )
     .await
     .map_err(from_store)?;
+    *sent_to = Some(runner.clone());
     let test = GatewayTest {
-        lease,
+        lease: lease.clone(),
         provider: a.provider.clone(),
         user_key: route.user_key,
         upstream,
+        test_path: route.test_path,
     };
-    let proof = app.hub.gateway_test_elevation(caller);
-    let sent = app
-        .hub
-        .dispatch_elevated(&runner, Command::GatewayTest(test), proof)
-        .map_err(|e| Failed::Runner(e.message))?;
-    let answer = tokio::time::timeout(TEST_WAIT, sent.outcome())
-        .await
-        .map_err(|_| Failed::Runner("the runner did not answer the test in time".to_owned()))?
-        .map_err(|e| Failed::Runner(e.message))?;
+    let asked = async {
+        let sent = app
+            .hub
+            .dispatch_gateway_test(&runner, test)
+            .map_err(|e| Failed::Runner(e.message))?;
+        tokio::time::timeout(TEST_WAIT, sent.outcome())
+            .await
+            .map_err(|_| Failed::Runner("the runner did not answer the test in time".to_owned()))?
+            .map_err(|e| Failed::Runner(e.message))
+    }
+    .await;
+    let answer = match asked {
+        Ok(answer) => answer,
+        Err(e) => {
+            // Nobody redeems it now: it must not stay live against the runner's cap.
+            let _ = account_keys::revoke_unused_lease(&app.pool, &lease).await;
+            return Err(e);
+        }
+    };
     match answer {
         Body::Result(Reply::GatewayTest(t)) => Ok(Tested {
-            result: t.result,
+            result: class_name(t.result),
             latency_ms: t.latency_ms,
             runner,
         }),

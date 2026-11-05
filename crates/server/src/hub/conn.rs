@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, CONTROL_STREAM, Control, CoreWelcome, Frame, Heartbeat, PROTOCOL_VERSION, RunnerHello,
-    close_code,
+    Body, CONTROL_STREAM, Command, Control, CoreWelcome, Frame, GatewayTest, Heartbeat,
+    PROTOCOL_VERSION, RunnerHello, StreamError, close_code,
 };
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use tokio::sync::{Notify, mpsc};
@@ -16,7 +16,7 @@ use tokio::time::Instant;
 use serde_json::{Value, json};
 
 use super::connect::send;
-use super::{Elevated, Hub, OUT_QUEUE};
+use super::{Dispatched, Hub, OUT_QUEUE};
 use crate::api::App;
 use crate::store::gov::Device;
 
@@ -246,12 +246,16 @@ async fn mark_used(app: &App, device: &Device) {
 }
 
 impl Hub {
-    /// The capability of `POST /accounts/{id}/test` (`admin`, not destructive: the design's §5.2).
-    /// It sends `gateway.test` only: one fixed, free request, to the host the account's key was
-    /// bound to when it was stored, through a runner that is in the key's scope. It runs no code
-    /// and takes no request-supplied URL. Not a route entry point for any other op.
-    pub(crate) fn gateway_test_elevation(&self, caller: &crate::api::v1::Caller) -> Elevated {
-        debug_assert!(caller.device.scopes.iter().any(|s| s == "admin"));
-        Elevated(())
+    /// The only way `POST /accounts/{id}/test` reaches a runner (`admin`, not destructive: the
+    /// design's §5.2): it builds the one op itself, so the route can send `gateway.test` and
+    /// nothing else, and no `Elevated` is minted for it. The test is one fixed, free request to the
+    /// host the account's key was bound to, through a runner in the key's scope; it runs no code
+    /// and takes no request-supplied URL.
+    pub(crate) fn dispatch_gateway_test(
+        self: &Arc<Self>,
+        runner: &str,
+        test: GatewayTest,
+    ) -> Result<Dispatched, StreamError> {
+        self.send_command(runner, Command::GatewayTest(test))
     }
 }

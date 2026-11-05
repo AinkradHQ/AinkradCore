@@ -153,6 +153,7 @@ async fn a_user_definitions_own_prices_are_the_fallback_when_the_book_has_none()
         priced_at: Some("2026-11-01T00:00:00Z".to_owned()),
         wire: String::new(),
         key_prefix: None,
+        test_path: None,
         builtin: false,
         version: 0,
     };
