@@ -103,11 +103,11 @@ pub(super) async fn feed(g: &G, reports: Vec<GatewayReport>) -> Result<u64, sqlx
     store::apply(&g.fx.app.pool, &g.session.id, &ev, NOW).await
 }
 
-async fn acked(g: &G) -> u64 {
+pub(super) async fn acked(g: &G) -> u64 {
     gw::acked(&g.fx.app.pool, &g.session.id).await.unwrap()
 }
 
-async fn keys(g: &G) -> Vec<String> {
+pub(super) async fn keys(g: &G) -> Vec<String> {
     sqlx::query_scalar("SELECT idempotency_key FROM core_cost_events WHERE session = ? ORDER BY id")
         .bind(&g.session.id)
         .fetch_all(&g.fx.app.pool)
@@ -115,7 +115,7 @@ async fn keys(g: &G) -> Vec<String> {
         .unwrap()
 }
 
-async fn price(g: &G) {
+pub(super) async fn price(g: &G) {
     prices::set(
         &g.fx.app.pool,
         "anthropic",
@@ -238,9 +238,11 @@ async fn an_unreachable_upstream_with_an_estimated_count_is_recorded_and_flagged
         approximate: true,
         ..usage(1, 700, 300)
     };
-    // The provider's own figure, when its response said one, wins over the price book.
+    // A runner's own figure for the cost is never taken: the price book prices the request, even
+    // when the report says it was free.
+    price(&g).await;
     let reported = GatewayReport {
-        reported_usd_micros: Some(1_234),
+        reported_usd_micros: Some(0),
         ..usage(2, 10, 10)
     };
     feed(&g, vec![cut, reported]).await.unwrap();
@@ -253,9 +255,10 @@ async fn an_unreachable_upstream_with_an_estimated_count_is_recorded_and_flagged
         (true, 700, 300)
     );
     assert_eq!(old.account_id, Some(g.account.id));
+    // 10 in at $3 and 10 out at $15 per Mtok, in micro-dollars.
     assert_eq!(
         (new.basis.as_str(), new.cost_usd_micros),
-        ("provider_reported", Some(1_234))
+        ("list_price", Some(30 + 150))
     );
     assert_eq!(acked(&g).await, 2);
 }

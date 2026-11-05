@@ -106,7 +106,9 @@
 ///    `GatewayTested` in the runner schema; no operation changes.
 /// 38: the auth gateway's usage reports (KAN-435 G4): `GatewayReport` in `AgentEvents` and `gw_after` in
 ///    `AgentRead`, in the runner schema; no operation changes.
-pub const API_MINOR: u32 = 38;
+/// 39: the auth gateway's account signals (KAN-435 G5): the `account.auth_failed` and `account.auth_inconclusive`
+///    audit actions; no operation changes.
+pub const API_MINOR: u32 = 39;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

@@ -536,3 +536,43 @@ async fn a_report_carries_the_epoch_the_gateway_was_opened_under() {
     assert_eq!(reports.batch()[0].epoch, 5);
     drop(root);
 }
+
+#[tokio::test]
+async fn an_ended_session_reads_as_running_until_its_gateway_has_handed_over_its_reports() {
+    let r = rig("gw-drain", true);
+    r.d.start(gateway_start("l_fast")).unwrap();
+    until("the harness to run", || {
+        r.rec.started.load(Ordering::SeqCst) == 1
+    })
+    .await;
+    r.d.end(
+        SESSION,
+        ainkrad_proto::runner::Outcome::Cancelled {
+            reason: "stopped".to_owned(),
+        },
+    );
+    // The real forwarder finishes once the gateway is gone; then hold it open by hand, as a request a
+    // stop aborted does while its approximate charge is still on the way.
+    until("the forwarder to finish", || {
+        !r.d.sessions.lock().unwrap()[SESSION].gw_forwarding
+    })
+    .await;
+    r.d.with(SESSION, |live, _, _| {
+        live.gw_forwarding = true;
+        live.drain_until = Some(std::time::Instant::now() + Duration::from_secs(60));
+    });
+    let read = AgentRead {
+        session: SESSION.to_owned(),
+        after: 0,
+        wait_ms: Some(50),
+        gw_after: 0,
+    };
+    let ev = r.d.read(&read).await.unwrap();
+    assert_eq!(ev.state, AgentState::Running, "its reports are not all in");
+    assert!(ev.outcome.is_none());
+    r.d.with(SESSION, |live, _, _| live.gw_forwarding = false);
+    let ev = r.d.read(&read).await.unwrap();
+    assert_eq!(ev.state, AgentState::Ended);
+    assert!(ev.outcome.is_some());
+    r.rec.hold.notify_one();
+}

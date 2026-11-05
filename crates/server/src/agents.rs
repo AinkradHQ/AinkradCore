@@ -19,6 +19,7 @@
 
 pub mod gateway;
 mod launch;
+mod topup;
 pub mod wake;
 use launch::launch;
 pub use launch::{Placement, placement};
@@ -642,6 +643,9 @@ impl ModuleAgents {
         if sandbox_without_flag {
             return Err(invalid_args("a sandboxed mode needs the sandbox flag"));
         }
+        if let Some(why) = gateway::module_refusal(new.secrets) {
+            return Err(invalid_args(why));
+        }
         admit_holding(app, new.runner, new.harness, new.policy, new.secrets).await?;
         let s = store::create_owned_ref(
             &app.pool,
@@ -792,10 +796,6 @@ async fn run(app: &App, id: &str) {
     }
 }
 
-fn after_gw(s: &Session) -> u64 {
-    u64::try_from(s.gw_seq).unwrap_or(0)
-}
-
 /// One long poll: stores what came; an `interrupted` or `ended` runner state, once every entry
 /// is stored, moves the session.
 async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal> {
@@ -804,7 +804,7 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
     // The reports the ledger holds, as of the transaction that last committed: what the Core
     // acknowledges is never ahead of it (an answer whose ledger write failed is resent).
     let req = Command::AgentRead(AgentRead {
-        gw_after: after_gw(s),
+        gw_after: crate::store::gateway::ack_after(&app.pool, &s.id).await?,
         session: s.id.clone(),
         after,
         wait_ms: Some(wait),
@@ -825,7 +825,7 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
     // Reports this answer moved the ledger's cursor over: more may be waiting (the runner sends a
     // batch at a time), so a session is not over for the Core until a read brings none that
     // advance it. A hole that never fills does not hold a session open: it is logged and passed.
-    let reported = crate::store::gateway::acked(&app.pool, &s.id).await? > after_gw(s);
+    let reported = crate::store::gateway::cursor(&app.pool, &s.id).await? != (s.gw_epoch, s.gw_seq);
     if !reported && !ev.gateway.is_empty() {
         tracing::warn!(
             session = s.id,
@@ -865,12 +865,16 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
             store::end(&app.pool, &s.id, "ended", &outcome, &app.clock.now()).await?;
             // The runner may drop its copy: the Core holds all of it.
             let ack = Command::AgentRead(AgentRead {
-                gw_after: crate::store::gateway::acked(&app.pool, &s.id).await?,
+                gw_after: crate::store::gateway::ack_after(&app.pool, &s.id).await?,
                 session: s.id.clone(),
                 after: held,
                 wait_ms: None,
             });
-            let _ = ask(app, &s.runner, ack, cfg.answer, None).await;
+            // What this last answer carries is stored too: the gateway's final reports (the
+            // requests a stop aborted, charged approximately) may come only with it.
+            if let Ok(ev) = ask(app, &s.runner, ack, cfg.answer, None).await {
+                store::apply(&app.pool, &s.id, &ev, &app.clock.now()).await?;
+            }
         }
         AgentState::Interrupted => {
             let why = "the runner restarted";

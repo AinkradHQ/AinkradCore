@@ -180,6 +180,14 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
             return Err(e);
         }
     }
+    // A stored module session naming an API-key account (created before the refusal) is refused too.
+    if s.owner_module.is_some()
+        && let Some(why) = gateway::module_refusal(&s.secrets)
+    {
+        let e = Refusal::Runner(StreamError::new(ErrorCode::InvalidArgs, why));
+        fail(app, s, &describe(&e)).await;
+        return Err(e);
+    }
     // A session holding a provider-account secret is placed before any lease is minted, so a
     // runner that may not take it (macOS, no proven filter) never sees one.
     if holds_account(&s.secrets)

@@ -65,12 +65,13 @@ pub fn gateway_secret(secrets: &[SessionSecret]) -> Option<&SessionSecret> {
     secrets.iter().find(|s| account_secret(&s.name).is_some())
 }
 
-/// What the cheapest priced model needs for one turn to be admitted: `MIN_CONTEXT_TOKENS` of input
+/// What the session's own `model` (the cheapest priced one when it names none) needs for one turn to be admitted: `MIN_CONTEXT_TOKENS` of input
 /// and `MAX_OUTPUT_TOKENS` of output at its list price, rounded up as the gateway rounds. 0 with
 /// no prices.
-pub fn min_turn_usd(prices: &[ModelPrice]) -> u64 {
+pub fn min_turn_usd(prices: &[ModelPrice], model: Option<&str>) -> u64 {
     prices
         .iter()
+        .filter(|p| model.is_none_or(|m| p.model == m))
         .map(|p| {
             let sum = u128::from(MIN_CONTEXT_TOKENS) * u128::from(p.input)
                 + u128::from(MAX_OUTPUT_TOKENS) * u128::from(p.output);
@@ -80,8 +81,12 @@ pub fn min_turn_usd(prices: &[ModelPrice]) -> u64 {
         .unwrap_or(0)
 }
 
+mod ceiling;
 mod reports;
+mod signals;
+pub use ceiling::*;
 pub use reports::*;
+pub use signals::*;
 
 /// The budgets' subjects of an account: itself and every pool it is in.
 async fn subjects_of(
@@ -171,6 +176,10 @@ pub async fn reserve(
         )));
     }
     let held = |n: Option<u64>| i64::try_from(n.unwrap_or(0)).unwrap_or(i64::MAX);
+    // The old hold goes first, in this transaction: `reserve_in` only replaces the holds of the
+    // budgets that apply now, so one on a pool the account has left would otherwise stay until it
+    // lapses (a hold lasts a week; a session that outlives it is counted by its spend alone).
+    guard::release_in(&mut tx, session).await?;
     let granted = guard::reserve_in(
         &mut tx,
         session,
@@ -234,18 +243,19 @@ mod tests {
     #[test]
     fn a_turn_costs_its_input_and_its_longest_output_at_the_cheapest_price() {
         let p = |input, output| ModelPrice {
-            model: "m".to_owned(),
+            model: if input == 1_000_000 { "cheap" } else { "dear" }.to_owned(),
             input,
             output,
             cache_read: 0,
             cache_write: 0,
         };
-        assert_eq!(min_turn_usd(&[]), 0);
+        assert_eq!(min_turn_usd(&[], None), 0);
         // 0.2 Mtok in at $3 and 0.128 Mtok out at $15, in micro-dollars: 600000 + 1920000.
-        assert_eq!(min_turn_usd(&[p(3_000_000, 15_000_000)]), 2_520_000);
-        assert_eq!(
-            min_turn_usd(&[p(3_000_000, 15_000_000), p(1_000_000, 5_000_000)]),
-            840_000
-        );
+        assert_eq!(min_turn_usd(&[p(3_000_000, 15_000_000)], None), 2_520_000);
+        let both = [p(3_000_000, 15_000_000), p(1_000_000, 5_000_000)];
+        assert_eq!(min_turn_usd(&both, None), 840_000);
+        // A session that pins its model is held to that model's turn, not the cheapest one's.
+        assert_eq!(min_turn_usd(&both, Some("dear")), 2_520_000);
+        assert_eq!(min_turn_usd(&both, Some("cheap")), 840_000);
     }
 }

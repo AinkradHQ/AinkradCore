@@ -9,10 +9,12 @@ use sqlx::{Row, SqliteConnection};
 
 use super::super::agents::SessionSecret;
 use super::super::budgets::guard;
-use super::super::costs::{self, NewCost};
+use super::super::costs::{self, NewCost, Pricing};
 use super::super::prices;
+use super::super::prices::Rates;
 use super::super::secrets::Error;
-use super::{MAX_CONFIRM_TRIES, account_secret, gateway_secret, refs, subjects_of};
+use super::ceiling::snapshot_rates;
+use super::{account_secret, gateway_secret, refs, subjects_of};
 
 /// The largest count the ledger takes from one report (a runner's number is not trusted to be sane:
 /// the sums over the ledger must never overflow).
@@ -57,8 +59,8 @@ pub async fn absorb(
     now: &str,
 ) -> Result<bool, sqlx::Error> {
     let row = sqlx::query(
-        "SELECT gateway_account_id, gw_seq, harness, secrets, gw_stop FROM core_agent_sessions \
-         WHERE id = ?",
+        "SELECT gateway_account_id, gw_seq, gw_epoch, harness, secrets, gw_stop, gw_prices \
+         FROM core_agent_sessions WHERE id = ?",
     )
     .bind(session)
     .fetch_optional(&mut *conn)
@@ -74,23 +76,42 @@ pub async fn absorb(
         tracing::error!(session, "a gateway session without its account secret");
         return Ok(true);
     };
+    let snapshot = snapshot_rates(row.try_get::<Option<String>, _>("gw_prices")?.as_deref());
     let mut cursor = u64::try_from(seq).unwrap_or(0);
-    let start = cursor;
+    let mut epoch = u32::try_from(row.try_get::<i64, _>("gw_epoch")?).unwrap_or(0);
+    let (start, start_epoch) = (cursor, epoch);
     let mut ordered: Vec<&GatewayReport> = reports.iter().collect();
-    ordered.sort_by_key(|r| r.gw_seq);
+    ordered.sort_by_key(|r| (r.epoch, r.gw_seq));
     for r in ordered {
-        if r.gw_seq <= cursor {
+        if r.epoch < epoch {
+            continue; // an older epoch's report, held already
+        }
+        if r.epoch > epoch && r.gw_seq <= cursor {
+            // A newer epoch numbering at or below the cursor: the runner lost its state and began
+            // again from 1. It is not a resend, so the cursor starts over under the new epoch.
+            cursor = 0;
+        }
+        if r.epoch == epoch && r.gw_seq <= cursor {
             continue; // held already: a resend, still acknowledged
         }
         if r.gw_seq != cursor + 1 {
             break; // a hole: the rest waits for the next read, from the cursor
         }
-        record(conn, session, account, provider, &harness, r, now).await?;
+        let bound = Bound {
+            session,
+            account,
+            provider,
+            harness: &harness,
+            snapshot: &snapshot,
+        };
+        record(conn, &bound, r, now).await?;
         cursor = r.gw_seq;
+        epoch = r.epoch;
     }
-    if cursor > start {
-        sqlx::query("UPDATE core_agent_sessions SET gw_seq = ? WHERE id = ?")
+    if cursor != start || epoch != start_epoch {
+        sqlx::query("UPDATE core_agent_sessions SET gw_seq = ?, gw_epoch = ? WHERE id = ?")
             .bind(i64::try_from(cursor).unwrap_or(i64::MAX))
+            .bind(i64::from(epoch))
             .bind(session)
             .execute(&mut *conn)
             .await?;
@@ -112,21 +133,34 @@ pub async fn absorb(
     Ok(true)
 }
 
+/// What a report is recorded against: the Core's own row, never the report.
+struct Bound<'a> {
+    session: &'a str,
+    account: i64,
+    provider: &'a str,
+    harness: &'a str,
+    /// The grant's prices, for a model the book has lost.
+    snapshot: &'a [(String, Rates)],
+}
+
 /// One report, in order.
 async fn record(
     conn: &mut SqliteConnection,
-    session: &str,
-    account: i64,
-    provider: &str,
-    harness: &str,
+    b: &Bound<'_>,
     r: &GatewayReport,
     now: &str,
 ) -> Result<(), sqlx::Error> {
+    let Bound {
+        session,
+        account,
+        provider,
+        harness,
+        snapshot,
+    } = *b;
     let key = format!("gw:{session}:{}:{}", r.epoch, r.gw_seq);
     if r.kind == GatewayReportKind::Usage {
         let cache = r.cache_read.saturating_add(r.cache_write);
-        let reported = r.reported_usd_micros.map(clamp);
-        if ceiling_tokens(r.input, r.output, cache, 0) > 0 || reported.is_some() {
+        if ceiling_tokens(r.input, r.output, cache, 0) > 0 {
             // The model is the request's own text: a name the ledger does not take is "unknown".
             let model = r
                 .model
@@ -144,13 +178,22 @@ async fn record(
                 input_tokens: clamp(r.input),
                 output_tokens: clamp(r.output),
                 cache_tokens: clamp(cache),
-                reported_usd_micros: reported,
+                // The runner's own figure for the cost is never taken: what a request costs is the
+                // Core's price book (or the grant's snapshot of it), not a runner's say-so.
+                reported_usd_micros: None,
                 approximate: r.approximate,
                 subjects: &[],
                 idempotency_key: &key,
                 occurred_at: now,
             };
-            match costs::record_in(conn, &cost, now).await {
+            let pricing = match prices::rates_in(conn, provider, model).await? {
+                Some(_) => Pricing::Book,
+                None => snapshot
+                    .iter()
+                    .find(|(m, _)| m == model)
+                    .map_or(Pricing::Unpriced, |(_, r)| Pricing::Own(r.clone())),
+            };
+            match costs::record_priced_in(conn, &cost, pricing, now).await {
                 Ok(_) => {}
                 Err(Error::Db(e)) => return Err(e),
                 Err(Error::Refused { code, message: why }) => {
@@ -166,16 +209,7 @@ async fn record(
         }
     }
     if r.status == UpstreamStatus::AuthFailed {
-        sqlx::query(
-            "INSERT INTO core_account_auth_signals (account_id, session, gw_key, seen_at) \
-             VALUES (?, ?, ?, ?) ON CONFLICT (gw_key) DO NOTHING",
-        )
-        .bind(account)
-        .bind(session)
-        .bind(&key)
-        .bind(now)
-        .execute(&mut *conn)
-        .await?;
+        super::signals::record(conn, account, session, &key, now).await?;
     }
     Ok(())
 }
@@ -219,51 +253,14 @@ pub async fn mark_stopped(pool: &SqlitePool, session: &str, at: i64) -> Result<(
     .map(drop)
 }
 
-/// The pending auth signal of `account` and how often it was tried, oldest first.
-pub async fn pending_auth(
-    pool: &SqlitePool,
-    account: i64,
-) -> Result<Option<(i64, i64)>, sqlx::Error> {
-    sqlx::query_as(
-        "SELECT id, tries FROM core_account_auth_signals WHERE account_id = ? AND state = 'pending' \
-         ORDER BY id LIMIT 1",
-    )
-    .bind(account)
-    .fetch_optional(pool)
-    .await
-}
-
-/// One more test of the pending signal came back without an answer; after
-/// [`MAX_CONFIRM_TRIES`] it is `inconclusive` and nothing more is asked.
-pub async fn tried(pool: &SqlitePool, signal: i64, now: &str) -> Result<(), sqlx::Error> {
+/// A reason to stop the session, set once (the supervisor cancels it, as for a budget that ran out).
+pub async fn stop(pool: &SqlitePool, session: &str, why: &str) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE core_account_auth_signals SET tries = tries + 1, \
-         state = iif(tries + 1 >= ?, 'inconclusive', state), \
-         decided_at = iif(tries + 1 >= ?, ?, decided_at) WHERE id = ?",
+        "UPDATE core_agent_sessions SET gw_stop = ? WHERE id = ? AND gw_stop IS NULL \
+         AND state NOT IN ('ended', 'lost')",
     )
-    .bind(MAX_CONFIRM_TRIES)
-    .bind(MAX_CONFIRM_TRIES)
-    .bind(now)
-    .bind(signal)
-    .execute(pool)
-    .await
-    .map(drop)
-}
-
-/// Settles every pending signal of `account` as `state` (`confirmed` or `cleared`).
-pub async fn decide(
-    pool: &SqlitePool,
-    account: i64,
-    state: &str,
-    now: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE core_account_auth_signals SET state = ?, decided_at = ? \
-         WHERE account_id = ? AND state = 'pending'",
-    )
-    .bind(state)
-    .bind(now)
-    .bind(account)
+    .bind(why)
+    .bind(session)
     .execute(pool)
     .await
     .map(drop)

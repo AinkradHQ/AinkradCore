@@ -149,13 +149,22 @@ pub(super) async fn grant(app: &App, s: &Session) -> Result<Option<Issued>, Refu
         return Err(refuse(format!("the model {m} has no price for {provider}")));
     }
     let now = app.clock.now();
-    let ceiling = match gw::reserve(&app.pool, &s.id, id, gw::min_turn_usd(&prices), &now)
-        .await
-        .map_err(lift)?
+    let ceiling = match gw::reserve(
+        &app.pool,
+        &s.id,
+        id,
+        gw::min_turn_usd(&prices, s.model.as_deref()),
+        &now,
+    )
+    .await
+    .map_err(lift)?
     {
         gw::Hold::Granted(c) => c,
         gw::Hold::Denied(why) => return Err(refuse(why)),
     };
+    // What the gateway is given is kept: the Core prices from it if the book loses a model, and
+    // tops the ceiling up from it (`agents::topup`).
+    gw::save_grant(&app.pool, &s.id, ceiling, &book).await?;
     let (lease, until) = secrets::lease_to(
         &app.pool,
         &account.secret_name,
@@ -184,6 +193,16 @@ pub(super) async fn grant(app: &App, s: &Session) -> Result<Option<Issued>, Refu
     }))
 }
 
+/// Why a session owned by a module may not name an API-key account: the ledger records a gateway
+/// session against its account and pools only, so a module's agent, company and issue budgets
+/// would not bind it. Until a module's subjects are carried to the gateway's rows, it is refused.
+pub(super) fn module_refusal(secrets: &[store::SessionSecret]) -> Option<&'static str> {
+    gw::gateway_secret(secrets).map(|_| {
+        "a module's session may not use an API-key account yet: its agent, company and issue \
+         budgets would not bind the gateway's spend"
+    })
+}
+
 /// What the Core does about a gateway session after each answer it stored: a stop a budget ordered,
 /// and the check of an upstream `auth_failed`. Only the logs hear of a failure: the next answer
 /// tries again.
@@ -191,10 +210,22 @@ pub(super) async fn after(app: &App, s: &Session) {
     let Some(account) = s.gateway_account_id else {
         return;
     };
+    // A gateway that has too little left for a turn is raised, or its session marked to stop.
+    if s.state == "running" && s.gw_stop.is_none() {
+        super::topup::run(app, s).await;
+    }
     // Only a running session is stopped: another one has nothing to refuse or cancel on its runner,
-    // and its next start reserves again (a denial ends it, room lifts the mark).
-    if let Some(why) = s.gw_stop.as_deref().filter(|_| s.state == "running")
-        && let Err(e) = enforce(app, s, why).await
+    // and its next start reserves again (a denial ends it, room lifts the mark). The row is read
+    // again: the raise above may have marked it.
+    let fresh = match store::get(&app.pool, &s.id).await {
+        Ok(Some(row)) => row,
+        _ => s.clone(),
+    };
+    if let Some(why) = fresh
+        .gw_stop
+        .as_deref()
+        .filter(|_| fresh.state == "running")
+        && let Err(e) = enforce(app, &fresh, why).await
     {
         tracing::warn!(
             session = s.id,
@@ -244,8 +275,11 @@ async fn enforce(app: &App, s: &Session, why: &str) -> Result<(), Refusal> {
                 session: s.id.clone(),
                 ceiling: none,
             });
-            let first = stopped(ask(app, &s.runner, limit, wait, Some(proof)).await)?;
-            let then = stopped(ask(app, &s.runner, stop(false), wait, Some(proof)).await)?;
+            // The cancel goes out even when the limit could not be sent: a session that may still
+            // spend must not outlive a failed refusal. A failure of either is tried again.
+            let first = stopped(ask(app, &s.runner, limit, wait, Some(proof)).await);
+            let then = stopped(ask(app, &s.runner, stop(false), wait, Some(proof)).await);
+            let (first, then) = (first?, then?);
             gw::mark_stopped(&app.pool, &s.id, now).await?;
             store::action(
                 &app.pool,
@@ -298,13 +332,18 @@ async fn check(app: &App, s: &Session, account: i64) -> Result<(), Refusal> {
     let a = match accounts::get(&app.pool, account).await {
         Ok(a) => a,
         Err(secrets::Error::Refused { .. }) => {
-            return Ok(gw::decide(&app.pool, account, "inconclusive", &app.clock.now()).await?);
+            let why = "the account is gone";
+            return Ok(
+                gw::decide(&app.pool, account, "inconclusive", why, &app.clock.now()).await?,
+            );
         }
         Err(e) => return Err(lift(e)),
     };
     let now = app.clock.now();
     if a.state == "disabled" {
-        return Ok(gw::decide(&app.pool, account, "confirmed", &now).await?);
+        // Nothing to confirm and nothing tested: it ends without a verdict, not as a confirmation.
+        let why = "the account was already disabled";
+        return Ok(gw::decide(&app.pool, account, "inconclusive", why, &now).await?);
     }
     let Some(proof) = app.agents.elevated.lock().unwrap().get(&s.id).copied() else {
         return Ok(()); // no elevation to send it under: the next answer tries again
@@ -318,6 +357,12 @@ async fn check(app: &App, s: &Session, account: i64) -> Result<(), Refusal> {
         .get(&s.runner)
         .is_some_and(|r| r.online && gateway_refusal(r).is_none());
     if !ready {
+        // A live session asks again on its next pass. One that is over has no next pass: its signal
+        // ends without a verdict, recorded, rather than waiting for ever on a runner that is gone.
+        if !s.live() {
+            let why = "no runner was ready to test the key when the session ended";
+            gw::decide(&app.pool, account, "inconclusive", why, &now).await?;
+        }
         return Ok(());
     }
     // From here a lease is minted: whatever goes wrong counts as a try, so the signal ends
@@ -380,10 +425,10 @@ async fn check(app: &App, s: &Session, account: i64) -> Result<(), Refusal> {
             )
             .await
             .map_err(lift)?;
-            gw::decide(&app.pool, account, "confirmed", &now).await?;
+            gw::decide(&app.pool, account, "confirmed", "", &now).await?;
         }
         Some(UpstreamStatus::Ok | UpstreamStatus::RateLimited | UpstreamStatus::Quota) => {
-            gw::decide(&app.pool, account, "cleared", &now).await?
+            gw::decide(&app.pool, account, "cleared", "", &now).await?
         }
         _ => gw::tried(&app.pool, signal, &now).await?,
     }

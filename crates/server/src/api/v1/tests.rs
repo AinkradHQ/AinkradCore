@@ -37,6 +37,7 @@ mod costs_store;
 mod devices;
 mod events;
 mod gateway_ceiling;
+mod gateway_epoch;
 mod gateway_store;
 mod me;
 mod metrics;

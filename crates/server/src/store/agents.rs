@@ -65,6 +65,8 @@ pub struct Session {
     pub gateway_account_id: Option<i64>,
     /// The newest gateway report recorded in the ledger: what the next `agent.read` acknowledges.
     pub gw_seq: i64,
+    /// The epoch of the report `gw_seq` belongs to.
+    pub gw_epoch: i64,
     /// Why a hard-stop budget ran out for the session; the Core stops it (`agents::gateway`).
     pub gw_stop: Option<String>,
     /// When (unix seconds) the Core told the runner to refuse and cancel it.
@@ -92,7 +94,7 @@ pub struct NewSession<'a> {
 const COLUMNS: &str = "n, id, runner, harness, model, prompt, workspace, policy, secrets, state, \
     harness_session, outcome, last_seq, tokens_in, tokens_out, cache_read, cache_write, \
     cost_usd_micros, resumes, created_by, owner_module, owner_ref, created_at, updated_at, ended_at, \
-    gateway_account_id, gw_seq, gw_stop, gw_stopped_at";
+    gateway_account_id, gw_seq, gw_epoch, gw_stop, gw_stopped_at";
 
 fn of(r: &sqlx::sqlite::SqliteRow) -> Result<Session, sqlx::Error> {
     let json = |col: &str| -> Result<Option<Value>, sqlx::Error> {
@@ -136,6 +138,7 @@ fn of(r: &sqlx::sqlite::SqliteRow) -> Result<Session, sqlx::Error> {
         ended_at: r.try_get("ended_at")?,
         gateway_account_id: r.try_get("gateway_account_id")?,
         gw_seq: r.try_get("gw_seq")?,
+        gw_epoch: r.try_get("gw_epoch")?,
         gw_stop: r.try_get("gw_stop")?,
         gw_stopped_at: r.try_get("gw_stopped_at")?,
     })

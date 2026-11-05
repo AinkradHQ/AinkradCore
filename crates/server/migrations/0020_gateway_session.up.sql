@@ -16,6 +16,24 @@ ALTER TABLE core_agent_sessions ADD COLUMN gateway_account_id INTEGER;
 ALTER TABLE core_agent_sessions ADD COLUMN gw_seq INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE core_agent_sessions ADD COLUMN gw_stop TEXT;
 ALTER TABLE core_agent_sessions ADD COLUMN gw_stopped_at INTEGER;
+-- The epoch of the report `gw_seq` belongs to: a runner that lost its state renumbers from 1 under a
+-- newer epoch, which is not a resend (see `store::gateway`). The ceiling the session's gateway was
+-- last given (`i64::MAX` is no limit) and the price snapshot of its grant: a model that loses its price
+-- in the book mid-session is still priced from what the gateway enforced, and the Core tops the
+-- ceiling up (or stops the session) when the gateway has too little left for a turn.
+ALTER TABLE core_agent_sessions ADD COLUMN gw_epoch INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE core_agent_sessions ADD COLUMN gw_ceiling_tokens INTEGER;
+ALTER TABLE core_agent_sessions ADD COLUMN gw_ceiling_usd INTEGER;
+ALTER TABLE core_agent_sessions ADD COLUMN gw_prices TEXT;
+
+-- Sessions already live under an API-key account name are bound to that account's row, as the Core
+-- binds a new one at create.
+UPDATE core_agent_sessions SET gateway_account_id = (
+    SELECT min(a.id) FROM core_accounts a
+    WHERE a.secret_name GLOB 'acct.*'
+      AND a.secret_name IN (SELECT json_extract(j.value, '$.name')
+                            FROM json_each(core_agent_sessions.secrets) j)
+) WHERE state NOT IN ('ended', 'lost');
 
 -- An upstream `auth_failed` a gateway reported: ONE such signal never disables an account (a
 -- provider's blip, a stale key in one session). It is kept here, `pending`, until a one-shot

@@ -230,6 +230,13 @@ struct Meta {
 }
 
 struct Live {
+    /// Its gateway's reports are still being taken in (`forward_gateway` has not ended): requests a
+    /// stop aborted are charged after the gateway is dropped, and the Core must not be told the
+    /// session is over before it has them.
+    gw_forwarding: bool,
+    /// Until when an ended session still reads as running for that: a gateway that never lets go
+    /// does not keep a session open for ever.
+    drain_until: Option<std::time::Instant>,
     meta: Meta,
     run: i64,
     /// Unacknowledged entries, oldest first.
@@ -455,8 +462,11 @@ impl AgentDriver {
             granted: false,
             pending_limit: None,
             reports: gw::Reports::default(),
+            gw_forwarding: false,
+            drain_until: None,
         });
         live.stopped = false;
+        live.drain_until = None;
         live.granted = req.gateway.is_some();
         live.pending_limit = None;
         live.required = req.policy.required_tier();
@@ -741,6 +751,9 @@ impl AgentDriver {
             }
             live.task = None;
             live.gateway = None;
+            live.drain_until = live
+                .gw_forwarding
+                .then(|| std::time::Instant::now() + GW_DRAIN);
             live.approvals.clear();
             push(cfg, s, live, json!({"type": "ended", "outcome": outcome}));
             live.meta.state = AgentState::Ended;
@@ -1014,17 +1027,34 @@ fn events(session: &str, live: &Live, after: u64) -> AgentEvents {
         bytes = bytes.saturating_add(size);
         entries.push(entry.clone());
     }
+    // An ended session whose gateway is still handing over its last reports is not over yet.
+    let draining = live.meta.state == AgentState::Ended
+        && live.gw_forwarding
+        && live
+            .drain_until
+            .is_some_and(|t| std::time::Instant::now() < t);
     AgentEvents {
         session: session.to_owned(),
-        state: live.meta.state,
+        state: if draining {
+            AgentState::Running
+        } else {
+            live.meta.state
+        },
         last_seq: live.meta.last_seq,
         entries,
         harness_session: live.meta.harness_session.clone(),
         usage: live.meta.usage,
-        outcome: live.meta.outcome.clone(),
+        outcome: if draining {
+            None
+        } else {
+            live.meta.outcome.clone()
+        },
         gateway: live.reports.batch(),
     }
 }
+
+/// How long an ended session reads as running while its gateway hands over its last reports.
+const GW_DRAIN: Duration = Duration::from_secs(10);
 
 fn save_meta(cfg: &AgentConfig, session: &str, meta: &Meta) {
     let dir = cfg.dir.join(session);
@@ -1083,6 +1113,8 @@ fn reload(cfg: &AgentConfig) -> HashMap<String, Live> {
             granted: false,
             pending_limit: None,
             reports: gw::Reports::default(),
+            gw_forwarding: false,
+            drain_until: None,
         };
         live.reports = gw::Reports::load(cfg, &session, &live.meta);
         // A socket a dead runner left is no gateway: nothing listens on it.

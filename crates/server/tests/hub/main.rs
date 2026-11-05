@@ -10,6 +10,7 @@ mod account_placement;
 mod fault;
 mod gateway;
 mod gateway_auth;
+mod gateway_more;
 mod health;
 mod isolation;
 mod proof;
