@@ -31,9 +31,16 @@ fn wire_named(name: &str) -> Option<Wire> {
     }
 }
 
+/// Why a subscription account is refused: its env-token delivery is not built yet.
+const SUBSCRIPTION_NOT_YET: &str =
+    "a subscription account's token is not delivered to a session yet (it lands with L5, KAN-434)";
+
 /// The route of an account of `def` whose frozen base URL is `base_url`. A provider that is not
 /// delivered through the gateway, has no wire, or (a user definition) declares no key shape has none.
 pub(super) fn of(def: &Definition, base_url: &str) -> Result<Route, Refusal> {
+    if crate::store::account_keys::is_subscription(def) {
+        return Err(refuse(SUBSCRIPTION_NOT_YET));
+    }
     if !def.delivery.iter().any(|m| m == "gateway") {
         return Err(refuse("the provider is not delivered through the gateway"));
     }
@@ -69,6 +76,8 @@ fn builtin(provider: &str) -> bool {
 ///   variable, nothing that redirects traffic). An API-key account of a user-defined provider is
 ///   served by the gateway and delivers no variable, so it is not judged by a variable list that
 ///   knows three providers; the launch checks its definition's harness against the session's.
+/// - **No subscription account** (`acct.claude-sub.<id>` parses as an account name, but it is not an
+///   API key and nothing delivers it yet): refused until L5 (KAN-434).
 /// - **Never in `secrets`** (design §4.3, §10 Q4): a name under `acct.` that is not the account
 ///   model's own `acct.<provider>.<id>` would be leased into the sandbox as an environment variable,
 ///   with the key in it. It is refused, whatever the label.
@@ -76,6 +85,13 @@ pub(in crate::agents) fn secrets_problem(
     harness: &str,
     secrets: &[crate::store::agents::SessionSecret],
 ) -> Option<&'static str> {
+    let subscription = secrets.iter().any(|s| {
+        crate::store::gateway::account_secret(&s.name)
+            .is_some_and(|(p, _)| crate::store::account_keys::subscription_provider(p))
+    });
+    if subscription {
+        return Some(SUBSCRIPTION_NOT_YET);
+    }
     let served_by_gateway =
         |name: &str| crate::store::gateway::account_secret(name).is_some_and(|(p, _)| !builtin(p));
     ainkrad_proto::v2::account_var_problem(
@@ -138,6 +154,11 @@ mod tests {
     #[test]
     fn a_built_in_carries_no_key_shape_and_a_user_definition_its_prefix_and_frozen_host() {
         for d in built_in() {
+            // A subscription's token is a leased env variable (§5): the gateway never serves it.
+            if d.id == "claude-sub" {
+                assert!(of(&d, &d.base_url).is_err());
+                continue;
+            }
             let r = of(&d, &d.base_url).expect("built-ins have a route");
             assert!(r.user_key.is_none(), "{}", d.id);
             assert_eq!(r.wire, wire_named(&d.wire).unwrap());
@@ -185,6 +206,9 @@ mod tests {
             assert!(secrets_problem("codex", &[s(name)]).is_some(), "{name}");
         }
         assert_eq!(secrets_problem("codex", &[s("git.token")]), None);
+        // A subscription account's secret is no API key and has no delivery yet: refused.
+        let why = secrets_problem("claude", &[s("acct.claude-sub.7")]);
+        assert!(why.is_some_and(|w| w.contains("L5")));
         // A sibling secret may not steer traffic beside a user provider's account either.
         for var in ["OPENAI_BASE_URL", "HTTPS_PROXY", "SSL_CERT_FILE"] {
             let both = [

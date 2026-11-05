@@ -14,6 +14,8 @@ mod gateway_more;
 mod gateway_test_route;
 mod health;
 mod isolation;
+mod login;
+mod login_pool;
 mod proof;
 mod resume;
 mod routing;

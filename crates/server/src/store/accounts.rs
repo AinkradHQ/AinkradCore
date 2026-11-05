@@ -28,13 +28,16 @@ use sqlx::{Row, SqliteConnection};
 use super::secrets::{self, Error, NewValue};
 use crate::ops::secretbox::SecretBox;
 
+mod create;
+pub use create::{create, create_by};
+
 /// The cap a new API-key account starts with.
 pub const DEFAULT_CAP: i64 = 4;
 /// The most a cap may be (0 is off).
 pub const MAX_CAP: i64 = 64;
 /// The built-in providers (pools are of these only). An account may also name a stored user
 /// definition (`account_keys::holds_keys_problem`).
-pub const PROVIDERS: [&str; 3] = ["anthropic", "openai", "google"];
+pub const PROVIDERS: [&str; 4] = ["anthropic", "openai", "google", "claude-sub"];
 /// The states an account is in.
 pub const STATES: [&str; 5] = ["active", "cooling", "limited", "unhealthy", "disabled"];
 
@@ -206,87 +209,6 @@ async fn secret_exists(conn: &mut SqliteConnection, name: &str) -> Result<bool, 
         .await
 }
 
-/// Stores an account and its key together. `owner` is the storing device; `actor` is audited.
-pub async fn create(
-    pool: &SqlitePool,
-    sealer: &SecretBox,
-    new: &NewAccount<'_>,
-    owner: &str,
-    actor: AuditActor,
-    now: &str,
-) -> Result<Account, Error> {
-    if !valid_label(new.label) {
-        return refused("bad_request", "a label is [a-z][a-z0-9._-]{0,63}");
-    }
-    let cap = new.cap.unwrap_or(DEFAULT_CAP);
-    check_cap(cap)?;
-    // A pasted key often carries a trailing newline: neither the sealed value nor the tail keeps it.
-    let key = new.value.trim();
-    let mut tx = super::begin_write(pool).await?;
-    let def = match super::providers::get_in(&mut tx, new.provider).await {
-        Err(Error::Refused {
-            code: "not_found", ..
-        }) => {
-            return refused(
-                "bad_request",
-                "provider is a built-in or a stored definition",
-            );
-        }
-        found => found?,
-    };
-    if let Some(why) = super::account_keys::holds_keys_problem(&def) {
-        return refused("bad_request", why);
-    }
-    let base_url = def.base_url;
-    let taken: i64 = sqlx::query_scalar("SELECT count(*) FROM core_accounts WHERE label = ?")
-        .bind(new.label)
-        .fetch_one(&mut *tx)
-        .await?;
-    if taken > 0 {
-        return refused("conflict", "an account of that label exists");
-    }
-    // The secret's name needs the row's id, so the row goes in first and the name follows, in
-    // the same transaction; nothing outside it ever sees the placeholder.
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO core_accounts (provider, label, secret_name, masked_tail, base_url, cap, \
-         owner, created_at, updated_at) VALUES (?, ?, '', ?, ?, ?, ?, ?, ?) RETURNING id",
-    )
-    .bind(new.provider)
-    .bind(new.label)
-    .bind(tail_of(key))
-    .bind(&base_url)
-    .bind(cap)
-    .bind(owner)
-    .bind(now)
-    .bind(now)
-    .fetch_one(&mut *tx)
-    .await?;
-    let name = format!("{}{}.{id}", secrets::ACCOUNT_PREFIX, new.provider);
-    let value = NewValue {
-        value: key,
-        runners: Some(new.runners),
-        delivery: Some("env"),
-    };
-    secrets::create_in(&mut tx, sealer, &name, &value, owner, actor, now).await?;
-    sqlx::query("UPDATE core_accounts SET secret_name = ? WHERE id = ?")
-        .bind(&name)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    audit(
-        &mut tx,
-        actor,
-        "account.created",
-        id,
-        json!({"provider": new.provider, "label": new.label, "cap": cap,
-               "base_url": base_url, "runners": new.runners, "by_device": owner}),
-    )
-    .await?;
-    let a = find(&mut tx, id).await?;
-    tx.commit().await?;
-    Ok(a)
-}
-
 /// Replaces the key (and its runner scope, when given): a new broker version, the masked tail
 /// cut again, every outstanding lease on the old one dropped.
 #[allow(clippy::too_many_arguments)]
@@ -303,6 +225,12 @@ pub async fn replace_secret(
     let value = value.trim();
     let mut tx = super::begin_write(pool).await?;
     let a = find(&mut tx, id).await?;
+    if super::account_keys::subscription_provider(&a.provider) {
+        return refused(
+            "login_required",
+            "a subscription token comes from a sign-in, not a pasted value",
+        );
+    }
     let new = NewValue {
         value,
         runners,

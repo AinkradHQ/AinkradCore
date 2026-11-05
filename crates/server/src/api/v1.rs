@@ -230,6 +230,15 @@ pub fn router(app: App) -> Router {
             "/api/v1/accounts/providers/{id}",
             put(accounts::replace_provider).delete(accounts::delete_provider),
         )
+        .route("/api/v1/accounts/logins", post(accounts::start_login))
+        .route(
+            "/api/v1/accounts/logins/{id}",
+            get(accounts::get_login).delete(accounts::cancel_login),
+        )
+        .route(
+            "/api/v1/accounts/logins/{id}/code",
+            post(accounts::send_login_code),
+        )
         .route(
             "/api/v1/accounts/{id}",
             get(accounts::get).delete(accounts::delete),

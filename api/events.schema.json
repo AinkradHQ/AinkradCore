@@ -56,6 +56,10 @@
   ],
   "title": "Ainkrad event stream",
   "x-event-kinds": [
+    "account.login.done",
+    "account.login.failed",
+    "account.login.started",
+    "account.login.url",
     "agent.approval_decided",
     "agent.approval_requested",
     "agent.created",

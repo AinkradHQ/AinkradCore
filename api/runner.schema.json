@@ -531,6 +531,45 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/LoginStart",
+          "properties": {
+            "op": {
+              "const": "login.start",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/LoginCode",
+          "properties": {
+            "op": {
+              "const": "login.code",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/LoginCancel",
+          "properties": {
+            "op": {
+              "const": "login.cancel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An op from a newer Core: answered `unsupported_command`. Never sent.",
           "properties": {
             "op": {
@@ -1518,6 +1557,90 @@
       ],
       "type": "object"
     },
+    "LoginCancel": {
+      "description": "Core to runner: stop the sign-in and wipe what it made.",
+      "properties": {
+        "login_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "login_id"
+      ],
+      "type": "object"
+    },
+    "LoginCode": {
+      "description": "Core to runner: the approval code the user pasted.",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "login_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "login_id",
+        "code"
+      ],
+      "type": "object"
+    },
+    "LoginResult": {
+      "description": "Runner to Core, the answer to `login.code` and `login.cancel`: the token (once; the runner\nzeroizes its copy) or an error, never both.",
+      "properties": {
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "login_id": {
+          "type": "string"
+        },
+        "token": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "login_id"
+      ],
+      "type": "object"
+    },
+    "LoginStart": {
+      "description": "Core to runner: begin the sign-in of `harness` (`claude`).",
+      "properties": {
+        "harness": {
+          "type": "string"
+        },
+        "login_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "login_id",
+        "harness"
+      ],
+      "type": "object"
+    },
+    "LoginUrl": {
+      "description": "Runner to Core, the answer to `login.start`: where the user signs in.",
+      "properties": {
+        "login_id": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "login_id",
+        "url"
+      ],
+      "type": "object"
+    },
     "ModelPrice": {
       "description": "The list price of one model, in micro-dollars per million tokens, for the gateway's\nper-request reservation (decision: the Core's price book, carried in the grant).",
       "properties": {
@@ -2044,6 +2167,34 @@
           "properties": {
             "op": {
               "const": "gateway.test",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/LoginUrl",
+          "description": "The answer to `login.start`.",
+          "properties": {
+            "op": {
+              "const": "login.url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/LoginResult",
+          "description": "The answer to `login.code` and `login.cancel`.",
+          "properties": {
+            "op": {
+              "const": "login.result",
               "type": "string"
             }
           },

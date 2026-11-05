@@ -29,8 +29,9 @@ use super::secrets::Error;
 
 /// How a key reaches a session: a leased environment variable, or the auth gateway (KAN-435).
 pub const DELIVERY: [&str; 2] = ["env", "gateway"];
-/// How an account is signed in: a pasted key. (Device-code and browser sign-ins are not built.)
-pub const LOGIN: [&str; 1] = ["paste"];
+/// How an account is signed in: a pasted key, or the browser plus a pasted approval code
+/// (`browser_code`, a subscription: a one-shot sign-in on a runner, KAN-441). Device codes are not built.
+pub const LOGIN: [&str; 2] = ["paste", "browser_code"];
 /// The usage decoders a definition may name.
 pub const USAGE_PARSERS: [&str; 4] = ["anthropic", "openai", "google", "none"];
 const MAX_USER_DEFS: i64 = 32;
@@ -103,6 +104,18 @@ fn builtin(id: &str, name: &str, harness: &str, var: &str, url: &str, parser: &s
 
 /// The built-in providers, in code.
 pub fn built_in() -> Vec<Definition> {
+    // A Claude Pro/Max sign-in: its token is a leased env variable (never the gateway, design §5)
+    // and comes from a login (`logins`), never from a pasted value.
+    let mut sub = builtin(
+        "claude-sub",
+        "Claude subscription",
+        "claude",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "https://api.anthropic.com",
+        "anthropic",
+    );
+    sub.delivery = vec!["env".to_owned()];
+    sub.login_methods = vec!["browser_code".to_owned()];
     vec![
         builtin(
             "anthropic",
@@ -128,6 +141,7 @@ pub fn built_in() -> Vec<Definition> {
             "https://generativelanguage.googleapis.com",
             "google",
         ),
+        sub,
     ]
 }
 
@@ -193,6 +207,10 @@ pub fn problem(d: &Definition) -> Option<String> {
             "login_methods is a non-empty list of {}",
             LOGIN.join(", ")
         ));
+    }
+    // A sign-in through the browser runs a vendor CLI on a runner: only a built-in has one.
+    if d.login_methods.iter().any(|m| m == "browser_code") {
+        return Some("browser_code is a built-in's sign-in, not a definition's".to_owned());
     }
     if d.models.len() > MAX_MODELS {
         return Some(format!("at most {MAX_MODELS} models"));

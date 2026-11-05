@@ -107,7 +107,7 @@ async fn the_built_ins_are_fixed_and_a_user_definition_is_stored_audited_and_ver
         .into_iter()
         .map(|d| d.id)
         .collect();
-    assert_eq!(ids, ["anthropic", "openai", "google"]);
+    assert_eq!(ids, ["anthropic", "openai", "google", "claude-sub"]);
     assert_eq!(
         code(prov::create(p, &def("openai"), "d_x", BY, NOW).await),
         "bad_request"
@@ -153,7 +153,7 @@ async fn the_built_ins_are_fixed_and_a_user_definition_is_stored_audited_and_ver
         "a refused edit changes nothing"
     );
     prov::delete(p, "router", "d_x", BY).await.unwrap();
-    assert_eq!(prov::list(p).await.unwrap().len(), 3);
+    assert_eq!(prov::list(p).await.unwrap().len(), 4);
     let actions: Vec<String> = sqlx::query_scalar(
         "SELECT action FROM audit_events WHERE action LIKE 'provider.%' ORDER BY seq",
     )

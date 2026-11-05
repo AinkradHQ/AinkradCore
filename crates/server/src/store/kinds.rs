@@ -28,6 +28,10 @@ pub const PLATFORM: &str = "core";
 /// sessions' (`agent.*`, E2-08); and the health alarms (`alarm.raised`, `alarm.cleared`, E1-19.3),
 /// visible to `admin`.
 pub const PLATFORM_EVENT_KINDS: &[&str] = &[
+    "account.login.done",
+    "account.login.failed",
+    "account.login.started",
+    "account.login.url",
     "alarm.cleared",
     "alarm.raised",
     "audit",
@@ -81,6 +85,9 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "account.deleted",
     "account.limit_cleared",
     "account.limit_set",
+    "account.login_cancelled",
+    "account.login_failed",
+    "account.login_started",
     "account.secret_replaced",
     "account.session_limits_set",
     "account.state_set",

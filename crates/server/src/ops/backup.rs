@@ -47,6 +47,8 @@ pub(crate) async fn archive_home(
     let plain = home.backups().join(format!(".{kind}-{}.db", random_hex()?));
     let made = async {
         snapshot(home, &plain).await?;
+        // A sign-in in flight is the moment's state, not something to restore (KAN-441).
+        drop_logins(&plain).await?;
         // An export holds the master key in clear, so it never holds the sealed secrets (E2-07):
         // only the encrypted backup carries them.
         if kind == "export" {
@@ -87,6 +89,25 @@ pub(crate) async fn archive_home(
     .await;
     let _ = fs::remove_file(&plain);
     made
+}
+
+/// Drops every subscription sign-in's row from a snapshot (a backup's too): a login holds no
+/// secret, but it is transient, and a restored one would name a runner PTY that is gone.
+async fn drop_logins(db: &Path) -> Result_ {
+    use sqlx::Connection;
+    let mut conn =
+        sqlx::SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(db)).await?;
+    let present: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name = 'core_account_logins'")
+            .fetch_one(&mut conn)
+            .await?;
+    if present > 0 {
+        sqlx::raw_sql("PRAGMA secure_delete = ON; DELETE FROM core_account_logins; VACUUM;")
+            .execute(&mut conn)
+            .await?;
+    }
+    conn.close().await?;
+    Ok(())
 }
 
 /// Wipes the secrets broker's rows from a snapshot, free pages included (`secure_delete`, then

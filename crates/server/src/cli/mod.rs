@@ -696,6 +696,9 @@ async fn serve(
         .chain([Arc::clone(&wake_jobs) as Arc<dyn Module>])
         .collect();
     ainkrad_core_server::jobs::register(&pool, &SystemClock.now(), &scheduled).await?;
+    // A sign-in the last run left in `storing` is settled now: nothing is in flight at startup.
+    let now = ainkrad_core_server::scheduler::unix_secs(&SystemClock.now()).unwrap_or(0);
+    ainkrad_core_server::store::logins::settle_leftover(&pool, AuditActor::System, now).await?;
     let pushing = tokio::spawn(async move {
         pusher
             .run(async { drop(stopped_push.changed().await) })

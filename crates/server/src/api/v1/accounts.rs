@@ -154,6 +154,14 @@ pub async fn create(
     body: Bytes,
 ) -> ApiResult<AccountDetail> {
     let b: NewProviderAccount = parse(&body)?;
+    // A subscription's token never comes in a body: only a sign-in (`startAccountLogin`) makes one.
+    if account_keys::subscription_provider(&b.provider) {
+        return Err(ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            "login_required",
+            "a subscription account is made by signing in (POST /api/v1/accounts/logins), not by a key",
+        ));
+    }
     let new = acc::NewAccount {
         provider: &b.provider,
         label: &b.label,
@@ -343,8 +351,10 @@ pub async fn delete(
     Ok(Json(AccountsDeleted { deleted: true }))
 }
 
+mod logins;
 mod pools;
 mod types;
 
+pub use logins::*;
 pub use pools::*;
 pub use types::*;

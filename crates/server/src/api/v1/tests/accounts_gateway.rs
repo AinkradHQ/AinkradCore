@@ -158,9 +158,16 @@ async fn a_user_provider_without_a_key_prefix_holds_no_key() {
         code(store(&fx, &s, "envonly", "eo", V1).await),
         "bad_request"
     );
-    // The built-ins are delivered through the gateway only.
+    // The API-key built-ins are delivered through the gateway only; a subscription's token is a
+    // leased env variable (KAN-441), signed in through a login.
     for p in prov::built_in() {
-        assert_eq!(p.delivery, ["gateway"], "{}", p.id);
+        let sub = p.id == "claude-sub";
+        assert_eq!(
+            p.delivery,
+            if sub { ["env"] } else { ["gateway"] },
+            "{}",
+            p.id
+        );
         assert!(!p.wire.is_empty() && p.key_prefix.is_none());
     }
 }

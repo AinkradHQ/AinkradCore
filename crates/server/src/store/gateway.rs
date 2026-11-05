@@ -49,7 +49,8 @@ pub const MAX_CONFIRM_TRIES: i64 = 3;
 
 /// The account an `acct.<provider>.<id>` secret names, when the name is the account model's own
 /// (a provider id, a built-in or a user definition's, and the account row's id, a plain number): an
-/// API-key account, served by the gateway. Whether such a row exists, and is of that provider, is
+/// API-key account, served by the gateway (a subscription's `acct.claude-sub.<id>` parses too: callers
+/// refuse it, `agents::gateway::secrets_problem`). Whether such a row exists, and is of that provider, is
 /// the launch's to check. A secret of any other label (`acct.anthropic.main`) is not one, and a
 /// session may not name it (`agents::non_gateway_account`): an API-key account is never an env secret.
 pub fn account_secret(name: &str) -> Option<(&str, i64)> {

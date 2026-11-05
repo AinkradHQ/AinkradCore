@@ -33,6 +33,98 @@ extension Components {
                 case runners
             }
         }
+        /// Where a sign-in has got to. Never a token or a code.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AccountLogin`.
+        public struct AccountLogin: Codable, Hashable, Sendable {
+            /// The new account, once `done`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountLogin/account_id`.
+            public var accountId: Swift.Int64?
+            /// - Remark: Generated from `#/components/schemas/AccountLogin/created_at`.
+            public var createdAt: Components.Schemas.Timestamp
+            /// Ten minutes after it began; a sign-in open past it fails.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountLogin/expires_at`.
+            public var expiresAt: Components.Schemas.Timestamp
+            /// - Remark: Generated from `#/components/schemas/AccountLogin/id`.
+            public var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AccountLogin/label`.
+            public var label: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AccountLogin/provider`.
+            public var provider: Swift.String
+            /// Why it `failed` or was `cancelled`; provider text passes the redactor.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountLogin/reason`.
+            public var reason: Swift.String?
+            /// The runner doing the sign-in.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountLogin/runner`.
+            public var runner: Swift.String
+            /// `starting`, `open_url` (open `url`, then send the code), `waiting_code` (the code is with
+            /// the runner), `storing`, `done` (see `account_id`), `failed` (see `reason`) or `cancelled`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountLogin/state`.
+            public var state: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AccountLogin/updated_at`.
+            public var updatedAt: Components.Schemas.Timestamp
+            /// The sign-in URL, from `open_url` on.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountLogin/url`.
+            public var url: Swift.String?
+            /// Creates a new `AccountLogin`.
+            ///
+            /// - Parameters:
+            ///   - accountId: The new account, once `done`.
+            ///   - createdAt:
+            ///   - expiresAt: Ten minutes after it began; a sign-in open past it fails.
+            ///   - id:
+            ///   - label:
+            ///   - provider:
+            ///   - reason: Why it `failed` or was `cancelled`; provider text passes the redactor.
+            ///   - runner: The runner doing the sign-in.
+            ///   - state: `starting`, `open_url` (open `url`, then send the code), `waiting_code` (the code is with
+            ///   - updatedAt:
+            ///   - url: The sign-in URL, from `open_url` on.
+            public init(
+                accountId: Swift.Int64? = nil,
+                createdAt: Components.Schemas.Timestamp,
+                expiresAt: Components.Schemas.Timestamp,
+                id: Swift.String,
+                label: Swift.String,
+                provider: Swift.String,
+                reason: Swift.String? = nil,
+                runner: Swift.String,
+                state: Swift.String,
+                updatedAt: Components.Schemas.Timestamp,
+                url: Swift.String? = nil
+            ) {
+                self.accountId = accountId
+                self.createdAt = createdAt
+                self.expiresAt = expiresAt
+                self.id = id
+                self.label = label
+                self.provider = provider
+                self.reason = reason
+                self.runner = runner
+                self.state = state
+                self.updatedAt = updatedAt
+                self.url = url
+            }
+            public enum CodingKeys: String, CodingKey {
+                case accountId = "account_id"
+                case createdAt = "created_at"
+                case expiresAt = "expires_at"
+                case id
+                case label
+                case provider
+                case reason
+                case runner
+                case state
+                case updatedAt = "updated_at"
+                case url
+            }
+        }
         /// One account's usage. No key, secret name, delivery or runner: it is for a `read` device.
         ///
         /// - Remark: Generated from `#/components/schemas/AccountSpend`.
@@ -1854,6 +1946,35 @@ extension Components {
                 case strikes
             }
         }
+        /// The approval code the user pasted. No `Debug`: it is a one-time secret.
+        ///
+        /// - Remark: Generated from `#/components/schemas/LoginCode`.
+        public struct LoginCode: Codable, Hashable, Sendable {
+            /// 8 to 512 of letters, digits and `-_.~#:+/=`; passed to the runner and dropped.
+            ///
+            /// - Remark: Generated from `#/components/schemas/LoginCode/code`.
+            public var code: Swift.String
+            /// Creates a new `LoginCode`.
+            ///
+            /// - Parameters:
+            ///   - code: 8 to 512 of letters, digits and `-_.~#:+/=`; passed to the runner and dropped.
+            public init(code: Swift.String) {
+                self.code = code
+            }
+            public enum CodingKeys: String, CodingKey {
+                case code
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.code = try container.decode(
+                    Swift.String.self,
+                    forKey: .code
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "code"
+                ])
+            }
+        }
         /// The calling device and what the server speaks.
         ///
         /// - Remark: Generated from `#/components/schemas/Me`.
@@ -2058,6 +2179,63 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case runner
                 case ttlSecs = "ttl_secs"
+            }
+        }
+        /// Starts a sign-in.
+        ///
+        /// - Remark: Generated from `#/components/schemas/NewLogin`.
+        public struct NewLogin: Codable, Hashable, Sendable {
+            /// The new account's label.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewLogin/label`.
+            public var label: Swift.String
+            /// A subscription provider: `claude-sub`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewLogin/provider`.
+            public var provider: Swift.String
+            /// A runner device id; absent, the best ready runner that has the provider's harness.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewLogin/runner`.
+            public var runner: Swift.String?
+            /// Creates a new `NewLogin`.
+            ///
+            /// - Parameters:
+            ///   - label: The new account's label.
+            ///   - provider: A subscription provider: `claude-sub`.
+            ///   - runner: A runner device id; absent, the best ready runner that has the provider's harness.
+            public init(
+                label: Swift.String,
+                provider: Swift.String,
+                runner: Swift.String? = nil
+            ) {
+                self.label = label
+                self.provider = provider
+                self.runner = runner
+            }
+            public enum CodingKeys: String, CodingKey {
+                case label
+                case provider
+                case runner
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.label = try container.decode(
+                    Swift.String.self,
+                    forKey: .label
+                )
+                self.provider = try container.decode(
+                    Swift.String.self,
+                    forKey: .provider
+                )
+                self.runner = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .runner
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "label",
+                    "provider",
+                    "runner"
+                ])
             }
         }
         /// - Remark: Generated from `#/components/schemas/NewPairingBody`.

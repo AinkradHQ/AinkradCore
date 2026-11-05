@@ -11,6 +11,18 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/accounts`.
     /// - Remark: Generated from `#/paths//api/v1/accounts/post(createAccount)`.
     func createAccount(_ input: Operations.CreateAccount.Input) async throws -> Operations.CreateAccount.Output
+    /// - Remark: HTTP `POST /api/v1/accounts/logins`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/logins/post(startAccountLogin)`.
+    func startAccountLogin(_ input: Operations.StartAccountLogin.Input) async throws -> Operations.StartAccountLogin.Output
+    /// - Remark: HTTP `GET /api/v1/accounts/logins/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/logins/{id}/get(getAccountLogin)`.
+    func getAccountLogin(_ input: Operations.GetAccountLogin.Input) async throws -> Operations.GetAccountLogin.Output
+    /// - Remark: HTTP `DELETE /api/v1/accounts/logins/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/logins/{id}/delete(cancelAccountLogin)`.
+    func cancelAccountLogin(_ input: Operations.CancelAccountLogin.Input) async throws -> Operations.CancelAccountLogin.Output
+    /// - Remark: HTTP `POST /api/v1/accounts/logins/{id}/code`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/logins/{id}/code/post(sendAccountLoginCode)`.
+    func sendAccountLoginCode(_ input: Operations.SendAccountLoginCode.Input) async throws -> Operations.SendAccountLoginCode.Output
     /// - Remark: HTTP `GET /api/v1/accounts/providers`.
     /// - Remark: Generated from `#/paths//api/v1/accounts/providers/get(listProviders)`.
     func listProviders(_ input: Operations.ListProviders.Input) async throws -> Operations.ListProviders.Output
@@ -314,6 +326,52 @@ extension APIProtocol {
         body: Operations.CreateAccount.Input.Body
     ) async throws -> Operations.CreateAccount.Output {
         try await createAccount(Operations.CreateAccount.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/accounts/logins`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/logins/post(startAccountLogin)`.
+    public func startAccountLogin(
+        headers: Operations.StartAccountLogin.Input.Headers = .init(),
+        body: Operations.StartAccountLogin.Input.Body
+    ) async throws -> Operations.StartAccountLogin.Output {
+        try await startAccountLogin(Operations.StartAccountLogin.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/accounts/logins/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/logins/{id}/get(getAccountLogin)`.
+    public func getAccountLogin(
+        path: Operations.GetAccountLogin.Input.Path,
+        headers: Operations.GetAccountLogin.Input.Headers = .init()
+    ) async throws -> Operations.GetAccountLogin.Output {
+        try await getAccountLogin(Operations.GetAccountLogin.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `DELETE /api/v1/accounts/logins/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/logins/{id}/delete(cancelAccountLogin)`.
+    public func cancelAccountLogin(
+        path: Operations.CancelAccountLogin.Input.Path,
+        headers: Operations.CancelAccountLogin.Input.Headers = .init()
+    ) async throws -> Operations.CancelAccountLogin.Output {
+        try await cancelAccountLogin(Operations.CancelAccountLogin.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/accounts/logins/{id}/code`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/logins/{id}/code/post(sendAccountLoginCode)`.
+    public func sendAccountLoginCode(
+        path: Operations.SendAccountLoginCode.Input.Path,
+        headers: Operations.SendAccountLoginCode.Input.Headers = .init(),
+        body: Operations.SendAccountLoginCode.Input.Body
+    ) async throws -> Operations.SendAccountLoginCode.Output {
+        try await sendAccountLoginCode(Operations.SendAccountLoginCode.Input(
+            path: path,
             headers: headers,
             body: body
         ))

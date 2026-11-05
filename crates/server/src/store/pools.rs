@@ -13,6 +13,7 @@ use serde_json::json;
 use sqlx::sqlite::{SqlitePool, SqliteRow};
 use sqlx::{Row, SqliteConnection};
 
+use super::account_keys;
 use super::secrets::Error;
 
 const MAX_POOLS: i64 = 64;
@@ -142,7 +143,10 @@ pub async fn create(
         return refused("bad_request", "a pool name is [a-z][a-z0-9._-]{0,63}");
     }
     if !super::accounts::PROVIDERS.contains(&provider) {
-        return refused("bad_request", "provider is anthropic, openai or google");
+        return refused(
+            "bad_request",
+            "provider is anthropic, openai, google or claude-sub",
+        );
     }
     let mut tx = super::begin_write(pool).await?;
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_pools")
@@ -250,6 +254,8 @@ pub async fn add_member(
     if p.members.contains(&account) {
         return refused("conflict", "the account is already in the pool");
     }
+    // A subscription is alone in its pool (Ahmed, 2026-11-05).
+    account_keys::check_pool(&mut tx, &p.members, account).await?;
     if p.members.len() as i64 >= MAX_MEMBERS {
         return refused("limit_reached", "the pool is full");
     }
@@ -381,6 +387,7 @@ pub async fn bind(
     }
     let mut tx = super::begin_write(pool).await?;
     let p = find(&mut tx, id).await?;
+    account_keys::check_bind(&p.provider)?;
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_pool_bindings")
         .fetch_one(&mut *tx)
         .await?;

@@ -24,6 +24,7 @@ pub mod events;
 pub mod gateway;
 pub mod gov;
 pub mod kinds;
+pub mod logins;
 pub mod migrate;
 pub mod modsettings;
 pub mod pools;

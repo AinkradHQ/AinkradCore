@@ -73,6 +73,10 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/accounts", "read"),
     // Before `/accounts/{id}`: the first template that fits a path decides, and `usage` fits `{id}`.
     ("GET", "/api/v1/accounts/usage", "admin"),
+    ("POST", "/api/v1/accounts/logins", "admin"),
+    ("GET", "/api/v1/accounts/logins/{id}", "admin"),
+    ("POST", "/api/v1/accounts/logins/{id}/code", "admin"),
+    ("DELETE", "/api/v1/accounts/logins/{id}", "admin"),
     ("GET", "/api/v1/accounts/{id}", "read"),
     ("GET", "/api/v1/accounts/providers", "read"),
     ("POST", "/api/v1/accounts", "admin"),
@@ -161,6 +165,8 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/secrets/{id}/leases"),
     // AI provider accounts (KAN-432): every write changes who may spend which key.
     ("POST", "/api/v1/accounts"),
+    // A sign-in ending in a stored credential; its code route is not (once, on the caller's own login).
+    ("POST", "/api/v1/accounts/logins"),
     ("PUT", "/api/v1/accounts/{id}/secret"),
     ("PUT", "/api/v1/accounts/{id}/state"),
     ("PUT", "/api/v1/accounts/{id}/cap"),
@@ -440,6 +446,9 @@ mod tests {
             // a runner in the key's scope (design 2026-11-04 section 5.2 says it is not
             // destructive); its only effect is the account's last-test record.
             ("POST", "/api/v1/accounts/{id}/test"),
+            // The caller's own sign-in: a cancel grants nothing, a code acts once on one a step-up began.
+            ("DELETE", "/api/v1/accounts/logins/{id}"),
+            ("POST", "/api/v1/accounts/logins/{id}/code"),
         ];
         for (m, t, scope) in ROUTES {
             let privileged = !matches!(*scope, "read" | "runner");
