@@ -241,6 +241,11 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/accounts/{id}/state", put(accounts::set_state))
         .route("/api/v1/accounts/{id}/cap", put(accounts::set_cap))
         .route(
+            "/api/v1/accounts/{id}/session-limits",
+            put(accounts::set_session_limits),
+        )
+        .route("/api/v1/accounts/{id}/test", post(accounts::test_account))
+        .route(
             "/api/v1/pools",
             get(accounts::list_pools).post(accounts::create_pool),
         )

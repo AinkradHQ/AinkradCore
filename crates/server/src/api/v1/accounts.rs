@@ -21,7 +21,7 @@ use crate::api::App;
 use crate::ops::secretbox::SecretBox;
 use crate::store::providers::{Definition, Model};
 use crate::store::secrets::Error as StoreError;
-use crate::store::{accounts as acc, pools as pl, providers as prov};
+use crate::store::{account_keys, accounts as acc, pools as pl, providers as prov};
 
 fn parse<T: DeserializeOwned>(body: &[u8]) -> Result<T, ApiError> {
     serde_json::from_slice(body)
@@ -252,6 +252,75 @@ pub async fn set_cap(
     .await
     .map_err(err)?;
     Ok(Json(a.into()))
+}
+
+#[utoipa::path(put, path = "/api/v1/accounts/{id}/session-limits",
+    operation_id = "setAccountSessionLimits", tag = "accounts",
+    params(("id" = String, Path, description = "The account's id")),
+    request_body = SessionLimits,
+    responses((status = 200, description = "What one session may spend through this account \
+        (audited as `account.session_limits_set`); a dimension left out is cleared. The Core's \
+        ceiling for a gateway session honours it beside the budgets. It raises what a session \
+        may spend, so it needs a step-up", body = ProviderAccount)))]
+pub async fn set_session_limits(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    Json(b): Json<SessionLimits>,
+) -> ApiResult<ProviderAccount> {
+    let a = account_keys::set_session_limits(
+        &app.pool,
+        num(&id, "account")?,
+        b.max_tokens,
+        b.max_usd_micros,
+        &me.device.id,
+        BY,
+        &app.clock.now(),
+    )
+    .await
+    .map_err(err)?;
+    Ok(Json(a.into()))
+}
+
+#[utoipa::path(post, path = "/api/v1/accounts/{id}/test", operation_id = "testAccount",
+    tag = "accounts", params(("id" = String, Path, description = "The account's id")),
+    responses((status = 200, description = "One free request (a model list) made through the \
+        gateway of a runner that is online, in the key's scope and offers it: the status class \
+        and the latency, never a body. Stored on the account and audited as `account.tested`. 409 \
+        `no_runner` when none is ready; 429 when the account was tested within a minute or a \
+        test is running; 502 when the runner failed", body = AccountTested)))]
+pub async fn test_account(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<AccountTested> {
+    use crate::agents::gateway::test::{Failed, class_name, run};
+    let id = num(&id, "account")?;
+    match run(&app, &me, id).await {
+        Ok(t) => Ok(Json(AccountTested {
+            result: class_name(t.result),
+            latency_ms: t.latency_ms,
+            runner: t.runner,
+        })),
+        Err(Failed::Gone) => Err(ApiError::not_found("no such account")),
+        Err(Failed::Soon(why)) => Err(ApiError::new(
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            why,
+        )),
+        Err(Failed::NoRunner) => Err(ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            "no_runner",
+            "no runner in this key's scope is online and offers the gateway",
+        )),
+        Err(Failed::Refused(why)) => Err(ApiError::conflict(why)),
+        Err(Failed::Runner(why)) => Err(ApiError::new(
+            axum::http::StatusCode::BAD_GATEWAY,
+            "runner_failed",
+            why,
+        )),
+        Err(Failed::Db(e)) => Err(e.into()),
+    }
 }
 
 #[utoipa::path(delete, path = "/api/v1/accounts/{id}", operation_id = "deleteAccount",

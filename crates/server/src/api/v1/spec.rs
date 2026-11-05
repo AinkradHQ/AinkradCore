@@ -97,6 +97,8 @@ use super::{
         accounts::replace_secret,
         accounts::set_state,
         accounts::set_cap,
+        accounts::set_session_limits,
+        accounts::test_account,
         accounts::list_providers,
         accounts::create_provider,
         accounts::replace_provider,
