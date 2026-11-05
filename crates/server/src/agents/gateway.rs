@@ -191,7 +191,9 @@ pub(super) async fn after(app: &App, s: &Session) {
     let Some(account) = s.gateway_account_id else {
         return;
     };
-    if let Some(why) = s.gw_stop.as_deref().filter(|_| s.live())
+    // Only a running session is stopped: another one has nothing to refuse or cancel on its runner,
+    // and its next start reserves again (a denial ends it, room lifts the mark).
+    if let Some(why) = s.gw_stop.as_deref().filter(|_| s.state == "running")
         && let Err(e) = enforce(app, s, why).await
     {
         tracing::warn!(
@@ -307,36 +309,60 @@ async fn check(app: &App, s: &Session, account: i64) -> Result<(), Refusal> {
     let Some(proof) = app.agents.elevated.lock().unwrap().get(&s.id).copied() else {
         return Ok(()); // no elevation to send it under: the next answer tries again
     };
-    let wire = wire_of(&a.provider).ok_or_else(|| refuse("the account's provider has no wire"))?;
-    let (lease, _) = secrets::lease_to(
-        &app.pool,
-        &a.secret_name,
-        &s.runner,
-        None,
-        &s.created_by,
-        AuditActor::System,
-        &now,
-        app.clock.unix(),
-        Some("gateway"),
-    )
-    .await?;
-    let test = GatewayTest {
-        lease,
-        provider: a.provider.clone(),
-        user_key: None,
-        upstream: upstream_of(&a.base_url, wire)?,
-    };
-    let sent = app
+    // Only a runner that is there and offers the gateway is asked, and nothing is leased for one that
+    // is not: a lease nobody redeems counts against the runner's cap until it expires, and this runs
+    // again on every pass of the supervisor.
+    let ready = app
         .hub
-        .dispatch_elevated(&s.runner, Command::GatewayTest(test), proof)?;
-    let answer = tokio::time::timeout(TEST_WAIT, sent.outcome())
-        .await
-        .map_err(|_| {
-            StreamError::new(ErrorCode::Lost, "the gateway test did not answer in time")
-        })??;
-    let result = match answer {
-        Body::Result(Reply::GatewayTest(t)) => Some(t.result),
-        _ => None,
+        .runners()
+        .get(&s.runner)
+        .is_some_and(|r| r.online && gateway_refusal(r).is_none());
+    if !ready {
+        return Ok(());
+    }
+    // From here a lease is minted: whatever goes wrong counts as a try, so the signal ends
+    // `inconclusive` after a few instead of leasing for ever.
+    let asked = async {
+        let wire =
+            wire_of(&a.provider).ok_or_else(|| refuse("the account's provider has no wire"))?;
+        let (lease, _) = secrets::lease_to(
+            &app.pool,
+            &a.secret_name,
+            &s.runner,
+            None,
+            &s.created_by,
+            AuditActor::System,
+            &now,
+            app.clock.unix(),
+            Some("gateway"),
+        )
+        .await?;
+        let test = GatewayTest {
+            lease,
+            provider: a.provider.clone(),
+            user_key: None,
+            upstream: upstream_of(&a.base_url, wire)?,
+        };
+        let sent = app
+            .hub
+            .dispatch_elevated(&s.runner, Command::GatewayTest(test), proof)?;
+        let answer = tokio::time::timeout(TEST_WAIT, sent.outcome())
+            .await
+            .map_err(|_| {
+                StreamError::new(ErrorCode::Lost, "the gateway test did not answer in time")
+            })??;
+        Ok::<_, Refusal>(match answer {
+            Body::Result(Reply::GatewayTest(t)) => Some(t.result),
+            _ => None,
+        })
+    }
+    .await;
+    let result = match asked {
+        Ok(result) => result,
+        Err(e) => {
+            gw::tried(&app.pool, signal, &app.clock.now()).await?;
+            return Err(e);
+        }
     };
     let now = app.clock.now();
     match result {

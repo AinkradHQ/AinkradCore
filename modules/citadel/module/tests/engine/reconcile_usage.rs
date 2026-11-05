@@ -77,6 +77,14 @@ async fn a_session_the_gateway_serves_is_not_recorded_a_second_time_from_its_har
     };
     w.report(&run, AgentState::Ended, vec![], tokens(10, 5), Some(fail))
         .await;
+    // The Core keeps a gateway session's usage columns from its ledger and ignores the harness's
+    // own meter; set them as that would, so the totals Citadel reads grew and only the skip stands
+    // between them and a second set of rows.
+    sqlx::query("UPDATE core_agent_sessions SET tokens_in = 10, tokens_out = 5 WHERE id = ?")
+        .bind(&sid)
+        .execute(&w.app().pool)
+        .await
+        .unwrap();
     w.reconcile().await;
     assert_eq!(w.run(run.id).await.state, RunState::Failed);
     assert_eq!(count(&w, "SELECT count(*) FROM core_cost_events").await, 0);
