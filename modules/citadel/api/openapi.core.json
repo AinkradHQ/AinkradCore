@@ -320,6 +320,30 @@
         ],
         "type": "object"
       },
+      "AccountTested": {
+        "description": "What `POST /accounts/{id}/test` answers: a status class and a latency, never a response body.",
+        "properties": {
+          "latency_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "result": {
+            "description": "As [`LastTest::result`].",
+            "type": "string"
+          },
+          "runner": {
+            "description": "The runner device that made the request.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result",
+          "latency_ms",
+          "runner"
+        ],
+        "type": "object"
+      },
       "AccountUsageReport": {
         "properties": {
           "billing": {
@@ -1536,7 +1560,9 @@
           "account.limit_cleared",
           "account.limit_set",
           "account.secret_replaced",
+          "account.session_limits_set",
           "account.state_set",
+          "account.tested",
           "agent.cancelled",
           "agent.created",
           "agent.decided",
@@ -4277,6 +4303,23 @@
         },
         "required": [
           "name"
+        ],
+        "type": "object"
+      },
+      "LastTest": {
+        "description": "The last one-shot test of an account's key.",
+        "properties": {
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "result": {
+            "description": "The status class the provider answered: `ok`, `rate_limited`, `quota`, `auth_failed`,\n`server_error`, `unreachable`, `refused_address` or `tls_failed`. Never provider text.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result",
+          "at"
         ],
         "type": "object"
       },
@@ -7049,6 +7092,13 @@
           "id": {
             "type": "string"
           },
+          "key_prefix": {
+            "description": "The shape this provider's keys start with (6 to 16 characters, never a built-in's, such\nas `sk-or-v1-`). A definition that sets it holds keys, and then only through the gateway\n(`delivery` is `[\"gateway\"]`): the broker binds each key to the account's host by it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "login_methods": {
             "description": "`paste`.",
             "items": {
@@ -7057,6 +7107,7 @@
             "type": "array"
           },
           "models": {
+            "description": "Model ids exactly as the provider names them: the gateway compares a request's model with\nthe ids it was granted, as they are, and resolves no alias (`-latest`). `:online` is refused.",
             "items": {
               "$ref": "#/components/schemas/ModelPrice"
             },
@@ -7078,6 +7129,13 @@
           "version": {
             "format": "int64",
             "type": "integer"
+          },
+          "wire": {
+            "description": "The API dialect the gateway speaks to this provider: `anthropic-messages` (claude),\n`openai-responses` (codex) or `gemini-generate` (agy). Optional on write: it is its\nharness's own, and any other is refused.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -7115,6 +7173,10 @@
           "label": {
             "type": "string"
           },
+          "last_test": {
+            "$ref": "#/components/schemas/LastTest",
+            "description": "The last one-shot test of the key; absent when it was never tested."
+          },
           "last_used_at": {
             "$ref": "#/components/schemas/Timestamp"
           },
@@ -7123,8 +7185,12 @@
             "type": "string"
           },
           "provider": {
-            "description": "`anthropic`, `openai` or `google`.",
+            "description": "`anthropic`, `openai`, `google` or a user definition's id.",
             "type": "string"
+          },
+          "session_limits": {
+            "$ref": "#/components/schemas/SessionLimits",
+            "description": "What one session may spend through this account; absent when only the budgets limit it."
           },
           "state": {
             "description": "`active`, `cooling`, `limited`, `unhealthy` or `disabled`.",
@@ -8527,6 +8593,28 @@
             "description": "`s_…`: sent as `Ainkrad-Session` on every signed request. Not a secret.",
             "type": [
               "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SessionLimits": {
+        "description": "What one session may spend through an account. A dimension left out is not limited by the\naccount (only by the budgets).",
+        "properties": {
+          "max_tokens": {
+            "description": "Input, output and cache tokens; at least 328000 (one turn needs that much room).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_usd_micros": {
+            "description": "Millionths of a dollar.",
+            "format": "int64",
+            "type": [
+              "integer",
               "null"
             ]
           }
@@ -10558,7 +10646,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.39.0"
+    "version": "1.40.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -11285,6 +11373,70 @@
         "x-ainkrad-scope": "admin"
       }
     },
+    "/api/v1/accounts/{id}/session-limits": {
+      "put": {
+        "operationId": "setAccountSessionLimits",
+        "parameters": [
+          {
+            "description": "The account's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionLimits"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderAccount"
+                }
+              }
+            },
+            "description": "What one session may spend through this account (audited as `account.session_limits_set`); a dimension left out is cleared. The Core's ceiling for a gateway session honours it beside the budgets. It raises what a session may spend, so it needs a step-up"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/api/v1/accounts/{id}/state": {
       "put": {
         "operationId": "setAccountState",
@@ -11346,6 +11498,59 @@
           "accounts"
         ],
         "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/accounts/{id}/test": {
+      "post": {
+        "operationId": "testAccount",
+        "parameters": [
+          {
+            "description": "The account's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountTested"
+                }
+              }
+            },
+            "description": "One free request (a model list) made through the gateway of a runner that is online, in the key's scope and offers it: the status class and the latency, never a body. Stored on the account and audited as `account.tested`. 409 `no_runner` when none is ready; 429 when the account was tested within a minute or a test is running; 502 when the runner failed"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
         "x-ainkrad-scope": "admin"
       }
     },
