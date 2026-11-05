@@ -121,14 +121,18 @@ impl Reports {
         self.broken || self.held.len() >= MAX_HELD
     }
 
-    /// Drops the acknowledged reports, and rewrites the file without them once enough pile up.
-    fn acknowledge(&mut self, cfg: &AgentConfig, session: &str, after: u64) {
-        let mut dropped = 0;
+    /// Drops the reports the Core acknowledged from memory.
+    fn drop_acked(&mut self, after: u64) {
         while self.held.front().is_some_and(|r| r.gw_seq <= after) {
             self.held.pop_front();
-            dropped += 1;
+            self.stale += 1;
         }
-        self.stale += dropped;
+    }
+
+    /// Rewrites the file without the acknowledged reports once enough pile up. Only after the
+    /// acknowledgement is saved in the session's state: a crash in between leaves lines the
+    /// state already counts as acknowledged, never a file whose numbers could be reused.
+    fn compact(&mut self, cfg: &AgentConfig, session: &str) {
         if self.stale >= COMPACT_AT || (self.held.is_empty() && self.stale > 0) {
             let text: String = self
                 .held
@@ -156,9 +160,12 @@ impl Reports {
 pub(super) fn ack(cfg: &AgentConfig, session: &str, live: &mut Live, after: u64) {
     let after = after.min(live.reports.last);
     if after > live.meta.gw_acked {
-        live.reports.acknowledge(cfg, session, after);
+        live.reports.drop_acked(after);
         live.meta.gw_acked = after;
+        // The acknowledgement is on disk before the report file is touched, so a crash can never
+        // leave the file shorter than the numbers the state says were used.
         save_meta(cfg, session, &live.meta);
+        live.reports.compact(cfg, session);
         if let Some(g) = live.gateway.as_ref() {
             g.meter().set_unreported(live.reports.full());
         }
@@ -179,13 +186,16 @@ impl AgentDriver {
         session: &str,
         mut events: UnboundedReceiver<Event>,
         meter: Arc<Meter>,
+        epoch: u32,
     ) {
         let (me, session) = (Arc::clone(self), session.to_owned());
         tokio::spawn(async move {
             while let Some(event) = events.recv().await {
                 me.with(&session, |live, cfg, s| match event {
                     Event::Report(report) => {
-                        live.reports.push(cfg, s, live.meta.epoch, report);
+                        // The epoch of the start the gateway was opened under, not whatever the
+                        // session has become by the time the report arrives.
+                        live.reports.push(cfg, s, epoch, report);
                         meter.set_unreported(live.reports.full());
                     }
                     Event::Closed(why) => {

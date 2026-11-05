@@ -91,6 +91,28 @@ fn usage_of(wire: Wire, v: &Value) -> Option<Usage> {
     }
 }
 
+/// The event that ends a reply of `wire`: nothing after it changes the count. Anthropic's
+/// `message_stop`; OpenAI's `response.completed` / `incomplete` / `failed`; a Gemini chunk with a
+/// `finishReason`. (OpenAI chat ends with a `[DONE]` line, read separately.) A stream that ends
+/// without one was cut, or ended in an `error` event, whatever the connection said.
+fn closes(wire: Wire, v: &Value) -> bool {
+    let kind = v.get("type").and_then(Value::as_str);
+    match wire {
+        Wire::AnthropicMessages => kind == Some("message_stop"),
+        Wire::OpenaiResponses => matches!(
+            kind,
+            Some("response.completed" | "response.incomplete" | "response.failed")
+        ),
+        Wire::GeminiGenerate => v
+            .get("candidates")
+            .and_then(Value::as_array)
+            .is_some_and(|c| {
+                c.iter()
+                    .any(|c| c.get("finishReason").is_some_and(|f| !f.is_null()))
+            }),
+    }
+}
+
 /// Characters of generated text in one event: the estimate behind a cut stream.
 fn text_chars(v: &Value) -> u64 {
     // An OpenAI event that restates what its deltas already carried is not counted twice.
@@ -132,6 +154,8 @@ pub(crate) struct Scan {
     skipping: bool,
     usage: Usage,
     reported: bool,
+    /// The closing event was read.
+    closed: bool,
     chars: u64,
     bytes: u64,
 }
@@ -149,6 +173,7 @@ impl Scan {
             skipping: false,
             usage: Usage::default(),
             reported: false,
+            closed: false,
             chars: 0,
             bytes: 0,
         }
@@ -206,6 +231,9 @@ impl Scan {
 
     fn event(&mut self) {
         let data = std::mem::take(&mut self.data);
+        if data == b"[DONE]" {
+            self.closed = true;
+        }
         if let Ok(v) = serde_json::from_slice::<Value>(&data) {
             self.absorb(&v);
         }
@@ -216,6 +244,7 @@ impl Scan {
             self.usage.merge(u);
             self.reported = true;
         }
+        self.closed |= closes(self.wire, v);
         self.chars += text_chars(v);
     }
 
@@ -234,6 +263,8 @@ impl Scan {
                 Value::Array(chunks) => chunks.iter().for_each(|c| self.absorb(c)),
                 _ => self.absorb(&v),
             }
+            // A whole JSON body that parsed is a reply that ended.
+            self.closed = true;
         }
     }
 
@@ -242,12 +273,13 @@ impl Scan {
         self.reported.then_some(self.usage)
     }
 
-    /// What the reply reported, when it can be taken as the count: it reported some input (plain
-    /// or cached), and nothing could not be read. A report of no input at all is a partial one
-    /// (Anthropic's `message_start` cut short, a Gemini chunk before its metadata).
+    /// What the reply reported, when it can be taken as the count: the closing event was read, it
+    /// reported some input (plain or cached), and nothing could not be read. A stream that ended
+    /// without its closing event (cut, or ended by an `error` event) holds only what the start of
+    /// the reply said, and a report of no input at all is partial too; both are estimated.
     pub(crate) fn exact(&self) -> Option<Usage> {
         self.reported()
-            .filter(|u| u.input + u.cache_read + u.cache_write > 0 && !self.overflow)
+            .filter(|u| self.closed && u.input + u.cache_read + u.cache_write > 0 && !self.overflow)
     }
 
     /// Output tokens so far by the estimate: streamed characters / 4 (a JSON body, which is not

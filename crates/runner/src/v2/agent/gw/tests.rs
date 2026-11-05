@@ -447,7 +447,8 @@ async fn a_report_the_disk_cannot_hold_fails_closed_and_the_epoch_is_stamped() {
         "kept in memory, numbered, stamped"
     );
     // Acknowledging does not lift it: the numbering may not be trusted again this run.
-    reports.acknowledge(&config, SESSION, 1);
+    reports.drop_acked(1);
+    reports.compact(&config, SESSION);
     assert!(reports.full());
     drop(root);
 }
@@ -467,7 +468,8 @@ async fn acknowledged_reports_are_dropped_from_the_file_and_a_reload_seeds_the_c
             .count()
     };
     assert_eq!(lines(&config), COMPACT_AT + 5);
-    reports.acknowledge(&config, SESSION, COMPACT_AT as u64);
+    reports.drop_acked(COMPACT_AT as u64);
+    reports.compact(&config, SESSION);
     assert_eq!(lines(&config), 5, "the acknowledged lines are gone");
     reports.push(&config, SESSION, 0, report("b")); // appended to the new file
     assert_eq!(lines(&config), 6);
@@ -481,5 +483,56 @@ async fn acknowledged_reports_are_dropped_from_the_file_and_a_reload_seeds_the_c
         many.held.push_back(report("c"));
     }
     assert!(many.full());
+    drop(root);
+}
+
+#[tokio::test]
+async fn the_acknowledgement_is_saved_before_the_report_file_is_touched() {
+    let r = rig("gw-ackorder", true);
+    r.d.start(gateway_start("l_fast")).unwrap();
+    until("the harness to run", || {
+        r.rec.started.load(Ordering::SeqCst) == 1
+    })
+    .await;
+    let n = COMPACT_AT + 4;
+    for _ in 0..n {
+        r.d.with(SESSION, |live, cfg, s| {
+            live.reports.push(cfg, s, 0, report("a"))
+        });
+    }
+    // Compaction cannot happen (its temporary file's path is taken by a directory), as if the
+    // process died in it: the state must already count the acknowledgement.
+    let cfg = &r.d.config;
+    std::fs::create_dir(path(cfg, SESSION).with_extension("jsonl.tmp")).unwrap();
+    r.d.read(&AgentRead {
+        session: SESSION.to_owned(),
+        after: 0,
+        wait_ms: None,
+        gw_after: n as u64,
+    })
+    .await
+    .unwrap();
+    let saved: Meta =
+        serde_json::from_slice(&std::fs::read(cfg.dir.join(SESSION).join("meta.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        saved.gw_acked, n as u64,
+        "saved though the file was not rewritten"
+    );
+    let lines = std::fs::read_to_string(path(cfg, SESSION))
+        .unwrap()
+        .lines()
+        .count();
+    assert_eq!(lines, n, "the file was left alone");
+    r.rec.hold.notify_one();
+}
+
+#[tokio::test]
+async fn a_report_carries_the_epoch_the_gateway_was_opened_under() {
+    let (root, config) = dirs("gw-epoch");
+    secrets::private_dir(&config.dir.join(SESSION)).unwrap();
+    let mut reports = Reports::default();
+    reports.push(&config, SESSION, 5, report("a"));
+    assert_eq!(reports.batch()[0].epoch, 5);
     drop(root);
 }

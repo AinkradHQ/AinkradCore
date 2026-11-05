@@ -17,15 +17,14 @@ pub(super) const PROBE_BYTES: usize = 16 * 1024;
 /// and an Anthropic credit message are not told apart without reading their text, which is never
 /// done: both read as rate limited.
 pub(super) fn of_http(status: u16, body: &[u8]) -> UpstreamStatus {
-    let field = |v: &Value, k: &str| {
+    let v = serde_json::from_slice::<Value>(body).unwrap_or_default();
+    let field = |k: &str| {
         v.pointer("/error")
             .and_then(|e| e.get(k))
             .and_then(Value::as_str)
             .map(str::to_owned)
     };
-    let (kind, code) = serde_json::from_slice::<Value>(body)
-        .map(|v| (field(&v, "type"), field(&v, "code")))
-        .unwrap_or_default();
+    let (kind, code) = (field("type"), field("code"));
     let billing = status == 402
         || kind.as_deref() == Some("billing_error")
         || code.as_deref() == Some("insufficient_quota")
@@ -34,10 +33,28 @@ pub(super) fn of_http(status: u16, body: &[u8]) -> UpstreamStatus {
         200..=299 => UpstreamStatus::Ok,
         _ if billing => UpstreamStatus::Quota,
         429 => UpstreamStatus::RateLimited,
-        401 | 403 => UpstreamStatus::AuthFailed,
-        // 5xx, and any other refusal the upstream itself made.
+        _ if key_rejected(status, &v) => UpstreamStatus::AuthFailed,
+        // 5xx, a 403 about a resource, and any other refusal the upstream itself made.
         _ => UpstreamStatus::ServerError,
     }
+}
+
+/// The upstream says the key itself is bad: a 401, or an error whose `type`, `code` or detail
+/// `reason` names the key (`authentication_error`, `invalid_api_key`, `API_KEY_INVALID`). A 403
+/// about a resource (a Gemini file or cached content, an Anthropic `permission_error`) is not: the
+/// key works, and the session must not be ended or the account disabled for it.
+fn key_rejected(status: u16, v: &Value) -> bool {
+    const KEY: [&str; 3] = ["authentication_error", "invalid_api_key", "API_KEY_INVALID"];
+    let named = |x: Option<&Value>| x.and_then(Value::as_str).is_some_and(|s| KEY.contains(&s));
+    let e = v.get("error");
+    let in_details = e
+        .and_then(|e| e.get("details"))
+        .and_then(Value::as_array)
+        .is_some_and(|d| d.iter().any(|x| named(x.get("reason"))));
+    status == 401
+        || named(e.and_then(|e| e.get("type")))
+        || named(e.and_then(|e| e.get("code")))
+        || in_details
 }
 
 /// The class of a request that did not get an answer.
@@ -95,7 +112,37 @@ mod tests {
         );
         assert_eq!(class(402, ""), UpstreamStatus::Quota);
         assert_eq!(class(401, ""), UpstreamStatus::AuthFailed);
-        assert_eq!(class(403, ""), UpstreamStatus::AuthFailed);
+        // A 403 is the key's only when the error says so; a resource's is the upstream's.
+        assert_eq!(class(403, ""), UpstreamStatus::ServerError);
+        assert_eq!(
+            class(
+                403,
+                r#"{"error":{"type":"permission_error","message":"x"}}"#
+            ),
+            UpstreamStatus::ServerError
+        );
+        assert_eq!(
+            class(
+                403,
+                r#"{"error":{"status":"PERMISSION_DENIED","message":"file"}}"#
+            ),
+            UpstreamStatus::ServerError
+        );
+        assert_eq!(
+            class(403, r#"{"error":{"type":"authentication_error"}}"#),
+            UpstreamStatus::AuthFailed
+        );
+        assert_eq!(
+            class(
+                400,
+                r#"{"error":{"status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}"#
+            ),
+            UpstreamStatus::AuthFailed
+        );
+        assert_eq!(
+            class(403, r#"{"error":{"code":"invalid_api_key"}}"#),
+            UpstreamStatus::AuthFailed
+        );
         assert_eq!(class(529, ""), UpstreamStatus::ServerError);
         assert_eq!(
             class(400, r#"{"error":{"type":"invalid_request_error"}}"#),

@@ -26,7 +26,9 @@ data: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"usage\":{\"input_t
 event: content_block_delta\r\n\
 data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello there\"}}\r\n\r\n\
 event: message_delta\r\n\
-data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":15}}\r\n\r\n";
+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":15}}\r\n\r\n\
+event: message_stop\r\n\
+data: {\"type\":\"message_stop\"}\r\n\r\n";
 
 #[test]
 fn anthropic_streams_and_bodies_read_the_same_whichever_way_they_are_cut() {
@@ -43,6 +45,11 @@ fn anthropic_streams_and_bodies_read_the_same_whichever_way_they_are_cut() {
             "cut {cut}"
         );
         assert!(!s.overflowed());
+        assert_eq!(
+            s.exact().map(|u| u.output),
+            Some(15),
+            "closed by message_stop"
+        );
         assert_eq!(s.chars, "Hello there".len() as u64);
     }
     let body = r#"{"id":"m","type":"message","usage":{"input_tokens":9,"output_tokens":4,"cache_read_input_tokens":0}}"#;
@@ -90,7 +97,7 @@ data: [DONE]\n\n";
 #[test]
 fn gemini_counts_are_cumulative_so_the_largest_wins_and_thoughts_are_output() {
     let stream = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ab\"}]}}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":2,\"cachedContentTokenCount\":4}}\n\n\
-data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"cd\"}]}}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":5,\"thoughtsTokenCount\":3,\"cachedContentTokenCount\":4}}\n\n";
+data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"cd\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":5,\"thoughtsTokenCount\":3,\"cachedContentTokenCount\":4}}\n\n";
     let s = sse(Wire::GeminiGenerate, stream, 11);
     assert_eq!(
         s.reported(),
@@ -250,4 +257,40 @@ fn a_report_with_no_input_is_partial_and_the_floor_stands_in() {
     ] {
         assert_eq!(sse(wire, line, 3).reported(), None, "{line}");
     }
+}
+
+#[test]
+fn usage_is_exact_only_after_the_closing_event() {
+    // Anthropic: a start, some output, an `error` event, and a clean close: not a finished reply.
+    let errored = "event: message_start\n\
+data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9,\"output_tokens\":1}}}\n\n\
+event: content_block_delta\n\
+data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"0123456789012345678901234567890123456789\"}}\n\n\
+event: error\n\
+data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\"}}\n\n";
+    let s = sse(Wire::AnthropicMessages, errored, 6);
+    assert!(s.reported().is_some());
+    assert_eq!(s.exact(), None, "no message_stop: not exact");
+    let u = s.running(1);
+    assert_eq!(
+        (u.input, u.output),
+        (9, 10),
+        "the reported input, the larger output"
+    );
+    // The same, closed: exact.
+    let closed = format!("{errored}event: message_stop\ndata: {{\"type\":\"message_stop\"}}\n\n");
+    assert!(sse(Wire::AnthropicMessages, &closed, 6).exact().is_some());
+    // OpenAI Responses without `response.completed`, chat without `[DONE]`.
+    let partial = RESPONSES_STREAM.replace("response.completed", "response.something");
+    assert_eq!(sse(Wire::OpenaiResponses, &partial, 9).exact(), None);
+    let chat = "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\n";
+    assert_eq!(sse(Wire::OpenaiResponses, chat, 9).exact(), None);
+    assert!(
+        sse(Wire::OpenaiResponses, &format!("{chat}data: [DONE]\n\n"), 9)
+            .exact()
+            .is_some()
+    );
+    // Gemini: a chunk with usage but no finishReason is not the last.
+    let g = "data: {\"candidates\":[{\"content\":{}}],\"usageMetadata\":{\"promptTokenCount\":4,\"candidatesTokenCount\":1}}\n\n";
+    assert_eq!(sse(Wire::GeminiGenerate, g, 9).exact(), None);
 }

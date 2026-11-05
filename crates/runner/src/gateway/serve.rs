@@ -251,7 +251,7 @@ async fn serve(sh: &Shared, c: &mut UnixStream) -> Result<(), End> {
         return Err(refuse(413, "body_too_large").into());
     }
     let _permit = take_permit(sh)?;
-    let body = read_body(c, early, len).await?;
+    let mut body = read_body(c, early, len).await?;
     // An object only: a derived struct would also read a JSON array as its fields in order.
     if body.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{') {
         return Err(refuse(400, "bad_json").into());
@@ -280,9 +280,17 @@ async fn serve(sh: &Shared, c: &mut UnixStream) -> Result<(), End> {
     let (held, est) = if routed.free {
         (Default::default(), Default::default())
     } else {
-        let cap = probe
-            .output_cap(routed.streams)
-            .ok_or(refuse(400, "max_output_required"))?;
+        let cap = match probe.output_cap(routed.streams) {
+            Some(cap) => cap,
+            // Gemini side calls that name no cap are given the one the hold is priced at: how the
+            // Gemini harness behaves was not checked, so these are not refused (the OpenAI and
+            // Anthropic wires, whose harnesses stream or name a cap, are).
+            None if cfg.upstream.wire == Wire::GeminiGenerate => {
+                body = probe::with_default_cap(&body).ok_or(refuse(400, "bad_json"))?;
+                probe::DEFAULT_MAX_OUTPUT
+            }
+            None => return Err(refuse(400, "max_output_required").into()),
+        };
         estimate(&price, body.len(), cap)
     };
     let reservation = cfg.meter.reserve(est).map_err(|d| match d {

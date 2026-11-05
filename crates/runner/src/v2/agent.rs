@@ -540,7 +540,7 @@ impl AgentDriver {
                             installed = true;
                         }
                     });
-                    self.forward_gateway(&session, events, meter);
+                    self.forward_gateway(&session, events, meter, req.epoch);
                     if !installed {
                         return self
                             .stopped_before_start(&session, run, workspace_prepared)

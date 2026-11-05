@@ -48,7 +48,9 @@ struct Reply {
 /// body may have been sent, anything that ends the request without a reply (a dial error after
 /// the write, a head that never came, an abort) is charged as the estimate it was held at, never
 /// as nothing. `free` is a request that costs nothing (`count_tokens`): it is held at nothing,
-/// settles at nothing and reports no usage.
+/// settles at nothing and never reports usage. It reports an upstream signal when the upstream
+/// answers with an error or could not be reached before the write, and nothing when it fails after
+/// the write.
 pub(super) struct Charge {
     res: Reservation,
     events: Events,

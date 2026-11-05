@@ -57,7 +57,7 @@ async fn a_buffered_reply_ends_in_one_exact_usage_report_for_the_model_asked() {
 #[tokio::test]
 async fn a_streamed_reply_split_anywhere_is_read_and_a_reply_without_usage_is_approximate() {
     let events = format!(
-        "data: {{\"type\":\"message_start\",\"message\":{{\"usage\":{{\"input_tokens\":9,\"output_tokens\":1}}}}}}\n\n{}data: {{\"type\":\"message_delta\",\"usage\":{{\"output_tokens\":4}}}}\n\n",
+        "data: {{\"type\":\"message_start\",\"message\":{{\"usage\":{{\"input_tokens\":9,\"output_tokens\":1}}}}}}\n\n{}data: {{\"type\":\"message_delta\",\"usage\":{{\"output_tokens\":4}}}}\n\ndata: {{\"type\":\"message_stop\"}}\n\n",
         delta("hello")
     );
     let mut script = vec![Step::Send(SSE_HEAD.as_bytes().to_vec())];
@@ -578,4 +578,74 @@ async fn an_upstream_that_refuses_the_key_ends_the_sessions_requests() {
     assert_eq!(status(&second), 403);
     assert!(body_of(&second).contains("gateway_account_unusable"));
     assert_eq!(r.up.count(), 1, "no retry storm: the second never left");
+}
+
+#[tokio::test]
+async fn a_stream_that_ended_in_an_error_event_is_estimated_not_taken_as_exact() {
+    let events = format!(
+        "data: {{\"type\":\"message_start\",\"message\":{{\"usage\":{{\"input_tokens\":9,\"output_tokens\":1}}}}}}\n\n{}data: {{\"type\":\"error\",\"error\":{{\"type\":\"overloaded_error\"}}}}\n\n",
+        delta(&"z".repeat(40))
+    );
+    let mut script = vec![Step::Send(SSE_HEAD.as_bytes().to_vec())];
+    script.push(Step::Send(chunk(&events)));
+    script.push(Step::Send(b"0\r\n\r\n".to_vec()));
+    let mut r = rig(Opts::anthropic(script)).await;
+    let resp = raw(&r.sock, &request(LINE, &[], &model_body())).await;
+    assert!(
+        String::from_utf8_lossy(&resp).ends_with("0\r\n\r\n"),
+        "a clean close"
+    );
+    let rep = r.report().await;
+    assert!(rep.approximate, "{rep:?}");
+    assert_eq!((rep.input, rep.output), (9, 10));
+}
+
+#[tokio::test]
+async fn a_403_about_a_resource_does_not_end_the_session_but_one_about_the_key_does() {
+    let reply = |body: &str| {
+        format!(
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    };
+    let resource = reply(r#"{"error":{"type":"permission_error","message":"file"}}"#);
+    let mut r = rig(Opts::anthropic(vec![Step::Send(
+        resource.clone().into_bytes(),
+    )]))
+    .await;
+    for _ in 0..2 {
+        let resp = raw(&r.sock, &request(LINE, &[], &model_body())).await;
+        assert_eq!(status(&resp), 403, "the upstream's answer passes through");
+        assert_eq!(r.report().await.status, UpstreamStatus::ServerError);
+    }
+    assert_eq!(r.up.count(), 2, "the session went on");
+    let key = reply(r#"{"error":{"type":"authentication_error"}}"#);
+    let mut r = rig(Opts::anthropic(vec![Step::Send(key.into_bytes())])).await;
+    raw(&r.sock, &request(LINE, &[], &model_body())).await;
+    assert_eq!(r.report().await.status, UpstreamStatus::AuthFailed);
+    let second = raw(&r.sock, &request(LINE, &[], &model_body())).await;
+    assert!(body_of(&second).contains("gateway_account_unusable"));
+}
+
+#[tokio::test]
+async fn a_gemini_request_without_a_cap_is_forwarded_with_the_default_one() {
+    let o = Opts::of(
+        Wire::GeminiGenerate,
+        "generativelanguage.googleapis.com",
+        "",
+        "google",
+        "AIza",
+        ok_script(),
+    );
+    let r = rig(o).await;
+    let line = format!("POST /v1beta/models/{MODEL}:generateContent HTTP/1.1");
+    let sent = "{\"contents\":[{\"parts\":[{\"text\":\"hi\"}]}]}";
+    assert_eq!(status(&raw(&r.sock, &request(&line, &[], sent)).await), 200);
+    let seen = r.up.seen.lock().unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&seen[0].body).unwrap();
+    assert_eq!(body["generationConfig"]["maxOutputTokens"], 32_768);
+    assert_eq!(body["contents"][0]["parts"][0]["text"], "hi");
+    // The head's length is the new body's.
+    let want = format!("content-length: {}", seen[0].body.len());
+    assert!(seen[0].head.to_ascii_lowercase().contains(&want));
 }

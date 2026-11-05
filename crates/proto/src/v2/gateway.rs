@@ -236,8 +236,8 @@ fn is_zero_epoch(n: &u32) -> bool {
 }
 
 /// What counts against a [`Ceiling`]'s `tokens`: all four kinds, summed. The one definition: the
-/// gateway's meter and the Core's ledger both call it, so what the gateway refuses and what the
-/// ledger records cannot drift.
+/// runner's gateway meter calls it, and the Core's ledger and budget hold must too (KAN-435 G5;
+/// the server does not yet), so what the gateway refuses and what the ledger records cannot drift.
 pub fn ceiling_tokens(input: u64, output: u64, cache_read: u64, cache_write: u64) -> u64 {
     input
         .saturating_add(output)

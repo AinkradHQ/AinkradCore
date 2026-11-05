@@ -87,8 +87,7 @@ pub(super) struct Probe {
     pub model: Option<String>,
     stream: Option<Value>,
     n: Option<Value>,
-    #[serde(default, deserialize_with = "present")]
-    background: bool,
+    background: Option<Value>,
     max_tokens: Option<Value>,
     max_output_tokens: Option<Value>,
     max_completion_tokens: Option<Value>,
@@ -114,11 +113,24 @@ fn normal(s: &str) -> String {
 }
 
 /// A tool name or key that gives the provider network reach on the agent's behalf.
+///
+/// Also refused: provider-side tools the gateway can neither check against the grant nor price,
+/// when unsure by name: the advisor (a second model run by the provider), code execution and the
+/// server-side tool search.
 fn reaches_network(s: &str) -> bool {
     let s = normal(s);
-    ["websearch", "webfetch", "urlcontext", "googlesearch", "mcp"]
-        .iter()
-        .any(|w| s.contains(w))
+    [
+        "websearch",
+        "webfetch",
+        "urlcontext",
+        "googlesearch",
+        "mcp",
+        "advisor",
+        "codeexecution",
+        "toolsearchtool",
+    ]
+    .iter()
+    .any(|w| s.contains(w))
 }
 
 impl Probe {
@@ -152,12 +164,21 @@ impl Probe {
     /// Why the request may not be sent, as a code: it asks the provider to reach the network, to
     /// answer with more than one candidate, or to carry on in the background.
     pub(super) fn refusal(&self) -> Option<&'static str> {
-        let many = |v: Option<&Value>| v.and_then(Value::as_u64).is_some_and(|n| n > 1);
-        let candidates = self
-            .generation_config
-            .as_ref()
-            .and_then(|g| g.get("candidateCount").or_else(|| g.get("candidate_count")));
-        if many(self.n.as_ref()) || many(candidates) || self.background {
+        // One candidate or none named: absent, null or the integer 1. `2.0` and `"2"` are refused.
+        let not_one = |v: Option<&Value>| match v {
+            None | Some(Value::Null) => false,
+            Some(v) => v.as_u64() != Some(1),
+        };
+        let gen_cfg = |k: &str| self.generation_config.as_ref().and_then(|g| g.get(k));
+        let background = !matches!(
+            self.background,
+            None | Some(Value::Null | Value::Bool(false))
+        );
+        if not_one(self.n.as_ref())
+            || not_one(gen_cfg("candidateCount"))
+            || not_one(gen_cfg("candidate_count"))
+            || background
+        {
             return Some("param_not_allowed");
         }
         if self.mcp_servers || self.web_search_options {
@@ -187,21 +208,43 @@ pub(super) fn parse(body: &[u8]) -> Result<Probe, serde_json::Error> {
     serde_json::from_slice(body)
 }
 
+/// The body with `maxOutputTokens` set to [`DEFAULT_MAX_OUTPUT`] in its generation config (made
+/// if absent), for a Gemini request that names no cap and is not streamed: the cap is the one the
+/// reservation holds, so the reply cannot outrun it. `None` when the config is not an object.
+pub(super) fn with_default_cap(body: &[u8]) -> Option<Vec<u8>> {
+    let mut v: Value = serde_json::from_slice(body).ok()?;
+    let m = v.as_object_mut()?;
+    let (key, name) = if m.contains_key("generation_config") {
+        ("generation_config", "max_output_tokens")
+    } else {
+        ("generationConfig", "maxOutputTokens")
+    };
+    let cfg = m
+        .entry(key)
+        .or_insert_with(|| Value::Object(Default::default()));
+    if cfg.is_null() {
+        *cfg = Value::Object(Default::default());
+    }
+    cfg.as_object_mut()?
+        .insert(name.to_owned(), DEFAULT_MAX_OUTPUT.into());
+    serde_json::to_vec(&v).ok()
+}
+
 /// The `anthropic-beta` values the gateway passes. A beta feature that is not here is dropped
 /// from the header (the request goes without it): several betas give the provider reach the
 /// agent does not have (MCP connector, web fetch, code execution, the files API), so the list
 /// is a short allowlist in code, not a pass-through. Extend it when a harness's smoke run shows
 /// one it needs.
-const BETAS: [&str; 15] = [
+const BETAS: [&str; 14] = [
     // What Claude Code 2.1.318 sends on an API-key turn (read from a request to a local listener,
-    // 2026-11-05): none gives the provider network reach.
+    // 2026-11-05), less `advisor-tool-2026-03-01`: it only matters when the advisor tool is in the
+    // request, and that tool is refused. None of these gives the provider network reach.
     "claude-code-20250219",
     "interleaved-thinking-2025-05-14",
     "context-management-2025-06-27",
     "per-turn-control-2026-07-01",
     "mid-conversation-tool-changes-2026-07-01",
     "inline-tools-2026-09-15",
-    "advisor-tool-2026-03-01",
     "thinking-token-count-2026-05-13",
     "advanced-tool-use-2025-11-20",
     "effort-2025-11-24",
@@ -226,6 +269,7 @@ pub(super) fn betas(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn probe(body: &str) -> Result<Probe, serde_json::Error> {
         parse(body.as_bytes())
@@ -276,6 +320,10 @@ mod tests {
             // OpenAI: remote MCP, web search, the chat-completions search option.
             r#"{"tools":[{"type":"mcp","server_url":"u"}]}"#,
             r#"{"tools":[{"type":"web_search"}]}"#,
+            // Provider-side tools the gateway can neither check nor price.
+            r#"{"tools":[{"type":"advisor_20260301","name":"advisor","model":"x"}]}"#,
+            r#"{"tools":[{"type":"code_execution_20250825","name":"code_execution"}]}"#,
+            r#"{"tools":[{"type":"tool_search_tool_regex_20251119","name":"tool_search"}]}"#,
             r#"{"tools":[{"type":"web_search_preview_2025_03_11"}]}"#,
             r#"{"web_search_options":{}}"#,
             r#"{"webSearchOptions":{}}"#,
@@ -321,6 +369,10 @@ mod tests {
             betas("web-fetch-2025-09-10, code-execution-2025-05-22"),
             None
         );
+        assert_eq!(
+            betas("claude-code-20250219,advisor-tool-2026-03-01").as_deref(),
+            Some("claude-code-20250219")
+        );
         assert_eq!(betas(""), None);
     }
 
@@ -354,7 +406,11 @@ mod tests {
             r#"{"generationConfig":{"candidateCount":3}}"#,
             r#"{"generation_config":{"candidate_count":2}}"#,
             r#"{"background":true}"#,
-            r#"{"background":false}"#,
+            r#"{"background":"true"}"#,
+            r#"{"n":2.0}"#,
+            r#"{"n":"2"}"#,
+            r#"{"generationConfig":{"candidateCount":1,"candidate_count":2}}"#,
+            r#"{"generationConfig":{"candidateCount":"1"}}"#,
         ] {
             assert_eq!(
                 probe(body).unwrap().refusal(),
@@ -366,6 +422,8 @@ mod tests {
             r#"{"n":1}"#,
             r#"{"generationConfig":{"candidateCount":1}}"#,
             r#"{"n":null}"#,
+            r#"{"background":false}"#,
+            r#"{"background":null}"#,
         ] {
             assert_eq!(probe(body).unwrap().refusal(), None, "{body}");
         }
@@ -385,5 +443,29 @@ mod tests {
         // Repeats in different objects are not repeats; trailing junk is refused.
         assert!(probe(r#"{"a":{"x":1},"b":{"x":2},"c":[{"x":1},{"x":2}]}"#).is_ok());
         assert!(probe(r#"{"a":1} x"#).is_err());
+    }
+
+    #[test]
+    fn a_gemini_request_without_a_cap_is_given_the_default_in_its_own_spelling() {
+        let cap = |body: &str| {
+            let v: Value =
+                serde_json::from_slice(&with_default_cap(body.as_bytes()).unwrap()).unwrap();
+            v
+        };
+        assert_eq!(
+            cap("{}")["generationConfig"]["maxOutputTokens"],
+            DEFAULT_MAX_OUTPUT
+        );
+        assert_eq!(
+            cap(r#"{"generation_config":{"temperature":1}}"#)["generation_config"]["max_output_tokens"],
+            DEFAULT_MAX_OUTPUT
+        );
+        let kept = cap(r#"{"contents":[1],"generationConfig":{"temperature":1}}"#);
+        assert_eq!(kept["generationConfig"]["temperature"], 1);
+        assert_eq!(kept["contents"], json!([1]));
+        assert!(with_default_cap(br#"{"generationConfig":"x"}"#).is_none());
+        // What comes out names a cap.
+        let body = with_default_cap(b"{}").unwrap();
+        assert!(parse(&body).unwrap().output_cap(false).is_some());
     }
 }
