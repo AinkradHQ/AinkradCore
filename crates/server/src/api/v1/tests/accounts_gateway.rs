@@ -18,7 +18,7 @@ const OR: &str = "sk-or-v1-0123456789abcdefghijklmnopqrstuvwxyzTESTONLY";
 const OR2: &str = "sk-or-v1-zyxwvutsrqponmlkjihgfedcba9876543210TESTONLY";
 const ANT: &str = "sk-ant-api03-0123456789abcdefghijklmnopqrstuvwxyzTESTONLY";
 
-fn router(id: &str, prefix: Option<&str>) -> Definition {
+pub(super) fn router(id: &str, prefix: Option<&str>) -> Definition {
     Definition {
         id: id.to_owned(),
         name: "Router".to_owned(),
@@ -50,7 +50,7 @@ fn code<T>(r: Result<T, Error>) -> &'static str {
     }
 }
 
-async fn open_gate(fx: &Fx) {
+pub(super) async fn open_gate(fx: &Fx) {
     crate::store::settings::set(
         &fx.app.pool,
         Key::SecretsProviderAccounts,

@@ -160,7 +160,7 @@ async fn the_slot_is_reachable_denied_and_filtered_and_the_key_is_nowhere_inside
             extra = egress::sandbox_env(&sock, &exe());
         }
         let script = format!(
-            "{}\nenv | grep -c '{key}' ; cat /proc/*/environ 2>/dev/null | tr '\\0' '\\n' | grep -c '{key}'; grep -rl '{key}' /tmp /proc/self/cwd 2>/dev/null | wc -l",
+            "{}\nenv | grep -c '{key}' ; cat /proc/*/environ /proc/*/cmdline 2>/dev/null | tr '\\0' '\\n' | grep -c '{key}'; grep -rl '{key}' /tmp /proc/self/cwd 2>/dev/null | wc -l",
             ask()
         );
         let said = tokio::task::spawn_blocking({

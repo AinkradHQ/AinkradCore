@@ -7,6 +7,7 @@ mod framing;
 mod harness_refusals;
 mod harness_wiring;
 mod metering;
+mod negative;
 mod stream;
 
 use std::net::SocketAddr;

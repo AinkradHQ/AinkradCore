@@ -40,6 +40,7 @@ mod events;
 mod gateway_ceiling;
 mod gateway_epoch;
 mod gateway_limits;
+mod gateway_negative;
 mod gateway_store;
 mod me;
 mod metrics;
