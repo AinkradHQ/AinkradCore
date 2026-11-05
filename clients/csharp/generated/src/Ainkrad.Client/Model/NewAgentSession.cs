@@ -41,7 +41,7 @@ namespace Ainkrad.Client.Model
         /// Initializes a new instance of the <see cref="NewAgentSession" /> class.
         /// </summary>
         /// <param name="harness">&#x60;claude&#x60;, &#x60;codex&#x60;, &#x60;opencode&#x60;, &#x60;agy&#x60; (what the runner&#39;s &#x60;agent&#x60; driver takes). (required).</param>
-        /// <param name="model">model.</param>
+        /// <param name="model">The model id as the provider names it. For a session served by the auth gateway it must be one of the ids priced for its provider, exactly: the gateway resolves no alias..</param>
         /// <param name="policy">&#x60;{\&quot;mode\&quot;: \&quot;ask\&quot; | \&quot;accept_edits\&quot; | \&quot;sandboxed\&quot;, \&quot;allow\&quot;: […]}&#x60;; default &#x60;ask&#x60;..</param>
         /// <param name="prompt">prompt.</param>
         /// <param name="runner">The runner&#39;s device id, &#x60;d_…&#x60;. (required).</param>
@@ -76,8 +76,9 @@ namespace Ainkrad.Client.Model
         public string Harness { get; set; }
 
         /// <summary>
-        /// Gets or Sets Model
+        /// The model id as the provider names it. For a session served by the auth gateway it must be one of the ids priced for its provider, exactly: the gateway resolves no alias.
         /// </summary>
+        /// <value>The model id as the provider names it. For a session served by the auth gateway it must be one of the ids priced for its provider, exactly: the gateway resolves no alias.</value>
         [DataMember(Name = "model", EmitDefaultValue = true)]
         public string Model { get; set; }
 

@@ -42,7 +42,7 @@ namespace Ainkrad.Client.Model
         /// </summary>
         /// <param name="cachePerMtokMicro">cachePerMtokMicro (required).</param>
         /// <param name="inputPerMtokMicro">inputPerMtokMicro (required).</param>
-        /// <param name="model">model (required).</param>
+        /// <param name="model">The model id exactly as the provider names it: the auth gateway grants a session the ids priced here and compares a request&#39;s model with them as they are. It resolves no alias (&#x60;-latest&#x60;, a family name), and an id ending in &#x60;:online&#x60; is refused. (required).</param>
         /// <param name="outputPerMtokMicro">outputPerMtokMicro (required).</param>
         /// <param name="pricedAt">When the provider&#39;s list price was read: a UTC timestamp. (required).</param>
         /// <param name="provider">provider (required).</param>
@@ -84,8 +84,9 @@ namespace Ainkrad.Client.Model
         public long InputPerMtokMicro { get; set; }
 
         /// <summary>
-        /// Gets or Sets Model
+        /// The model id exactly as the provider names it: the auth gateway grants a session the ids priced here and compares a request&#39;s model with them as they are. It resolves no alias (&#x60;-latest&#x60;, a family name), and an id ending in &#x60;:online&#x60; is refused.
         /// </summary>
+        /// <value>The model id exactly as the provider names it: the auth gateway grants a session the ids priced here and compares a request&#39;s model with them as they are. It resolves no alias (&#x60;-latest&#x60;, a family name), and an id ending in &#x60;:online&#x60; is refused.</value>
         [DataMember(Name = "model", IsRequired = true, EmitDefaultValue = true)]
         public string Model { get; set; }
 

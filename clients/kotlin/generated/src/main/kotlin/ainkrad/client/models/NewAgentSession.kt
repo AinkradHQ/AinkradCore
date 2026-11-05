@@ -26,7 +26,7 @@ import kotlinx.serialization.Contextual
  *
  * @param harness `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes).
  * @param runner The runner's device id, `d_…`.
- * @param model 
+ * @param model The model id as the provider names it. For a session served by the auth gateway it must be one of the ids priced for its provider, exactly: the gateway resolves no alias.
  * @param policy `{\"mode\": \"ask\" | \"accept_edits\" | \"sandboxed\", \"allow\": […]}`; default `ask`.
  * @param prompt 
  * @param secrets At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).
@@ -44,6 +44,7 @@ data class NewAgentSession (
     @SerialName(value = "runner")
     val runner: kotlin.String,
 
+    /* The model id as the provider names it. For a session served by the auth gateway it must be one of the ids priced for its provider, exactly: the gateway resolves no alias. */
     @SerialName(value = "model")
     val model: kotlin.String? = null,
 

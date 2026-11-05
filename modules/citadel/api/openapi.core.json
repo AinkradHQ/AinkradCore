@@ -4884,6 +4884,7 @@
             "type": "string"
           },
           "model": {
+            "description": "The model id as the provider names it. For a session served by the auth gateway it must be\none of the ids priced for its provider, exactly: the gateway resolves no alias.",
             "type": [
               "string",
               "null"
@@ -8688,6 +8689,7 @@
             "type": "integer"
           },
           "model": {
+            "description": "The model id exactly as the provider names it: the auth gateway grants a session the ids\npriced here and compares a request's model with them as they are. It resolves no alias\n(`-latest`, a family name), and an id ending in `:online` is refused.",
             "type": "string"
           },
           "output_per_mtok_micro": {

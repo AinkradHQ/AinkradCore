@@ -1783,6 +1783,10 @@ export interface components {
         NewAgentSession: {
             /** @description `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). */
             harness: string;
+            /**
+             * @description The model id as the provider names it. For a session served by the auth gateway it must be
+             *     one of the ids priced for its provider, exactly: the gateway resolves no alias.
+             */
             model?: string | null;
             /** @description `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`. */
             policy?: Record<string, never> | null;
@@ -2251,6 +2255,11 @@ export interface components {
             cache_per_mtok_micro: number;
             /** Format: int64 */
             input_per_mtok_micro: number;
+            /**
+             * @description The model id exactly as the provider names it: the auth gateway grants a session the ids
+             *     priced here and compares a request's model with them as they are. It resolves no alias
+             *     (`-latest`, a family name), and an id ending in `:online` is refused.
+             */
             model: string;
             /** Format: int64 */
             output_per_mtok_micro: number;

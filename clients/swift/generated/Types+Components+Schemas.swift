@@ -1943,6 +1943,9 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/harness`.
             public var harness: Swift.String
+            /// The model id as the provider names it. For a session served by the auth gateway it must be
+            /// one of the ids priced for its provider, exactly: the gateway resolves no alias.
+            ///
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/model`.
             public var model: Swift.String?
             /// `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`.
@@ -1968,7 +1971,7 @@ extension Components {
             ///
             /// - Parameters:
             ///   - harness: `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes).
-            ///   - model:
+            ///   - model: The model id as the provider names it. For a session served by the auth gateway it must be
             ///   - policy: `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`.
             ///   - prompt:
             ///   - runner: The runner's device id, `d_…`.
@@ -3699,6 +3702,10 @@ extension Components {
             public var cachePerMtokMicro: Swift.Int64
             /// - Remark: Generated from `#/components/schemas/SetPrice/input_per_mtok_micro`.
             public var inputPerMtokMicro: Swift.Int64
+            /// The model id exactly as the provider names it: the auth gateway grants a session the ids
+            /// priced here and compares a request's model with them as they are. It resolves no alias
+            /// (`-latest`, a family name), and an id ending in `:online` is refused.
+            ///
             /// - Remark: Generated from `#/components/schemas/SetPrice/model`.
             public var model: Swift.String
             /// - Remark: Generated from `#/components/schemas/SetPrice/output_per_mtok_micro`.
@@ -3714,7 +3721,7 @@ extension Components {
             /// - Parameters:
             ///   - cachePerMtokMicro:
             ///   - inputPerMtokMicro:
-            ///   - model:
+            ///   - model: The model id exactly as the provider names it: the auth gateway grants a session the ids
             ///   - outputPerMtokMicro:
             ///   - pricedAt: When the provider's list price was read: a UTC timestamp.
             ///   - provider:
