@@ -23,6 +23,7 @@ mod charge;
 pub mod check;
 pub mod dial;
 pub mod meter;
+mod online;
 mod probe;
 mod reply;
 mod request;

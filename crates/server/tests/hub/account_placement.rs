@@ -62,7 +62,7 @@ fn checked(secrets: &[SessionSecret], policy: &Value) -> Result<(), Invalid> {
 
 #[test]
 fn an_account_session_must_ask_for_a_sandbox_whoever_creates_it() {
-    let key = [secret("acct.anthropic.main")];
+    let key = [secret("acct.anthropic.7")];
     for policy in [
         json!({"mode": "ask"}),
         json!({"mode": "ask", "min_isolation": "none"}),

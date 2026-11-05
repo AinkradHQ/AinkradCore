@@ -7,7 +7,7 @@ use super::*;
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ProviderAccount {
     pub id: i64,
-    /// `anthropic`, `openai` or `google`.
+    /// `anthropic`, `openai`, `google` or a user definition's id.
     pub provider: String,
     pub label: String,
     /// The key's last four characters; empty for a key too short to show any.
@@ -20,6 +20,10 @@ pub struct ProviderAccount {
     pub state_until: Option<Timestamp>,
     /// Sessions that may hold the account at once; 0 is no cap.
     pub cap: i64,
+    /// What one session may spend through this account; absent when only the budgets limit it.
+    pub session_limits: Option<SessionLimits>,
+    /// The last one-shot test of the key; absent when it was never tested.
+    pub last_test: Option<LastTest>,
     pub last_used_at: Option<Timestamp>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
@@ -37,6 +41,16 @@ impl From<acc::Account> for ProviderAccount {
             state_reason: a.state_reason,
             state_until: opt_ts(a.state_until.as_deref()),
             cap: a.cap,
+            session_limits: (a.session_max_tokens.is_some() || a.session_max_usd_micros.is_some())
+                .then_some(SessionLimits {
+                    max_tokens: a.session_max_tokens,
+                    max_usd_micros: a.session_max_usd_micros,
+                }),
+            last_test: a
+                .last_test_at
+                .as_deref()
+                .zip(a.last_test_result)
+                .map(|(at, result)| LastTest { result, at: ts(at) }),
             last_used_at: opt_ts(a.last_used_at.as_deref()),
             created_at: ts(&a.created_at),
             updated_at: ts(&a.updated_at),
@@ -97,6 +111,37 @@ pub struct SetCap {
     pub cap: i64,
 }
 
+/// What one session may spend through an account. A dimension left out is not limited by the
+/// account (only by the budgets).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SessionLimits {
+    /// Input, output and cache tokens; at least 328000 (one turn needs that much room).
+    pub max_tokens: Option<i64>,
+    /// Millionths of a dollar.
+    pub max_usd_micros: Option<i64>,
+}
+
+/// The last one-shot test of an account's key.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct LastTest {
+    /// The status class the provider answered: `ok`, `rate_limited`, `quota`, `auth_failed`,
+    /// `server_error`, `unreachable`, `refused_address`, `tls_failed`, `inconclusive` (see
+    /// [`AccountTested`]) or `failed` (the runner did not answer). Never provider text.
+    pub result: String,
+    pub at: Timestamp,
+}
+
+/// What `POST /accounts/{id}/test` answers: a status class and a latency, never a response body.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AccountTested {
+    /// As [`LastTest::result`], or `inconclusive`: the provider's model list needs no key and its
+    /// definition declares no `test_path`, so nothing was sent and nothing is known of the key.
+    pub result: String,
+    pub latency_ms: u64,
+    /// The runner device that made the request (empty when `result` is `inconclusive`).
+    pub runner: String,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AccountsDeleted {
     pub deleted: bool,
@@ -117,6 +162,22 @@ pub struct Provider {
     pub name: String,
     /// `claude`, `codex` or `agy`.
     pub harness: String,
+    /// The API dialect the gateway speaks to this provider: `anthropic-messages` (claude),
+    /// `openai-responses` (codex) or `gemini-generate` (agy). Optional on write: it is its
+    /// harness's own, and any other is refused.
+    #[serde(default)]
+    pub wire: Option<String>,
+    /// The shape this provider's keys start with (6 to 16 characters, never a built-in's, such
+    /// as `sk-or-v1-`). A definition that sets it holds keys, and then only through the gateway
+    /// (`delivery` is `["gateway"]`): the broker binds each key to the account's host by it.
+    #[serde(default)]
+    pub key_prefix: Option<String>,
+    /// The authenticated path (under the base URL, such as `/key`) of the one-shot account test,
+    /// for a provider whose model list needs no key (OpenRouter's is public: a revoked key would
+    /// read as `ok`). A user definition without one cannot be tested: the answer is
+    /// `inconclusive`. Built-ins use their wire's own model list.
+    #[serde(default)]
+    pub test_path: Option<String>,
     /// The harness's own authentication variable.
     pub auth_var: String,
     /// `https://`, a public DNS name.
@@ -126,6 +187,8 @@ pub struct Provider {
     pub delivery: Vec<String>,
     /// `paste`.
     pub login_methods: Vec<String>,
+    /// Model ids exactly as the provider names them: the gateway compares a request's model with
+    /// the ids it was granted, as they are, and resolves no alias (`-latest`). `:online` is refused.
     pub models: Vec<ModelPrice>,
     /// When the models' list prices were read.
     pub priced_at: Option<String>,
@@ -142,6 +205,9 @@ impl From<Definition> for Provider {
             id: d.id,
             name: d.name,
             harness: d.harness,
+            wire: Some(d.wire),
+            key_prefix: d.key_prefix,
+            test_path: d.test_path,
             auth_var: d.auth_var,
             base_url: d.base_url,
             usage_parser: d.usage_parser,
@@ -169,6 +235,9 @@ impl From<Provider> for Definition {
             id: p.id,
             name: p.name,
             harness: p.harness,
+            wire: p.wire.unwrap_or_default(),
+            key_prefix: p.key_prefix,
+            test_path: p.test_path,
             auth_var: p.auth_var,
             base_url: p.base_url,
             usage_parser: p.usage_parser,

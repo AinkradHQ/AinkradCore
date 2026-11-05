@@ -108,7 +108,11 @@
 ///    `AgentRead`, in the runner schema; no operation changes.
 /// 39: the auth gateway's account signals (KAN-435 G5): the `account.auth_failed` and `account.auth_inconclusive`
 ///    audit actions; no operation changes.
-pub const API_MINOR: u32 = 39;
+/// 40: the auth gateway's account API (KAN-435 G7): `testAccount` (`admin`, one free request through a runner's
+///    gateway) and `setAccountSessionLimits` (`admin` and destructive); `session_limits` and `last_test` on
+///    `ProviderAccount`; `wire` and `key_prefix` on `Provider`; the `account.session_limits_set` and
+///    `account.tested` audit actions.
+pub const API_MINOR: u32 = 40;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

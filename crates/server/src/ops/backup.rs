@@ -119,7 +119,8 @@ async fn strip_secrets(db: &Path) -> Result_ {
         sqlx::raw_sql(
             "PRAGMA secure_delete = ON; UPDATE core_accounts SET masked_tail = '', \
              state = 'disabled', state_reason = 'exported without its key: store a new key', \
-             state_until = NULL, last_used_at = NULL; VACUUM;",
+             state_until = NULL, last_used_at = NULL, last_test_at = NULL, last_test_result = NULL; \
+             VACUUM;",
         )
         .execute(&mut conn)
         .await?;

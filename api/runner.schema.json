@@ -1309,6 +1309,13 @@
           "description": "As in [`GatewayGrant`].",
           "type": "string"
         },
+        "test_path": {
+          "description": "The path of the one request, under the upstream's base path, when the provider's own model\nlist is not an authenticated call (OpenRouter lists models without a key, so a revoked key\nwould read as `ok`). Absent: the wire's own model list, which every built-in provider\nauthenticates.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "upstream": {
           "$ref": "#/$defs/Upstream"
         },

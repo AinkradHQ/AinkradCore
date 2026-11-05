@@ -785,6 +785,7 @@ fn v2_agent_frames_are_pinned() {
             provider: "anthropic".to_owned(),
             user_key: None,
             upstream,
+            test_path: None,
         })),
     );
 }

@@ -478,6 +478,19 @@ async fn an_export_blanks_account_rows_and_keeps_the_ledger() {
         .await
         .unwrap();
     assert_eq!(a.masked_tail, "ZqX7");
+    // A test of the key is a trace of it too: the export drops it with the tail.
+    ainkrad_core_server::store::account_keys::record_test(
+        &pool,
+        a.id,
+        "ok",
+        5,
+        "d_runner",
+        &owner.id,
+        AuditActor::System,
+        now,
+    )
+    .await
+    .unwrap();
     let cost = costs::NewCost {
         session: "s1",
         epoch: 0,
@@ -515,6 +528,7 @@ async fn an_export_blanks_account_rows_and_keeps_the_ledger() {
         ("", "disabled")
     );
     assert_eq!((blank.label.as_str(), blank.cap), ("main", 4));
+    assert_eq!((blank.last_test_at, blank.last_test_result), (None, None));
     let events = costs::list(&pool, None, None, 10).await.unwrap();
     assert_eq!(events.len(), 1);
     pool.close().await;

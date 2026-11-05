@@ -27,7 +27,7 @@ use super::budgets::{
     Standing,
     guard::{self, Reservation},
 };
-use super::secrets::{ACCOUNT_PREFIX, ACCOUNT_PROVIDERS, Error};
+use super::secrets::{ACCOUNT_PREFIX, Error};
 
 /// The most a Claude turn may ask to write (`max_tokens`).
 pub const MAX_OUTPUT_TOKENS: u64 = 128_000;
@@ -48,16 +48,22 @@ const HOLD_TTL_SECS: i64 = 7 * 24 * 3600;
 pub const MAX_CONFIRM_TRIES: i64 = 3;
 
 /// The account an `acct.<provider>.<id>` secret names, when the name is the account model's own
-/// (the id is the account row's, a plain number): an API-key account, served by the gateway. A
-/// secret of any other label (`acct.anthropic.main`) is an env secret, as before.
-pub fn account_secret(name: &str) -> Option<(&'static str, i64)> {
+/// (a provider id, a built-in or a user definition's, and the account row's id, a plain number): an
+/// API-key account, served by the gateway. Whether such a row exists, and is of that provider, is
+/// the launch's to check. A secret of any other label (`acct.anthropic.main`) is not one, and a
+/// session may not name it (`agents::non_gateway_account`): an API-key account is never an env secret.
+pub fn account_secret(name: &str) -> Option<(&str, i64)> {
     let (provider, id) = name.strip_prefix(ACCOUNT_PREFIX)?.split_once('.')?;
-    let (provider, _) = ACCOUNT_PROVIDERS.iter().find(|(k, _)| *k == provider)?;
+    let shaped = (1..=32).contains(&provider.len())
+        && provider.as_bytes()[0].is_ascii_lowercase()
+        && provider
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
     let plain = !id.is_empty() && id.len() <= 18 && !id.starts_with('0');
-    (plain && id.bytes().all(|b| b.is_ascii_digit()))
+    (shaped && plain && id.bytes().all(|b| b.is_ascii_digit()))
         .then(|| id.parse().ok())
         .flatten()
-        .map(|id| (*provider, id))
+        .map(|id| (provider, id))
 }
 
 /// The secret of `secrets` that a gateway serves, if any.
@@ -144,7 +150,8 @@ pub enum Hold {
 
 /// Reserves what `session`, served by `account`, may spend: the headroom of every hard-stop budget
 /// of the account and its pools, at most [`HOLD_TOKENS`] and [`HOLD_USD_MICROS`], in one write
-/// transaction (so two sessions cannot both take the last of it). A second reserve for the same
+/// transaction (so two sessions cannot both take the last of it). The account's session limits
+/// (`core_accounts.session_max_*`, less what this session has already spent) cap the hold too. A second reserve for the same
 /// session (a resume) replaces its own hold and is not counted against itself, and lifts a stop the
 /// budgets had set (what is left now is what it may spend). Denied, nothing is held, and a ceiling
 /// that cannot admit one turn is a denial that says so: a session that starts but is refused at
@@ -175,6 +182,23 @@ pub async fn reserve(
              needs at least {min_usd}"
         )));
     }
+    // The account's session limits cap what the hold may be, and are the ceiling alone where no
+    // budget limits a dimension (nothing is held then, there is nothing to hold it from).
+    let (left_t, left_u) = ceiling::session_left(&mut tx, account, session).await?;
+    if let Some(t) = left_t.filter(|t| *t < MIN_CEILING_TOKENS) {
+        return Ok(Hold::Denied(format!(
+            "the account's session limit leaves {t} tokens, and one turn needs at least \
+             {MIN_CEILING_TOKENS}"
+        )));
+    }
+    if let Some(u) = left_u.filter(|u| *u < min_usd) {
+        return Ok(Hold::Denied(format!(
+            "the account's session limit leaves {u} micro-dollars, and one turn of the cheapest \
+             priced model needs at least {min_usd}"
+        )));
+    }
+    let capped = |hold: Option<u64>, left: Option<u64>| hold.map(|h| left.map_or(h, |l| h.min(l)));
+    let (tokens_held, usd_held) = (capped(tokens, left_t), capped(usd, left_u));
     let held = |n: Option<u64>| i64::try_from(n.unwrap_or(0)).unwrap_or(i64::MAX);
     // The old hold goes first, in this transaction: `reserve_in` only replaces the holds of the
     // budgets that apply now, so one on a pool the account has left would otherwise stay until it
@@ -184,8 +208,8 @@ pub async fn reserve(
         &mut tx,
         session,
         &subjects,
-        held(tokens),
-        held(usd),
+        held(tokens_held),
+        held(usd_held),
         HOLD_TTL_SECS,
         now,
     )
@@ -211,8 +235,8 @@ pub async fn reserve(
         .await?;
     tx.commit().await?;
     Ok(Hold::Granted(Ceiling {
-        tokens: tokens.unwrap_or(u64::MAX),
-        usd_micros: usd.unwrap_or(u64::MAX),
+        tokens: tokens_held.or(left_t).unwrap_or(u64::MAX),
+        usd_micros: usd_held.or(left_u).unwrap_or(u64::MAX),
     }))
 }
 
@@ -225,13 +249,20 @@ mod tests {
         assert_eq!(account_secret("acct.anthropic.7"), Some(("anthropic", 7)));
         assert_eq!(account_secret("acct.openai.120"), Some(("openai", 120)));
         assert_eq!(account_secret("acct.google.3"), Some(("google", 3)));
+        // A user definition's id is a provider too (its account row decides if it exists).
+        assert_eq!(
+            account_secret("acct.openrouter.12"),
+            Some(("openrouter", 12))
+        );
         for env in [
             "acct.anthropic.main",
             "acct.anthropic.07",
             "acct.anthropic.0",
             "acct.anthropic.",
             "acct.anthropic.1.2",
-            "acct.nobody.1",
+            "acct.Nobody.1",
+            "acct.-x.1",
+            "acct..1",
             "acct.1",
             "git.token",
             "acct.anthropic.99999999999999999999",

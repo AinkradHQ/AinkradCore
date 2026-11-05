@@ -32,8 +32,8 @@ use crate::ops::secretbox::SecretBox;
 pub const DEFAULT_CAP: i64 = 4;
 /// The most a cap may be (0 is off).
 pub const MAX_CAP: i64 = 64;
-/// The provider kinds an account may name: the broker's, so an account's key is always checked
-/// against its own provider's shape.
+/// The built-in providers (pools are of these only). An account may also name a stored user
+/// definition (`account_keys::holds_keys_problem`).
 pub const PROVIDERS: [&str; 3] = ["anthropic", "openai", "google"];
 /// The states an account is in.
 pub const STATES: [&str; 5] = ["active", "cooling", "limited", "unhealthy", "disabled"];
@@ -56,6 +56,13 @@ pub struct Account {
     pub state_reason: Option<String>,
     pub state_until: Option<String>,
     pub cap: i64,
+    /// The most one session may spend through this account (`None`: only the budgets limit it);
+    /// the Core's ceiling honours it (KAN-435 G7).
+    pub session_max_tokens: Option<i64>,
+    pub session_max_usd_micros: Option<i64>,
+    /// The last one-shot `gateway.test` of the key: when, and the status class it answered.
+    pub last_test_at: Option<String>,
+    pub last_test_result: Option<String>,
     /// The runner devices the key may be leased to (the broker secret's scope).
     pub runners: Vec<String>,
     /// The device that stored it.
@@ -78,6 +85,7 @@ pub struct NewAccount<'a> {
 
 const COLUMNS: &str = "a.id, a.provider, a.label, a.secret_name, a.masked_tail, a.base_url, a.state, \
     a.state_reason, a.state_until, a.cap, a.owner, a.last_used_at, a.created_at, a.updated_at, \
+    a.session_max_tokens, a.session_max_usd_micros, a.last_test_at, a.last_test_result, \
     COALESCE(s.runners, '[]') AS runners";
 
 fn refused<T>(code: &'static str, message: impl Into<String>) -> Result<T, Error> {
@@ -100,6 +108,10 @@ fn row(r: SqliteRow) -> Result<Account, sqlx::Error> {
         state_reason: r.try_get("state_reason")?,
         state_until: r.try_get("state_until")?,
         cap: r.try_get("cap")?,
+        session_max_tokens: r.try_get("session_max_tokens")?,
+        session_max_usd_micros: r.try_get("session_max_usd_micros")?,
+        last_test_at: r.try_get("last_test_at")?,
+        last_test_result: r.try_get("last_test_result")?,
         runners: serde_json::from_str(&runners).unwrap_or_default(),
         owner: r.try_get("owner")?,
         last_used_at: r.try_get("last_used_at")?,
@@ -133,7 +145,7 @@ fn tail_of(value: &str) -> String {
     }
 }
 
-async fn audit(
+pub(super) async fn audit(
     conn: &mut SqliteConnection,
     actor: AuditActor,
     action: &str,
@@ -153,7 +165,7 @@ async fn audit(
     Ok(())
 }
 
-async fn find(conn: &mut SqliteConnection, id: i64) -> Result<Account, Error> {
+pub(super) async fn find(conn: &mut SqliteConnection, id: i64) -> Result<Account, Error> {
     let sql = format!(
         "SELECT {COLUMNS} FROM core_accounts a LEFT JOIN core_secrets s ON s.name = a.secret_name \
          WHERE a.id = ?"
@@ -203,9 +215,6 @@ pub async fn create(
     actor: AuditActor,
     now: &str,
 ) -> Result<Account, Error> {
-    if !PROVIDERS.contains(&new.provider) {
-        return refused("bad_request", "provider is anthropic, openai or google");
-    }
     if !valid_label(new.label) {
         return refused("bad_request", "a label is [a-z][a-z0-9._-]{0,63}");
     }
@@ -214,9 +223,21 @@ pub async fn create(
     // A pasted key often carries a trailing newline: neither the sealed value nor the tail keeps it.
     let key = new.value.trim();
     let mut tx = super::begin_write(pool).await?;
-    let base_url = super::providers::get_in(&mut tx, new.provider)
-        .await?
-        .base_url;
+    let def = match super::providers::get_in(&mut tx, new.provider).await {
+        Err(Error::Refused {
+            code: "not_found", ..
+        }) => {
+            return refused(
+                "bad_request",
+                "provider is a built-in or a stored definition",
+            );
+        }
+        found => found?,
+    };
+    if let Some(why) = super::account_keys::holds_keys_problem(&def) {
+        return refused("bad_request", why);
+    }
+    let base_url = def.base_url;
     let taken: i64 = sqlx::query_scalar("SELECT count(*) FROM core_accounts WHERE label = ?")
         .bind(new.label)
         .fetch_one(&mut *tx)

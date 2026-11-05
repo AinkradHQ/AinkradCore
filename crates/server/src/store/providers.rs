@@ -13,9 +13,9 @@
 //! definition's URL itself (no probe). An account is bound to its provider's base URL when it is
 //! stored (`core_accounts.base_url`), so an edit afterwards cannot move a stored key.
 //!
-//! Only the built-ins can hold accounts today: the broker names an account secret
-//! `acct.<provider>.<id>` and knows three providers' key shapes. A user definition is data until
-//! the broker and the gateway can serve it (open question in the KAN-429 PR).
+//! A user definition holds accounts when it declares a `key_prefix` and is delivered through the
+//! gateway only (KAN-435 G7, design §5.3): the broker binds each of its keys to the definition's
+//! host (`provider_rules`, `secrets_user`). `wire` is the dialect the gateway speaks to it.
 
 use ainkrad_core::audit::{AuditActor, NewAuditEvent};
 use ainkrad_proto::v2::{account_vars, redirects_traffic, valid_secret_var};
@@ -24,6 +24,7 @@ use serde_json::json;
 use sqlx::sqlite::{SqlitePool, SqliteRow};
 use sqlx::{Row, SqliteConnection};
 
+use super::provider_rules::{self as rules, wire_for};
 use super::secrets::Error;
 
 /// How a key reaches a session: a leased environment variable, or the auth gateway (KAN-435).
@@ -58,6 +59,20 @@ pub struct Definition {
     pub models: Vec<Model>,
     /// When the models' list prices were read; the screen shows it (prices go stale).
     pub priced_at: Option<String>,
+    /// The API dialect the gateway speaks to this provider (`provider_rules::WIRES`); empty reads
+    /// as the harness's own.
+    #[serde(default)]
+    pub wire: String,
+    /// The shape this provider's keys start with, so the broker can bind a key to this
+    /// definition's host (design §5.3). A user definition only; it makes the definition
+    /// gateway-only.
+    #[serde(default)]
+    pub key_prefix: Option<String>,
+    /// The authenticated path of the one-shot account test, under the base URL (`/key`), for a
+    /// provider whose model list needs no key. A user definition without one cannot be tested: the
+    /// answer is `inconclusive`, never `ok` (design §7.1, Opus review of G7).
+    #[serde(default)]
+    pub test_path: Option<String>,
     #[serde(default)]
     pub builtin: bool,
     #[serde(default)]
@@ -72,11 +87,15 @@ fn builtin(id: &str, name: &str, harness: &str, var: &str, url: &str, parser: &s
         auth_var: var.to_owned(),
         base_url: url.to_owned(),
         usage_parser: parser.to_owned(),
-        delivery: vec!["env".to_owned()],
+        // An API key reaches a session only through the gateway (design §10 Q4).
+        delivery: vec!["gateway".to_owned()],
         login_methods: vec!["paste".to_owned()],
         // Prices are the cost ledger's (KAN-449); none are invented here.
         models: Vec::new(),
         priced_at: None,
+        wire: wire_for(harness).to_owned(),
+        key_prefix: None,
+        test_path: None,
         builtin: true,
         version: 1,
     }
@@ -119,47 +138,7 @@ fn bad<T>(message: impl Into<String>) -> Result<T, Error> {
     })
 }
 
-/// Why `url` is not an acceptable base URL, if it is not.
-pub fn url_problem(url: &str) -> Option<&'static str> {
-    let Some(rest) = url.strip_prefix("https://") else {
-        return Some("a base URL is https://");
-    };
-    if url.len() > 200 || !url.is_ascii() || url.bytes().any(|b| b <= b' ' || b == 0x7f) {
-        return Some("a base URL is at most 200 printable ASCII characters");
-    }
-    if rest.contains(['@', '?', '#', '\\']) {
-        return Some("a base URL has no credentials, query or fragment");
-    }
-    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
-    if path.split('/').any(|s| s == ".." || s == ".") {
-        return Some("a base URL path has no dot segments");
-    }
-    let (host, port) = authority
-        .split_once(':')
-        .map_or((authority, None), |(h, p)| (h, Some(p)));
-    if port.is_some_and(|p| p != "443") {
-        return Some("a base URL uses port 443");
-    }
-    let labels: Vec<&str> = host.split('.').collect();
-    let dns = labels.len() >= 2
-        && labels.iter().all(|l| {
-            (1..=63).contains(&l.len())
-                && !l.starts_with('-')
-                && !l.ends_with('-')
-                && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        })
-        // The last label of an IP literal is a number; no real top-level domain is.
-        && !labels[labels.len() - 1].bytes().all(|b| b.is_ascii_digit());
-    if !dns
-        || host == "localhost"
-        || host.ends_with(".localhost")
-        || host.ends_with(".local")
-        || host.ends_with(".internal")
-    {
-        return Some("a base URL's host is a public DNS name (no IP literal, localhost or .local)");
-    }
-    None
-}
+pub use super::provider_url::url_problem;
 
 /// Why `d` is not an acceptable user definition, if it is not.
 pub fn problem(d: &Definition) -> Option<String> {
@@ -194,6 +173,9 @@ pub fn problem(d: &Definition) -> Option<String> {
     if let Some(why) = url_problem(&d.base_url) {
         return Some(why.to_owned());
     }
+    if let Some(why) = rules::problem(d) {
+        return Some(why);
+    }
     if !USAGE_PARSERS.contains(&d.usage_parser.as_str()) {
         return Some(format!(
             "usage_parser is one of {}",
@@ -221,7 +203,14 @@ pub fn problem(d: &Definition) -> Option<String> {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"._:/-".contains(&b));
         if !id_ok || d.models[..i].iter().any(|o| o.id == m.id) {
-            return Some("a model id is 1 to 80 of [A-Za-z0-9._:/-], once".to_owned());
+            return Some(
+                "a model id is 1 to 80 of [A-Za-z0-9._:/-], once, exactly as the provider \
+                 names it: the gateway grants and compares these ids as they are and resolves no alias"
+                    .to_owned(),
+            );
+        }
+        if let Some(why) = rules::model_problem(&m.id) {
+            return Some(why.to_owned());
         }
         let price_ok = |p: i64| (0..=MAX_PRICE).contains(&p);
         if !price_ok(m.input_per_mtok_micro) || !price_ok(m.output_per_mtok_micro) {
@@ -252,13 +241,17 @@ fn row(r: SqliteRow) -> Result<Definition, sqlx::Error> {
         login_methods: serde_json::from_str(&js("login_methods")?).unwrap_or_default(),
         models: serde_json::from_str(&js("models")?).unwrap_or_default(),
         priced_at: r.try_get("priced_at")?,
+        wire: r.try_get("wire")?,
+        key_prefix: r.try_get("key_prefix")?,
+        test_path: r.try_get("test_path")?,
         builtin: false,
         version: r.try_get("version")?,
     })
 }
 
 const COLUMNS: &str = "id, name, harness, auth_var, base_url, usage_parser, delivery, \
-    login_methods, models, priced_at, version";
+    login_methods, models, priced_at, version, wire, key_prefix, \
+    test_path";
 
 /// Every provider: the built-ins, then the user definitions by id.
 pub async fn list(pool: &SqlitePool) -> Result<Vec<Definition>, sqlx::Error> {
@@ -328,12 +321,14 @@ async fn write(
         true => {
             "INSERT INTO core_provider_defs (id, name, harness, auth_var, base_url, \
                  usage_parser, delivery, login_methods, models, priced_at, version, created_at, \
-                 updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                 updated_at, wire, key_prefix, test_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+                 ?, ?)"
         }
         false => {
             "UPDATE core_provider_defs SET name = ?2, harness = ?3, auth_var = ?4, \
                   base_url = ?5, usage_parser = ?6, delivery = ?7, login_methods = ?8, \
-                  models = ?9, priced_at = ?10, version = ?11, updated_at = ?13 WHERE id = ?1"
+                  models = ?9, priced_at = ?10, version = ?11, updated_at = ?13, wire = ?14, \
+                  key_prefix = ?15, test_path = ?16 WHERE id = ?1"
         }
     };
     sqlx::query(sql)
@@ -350,6 +345,9 @@ async fn write(
         .bind(d.version)
         .bind(now)
         .bind(now)
+        .bind(&d.wire)
+        .bind(&d.key_prefix)
+        .bind(&d.test_path)
         .execute(&mut *conn)
         .await?;
     Ok(())
@@ -368,7 +366,13 @@ pub async fn create(
     }
     let mut d = d.clone();
     (d.builtin, d.version) = (false, 1);
+    if d.wire.is_empty() {
+        d.wire = wire_for(&d.harness).to_owned();
+    }
     let mut tx = super::begin_write(pool).await?;
+    if let Some(why) = rules::prefix_conflict(&mut tx, &d).await? {
+        return bad(why);
+    }
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_provider_defs")
         .fetch_one(&mut *tx)
         .await?;
@@ -410,6 +414,29 @@ pub async fn replace(
     let old = get_in(&mut tx, &d.id).await?;
     let mut d = d.clone();
     (d.builtin, d.version) = (false, old.version + 1);
+    if d.wire.is_empty() {
+        d.wire = wire_for(&d.harness).to_owned();
+    }
+    if let Some(why) = rules::prefix_conflict(&mut tx, &d).await? {
+        return bad(why);
+    }
+    // What a stored key was bound to, and how it is served, does not move under it: a definition
+    // that has accounts keeps its harness, wire and key shape (delete the accounts to change them).
+    if (old.harness, old.wire, old.key_prefix)
+        != (d.harness.clone(), d.wire.clone(), d.key_prefix.clone())
+    {
+        let used: i64 = sqlx::query_scalar("SELECT count(*) FROM core_accounts WHERE provider = ?")
+            .bind(&d.id)
+            .fetch_one(&mut *tx)
+            .await?;
+        if used > 0 {
+            return Err(Error::Refused {
+                code: "conflict",
+                message: "accounts use that provider: its harness, wire and key_prefix are fixed"
+                    .to_owned(),
+            });
+        }
+    }
     write(&mut tx, &d, false, now).await?;
     audit(&mut tx, actor, "provider.updated", &d, by_device).await?;
     tx.commit().await?;

@@ -11,6 +11,7 @@ mod fault;
 mod gateway;
 mod gateway_auth;
 mod gateway_more;
+mod gateway_test_route;
 mod health;
 mod isolation;
 mod proof;

@@ -115,6 +115,8 @@ pub struct NewAgentSession {
     pub runner: String,
     /// `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes).
     pub harness: String,
+    /// The model id as the provider names it. For a session served by the auth gateway it must be
+    /// one of the ids priced for its provider, exactly: the gateway resolves no alias.
     pub model: Option<String>,
     pub prompt: Option<String>,
     /// The repo and worktree to work in (`{"repo_url", "base_branch", "branch", …}`); absent, a

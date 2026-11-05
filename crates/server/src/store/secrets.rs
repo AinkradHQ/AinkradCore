@@ -153,6 +153,8 @@ pub enum Kind {
         provider: &'static str,
         shape: &'static str,
     },
+    /// An account of a user-defined provider (`acct.<definition id>.<id>`, see `secrets_user`).
+    UserAccount,
 }
 
 /// Classifies `name`; fails closed: a name under [`ACCOUNT_PREFIX`] that is not
@@ -178,26 +180,13 @@ pub fn kind_of(name: &str) -> Result<Kind, Error> {
     }
 }
 
-/// The longest value the shape check scans for a key glued behind another (it is quadratic).
-const MAX_ACCOUNT_SCAN: usize = 512;
-
-/// Whether `value` as a whole is one key of the provider's own `shape` and nothing else: the
-/// redactor sees exactly that key, and no other shape starts anywhere inside it (the redactor
-/// reads a glued `-----BEGIN` or `ghp_` as part of one token, so each tail is tried on its own).
-fn single_own_key(redactor: &Redactor, value: &str, shape: &str) -> bool {
-    let value = value.trim();
-    value.len() <= MAX_ACCOUNT_SCAN
-        && redactor.text(value) == format!("[redacted:{shape}]")
-        && value
-            .char_indices()
-            .skip(1)
-            .all(|(i, _)| redactor.text(&value[i..]) == value[i..])
-}
-
 /// The audit tag of a provider-account secret, merged into its details; `lifted` when the gate
 /// admitted a value the mode would have refused.
 fn tag_account(details: &mut serde_json::Value, name: &str, lifted: bool) {
-    if matches!(kind_of(name), Ok(Kind::ProviderAccount { .. })) {
+    // The account model's own name, of any provider, is one too (a user definition's has no `kind_of`).
+    if matches!(kind_of(name), Ok(Kind::ProviderAccount { .. }))
+        || super::gateway::account_secret(name).is_some()
+    {
         details["kind"] = json!("provider_account");
         if lifted {
             details["gate_lifted"] = json!(true);
@@ -247,6 +236,7 @@ async fn check_value(
     // Fail closed on an unknown `acct.` name, but only below mode 2 (which is unchanged).
     let kind = match kind_of(name) {
         Ok(kind) => kind,
+        Err(_) if super::secrets_user::holds(conn, name).await? => Kind::UserAccount,
         Err(e) if mode < 2 => return Err(e),
         Err(_) => Kind::Other,
     };
@@ -268,6 +258,7 @@ async fn check_value(
             format!("the value is over secrets.max_bytes ({max} bytes)"),
         );
     }
+    super::secrets_user::bind(conn, name, value).await?;
     // Before G-SEC only throwaway values: one the redactor recognises as a real key shape is
     // refused. ponytail: shapes only, as the redactor; a real value with no known prefix gets
     // through, which is why mode 1 is a guard rail and the gate itself is mode 2.
@@ -280,7 +271,13 @@ async fn check_value(
     match kind {
         Kind::ProviderAccount { shape, .. }
             if setting(conn, Key::SecretsProviderAccounts).await? == 1
-                && single_own_key(&redactor, value, shape) =>
+                && super::secrets_user::single_own_key(&redactor, value, shape) =>
+        {
+            Ok(true)
+        }
+        Kind::UserAccount
+            if setting(conn, Key::SecretsProviderAccounts).await? == 1
+                && super::secrets_user::single_key(&redactor, value) =>
         {
             Ok(true)
         }

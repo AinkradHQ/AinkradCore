@@ -44,9 +44,15 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `PUT /api/v1/accounts/{id}/secret`.
     /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/secret/put(replaceAccountSecret)`.
     func replaceAccountSecret(_ input: Operations.ReplaceAccountSecret.Input) async throws -> Operations.ReplaceAccountSecret.Output
+    /// - Remark: HTTP `PUT /api/v1/accounts/{id}/session-limits`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/session-limits/put(setAccountSessionLimits)`.
+    func setAccountSessionLimits(_ input: Operations.SetAccountSessionLimits.Input) async throws -> Operations.SetAccountSessionLimits.Output
     /// - Remark: HTTP `PUT /api/v1/accounts/{id}/state`.
     /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/state/put(setAccountState)`.
     func setAccountState(_ input: Operations.SetAccountState.Input) async throws -> Operations.SetAccountState.Output
+    /// - Remark: HTTP `POST /api/v1/accounts/{id}/test`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/test/post(testAccount)`.
+    func testAccount(_ input: Operations.TestAccount.Input) async throws -> Operations.TestAccount.Output
     /// - Remark: HTTP `GET /api/v1/agent-sessions`.
     /// - Remark: Generated from `#/paths//api/v1/agent-sessions/get(listAgentSessions)`.
     func listAgentSessions(_ input: Operations.ListAgentSessions.Input) async throws -> Operations.ListAgentSessions.Output
@@ -429,6 +435,19 @@ extension APIProtocol {
             body: body
         ))
     }
+    /// - Remark: HTTP `PUT /api/v1/accounts/{id}/session-limits`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/session-limits/put(setAccountSessionLimits)`.
+    public func setAccountSessionLimits(
+        path: Operations.SetAccountSessionLimits.Input.Path,
+        headers: Operations.SetAccountSessionLimits.Input.Headers = .init(),
+        body: Operations.SetAccountSessionLimits.Input.Body
+    ) async throws -> Operations.SetAccountSessionLimits.Output {
+        try await setAccountSessionLimits(Operations.SetAccountSessionLimits.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
     /// - Remark: HTTP `PUT /api/v1/accounts/{id}/state`.
     /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/state/put(setAccountState)`.
     public func setAccountState(
@@ -440,6 +459,17 @@ extension APIProtocol {
             path: path,
             headers: headers,
             body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/accounts/{id}/test`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/test/post(testAccount)`.
+    public func testAccount(
+        path: Operations.TestAccount.Input.Path,
+        headers: Operations.TestAccount.Input.Headers = .init()
+    ) async throws -> Operations.TestAccount.Output {
+        try await testAccount(Operations.TestAccount.Input(
+            path: path,
+            headers: headers
         ))
     }
     /// - Remark: HTTP `GET /api/v1/agent-sessions`.

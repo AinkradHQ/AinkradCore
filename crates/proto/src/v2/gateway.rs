@@ -148,6 +148,12 @@ pub struct GatewayTest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_key: Option<UserKeyDef>,
     pub upstream: Upstream,
+    /// The path of the one request, under the upstream's base path, when the provider's own model
+    /// list is not an authenticated call (OpenRouter lists models without a key, so a revoked key
+    /// would read as `ok`). Absent: the wire's own model list, which every built-in provider
+    /// authenticates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_path: Option<String>,
 }
 
 /// The outcome class of an upstream request or test: a status class only, never provider text.
@@ -328,7 +334,20 @@ pub fn key_prefix_problem(prefix: &str) -> Option<&'static str> {
     let builtin = KEY_CLASSES
         .iter()
         .any(|c| prefix.starts_with(c.0) || c.0.starts_with(prefix));
-    builtin.then_some("a key prefix may not equal, shadow or extend a built-in key shape")
+    if builtin {
+        return Some("a key prefix may not equal, shadow or extend a built-in key shape");
+    }
+    // Nor the shape of any other credential the redactor knows (a GitHub token, an AWS key, a
+    // Citadel run token, a bearer token, ...): a key of that kind would be read as this provider's.
+    // The probe is the prefix and a body every shape's alphabet accepts.
+    let probe = format!("{prefix}{}", "A0".repeat(32));
+    let seen = crate::redact::Redactor::new().text(&probe);
+    let provider_kind = ["anthropic_key", "openai_key", "google_key"]
+        .iter()
+        .any(|k| seen == format!("[redacted:{k}]"));
+    (seen != probe && !provider_kind).then_some(
+        "a key prefix may not start another kind of credential (GitHub, AWS, Citadel, ...)",
+    )
 }
 
 #[cfg(test)]

@@ -19,9 +19,13 @@ use ainkrad_proto::v2::{
     UpstreamStatus, Wire,
 };
 
+mod route;
+pub mod test;
+pub(super) use route::secrets_problem;
+
 use super::*;
 use crate::store::gateway as gw;
-use crate::store::{accounts, costs, prices, secrets};
+use crate::store::{accounts, costs, prices, providers, secrets};
 
 /// How fast a session may call, and how many requests at once (design §4.7: concurrency 2).
 const RATE: Rate = Rate {
@@ -44,16 +48,6 @@ fn lift(e: secrets::Error) -> Refusal {
     match e {
         secrets::Error::Refused { message, .. } => refuse(message),
         secrets::Error::Db(e) => Refusal::Db(e),
-    }
-}
-
-/// The wire a built-in provider speaks.
-fn wire_of(provider: &str) -> Option<Wire> {
-    match provider {
-        "anthropic" => Some(Wire::AnthropicMessages),
-        "openai" => Some(Wire::OpenaiResponses),
-        "google" => Some(Wire::GeminiGenerate),
-        _ => None,
     }
 }
 
@@ -113,21 +107,42 @@ pub(super) async fn grant(app: &App, s: &Session) -> Result<Option<Issued>, Refu
             account.state
         )));
     }
-    if !costs::HARNESSES.contains(&s.harness.as_str())
-        || ainkrad_proto::v2::harness_provider(&s.harness) != Some(provider)
-    {
+    // The provider's definition (a built-in's is code) says which harness speaks to it.
+    let def = providers::get(&app.pool, provider).await.map_err(lift)?;
+    if !costs::HARNESSES.contains(&s.harness.as_str()) || def.harness != s.harness {
         return Err(refuse(
             "a gateway session runs its provider's own harness (claude, codex or agy)",
         ));
     }
-    let wire = wire_of(provider).ok_or_else(|| refuse("the account's provider has no wire"))?;
-    let upstream = upstream_of(&account.base_url, wire)?;
+    let route = route::of(&def, &account.base_url)?;
+    let upstream = upstream_of(&account.base_url, route.wire)?;
     // The allowlist is the price book: a model with no price is refused, so dollar ceilings mean something.
-    let book: Vec<_> = prices::list(&app.pool)
+    let mut book: Vec<_> = prices::list(&app.pool)
         .await?
         .into_iter()
         .filter(|p| p.provider == provider)
         .collect();
+    // A user definition's own priced models are the fallback, as `prices::rates` reads them (the
+    // book wins; the cache rate is the input rate).
+    let fallback: Vec<prices::Price> = def
+        .models
+        .iter()
+        .filter(|m| !book.iter().any(|p| p.model == m.id))
+        .filter_map(|m| {
+            let at = def.priced_at.as_ref().filter(|_| !def.builtin)?;
+            Some(prices::Price {
+                provider: provider.to_owned(),
+                model: m.id.clone(),
+                version: 0,
+                input_per_mtok_micro: m.input_per_mtok_micro,
+                output_per_mtok_micro: m.output_per_mtok_micro,
+                cache_per_mtok_micro: m.input_per_mtok_micro,
+                priced_at: at.clone(),
+                created_at: String::new(),
+            })
+        })
+        .collect();
+    book.extend(fallback);
     let rate = |n: i64| u64::try_from(n).unwrap_or(0);
     let prices: Vec<ModelPrice> = book
         .iter()
@@ -182,7 +197,7 @@ pub(super) async fn grant(app: &App, s: &Session) -> Result<Option<Issued>, Refu
             lease,
             account: id,
             provider: provider.to_owned(),
-            user_key: None,
+            user_key: route.user_key,
             upstream,
             models,
             prices,
@@ -365,11 +380,18 @@ async fn check(app: &App, s: &Session, account: i64) -> Result<(), Refusal> {
         }
         return Ok(());
     }
+    // A provider whose model list says nothing about the key can neither confirm nor clear an auth
+    // failure: the signal ends `inconclusive`, and nothing is asked of a runner.
+    let def = providers::get(&app.pool, &a.provider).await.map_err(lift)?;
+    if route::of(&def, &a.base_url).is_ok_and(|r| !r.can_test) {
+        let why = "the provider declares no authenticated test path";
+        return Ok(gw::decide(&app.pool, account, "inconclusive", why, &now).await?);
+    }
     // From here a lease is minted: whatever goes wrong counts as a try, so the signal ends
     // `inconclusive` after a few instead of leasing for ever.
     let asked = async {
-        let wire =
-            wire_of(&a.provider).ok_or_else(|| refuse("the account's provider has no wire"))?;
+        let def = providers::get(&app.pool, &a.provider).await.map_err(lift)?;
+        let route = route::of(&def, &a.base_url)?;
         let (lease, _) = secrets::lease_to(
             &app.pool,
             &a.secret_name,
@@ -385,8 +407,9 @@ async fn check(app: &App, s: &Session, account: i64) -> Result<(), Refusal> {
         let test = GatewayTest {
             lease,
             provider: a.provider.clone(),
-            user_key: None,
-            upstream: upstream_of(&a.base_url, wire)?,
+            user_key: route.user_key,
+            upstream: upstream_of(&a.base_url, route.wire)?,
+            test_path: route.test_path,
         };
         let sent = app
             .hub

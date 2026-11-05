@@ -148,6 +148,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/{id}/session-limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setAccountSessionLimits"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/{id}/state": {
         parameters: {
             query?: never;
@@ -158,6 +174,22 @@ export interface paths {
         get?: never;
         put: operations["setAccountState"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testAccount"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1218,6 +1250,18 @@ export interface components {
             recent_drops: number;
             seven_days: components["schemas"]["UsageWindow"];
         };
+        /** @description What `POST /accounts/{id}/test` answers: a status class and a latency, never a response body. */
+        AccountTested: {
+            /** Format: int64 */
+            latency_ms: number;
+            /**
+             * @description As [`LastTest::result`], or `inconclusive`: the provider's model list needs no key and its
+             *     definition declares no `test_path`, so nothing was sent and nothing is known of the key.
+             */
+            result: string;
+            /** @description The runner device that made the request (empty when `result` is `inconclusive`). */
+            runner: string;
+        };
         AccountsDeleted: {
             deleted: boolean;
         };
@@ -1636,6 +1680,16 @@ export interface components {
             server_version?: string | null;
             supported_minors?: number[] | null;
         };
+        /** @description The last one-shot test of an account's key. */
+        LastTest: {
+            at: components["schemas"]["Timestamp"];
+            /**
+             * @description The status class the provider answered: `ok`, `rate_limited`, `quota`, `auth_failed`,
+             *     `server_error`, `unreachable`, `refused_address`, `tls_failed`, `inconclusive` (see
+             *     [`AccountTested`]) or `failed` (the runner did not answer). Never provider text.
+             */
+            result: string;
+        };
         /** @description The newest event's seq a client would be shown: the catch-up target. */
         LatestEvent: {
             /**
@@ -1733,6 +1787,10 @@ export interface components {
         NewAgentSession: {
             /** @description `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). */
             harness: string;
+            /**
+             * @description The model id as the provider names it. For a session served by the auth gateway it must be
+             *     one of the ids priced for its provider, exactly: the gateway resolves no alias.
+             */
             model?: string | null;
             /** @description `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`. */
             policy?: Record<string, never> | null;
@@ -1941,15 +1999,38 @@ export interface components {
             /** @description `claude`, `codex` or `agy`. */
             harness: string;
             id: string;
+            /**
+             * @description The shape this provider's keys start with (6 to 16 characters, never a built-in's, such
+             *     as `sk-or-v1-`). A definition that sets it holds keys, and then only through the gateway
+             *     (`delivery` is `["gateway"]`): the broker binds each key to the account's host by it.
+             */
+            key_prefix?: string | null;
             /** @description `paste`. */
             login_methods: string[];
+            /**
+             * @description Model ids exactly as the provider names them: the gateway compares a request's model with
+             *     the ids it was granted, as they are, and resolves no alias (`-latest`). `:online` is refused.
+             */
             models: components["schemas"]["ModelPrice"][];
             name: string;
             /** @description When the models' list prices were read. */
             priced_at?: string | null;
+            /**
+             * @description The authenticated path (under the base URL, such as `/key`) of the one-shot account test,
+             *     for a provider whose model list needs no key (OpenRouter's is public: a revoked key would
+             *     read as `ok`). A user definition without one cannot be tested: the answer is
+             *     `inconclusive`. Built-ins use their wire's own model list.
+             */
+            test_path?: string | null;
             usage_parser: string;
             /** Format: int64 */
             version?: number;
+            /**
+             * @description The API dialect the gateway speaks to this provider: `anthropic-messages` (claude),
+             *     `openai-responses` (codex) or `gemini-generate` (agy). Optional on write: it is its
+             *     harness's own, and any other is refused.
+             */
+            wire?: string | null;
         };
         /**
          * @description An account as a `read` device sees it: its key's last four characters, never the key, the
@@ -1967,11 +2048,15 @@ export interface components {
             /** Format: int64 */
             id: number;
             label: string;
+            /** @description The last one-shot test of the key; absent when it was never tested. */
+            last_test?: components["schemas"]["LastTest"];
             last_used_at?: components["schemas"]["Timestamp"];
             /** @description The key's last four characters; empty for a key too short to show any. */
             masked_tail: string;
-            /** @description `anthropic`, `openai` or `google`. */
+            /** @description `anthropic`, `openai`, `google` or a user definition's id. */
             provider: string;
+            /** @description What one session may spend through this account; absent when only the budgets limit it. */
+            session_limits?: components["schemas"]["SessionLimits"];
             /** @description `active`, `cooling`, `limited`, `unhealthy` or `disabled`. */
             state: string;
             state_reason?: string | null;
@@ -2136,6 +2221,22 @@ export interface components {
             /** @description `s_…`: sent as `Ainkrad-Session` on every signed request. Not a secret. */
             session_id?: string | null;
         };
+        /**
+         * @description What one session may spend through an account. A dimension left out is not limited by the
+         *     account (only by the budgets).
+         */
+        SessionLimits: {
+            /**
+             * Format: int64
+             * @description Input, output and cache tokens; at least 328000 (one turn needs that much room).
+             */
+            max_tokens?: number | null;
+            /**
+             * Format: int64
+             * @description Millionths of a dollar.
+             */
+            max_usd_micros?: number | null;
+        };
         SessionRequest: {
             /** @description A live challenge issued for the signing device. */
             challenge: string;
@@ -2165,6 +2266,11 @@ export interface components {
             cache_per_mtok_micro: number;
             /** Format: int64 */
             input_per_mtok_micro: number;
+            /**
+             * @description The model id exactly as the provider names it: the auth gateway grants a session the ids
+             *     priced here and compares a request's model with them as they are. It resolves no alias
+             *     (`-latest`, a family name), and an id ending in `:online` is refused.
+             */
             model: string;
             /** Format: int64 */
             output_per_mtok_micro: number;
@@ -2897,6 +3003,40 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    setAccountSessionLimits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The account's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionLimits"];
+            };
+        };
+        responses: {
+            /** @description What one session may spend through this account (audited as `account.session_limits_set`); a dimension left out is cleared. The Core's ceiling for a gateway session honours it beside the budgets, from the next time a ceiling is set (a session's start, its resume, or the top-up of its ceiling): a session that is running keeps the ceiling it holds until then. It raises what a session may spend, so it needs a step-up */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccount"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     setAccountState: {
         parameters: {
             query?: never;
@@ -2929,6 +3069,43 @@ export interface operations {
             409: components["responses"]["Conflict"];
             429: components["responses"]["TooManyRequests"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    testAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The account's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One free request (a model list) made through the gateway of a runner that is online, in the key's scope and offers it: the status class and the latency, never a body. Stored on the account and audited as `account.tested`. 409 `no_runner` when none is ready; 429 when the account was tested within a minute or a test is running. A provider whose model list needs no key and that declares no `test_path` answers `inconclusive` (nothing is sent), never `ok` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountTested"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+            /** @description The runner failed or did not answer the test (code `runner_failed`); the attempt is recorded as `failed` and counts for the rate limit */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     listAgentSessions: {

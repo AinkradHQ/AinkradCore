@@ -92,6 +92,42 @@ extension Components {
                 case sevenDays = "seven_days"
             }
         }
+        /// What `POST /accounts/{id}/test` answers: a status class and a latency, never a response body.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AccountTested`.
+        public struct AccountTested: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AccountTested/latency_ms`.
+            public var latencyMs: Swift.Int64
+            /// As [`LastTest::result`], or `inconclusive`: the provider's model list needs no key and its
+            /// definition declares no `test_path`, so nothing was sent and nothing is known of the key.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountTested/result`.
+            public var result: Swift.String
+            /// The runner device that made the request (empty when `result` is `inconclusive`).
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountTested/runner`.
+            public var runner: Swift.String
+            /// Creates a new `AccountTested`.
+            ///
+            /// - Parameters:
+            ///   - latencyMs:
+            ///   - result: As [`LastTest::result`], or `inconclusive`: the provider's model list needs no key and its
+            ///   - runner: The runner device that made the request (empty when `result` is `inconclusive`).
+            public init(
+                latencyMs: Swift.Int64,
+                result: Swift.String,
+                runner: Swift.String
+            ) {
+                self.latencyMs = latencyMs
+                self.result = result
+                self.runner = runner
+            }
+            public enum CodingKeys: String, CodingKey {
+                case latencyMs = "latency_ms"
+                case result
+                case runner
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/AccountsDeleted`.
         public struct AccountsDeleted: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/AccountsDeleted/deleted`.
@@ -1544,6 +1580,35 @@ extension Components {
                 case supportedMinors = "supported_minors"
             }
         }
+        /// The last one-shot test of an account's key.
+        ///
+        /// - Remark: Generated from `#/components/schemas/LastTest`.
+        public struct LastTest: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/LastTest/at`.
+            public var at: Components.Schemas.Timestamp
+            /// The status class the provider answered: `ok`, `rate_limited`, `quota`, `auth_failed`,
+            /// `server_error`, `unreachable`, `refused_address`, `tls_failed`, `inconclusive` (see
+            /// [`AccountTested`]) or `failed` (the runner did not answer). Never provider text.
+            ///
+            /// - Remark: Generated from `#/components/schemas/LastTest/result`.
+            public var result: Swift.String
+            /// Creates a new `LastTest`.
+            ///
+            /// - Parameters:
+            ///   - at:
+            ///   - result: The status class the provider answered: `ok`, `rate_limited`, `quota`, `auth_failed`,
+            public init(
+                at: Components.Schemas.Timestamp,
+                result: Swift.String
+            ) {
+                self.at = at
+                self.result = result
+            }
+            public enum CodingKeys: String, CodingKey {
+                case at
+                case result
+            }
+        }
         /// The newest event's seq a client would be shown: the catch-up target.
         ///
         /// - Remark: Generated from `#/components/schemas/LatestEvent`.
@@ -1880,6 +1945,9 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/harness`.
             public var harness: Swift.String
+            /// The model id as the provider names it. For a session served by the auth gateway it must be
+            /// one of the ids priced for its provider, exactly: the gateway resolves no alias.
+            ///
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/model`.
             public var model: Swift.String?
             /// `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`.
@@ -1905,7 +1973,7 @@ extension Components {
             ///
             /// - Parameters:
             ///   - harness: `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes).
-            ///   - model:
+            ///   - model: The model id as the provider names it. For a session served by the auth gateway it must be
             ///   - policy: `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`.
             ///   - prompt:
             ///   - runner: The runner's device id, `d_…`.
@@ -2753,10 +2821,19 @@ extension Components {
             public var harness: Swift.String
             /// - Remark: Generated from `#/components/schemas/Provider/id`.
             public var id: Swift.String
+            /// The shape this provider's keys start with (6 to 16 characters, never a built-in's, such
+            /// as `sk-or-v1-`). A definition that sets it holds keys, and then only through the gateway
+            /// (`delivery` is `["gateway"]`): the broker binds each key to the account's host by it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Provider/key_prefix`.
+            public var keyPrefix: Swift.String?
             /// `paste`.
             ///
             /// - Remark: Generated from `#/components/schemas/Provider/login_methods`.
             public var loginMethods: [Swift.String]
+            /// Model ids exactly as the provider names them: the gateway compares a request's model with
+            /// the ids it was granted, as they are, and resolves no alias (`-latest`). `:online` is refused.
+            ///
             /// - Remark: Generated from `#/components/schemas/Provider/models`.
             public var models: [Components.Schemas.ModelPrice]
             /// - Remark: Generated from `#/components/schemas/Provider/name`.
@@ -2765,10 +2842,23 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Provider/priced_at`.
             public var pricedAt: Swift.String?
+            /// The authenticated path (under the base URL, such as `/key`) of the one-shot account test,
+            /// for a provider whose model list needs no key (OpenRouter's is public: a revoked key would
+            /// read as `ok`). A user definition without one cannot be tested: the answer is
+            /// `inconclusive`. Built-ins use their wire's own model list.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Provider/test_path`.
+            public var testPath: Swift.String?
             /// - Remark: Generated from `#/components/schemas/Provider/usage_parser`.
             public var usageParser: Swift.String
             /// - Remark: Generated from `#/components/schemas/Provider/version`.
             public var version: Swift.Int64?
+            /// The API dialect the gateway speaks to this provider: `anthropic-messages` (claude),
+            /// `openai-responses` (codex) or `gemini-generate` (agy). Optional on write: it is its
+            /// harness's own, and any other is refused.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Provider/wire`.
+            public var wire: Swift.String?
             /// Creates a new `Provider`.
             ///
             /// - Parameters:
@@ -2778,12 +2868,15 @@ extension Components {
             ///   - delivery: `env` and/or `gateway`.
             ///   - harness: `claude`, `codex` or `agy`.
             ///   - id:
+            ///   - keyPrefix: The shape this provider's keys start with (6 to 16 characters, never a built-in's, such
             ///   - loginMethods: `paste`.
-            ///   - models:
+            ///   - models: Model ids exactly as the provider names them: the gateway compares a request's model with
             ///   - name:
             ///   - pricedAt: When the models' list prices were read.
+            ///   - testPath: The authenticated path (under the base URL, such as `/key`) of the one-shot account test,
             ///   - usageParser:
             ///   - version:
+            ///   - wire: The API dialect the gateway speaks to this provider: `anthropic-messages` (claude),
             public init(
                 authVar: Swift.String,
                 baseUrl: Swift.String,
@@ -2791,12 +2884,15 @@ extension Components {
                 delivery: [Swift.String],
                 harness: Swift.String,
                 id: Swift.String,
+                keyPrefix: Swift.String? = nil,
                 loginMethods: [Swift.String],
                 models: [Components.Schemas.ModelPrice],
                 name: Swift.String,
                 pricedAt: Swift.String? = nil,
+                testPath: Swift.String? = nil,
                 usageParser: Swift.String,
-                version: Swift.Int64? = nil
+                version: Swift.Int64? = nil,
+                wire: Swift.String? = nil
             ) {
                 self.authVar = authVar
                 self.baseUrl = baseUrl
@@ -2804,12 +2900,15 @@ extension Components {
                 self.delivery = delivery
                 self.harness = harness
                 self.id = id
+                self.keyPrefix = keyPrefix
                 self.loginMethods = loginMethods
                 self.models = models
                 self.name = name
                 self.pricedAt = pricedAt
+                self.testPath = testPath
                 self.usageParser = usageParser
                 self.version = version
+                self.wire = wire
             }
             public enum CodingKeys: String, CodingKey {
                 case authVar = "auth_var"
@@ -2818,12 +2917,15 @@ extension Components {
                 case delivery
                 case harness
                 case id
+                case keyPrefix = "key_prefix"
                 case loginMethods = "login_methods"
                 case models
                 case name
                 case pricedAt = "priced_at"
+                case testPath = "test_path"
                 case usageParser = "usage_parser"
                 case version
+                case wire
             }
         }
         /// An account as a `read` device sees it: its key's last four characters, never the key, the
@@ -2845,16 +2947,24 @@ extension Components {
             public var id: Swift.Int64
             /// - Remark: Generated from `#/components/schemas/ProviderAccount/label`.
             public var label: Swift.String
+            /// The last one-shot test of the key; absent when it was never tested.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/last_test`.
+            public var lastTest: Components.Schemas.LastTest?
             /// - Remark: Generated from `#/components/schemas/ProviderAccount/last_used_at`.
             public var lastUsedAt: Components.Schemas.Timestamp?
             /// The key's last four characters; empty for a key too short to show any.
             ///
             /// - Remark: Generated from `#/components/schemas/ProviderAccount/masked_tail`.
             public var maskedTail: Swift.String
-            /// `anthropic`, `openai` or `google`.
+            /// `anthropic`, `openai`, `google` or a user definition's id.
             ///
             /// - Remark: Generated from `#/components/schemas/ProviderAccount/provider`.
             public var provider: Swift.String
+            /// What one session may spend through this account; absent when only the budgets limit it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/session_limits`.
+            public var sessionLimits: Components.Schemas.SessionLimits?
             /// `active`, `cooling`, `limited`, `unhealthy` or `disabled`.
             ///
             /// - Remark: Generated from `#/components/schemas/ProviderAccount/state`.
@@ -2873,9 +2983,11 @@ extension Components {
             ///   - createdAt:
             ///   - id:
             ///   - label:
+            ///   - lastTest: The last one-shot test of the key; absent when it was never tested.
             ///   - lastUsedAt:
             ///   - maskedTail: The key's last four characters; empty for a key too short to show any.
-            ///   - provider: `anthropic`, `openai` or `google`.
+            ///   - provider: `anthropic`, `openai`, `google` or a user definition's id.
+            ///   - sessionLimits: What one session may spend through this account; absent when only the budgets limit it.
             ///   - state: `active`, `cooling`, `limited`, `unhealthy` or `disabled`.
             ///   - stateReason:
             ///   - stateUntil:
@@ -2886,9 +2998,11 @@ extension Components {
                 createdAt: Components.Schemas.Timestamp,
                 id: Swift.Int64,
                 label: Swift.String,
+                lastTest: Components.Schemas.LastTest? = nil,
                 lastUsedAt: Components.Schemas.Timestamp? = nil,
                 maskedTail: Swift.String,
                 provider: Swift.String,
+                sessionLimits: Components.Schemas.SessionLimits? = nil,
                 state: Swift.String,
                 stateReason: Swift.String? = nil,
                 stateUntil: Components.Schemas.Timestamp? = nil,
@@ -2899,9 +3013,11 @@ extension Components {
                 self.createdAt = createdAt
                 self.id = id
                 self.label = label
+                self.lastTest = lastTest
                 self.lastUsedAt = lastUsedAt
                 self.maskedTail = maskedTail
                 self.provider = provider
+                self.sessionLimits = sessionLimits
                 self.state = state
                 self.stateReason = stateReason
                 self.stateUntil = stateUntil
@@ -2913,9 +3029,11 @@ extension Components {
                 case createdAt = "created_at"
                 case id
                 case label
+                case lastTest = "last_test"
                 case lastUsedAt = "last_used_at"
                 case maskedTail = "masked_tail"
                 case provider
+                case sessionLimits = "session_limits"
                 case state
                 case stateReason = "state_reason"
                 case stateUntil = "state_until"
@@ -3478,6 +3596,36 @@ extension Components {
                 case sessionId = "session_id"
             }
         }
+        /// What one session may spend through an account. A dimension left out is not limited by the
+        /// account (only by the budgets).
+        ///
+        /// - Remark: Generated from `#/components/schemas/SessionLimits`.
+        public struct SessionLimits: Codable, Hashable, Sendable {
+            /// Input, output and cache tokens; at least 328000 (one turn needs that much room).
+            ///
+            /// - Remark: Generated from `#/components/schemas/SessionLimits/max_tokens`.
+            public var maxTokens: Swift.Int64?
+            /// Millionths of a dollar.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SessionLimits/max_usd_micros`.
+            public var maxUsdMicros: Swift.Int64?
+            /// Creates a new `SessionLimits`.
+            ///
+            /// - Parameters:
+            ///   - maxTokens: Input, output and cache tokens; at least 328000 (one turn needs that much room).
+            ///   - maxUsdMicros: Millionths of a dollar.
+            public init(
+                maxTokens: Swift.Int64? = nil,
+                maxUsdMicros: Swift.Int64? = nil
+            ) {
+                self.maxTokens = maxTokens
+                self.maxUsdMicros = maxUsdMicros
+            }
+            public enum CodingKeys: String, CodingKey {
+                case maxTokens = "max_tokens"
+                case maxUsdMicros = "max_usd_micros"
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/SessionRequest`.
         public struct SessionRequest: Codable, Hashable, Sendable {
             /// A live challenge issued for the signing device.
@@ -3567,6 +3715,10 @@ extension Components {
             public var cachePerMtokMicro: Swift.Int64
             /// - Remark: Generated from `#/components/schemas/SetPrice/input_per_mtok_micro`.
             public var inputPerMtokMicro: Swift.Int64
+            /// The model id exactly as the provider names it: the auth gateway grants a session the ids
+            /// priced here and compares a request's model with them as they are. It resolves no alias
+            /// (`-latest`, a family name), and an id ending in `:online` is refused.
+            ///
             /// - Remark: Generated from `#/components/schemas/SetPrice/model`.
             public var model: Swift.String
             /// - Remark: Generated from `#/components/schemas/SetPrice/output_per_mtok_micro`.
@@ -3582,7 +3734,7 @@ extension Components {
             /// - Parameters:
             ///   - cachePerMtokMicro:
             ///   - inputPerMtokMicro:
-            ///   - model:
+            ///   - model: The model id exactly as the provider names it: the auth gateway grants a session the ids
             ///   - outputPerMtokMicro:
             ///   - pricedAt: When the provider's list price was read: a UTC timestamp.
             ///   - provider:

@@ -15,6 +15,8 @@
 
 package ainkrad.client.models
 
+import ainkrad.client.models.LastTest
+import ainkrad.client.models.SessionLimits
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
@@ -29,10 +31,12 @@ import kotlinx.serialization.Contextual
  * @param id 
  * @param label 
  * @param maskedTail The key's last four characters; empty for a key too short to show any.
- * @param provider `anthropic`, `openai` or `google`.
+ * @param provider `anthropic`, `openai`, `google` or a user definition's id.
  * @param state `active`, `cooling`, `limited`, `unhealthy` or `disabled`.
  * @param updatedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param lastTest The last one-shot test of the key; absent when it was never tested.
  * @param lastUsedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param sessionLimits What one session may spend through this account; absent when only the budgets limit it.
  * @param stateReason 
  * @param stateUntil RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  */
@@ -62,7 +66,7 @@ data class ProviderAccount (
     @SerialName(value = "masked_tail")
     val maskedTail: kotlin.String,
 
-    /* `anthropic`, `openai` or `google`. */
+    /* `anthropic`, `openai`, `google` or a user definition's id. */
     @SerialName(value = "provider")
     val provider: kotlin.String,
 
@@ -74,9 +78,17 @@ data class ProviderAccount (
     @Contextual @SerialName(value = "updated_at")
     val updatedAt: java.time.OffsetDateTime,
 
+    /* The last one-shot test of the key; absent when it was never tested. */
+    @SerialName(value = "last_test")
+    val lastTest: LastTest? = null,
+
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "last_used_at")
     val lastUsedAt: java.time.OffsetDateTime? = null,
+
+    /* What one session may spend through this account; absent when only the budgets limit it. */
+    @SerialName(value = "session_limits")
+    val sessionLimits: SessionLimits? = null,
 
     @SerialName(value = "state_reason")
     val stateReason: kotlin.String? = null,

@@ -95,7 +95,13 @@ pub async fn set(
     now: &str,
 ) -> Result<Price, Error> {
     if !valid_model(model) || !(1..=32).contains(&provider.len()) {
-        return refused("a price names a provider and a model of [A-Za-z0-9._:/-]");
+        return refused(
+            "a price names a provider and a model of [A-Za-z0-9._:/-], exactly as the provider \
+             names it: the gateway grants and compares model ids as they are and resolves no alias",
+        );
+    }
+    if let Some(why) = super::provider_rules::model_problem(model) {
+        return refused(why);
     }
     if rates.iter().any(|r| !(0..=MAX_PRICE).contains(r)) {
         return refused("a price is 0 to 1000000000 micro-dollars per million tokens");

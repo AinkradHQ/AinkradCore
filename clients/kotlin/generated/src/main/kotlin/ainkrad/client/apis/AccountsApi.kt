@@ -16,6 +16,7 @@
 package ainkrad.client.apis
 
 import ainkrad.client.models.AccountDetail
+import ainkrad.client.models.AccountTested
 import ainkrad.client.models.AccountsDeleted
 import ainkrad.client.models.Binding
 import ainkrad.client.models.ErrorBody
@@ -26,6 +27,7 @@ import ainkrad.client.models.Pool
 import ainkrad.client.models.Provider
 import ainkrad.client.models.ProviderAccount
 import ainkrad.client.models.ReplaceKey
+import ainkrad.client.models.SessionLimits
 import ainkrad.client.models.SetCap
 import ainkrad.client.models.SetState
 
@@ -618,6 +620,40 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * PUT /api/v1/accounts/{id}/session-limits
+        * 
+        * 
+         * @param id The account&#39;s id 
+         * @param sessionLimits  
+         * @return ProviderAccount
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun setAccountSessionLimits(id: kotlin.String, sessionLimits: SessionLimits): HttpResponse<ProviderAccount> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = sessionLimits
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.PUT,
+            "/api/v1/accounts/{id}/session-limits".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * PUT /api/v1/accounts/{id}/state
         * 
         * 
@@ -673,6 +709,40 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.PUT,
             "/api/v1/pools/{id}/default".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/accounts/{id}/test
+        * 
+        * 
+         * @param id The account&#39;s id 
+         * @return AccountTested
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun testAccount(id: kotlin.String): HttpResponse<AccountTested> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/accounts/{id}/test".replace("{" + "id" + "}", "$id"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

@@ -79,6 +79,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("PUT", "/api/v1/accounts/{id}/secret", "admin"),
     ("PUT", "/api/v1/accounts/{id}/state", "admin"),
     ("PUT", "/api/v1/accounts/{id}/cap", "admin"),
+    ("PUT", "/api/v1/accounts/{id}/session-limits", "admin"),
+    ("POST", "/api/v1/accounts/{id}/test", "admin"),
     ("DELETE", "/api/v1/accounts/{id}", "admin"),
     ("POST", "/api/v1/accounts/providers", "admin"),
     ("PUT", "/api/v1/accounts/providers/{id}", "admin"),
@@ -162,6 +164,8 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("PUT", "/api/v1/accounts/{id}/secret"),
     ("PUT", "/api/v1/accounts/{id}/state"),
     ("PUT", "/api/v1/accounts/{id}/cap"),
+    // It raises what one session may spend (a test is not here: one fixed free request).
+    ("PUT", "/api/v1/accounts/{id}/session-limits"),
     ("DELETE", "/api/v1/accounts/{id}"),
     ("POST", "/api/v1/accounts/providers"),
     ("PUT", "/api/v1/accounts/providers/{id}"),
@@ -432,6 +436,10 @@ mod tests {
         const EXCEPTED: &[(&str, &str)] = &[
             // Fixed op, no input, changes nothing on the runner (see `DESTRUCTIVE`).
             ("POST", "/api/v1/runners/{id}/noop"),
+            // One fixed, free request to the host the key was bound to when it was stored, through
+            // a runner in the key's scope (design 2026-11-04 section 5.2 says it is not
+            // destructive); its only effect is the account's last-test record.
+            ("POST", "/api/v1/accounts/{id}/test"),
         ];
         for (m, t, scope) in ROUTES {
             let privileged = !matches!(*scope, "read" | "runner");

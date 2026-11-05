@@ -25,7 +25,7 @@ import kotlinx.serialization.Contextual
  *
  * @param cachePerMtokMicro 
  * @param inputPerMtokMicro 
- * @param model 
+ * @param model The model id exactly as the provider names it: the auth gateway grants a session the ids priced here and compares a request's model with them as they are. It resolves no alias (`-latest`, a family name), and an id ending in `:online` is refused.
  * @param outputPerMtokMicro 
  * @param pricedAt When the provider's list price was read: a UTC timestamp.
  * @param provider 
@@ -40,6 +40,7 @@ data class SetPrice (
     @SerialName(value = "input_per_mtok_micro")
     val inputPerMtokMicro: kotlin.Long,
 
+    /* The model id exactly as the provider names it: the auth gateway grants a session the ids priced here and compares a request's model with them as they are. It resolves no alias (`-latest`, a family name), and an id ending in `:online` is refused. */
     @SerialName(value = "model")
     val model: kotlin.String,
 

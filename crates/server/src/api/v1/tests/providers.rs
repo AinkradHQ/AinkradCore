@@ -27,6 +27,9 @@ fn def(id: &str) -> Definition {
             output_per_mtok_micro: 15_000_000,
         }],
         priced_at: Some("2026-11-01".to_owned()),
+        wire: String::new(),
+        key_prefix: None,
+        test_path: None,
         builtin: false,
         version: 0,
     }
@@ -199,7 +202,7 @@ async fn an_account_is_bound_to_its_providers_base_url_when_stored() {
         acc::get(&fx.app.pool, a.id).await.unwrap().base_url,
         a.base_url
     );
-    // A user definition holds no account yet: the broker knows three providers' key shapes only.
+    // A user definition that declares no key_prefix holds no key: its keys could not be bound to its host.
     prov::create(&fx.app.pool, &def("router"), "d_x", BY, NOW)
         .await
         .unwrap();

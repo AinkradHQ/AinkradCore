@@ -533,12 +533,7 @@ pub fn validate_new(new: &store::NewSession<'_>, admin: bool) -> Result<(), Inva
              does not set itself (CITADEL_RUN_TOKEN is reserved for a module's run token)",
         ));
     }
-    if let Some(why) = ainkrad_proto::v2::account_var_problem(
-        new.harness,
-        new.secrets
-            .iter()
-            .map(|s| (s.name.as_str(), s.var.as_str())),
-    ) {
+    if let Some(why) = gateway::secrets_problem(new.harness, new.secrets) {
         return Err(Invalid::Bad(why));
     }
     // The gateway serves one account per session: the ledger records against that one.
