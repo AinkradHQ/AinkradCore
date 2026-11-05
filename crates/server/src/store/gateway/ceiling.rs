@@ -173,3 +173,38 @@ pub async fn cursor(pool: &SqlitePool, session: &str) -> Result<(i64, i64), sqlx
             .await?;
     Ok(row.unwrap_or((0, 0)))
 }
+
+/// What the account's session limits leave this session: each limit less everything the ledger
+/// holds for the session (every epoch: a resume does not renew it); `None` in a dimension the
+/// account does not limit. The ceiling honours it beside the budgets (KAN-435 G7).
+pub(super) async fn session_left(
+    conn: &mut sqlx::SqliteConnection,
+    account: i64,
+    session: &str,
+) -> Result<(Option<u64>, Option<u64>), sqlx::Error> {
+    let limits: Option<(Option<i64>, Option<i64>)> = sqlx::query_as(
+        "SELECT session_max_tokens, session_max_usd_micros FROM core_accounts WHERE id = ?",
+    )
+    .bind(account)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let (max_tokens, max_usd) = limits.unwrap_or((None, None));
+    if max_tokens.is_none() && max_usd.is_none() {
+        return Ok((None, None));
+    }
+    let (tokens, usd): (i64, i64) = sqlx::query_as(
+        "SELECT coalesce(sum(input_tokens + output_tokens + cache_tokens), 0), \
+         coalesce(sum(cost_usd_micros), 0) FROM core_cost_events WHERE session = ?",
+    )
+    .bind(session)
+    .fetch_one(&mut *conn)
+    .await?;
+    let left = |max: Option<i64>, spent: i64| {
+        max.map(|m| {
+            u64::try_from(m)
+                .unwrap_or(0)
+                .saturating_sub(u64::try_from(spent).unwrap_or(0))
+        })
+    };
+    Ok((left(max_tokens, tokens), left(max_usd, usd)))
+}
