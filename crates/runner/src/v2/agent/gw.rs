@@ -220,5 +220,6 @@ impl AgentDriver {
     }
 }
 
-#[cfg(test)]
+// Linux only, as the gateway's first release is: a macOS temp dir is too long for the socket path.
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
