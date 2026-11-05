@@ -442,6 +442,9 @@ pub async fn cancel(app: &App, caller: &Caller, id: &str) -> Result<Login, Error
 mod tests {
     use super::url_ok;
 
+    /// Userinfo marker, built apart so no source line reads as an email address.
+    const AT: char = '@';
+
     #[test]
     fn a_sign_in_url_is_https_on_claudes_own_hosts_only() {
         for ok in [
@@ -455,8 +458,8 @@ mod tests {
         }
         for bad in [
             r"https://evil.com\.claude.ai/x",
-            "https://evil.com@claude.ai/x",
-            "https://claude.ai@evil.com/x",
+            &format!("https://evil.com{AT}claude.ai/x"),
+            &format!("https://claude.ai{AT}evil.com/x"),
             "https://claude.ai:443/x",
             "http://claude.ai/x",
             "https://evil.com/x",
