@@ -367,3 +367,23 @@ fn ignores_unknown_events_and_fields() {
         assert_eq!(replay(&newer, &mut Decoder::default()), want);
     }
 }
+
+/// KAN-435 G6: a session on the auth gateway (the runner's base URL is in its spec) gets
+/// `modelProvider: "gemini"` next to the runner's own setting, and any other session does not.
+#[test]
+fn a_gateway_session_names_its_model_provider_and_no_other_does() {
+    let plain = Spec::default();
+    assert_eq!(settings_for(&plain), SETTINGS);
+    let gateway = Spec {
+        env: vec![(
+            "GOOGLE_GEMINI_BASE_URL".to_owned(),
+            "http://127.0.0.1:47833".into(),
+        )],
+        ..Spec::default()
+    };
+    assert_eq!(settings_for(&gateway), GATEWAY_SETTINGS);
+    let v: Value = serde_json::from_str(GATEWAY_SETTINGS).unwrap();
+    assert_eq!(v["modelProvider"], "gemini");
+    assert_eq!(v["toolPermission"], "always-proceed");
+    assert!(!SETTINGS.contains("modelProvider"));
+}

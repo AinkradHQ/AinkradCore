@@ -5,7 +5,7 @@ use super::*;
 
 /// A fake `codex app-server` that writes the environment it was started with to `dir/env`,
 /// then serves one thread and completes its turn.
-fn fake_codex_recording_env(dir: &Path) -> PathBuf {
+pub(super) fn fake_codex_recording_env(dir: &Path) -> PathBuf {
     let bin = dir.join("codex");
     let d = dir.display();
     let script = format!(

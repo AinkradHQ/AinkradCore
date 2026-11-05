@@ -4,6 +4,8 @@
 
 mod auth;
 mod framing;
+mod harness_refusals;
+mod harness_wiring;
 mod metering;
 mod stream;
 
@@ -340,7 +342,7 @@ pub(super) fn ok_script() -> Vec<Step> {
 }
 
 pub(super) fn model_body() -> String {
-    format!("{{\"model\":\"{MODEL}\",\"max_tokens\":8}}")
+    format!("{{\"model\":\"{MODEL}\",\"max_tokens\":8,\"store\":false}}")
 }
 
 pub(super) fn user_def() -> UserKeyDef {

@@ -30,6 +30,22 @@ use crate::gateway::{Event, check, dial::Dialer, meter::Meter};
 /// Unacknowledged reports a session may hold before its gateway stops admitting requests.
 pub(super) const MAX_HELD: usize = 10_000;
 
+/// Why a session that holds a gateway grant may not also hold a provider-account secret, in any
+/// delivery mode (env, file, askpass): the gateway exists so the key is never in the sandbox, and
+/// a second copy under the writable secrets dir would put it there (spec 4.3). `granted` is each
+/// redeemed secret's name and variable. Checked once the names are known (a lease is opaque until
+/// redeemed) and before anything is written or the gateway's own lease is redeemed.
+pub(super) fn account_conflict(
+    has_gateway: bool,
+    granted: &[(String, String)],
+) -> Option<&'static str> {
+    (has_gateway
+        && granted
+            .iter()
+            .any(|(name, _)| name.starts_with(ainkrad_proto::v2::ACCOUNT_PREFIX)))
+    .then_some("a session served by the gateway may not also hold a provider-account secret")
+}
+
 fn path(cfg: &AgentConfig, session: &str) -> PathBuf {
     cfg.dir.join(session).join("gateway.jsonl")
 }

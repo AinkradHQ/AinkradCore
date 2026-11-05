@@ -67,6 +67,7 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
+pub mod codex_config;
 mod connect;
 pub mod egress;
 mod executor;

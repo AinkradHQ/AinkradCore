@@ -325,7 +325,7 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
                 }
             }
             // The auth gateway's slot (KAN-435): a socket into the runner and a forwarder on this
-            // namespace's loopback. It carries no key; the harness's base URL is G6's.
+            // namespace's loopback. It carries no key; the runner points the harness at it (`gateway::wiring`).
             let (sock, fwd, port) = (
                 env(spec, "AINKRAD_SANDBOX_GW_SOCK"),
                 env(spec, "AINKRAD_SANDBOX_GW_FWD"),

@@ -268,6 +268,18 @@ async fn serve(sh: &Shared, c: &mut UnixStream) -> Result<(), End> {
     if let Some(code) = probe.refusal() {
         return Err(refuse(403, code).into());
     }
+    // Only a client-side tool is allowed, at any depth: the provider runs none for the agent.
+    if super::tools::refusal(&body) {
+        return Err(refuse(403, "tool_not_allowed").into());
+    }
+    // A Responses request may name stored state, or leave some for later: only `store: false`
+    // passes. (Chat completions does not store by default, and has no such fields.)
+    if cfg.upstream.wire == Wire::OpenaiResponses
+        && routed.target.ends_with("/responses")
+        && let Some(code) = super::stored::refusal(&body)
+    {
+        return Err(refuse(if code == "bad_json" { 400 } else { 403 }, code).into());
+    }
     let headers = upstream_headers(cfg, &req)?;
     count_rate(sh)?;
     let price = cfg

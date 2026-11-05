@@ -688,6 +688,9 @@ impl AgentDriver {
         ) {
             return Err(why.to_owned());
         }
+        if let Some(why) = gw::account_conflict(req.gateway.is_some(), &granted) {
+            return Err(why.to_owned());
+        }
         let delivered = secrets::deliver(&self.config.secrets_dir, &req.session, leased)
             .map_err(|e| format!("delivering the session's secrets: {e}"))?;
         Ok((delivered, run_token))

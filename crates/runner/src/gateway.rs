@@ -12,7 +12,11 @@
 //!   streamed, whole or cut) and ends in one report on a channel of its own ([`Event`]); the
 //!   stream is cut when the ceiling is reached; `agent.limit` moves the ceiling.
 //!
-//! The Core's side is G5; the harness's base URL and placeholder key are G6.
+//! - G6 ([`wiring`], [`stored`]): what each harness is given to reach the gateway (a base URL and
+//!   a placeholder key; Codex's generated `config.toml`), and the Responses requests that read
+//!   state the provider holds are refused.
+//!
+//! The Core's side is G5.
 
 mod body;
 mod charge;
@@ -27,10 +31,13 @@ mod selftest;
 mod serve;
 pub mod session;
 mod status;
+mod stored;
 mod stream;
 #[cfg(test)]
 mod tests;
+mod tools;
 mod usage;
+pub mod wiring;
 
 use std::io;
 use std::path::{Path, PathBuf};
