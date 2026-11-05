@@ -1,11 +1,16 @@
 //! Idempotent start attempts retain leases until acknowledgement or their actual expiry.
 use super::*;
 
-/// Leases each of the session's secrets to its runner for one start.
-async fn leases(app: &App, s: &Session) -> Result<(i64, Vec<SecretGrant>), Refusal> {
+/// Leases each of the session's secrets to its runner for one start, and builds the gateway grant
+/// of an API-key account (which is never leased as an env secret, KAN-435).
+async fn leases(app: &App, s: &Session) -> Result<Leased, Refusal> {
     let mut expires = i64::MAX;
     let mut out = Vec::with_capacity(s.secrets.len());
-    for secret in &s.secrets {
+    for secret in s
+        .secrets
+        .iter()
+        .filter(|x| crate::store::gateway::account_secret(&x.name).is_none())
+    {
         let (lease, until) = crate::store::secrets::lease(
             &app.pool,
             &secret.name,
@@ -23,7 +28,18 @@ async fn leases(app: &App, s: &Session) -> Result<(i64, Vec<SecretGrant>), Refus
             var: secret.var.clone(),
         });
     }
-    Ok((expires, out))
+    let gateway = match gateway::grant(app, s).await? {
+        Some(issued) => {
+            expires = expires.min(issued.until);
+            Some(issued.grant)
+        }
+        None => None,
+    };
+    Ok(Leased {
+        until: expires,
+        secrets: out,
+        gateway,
+    })
 }
 
 /// What the owning module mints for this start (the run token): held in memory for the
@@ -68,7 +84,12 @@ async fn minted(app: &App, s: &Session) -> Result<Vec<SecretGrant>, Refusal> {
 
 /// The `agent.start` of `s`, continuing the harness's own session when `resume`. A workspace or
 /// policy that does not parse is refused, never replaced by a default (a weaker policy).
-fn start_command(s: &Session, secrets: Vec<SecretGrant>, resume: bool) -> Result<Command, Refusal> {
+fn start_command(
+    s: &Session,
+    secrets: Vec<SecretGrant>,
+    gateway: Option<Box<ainkrad_proto::v2::GatewayGrant>>,
+    resume: bool,
+) -> Result<Command, Refusal> {
     let bad = || {
         Refusal::Runner(StreamError::new(
             ErrorCode::InvalidArgs,
@@ -93,7 +114,7 @@ fn start_command(s: &Session, secrets: Vec<SecretGrant>, resume: bool) -> Result
         policy,
         resume: resume.then(|| s.harness_session.clone()).flatten(),
         secrets,
-        gateway: None,
+        gateway,
         epoch: if resume {
             u32::try_from(s.resumes + 1).unwrap_or(u32::MAX)
         } else {
@@ -130,7 +151,7 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
         let why = "the runner is not connected";
         return Err(Refusal::Runner(StreamError::new(ErrorCode::Offline, why)));
     }
-    if let Err(e) = start_command(s, Vec::new(), resume) {
+    if let Err(e) = start_command(s, Vec::new(), None, resume) {
         fail(app, s, &describe(&e)).await;
         return Err(e);
     }
@@ -169,16 +190,16 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
         return Err(e);
     }
     let cached = { app.agents.leases.lock().unwrap().get(&s.id).cloned() };
-    let mut secrets = match cached {
-        Some((until, grants)) if until > app.clock.unix() => grants,
+    let leased = match cached {
+        Some(l) if l.until > app.clock.unix() => l,
         _ => match leases(app, s).await {
-            Ok((until, grants)) => {
+            Ok(l) => {
                 app.agents
                     .leases
                     .lock()
                     .unwrap()
-                    .insert(s.id.clone(), (until, grants.clone()));
-                grants
+                    .insert(s.id.clone(), l.clone());
+                l
             }
             Err(e) => {
                 fail(app, s, &format!("leasing its secrets: {}", describe(&e))).await;
@@ -186,6 +207,7 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
             }
         },
     };
+    let mut secrets = leased.secrets.clone();
     match minted(app, s).await {
         Ok(grants) => secrets.extend(grants),
         Err(e) => {
@@ -218,7 +240,7 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
     match ask(
         app,
         &s.runner,
-        start_command(s, secrets.clone(), resume)?,
+        start_command(s, secrets.clone(), leased.gateway.clone(), resume)?,
         wait,
         proof,
     )

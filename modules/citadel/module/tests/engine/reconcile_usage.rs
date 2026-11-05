@@ -60,6 +60,29 @@ async fn a_run_follows_its_session_to_success_and_releases_what_it_held() {
 }
 
 #[tokio::test]
+async fn a_session_the_gateway_serves_is_not_recorded_a_second_time_from_its_harness_meter() {
+    // One ledger writer per session (KAN-435 G5): the gateway's reports record a session whose key
+    // it serves, so the harness's own totals must not become a second set of rows.
+    let w = world().await;
+    let run = w.running().await;
+    let sid = run.session_id.clone().unwrap();
+    sqlx::query("UPDATE core_agent_sessions SET gateway_account_id = 7 WHERE id = ?")
+        .bind(&sid)
+        .execute(&w.app().pool)
+        .await
+        .unwrap();
+    let fail = Outcome::Failed {
+        reason: "tests red".into(),
+        fingerprint: None,
+    };
+    w.report(&run, AgentState::Ended, vec![], tokens(10, 5), Some(fail))
+        .await;
+    w.reconcile().await;
+    assert_eq!(w.run(run.id).await.state, RunState::Failed);
+    assert_eq!(count(&w, "SELECT count(*) FROM core_cost_events").await, 0);
+}
+
+#[tokio::test]
 async fn a_failed_session_schedules_bounded_retries_with_backoff() {
     let w = world().await;
     let mut run = w.running().await;

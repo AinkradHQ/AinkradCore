@@ -6,8 +6,8 @@
 //! - **Mid-run** ([`check_in`], called by `store::costs::record_in`): after each event, a budget that
 //!   reached its warning threshold sends one `budget.warning` per period and one that ran out sends one
 //!   `budget.exhausted` (audit rows: they are events on the bus). The answer says which hard-stop
-//!   budgets are exhausted NOW, so whoever runs the session stops it. The Core stops nothing itself: it
-//!   has no caller that records costs yet (AP-10).
+//!   budgets are exhausted NOW, so whoever runs the session stops it. This layer stops nothing itself:
+//!   a gateway session is stopped by `agents::gateway` (KAN-435 G5), a Citadel run by its module.
 //! - **Admission** ([`reserve_in`]): a new session takes what it may spend from every hard-stop budget
 //!   that applies, in the write transaction that checked the headroom, so two sessions cannot both
 //!   take the last of it. A denial names the budgets that said no; the module that asked decides what

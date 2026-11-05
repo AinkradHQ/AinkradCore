@@ -151,6 +151,12 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../migrations/0019_budgets.up.sql"),
         down: include_str!("../../migrations/0019_budgets.down.sql"),
     },
+    Migration {
+        version: 20,
+        name: "gateway_session",
+        up: include_str!("../../migrations/0020_gateway_session.up.sql"),
+        down: include_str!("../../migrations/0020_gateway_session.down.sql"),
+    },
 ];
 
 #[derive(Debug)]
