@@ -13,7 +13,8 @@
 //!   and pastes the code; `waiting_code`: the code was handed to the runner, which finishes the
 //!   sign-in; `storing`: the token arrived and is being stored.
 //! - A login lives [`TTL_SECS`]; one past `expires_at` is `failed` (`expired`) the next time it is read,
-//!   unless it is `storing`: that ends in `done` or `failed` by its own store.
+//!   unless it is `storing`: that ends in `done` or `failed` by its own store, or
+//!   after [`STORING_GRACE_SECS`] is settled as interrupted (`settle_storing_in`; at startup, at once).
 //! - Every move is one compare-and-set write with its audit row and event in the same
 //!   transaction (events `account.login.started|url|done|failed`; a cancel is a `failed` with the
 //!   reason `cancelled`). Text from a provider or a runner passes the redactor.
@@ -31,6 +32,9 @@ pub const TTL_SECS: i64 = 600;
 /// The most logins open at once.
 const MAX_OPEN: i64 = 4;
 const CLOSED: &str = "('done', 'failed', 'cancelled')";
+/// How long a login may sit in `storing` before it counts as interrupted (the Core stopped
+/// mid-store). A store takes milliseconds, so this is far above it: an in-flight one is never raced.
+pub const STORING_GRACE_SECS: i64 = 120;
 /// What expiry leaves alone: a login that ended, or is `storing` (its token is in the broker's
 /// hands: it ends in `done` or `failed` by itself, never by the clock).
 const NOT_EXPIRABLE: &str = "('done', 'failed', 'cancelled', 'storing')";
@@ -183,9 +187,11 @@ pub async fn get(
     now: i64,
 ) -> Result<Option<Login>, Error> {
     let due: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT count(*) FROM core_account_logins WHERE state NOT IN {NOT_EXPIRABLE} AND expires_at <= ?"
+        "SELECT count(*) FROM core_account_logins WHERE (state NOT IN {NOT_EXPIRABLE} AND \
+         expires_at <= ?) OR (state = 'storing' AND updated_at <= ?)"
     )))
     .bind(iso_of_unix(now))
+    .bind(iso_of_unix(now - STORING_GRACE_SECS))
     .fetch_one(pool)
     .await?;
     if due > 0 {
@@ -212,6 +218,59 @@ async fn expire_in(conn: &mut SqliteConnection, actor: AuditActor, now: i64) -> 
     for id in ids {
         move_in(conn, &id, &[], "failed", &why, actor, now).await?;
     }
+    settle_storing_in(conn, actor, now, STORING_GRACE_SECS).await
+}
+
+/// Settles every login stuck in `storing` for `grace` seconds or more (the Core stopped between
+/// taking the token and finishing). The account is created in one transaction, so if its row
+/// exists the store did succeed and the login becomes `done` with it; otherwise it `failed`
+/// (`interrupted`). Both are compare-and-set from `storing`: a store that ends meanwhile wins.
+async fn settle_storing_in(
+    conn: &mut SqliteConnection,
+    actor: AuditActor,
+    now: i64,
+    grace: i64,
+) -> Result<(), Error> {
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM core_account_logins WHERE state = 'storing' AND updated_at <= ?",
+    )
+    .bind(iso_of_unix(now - grace))
+    .fetch_all(&mut *conn)
+    .await?;
+    for id in ids {
+        let made: Option<i64> = sqlx::query_scalar(
+            "SELECT a.id FROM core_accounts a JOIN core_account_logins l \
+             ON a.label = l.label AND a.provider = l.provider WHERE l.id = ?",
+        )
+        .bind(&id)
+        .fetch_optional(&mut *conn)
+        .await?;
+        let change = match made {
+            Some(a) => (
+                "done",
+                Change {
+                    account_id: Some(a),
+                    ..Change::default()
+                },
+            ),
+            None => (
+                "failed",
+                Change {
+                    reason: Some("interrupted: the Core stopped before it stored the account"),
+                    ..Change::default()
+                },
+            ),
+        };
+        move_in(conn, &id, &["storing"], change.0, &change.1, actor, now).await?;
+    }
+    Ok(())
+}
+
+/// At startup nothing is in flight: every login still `storing` is settled now (`grace` 0).
+pub async fn settle_leftover(pool: &SqlitePool, actor: AuditActor, now: i64) -> Result<(), Error> {
+    let mut tx = super::begin_write(pool).await?;
+    settle_storing_in(&mut tx, actor, now, 0).await?;
+    tx.commit().await?;
     Ok(())
 }
 

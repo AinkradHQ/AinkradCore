@@ -434,27 +434,103 @@ async fn a_sign_in_that_is_storing_does_not_expire_under_its_store() {
     let w = up("login-storing", true, true).await;
     let pool = &w.core.app.pool;
     let at = w.core.app.clock.unix();
-    let l = logins::create(
-        pool,
-        ("claude-sub", "late", &w.runner),
-        &w.who.device.id,
-        AuditActor::System,
-        at,
-    )
-    .await
-    .unwrap();
-    let c = logins::Change::default();
-    let step = |from: &'static [&'static str], to: &'static str| {
-        logins::step(pool, &l.id, from, to, &c, AuditActor::System, at)
-    };
-    step(&["starting"], "storing").await.unwrap().unwrap();
-    let late = at + logins::TTL_SECS + 5;
-    let got = logins::get(pool, &l.id, AuditActor::System, late).await;
-    assert_eq!(
-        got.unwrap().unwrap().state,
-        "storing",
-        "storing is not expired"
-    );
-    let done = step(&["storing"], "done").await.unwrap();
+    let l = mk_login(&w, "late", at).await;
+    // It enters `storing` just past its expiry and is read a moment later: untouched, then done.
+    let entered = at + logins::TTL_SECS + 1;
+    step(&w, &l.id, "storing", entered).await.unwrap();
+    let got = logins::get(pool, &l.id, AuditActor::System, entered + 10).await;
+    assert_eq!(got.unwrap().unwrap().state, "storing");
+    let done = step(&w, &l.id, "done", entered + 11).await;
     assert_eq!(done.map(|d| d.state), Some("done".to_owned()));
+}
+
+async fn mk_login(w: &W, label: &str, at: i64) -> logins::Login {
+    let runner = &w.runner;
+    let device = &w.who.device.id;
+    let args = ("claude-sub", label, runner.as_str());
+    logins::create(&w.core.app.pool, args, device, AuditActor::System, at)
+        .await
+        .unwrap()
+}
+
+async fn step(w: &W, id: &str, to: &str, at: i64) -> Option<logins::Login> {
+    let c = logins::Change::default();
+    let pool = &w.core.app.pool;
+    logins::step(pool, id, &[], to, &c, AuditActor::System, at)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_login_stuck_storing_is_failed_after_its_grace_and_at_startup() {
+    let w = up("login-stuck", true, true).await;
+    let (pool, at) = (&w.core.app.pool, w.core.app.clock.unix());
+    let open = |sql: &'static str| sqlx::query_scalar::<_, i64>(sql).fetch_one(pool);
+    let mut stuck = Vec::new();
+    for label in ["s1", "s2", "s3", "s4"] {
+        let l = mk_login(&w, label, at).await;
+        step(&w, &l.id, "storing", at).await.unwrap();
+        stuck.push(l.id);
+    }
+    // At the cap: a fifth is refused.
+    let args = ("claude-sub", "s5", w.runner.as_str());
+    let full = logins::create(pool, args, &w.who.device.id, AuditActor::System, at).await;
+    assert_eq!(refusal(full).0, "limit_reached");
+    // Within the grace nothing moves, even through a read.
+    let soon = at + logins::STORING_GRACE_SECS - 1;
+    let got = logins::get(pool, &stuck[0], AuditActor::System, soon).await;
+    assert_eq!(got.unwrap().unwrap().state, "storing");
+    // Past it, a read settles every one of them: failed, and no longer counted.
+    let late = at + logins::STORING_GRACE_SECS;
+    let got = logins::get(pool, &stuck[0], AuditActor::System, late).await;
+    let got = got.unwrap().unwrap();
+    assert_eq!(got.state, "failed");
+    assert!(got.reason.unwrap().starts_with("interrupted"));
+    let n = open("SELECT count(*) FROM core_account_logins WHERE state = 'storing'").await;
+    assert_eq!(n.unwrap(), 0);
+    let ok = logins::create(pool, args, &w.who.device.id, AuditActor::System, late).await;
+    assert!(ok.is_ok(), "the cap has room again");
+    // At startup a fresh `storing` row is settled at once (nothing is in flight then).
+    let l = mk_login(&w, "s6", late).await;
+    step(&w, &l.id, "storing", late).await.unwrap();
+    logins::settle_leftover(pool, AuditActor::System, late)
+        .await
+        .unwrap();
+    assert_eq!(step(&w, &l.id, "done", late).await.map(|d| d.state), None);
+    let got = logins::get(pool, &l.id, AuditActor::System, late).await;
+    assert_eq!(got.unwrap().unwrap().state, "failed");
+}
+
+#[tokio::test]
+async fn a_stuck_login_whose_account_exists_resolves_to_done() {
+    let w = up("login-stuck-made", true, true).await;
+    let (pool, at) = (&w.core.app.pool, w.core.app.clock.unix());
+    let l = mk_login(&w, "made", at).await;
+    step(&w, &l.id, "storing", at).await.unwrap();
+    let new = accounts::NewAccount {
+        provider: "claude-sub",
+        label: "made",
+        value: super::login::TOKEN,
+        runners: std::slice::from_ref(&w.runner),
+        cap: None,
+    };
+    let sealer = w.core.app.secrets.as_deref().unwrap();
+    let now = w.core.app.clock.now();
+    let args = (pool, sealer, &new, "subscription", &w.runner);
+    let made = accounts::create_by(
+        args.0,
+        args.1,
+        args.2,
+        args.3,
+        args.4,
+        AuditActor::System,
+        &now,
+    );
+    let a = made.await.unwrap();
+    logins::settle_leftover(pool, AuditActor::System, at)
+        .await
+        .unwrap();
+    let got = logins::get(pool, &l.id, AuditActor::System, at).await;
+    let got = got.unwrap().unwrap();
+    assert_eq!((got.state.as_str(), got.account_id), ("done", Some(a.id)));
 }
