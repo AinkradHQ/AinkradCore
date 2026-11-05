@@ -9,11 +9,73 @@
 //! ignored), because the providers spell them differently (`web_search_20250305`, `googleSearch`
 //! and `google_search`, `urlContext` and `url_context`, `mcp`, `mcp_toolset`).
 //!
-//! The body is read through a derived struct, so a duplicated key is refused outright: what is
-//! checked here is what the upstream reads.
+//! A duplicated JSON key at any depth is refused outright ([`Strict`]), so what is checked here is
+//! what the upstream reads, whichever of two copies it would take.
+//!
+//! Also refused, because a reply's size is then not bounded by the output cap the reservation is
+//! priced from: more than one candidate (`n`, `candidateCount`), and a Responses `background`
+//! run (the provider works on after the gateway has stopped counting).
 
+use std::collections::HashSet;
+
+use serde::de::{DeserializeSeed, Error as _, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
+
+/// Reads a JSON document and fails on the first object that names a key twice, at any depth. Keys
+/// are compared as decoded, so `"model"` and `"\u006dodel"` are the same key.
+struct Strict;
+
+impl<'de> DeserializeSeed<'de> for Strict {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Strict {
+    type Value = ();
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("JSON with no repeated key")
+    }
+
+    fn visit_bool<E>(self, _: bool) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_i64<E>(self, _: i64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_u64<E>(self, _: u64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_f64<E>(self, _: f64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_str<E>(self, _: &str) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_unit<E>(self) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        while seq.next_element_seed(Strict)?.is_some() {}
+        Ok(())
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        let mut seen = HashSet::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if !seen.insert(key) {
+                return Err(A::Error::custom("a key is repeated"));
+            }
+            map.next_value_seed(Strict)?;
+        }
+        Ok(())
+    }
+}
 
 /// A field whose presence is the finding, whatever it holds (even `null`).
 fn present<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
@@ -23,6 +85,10 @@ fn present<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
 #[derive(Deserialize)]
 pub(super) struct Probe {
     pub model: Option<String>,
+    stream: Option<Value>,
+    n: Option<Value>,
+    #[serde(default, deserialize_with = "present")]
+    background: bool,
     max_tokens: Option<Value>,
     max_output_tokens: Option<Value>,
     max_completion_tokens: Option<Value>,
@@ -56,8 +122,8 @@ fn reaches_network(s: &str) -> bool {
 }
 
 impl Probe {
-    /// The cap on the reply's output tokens the request asks for, the largest of the spellings.
-    pub(super) fn max_output(&self) -> u64 {
+    /// The cap on the reply's output tokens the request names, the largest of the spellings.
+    pub(super) fn max_output(&self) -> Option<u64> {
         let gen_cfg = self.generation_config.as_ref().and_then(|g| {
             g.get("maxOutputTokens")
                 .or_else(|| g.get("max_output_tokens"))
@@ -72,11 +138,28 @@ impl Probe {
         .flatten()
         .filter_map(Value::as_u64)
         .max()
-        .unwrap_or(DEFAULT_MAX_OUTPUT)
     }
 
-    /// Why the request may not be sent: it asks the provider to reach the network.
-    pub(super) fn network_tool(&self) -> Option<&'static str> {
+    /// The output cap the reservation is priced from, or `None` when the request must be refused:
+    /// a reply that is not streamed is bounded by nothing but this cap, so a request that names
+    /// none is not given one. A streamed reply is bounded by the running cut-off as well, so it
+    /// is held at [`DEFAULT_MAX_OUTPUT`].
+    pub(super) fn output_cap(&self, route_streams: bool) -> Option<u64> {
+        let streams = route_streams || self.stream.as_ref().and_then(Value::as_bool) == Some(true);
+        self.max_output().or(streams.then_some(DEFAULT_MAX_OUTPUT))
+    }
+
+    /// Why the request may not be sent, as a code: it asks the provider to reach the network, to
+    /// answer with more than one candidate, or to carry on in the background.
+    pub(super) fn refusal(&self) -> Option<&'static str> {
+        let many = |v: Option<&Value>| v.and_then(Value::as_u64).is_some_and(|n| n > 1);
+        let candidates = self
+            .generation_config
+            .as_ref()
+            .and_then(|g| g.get("candidateCount").or_else(|| g.get("candidate_count")));
+        if many(self.n.as_ref()) || many(candidates) || self.background {
+            return Some("param_not_allowed");
+        }
         if self.mcp_servers || self.web_search_options {
             return Some("tool_not_allowed");
         }
@@ -95,16 +178,35 @@ impl Probe {
     }
 }
 
+/// Reads a request body: an object, no key repeated at any depth, and the fields the gateway
+/// checks.
+pub(super) fn parse(body: &[u8]) -> Result<Probe, serde_json::Error> {
+    let mut de = serde_json::Deserializer::from_slice(body);
+    Strict.deserialize(&mut de)?;
+    de.end()?;
+    serde_json::from_slice(body)
+}
+
 /// The `anthropic-beta` values the gateway passes. A beta feature that is not here is dropped
 /// from the header (the request goes without it): several betas give the provider reach the
 /// agent does not have (MCP connector, web fetch, code execution, the files API), so the list
 /// is a short allowlist in code, not a pass-through. Extend it when a harness's smoke run shows
 /// one it needs.
-const BETAS: [&str; 8] = [
+const BETAS: [&str; 15] = [
+    // What Claude Code 2.1.318 sends on an API-key turn (read from a request to a local listener,
+    // 2026-11-05): none gives the provider network reach.
     "claude-code-20250219",
     "interleaved-thinking-2025-05-14",
-    "fine-grained-tool-streaming-2025-05-14",
     "context-management-2025-06-27",
+    "per-turn-control-2026-07-01",
+    "mid-conversation-tool-changes-2026-07-01",
+    "inline-tools-2026-09-15",
+    "advisor-tool-2026-03-01",
+    "thinking-token-count-2026-05-13",
+    "advanced-tool-use-2025-11-20",
+    "effort-2025-11-24",
+    // Older ones a harness may still send.
+    "fine-grained-tool-streaming-2025-05-14",
     "extended-cache-ttl-2025-04-11",
     "token-efficient-tools-2025-02-19",
     "output-128k-2025-02-19",
@@ -126,18 +228,25 @@ mod tests {
     use super::*;
 
     fn probe(body: &str) -> Result<Probe, serde_json::Error> {
-        serde_json::from_str(body)
+        parse(body.as_bytes())
     }
 
     #[test]
-    fn the_output_cap_is_the_largest_spelling_or_the_default() {
+    fn the_output_cap_is_the_largest_spelling_and_a_streamed_request_without_one_is_held_at_the_default()
+     {
         for (body, want) in [
-            (r#"{"model":"m","max_tokens":100}"#, 100),
-            (r#"{"max_output_tokens":7,"max_completion_tokens":9}"#, 9),
-            (r#"{"generationConfig":{"maxOutputTokens":55}}"#, 55),
-            (r#"{"generation_config":{"max_output_tokens":56}}"#, 56),
-            (r#"{"max_tokens":"lots"}"#, DEFAULT_MAX_OUTPUT),
-            (r#"{"model":"m"}"#, DEFAULT_MAX_OUTPUT),
+            (r#"{"model":"m","max_tokens":100}"#, Some(100)),
+            (
+                r#"{"max_output_tokens":7,"max_completion_tokens":9}"#,
+                Some(9),
+            ),
+            (r#"{"generationConfig":{"maxOutputTokens":55}}"#, Some(55)),
+            (
+                r#"{"generation_config":{"max_output_tokens":56}}"#,
+                Some(56),
+            ),
+            (r#"{"max_tokens":"lots"}"#, None),
+            (r#"{"model":"m"}"#, None),
         ] {
             assert_eq!(probe(body).unwrap().max_output(), want, "{body}");
         }
@@ -181,7 +290,7 @@ mod tests {
             r#"{"tools":[{"type":"function","name":"f"},{"type":"web_search"}]}"#,
         ] {
             assert_eq!(
-                probe(body).unwrap().network_tool(),
+                probe(body).unwrap().refusal(),
                 Some("tool_not_allowed"),
                 "{body}"
             );
@@ -198,7 +307,7 @@ mod tests {
             r#"{"tools":[{"functionDeclarations":[{"name":"f"}]}]}"#,
             r#"{"tools":[{"type":"custom","name":"bash"}]}"#,
         ] {
-            assert_eq!(probe(body).unwrap().network_tool(), None, "{body}");
+            assert_eq!(probe(body).unwrap().refusal(), None, "{body}");
         }
     }
 
@@ -213,5 +322,68 @@ mod tests {
             None
         );
         assert_eq!(betas(""), None);
+    }
+
+    #[test]
+    fn a_reply_that_is_not_streamed_must_name_its_cap_and_a_streamed_one_gets_the_default() {
+        let none = probe(r#"{"model":"m"}"#).unwrap();
+        assert_eq!(
+            none.output_cap(false),
+            None,
+            "not streamed, no cap: refused"
+        );
+        assert_eq!(
+            none.output_cap(true),
+            Some(DEFAULT_MAX_OUTPUT),
+            "the route streams"
+        );
+        let body = probe(r#"{"model":"m","stream":true}"#).unwrap();
+        assert_eq!(body.output_cap(false), Some(DEFAULT_MAX_OUTPUT));
+        let off = probe(r#"{"model":"m","stream":false}"#).unwrap();
+        assert_eq!(off.output_cap(false), None);
+        assert_eq!(
+            probe(r#"{"max_tokens":9}"#).unwrap().output_cap(false),
+            Some(9)
+        );
+    }
+
+    #[test]
+    fn more_than_one_candidate_and_background_runs_are_refused() {
+        for body in [
+            r#"{"n":2}"#,
+            r#"{"generationConfig":{"candidateCount":3}}"#,
+            r#"{"generation_config":{"candidate_count":2}}"#,
+            r#"{"background":true}"#,
+            r#"{"background":false}"#,
+        ] {
+            assert_eq!(
+                probe(body).unwrap().refusal(),
+                Some("param_not_allowed"),
+                "{body}"
+            );
+        }
+        for body in [
+            r#"{"n":1}"#,
+            r#"{"generationConfig":{"candidateCount":1}}"#,
+            r#"{"n":null}"#,
+        ] {
+            assert_eq!(probe(body).unwrap().refusal(), None, "{body}");
+        }
+    }
+
+    #[test]
+    fn a_repeated_key_at_any_depth_is_refused_even_where_a_checked_field_hides() {
+        for body in [
+            r#"{"tools":[{"type":"web_search_20250305","type":"function"}]}"#,
+            r#"{"tools":[{"type":"function","type":"web_search"}]}"#,
+            r#"{"a":{"b":[{"c":1,"c":2}]}}"#,
+            r#"{"generationConfig":{"candidateCount":1,"candidateCount":9}}"#,
+            r#"{"m\u006fdel":"a","model":"b"}"#,
+        ] {
+            assert!(probe(body).is_err(), "{body}");
+        }
+        // Repeats in different objects are not repeats; trailing junk is refused.
+        assert!(probe(r#"{"a":{"x":1},"b":{"x":2},"c":[{"x":1},{"x":2}]}"#).is_ok());
+        assert!(probe(r#"{"a":1} x"#).is_err());
     }
 }

@@ -200,7 +200,7 @@ async fn the_head_and_the_body_are_bounded() {
     assert_eq!(status(&raw(&r.sock, &request(LINE, &[], &body)).await), 413);
     assert_eq!(r.up.count(), 0);
     // At the limit it goes through.
-    let at = "{\"model\":\"model-a\"}";
+    let at = "{\"model\":\"model-a\",\"max_tokens\":8}";
     assert!(at.len() <= 64);
     assert_eq!(status(&raw(&r.sock, &request(LINE, &[], at)).await), 200);
 }

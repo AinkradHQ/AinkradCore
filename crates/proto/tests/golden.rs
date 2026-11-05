@@ -652,6 +652,7 @@ fn v2_agent_frames_are_pinned() {
     );
     let report = |gw_seq, kind, status| GatewayReport {
         gw_seq,
+        epoch: 0,
         kind,
         model: None,
         input: 0,
@@ -671,6 +672,7 @@ fn v2_agent_frames_are_pinned() {
         Body::Result(Reply::AgentRead(AgentEvents {
             gateway: vec![
                 GatewayReport {
+                    epoch: 2,
                     model: Some("m-1".to_owned()),
                     input: 11,
                     output: 5,

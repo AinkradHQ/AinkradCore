@@ -195,6 +195,10 @@ pub enum GatewayReportKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GatewayReport {
     pub gw_seq: u64,
+    /// The `epoch` of the start the report was made under (`AgentStart::epoch`), set by the runner
+    /// when it numbers the report. The ledger's key is session, epoch and `gw_seq`.
+    #[serde(default, skip_serializing_if = "is_zero_epoch")]
+    pub epoch: u32,
     pub kind: GatewayReportKind,
     /// The model the request named (checked against the grant), for a usage report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -225,6 +229,27 @@ pub struct GatewayReport {
     /// When the upstream's limit resets, as it said (an RFC 3339 time), for an upstream report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reset_at: Option<String>,
+}
+
+fn is_zero_epoch(n: &u32) -> bool {
+    *n == 0
+}
+
+/// What counts against a [`Ceiling`]'s `tokens`: all four kinds, summed. The one definition: the
+/// gateway's meter and the Core's ledger both call it, so what the gateway refuses and what the
+/// ledger records cannot drift.
+pub fn ceiling_tokens(input: u64, output: u64, cache_read: u64, cache_write: u64) -> u64 {
+    input
+        .saturating_add(output)
+        .saturating_add(cache_read)
+        .saturating_add(cache_write)
+}
+
+impl GatewayReport {
+    /// This report's tokens as a ceiling counts them ([`ceiling_tokens`]).
+    pub fn ceiling_tokens(&self) -> u64 {
+        ceiling_tokens(self.input, self.output, self.cache_read, self.cache_write)
+    }
 }
 
 // No `Debug` on anything carrying a lease (secrets review L4).

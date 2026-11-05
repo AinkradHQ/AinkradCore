@@ -310,6 +310,7 @@ async fn agent_limit_moves_the_ceiling_and_one_sent_during_redemption_is_applied
 fn report(model: &str) -> GatewayReport {
     GatewayReport {
         gw_seq: 0,
+        epoch: 0,
         kind: GatewayReportKind::Usage,
         model: Some(model.to_owned()),
         input: 1,
@@ -371,7 +372,9 @@ async fn reports_have_their_own_numbering_and_acknowledgement_and_a_harness_line
     };
     // Reports the gateway made are numbered from 1 by the driver, whatever they carry.
     for m in ["a", "b"] {
-        r.d.with(SESSION, |live, cfg, s| live.reports.push(cfg, s, report(m)));
+        r.d.with(SESSION, |live, cfg, s| {
+            live.reports.push(cfg, s, live.meta.epoch, report(m))
+        });
     }
     let ev = r.d.read(&read(0)).await.unwrap();
     let seqs: Vec<u64> = ev.gateway.iter().map(|g| g.gw_seq).collect();
@@ -398,21 +401,22 @@ async fn unacknowledged_reports_survive_a_restart_and_numbering_goes_on() {
         )
         .unwrap()
     };
+    secrets::private_dir(&config.dir.join(SESSION)).unwrap();
     let mut reports = Reports::default();
     for m in ["a", "b", "c"] {
-        reports.push(&config, SESSION, report(m));
+        reports.push(&config, SESSION, 0, report(m));
     }
     let loaded = Reports::load(&config, SESSION, &meta(1));
     let seqs: Vec<u64> = loaded.batch().iter().map(|g| g.gw_seq).collect();
     assert_eq!(seqs, [2, 3], "the acknowledged one is not held again");
     let mut loaded = loaded;
-    loaded.push(&config, SESSION, report("d"));
+    loaded.push(&config, SESSION, 0, report("d"));
     assert_eq!(loaded.batch().last().unwrap().gw_seq, 4);
     // All acknowledged and none new: numbering continues from the acknowledgement.
     let none = Reports::load(&config, SESSION, &meta(4));
     assert!(none.batch().is_empty());
     let mut none = none;
-    none.push(&config, SESSION, report("e"));
+    none.push(&config, SESSION, 0, report("e"));
     assert_eq!(none.batch()[0].gw_seq, 5);
     let mode = std::os::unix::fs::PermissionsExt::mode(
         &std::fs::metadata(path(&config, SESSION))
@@ -420,5 +424,62 @@ async fn unacknowledged_reports_survive_a_restart_and_numbering_goes_on() {
             .permissions(),
     );
     assert_eq!(mode & 0o777, 0o600);
+    drop(root);
+}
+
+#[tokio::test]
+async fn a_report_the_disk_cannot_hold_fails_closed_and_the_epoch_is_stamped() {
+    let (root, config) = dirs("gw-broken");
+    secrets::private_dir(&config.dir.join(SESSION)).unwrap();
+    // The file's path is a directory: the append fails.
+    std::fs::create_dir(path(&config, SESSION)).unwrap();
+    let mut reports = Reports::default();
+    assert!(!reports.full());
+    reports.push(&config, SESSION, 3, report("a"));
+    assert!(
+        reports.full(),
+        "a failed write stops the gateway admitting requests"
+    );
+    let held = reports.batch();
+    assert_eq!(
+        (held[0].gw_seq, held[0].epoch),
+        (1, 3),
+        "kept in memory, numbered, stamped"
+    );
+    // Acknowledging does not lift it: the numbering may not be trusted again this run.
+    reports.acknowledge(&config, SESSION, 1);
+    assert!(reports.full());
+    drop(root);
+}
+
+#[tokio::test]
+async fn acknowledged_reports_are_dropped_from_the_file_and_a_reload_seeds_the_cap() {
+    let (root, config) = dirs("gw-compact");
+    secrets::private_dir(&config.dir.join(SESSION)).unwrap();
+    let mut reports = Reports::default();
+    for _ in 0..(COMPACT_AT + 5) {
+        reports.push(&config, SESSION, 0, report("a"));
+    }
+    let lines = |c: &AgentConfig| {
+        std::fs::read_to_string(path(c, SESSION))
+            .unwrap()
+            .lines()
+            .count()
+    };
+    assert_eq!(lines(&config), COMPACT_AT + 5);
+    reports.acknowledge(&config, SESSION, COMPACT_AT as u64);
+    assert_eq!(lines(&config), 5, "the acknowledged lines are gone");
+    reports.push(&config, SESSION, 0, report("b")); // appended to the new file
+    assert_eq!(lines(&config), 6);
+    assert_eq!(
+        reports.batch().last().unwrap().gw_seq,
+        COMPACT_AT as u64 + 6
+    );
+    // A reload holding more than the cap starts the gateway refusing.
+    let mut many = Reports::default();
+    for _ in 0..MAX_HELD {
+        many.held.push_back(report("c"));
+    }
+    assert!(many.full());
     drop(root);
 }

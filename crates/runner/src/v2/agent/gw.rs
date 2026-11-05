@@ -13,6 +13,7 @@
 //! - **`gateway.test`** is the one-shot request behind `POST /accounts/{id}/test`.
 
 use std::collections::VecDeque;
+use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
 
@@ -41,34 +42,63 @@ pub(super) struct Reports {
     last: u64,
     /// The newest `gw_seq` an answer carried.
     shown: u64,
+    /// `gateway.jsonl`, open for appending (opened once: no directory work per report).
+    file: Option<File>,
+    /// Lines in the file the Core has acknowledged since it was last rewritten.
+    stale: usize,
+    /// A report could not be written: nothing more is admitted, for good (a number is never
+    /// reused, and a report the disk does not hold is not one a restart can resend).
+    broken: bool,
 }
+
+/// Acknowledged lines the file keeps before it is rewritten without them.
+const COMPACT_AT: usize = 256;
 
 impl Reports {
     /// The reports a restart finds: those the Core has not acknowledged.
     pub(super) fn load(cfg: &AgentConfig, session: &str, meta: &Meta) -> Reports {
         let text = std::fs::read_to_string(path(cfg, session)).unwrap_or_default();
-        let held: VecDeque<GatewayReport> = text
+        let all: Vec<GatewayReport> = text
             .lines()
             .filter_map(|l| serde_json::from_str::<GatewayReport>(l).ok())
-            .filter(|r| r.gw_seq > meta.gw_acked)
             .collect();
-        let last = held.back().map_or(meta.gw_acked, |r| r.gw_seq);
+        let held: VecDeque<GatewayReport> = all
+            .iter()
+            .filter(|r| r.gw_seq > meta.gw_acked)
+            .cloned()
+            .collect();
+        let last = all.last().map_or(0, |r| r.gw_seq).max(meta.gw_acked);
         Reports {
+            stale: all.len() - held.len(),
             held,
             last,
-            shown: 0,
+            ..Reports::default()
         }
     }
 
-    fn push(&mut self, cfg: &AgentConfig, session: &str, mut report: GatewayReport) {
+    fn append(&mut self, cfg: &AgentConfig, session: &str, line: &str) -> std::io::Result<()> {
+        if self.file.is_none() {
+            self.file = Some(secrets::private_file(&path(cfg, session), true)?);
+        }
+        let f = self.file.as_mut().expect("opened above");
+        f.write_all(line.as_bytes())
+    }
+
+    /// Numbers a report (`gw_seq`, and the `epoch` it was made under), writes it, and holds it.
+    pub(super) fn push(
+        &mut self,
+        cfg: &AgentConfig,
+        session: &str,
+        epoch: u32,
+        mut report: GatewayReport,
+    ) {
         self.last += 1;
         report.gw_seq = self.last;
+        report.epoch = epoch;
         let line = serde_json::to_string(&report).expect("a report serializes") + "\n";
-        let written = secrets::private_dir(&cfg.dir.join(session))
-            .and_then(|()| secrets::private_file(&path(cfg, session), true))
-            .and_then(|mut f| f.write_all(line.as_bytes()));
-        if let Err(e) = written {
-            tracing::error!(session, error = %e, "appending a gateway report failed");
+        if let Err(e) = self.append(cfg, session, &line) {
+            tracing::error!(session, error = %e, "appending a gateway report failed; the gateway stops admitting requests");
+            self.broken = true;
         }
         self.held.push_back(report);
     }
@@ -86,8 +116,39 @@ impl Reports {
         self.held.iter().take(256).cloned().collect()
     }
 
-    fn full(&self) -> bool {
-        self.held.len() >= MAX_HELD
+    /// The gateway must not admit requests: the Core is too far behind, or a write failed.
+    pub(super) fn full(&self) -> bool {
+        self.broken || self.held.len() >= MAX_HELD
+    }
+
+    /// Drops the acknowledged reports, and rewrites the file without them once enough pile up.
+    fn acknowledge(&mut self, cfg: &AgentConfig, session: &str, after: u64) {
+        let mut dropped = 0;
+        while self.held.front().is_some_and(|r| r.gw_seq <= after) {
+            self.held.pop_front();
+            dropped += 1;
+        }
+        self.stale += dropped;
+        if self.stale >= COMPACT_AT || (self.held.is_empty() && self.stale > 0) {
+            let text: String = self
+                .held
+                .iter()
+                .map(|r| serde_json::to_string(r).expect("a report serializes") + "\n")
+                .collect();
+            let tmp = path(cfg, session).with_extension("jsonl.tmp");
+            let done = secrets::private_file(&tmp, false)
+                .and_then(|mut f| f.write_all(text.as_bytes()).and_then(|()| f.sync_all()))
+                .and_then(|()| std::fs::rename(&tmp, path(cfg, session)));
+            match done {
+                Ok(()) => {
+                    self.file = None; // the old file is gone: open the new one on the next append
+                    self.stale = 0;
+                }
+                Err(e) => {
+                    tracing::error!(session, error = %e, "compacting the gateway reports failed")
+                }
+            }
+        }
     }
 }
 
@@ -95,9 +156,7 @@ impl Reports {
 pub(super) fn ack(cfg: &AgentConfig, session: &str, live: &mut Live, after: u64) {
     let after = after.min(live.reports.last);
     if after > live.meta.gw_acked {
-        while live.reports.held.front().is_some_and(|r| r.gw_seq <= after) {
-            live.reports.held.pop_front();
-        }
+        live.reports.acknowledge(cfg, session, after);
         live.meta.gw_acked = after;
         save_meta(cfg, session, &live.meta);
         if let Some(g) = live.gateway.as_ref() {
@@ -106,6 +165,7 @@ pub(super) fn ack(cfg: &AgentConfig, session: &str, live: &mut Live, after: u64)
     }
     // Everything delivered and nothing more to come: the file goes, the state stays.
     if live.meta.state == AgentState::Ended && live.reports.held.is_empty() {
+        live.reports.file = None;
         let _ = std::fs::remove_file(path(cfg, session));
     }
 }
@@ -125,7 +185,7 @@ impl AgentDriver {
             while let Some(event) = events.recv().await {
                 me.with(&session, |live, cfg, s| match event {
                     Event::Report(report) => {
-                        live.reports.push(cfg, s, report);
+                        live.reports.push(cfg, s, live.meta.epoch, report);
                         meter.set_unreported(live.reports.full());
                     }
                     Event::Closed(why) => {

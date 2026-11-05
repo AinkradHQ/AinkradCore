@@ -38,6 +38,12 @@ impl Usage {
     }
 }
 
+/// A usage object, when the value is one: `"usage": null` (a Responses `response.created`, every
+/// chat chunk but the last with `include_usage`) reports nothing and is not a report.
+fn object(v: Option<&Value>) -> Option<&Value> {
+    v.filter(|u| u.is_object())
+}
+
 fn n(v: &Value, path: &[&str]) -> u64 {
     path.iter()
         .try_fold(v, |v, k| v.get(*k))
@@ -49,7 +55,7 @@ fn n(v: &Value, path: &[&str]) -> u64 {
 fn usage_of(wire: Wire, v: &Value) -> Option<Usage> {
     match wire {
         Wire::AnthropicMessages => {
-            let u = v.pointer("/message/usage").or_else(|| v.get("usage"))?;
+            let u = object(v.pointer("/message/usage")).or_else(|| object(v.get("usage")))?;
             Some(Usage {
                 input: n(u, &["input_tokens"]),
                 output: n(u, &["output_tokens"]),
@@ -58,7 +64,7 @@ fn usage_of(wire: Wire, v: &Value) -> Option<Usage> {
             })
         }
         Wire::OpenaiResponses => {
-            let u = v.pointer("/response/usage").or_else(|| v.get("usage"))?;
+            let u = object(v.pointer("/response/usage")).or_else(|| object(v.get("usage")))?;
             let total = n(u, &["input_tokens"]).max(n(u, &["prompt_tokens"]));
             let cached = n(u, &["input_tokens_details", "cached_tokens"])
                 .max(n(u, &["prompt_tokens_details", "cached_tokens"]));
@@ -70,7 +76,7 @@ fn usage_of(wire: Wire, v: &Value) -> Option<Usage> {
             })
         }
         Wire::GeminiGenerate => {
-            let u = v.get("usageMetadata").or_else(|| v.get("usage_metadata"))?;
+            let u = object(v.get("usageMetadata")).or_else(|| object(v.get("usage_metadata")))?;
             let cached = n(u, &["cachedContentTokenCount"]);
             Some(Usage {
                 input: n(u, &["promptTokenCount"])
@@ -236,6 +242,14 @@ impl Scan {
         self.reported.then_some(self.usage)
     }
 
+    /// What the reply reported, when it can be taken as the count: it reported some input (plain
+    /// or cached), and nothing could not be read. A report of no input at all is a partial one
+    /// (Anthropic's `message_start` cut short, a Gemini chunk before its metadata).
+    pub(crate) fn exact(&self) -> Option<Usage> {
+        self.reported()
+            .filter(|u| u.input + u.cache_read + u.cache_write > 0 && !self.overflow)
+    }
+
     /// Output tokens so far by the estimate: streamed characters / 4 (a JSON body, which is not
     /// read until its end, by its bytes / 4).
     pub(crate) fn estimated_output(&self) -> u64 {
@@ -244,6 +258,7 @@ impl Scan {
     }
 
     /// Part of the reply could not be read: no count from it is exact.
+    #[cfg(test)]
     pub(crate) fn overflowed(&self) -> bool {
         self.overflow
     }
@@ -254,6 +269,9 @@ impl Scan {
         match self.reported() {
             Some(mut u) => {
                 u.output = u.output.max(self.estimated_output());
+                if u.input + u.cache_read + u.cache_write == 0 {
+                    u.input = input_floor;
+                }
                 u
             }
             None => Usage {

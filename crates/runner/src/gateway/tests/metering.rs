@@ -439,3 +439,143 @@ async fn reports_the_core_has_not_acknowledged_fail_closed() {
         200
     );
 }
+
+#[tokio::test]
+async fn a_request_that_may_have_been_served_is_charged_its_estimate_never_nothing() {
+    // The upstream read the request and then dropped the connection: a 502 to the harness, and
+    // the hold (8 output tokens and the body's input) is spent, approximately.
+    let mut r = rig(Opts::anthropic(vec![Step::Abrupt])).await;
+    let resp = raw(&r.sock, &request(LINE, &[], &model_body())).await;
+    assert_eq!(status(&resp), 502);
+    let rep = r.report().await;
+    assert_eq!(rep.kind, GatewayReportKind::Usage);
+    assert!(
+        rep.approximate && rep.output == 8 && rep.input > 0,
+        "{rep:?}"
+    );
+    assert!(r.no_report());
+    assert!(r.meter().spent().0 > 8);
+    // A refused address or a bad certificate never reached the upstream: nothing is spent.
+    let mut o = Opts::anthropic(ok_script());
+    o.answers = vec![std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))];
+    let mut r = rig(o).await;
+    raw(&r.sock, &request(LINE, &[], &model_body())).await;
+    assert_eq!(r.report().await.kind, GatewayReportKind::Upstream);
+    assert_eq!(r.meter().spent(), (0, 0));
+}
+
+#[tokio::test]
+async fn an_abort_while_the_upstream_is_still_thinking_is_charged_its_estimate() {
+    // The upstream has the request and sends nothing: the gateway is dropped (a stop).
+    let mut r = rig(Opts::anthropic(vec![Step::Wait(Arc::new(Notify::new()))])).await;
+    let mut c = UnixStream::connect(&r.sock).await.unwrap();
+    c.write_all(&request(LINE, &[], &model_body()))
+        .await
+        .unwrap();
+    for _ in 0..250 {
+        if r.up.count() == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(r.up.count(), 1, "the request reached the upstream");
+    r.close();
+    let rep = r.report().await;
+    assert!(
+        rep.approximate && rep.output == 8 && rep.input > 0,
+        "{rep:?}"
+    );
+    assert!(r.no_report());
+}
+
+#[tokio::test]
+async fn count_tokens_costs_nothing_and_reports_no_usage() {
+    let body = r#"{"input_tokens":5}"#;
+    let reply = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    // A ceiling too small for any held request: a free one still goes.
+    let mut r = rig(opts(vec![Step::Send(reply.into_bytes())], 1)).await;
+    let resp = raw(
+        &r.sock,
+        &request(
+            "POST /v1/messages/count_tokens HTTP/1.1",
+            &[],
+            &model_body(),
+        ),
+    )
+    .await;
+    assert_eq!(status(&resp), 200, "{}", String::from_utf8_lossy(&resp));
+    assert!(r.no_report(), "count_tokens reported usage");
+    assert_eq!(r.meter().spent(), (0, 0));
+    // But the model and tool checks still apply to it.
+    let resp = raw(
+        &r.sock,
+        &request(
+            "POST /v1/messages/count_tokens HTTP/1.1",
+            &[],
+            r#"{"model":"unpriced"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status(&resp), 403);
+}
+
+#[tokio::test]
+async fn a_reply_that_is_not_streamed_must_name_its_cap() {
+    let r = rig(Opts::anthropic(ok_script())).await;
+    let bare = format!("{{\"model\":\"{MODEL}\"}}");
+    let resp = raw(&r.sock, &request(LINE, &[], &bare)).await;
+    assert_eq!(status(&resp), 400);
+    assert!(body_of(&resp).contains("max_output_required"));
+    assert_eq!(r.up.count(), 0);
+    let streamed = format!("{{\"model\":\"{MODEL}\",\"stream\":true}}");
+    assert_eq!(
+        status(&raw(&r.sock, &request(LINE, &[], &streamed)).await),
+        200
+    );
+}
+
+#[tokio::test]
+async fn more_candidates_background_runs_and_hidden_repeats_are_refused_over_the_wire() {
+    let o = Opts::of(
+        Wire::OpenaiResponses,
+        "api.openai.com",
+        "/v1",
+        "openai",
+        "sk-proj-",
+        ok_script(),
+    );
+    let r = rig(o).await;
+    let line = "POST /v1/responses HTTP/1.1";
+    for body in [
+        format!("{{\"model\":\"{MODEL}\",\"stream\":true,\"background\":true}}"),
+        format!("{{\"model\":\"{MODEL}\",\"stream\":true,\"n\":4}}"),
+    ] {
+        let resp = raw(&r.sock, &request(line, &[], &body)).await;
+        assert_eq!(status(&resp), 403, "{body}");
+        assert!(body_of(&resp).contains("param_not_allowed"));
+    }
+    let hidden = format!(
+        "{{\"model\":\"{MODEL}\",\"stream\":true,\"tools\":[{{\"type\":\"web_search\",\"type\":\"function\"}}]}}"
+    );
+    assert_eq!(
+        status(&raw(&r.sock, &request(line, &[], &hidden)).await),
+        400
+    );
+    assert_eq!(r.up.count(), 0);
+}
+
+#[tokio::test]
+async fn an_upstream_that_refuses_the_key_ends_the_sessions_requests() {
+    let reply = "HTTP/1.1 401 Unauthorized\r\nContent-Length: 2\r\n\r\n{}";
+    let mut r = rig(Opts::anthropic(vec![Step::Send(reply.as_bytes().to_vec())])).await;
+    let first = raw(&r.sock, &request(LINE, &[], &model_body())).await;
+    assert_eq!(status(&first), 401, "the refusal passes through");
+    assert_eq!(r.report().await.status, UpstreamStatus::AuthFailed);
+    let second = raw(&r.sock, &request(LINE, &[], &model_body())).await;
+    assert_eq!(status(&second), 403);
+    assert!(body_of(&second).contains("gateway_account_unusable"));
+    assert_eq!(r.up.count(), 1, "no retry storm: the second never left");
+}

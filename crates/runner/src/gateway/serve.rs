@@ -16,15 +16,14 @@ use tokio::net::UnixStream;
 use tokio::time::{Instant, timeout};
 use zeroize::Zeroizing;
 
-use super::charge::{Charge, signal};
+use super::charge::Charge;
 use super::dial::DialError;
 use super::meter::{Denied, estimate};
-use super::probe::{Probe, betas};
+use super::probe::{self, betas};
 use super::request::{MAX_HEAD, Refusal, Request, header_ok, refuse};
 use super::route::route;
-use super::status::of_dial;
 use super::stream::respond;
-use super::{Config, Event, Shared};
+use super::{Config, Shared};
 
 /// From accepting a connection to the blank line ending the head.
 const HEAD: Duration = Duration::from_secs(10);
@@ -257,7 +256,7 @@ async fn serve(sh: &Shared, c: &mut UnixStream) -> Result<(), End> {
     if body.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{') {
         return Err(refuse(400, "bad_json").into());
     }
-    let probe: Probe = serde_json::from_slice(&body).map_err(|_| refuse(400, "bad_json"))?;
+    let probe = probe::parse(&body).map_err(|_| refuse(400, "bad_json"))?;
     // The model: in the path on the Gemini wire, in the body on the others.
     let model = match cfg.upstream.wire {
         Wire::GeminiGenerate => routed.path_model.clone(),
@@ -266,7 +265,7 @@ async fn serve(sh: &Shared, c: &mut UnixStream) -> Result<(), End> {
     let Some(model) = model.filter(|m| cfg.models.contains(m)) else {
         return Err(refuse(403, "model_not_allowed").into());
     };
-    if let Some(code) = probe.network_tool() {
+    if let Some(code) = probe.refusal() {
         return Err(refuse(403, code).into());
     }
     let headers = upstream_headers(cfg, &req)?;
@@ -276,11 +275,32 @@ async fn serve(sh: &Shared, c: &mut UnixStream) -> Result<(), End> {
         .price(&model)
         .ok_or(refuse(403, "model_not_allowed"))?
         .clone();
-    let (held, est) = estimate(&price, body.len(), probe.max_output());
+    // A request that costs nothing (`count_tokens`) is held at nothing. Any other is held at its
+    // estimate, and one that is not streamed must say how long its reply may be.
+    let (held, est) = if routed.free {
+        (Default::default(), Default::default())
+    } else {
+        let cap = probe
+            .output_cap(routed.streams)
+            .ok_or(refuse(400, "max_output_required"))?;
+        estimate(&price, body.len(), cap)
+    };
     let reservation = cfg.meter.reserve(est).map_err(|d| match d {
         Denied::Ceiling => refuse(429, "gateway_ceiling"),
         Denied::Unreported => refuse(429, "gateway_unreported"),
+        Denied::AuthFailed => refuse(403, "gateway_account_unusable"),
     })?;
+    // From here on the body may reach the upstream: the account exists before the dial, so an
+    // error after the write or an abort is charged as the estimate, never as nothing.
+    let mut charge = Charge::new(
+        reservation,
+        sh.events.clone(),
+        model,
+        price,
+        held,
+        cfg.upstream.wire,
+        routed.free,
+    );
     let pairs: Vec<(&str, &str)> = headers
         .iter()
         .map(|(n, v)| (n.as_str(), v.as_str()))
@@ -300,21 +320,10 @@ async fn serve(sh: &Shared, c: &mut UnixStream) -> Result<(), End> {
         Ok(up) => up,
         Err(e) => {
             tracing::debug!(error = ?e, "gateway upstream not opened");
-            // The hold is released as `reservation` drops; the Core hears the class.
-            let _ = sh
-                .events
-                .send(Event::Report(signal(of_dial(e), None, None)));
+            charge.dial_failed(e);
             return Err(dial_refusal(e).into());
         }
     };
-    let mut charge = Charge::new(
-        reservation,
-        sh.events.clone(),
-        model,
-        price,
-        held.input,
-        cfg.upstream.wire,
-        &up,
-    );
+    charge.attach(&up);
     respond(cfg, c, up, &mut charge).await
 }

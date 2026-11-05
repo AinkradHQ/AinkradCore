@@ -61,11 +61,7 @@ pub(crate) fn cost_of(p: &ModelPrice, u: &Usage) -> Cost {
         + usd(u.cache_read, p.cache_read)
         + usd(u.cache_write, p.cache_write);
     Cost {
-        tokens: u
-            .input
-            .saturating_add(u.output)
-            .saturating_add(u.cache_read)
-            .saturating_add(u.cache_write),
+        tokens: ainkrad_proto::v2::ceiling_tokens(u.input, u.output, u.cache_read, u.cache_write),
         usd: micros(sum),
     }
 }
@@ -102,6 +98,8 @@ pub struct Meter {
     /// The Core has not acknowledged the reports it holds: nothing more is spent (fail closed,
     /// never a dropped usage report).
     unreported: AtomicBool,
+    /// The upstream refused the key: nothing more is sent with it.
+    auth_failed: AtomicBool,
 }
 
 /// Why a request was not admitted.
@@ -109,6 +107,8 @@ pub struct Meter {
 pub(crate) enum Denied {
     Ceiling,
     Unreported,
+    /// The upstream answered 401/403 to this session's key.
+    AuthFailed,
 }
 
 impl Meter {
@@ -122,6 +122,7 @@ impl Meter {
             prices,
             changed: watch::channel(0).0,
             unreported: AtomicBool::new(false),
+            auth_failed: AtomicBool::new(false),
         }
     }
 
@@ -171,6 +172,9 @@ impl Meter {
 
     /// Holds `est` against the ceiling, or says why not.
     pub(crate) fn reserve(self: &Arc<Self>, est: Cost) -> Result<Reservation, Denied> {
+        if self.auth_failed.load(Ordering::SeqCst) {
+            return Err(Denied::AuthFailed);
+        }
         if self.unreported.load(Ordering::SeqCst) {
             return Err(Denied::Unreported);
         }
@@ -207,6 +211,11 @@ impl Reservation {
         Meter::is_stopped(&s.ceiling)
             || others.tokens > s.ceiling.tokens
             || others.usd > s.ceiling.usd_micros
+    }
+
+    /// The upstream refused the key: no more requests this session (no retry storm).
+    pub(crate) fn fail_auth(&self) {
+        self.meter.auth_failed.store(true, Ordering::SeqCst);
     }
 
     /// Replaces the hold with what was spent.
@@ -355,6 +364,14 @@ mod tests {
         assert_eq!(m.reserve(Cost::default()).err(), Some(Denied::Unreported));
         m.set_unreported(false);
         assert!(m.reserve(Cost::default()).is_ok());
+    }
+
+    #[test]
+    fn a_refused_key_stops_every_later_request() {
+        let m = meter(1000, 1000);
+        let r = m.reserve(Cost::default()).unwrap();
+        r.fail_auth();
+        assert_eq!(m.reserve(Cost::default()).err(), Some(Denied::AuthFailed));
     }
 
     #[tokio::test]

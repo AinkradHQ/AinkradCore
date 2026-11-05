@@ -534,6 +534,8 @@ impl AgentDriver {
                             if let Some(limit) = live.pending_limit.take() {
                                 gateway.meter().set_ceiling(limit);
                             }
+                            // Reports a restart found still unacknowledged count from the start.
+                            gateway.meter().set_unreported(live.reports.full());
                             live.gateway = Some(gateway);
                             installed = true;
                         }

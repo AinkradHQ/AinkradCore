@@ -165,3 +165,89 @@ fn junk_and_oversized_input_never_panics_and_marks_the_scan_inexact() {
     assert!(s.overflowed());
     assert_eq!(s.reported(), None);
 }
+
+const RESPONSES_STREAM: &str = "event: response.created\n\
+data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"usage\":null}}\n\n\
+event: response.in_progress\n\
+data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"r\",\"usage\":null}}\n\n\
+event: response.output_text.delta\n\
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"twelve chars\"}\n\n\
+event: response.completed\n\
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"usage\":{\"input_tokens\":200,\"input_tokens_details\":{\"cached_tokens\":50},\"output_tokens\":9}}}\n\n";
+
+#[test]
+fn a_null_usage_is_not_a_report_so_a_responses_stream_cut_before_completion_reports_nothing() {
+    let whole = sse(Wire::OpenaiResponses, RESPONSES_STREAM, 13);
+    assert_eq!(
+        whole.exact(),
+        Some(Usage {
+            input: 150,
+            output: 9,
+            cache_read: 50,
+            cache_write: 0
+        })
+    );
+    // Cut after the deltas, before `response.completed`: `usage: null` was all it said.
+    let cut = &RESPONSES_STREAM[..RESPONSES_STREAM.find("event: response.completed").unwrap()];
+    let s = sse(Wire::OpenaiResponses, cut, 13);
+    assert_eq!(s.reported(), None, "a null usage counted as a report");
+    assert_eq!(s.exact(), None);
+    let running = s.running(321);
+    assert_eq!(
+        (running.input, running.output),
+        (321, 3),
+        "the input floor, the text / 4"
+    );
+}
+
+#[test]
+fn chat_chunks_with_include_usage_report_only_in_the_last_one() {
+    let chunks = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}],\"usage\":null}\n\n\
+data: {\"choices\":[{\"delta\":{\"content\":\"hello there!\"}}],\"usage\":null}\n\n\
+data: {\"choices\":[],\"usage\":{\"prompt_tokens\":30,\"completion_tokens\":6,\"prompt_tokens_details\":{\"cached_tokens\":10}}}\n\n\
+data: [DONE]\n\n";
+    let s = sse(Wire::OpenaiResponses, chunks, 7);
+    assert_eq!(
+        s.exact(),
+        Some(Usage {
+            input: 20,
+            output: 6,
+            cache_read: 10,
+            cache_write: 0
+        })
+    );
+    let cut = &chunks[..chunks.find("data: {\"choices\":[],").unwrap()];
+    let s = sse(Wire::OpenaiResponses, cut, 7);
+    assert_eq!(s.reported(), None);
+    assert_eq!(s.running(40).input, 40);
+}
+
+#[test]
+fn a_report_with_no_input_is_partial_and_the_floor_stands_in() {
+    // Gemini metadata before the counts are in; Anthropic's delta before a start was read.
+    let gemini = "data: {\"candidates\":[],\"usageMetadata\":{\"trafficType\":\"ON_DEMAND\"}}\n\n";
+    let s = sse(Wire::GeminiGenerate, gemini, 5);
+    assert!(s.reported().is_some(), "an object is a report");
+    assert_eq!(s.exact(), None, "but with no input it is not the count");
+    assert_eq!(s.running(77).input, 77);
+    let delta = "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":4}}\n\n";
+    let s = sse(Wire::AnthropicMessages, delta, 5);
+    assert_eq!(s.exact(), None);
+    let u = s.running(55);
+    assert_eq!((u.input, u.output), (55, 4));
+    // A non-object usage of any kind is no report, on any wire.
+    for (wire, line) in [
+        (Wire::AnthropicMessages, "data: {\"usage\":null}\n\n"),
+        (
+            Wire::AnthropicMessages,
+            "data: {\"message\":{\"usage\":[]}}\n\n",
+        ),
+        (
+            Wire::OpenaiResponses,
+            "data: {\"response\":{\"usage\":\"x\"}}\n\n",
+        ),
+        (Wire::GeminiGenerate, "data: {\"usageMetadata\":null}\n\n"),
+    ] {
+        assert_eq!(sse(wire, line, 3).reported(), None, "{line}");
+    }
+}

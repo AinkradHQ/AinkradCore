@@ -13,6 +13,10 @@ use super::dial::DialError;
 
 /// Nothing read for this long ends the response.
 pub(super) const IDLE: Duration = Duration::from_secs(30);
+/// How long the head of a response may take to come: a generation that is not streamed sends
+/// nothing until it is done. The request's total deadline caps it; once the head is in, a
+/// silence of [`IDLE`] ends the body.
+const HEAD_WAIT: Duration = Duration::from_secs(30 * 60);
 /// The largest response head kept.
 const MAX_HEAD: usize = 32 * 1024;
 /// The longest chunk-size or trailer line.
@@ -157,6 +161,8 @@ pub(super) struct Rd<R> {
     r: R,
     buf: Vec<u8>,
     at: usize,
+    /// How long a read may wait.
+    idle: Duration,
 }
 
 impl<R: AsyncReadExt + Unpin> Rd<R> {
@@ -165,6 +171,7 @@ impl<R: AsyncReadExt + Unpin> Rd<R> {
             r,
             buf: Vec::new(),
             at: 0,
+            idle: IDLE,
         }
     }
 
@@ -183,7 +190,7 @@ impl<R: AsyncReadExt + Unpin> Rd<R> {
     /// Reads more. `Ok(false)` only for a clean end of stream.
     pub(super) async fn fill(&mut self) -> Result<bool, DialError> {
         let mut chunk = [0u8; 8192];
-        match timeout(IDLE, self.r.read(&mut chunk)).await {
+        match timeout(self.idle, self.r.read(&mut chunk)).await {
             Ok(Ok(0)) => Ok(false),
             Ok(Ok(n)) => {
                 self.buf.extend_from_slice(&chunk[..n]);
@@ -250,6 +257,7 @@ pub(super) async fn open_reply<R: AsyncReadExt + Unpin>(
     deadline: Instant,
 ) -> Result<Opened<R>, DialError> {
     let mut rd = Rd::new(r);
+    rd.idle = HEAD_WAIT;
     let mut interim = 0;
     let head = loop {
         let head = parse_head(&rd.head().await?)?;
@@ -260,6 +268,7 @@ pub(super) async fn open_reply<R: AsyncReadExt + Unpin>(
             _ => break head,
         }
     };
+    rd.idle = IDLE;
     let framing = framing(head.status, &head.headers)?;
     Ok(Opened {
         status: head.status,

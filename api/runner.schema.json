@@ -1207,6 +1207,12 @@
           "minimum": 0,
           "type": "integer"
         },
+        "epoch": {
+          "description": "The `epoch` of the start the report was made under (`AgentStart::epoch`), set by the runner\nwhen it numbers the report. The ledger's key is session, epoch and `gw_seq`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "gw_seq": {
           "format": "uint64",
           "minimum": 0,
