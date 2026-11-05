@@ -23,6 +23,7 @@ pub mod exec;
 mod meter;
 pub mod opencode;
 mod proc;
+mod safe_fs;
 mod sandbox;
 pub use sandbox::identity as process_identity;
 pub use sandbox::reap_group;

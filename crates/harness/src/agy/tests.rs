@@ -387,30 +387,3 @@ fn a_gateway_session_names_its_model_provider_and_no_other_does() {
     assert_eq!(v["toolPermission"], "always-proceed");
     assert!(!SETTINGS.contains("modelProvider"));
 }
-
-/// The runner writes `settings.json` into a home the agent can write to: a link planted at the
-/// file or at its temp name is replaced, never written through.
-#[test]
-fn settings_are_written_by_rename_and_never_through_a_planted_link() {
-    let dir = std::env::temp_dir().join(format!("citadel-agy-settings-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let victim = dir.join("victim");
-    std::fs::write(&victim, "keep").unwrap();
-    for name in ["settings.json", "settings.json.runner-tmp"] {
-        std::os::unix::fs::symlink(&victim, dir.join(name)).unwrap();
-    }
-    write_replacing(&dir, "settings.json", GATEWAY_SETTINGS).unwrap();
-    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
-    let file = dir.join("settings.json");
-    assert!(
-        std::fs::symlink_metadata(&file)
-            .unwrap()
-            .file_type()
-            .is_file()
-    );
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), GATEWAY_SETTINGS);
-    write_replacing(&dir, "settings.json", SETTINGS).unwrap();
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), SETTINGS);
-    let _ = std::fs::remove_dir_all(&dir);
-}

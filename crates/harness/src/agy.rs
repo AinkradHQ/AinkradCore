@@ -18,6 +18,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
+use std::path::Path;
 
 use serde_json::{Value, json};
 use tokio::process::Command;
@@ -45,27 +46,6 @@ fn settings_for(spec: &Spec) -> &'static str {
         Some(_) => GATEWAY_SETTINGS,
         None => SETTINGS,
     }
-}
-
-/// Writes `dir/name`, replacing what is there. `dir` is in the agent's writable home, so the old
-/// file may be a link to anywhere: a link at the name or at the temp name is removed (not followed),
-/// the temp file is made with `create_new`, and a rename puts it in place.
-fn write_replacing(dir: &std::path::Path, name: &str, text: &str) -> io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let tmp = dir.join(format!("{name}.runner-tmp"));
-    match std::fs::remove_file(&tmp) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
-        _ => {}
-    }
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&tmp)?;
-    f.write_all(text.as_bytes())?;
-    drop(f);
-    std::fs::rename(&tmp, dir.join(name))
 }
 
 /// The argv: flags only, `-p=` last (`-p` takes the next argument as its prompt).
@@ -115,13 +95,16 @@ pub fn mcp_config(url: &str, token: &str) -> Value {
 // ponytail: one home per runner, so two agy runs at once would share these links: the v2
 // driver admits one agy at a time (`one_at_a_time`). A home per run is the upgrade.
 fn link_files(spec: &Spec) -> io::Result<()> {
+    // The home is the agent's to write in: no link may stand where a directory belongs, or the
+    // removals and links below would land outside it.
+    std::fs::create_dir_all(&spec.config_dir)?;
+    crate::safe_fs::real_dir(&spec.config_dir, Path::new(".gemini/config"))?;
     let gemini = spec.config_dir.join(".gemini");
     let links = [
         (&spec.mcp_config, gemini.join("config/mcp_config.json")),
         (&spec.instructions, gemini.join("GEMINI.md")),
     ];
     for (file, at) in links {
-        std::fs::create_dir_all(at.parent().expect("a parent"))?;
         match std::fs::remove_file(&at) {
             Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
             _ => {}
@@ -311,8 +294,8 @@ impl Agy {
         }
         link_files(spec)?;
         let settings = spec.config_dir.join(".gemini/antigravity-cli");
-        std::fs::create_dir_all(&settings)?;
-        write_replacing(&settings, "settings.json", settings_for(spec))?;
+        crate::safe_fs::real_dir(&spec.config_dir, Path::new(".gemini/antigravity-cli"))?;
+        crate::safe_fs::write_replacing(&settings, "settings.json", settings_for(spec))?;
         Ok(Self {
             proc: Proc::start(spec, launch(spec, resume)).await?,
             decoder: Decoder {
@@ -381,5 +364,7 @@ impl Harness for Agy {
     }
 }
 
+#[cfg(test)]
+mod links_tests;
 #[cfg(test)]
 mod tests;

@@ -89,6 +89,11 @@ pub fn args(spec: &Spec, resume: Option<&str>) -> Vec<String> {
     ]
     .map(str::to_owned)
     .into();
+    // A gateway session's base URL and placeholder key are pinned in the flag settings, which
+    // outrank the workspace's `.claude/settings.local.json` that the agent can write.
+    if let Some(at) = args.iter().position(|a| a == "--settings") {
+        args[at + 1] = settings::flag(spec);
+    }
     args.push(spec.model.clone());
     let mut flag = |name: &str, value: String| args.extend([name.to_owned(), value]);
     if let Some(file) = &spec.instructions {
@@ -475,5 +480,6 @@ impl Harness for Claude {
     }
 }
 
+mod settings;
 #[cfg(test)]
 mod tests;
