@@ -38,11 +38,11 @@ fn checked(harness: &str, secrets: &[SessionSecret]) -> Result<(), Invalid> {
 fn an_account_secret_is_delivered_only_under_its_harnesss_own_variable() {
     // Its own variable: accepted, per harness.
     for (harness, account, var) in [
-        ("claude", "acct.anthropic.main", "ANTHROPIC_API_KEY"),
-        ("claude", "acct.anthropic.main", "CLAUDE_CODE_OAUTH_TOKEN"),
-        ("codex", "acct.openai.main", "OPENAI_API_KEY"),
-        ("codex", "acct.openai.main", "CODEX_API_KEY"),
-        ("agy", "acct.google.main", "GEMINI_API_KEY"),
+        ("claude", "acct.anthropic.7", "ANTHROPIC_API_KEY"),
+        ("claude", "acct.anthropic.7", "CLAUDE_CODE_OAUTH_TOKEN"),
+        ("codex", "acct.openai.7", "OPENAI_API_KEY"),
+        ("codex", "acct.openai.7", "CODEX_API_KEY"),
+        ("agy", "acct.google.7", "GEMINI_API_KEY"),
     ] {
         let ok = checked(harness, &[grant(account, var)]);
         assert_eq!(ok, Ok(()), "{harness} {var}");
@@ -58,9 +58,9 @@ fn an_account_secret_is_delivered_only_under_its_harnesss_own_variable() {
         ("fake", "ANTHROPIC_API_KEY"),
     ] {
         let own = match harness {
-            "codex" => "acct.openai.main",
-            "agy" => "acct.google.main",
-            _ => "acct.anthropic.main",
+            "codex" => "acct.openai.7",
+            "agy" => "acct.google.7",
+            _ => "acct.anthropic.7",
         };
         let Err(Invalid::Bad(why)) = checked(harness, &[grant(own, var)]) else {
             panic!("{harness} {var} must be refused")
@@ -81,9 +81,9 @@ fn an_account_secret_is_delivered_only_under_its_harnesss_own_variable() {
 #[test]
 fn an_account_secret_is_refused_for_another_providers_harness() {
     let accounts = [
-        ("anthropic", "acct.anthropic.main"),
-        ("openai", "acct.openai.main"),
-        ("google", "acct.google.main"),
+        ("anthropic", "acct.anthropic.7"),
+        ("openai", "acct.openai.7"),
+        ("google", "acct.google.7"),
     ];
     let harnesses = [
         (
@@ -123,7 +123,7 @@ fn an_account_secret_is_refused_for_another_providers_harness() {
 
 #[test]
 fn a_session_holding_an_account_secret_may_not_redirect_traffic_with_any_other_secret() {
-    let key = grant("acct.anthropic.main", "ANTHROPIC_API_KEY");
+    let key = grant("acct.anthropic.7", "ANTHROPIC_API_KEY");
     for var in [
         "HTTPS_PROXY",
         "HTTP_PROXY",

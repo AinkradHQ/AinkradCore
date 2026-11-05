@@ -157,10 +157,7 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
     }
     // An account secret sits only in its harness's own authentication variable, and nothing in
     // the session can redirect traffic (checked at create, again here for a stored row).
-    if let Some(why) = ainkrad_proto::v2::account_var_problem(
-        &s.harness,
-        s.secrets.iter().map(|x| (x.name.as_str(), x.var.as_str())),
-    ) {
+    if let Some(why) = gateway::secrets_problem(&s.harness, &s.secrets) {
         let e = Refusal::Runner(StreamError::new(ErrorCode::InvalidArgs, why));
         fail(app, s, &describe(&e)).await;
         return Err(e);

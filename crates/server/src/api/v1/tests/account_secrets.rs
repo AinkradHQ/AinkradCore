@@ -56,9 +56,11 @@ async fn store_account(fx: &Fx, vm: &TestDevice, value: &str) {
     assert_eq!(r.0, StatusCode::OK, "{}", r.1);
 }
 
+/// A session names an API-key account by the account model's own name (`acct.<provider>.<id>`):
+/// any other label would be an env secret, which no session may hold (KAN-435 G7).
 fn session_body(harness: &str, var: &str, policy: Value) -> Value {
     json!({"runner": "d_00000000000000000000000000", "harness": harness, "policy": policy,
-           "secrets": [{"name": NAME, "var": var}]})
+           "secrets": [{"name": "acct.anthropic.7", "var": var}]})
 }
 
 fn sandboxed() -> Value {
