@@ -119,6 +119,9 @@ impl From<prices::Price> for PriceBookEntry {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SetPrice {
     pub provider: String,
+    /// The model id exactly as the provider names it: the auth gateway grants a session the ids
+    /// priced here and compares a request's model with them as they are. It resolves no alias
+    /// (`-latest`, a family name), and an id ending in `:online` is refused.
     pub model: String,
     pub input_per_mtok_micro: i64,
     pub output_per_mtok_micro: i64,

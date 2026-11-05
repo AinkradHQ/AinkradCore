@@ -368,6 +368,22 @@ async fn session_limits_are_set_cleared_validated_and_audited() {
     assert_eq!(n, 3);
 }
 
+/// An admin whose session never stepped up.
+async fn plain_admin(fx: &Fx) -> TestDevice {
+    let d = TestDevice::enroll(
+        &fx.app.pool,
+        "plain",
+        "device",
+        &["read", "admin"],
+        &fx.app.auth.identity.fp,
+        fx.clock.clone(),
+    )
+    .await;
+    let s = fx.app.auth.issue_session(&d.id, fx.clock.unix());
+    d.set_session(Some(s.id));
+    d
+}
+
 #[tokio::test]
 async fn the_test_route_needs_admin_and_a_runner_and_is_limited_to_one_a_minute() {
     let (fx, vm, s) = setup().await;
@@ -379,6 +395,15 @@ async fn the_test_route_needs_admin_and_a_runner_and_is_limited_to_one_a_minute(
     assert_eq!(
         (st, b["code"].as_str()),
         (StatusCode::FORBIDDEN, Some("forbidden_scope"))
+    );
+    // It is not destructive: an admin who never stepped up gets past the gate (and the session
+    // limits, which raise what a session may spend, need the step-up: `accounts_api`).
+    let plain = plain_admin(&fx).await;
+    let (st, b) = call(&fx, &plain, Method::POST, &uri, Value::Null).await;
+    assert_eq!(
+        (st, b["code"].as_str()),
+        (StatusCode::CONFLICT, Some("no_runner")),
+        "{b}"
     );
     // No runner is connected in this fixture: nothing is leased, and the answer says why.
     let (st, b) = call(&fx, &fx.dev, Method::POST, &uri, Value::Null).await;
