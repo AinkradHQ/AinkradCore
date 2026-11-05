@@ -118,7 +118,8 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
             (18, "cost_ledger"),
             (19, "budgets"),
             (20, "gateway_session"),
-            (21, "gateway_api")
+            (21, "gateway_api"),
+            (22, "account_logins")
         ]
     );
     let sum: Vec<u8> =

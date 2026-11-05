@@ -788,4 +788,49 @@ fn v2_agent_frames_are_pinned() {
             test_path: None,
         })),
     );
+    v2(
+        "login_start",
+        18,
+        0,
+        Body::Command(Command::LoginStart(LoginStart {
+            login_id: "lg_test".to_owned(),
+            harness: "claude".to_owned(),
+        })),
+    );
+    v2(
+        "login_url",
+        18,
+        1,
+        Body::Result(Reply::LoginUrl(LoginUrl {
+            login_id: "lg_test".to_owned(),
+            url: "https://claude.ai/oauth/authorize?state=TESTONLY".to_owned(),
+        })),
+    );
+    v2(
+        "login_code",
+        19,
+        0,
+        Body::Command(Command::LoginCode(LoginCode {
+            login_id: "lg_test".to_owned(),
+            code: "TESTONLY-code".to_owned(),
+        })),
+    );
+    v2(
+        "login_result",
+        19,
+        1,
+        Body::Result(Reply::LoginResult(LoginResult {
+            login_id: "lg_test".to_owned(),
+            token: Some("sk-ant-oat01-TESTONLY".to_owned()),
+            error: None,
+        })),
+    );
+    v2(
+        "login_cancel",
+        20,
+        0,
+        Body::Command(Command::LoginCancel(LoginCancel {
+            login_id: "lg_test".to_owned(),
+        })),
+    );
 }

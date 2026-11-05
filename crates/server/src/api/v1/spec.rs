@@ -534,6 +534,10 @@ mod tests {
         assert_eq!(
             s["Event"]["x-event-kinds"],
             json!([
+                "account.login.done",
+                "account.login.failed",
+                "account.login.started",
+                "account.login.url",
                 "agent.approval_decided",
                 "agent.approval_requested",
                 "agent.created",
@@ -560,7 +564,9 @@ mod tests {
         // A module's kinds default to its route scope (`admin`); runner presence is `read`.
         assert_eq!(
             s["Event"]["x-event-scopes"],
-            json!({"agent.approval_decided": "approve", "agent.approval_requested": "approve",
+            json!({"account.login.done": "admin", "account.login.failed": "admin",
+                "account.login.started": "admin", "account.login.url": "admin",
+                "agent.approval_decided": "approve", "agent.approval_requested": "approve",
                 "agent.created": "agent", "agent.ended": "agent", "agent.message": "agent",
                 "agent.state": "agent", "agent.transcript": "agent",
                 "alarm.cleared": "admin", "alarm.raised": "admin", "audit": "admin", "notify.delivery": "admin", "runner.connected": "read",
@@ -576,6 +582,10 @@ mod tests {
         assert_eq!(
             plain["components"]["schemas"]["Event"]["x-event-kinds"],
             json!([
+                "account.login.done",
+                "account.login.failed",
+                "account.login.started",
+                "account.login.url",
                 "agent.approval_decided",
                 "agent.approval_requested",
                 "agent.created",

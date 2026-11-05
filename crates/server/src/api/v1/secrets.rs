@@ -141,9 +141,13 @@ impl From<Error> for ApiError {
                     "not_found" => StatusCode::NOT_FOUND,
                     "lease_expired" => StatusCode::GONE,
                     "secrets_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
-                    "secrets_disabled" | "real_secret_refused" | "conflict" | "limit_reached" => {
-                        StatusCode::CONFLICT
-                    }
+                    "secrets_disabled"
+                    | "real_secret_refused"
+                    | "conflict"
+                    | "limit_reached"
+                    | "subscription_pool_alone"
+                    | "no_runner"
+                    | "login_state" => StatusCode::CONFLICT,
                     _ => StatusCode::BAD_REQUEST,
                 };
                 ApiError::new(status, code, message)

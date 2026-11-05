@@ -131,4 +131,10 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0021_gateway_api.up.sql"),
         down: include_str!("../../../migrations/0021_gateway_api.down.sql"),
     },
+    Migration {
+        version: 22,
+        name: "account_logins",
+        up: include_str!("../../../migrations/0022_account_logins.up.sql"),
+        down: include_str!("../../../migrations/0022_account_logins.down.sql"),
+    },
 ];

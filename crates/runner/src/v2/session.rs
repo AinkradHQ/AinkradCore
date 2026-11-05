@@ -428,7 +428,12 @@ impl Session {
             // runner has proven the gateway and lists it.
             | Command::AgentLimit(_)
             | Command::GatewayTest(_) => self.start_agent(stream, command),
-            Command::Unknown => {
+            // L2 (KAN-441) gives these a driver; until then the runner never lists the `login`
+            // command, so the Core never sends them, and one that arrives anyway is refused.
+            Command::LoginStart(_)
+            | Command::LoginCode(_)
+            | Command::LoginCancel(_)
+            | Command::Unknown => {
                 Some(Body::Error(StreamError::new(
                     ErrorCode::UnsupportedCommand,
                     "no driver of this runner takes that command",

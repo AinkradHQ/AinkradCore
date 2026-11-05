@@ -138,6 +138,11 @@ mod tests {
     #[test]
     fn a_built_in_carries_no_key_shape_and_a_user_definition_its_prefix_and_frozen_host() {
         for d in built_in() {
+            // A subscription's token is a leased env variable (§5): the gateway never serves it.
+            if d.id == "claude-sub" {
+                assert!(of(&d, &d.base_url).is_err());
+                continue;
+            }
             let r = of(&d, &d.base_url).expect("built-ins have a route");
             assert!(r.user_key.is_none(), "{}", d.id);
             assert_eq!(r.wire, wire_named(&d.wire).unwrap());

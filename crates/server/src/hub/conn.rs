@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, CONTROL_STREAM, Command, Control, CoreWelcome, Frame, GatewayTest, Heartbeat,
+    Body, CONTROL_STREAM, Command, Control, CoreWelcome, ErrorCode, Frame, GatewayTest, Heartbeat,
     PROTOCOL_VERSION, RunnerHello, StreamError, close_code,
 };
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
@@ -257,5 +257,26 @@ impl Hub {
         test: GatewayTest,
     ) -> Result<Dispatched, StreamError> {
         self.send_command(runner, Command::GatewayTest(test))
+    }
+
+    /// The only way a subscription sign-in reaches a runner (KAN-441): `login.start`, `login.code`
+    /// and `login.cancel` and nothing else. The Core's start route is a step-up (`DESTRUCTIVE`) and
+    /// the other two act on a sign-in that route began, so no `Elevated` is minted. The ops run
+    /// one fixed vendor-CLI sign-in with no request-supplied program, argument or path.
+    pub(crate) fn dispatch_login(
+        self: &Arc<Self>,
+        runner: &str,
+        command: Command,
+    ) -> Result<Dispatched, StreamError> {
+        if !matches!(
+            command,
+            Command::LoginStart(_) | Command::LoginCode(_) | Command::LoginCancel(_)
+        ) {
+            return Err(StreamError::new(
+                ErrorCode::InvalidArgs,
+                "only the login ops are dispatched here",
+            ));
+        }
+        self.send_command(runner, command)
     }
 }

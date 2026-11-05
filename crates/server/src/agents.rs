@@ -19,6 +19,7 @@
 
 pub mod gateway;
 mod launch;
+pub mod login;
 mod topup;
 pub mod wake;
 use launch::launch;

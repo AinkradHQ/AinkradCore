@@ -20,10 +20,65 @@ fn refused<T>(message: impl Into<String>) -> Result<T, Error> {
     })
 }
 
+/// Whether `def` is a subscription sign-in (`claude-sub`): a built-in whose only login is the
+/// browser plus an approval code. Its account is alone in its pool (Ahmed, 2026-11-05) and is
+/// created by a login, never by a pasted value.
+pub fn is_subscription(def: &Definition) -> bool {
+    def.builtin
+        && def.login_methods.iter().any(|m| m == "browser_code")
+        && !def.login_methods.iter().any(|m| m == "paste")
+}
+
+/// Whether `provider` is a built-in subscription provider.
+pub fn subscription_provider(provider: &str) -> bool {
+    super::providers::built_in()
+        .iter()
+        .any(|d| d.id == provider && is_subscription(d))
+}
+
+/// Refuses `subscription_pool_alone` when adding `account` to a pool holding `members` would put a
+/// subscription account beside another account (either way round).
+pub(super) async fn check_pool(
+    conn: &mut sqlx::SqliteConnection,
+    members: &[i64],
+    account: i64,
+) -> Result<(), Error> {
+    let mut mine = false;
+    let mut theirs = false;
+    for (id, own) in members.iter().map(|m| (*m, false)).chain([(account, true)]) {
+        let provider: Option<String> =
+            sqlx::query_scalar("SELECT provider FROM core_accounts WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&mut *conn)
+                .await?;
+        let sub = provider.is_some_and(|p| subscription_provider(&p));
+        (mine, theirs) = (mine || (own && sub), theirs || (!own && sub));
+    }
+    match (mine && !members.is_empty()) || theirs {
+        true => Err(Error::Refused {
+            code: "subscription_pool_alone",
+            message: "a subscription account is alone in its pool".to_owned(),
+        }),
+        false => Ok(()),
+    }
+}
+
+/// A subscription pool is not bound to an agent yet (L5 widens the bindings).
+pub(super) fn check_bind(provider: &str) -> Result<(), Error> {
+    match subscription_provider(provider) {
+        true => Err(Error::Refused {
+            code: "bad_request",
+            message: "a subscription pool is not bound to an agent yet".to_owned(),
+        }),
+        false => Ok(()),
+    }
+}
+
 /// Why accounts of `def` hold no key, if they do not: only the gateway serves an API key (design
 /// §10 Q4), and a user definition needs the key shape that binds its keys to its host (§5.3).
 pub fn holds_keys_problem(def: &Definition) -> Option<&'static str> {
-    if !def.delivery.iter().any(|m| m == "gateway") {
+    // A subscription's token is a leased env variable (§5), signed in through a login.
+    if !def.delivery.iter().any(|m| m == "gateway") && !is_subscription(def) {
         return Some(
             "the provider is not delivered through the gateway, so its accounts hold no key",
         );

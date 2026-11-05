@@ -34,7 +34,7 @@ pub const DEFAULT_CAP: i64 = 4;
 pub const MAX_CAP: i64 = 64;
 /// The built-in providers (pools are of these only). An account may also name a stored user
 /// definition (`account_keys::holds_keys_problem`).
-pub const PROVIDERS: [&str; 3] = ["anthropic", "openai", "google"];
+pub const PROVIDERS: [&str; 4] = ["anthropic", "openai", "google", "claude-sub"];
 /// The states an account is in.
 pub const STATES: [&str; 5] = ["active", "cooling", "limited", "unhealthy", "disabled"];
 
@@ -215,6 +215,20 @@ pub async fn create(
     actor: AuditActor,
     now: &str,
 ) -> Result<Account, Error> {
+    create_by(pool, sealer, new, "key", owner, actor, now).await
+}
+
+/// [`create`], naming how the key came (`key`: pasted, `subscription`: a login), which the audit
+/// row records.
+pub async fn create_by(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    new: &NewAccount<'_>,
+    method: &str,
+    owner: &str,
+    actor: AuditActor,
+    now: &str,
+) -> Result<Account, Error> {
     if !valid_label(new.label) {
         return refused("bad_request", "a label is [a-z][a-z0-9._-]{0,63}");
     }
@@ -279,7 +293,8 @@ pub async fn create(
         "account.created",
         id,
         json!({"provider": new.provider, "label": new.label, "cap": cap,
-               "base_url": base_url, "runners": new.runners, "by_device": owner}),
+               "base_url": base_url, "runners": new.runners, "by_device": owner,
+               "method": method}),
     )
     .await?;
     let a = find(&mut tx, id).await?;

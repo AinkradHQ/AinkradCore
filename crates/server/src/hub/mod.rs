@@ -35,9 +35,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, CAP_GATEWAY, Close, Command, Control, Credit, DriverInfo, ErrorCode, Frame, Heartbeat,
-    HostLoad, IsolationCaps, OP_AGENT_LIMIT, OP_AGENT_READ, OP_GATEWAY_TEST, OP_PTY_ATTACH,
-    OP_PTY_OPEN, RunnerHello, STREAM_WINDOW, StreamError, StreamState,
+    Body, CAP_GATEWAY, CAP_LOGIN, Close, Command, Control, Credit, DriverInfo, ErrorCode, Frame,
+    Heartbeat, HostLoad, IsolationCaps, OP_AGENT_LIMIT, OP_AGENT_READ, OP_GATEWAY_TEST,
+    OP_LOGIN_CANCEL, OP_LOGIN_CODE, OP_LOGIN_START, OP_PTY_ATTACH, OP_PTY_OPEN, RunnerHello,
+    STREAM_WINDOW, StreamError, StreamState,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -168,11 +169,14 @@ struct Runner {
 }
 
 /// Whether a driver's command `listed` offers `op`: itself, or (KAN-435) the `gateway` capability
-/// for the two ops that capability brings, `agent.limit` and `gateway.test`. A runner lists the
-/// capability beside the agent driver's five ops and never the two by name, so matching the op's
-/// name alone would refuse them against every real runner.
+/// for the two ops that capability brings, `agent.limit` and `gateway.test`, or (KAN-441) the
+/// `login` capability for the three `login.*` ops. A runner lists a capability beside the agent
+/// driver's five ops and never its ops by name, so matching the op's name alone would refuse them
+/// against every real runner.
 fn offers(listed: &str, op: &str) -> bool {
-    listed == op || (listed == CAP_GATEWAY && matches!(op, OP_AGENT_LIMIT | OP_GATEWAY_TEST))
+    listed == op
+        || (listed == CAP_GATEWAY && matches!(op, OP_AGENT_LIMIT | OP_GATEWAY_TEST))
+        || (listed == CAP_LOGIN && matches!(op, OP_LOGIN_START | OP_LOGIN_CODE | OP_LOGIN_CANCEL))
 }
 
 impl Runner {

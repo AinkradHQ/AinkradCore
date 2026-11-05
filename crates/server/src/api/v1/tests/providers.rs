@@ -107,7 +107,7 @@ async fn the_built_ins_are_fixed_and_a_user_definition_is_stored_audited_and_ver
         .into_iter()
         .map(|d| d.id)
         .collect();
-    assert_eq!(ids, ["anthropic", "openai", "google"]);
+    assert_eq!(ids, ["anthropic", "openai", "google", "claude-sub"]);
     assert_eq!(
         code(prov::create(p, &def("openai"), "d_x", BY, NOW).await),
         "bad_request"

@@ -40,6 +40,12 @@ pub enum Command {
     AgentLimit(super::AgentLimit),
     #[serde(rename = "gateway.test")]
     GatewayTest(super::GatewayTest),
+    #[serde(rename = "login.start")]
+    LoginStart(super::LoginStart),
+    #[serde(rename = "login.code")]
+    LoginCode(super::LoginCode),
+    #[serde(rename = "login.cancel")]
+    LoginCancel(super::LoginCancel),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -61,6 +67,9 @@ impl Command {
             Self::AgentStop(_) => super::OP_AGENT_STOP,
             Self::AgentLimit(_) => super::OP_AGENT_LIMIT,
             Self::GatewayTest(_) => super::OP_GATEWAY_TEST,
+            Self::LoginStart(_) => super::OP_LOGIN_START,
+            Self::LoginCode(_) => super::OP_LOGIN_CODE,
+            Self::LoginCancel(_) => super::OP_LOGIN_CANCEL,
             Self::Unknown => "unknown",
         }
     }
@@ -130,6 +139,12 @@ pub enum Reply {
     AgentLimit(super::AgentEvents),
     #[serde(rename = "gateway.test")]
     GatewayTest(super::GatewayTested),
+    /// The answer to `login.start`.
+    #[serde(rename = "login.url")]
+    LoginUrl(super::LoginUrl),
+    /// The answer to `login.code` and `login.cancel`.
+    #[serde(rename = "login.result")]
+    LoginResult(super::LoginResult),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

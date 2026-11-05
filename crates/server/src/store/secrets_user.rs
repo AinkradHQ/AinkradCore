@@ -25,6 +25,9 @@ fn refused<T>(message: impl Into<String>) -> Result<T, Error> {
     })
 }
 
+/// What a Claude subscription's token starts with (`claude setup-token`).
+pub const SUBSCRIPTION_TOKEN_PREFIX: &str = "sk-ant-oat01-";
+
 fn builtin(provider: &str) -> bool {
     ACCOUNT_PROVIDERS.iter().any(|(k, _)| *k == provider)
 }
@@ -54,6 +57,14 @@ pub(super) async fn bind(
     else {
         return Ok(());
     };
+    // A subscription's token is no API key and is never sent to a host by shape: it is the
+    // OAuth token `claude setup-token` prints, and nothing else is stored under this provider.
+    if provider == "claude-sub" {
+        return match value.trim().starts_with(SUBSCRIPTION_TOKEN_PREFIX) {
+            true => Ok(()),
+            false => refused("a Claude subscription's token starts with sk-ant-oat01-"),
+        };
+    }
     let user = !builtin(provider);
     // A name under no definition is no account of any provider (`kind_of` refuses it below mode 2).
     if user && !holds(conn, name).await? {

@@ -650,6 +650,66 @@ async fn an_export_never_carries_secrets_and_a_backup_does() {
     pool.close().await;
 }
 
+/// KAN-441: a subscription sign-in is the moment's state, so neither an export nor a backup
+/// carries one (the table is dropped from the snapshot, free pages included).
+#[tokio::test]
+async fn an_export_and_a_backup_drop_sign_in_logins() {
+    use ainkrad_core::audit::AuditActor;
+    use ainkrad_core_server::store::logins;
+    let d = dir("logins");
+    let home = d.0.join("home");
+    let fp = home_with_state(&home).await;
+    let pool = store::connect(&home.join("core.db")).await.unwrap();
+    let l = logins::create(
+        &pool,
+        ("claude-sub", "planted-label-7f3a", "d_runner"),
+        "d_device",
+        AuditActor::System,
+        1_800_000_000,
+    )
+    .await
+    .unwrap();
+    pool.close().await;
+    let count = |db: std::path::PathBuf| async move {
+        let pool = store::connect(&db).await.unwrap();
+        let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_account_logins")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        n
+    };
+    assert_eq!(count(home.join("core.db")).await, 1, "{}", l.id);
+
+    let config = home.join("config.toml");
+    let file = d.0.join("core.export");
+    ok(&["export", "--config", s(&config), s(&file)], &[]);
+    let imported = d.0.join("imported");
+    ok(&["import", s(&file), "--signer", &fp, s(&imported)], &[]);
+    assert_eq!(count(imported.join("core.db")).await, 0, "export");
+
+    let keygen = ok(&["backup-keygen"], &[]);
+    let identity = d.0.join("identity.txt");
+    std::fs::write(&identity, &keygen).unwrap();
+    let recipient = keygen
+        .lines()
+        .find_map(|l| l.strip_prefix("# public key: "))
+        .unwrap();
+    let env = [("AINKRAD_BACKUP_RECIPIENT", recipient)];
+    let backup = ok(&["backup", "--config", s(&config), "--local-only"], &env);
+    let restored = d.0.join("restored");
+    ok_err(&[
+        "restore",
+        &backup,
+        "--identity",
+        s(&identity),
+        "--signer",
+        &fp,
+        s(&restored),
+    ]);
+    assert_eq!(count(restored.join("core.db")).await, 0, "backup");
+}
+
 /// The identity is sealed under the master key: an archive that carries it without that key
 /// is refused (nothing written), and a legacy plaintext one is sealed in the new home.
 #[tokio::test]
