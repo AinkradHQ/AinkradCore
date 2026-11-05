@@ -448,6 +448,8 @@ mod tests {
             ("POST", "/api/v1/accounts/{id}/test"),
             // Ends the caller's own sign-in; it grants nothing.
             ("DELETE", "/api/v1/accounts/logins/{id}"),
+            // Acts once on the caller's own sign-in, which a step-up began (it outlives the window).
+            ("POST", "/api/v1/accounts/logins/{id}/code"),
         ];
         for (m, t, scope) in ROUTES {
             let privileged = !matches!(*scope, "read" | "runner");
