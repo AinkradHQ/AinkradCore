@@ -396,7 +396,8 @@ pub async fn cancel(app: &App, caller: &Caller, id: &str) -> Result<Login, Error
     match logins::step(
         &app.pool,
         id,
-        &[],
+        // Not while its token is being stored: that ends in `done` or `failed`.
+        &["starting", "open_url", "waiting_code"],
         "cancelled",
         &Change::default(),
         BY,
