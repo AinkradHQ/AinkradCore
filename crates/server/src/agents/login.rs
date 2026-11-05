@@ -13,8 +13,9 @@
 //! Every ending is a `failed` or `cancelled` login with a plain reason, and the runner is told
 //! `login.cancel` (best effort). A login open past ten minutes fails by itself (not while storing).
 //!
-//! **Seam for L2:** the runner side. Until a runner lists [`CAP_LOGIN`] among its agent driver's
-//! commands, [`start`] answers 409 `no_runner`: nothing here is sent to a runner that cannot take it.
+//! **The runner side** (L2, `ainkrad-runner`'s `v2::login`): a runner lists [`CAP_LOGIN`] among its
+//! agent driver's commands only while its `claude` is a version it can drive. Without one, [`start`]
+//! answers 409 `no_runner`: nothing here is sent to a runner that cannot take it.
 
 use std::time::Duration;
 
