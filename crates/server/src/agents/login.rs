@@ -11,7 +11,7 @@
 //!    with the method `subscription`; the login is `done`.
 //!
 //! Every ending is a `failed` or `cancelled` login with a plain reason, and the runner is told
-//! `login.cancel` (best effort). A login open past ten minutes fails by itself.
+//! `login.cancel` (best effort). A login open past ten minutes fails by itself (not while storing).
 //!
 //! **Seam for L2:** the runner side. Until a runner lists [`CAP_LOGIN`] among its agent driver's
 //! commands, [`start`] answers 409 `no_runner`: nothing here is sent to a runner that cannot take it.
@@ -205,17 +205,32 @@ async fn run_start(app: App, l: Login, harness: String) {
         }
     }
     tokio::time::sleep(Duration::from_secs(logins::TTL_SECS as u64)).await;
-    fail(&app, &l, "expired").await;
+    // Not `storing`: that one ends in `done` or `failed` by its own store.
+    fail_from(
+        &app,
+        &l,
+        "expired",
+        &["starting", "open_url", "waiting_code"],
+    )
+    .await;
 }
 
 fn url_ok(url: &str) -> bool {
     let Some(rest) = url.strip_prefix("https://") else {
         return false;
     };
+    // The host is what is before the first `/ ? #`: letters, digits, `.` and `-` only, so no
+    // userinfo, port, backslash or other trick can make it read as another host.
     let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let shaped = host
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+        && !host.starts_with('.')
+        && !host.contains("..");
+    let host = host.to_ascii_lowercase();
     url.len() <= 2048
         && url.bytes().all(|b| b.is_ascii_graphic())
-        && !host.contains(['@', ':'])
+        && shaped
         && URL_HOSTS
             .iter()
             .any(|h| host == *h || host.ends_with(&format!(".{h}")))
@@ -224,11 +239,16 @@ fn url_ok(url: &str) -> bool {
 /// Ends an open login as failed and tells its runner to drop the sign-in. A login that already
 /// ended is left alone.
 async fn fail(app: &App, l: &Login, reason: &str) {
+    fail_from(app, l, reason, &[]).await;
+}
+
+/// [`fail`] from the states `from` only (any open state when empty).
+async fn fail_from(app: &App, l: &Login, reason: &str, from: &[&str]) {
     let change = Change {
         reason: Some(reason),
         ..Change::default()
     };
-    if let Ok(Some(_)) = logins::step(&app.pool, &l.id, &[], "failed", &change, BY, now(app)).await
+    if let Ok(Some(_)) = logins::step(&app.pool, &l.id, from, "failed", &change, BY, now(app)).await
     {
         tell_cancel(app, l);
     }
@@ -349,7 +369,12 @@ async fn store(app: &App, l: &Login, token: Zeroizing<String>) {
     let Some(sealer) = app.secrets.as_deref() else {
         return fail(app, l, "this Core has no master key loaded").await;
     };
-    let runners = [l.runner.clone()];
+    // Usable on every allowed runner (spec 12e), as the broker's scope is an explicit list: every
+    // active runner now. (A Claude token is a bearer env variable; a Codex `auth.json` is bound to
+    // one runner and would not do this.)
+    let Ok(runners) = logins::active_runners(&app.pool).await else {
+        return fail(app, l, "the Core could not list its runners").await;
+    };
     let new = accounts::NewAccount {
         provider: &l.provider,
         label: &l.label,
@@ -410,5 +435,42 @@ pub async fn cancel(app: &App, caller: &Caller, id: &str) -> Result<Login, Error
             Ok(done)
         }
         None => Ok(l),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::url_ok;
+
+    #[test]
+    fn a_sign_in_url_is_https_on_claudes_own_hosts_only() {
+        for ok in [
+            "https://claude.ai/oauth/authorize?state=x",
+            "https://console.anthropic.com/a#b",
+            "https://CLAUDE.AI/x",
+            "https://claude.com",
+            "https://claude.ai?x=1",
+        ] {
+            assert!(url_ok(ok), "{ok}");
+        }
+        for bad in [
+            r"https://evil.com\.claude.ai/x",
+            "https://evil.com@claude.ai/x",
+            "https://claude.ai@evil.com/x",
+            "https://claude.ai:443/x",
+            "http://claude.ai/x",
+            "https://evil.com/x",
+            "https://evilclaude.ai/x",
+            "https://claude.ai.evil.com/x",
+            "https://claude.ai./x",
+            "https://.claude.ai/x",
+            "https://a..claude.ai/x",
+            "https:///x",
+            "https://claude.ai/a b",
+            "https://claude.ai/a\nb",
+            "https://claude.ai\t/x",
+        ] {
+            assert!(!url_ok(bad), "{bad:?}");
+        }
     }
 }

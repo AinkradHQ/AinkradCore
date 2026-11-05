@@ -12,7 +12,8 @@
 //! - `starting`: the runner was asked to begin; `open_url`: its URL is known, the user opens it
 //!   and pastes the code; `waiting_code`: the code was handed to the runner, which finishes the
 //!   sign-in; `storing`: the token arrived and is being stored.
-//! - A login lives [`TTL_SECS`]; one past `expires_at` is `failed` (`expired`) the next time it is read.
+//! - A login lives [`TTL_SECS`]; one past `expires_at` is `failed` (`expired`) the next time it is read,
+//!   unless it is `storing`: that ends in `done` or `failed` by its own store.
 //! - Every move is one compare-and-set write with its audit row and event in the same
 //!   transaction (events `account.login.started|url|done|failed`; a cancel is a `failed` with the
 //!   reason `cancelled`). Text from a provider or a runner passes the redactor.
@@ -30,6 +31,9 @@ pub const TTL_SECS: i64 = 600;
 /// The most logins open at once.
 const MAX_OPEN: i64 = 4;
 const CLOSED: &str = "('done', 'failed', 'cancelled')";
+/// What expiry leaves alone: a login that ended, or is `storing` (its token is in the broker's
+/// hands: it ends in `done` or `failed` by itself, never by the clock).
+const NOT_EXPIRABLE: &str = "('done', 'failed', 'cancelled', 'storing')";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Login {
@@ -179,7 +183,7 @@ pub async fn get(
     now: i64,
 ) -> Result<Option<Login>, Error> {
     let due: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT count(*) FROM core_account_logins WHERE state NOT IN {CLOSED} AND expires_at <= ?"
+        "SELECT count(*) FROM core_account_logins WHERE state NOT IN {NOT_EXPIRABLE} AND expires_at <= ?"
     )))
     .bind(iso_of_unix(now))
     .fetch_one(pool)
@@ -196,7 +200,7 @@ pub async fn get(
 /// Fails every open login past its `expires_at`.
 async fn expire_in(conn: &mut SqliteConnection, actor: AuditActor, now: i64) -> Result<(), Error> {
     let ids: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT id FROM core_account_logins WHERE state NOT IN {CLOSED} AND expires_at <= ?"
+        "SELECT id FROM core_account_logins WHERE state NOT IN {NOT_EXPIRABLE} AND expires_at <= ?"
     )))
     .bind(iso_of_unix(now))
     .fetch_all(&mut *conn)
@@ -287,4 +291,15 @@ async fn move_in(
         _ => {}
     }
     Ok(Some(l))
+}
+
+/// Every active runner device: the scope a subscription account gets (usable on every allowed
+/// runner, spec 12e; the scope is an explicit list, the broker has no wildcard).
+pub async fn active_runners(pool: &SqlitePool) -> Result<Vec<String>, Error> {
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM core_devices WHERE kind = 'runner' AND status = 'active' \
+         AND revoked_at IS NULL ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await?)
 }

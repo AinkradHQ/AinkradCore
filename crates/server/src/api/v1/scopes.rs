@@ -165,9 +165,8 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/secrets/{id}/leases"),
     // AI provider accounts (KAN-432): every write changes who may spend which key.
     ("POST", "/api/v1/accounts"),
-    // A sign-in ending in a stored credential; its code needs the elevation too (the start's covers it).
+    // A sign-in ending in a stored credential; its code route is not (once, on the caller's own login).
     ("POST", "/api/v1/accounts/logins"),
-    ("POST", "/api/v1/accounts/logins/{id}/code"),
     ("PUT", "/api/v1/accounts/{id}/secret"),
     ("PUT", "/api/v1/accounts/{id}/state"),
     ("PUT", "/api/v1/accounts/{id}/cap"),

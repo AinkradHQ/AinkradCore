@@ -9,15 +9,11 @@ use ainkrad_core_server::store::{accounts, pools};
 use super::login::{TOKEN, W, refusal, up};
 
 #[test]
-fn a_sign_in_start_and_code_need_a_step_up_and_a_read_or_cancel_does_not() {
-    for t in [
-        "/api/v1/accounts/logins",
-        "/api/v1/accounts/logins/{id}/code",
-    ] {
-        assert!(declared_destructive("POST", t), "{t}");
-        assert_eq!(declared("POST", t), Some("admin"));
-    }
+fn a_sign_in_start_needs_a_step_up_and_its_code_a_read_or_cancel_does_not() {
+    assert!(declared_destructive("POST", "/api/v1/accounts/logins"));
+    assert_eq!(declared("POST", "/api/v1/accounts/logins"), Some("admin"));
     for (m, t) in [
+        ("POST", "/api/v1/accounts/logins/{id}/code"),
         ("GET", "/api/v1/accounts/logins/{id}"),
         ("DELETE", "/api/v1/accounts/logins/{id}"),
     ] {
@@ -138,4 +134,24 @@ async fn a_subscription_account_is_alone_in_its_pool_and_its_token_has_its_own_s
     )
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn a_subscription_token_is_never_replaced_by_a_pasted_value() {
+    let w = up("login-replace", true, true).await;
+    let a = mk(&w, "sub-r", "claude-sub", TOKEN).await.unwrap();
+    let sealer = w.core.app.secrets.as_deref().unwrap();
+    let now = w.core.app.clock.now();
+    let r = accounts::replace_secret(
+        &w.core.app.pool,
+        sealer,
+        a.id,
+        "sk-ant-oat01-TESTONLYpastedreplacement12345678",
+        None,
+        &w.runner,
+        AuditActor::System,
+        &now,
+    )
+    .await;
+    assert_eq!(refusal(r).0, "login_required");
 }

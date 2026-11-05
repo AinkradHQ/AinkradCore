@@ -147,6 +147,7 @@ impl From<Error> for ApiError {
                     | "limit_reached"
                     | "subscription_pool_alone"
                     | "no_runner"
+                    | "login_required"
                     | "login_state" => StatusCode::CONFLICT,
                     _ => StatusCode::BAD_REQUEST,
                 };

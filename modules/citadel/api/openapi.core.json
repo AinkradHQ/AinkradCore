@@ -11088,7 +11088,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },

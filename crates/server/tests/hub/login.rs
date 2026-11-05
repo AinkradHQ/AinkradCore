@@ -149,6 +149,8 @@ pub(super) async fn everything(core: &Core) -> String {
 #[tokio::test]
 async fn a_sign_in_runs_from_the_url_to_a_stored_account_and_no_token_leaks() {
     let mut w = up("login-ok", true, true).await;
+    // A second, offline runner: a subscription account is usable on every allowed runner.
+    let second = w.core.runner().await.id;
     let l = to_open_url(&mut w, "claude-me").await;
     assert_eq!(l.runner, w.runner);
     assert!(l.url.as_deref().unwrap().starts_with("https://claude.ai/"));
@@ -187,7 +189,14 @@ async fn a_sign_in_runs_from_the_url_to_a_stored_account_and_no_token_leaks() {
         (account.provider.as_str(), account.label.as_str()),
         ("claude-sub", "claude-me")
     );
-    assert_eq!(account.runners, [w.runner.clone()]);
+    let mut want = vec![w.runner.clone(), second];
+    want.sort();
+    let mut got = account.runners.clone();
+    got.sort();
+    assert_eq!(
+        got, want,
+        "every active runner, not only the one it signed in on"
+    );
     assert!(account.secret_name.starts_with("acct.claude-sub."));
     // `account.created` is audited with the method, and the broker's own `secret.created` too.
     let created: Vec<String> =
@@ -352,7 +361,8 @@ async fn a_runner_error_fails_the_login_with_redacted_text() {
 async fn a_sign_in_past_its_expiry_has_failed() {
     let mut w = up("login-expiry", true, true).await;
     let l = to_open_url(&mut w, "slow").await;
-    let now = w.core.app.clock.unix();
+    // The base is the login's own clock (to_open_url polls, so the clock may have moved on).
+    let now = ainkrad_core_server::scheduler::unix_secs(&l.expires_at).unwrap() - logins::TTL_SECS;
     let before = logins::get(
         &w.core.app.pool,
         &l.id,
@@ -417,4 +427,34 @@ async fn a_start_is_refused_where_a_sign_in_cannot_go_or_a_gate_is_closed() {
             .unwrap(),
         0
     );
+}
+
+#[tokio::test]
+async fn a_sign_in_that_is_storing_does_not_expire_under_its_store() {
+    let w = up("login-storing", true, true).await;
+    let pool = &w.core.app.pool;
+    let at = w.core.app.clock.unix();
+    let l = logins::create(
+        pool,
+        ("claude-sub", "late", &w.runner),
+        &w.who.device.id,
+        AuditActor::System,
+        at,
+    )
+    .await
+    .unwrap();
+    let c = logins::Change::default();
+    let step = |from: &'static [&'static str], to: &'static str| {
+        logins::step(pool, &l.id, from, to, &c, AuditActor::System, at)
+    };
+    step(&["starting"], "storing").await.unwrap().unwrap();
+    let late = at + logins::TTL_SECS + 5;
+    let got = logins::get(pool, &l.id, AuditActor::System, late).await;
+    assert_eq!(
+        got.unwrap().unwrap().state,
+        "storing",
+        "storing is not expired"
+    );
+    let done = step(&["storing"], "done").await.unwrap();
+    assert_eq!(done.map(|d| d.state), Some("done".to_owned()));
 }

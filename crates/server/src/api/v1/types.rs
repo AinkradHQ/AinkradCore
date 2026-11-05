@@ -112,6 +112,10 @@
 ///    gateway) and `setAccountSessionLimits` (`admin` and destructive); `session_limits` and `last_test` on
 ///    `ProviderAccount`; `wire` and `key_prefix` on `Provider`; the `account.session_limits_set` and
 ///    `account.tested` audit actions.
+/// 41: the Claude subscription sign-in (KAN-441 L1): `startAccountLogin` (`admin` and destructive),
+///    `getAccountLogin`, `sendAccountLoginCode` and `cancelAccountLogin` (`admin`); `AccountLogin`; the
+///    `account.login.started|url|done|failed` events and the `account.login_started|failed|cancelled`
+///    audit actions; the `login.*` ops in the runner schema.
 pub const API_MINOR: u32 = 41;
 
 use serde::{Deserialize, Serialize};
