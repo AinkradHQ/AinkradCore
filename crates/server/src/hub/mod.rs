@@ -43,7 +43,6 @@ use tokio::sync::{Notify, mpsc};
 
 mod conn;
 pub mod connect;
-mod elevation;
 
 /// Proof that a command's caller stepped up for it (handshake spec §8): what
 /// [`Hub::dispatch_elevated`] takes. Nothing outside the crate can make one, so no module can

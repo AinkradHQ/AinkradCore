@@ -15,8 +15,8 @@ use tokio::time::Instant;
 
 use serde_json::{Value, json};
 
-use super::OUT_QUEUE;
 use super::connect::send;
+use super::{Elevated, Hub, OUT_QUEUE};
 use crate::api::App;
 use crate::store::gov::Device;
 
@@ -242,5 +242,16 @@ async fn mark_used(app: &App, device: &Device) {
     if let Err(e) = crate::store::gov::mark_used(&app.pool, &device.id, last.as_deref(), &now).await
     {
         tracing::error!(error = %e, "marking a runner used failed");
+    }
+}
+
+impl Hub {
+    /// The capability of `POST /accounts/{id}/test` (`admin`, not destructive: the design's §5.2).
+    /// It sends `gateway.test` only: one fixed, free request, to the host the account's key was
+    /// bound to when it was stored, through a runner that is in the key's scope. It runs no code
+    /// and takes no request-supplied URL. Not a route entry point for any other op.
+    pub(crate) fn gateway_test_elevation(&self, caller: &crate::api::v1::Caller) -> Elevated {
+        debug_assert!(caller.device.scopes.iter().any(|s| s == "admin"));
+        Elevated(())
     }
 }

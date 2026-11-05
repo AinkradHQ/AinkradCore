@@ -16,7 +16,7 @@ use sqlx::SqliteConnection;
 
 use super::gateway::account_secret;
 use super::provider_rules::{host_of, key_shapes};
-use super::secrets::{ACCOUNT_PREFIX, ACCOUNT_PROVIDERS, Error, single_own_key};
+use super::secrets::{ACCOUNT_PREFIX, ACCOUNT_PROVIDERS, Error};
 
 fn refused<T>(message: impl Into<String>) -> Result<T, Error> {
     Err(Error::Refused {
@@ -102,6 +102,22 @@ pub(super) async fn bind(
         )),
         None => Ok(()),
     }
+}
+
+/// The longest value the shape check scans for a key glued behind another (it is quadratic).
+const MAX_ACCOUNT_SCAN: usize = 512;
+
+/// Whether `value` as a whole is one key of the provider's own `shape` and nothing else: the
+/// redactor sees exactly that key, and no other shape starts anywhere inside it (the redactor
+/// reads a glued `-----BEGIN` or `ghp_` as part of one token, so each tail is tried on its own).
+pub(super) fn single_own_key(redactor: &Redactor, value: &str, shape: &str) -> bool {
+    let value = value.trim();
+    value.len() <= MAX_ACCOUNT_SCAN
+        && redactor.text(value) == format!("[redacted:{shape}]")
+        && value
+            .char_indices()
+            .skip(1)
+            .all(|(i, _)| redactor.text(&value[i..]) == value[i..])
 }
 
 /// Whether `value` as a whole is one key of the one shape the redactor reads in it (a user
