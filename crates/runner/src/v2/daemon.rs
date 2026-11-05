@@ -79,7 +79,7 @@ impl Daemon {
         if let Some(agents) = &self.agents {
             session = session.with_agents(Arc::clone(agents));
             if let Some(login) = &self.login {
-                session = session.with_login(Arc::clone(login));
+                session.login = Some(Arc::clone(login));
             }
         }
         let mut delay = self.backoff.min;
@@ -182,6 +182,8 @@ pub async fn from_state(
         agent.watch_isolation(std::time::Duration::from_secs(5));
         agent
     });
+    // Whatever is enabled, a crash may have left a sign-in's scratch HOME behind.
+    super::login::sweep(&state.0);
     let login = match agents.is_some() {
         true => super::login::detect(&state.0).await,
         false => None,

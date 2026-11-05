@@ -1,7 +1,7 @@
 //! One sign-in's life: the PTY, the output, the code, the ending (KAN-441 L2).
 
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,9 +13,28 @@ use zeroize::Zeroizing;
 
 use super::parse::{self, Screen};
 use super::{
-    LoginDriver, MAX_OUTPUT, Msg, PROMPT_QUIET, QUIET, SIZE, TICK, child_env, err, private_dir,
-    result, runner_env,
+    LoginDriver, MAX_OUTPUT, Msg, PROMPT_QUIET, QUIET, SIZE, TICK, child_env, err, make_stubs,
+    private_dir, result, runner_env,
 };
+
+/// Removes a sign-in's scratch dir and its `active` entry when dropped, so a panic or an abort of
+/// the task cannot leave either behind.
+pub(super) struct Guard {
+    pub(super) driver: Arc<LoginDriver>,
+    pub(super) id: String,
+    pub(super) scratch: PathBuf,
+}
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.scratch);
+        self.driver
+            .active
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.id);
+    }
+}
 
 impl LoginDriver {
     /// Runs one sign-in to its end, cleans up, then answers whoever waits.
@@ -26,14 +45,18 @@ impl LoginDriver {
         url_tx: oneshot::Sender<Result<LoginUrl, StreamError>>,
     ) {
         let scratch = self.cfg.root.join(&id);
+        let guard = Guard {
+            driver: Arc::clone(&self),
+            id: id.clone(),
+            scratch: scratch.clone(),
+        };
         let mut run = Run {
             url_tx: Some(url_tx),
             code_tx: None,
             acks: Vec::new(),
         };
         let end = self.drive(&id, &scratch, &mut rx, &mut run).await;
-        let _ = std::fs::remove_dir_all(&scratch);
-        self.active.lock().unwrap().remove(&id);
+        drop(guard);
         // Late messages (a code that raced the ending) get no answer from the dropped channel.
         rx.close();
         run.finish(&id, end);
@@ -51,8 +74,12 @@ impl LoginDriver {
                 return End::Fail("the runner could not make a scratch directory".to_owned());
             }
         }
+        if make_stubs(scratch).is_err() {
+            return End::Fail("the runner could not make a scratch directory".to_owned());
+        }
+        // `claude` updates itself: a version off the pinned list is not driven.
         if let Err(why) = self.version(scratch).await {
-            return End::Fail(why);
+            return End::Unsupported(why);
         }
         let spec = Spec {
             program: Some(self.cfg.program.display().to_string()),
@@ -73,11 +100,16 @@ impl LoginDriver {
         };
         let (mut pty, mut reader, mut writer, mut exit) =
             (spawned.pty, spawned.reader, spawned.writer, spawned.exit);
-        let (out_tx, mut out) = mpsc::channel::<Vec<u8>>(64);
+        // Output may hold the echo of the code or the token: every copy here wipes itself.
+        let (out_tx, mut out) = mpsc::channel::<Zeroizing<Vec<u8>>>(64);
         std::thread::spawn(move || {
-            let mut buf = [0u8; 4096];
-            while let Ok(n) = reader.read(&mut buf) {
-                if n == 0 || out_tx.blocking_send(buf[..n].to_vec()).is_err() {
+            let mut buf = Zeroizing::new([0u8; 4096]);
+            while let Ok(n) = reader.read(&mut buf[..]) {
+                if n == 0
+                    || out_tx
+                        .blocking_send(Zeroizing::new(buf[..n].to_vec()))
+                        .is_err()
+                {
                     break;
                 }
             }
@@ -101,7 +133,7 @@ impl LoginDriver {
         id: &str,
         rx: &mut mpsc::UnboundedReceiver<Msg>,
         run: &mut Run,
-        out: &mut mpsc::Receiver<Vec<u8>>,
+        out: &mut mpsc::Receiver<Zeroizing<Vec<u8>>>,
         writer: &mut Box<dyn Write + Send>,
         pty: &mut Pty,
         exit: &mut tokio::sync::watch::Receiver<Option<pty::Exit>>,
@@ -113,6 +145,7 @@ impl LoginDriver {
         let (mut last_out, mut url_at) = (now, None::<Instant>);
         let mut pending: Option<(Zeroizing<String>, oneshot::Sender<LoginResult>)> = None;
         let mut typed = false;
+        let mut typed_at = None::<Instant>;
         // Kept to mask it in what the child says back (the terminal echoes what is typed).
         let mut sent = Zeroizing::new(String::new());
         let (mut exited, mut drain) = (false, None::<Instant>);
@@ -138,6 +171,16 @@ impl LoginDriver {
                     if Instant::now() >= deadline {
                         return End::Fail("the sign-in timed out".to_owned());
                     }
+                    if let Some(at) = typed_at && at.elapsed() >= self.cfg.answer_timeout {
+                        screen.flush();
+                        let last = parse::last_line(screen.done(), &screen.tail(), &[&sent])
+                            .map(|l| format!(" (it last said: {l})"))
+                            .unwrap_or_default();
+                        return End::Fail(format!(
+                            "claude gave no token within {}s of the code; the code may be wrong or expired{last}",
+                            self.cfg.answer_timeout.as_secs()
+                        ));
+                    }
                     if url_at.is_none() && Instant::now() >= url_deadline {
                         return End::Fail("claude showed no sign-in URL in time".to_owned());
                     }
@@ -145,10 +188,11 @@ impl LoginDriver {
                         let ready = parse::asks_for_code(screen.done(), &screen.tail());
                         if pending.is_some() && !typed && (ready || quiet >= PROMPT_QUIET) {
                             let (code, tx) = pending.take().unwrap();
-                            if type_code(writer, &code).is_err() {
+                            if type_code(writer, &code, self.cfg.enter_delay).await.is_err() {
                                 return End::Fail("the code could not be typed".to_owned());
                             }
                             typed = true;
+                            typed_at = Some(Instant::now());
                             sent = code;
                             run.code_tx = Some(tx);
                             // Anything the child printed before the code is not its answer.
@@ -191,6 +235,10 @@ impl LoginDriver {
                             url,
                         }));
                     }
+                } else if parse::asks_for_code(screen.done(), &screen.tail()) {
+                    return End::Fail(
+                        "claude asked for the code but printed no sign-in URL".to_owned(),
+                    );
                 }
             } else if typed && let Some(token) = parse::find_token(screen.done()) {
                 screen.wipe();
@@ -235,17 +283,32 @@ impl LoginDriver {
     }
 }
 
-fn type_code(writer: &mut Box<dyn Write + Send>, code: &Zeroizing<String>) -> std::io::Result<()> {
-    let mut line = Zeroizing::new(Vec::with_capacity(code.len() + 1));
-    line.extend_from_slice(code.as_bytes());
-    line.push(b'\r');
-    writer.write_all(&line)?;
+/// The code, then its Enter as a write of its own `delay` later (see `ENTER_DELAY`); a zero
+/// `delay` sends both in one write.
+async fn type_code(
+    writer: &mut Box<dyn Write + Send>,
+    code: &str,
+    delay: Duration,
+) -> std::io::Result<()> {
+    if delay.is_zero() {
+        let mut line = Zeroizing::new(Vec::with_capacity(code.len() + 1));
+        line.extend_from_slice(code.as_bytes());
+        line.push(b'\r');
+        writer.write_all(&line)?;
+        return writer.flush();
+    }
+    writer.write_all(code.as_bytes())?;
+    writer.flush()?;
+    tokio::time::sleep(delay).await;
+    writer.write_all(b"\r")?;
     writer.flush()
 }
 
 enum End {
     Token(Zeroizing<String>),
     Fail(String),
+    /// The CLI is not one this runner can drive (version drift); the Core may use another runner.
+    Unsupported(String),
     Cancelled,
 }
 
@@ -262,18 +325,21 @@ impl Run {
             let (code, why) = match &end {
                 End::Cancelled => (ErrorCode::Cancelled, "the sign-in was cancelled".to_owned()),
                 End::Fail(w) => (ErrorCode::Internal, w.clone()),
+                End::Unsupported(w) => (ErrorCode::UnsupportedCommand, w.clone()),
                 End::Token(_) => (ErrorCode::Internal, "the sign-in ended".to_owned()),
             };
             let _ = tx.send(Err(err(code, why)));
         }
         if let Some(tx) = self.code_tx.take() {
             let r = match end {
+                // ponytail: the wire type is a plain String, so this copy is not wiped; the
+                // session's frame buffer holds it until the Core acknowledges anyway.
                 End::Token(t) => LoginResult {
                     login_id: id.to_owned(),
                     token: Some(t.to_string()),
                     error: None,
                 },
-                End::Fail(w) => result(id, Some(&w)),
+                End::Fail(w) | End::Unsupported(w) => result(id, Some(&w)),
                 End::Cancelled => result(id, Some("cancelled")),
             };
             let _ = tx.send(r);

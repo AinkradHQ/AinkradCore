@@ -22,7 +22,15 @@
 //! list of its own). So the child runs as the runner's user with a scrubbed environment
 //! ([`child_env`]), its own session and process group, and HOME/TMPDIR/XDG in the scratch dir.
 //! It can read what the runner's user can read and reach whatever the host network reaches.
+//!
+//! Gaps, stated: the `login.code` and `login.result` frames carry the secrets as plain `String`s
+//! (the wire types), which the session's frame buffer holds until acknowledged; the PTY read
+//! chunks and the screen are wiped, the token and code copies made here are `Zeroizing`. The
+//! runner does not set `RLIMIT_CORE` (no safe std call, and `unsafe` is forbidden outside
+//! `crates/sys`): run it with core dumps off (`LimitCORE=0`, `ulimit -c 0`).
 
+#[cfg(test)]
+mod hardening_tests;
 mod parse;
 #[cfg(test)]
 mod parse_tests;
@@ -39,9 +47,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    ErrorCode, LoginCancel, LoginCode, LoginResult, LoginStart, LoginUrl, Size, StreamError,
+    Body, CAP_LOGIN, Command, DriverInfo, ErrorCode, LoginCancel, LoginCode, LoginResult,
+    LoginStart, LoginUrl, Reply, Size, StreamError,
 };
 use ainkrad_ptyhost::pty;
+
+use super::agent::AgentDriver;
 use tokio::sync::{mpsc, oneshot};
 use zeroize::Zeroizing;
 
@@ -56,6 +67,11 @@ pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
 const URL_TIMEOUT: Duration = Duration::from_secs(60);
 /// Output quiet this long ends the line being written (a prompt has no newline).
 const QUIET: Duration = Duration::from_millis(300);
+/// The code and its Enter are two writes this far apart: a raw-mode TUI reads one chunk holding
+/// both as a paste, and the Enter in it does not submit.
+const ENTER_DELAY: Duration = Duration::from_millis(150);
+/// Once the code is in, a token must follow this soon (a wrong or expired code never gets one).
+const ANSWER_TIMEOUT: Duration = Duration::from_secs(60);
 /// With no recognisable prompt, a code is typed once the output has been quiet this long.
 const PROMPT_QUIET: Duration = Duration::from_millis(750);
 const TICK: Duration = Duration::from_millis(50);
@@ -81,6 +97,10 @@ pub struct LoginConfig {
     pub url_timeout: Duration,
     /// Per signal of the escalating kill.
     pub grace: Duration,
+    /// Between typing the code and its Enter; zero sends both in one write (a test of the stand-in).
+    pub enter_delay: Duration,
+    /// From the code to the token.
+    pub answer_timeout: Duration,
     /// Versions accepted (tests add a stand-in's).
     pub pinned: Vec<String>,
 }
@@ -94,6 +114,8 @@ impl LoginConfig {
             timeout: LOGIN_TIMEOUT,
             url_timeout: URL_TIMEOUT,
             grace: Duration::from_millis(500),
+            enter_delay: ENTER_DELAY,
+            answer_timeout: ANSWER_TIMEOUT,
             pinned: PINNED.iter().map(|v| (*v).to_owned()).collect(),
         }
     }
@@ -111,9 +133,16 @@ fn find_claude() -> Option<PathBuf> {
         })
 }
 
-/// The sign-in driver for this runner (`<state>/logins`), or `None` (with the reason logged):
-/// no `claude`, or one whose version is not in [`PINNED`]. Without it the runner does not list
-/// the `login` command and the Core places no sign-in here. Leftovers of an earlier run are swept.
+/// Removes every sign-in scratch dir an earlier runner left (`<state>/logins`). The runner does
+/// this at start whatever else is enabled: a crash can leave a scratch HOME behind.
+pub fn sweep(state: &Path) {
+    let _ = std::fs::remove_dir_all(state.join("logins"));
+}
+
+/// The sign-in driver for this runner (`<state>/logins`), or `None` (with the reason logged)
+/// when there is no `claude` on PATH. Its version is not judged here: [`advertise`] checks it
+/// each time the runner connects, and `login.start` checks it again, because `claude` updates
+/// itself.
 pub async fn detect(state: &Path) -> Option<Arc<LoginDriver>> {
     let Some(program) = find_claude() else {
         tracing::info!("sign-in is not offered: no claude on PATH");
@@ -127,15 +156,58 @@ pub async fn detect(state: &Path) -> Option<Arc<LoginDriver>> {
         }
     };
     match driver.supported().await {
-        Ok(v) => {
-            tracing::info!(version = %v, "claude sign-in is offered");
-            Some(driver)
-        }
-        Err(why) => {
-            tracing::warn!("sign-in is not offered: {why}");
-            None
+        Ok(v) => tracing::info!(version = %v, "claude sign-in is offered"),
+        Err(why) => tracing::warn!("sign-in is not offered while: {why}"),
+    }
+    Some(driver)
+}
+
+/// The agent driver's info for a hello, with the `login` command added when `claude` is, right
+/// now, a pinned version. Called for each hello: a `claude` that updated itself off the pinned
+/// list drops the capability at the next connection, and the Core places no sign-in here.
+pub async fn advertise(
+    agent: Option<&Arc<AgentDriver>>,
+    login: Option<&Arc<LoginDriver>>,
+) -> Option<DriverInfo> {
+    let mut info = agent?.info();
+    if let Some(l) = login {
+        match l.supported().await {
+            Ok(_) => info.commands.push(CAP_LOGIN.to_owned()),
+            Err(why) => tracing::warn!("sign-in is not offered: {why}"),
         }
     }
+    Some(info)
+}
+
+/// A `login.*` command, answered by a task (`None` now): the sign-in lives in the driver, not in
+/// the command's stream.
+pub fn dispatch(
+    login: Option<&Arc<LoginDriver>>,
+    stream: u64,
+    command: Command,
+    done: &mpsc::UnboundedSender<(u64, Body)>,
+) -> Option<Body> {
+    let (Some(login), true) = (login, command.op().starts_with("login.")) else {
+        return Some(Body::Error(err(
+            ErrorCode::UnsupportedCommand,
+            "no driver of this runner takes that command",
+        )));
+    };
+    let (login, done) = (Arc::clone(login), done.clone());
+    tokio::spawn(async move {
+        let answer = match command {
+            Command::LoginStart(req) => login.start(req).await.map(Reply::LoginUrl),
+            Command::LoginCode(req) => login.code(req).await.map(Reply::LoginResult),
+            Command::LoginCancel(req) => login.cancel(req).await.map(Reply::LoginResult),
+            _ => return,
+        };
+        let body = match answer {
+            Ok(reply) => Body::Result(reply),
+            Err(e) => Body::Error(e),
+        };
+        let _ = done.send((stream, body));
+    });
+    None
 }
 
 enum Msg {
@@ -179,9 +251,14 @@ fn result(id: &str, error: Option<&str>) -> LoginResult {
 }
 
 /// The child's whole environment: the pty host's allow-list from the runner's own (so no
-/// provider key or token), then HOME, TMPDIR and the XDG dirs in the scratch dir.
+/// provider key or token), then HOME, TMPDIR and the XDG dirs in the scratch dir, and a fixed
+/// PATH that starts with the scratch dir's browser stubs.
 pub fn child_env(runner: &[(OsString, OsString)], scratch: &Path) -> BTreeMap<String, String> {
     let (home, tmp) = (scratch.join("home"), scratch.join("tmp"));
+    let path = format!(
+        "{}:/usr/local/bin:/usr/bin:/bin",
+        scratch.join("bin").display()
+    );
     let d = |p: &Path| p.display().to_string();
     let set = BTreeMap::from([
         ("HOME".to_owned(), d(&home)),
@@ -191,11 +268,33 @@ pub fn child_env(runner: &[(OsString, OsString)], scratch: &Path) -> BTreeMap<St
         ("XDG_STATE_HOME".to_owned(), d(&home.join(".local/state"))),
         ("XDG_CACHE_HOME".to_owned(), d(&home.join(".cache"))),
         ("CLAUDE_CONFIG_DIR".to_owned(), d(&home.join(".claude"))),
-        // Best effort: no browser on the runner's machine opens the URL.
+        // Best effort: no browser on the runner's machine opens the URL. `BROWSER` is one way a
+        // CLI looks; the stubs first on PATH (`make_stubs`) catch `open` and `xdg-open`.
         ("BROWSER".to_owned(), "/usr/bin/false".to_owned()),
+        ("PATH".to_owned(), path),
         ("DISABLE_AUTOUPDATER".to_owned(), "1".to_owned()),
     ]);
     pty::environment(runner, &[], &[], &set)
+}
+
+/// Scripts named like the programs a CLI opens a browser with, in `<scratch>/bin`, that only fail.
+fn make_stubs(scratch: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = scratch.join("bin");
+    private_dir(&bin)?;
+    for name in [
+        "open",
+        "xdg-open",
+        "sensible-browser",
+        "x-www-browser",
+        "www-browser",
+        "gnome-open",
+    ] {
+        let p = bin.join(name);
+        std::fs::write(&p, "#!/bin/sh\nexit 1\n")?;
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 
 fn runner_env() -> Vec<(OsString, OsString)> {

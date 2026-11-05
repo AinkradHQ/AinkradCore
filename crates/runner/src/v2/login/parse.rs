@@ -150,8 +150,8 @@ impl Screen {
     }
 
     /// The line being written, which a prompt is (no newline after it).
-    pub fn tail(&self) -> String {
-        String::from_utf8_lossy(&self.cur).into_owned()
+    pub fn tail(&self) -> std::borrow::Cow<'_, str> {
+        String::from_utf8_lossy(&self.cur)
     }
 
     /// Whether the line being written is empty.
@@ -174,13 +174,18 @@ impl Drop for Screen {
     }
 }
 
-/// The first `http(s)://` word in `lines`, as printed. Whether it is Claude's is the Core's call
-/// (it checks the host); the runner never opens it.
+/// The first word in `lines` that is an `http(s)://` URL of an OAuth authorisation (its path has
+/// `/oauth/authorize` or its query a `code_challenge=`), as printed: not a docs or help link the
+/// CLI may print before it. Whether the host is Claude's is the Core's call; the runner never
+/// opens it.
 pub fn find_url(lines: &[String]) -> Option<String> {
     lines
         .iter()
         .flat_map(|l| l.split_whitespace())
-        .find(|w| w.starts_with("https://") || w.starts_with("http://"))
+        .find(|w| {
+            (w.starts_with("https://") || w.starts_with("http://"))
+                && (w.contains("/oauth/authorize") || w.contains("code_challenge="))
+        })
         .map(str::to_owned)
 }
 

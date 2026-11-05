@@ -29,7 +29,7 @@ impl Tmp {
         std::fs::create_dir_all(&p).unwrap();
         Self(p)
     }
-    fn file(&self, name: &str) -> PathBuf {
+    pub(super) fn file(&self, name: &str) -> PathBuf {
         self.0.join(name)
     }
 }
@@ -100,7 +100,7 @@ pub(super) async fn done(d: &LoginDriver, id: &str, c: &str) -> LoginResult {
     d.code(code(id, c)).await.unwrap()
 }
 
-fn scratch_gone(t: &Tmp, id: &str) -> bool {
+pub(super) fn scratch_gone(t: &Tmp, id: &str) -> bool {
     !t.file("logins").join(id).exists()
 }
 
@@ -196,6 +196,8 @@ async fn an_unknown_version_is_refused_with_a_clear_result() {
         let d = Arc::new(LoginDriver::new(cfg).unwrap());
         let e = d.start(start("l_1")).await.unwrap_err();
         assert!(e.message.contains(why), "{}", e.message);
+        // The Core can tell this from a failure of the sign-in itself, and use another runner.
+        assert_eq!(e.code, ErrorCode::UnsupportedCommand);
         assert!(scratch_gone(&t, "l_1"));
         // Refused, not stuck: the slot is free.
         assert!(
@@ -262,7 +264,7 @@ async fn garbage_output_and_early_endings_fail_plainly() {
 #[tokio::test]
 async fn a_hostile_url_is_passed_on_as_printed_and_never_opened() {
     let t = Tmp::new();
-    let evil = "https://claude.ai.evil.example/login?next=http://127.0.0.1/";
+    let evil = "https://claude.ai.evil.example/oauth/authorize?next=http://127.0.0.1/";
     let opened = t.file("opened");
     // BROWSER is the stand-in's "browser": it records a launch; the runner sets it to `false`.
     let body = format!(
@@ -429,6 +431,7 @@ fn child_env_drops_provider_keys_and_tokens() {
     assert_eq!(env["HOME"], "/scratch/l_1/home");
     assert_eq!(env["TMPDIR"], "/scratch/l_1/tmp");
     assert_eq!(env["BROWSER"], "/usr/bin/false");
+    assert_eq!(env["PATH"], "/scratch/l_1/bin:/usr/local/bin:/usr/bin:/bin");
 }
 
 #[tokio::test]

@@ -114,8 +114,7 @@ pub struct Session {
     pty: Option<Arc<PtyDriver>>,
     /// Agent sessions (`--enable-agents`), if offered.
     agent: Option<Arc<AgentDriver>>,
-    /// Subscription sign-in (KAN-441 L2), listed on the agent driver when present.
-    login: Option<Arc<super::login::LoginDriver>>,
+    pub(super) login: Option<Arc<super::login::LoginDriver>>, // KAN-441 L2, set with `agent`
     /// Where wall time comes from: a monotonic clock stands still while the machine sleeps.
     clock: Clock,
     boot: String,
@@ -161,12 +160,6 @@ impl Session {
         self
     }
 
-    /// Offers subscription sign-in, as a command of the agent driver.
-    pub fn with_login(mut self, login: Arc<super::login::LoginDriver>) -> Self {
-        self.login = Some(login);
-        self
-    }
-
     /// Forgets `stream`, cancelling its command if it still runs (dropping the sender does).
     fn forget(&mut self, stream: u64) {
         self.streams.remove(&stream);
@@ -196,16 +189,11 @@ impl Session {
             Some(p) => (p.info(), p.terminals().await),
             None => (None, Vec::new()),
         };
+        let agent_info = super::login::advertise(self.agent.as_ref(), self.login.as_ref()).await;
         let hello = RunnerHello {
             drivers: std::iter::once(self.exec.info())
                 .chain(pty_info)
-                .chain(self.agent.as_ref().map(|a| {
-                    let mut info = a.info();
-                    if self.login.is_some() {
-                        info.commands.push(ainkrad_proto::v2::CAP_LOGIN.to_owned());
-                    }
-                    info
-                }))
+                .chain(agent_info)
                 .collect(),
             boot: Some(self.boot.clone()),
             isolation: self.agent.as_ref().map(|a| a.isolation()),
@@ -443,14 +431,12 @@ impl Session {
             // runner has proven the gateway and lists it.
             | Command::AgentLimit(_)
             | Command::GatewayTest(_) => self.start_agent(stream, command),
-            Command::LoginStart(_) | Command::LoginCode(_) | Command::LoginCancel(_) => {
-                self.start_login(stream, command)
-            }
-            Command::Unknown => {
-                Some(Body::Error(StreamError::new(
-                    ErrorCode::UnsupportedCommand,
-                    "no driver of this runner takes that command",
-                )))
+            // The sign-in driver's, or (an op of a newer Core) `unsupported_command`.
+            Command::LoginStart(_)
+            | Command::LoginCode(_)
+            | Command::LoginCancel(_)
+            | Command::Unknown => {
+                super::login::dispatch(self.login.as_ref(), stream, command, &self.done_tx)
             }
         }
     }
@@ -507,33 +493,6 @@ impl Session {
                 )
                 .await;
             let _ = done.send((stream, last));
-        });
-        None
-    }
-}
-
-impl Session {
-    /// A `login.*` command (KAN-441 L2), answered by a task: the sign-in lives in the driver.
-    fn start_login(&self, stream: u64, command: Command) -> Option<Body> {
-        let (Some(login), Some(_)) = (self.login.as_ref(), self.agent.as_ref()) else {
-            return Some(Body::Error(StreamError::new(
-                ErrorCode::UnsupportedCommand,
-                "sign-in is off on this runner",
-            )));
-        };
-        let (login, done) = (Arc::clone(login), self.done_tx.clone());
-        tokio::spawn(async move {
-            let answer = match command {
-                Command::LoginStart(req) => login.start(req).await.map(Reply::LoginUrl),
-                Command::LoginCode(req) => login.code(req).await.map(Reply::LoginResult),
-                Command::LoginCancel(req) => login.cancel(req).await.map(Reply::LoginResult),
-                _ => return,
-            };
-            let body = match answer {
-                Ok(reply) => Body::Result(reply),
-                Err(e) => Body::Error(e),
-            };
-            let _ = done.send((stream, body));
         });
         None
     }
