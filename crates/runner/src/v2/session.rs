@@ -114,6 +114,8 @@ pub struct Session {
     pty: Option<Arc<PtyDriver>>,
     /// Agent sessions (`--enable-agents`), if offered.
     agent: Option<Arc<AgentDriver>>,
+    /// Subscription sign-in (KAN-441 L2), listed on the agent driver when present.
+    login: Option<Arc<super::login::LoginDriver>>,
     /// Where wall time comes from: a monotonic clock stands still while the machine sleeps.
     clock: Clock,
     boot: String,
@@ -130,6 +132,7 @@ impl Session {
             exec,
             pty: None,
             agent: None,
+            login: None,
             clock: Arc::new(SystemTime::now),
             boot: format!("b_{}", key::b64(&key::random::<16>())),
             core_boot: None,
@@ -155,6 +158,12 @@ impl Session {
     /// Offers the `agent` driver too.
     pub fn with_agents(mut self, agent: Arc<AgentDriver>) -> Self {
         self.agent = Some(agent);
+        self
+    }
+
+    /// Offers subscription sign-in, as a command of the agent driver.
+    pub fn with_login(mut self, login: Arc<super::login::LoginDriver>) -> Self {
+        self.login = Some(login);
         self
     }
 
@@ -190,7 +199,13 @@ impl Session {
         let hello = RunnerHello {
             drivers: std::iter::once(self.exec.info())
                 .chain(pty_info)
-                .chain(self.agent.as_ref().map(|a| a.info()))
+                .chain(self.agent.as_ref().map(|a| {
+                    let mut info = a.info();
+                    if self.login.is_some() {
+                        info.commands.push(ainkrad_proto::v2::CAP_LOGIN.to_owned());
+                    }
+                    info
+                }))
                 .collect(),
             boot: Some(self.boot.clone()),
             isolation: self.agent.as_ref().map(|a| a.isolation()),
@@ -428,12 +443,10 @@ impl Session {
             // runner has proven the gateway and lists it.
             | Command::AgentLimit(_)
             | Command::GatewayTest(_) => self.start_agent(stream, command),
-            // L2 (KAN-441) gives these a driver; until then the runner never lists the `login`
-            // command, so the Core never sends them, and one that arrives anyway is refused.
-            Command::LoginStart(_)
-            | Command::LoginCode(_)
-            | Command::LoginCancel(_)
-            | Command::Unknown => {
+            Command::LoginStart(_) | Command::LoginCode(_) | Command::LoginCancel(_) => {
+                self.start_login(stream, command)
+            }
+            Command::Unknown => {
                 Some(Body::Error(StreamError::new(
                     ErrorCode::UnsupportedCommand,
                     "no driver of this runner takes that command",
@@ -494,6 +507,33 @@ impl Session {
                 )
                 .await;
             let _ = done.send((stream, last));
+        });
+        None
+    }
+}
+
+impl Session {
+    /// A `login.*` command (KAN-441 L2), answered by a task: the sign-in lives in the driver.
+    fn start_login(&self, stream: u64, command: Command) -> Option<Body> {
+        let (Some(login), Some(_)) = (self.login.as_ref(), self.agent.as_ref()) else {
+            return Some(Body::Error(StreamError::new(
+                ErrorCode::UnsupportedCommand,
+                "sign-in is off on this runner",
+            )));
+        };
+        let (login, done) = (Arc::clone(login), self.done_tx.clone());
+        tokio::spawn(async move {
+            let answer = match command {
+                Command::LoginStart(req) => login.start(req).await.map(Reply::LoginUrl),
+                Command::LoginCode(req) => login.code(req).await.map(Reply::LoginResult),
+                Command::LoginCancel(req) => login.cancel(req).await.map(Reply::LoginResult),
+                _ => return,
+            };
+            let body = match answer {
+                Ok(reply) => Body::Result(reply),
+                Err(e) => Body::Error(e),
+            };
+            let _ = done.send((stream, body));
         });
         None
     }
