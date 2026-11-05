@@ -423,9 +423,12 @@ impl Session {
             | Command::AgentRead(_)
             | Command::AgentSend(_)
             | Command::AgentDecide(_)
-            | Command::AgentStop(_) => self.start_agent(stream, command),
-            // The gateway ops (KAN-435): the runner does not list `gateway` yet.
-            Command::AgentLimit(_) | Command::GatewayTest(_) | Command::Unknown => {
+            | Command::AgentStop(_)
+            // The gateway ops (KAN-435): the driver answers `unsupported_command` unless its
+            // runner has proven the gateway and lists it.
+            | Command::AgentLimit(_)
+            | Command::GatewayTest(_) => self.start_agent(stream, command),
+            Command::Unknown => {
                 Some(Body::Error(StreamError::new(
                     ErrorCode::UnsupportedCommand,
                     "no driver of this runner takes that command",
@@ -508,6 +511,8 @@ impl Session {
                 Command::AgentSend(req) => agent.send(&req.session, req.text).map(Reply::AgentSend),
                 Command::AgentDecide(req) => agent.decide(req).map(Reply::AgentDecide),
                 Command::AgentStop(req) => agent.stop(req).map(Reply::AgentStop),
+                Command::AgentLimit(req) => agent.limit(req).map(Reply::AgentLimit),
+                Command::GatewayTest(req) => agent.gateway_test(req).await.map(Reply::GatewayTest),
                 _ => return,
             };
             let body = match answer {

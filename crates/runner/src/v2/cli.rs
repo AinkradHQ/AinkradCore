@@ -453,6 +453,14 @@ async fn egress_filter(executor: &mut crate::HarnessExecutor) -> Result<bool, St
     Ok(true)
 }
 
+/// The auth gateway's start-up check (Linux): a request from inside a real sandbox, to the real
+/// forwarder port, under a socket path of a session's length, must be answered with the refusal.
+async fn gateway_selftest(agents: &std::path::Path) -> Result<(), String> {
+    let exe =
+        std::env::current_exe().map_err(|_| "cannot find the runner executable".to_owned())?;
+    crate::gateway::selftest(agents, &exe).await
+}
+
 /// The egress proxy of `--terminal-network=filtered` (KAN-416): the policy of the agent sessions
 /// (`AINKRAD_AGENT_EGRESS_*`), proven by the same start-up check, on a socket in `dir` (0700) that
 /// the shells get bound in. A socket left by an earlier runner is replaced.
@@ -495,7 +503,7 @@ async fn agents(
     let egress_ready = egress_filter(&mut executor).await?;
     // The auth gateway is offered only once its socket has been seen to answer; a failure
     // withholds the capability, it does not stop the driver.
-    let gateway_ready = match crate::gateway::selftest().await {
+    let gateway_ready = match gateway_selftest(&state.join("agents")).await {
         Ok(()) => true,
         Err(why) => {
             tracing::warn!("the auth gateway is not offered: its start-up check failed: {why}");

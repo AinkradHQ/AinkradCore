@@ -2,22 +2,29 @@
 //! so there is no pipelining and no connection outlives its check (KAN-435 G3).
 //!
 //! Order of refusals: the head is bounded and parsed strictly (400/411/426/431), then the route
-//! (403/405), the body is read by its length (411/413) and parsed (400), the model is checked
-//! (403), then the rate and concurrency caps (429), and only then is the upstream dialled. Nothing
-//! the agent sent as auth, and no header outside the allowlist, goes upstream.
+//! (403/405) and the body's length (411/413), then the concurrency permit (429: it is taken
+//! before the body is read, so what the gateway holds in memory is bounded by the cap, not by the
+//! connections), the body is read and parsed (400), the model and its tools are checked (403),
+//! the rate cap (429), the reservation against the ceiling (429), and only then is the upstream
+//! dialled. Nothing the agent sent as auth, and no header outside the allowlist, goes upstream.
 
 use std::time::Duration;
 
 use ainkrad_proto::v2::{GatewayAuth, Wire};
-use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::time::{Instant, timeout};
+use zeroize::Zeroizing;
 
+use super::charge::{Charge, signal};
 use super::dial::DialError;
+use super::meter::{Denied, estimate};
+use super::probe::{Probe, betas};
 use super::request::{MAX_HEAD, Refusal, Request, header_ok, refuse};
 use super::route::route;
-use super::{Config, Shared};
+use super::status::of_dial;
+use super::stream::respond;
+use super::{Config, Event, Shared};
 
 /// From accepting a connection to the blank line ending the head.
 const HEAD: Duration = Duration::from_secs(10);
@@ -27,7 +34,7 @@ const BODY: Duration = Duration::from_secs(60);
 const WRITE: Duration = Duration::from_secs(60);
 
 /// How a connection ends without a response the gateway wrote.
-enum End {
+pub(super) enum End {
     Refuse(Refusal),
     /// Close without a word: the response was already started.
     Drop,
@@ -37,13 +44,6 @@ impl From<Refusal> for End {
     fn from(r: Refusal) -> End {
         End::Refuse(r)
     }
-}
-
-/// What the body is probed for. A derived struct refuses a duplicate `model` key, so the model
-/// checked here is the one the upstream reads; unknown fields are only syntax-checked.
-#[derive(Deserialize)]
-struct Probe {
-    model: Option<String>,
 }
 
 pub(super) async fn connection(sh: &Shared, mut c: UnixStream) {
@@ -56,7 +56,7 @@ pub(super) async fn connection(sh: &Shared, mut c: UnixStream) {
     let _ = c.shutdown().await;
 }
 
-fn reason(status: u16) -> &'static str {
+pub(super) fn reason(status: u16) -> &'static str {
     match status {
         200 => "OK",
         201 => "Created",
@@ -78,7 +78,7 @@ fn reason(status: u16) -> &'static str {
     }
 }
 
-async fn put(c: &mut UnixStream, bytes: &[u8]) -> Result<(), End> {
+pub(super) async fn put(c: &mut UnixStream, bytes: &[u8]) -> Result<(), End> {
     match timeout(WRITE, async {
         c.write_all(bytes).await?;
         c.flush().await
@@ -154,13 +154,16 @@ async fn read_body(c: &mut UnixStream, mut have: Vec<u8>, len: usize) -> Result<
     }
 }
 
-/// Counts a request against the per-minute window; the permit is the concurrency cap.
-fn admit(sh: &Shared) -> Result<tokio::sync::OwnedSemaphorePermit, Refusal> {
-    let permit = sh
-        .inflight
+/// The concurrency cap: a request holds a permit from before its body is read to its last byte.
+fn take_permit(sh: &Shared) -> Result<tokio::sync::OwnedSemaphorePermit, Refusal> {
+    sh.inflight
         .clone()
         .try_acquire_owned()
-        .map_err(|_| refuse(429, "gateway_busy"))?;
+        .map_err(|_| refuse(429, "gateway_busy"))
+}
+
+/// Counts a request against the per-minute window.
+fn count_rate(sh: &Shared) -> Result<(), Refusal> {
     let now = Instant::now();
     let mut w = sh.window.lock().expect("rate window lock");
     while w
@@ -173,7 +176,7 @@ fn admit(sh: &Shared) -> Result<tokio::sync::OwnedSemaphorePermit, Refusal> {
         return Err(refuse(429, "gateway_rate"));
     }
     w.push_back(now);
-    Ok(permit)
+    Ok(())
 }
 
 fn dial_refusal(e: DialError) -> Refusal {
@@ -189,23 +192,47 @@ fn dial_refusal(e: DialError) -> Refusal {
 }
 
 /// The headers of the upstream request: the allow-listed ones the agent sent (a repeat of one is
-/// ambiguous, so refused), a JSON content type if none, and the gateway's own auth.
-fn upstream_headers(cfg: &Config, req: &Request) -> Result<Vec<(String, String)>, Refusal> {
-    let mut out: Vec<(String, String)> = Vec::new();
-    for (n, v) in req.headers.iter().filter(|(n, _)| header_ok(n)) {
+/// ambiguous, so refused), `anthropic-beta` cut to the betas the gateway allows, a JSON content
+/// type of the gateway's own (the agent's is dropped: the body is JSON or it was refused), and
+/// the gateway's own auth. The auth value is wiped when dropped.
+fn upstream_headers(
+    cfg: &Config,
+    req: &Request,
+) -> Result<Vec<(String, Zeroizing<String>)>, Refusal> {
+    let mut out: Vec<(String, Zeroizing<String>)> = Vec::new();
+    for (n, v) in req
+        .headers
+        .iter()
+        .filter(|(n, _)| header_ok(n) && n != "content-type")
+    {
         if out.iter().any(|o| &o.0 == n) {
             return Err(refuse(400, "bad_request"));
         }
-        out.push((n.clone(), v.clone()));
+        let v = if n == "anthropic-beta" {
+            match betas(v) {
+                Some(kept) => kept,
+                None => continue,
+            }
+        } else {
+            v.clone()
+        };
+        out.push((n.clone(), Zeroizing::new(v)));
     }
-    if !out.iter().any(|(n, _)| n == "content-type") {
-        out.push(("content-type".to_owned(), "application/json".to_owned()));
+    if req.headers.iter().filter(|h| h.0 == "content-type").count() > 1 {
+        return Err(refuse(400, "bad_request"));
     }
+    out.push((
+        "content-type".to_owned(),
+        Zeroizing::new("application/json".to_owned()),
+    ));
     let key = cfg.key.expose();
     out.push(match cfg.upstream.auth {
-        GatewayAuth::XApiKey => ("x-api-key".to_owned(), key.to_owned()),
-        GatewayAuth::Bearer => ("authorization".to_owned(), format!("Bearer {key}")),
-        GatewayAuth::XGoogApiKey => ("x-goog-api-key".to_owned(), key.to_owned()),
+        GatewayAuth::XApiKey => ("x-api-key".to_owned(), Zeroizing::new(key.to_owned())),
+        GatewayAuth::Bearer => (
+            "authorization".to_owned(),
+            Zeroizing::new(format!("Bearer {key}")),
+        ),
+        GatewayAuth::XGoogApiKey => ("x-goog-api-key".to_owned(), Zeroizing::new(key.to_owned())),
     });
     Ok(out)
 }
@@ -224,6 +251,7 @@ async fn serve(sh: &Shared, c: &mut UnixStream) -> Result<(), End> {
     if len > cfg.max_body {
         return Err(refuse(413, "body_too_large").into());
     }
+    let _permit = take_permit(sh)?;
     let body = read_body(c, early, len).await?;
     // An object only: a derived struct would also read a JSON array as its fields in order.
     if body.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{') {
@@ -232,19 +260,32 @@ async fn serve(sh: &Shared, c: &mut UnixStream) -> Result<(), End> {
     let probe: Probe = serde_json::from_slice(&body).map_err(|_| refuse(400, "bad_json"))?;
     // The model: in the path on the Gemini wire, in the body on the others.
     let model = match cfg.upstream.wire {
-        Wire::GeminiGenerate => routed.path_model,
-        _ => probe.model,
+        Wire::GeminiGenerate => routed.path_model.clone(),
+        _ => probe.model.clone(),
     };
-    if !model.is_some_and(|m| cfg.models.contains(&m)) {
+    let Some(model) = model.filter(|m| cfg.models.contains(m)) else {
         return Err(refuse(403, "model_not_allowed").into());
+    };
+    if let Some(code) = probe.network_tool() {
+        return Err(refuse(403, code).into());
     }
     let headers = upstream_headers(cfg, &req)?;
-    let _permit = admit(sh)?;
+    count_rate(sh)?;
+    let price = cfg
+        .meter
+        .price(&model)
+        .ok_or(refuse(403, "model_not_allowed"))?
+        .clone();
+    let (held, est) = estimate(&price, body.len(), probe.max_output());
+    let reservation = cfg.meter.reserve(est).map_err(|d| match d {
+        Denied::Ceiling => refuse(429, "gateway_ceiling"),
+        Denied::Unreported => refuse(429, "gateway_unreported"),
+    })?;
     let pairs: Vec<(&str, &str)> = headers
         .iter()
         .map(|(n, v)| (n.as_str(), v.as_str()))
         .collect();
-    let mut up = cfg
+    let up = cfg
         .dialer
         .open(
             &cfg.upstream.host,
@@ -254,55 +295,26 @@ async fn serve(sh: &Shared, c: &mut UnixStream) -> Result<(), End> {
             &body,
             cfg.max_response,
         )
-        .await
-        .map_err(|e| {
+        .await;
+    let up = match up {
+        Ok(up) => up,
+        Err(e) => {
             tracing::debug!(error = ?e, "gateway upstream not opened");
-            dial_refusal(e)
-        })?;
-    // The response head: the allow-listed headers, minus any whose value holds the key.
-    let key = cfg.key.expose();
-    let mut head = format!("HTTP/1.1 {} {}\r\n", up.status, reason(up.status));
-    for (n, v) in up.headers.iter().filter(|(_, v)| !v.contains(key)) {
-        head.push_str(&format!("{n}: {v}\r\n"));
-    }
-    // The body's framing is the gateway's own: a length is passed on and checked, anything else
-    // is chunked, and a chunked stream that ends in an error never gets its last chunk.
-    let framed = !matches!(up.status, 204 | 304);
-    let chunked = framed && up.length.is_none();
-    match up.length {
-        Some(n) if framed => head.push_str(&format!("Content-Length: {n}\r\n")),
-        _ if chunked => head.push_str("Transfer-Encoding: chunked\r\n"),
-        _ => {}
-    }
-    head.push_str("Connection: close\r\n\r\n");
-    put(c, head.as_bytes()).await?;
-    let mut sent = 0usize;
-    loop {
-        match up.body.next().await {
-            Ok(Some(piece)) => {
-                sent += piece.len();
-                let mut out = Vec::with_capacity(piece.len() + 16);
-                if chunked {
-                    out.extend_from_slice(format!("{:x}\r\n", piece.len()).as_bytes());
-                }
-                out.extend_from_slice(&piece);
-                if chunked {
-                    out.extend_from_slice(b"\r\n");
-                }
-                put(c, &out).await?; // flushed per piece: a stream is not buffered here
-            }
-            Ok(None) => break,
-            Err(e) => {
-                // A read error, a truncation or the ceiling: the stream ends without a last
-                // chunk (or short of its length), so the harness sees an error, not a clean end.
-                tracing::debug!(error = ?e, sent, "gateway response cut");
-                return Err(End::Drop);
-            }
+            // The hold is released as `reservation` drops; the Core hears the class.
+            let _ = sh
+                .events
+                .send(Event::Report(signal(of_dial(e), None, None)));
+            return Err(dial_refusal(e).into());
         }
-    }
-    if chunked {
-        put(c, b"0\r\n\r\n").await?;
-    }
-    tracing::debug!(status = up.status, sent, "gateway response");
-    Ok(())
+    };
+    let mut charge = Charge::new(
+        reservation,
+        sh.events.clone(),
+        model,
+        price,
+        held.input,
+        cfg.upstream.wire,
+        &up,
+    );
+    respond(cfg, c, up, &mut charge).await
 }

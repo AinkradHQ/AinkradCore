@@ -320,10 +320,14 @@ impl Sandbox for ProcessSandbox {
         // The process sandbox still owns the filesystem boundary; this makes HOME harmless
         // even on systems whose Seatbelt profile cannot hide a pre-existing home directory.
         Self::add(env, "HOME", "/nonexistent");
-        let holds = start
-            .secrets
-            .iter()
-            .any(|g| g.var != super::agent::RUN_TOKEN_VAR);
+        // A gateway grant is a secret held for the session (the key is in the runner, and the
+        // network the harness has decides what else it could reach with the gateway's help):
+        // `AINKRAD_AGENT_NETWORK=allow` never gives such a session the host network.
+        let holds = start.gateway.is_some()
+            || start
+                .secrets
+                .iter()
+                .any(|g| g.var != super::agent::RUN_TOKEN_VAR);
         let requested = self.requested.clone();
         let network = network_for(
             requested.as_deref(),

@@ -138,7 +138,7 @@ impl Executor for Script {
     }
 }
 
-fn dirs(name: &str) -> (TestDir, AgentConfig) {
+pub(super) fn dirs(name: &str) -> (TestDir, AgentConfig) {
     let base = if cfg!(target_os = "linux") {
         std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
@@ -158,7 +158,7 @@ fn dirs(name: &str) -> (TestDir, AgentConfig) {
     (TestDir(root), config)
 }
 
-fn start(session: &str, harness: &str) -> AgentStart {
+pub(super) fn start(session: &str, harness: &str) -> AgentStart {
     AgentStart {
         session: session.to_owned(),
         harness: harness.to_owned(),
@@ -192,6 +192,21 @@ fn leases() -> Redeem {
     })
 }
 
+/// An unconfined sandbox that lists the gateway capability, as a proven runner does.
+struct GatewayCapable;
+
+impl Sandbox for GatewayCapable {
+    fn name(&self) -> &'static str {
+        "gateway-capable"
+    }
+    fn prepare(&self, _: &AgentStart, _: &mut Vec<(String, String)>) -> Result<(), String> {
+        Ok(())
+    }
+    fn capabilities(&self) -> &'static [&'static str] {
+        &[ainkrad_proto::v2::CAP_GATEWAY]
+    }
+}
+
 fn grants() -> Vec<SecretGrant> {
     [
         ("l_env", "TOKEN"),
@@ -220,6 +235,7 @@ async fn drain_from(
     for _ in 0..200 {
         let after = all.last().map_or(from, |e: &TranscriptEntry| e.seq);
         let read = AgentRead {
+            gw_after: 0,
             session: session.to_owned(),
             after,
             wait_ms: Some(2000),
@@ -267,6 +283,7 @@ async fn two_sessions_run_at_once_and_capacity_and_slots_hold() {
     // Both are running at the same time: each has said `up` and neither has ended.
     for s in ["as_a", "as_b"] {
         let read = AgentRead {
+            gw_after: 0,
             session: s.to_owned(),
             after: 0,
             wait_ms: Some(2000),
@@ -278,6 +295,7 @@ async fn two_sessions_run_at_once_and_capacity_and_slots_hold() {
         {
             let ev = d
                 .read(&AgentRead {
+                    gw_after: 0,
                     after: seen.last().map_or(0, |e| e.seq),
                     ..read.clone()
                 })
@@ -383,6 +401,7 @@ async fn a_read_acknowledges_what_the_core_holds_and_a_gap_is_explicit() {
     // Nothing was read: past `max_entries`, the oldest went, and the read says so first.
     let ev = d
         .read(&AgentRead {
+            gw_after: 0,
             session: "as_a".into(),
             after: 0,
             wait_ms: None,
@@ -402,6 +421,7 @@ async fn a_read_acknowledges_what_the_core_holds_and_a_gap_is_explicit() {
     assert!(file.exists());
     let done = d
         .read(&AgentRead {
+            gw_after: 0,
             session: "as_a".into(),
             after: ev.last_seq,
             wait_ms: None,
@@ -425,6 +445,7 @@ async fn an_approval_and_a_message_round_trip() {
         let after = entries.last().map_or(0, |e: &TranscriptEntry| e.seq);
         entries.extend(
             d.read(&AgentRead {
+                gw_after: 0,
                 session: "as_a".into(),
                 after,
                 wait_ms: Some(2000),
@@ -526,6 +547,7 @@ async fn a_new_driver_reloads_a_running_session_as_interrupted_and_resumes_it() 
         seen.extend(
             first
                 .read(&AgentRead {
+                    gw_after: 0,
                     session: "as_a".into(),
                     after,
                     wait_ms: Some(2000),
@@ -539,6 +561,7 @@ async fn a_new_driver_reloads_a_running_session_as_interrupted_and_resumes_it() 
     let held = seen.iter().find(|e| e.body["text"] == "one").unwrap().seq;
     first
         .read(&AgentRead {
+            gw_after: 0,
             session: "as_a".into(),
             after: held,
             wait_ms: None,
@@ -550,6 +573,7 @@ async fn a_new_driver_reloads_a_running_session_as_interrupted_and_resumes_it() 
     let second = Arc::new(AgentDriver::new(config, s).unwrap());
     let ev = second
         .read(&AgentRead {
+            gw_after: 0,
             session: "as_a".into(),
             after: held,
             wait_ms: None,
@@ -607,6 +631,7 @@ async fn an_ended_session_is_woken_by_a_newer_resume_and_never_twice() {
     assert!(harness.is_some());
     // The Core acknowledged everything, as it does when a session ends.
     d.read(&AgentRead {
+        gw_after: 0,
         session: "as_w".into(),
         after: held,
         wait_ms: None,
@@ -672,6 +697,7 @@ async fn a_secret_reaches_only_its_session_and_never_its_transcript() {
         let after = seen.last().map_or(0, |e: &TranscriptEntry| e.seq);
         seen.extend(
             d.read(&AgentRead {
+                gw_after: 0,
                 session: "as_a".into(),
                 after,
                 wait_ms: Some(2000),
@@ -1361,7 +1387,8 @@ async fn a_gateway_grant_gives_the_harness_a_socket_not_a_key_and_a_stop_closes_
     let d = Arc::new(
         AgentDriver::new(config.clone(), s)
             .unwrap()
-            .with_redeem(redeem),
+            .with_redeem(redeem)
+            .with_sandbox(Arc::new(GatewayCapable)),
     );
     let mut req = start("as_gw", "fake");
     req.gateway = Some(grant("l_gw", "api.anthropic.com"));
@@ -1372,6 +1399,7 @@ async fn a_gateway_grant_gives_the_harness_a_socket_not_a_key_and_a_stop_closes_
         let after = seen.last().map_or(0, |e: &TranscriptEntry| e.seq);
         seen.extend(
             d.read(&AgentRead {
+                gw_after: 0,
                 session: "as_gw".into(),
                 after,
                 wait_ms: Some(2000),

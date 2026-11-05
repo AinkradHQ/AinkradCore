@@ -10,19 +10,27 @@ use ainkrad_proto::redact::Redactor;
 use ainkrad_proto::v2::GatewayGrant;
 
 use super::dial::Dialer;
-use super::{Config, Gateway, Key, REQUEST_TOTAL, sandbox_env, socket_in, start};
+use super::{Config, Event, Gateway, Key, REQUEST_TOTAL, sandbox_env, socket_in, start};
 use crate::v2::agent::secrets::Redeem;
+
+/// An open gateway, the sandbox slot's variables, and what it reports.
+pub type Opened = (
+    Gateway,
+    Vec<(String, String)>,
+    tokio::sync::mpsc::UnboundedReceiver<Event>,
+);
 
 /// Redeems `grant.lease`, teaches `redactor` the value, and starts the gateway on a socket in
 /// `dir` (the session's private dir). Returns it with the sandbox slot's variables
-/// (`AINKRAD_SANDBOX_GW_*`; they name the socket and forwarder, never the key). Errors say what
-/// failed and never hold the lease or the key.
+/// (`AINKRAD_SANDBOX_GW_*`; they name the socket and forwarder, never the key) and the channel
+/// of what the gateway reports (usage, upstream signals, a close). Errors say what failed and
+/// never hold the lease or the key.
 pub async fn open(
     grant: &GatewayGrant,
     redeem: Option<&Redeem>,
     dir: &Path,
     redactor: &mut Redactor,
-) -> Result<(Gateway, Vec<(String, String)>), String> {
+) -> Result<Opened, String> {
     let redeem = redeem.ok_or("this runner cannot redeem a gateway lease")?;
     let leased = redeem(grant.lease.clone()).await?;
     redactor.known(&leased.name, &leased.value);
@@ -36,11 +44,12 @@ pub async fn open(
         .create(dir)
         .map_err(|e| format!("the gateway's directory: {e}"))?;
     let sock = socket_in(dir);
-    let gateway = start(&sock, cfg).map_err(|e| format!("the gateway socket: {e}"))?;
+    let (events, rx) = tokio::sync::mpsc::unbounded_channel();
+    let gateway = start(&sock, cfg, events).map_err(|e| format!("the gateway socket: {e}"))?;
     let exe = std::env::current_exe().map_err(|e| format!("the forwarder: {e}"))?;
     let env = sandbox_env(&sock, &exe)
         .into_iter()
         .map(|(n, v)| Ok((n, v.into_string().map_err(|_| "a non-UTF-8 gateway path")?)))
         .collect::<Result<_, &str>>()?;
-    Ok((gateway, env))
+    Ok((gateway, env, rx))
 }
