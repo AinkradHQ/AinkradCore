@@ -184,3 +184,39 @@ fn a_gateway_session_that_asks_for_egress_needs_the_proven_filter() {
     both.drivers[0].commands.push("egress-filter".to_owned());
     assert_eq!(gw(&both), None);
 }
+
+#[test]
+fn an_api_key_account_session_is_placed_through_the_gateway_and_not_the_env_filter() {
+    // The account model's own name (`acct.<provider>.<id>`) is an API key a gateway serves.
+    let key = [secret("acct.anthropic.7")];
+    // A runner without the gateway is refused, though it has the egress filter an env key needs.
+    let why = placement_refusal(&runner(Some("linux"), true), &key, &sandboxed()).unwrap();
+    assert!(why.contains("offers the gateway"), "{why}");
+    // macOS and an unreported OS are refused even with the capability (decision 6).
+    let why = placement_refusal(&gw_runner(Some("macos"), true), &key, &sandboxed()).unwrap();
+    assert!(why.contains("Linux") && why.contains("macos"), "{why}");
+    assert!(placement_refusal(&gw_runner(None, true), &key, &sandboxed()).is_some());
+    // Unsandboxed, or an unreadable policy: refused.
+    let ok = gw_runner(Some("linux"), true);
+    let why = placement_refusal(&ok, &key, &json!({"mode": "ask"})).unwrap();
+    assert!(why.contains("sandboxed"), "{why}");
+    assert!(placement_refusal(&ok, &key, &json!({"x": 1})).is_some());
+    // Placed with the gateway and the sandbox: no egress filter is demanded of it.
+    assert_eq!(placement_refusal(&ok, &key, &sandboxed()), None);
+    // An account secret of any other label stays on the env rules: it needs the filter.
+    let env = [secret("acct.anthropic.main")];
+    let why = placement_refusal(&ok, &env, &sandboxed()).unwrap();
+    assert!(why.contains("egress filter"), "{why}");
+}
+
+#[test]
+fn a_session_names_at_most_one_api_key_account() {
+    assert!(checked(&[secret("acct.anthropic.7")], &sandboxed()).is_ok());
+    let two = [secret("acct.anthropic.7"), secret("acct.anthropic.8")];
+    let Err(Invalid::Bad(why)) = checked(&two, &sandboxed()) else {
+        panic!("two accounts must be refused")
+    };
+    assert!(why.contains("at most one"), "{why}");
+    // An API-key account still needs the sandbox, as any account does.
+    assert!(checked(&[secret("acct.anthropic.7")], &json!({"mode": "ask"})).is_err());
+}

@@ -574,6 +574,26 @@ pub async fn lease(
     now: &str,
     now_unix: i64,
 ) -> Result<(String, i64), Error> {
+    lease_to(
+        pool, name, runner, ttl, by_device, actor, now, now_unix, None,
+    )
+    .await
+}
+
+/// [`lease`] for a reader named in the audit row (`"to": "gateway"`: the runner's auth gateway
+/// redeems it into its own memory, KAN-435).
+#[allow(clippy::too_many_arguments)]
+pub async fn lease_to(
+    pool: &SqlitePool,
+    name: &str,
+    runner: &str,
+    ttl: Option<i64>,
+    by_device: &str,
+    actor: AuditActor,
+    now: &str,
+    now_unix: i64,
+    to: Option<&str>,
+) -> Result<(String, i64), Error> {
     let mut tx = super::begin_write(pool).await?;
     enabled(&mut tx).await?;
     let s = find(&mut tx, name).await?;
@@ -633,9 +653,12 @@ pub async fn lease(
     .bind(now)
     .execute(&mut *tx)
     .await?;
-    let details = json!({"name": name, "version": s.version, "runner": runner,
-                         "lease": hex8(hash.as_ref()), "expires_at": expires_at,
-                         "by_device": by_device});
+    let mut details = json!({"name": name, "version": s.version, "runner": runner,
+                             "lease": hex8(hash.as_ref()), "expires_at": expires_at,
+                             "by_device": by_device});
+    if let Some(to) = to {
+        details["to"] = json!(to);
+    }
     audit(&mut tx, actor, "secret.leased", s.id, details).await?;
     tx.commit().await?;
     Ok((id, expires_at))

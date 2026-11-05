@@ -35,9 +35,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, Close, Command, Control, Credit, DriverInfo, ErrorCode, Frame, Heartbeat, HostLoad,
-    IsolationCaps, OP_AGENT_READ, OP_PTY_ATTACH, OP_PTY_OPEN, RunnerHello, STREAM_WINDOW,
-    StreamError, StreamState,
+    Body, CAP_GATEWAY, Close, Command, Control, Credit, DriverInfo, ErrorCode, Frame, Heartbeat,
+    HostLoad, IsolationCaps, OP_AGENT_LIMIT, OP_AGENT_READ, OP_GATEWAY_TEST, OP_PTY_ATTACH,
+    OP_PTY_OPEN, RunnerHello, STREAM_WINDOW, StreamError, StreamState,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -167,12 +167,20 @@ struct Runner {
     load: Option<HostLoad>,
 }
 
+/// Whether a driver's command `listed` offers `op`: itself, or (KAN-435) the `gateway` capability
+/// for the two ops that capability brings, `agent.limit` and `gateway.test`. A runner lists the
+/// capability beside the agent driver's five ops and never the two by name, so matching the op's
+/// name alone would refuse them against every real runner.
+fn offers(listed: &str, op: &str) -> bool {
+    listed == op || (listed == CAP_GATEWAY && matches!(op, OP_AGENT_LIMIT | OP_GATEWAY_TEST))
+}
+
 impl Runner {
     fn advertises(&self, op: &str) -> bool {
         self.hello
             .drivers
             .iter()
-            .any(|d| d.commands.iter().any(|c| c == op))
+            .any(|d| d.commands.iter().any(|c| offers(c, op)))
     }
 
     fn capacity(&self, max: usize) -> usize {
@@ -192,7 +200,7 @@ impl Runner {
             .hello
             .drivers
             .iter()
-            .find(|d| d.commands.iter().any(|c| c == op));
+            .find(|d| d.commands.iter().any(|c| offers(c, op)));
         let own = d.and_then(|d| d.streams.map(|s| (d.name.clone(), s)));
         let count = |name: Option<&str>| {
             self.inflight

@@ -20,6 +20,7 @@ mod backup;
 pub mod budgets;
 pub mod costs;
 pub mod events;
+pub mod gateway;
 pub mod gov;
 pub mod kinds;
 pub mod migrate;

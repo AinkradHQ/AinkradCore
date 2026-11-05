@@ -281,7 +281,17 @@ pub async fn record_priced_in(
     .fetch_one(&mut *conn)
     .await?;
     add_subjects(conn, id, c.account_id, c.subjects).await?;
-    let tokens = c.input_tokens + c.output_tokens + c.cache_tokens;
+    // What counts against a budget is what the gateway counts against a ceiling: the one definition
+    // (`ceiling_tokens`), so what the gateway refuses and what the ledger holds cannot drift. The
+    // counts are checked non-negative above; the sum saturates instead of overflowing.
+    let count = |n: i64| u64::try_from(n).unwrap_or(0);
+    let tokens = i64::try_from(ainkrad_proto::v2::ceiling_tokens(
+        count(c.input_tokens),
+        count(c.output_tokens),
+        count(c.cache_tokens),
+        0,
+    ))
+    .unwrap_or(i64::MAX);
     guard::apply_in(
         conn,
         id,

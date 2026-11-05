@@ -189,6 +189,7 @@ impl AgentDriver {
         epoch: u32,
     ) {
         let (me, session) = (Arc::clone(self), session.to_owned());
+        self.with(&session, |live, _, _| live.gw_forwarding = true);
         tokio::spawn(async move {
             while let Some(event) = events.recv().await {
                 me.with(&session, |live, cfg, s| match event {
@@ -206,6 +207,8 @@ impl AgentDriver {
                     }
                 });
             }
+            // Every report is in: an ended session may now say so.
+            me.with(&session, |live, _, _| live.gw_forwarding = false);
         });
     }
 

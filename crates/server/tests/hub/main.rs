@@ -8,6 +8,9 @@ mod agents;
 use ainkrad_core_server::agents::AgentsConfig;
 mod account_placement;
 mod fault;
+mod gateway;
+mod gateway_auth;
+mod gateway_more;
 mod health;
 mod isolation;
 mod proof;
@@ -231,6 +234,10 @@ pub struct Fake {
     pub streams: Vec<StreamState>,
     /// Load to advertise in `hello` (E2-15.2).
     pub load: Option<HostLoad>,
+    /// The OS and isolation `hello` claims (a gateway session is placed on a Linux runner that
+    /// reports a sandbox).
+    pub os: Option<String>,
+    pub isolation: Option<IsolationCaps>,
 }
 
 pub fn exec_driver(commands: &[&str], capacity: u32) -> DriverInfo {
@@ -260,6 +267,8 @@ impl Fake {
             boot: None,
             streams: Vec::new(),
             load: None,
+            os: None,
+            isolation: None,
         }
     }
 
@@ -295,7 +304,7 @@ impl Fake {
             protocol: PROTOCOL_VERSION.to_owned(),
             runner_version: "test".to_owned(),
             drivers,
-            os: None,
+            os: self.os.clone(),
             arch: None,
             device_id: Some(dev.id.clone()),
             nonce: Some(b64(nonce_r)),
@@ -303,7 +312,7 @@ impl Fake {
             streams: self.streams.clone(),
             terminals: vec![],
             load: self.load,
-            isolation: None,
+            isolation: self.isolation.clone(),
         };
         self.send(CONTROL_STREAM, Body::Control(Control::Hello(hello)))
             .await;

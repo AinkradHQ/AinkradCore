@@ -17,7 +17,9 @@
 //! - **Capacity** (E2-08.1): a create is refused `runner_busy` when the runner's `agent`
 //!   driver, or the harness's slot on it, is full (the runner refuses it too).
 
+pub mod gateway;
 mod launch;
+mod topup;
 pub mod wake;
 use launch::launch;
 pub use launch::{Placement, placement};
@@ -69,11 +71,24 @@ pub struct Agents {
     pub config: AgentsConfig,
     supervised: Mutex<HashSet<String>>,
     elevated: Mutex<HashMap<String, Elevated>>,
-    leases: Mutex<HashMap<String, (i64, Vec<SecretGrant>)>>,
+    leases: Mutex<HashMap<String, Leased>>,
+    /// The accounts whose key a one-shot `gateway.test` is checking now (one at a time each).
+    confirming: Mutex<HashSet<i64>>,
     /// Module credentials awaiting redemption (`Module::credentials`), by the SHA-256 of their
     /// lease id. In memory only: never stored, never logged, gone at the first redemption, at
     /// expiry or with the process.
     ephemeral: Mutex<HashMap<[u8; 32], Ephemeral>>,
+}
+
+/// What one start of a session was leased, kept until the runner confirms it: a resent start (its
+/// answer was lost) carries the same leases, so it never piles new ones up.
+#[derive(Clone)]
+struct Leased {
+    /// When the first of them ends (unix seconds).
+    until: i64,
+    secrets: Vec<SecretGrant>,
+    /// The key of an API-key account, for the runner's gateway (KAN-435); never an env secret.
+    gateway: Option<Box<ainkrad_proto::v2::GatewayGrant>>,
 }
 
 /// How long a module credential's lease lasts: the runner redeems it at the start of the session.
@@ -289,6 +304,12 @@ pub fn placement_refusal(
     placement_refusal_with(runner, secrets, policy, false)
 }
 
+/// Whether a secret is an API-key account the runner's gateway serves (the account model's own
+/// `acct.<provider>.<id>`), not an env secret.
+fn gateway_bound(s: &store::SessionSecret) -> bool {
+    crate::store::gateway::account_secret(&s.name).is_some()
+}
+
 /// Whether the runner lists the `gateway` command beside its agent driver's ops (KAN-435).
 fn serves_gateway(runner: &RunnerState) -> bool {
     runner
@@ -325,6 +346,15 @@ pub fn placement_refusal_with(
     policy: &serde_json::Value,
     needs_gateway: bool,
 ) -> Option<String> {
+    // An API-key account is served by the gateway, so such a session needs it (KAN-435 G5); what
+    // is left of the secrets is what the env rules below still judge.
+    let needs_gateway = needs_gateway || secrets.iter().any(gateway_bound);
+    let secrets: Vec<store::SessionSecret> = secrets
+        .iter()
+        .filter(|s| !gateway_bound(s))
+        .cloned()
+        .collect();
+    let secrets = secrets.as_slice();
     if needs_gateway {
         let Ok(parsed) = serde_json::from_value::<ainkrad_proto::runner::Policy>(policy.clone())
         else {
@@ -387,7 +417,8 @@ pub async fn ask(
             | Reply::AgentRead(ev)
             | Reply::AgentSend(ev)
             | Reply::AgentDecide(ev)
-            | Reply::AgentStop(ev),
+            | Reply::AgentStop(ev)
+            | Reply::AgentLimit(ev),
         ) => Ok(ev),
         other => Err(StreamError::new(
             ErrorCode::BadFrame,
@@ -510,6 +541,12 @@ pub fn validate_new(new: &store::NewSession<'_>, admin: bool) -> Result<(), Inva
     ) {
         return Err(Invalid::Bad(why));
     }
+    // The gateway serves one account per session: the ledger records against that one.
+    if new.secrets.iter().filter(|s| gateway_bound(s)).count() > 1 {
+        return Err(Invalid::Bad(
+            "a session names at most one API-key account (acct.<provider>.<id>)",
+        ));
+    }
     if !new.secrets.is_empty() && !admin {
         return Err(Invalid::Forbidden(
             "naming broker secrets requires the admin scope",
@@ -605,6 +642,9 @@ impl ModuleAgents {
         .is_ok_and(|p| p.mode == ainkrad_proto::runner::PermissionMode::Sandboxed && !p.sandboxed);
         if sandbox_without_flag {
             return Err(invalid_args("a sandboxed mode needs the sandbox flag"));
+        }
+        if let Some(why) = gateway::module_refusal(new.secrets) {
+            return Err(invalid_args(why));
         }
         admit_holding(app, new.runner, new.harness, new.policy, new.secrets).await?;
         let s = store::create_owned_ref(
@@ -702,13 +742,20 @@ async fn run(app: &App, id: &str) {
     loop {
         let s = match store::get(&app.pool, id).await {
             Ok(Some(s)) if s.live() => s,
-            Ok(_) => return,
+            Ok(Some(s)) => {
+                // Over: nothing left to stop, but an upstream `auth_failed` it reported is checked.
+                gateway::after(app, &s).await;
+                return;
+            }
+            Ok(None) => return,
             Err(e) => {
                 tracing::error!(session = id, error = %e, "reading a session failed");
                 tokio::time::sleep(cfg.retry).await;
                 continue;
             }
         };
+        // A budget stop or an auth failure the last answer recorded.
+        gateway::after(app, &s).await;
         let step = match s.state.as_str() {
             "starting" => launch(app, &s, false).await.map(drop),
             "interrupted" => launch(app, &s, true).await.map(drop),
@@ -754,8 +801,10 @@ async fn run(app: &App, id: &str) {
 async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal> {
     let after = u64::try_from(s.last_seq).unwrap_or(0);
     let wait = u64::try_from(cfg.read_wait.as_millis()).unwrap_or(u64::MAX);
+    // The reports the ledger holds, as of the transaction that last committed: what the Core
+    // acknowledges is never ahead of it (an answer whose ledger write failed is resent).
     let req = Command::AgentRead(AgentRead {
-        gw_after: 0,
+        gw_after: crate::store::gateway::ack_after(&app.pool, &s.id).await?,
         session: s.id.clone(),
         after,
         wait_ms: Some(wait),
@@ -773,6 +822,16 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
         Err(e) => return Err(e.into()),
     };
     let held = store::apply(&app.pool, &s.id, &ev, &app.clock.now()).await?;
+    // Reports this answer moved the ledger's cursor over: more may be waiting (the runner sends a
+    // batch at a time), so a session is not over for the Core until a read brings none that
+    // advance it. A hole that never fills does not hold a session open: it is logged and passed.
+    let reported = crate::store::gateway::cursor(&app.pool, &s.id).await? != (s.gw_epoch, s.gw_seq);
+    if !reported && !ev.gateway.is_empty() {
+        tracing::warn!(
+            session = s.id,
+            "gateway reports that did not advance the ledger's cursor"
+        );
+    }
     if held >= store::MAX_TRANSCRIPT && held < ev.last_seq {
         // Nothing more is stored: the session is stopped, not read forever.
         let stop = Command::AgentStop(ainkrad_proto::v2::AgentStop {
@@ -793,7 +852,7 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
         }
         return Ok(());
     }
-    if held < ev.last_seq {
+    if held < ev.last_seq || reported {
         return Ok(()); // more to read first
     }
     match ev.state {
@@ -806,12 +865,16 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
             store::end(&app.pool, &s.id, "ended", &outcome, &app.clock.now()).await?;
             // The runner may drop its copy: the Core holds all of it.
             let ack = Command::AgentRead(AgentRead {
-                gw_after: 0,
+                gw_after: crate::store::gateway::ack_after(&app.pool, &s.id).await?,
                 session: s.id.clone(),
                 after: held,
                 wait_ms: None,
             });
-            let _ = ask(app, &s.runner, ack, cfg.answer, None).await;
+            // What this last answer carries is stored too: the gateway's final reports (the
+            // requests a stop aborted, charged approximately) may come only with it.
+            if let Ok(ev) = ask(app, &s.runner, ack, cfg.answer, None).await {
+                store::apply(&app.pool, &s.id, &ev, &app.clock.now()).await?;
+            }
         }
         AgentState::Interrupted => {
             let why = "the runner restarted";
@@ -857,6 +920,7 @@ impl Agents {
             supervised: Mutex::default(),
             elevated: Mutex::default(),
             leases: Mutex::default(),
+            confirming: Mutex::default(),
             ephemeral: Mutex::default(),
         })
     }

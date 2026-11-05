@@ -270,6 +270,12 @@ pub async fn record_usage(
 ) -> Result<Run, Error> {
     use ainkrad_core_server::store::costs::{self, Pricing};
     use ainkrad_core_server::store::{prices::Rates, secrets::Error as CoreError};
+    // A session the Core's auth gateway serves is recorded from its gateway's reports (KAN-435 G5):
+    // one ledger writer per session, so its usage is never counted a second time from the harness's
+    // own meter here.
+    if s.gateway_account_id.is_some() {
+        return Ok(r.clone());
+    }
     let total = [
         s.usage.input,
         s.usage.output,

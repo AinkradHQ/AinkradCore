@@ -60,6 +60,17 @@ pub struct Session {
     pub created_at: String,
     pub updated_at: String,
     pub ended_at: Option<String>,
+    /// The account whose key the runner's auth gateway serves this session (KAN-435): written by the
+    /// Core at create from its own account row. Its ledger rows come from the gateway's reports.
+    pub gateway_account_id: Option<i64>,
+    /// The newest gateway report recorded in the ledger: what the next `agent.read` acknowledges.
+    pub gw_seq: i64,
+    /// The epoch of the report `gw_seq` belongs to.
+    pub gw_epoch: i64,
+    /// Why a hard-stop budget ran out for the session; the Core stops it (`agents::gateway`).
+    pub gw_stop: Option<String>,
+    /// When (unix seconds) the Core told the runner to refuse and cancel it.
+    pub gw_stopped_at: Option<i64>,
 }
 
 impl Session {
@@ -82,7 +93,8 @@ pub struct NewSession<'a> {
 
 const COLUMNS: &str = "n, id, runner, harness, model, prompt, workspace, policy, secrets, state, \
     harness_session, outcome, last_seq, tokens_in, tokens_out, cache_read, cache_write, \
-    cost_usd_micros, resumes, created_by, owner_module, owner_ref, created_at, updated_at, ended_at";
+    cost_usd_micros, resumes, created_by, owner_module, owner_ref, created_at, updated_at, ended_at, \
+    gateway_account_id, gw_seq, gw_epoch, gw_stop, gw_stopped_at";
 
 fn of(r: &sqlx::sqlite::SqliteRow) -> Result<Session, sqlx::Error> {
     let json = |col: &str| -> Result<Option<Value>, sqlx::Error> {
@@ -124,6 +136,11 @@ fn of(r: &sqlx::sqlite::SqliteRow) -> Result<Session, sqlx::Error> {
         created_at: r.try_get("created_at")?,
         updated_at: r.try_get("updated_at")?,
         ended_at: r.try_get("ended_at")?,
+        gateway_account_id: r.try_get("gateway_account_id")?,
+        gw_seq: r.try_get("gw_seq")?,
+        gw_epoch: r.try_get("gw_epoch")?,
+        gw_stop: r.try_get("gw_stop")?,
+        gw_stopped_at: r.try_get("gw_stopped_at")?,
     })
 }
 
@@ -237,11 +254,16 @@ pub async fn create_owned_ref(
     now: &str,
 ) -> Result<Session, sqlx::Error> {
     let id = crate::auth::crypto::random_id("as_");
+    // The account a gateway serves is the Core's own row behind the secret's name, nothing a caller
+    // or a runner says; no such row leaves it NULL and the launch refuses the session.
+    let gateway_secret = super::gateway::gateway_secret(new.secrets).map(|s| s.name.as_str());
     let mut tx = super::begin_write(pool).await?;
     let n: i64 = sqlx::query_scalar(
         "INSERT INTO core_agent_sessions (id, runner, harness, model, prompt, workspace, policy, \
-         secrets, state, created_by, created_at, updated_at, owner_module, owner_ref) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?) RETURNING n",
+         secrets, state, created_by, created_at, updated_at, owner_module, owner_ref, \
+         gateway_account_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, \
+         (SELECT id FROM core_accounts WHERE secret_name = ?)) RETURNING n",
     )
     .bind(&id)
     .bind(new.runner)
@@ -256,6 +278,7 @@ pub async fn create_owned_ref(
     .bind(now)
     .bind(owner)
     .bind(owner_ref)
+    .bind(gateway_secret)
     .fetch_one(&mut *tx)
     .await?;
     let names: Vec<&str> = new.secrets.iter().map(|s| s.name.as_str()).collect();
@@ -329,6 +352,8 @@ pub async fn end(
     .await?
     .rows_affected();
     if changed > 0 {
+        // A budget hold is for a live session: what it did not spend goes back.
+        super::budgets::guard::release_in(&mut tx, id).await?;
         let kind = outcome["kind"].as_str().unwrap_or(state);
         emit(
             &mut tx,
@@ -354,6 +379,9 @@ pub async fn apply(
         .bind(id)
         .fetch_one(&mut *tx)
         .await?;
+    // What the session's gateway reported is recorded in this same transaction (none of it for a
+    // session no gateway serves), so the cursor the Core acknowledges never runs ahead of the ledger.
+    let gateway = super::gateway::absorb(&mut tx, id, &ev.gateway, now).await?;
     let mut last = u64::try_from(last).unwrap_or(0);
     let from = last + 1;
     for e in &ev.entries {
@@ -381,7 +409,13 @@ pub async fn apply(
         )
         .await?;
     }
-    let u = ev.usage.unwrap_or_default();
+    // A gateway session's usage columns are the ledger's (`gateway::absorb`): its harness's own
+    // meter is display-only, and nothing here may overwrite them.
+    let u = if gateway {
+        Tokens::default()
+    } else {
+        ev.usage.unwrap_or_default()
+    };
     let i = |v: u64| i64::try_from(v).unwrap_or(i64::MAX);
     sqlx::query(
         "UPDATE core_agent_sessions SET last_seq = ?, \
