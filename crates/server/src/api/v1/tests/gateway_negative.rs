@@ -47,9 +47,9 @@ async fn call(fx: &Fx, m: Method, uri: &str, body: Value) -> (StatusCode, String
 
 fn id_of(text: &str) -> i64 {
     let v: Value = serde_json::from_str(text).unwrap();
-    v["id"]
+    v["account"]["id"]
         .as_i64()
-        .or_else(|| v["id"].as_str().and_then(|s| s.parse().ok()))
+        .or_else(|| v["account"]["id"].as_str().and_then(|s| s.parse().ok()))
         .unwrap_or_else(|| panic!("no id: {text}"))
 }
 
