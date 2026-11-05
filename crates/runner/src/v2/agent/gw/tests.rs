@@ -13,6 +13,8 @@ use super::super::tests::{dirs, start};
 use super::*;
 use crate::{Executor, Job, Report};
 
+mod conflict;
+
 const SESSION: &str = "as_gwtest0000000000000000001";
 
 /// Records what the harness side sees: whether the gateway's socket still existed whenever it was
