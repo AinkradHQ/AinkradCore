@@ -556,7 +556,8 @@ pub async fn reopen(pool: &SqlitePool, id: &str, now: &str) -> Result<bool, sqlx
     super::alloc::stamp_account_in(&mut tx, id).await?;
     let changed = sqlx::query(
         "UPDATE core_agent_sessions SET state = 'interrupted', outcome = NULL, ended_at = NULL, \
-         updated_at = ? WHERE id = ? AND state IN ('lost', 'interrupted')",
+         failover_done = 0, failover_class = NULL, updated_at = ? \
+         WHERE id = ? AND state IN ('lost', 'interrupted')",
     )
     .bind(now)
     .bind(id)
@@ -614,6 +615,10 @@ pub async fn wake(
     let Some((state, harness, outcome, owner)) = found else {
         return Ok(Woken::Gone);
     };
+    // An attempt a failover replaced is never brought back: the run lives on in its successor.
+    if super::failover::has_successor_in(&mut tx, id).await? {
+        return Ok(Woken::Gone);
+    }
     let succeeded = outcome
         .and_then(|o| serde_json::from_str::<Value>(&o).ok())
         .is_some_and(|o| o["kind"] == "succeeded");
@@ -631,7 +636,8 @@ pub async fn wake(
     super::alloc::stamp_account_in(&mut tx, id).await?;
     sqlx::query(
         "UPDATE core_agent_sessions SET state = 'interrupted', outcome = NULL, ended_at = NULL, \
-         prompt = coalesce(?, prompt), updated_at = ? WHERE id = ?",
+         failover_done = 0, failover_class = NULL, prompt = coalesce(?, prompt), updated_at = ? \
+         WHERE id = ?",
     )
     .bind(text)
     .bind(now)

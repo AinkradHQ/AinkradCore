@@ -36,7 +36,7 @@ fn offline() -> Refusal {
 /// Why `runner` cannot serve `e`, if it cannot: no slot for the harness, or the placement rules of
 /// the entry's delivery (a gateway for an API key; the egress filter, the tier and the
 /// subscription command for a subscription).
-fn serves(runner: &RunnerState, s: &Session, e: &Entry) -> Option<String> {
+pub(super) fn serves(runner: &RunnerState, s: &Session, e: &Entry) -> Option<String> {
     let Some(d) = runner.drivers.iter().find(|d| d.name == AGENT_DRIVER) else {
         return Some("the runner offers no agent sessions".to_owned());
     };
@@ -64,7 +64,10 @@ pub(super) async fn ready(app: &App, s: &Session) -> Result<Option<Session>, Ref
 }
 
 /// Prices a turn per provider of the chain from the grant's own source (`prices::book_of`).
-async fn books(app: &App, chain: &[Entry]) -> Result<HashMap<String, Vec<ModelPrice>>, Refusal> {
+pub(super) async fn books(
+    app: &App,
+    chain: &[Entry],
+) -> Result<HashMap<String, Vec<ModelPrice>>, Refusal> {
     let all = prices::list(&app.pool).await?;
     let mut books = HashMap::new();
     for e in chain {
@@ -76,7 +79,7 @@ async fn books(app: &App, chain: &[Entry]) -> Result<HashMap<String, Vec<ModelPr
     Ok(books)
 }
 
-fn min_turn(books: &HashMap<String, Vec<ModelPrice>>, e: &Entry) -> u64 {
+pub(super) fn min_turn(books: &HashMap<String, Vec<ModelPrice>>, e: &Entry) -> u64 {
     let none = Vec::new();
     gw::min_turn_usd(books.get(&e.provider).unwrap_or(&none), e.model.as_deref())
 }
@@ -155,6 +158,17 @@ async fn pick(app: &App, s: &Session, retreat: bool) -> Result<Next, Refusal> {
         return Ok(Next::Ended);
     };
     let chain = v.chain.unwrap_or_default();
+    // A failover's attempt leaves out every account its run has used, and the pools a budget stop
+    // took out (I3); a refused pick adds its own `tried`.
+    let (mut used, skip) = crate::store::failover::context_in(&mut tx, &s.id).await?;
+    let more: Vec<i64> = v
+        .tried
+        .iter()
+        .filter(|t| !used.contains(t))
+        .copied()
+        .collect();
+    used.extend(more);
+    let successor = crate::store::failover::has_predecessor_in(&mut tx, &s.id).await?;
     let placed = |e: &Entry| serves(runner, s, e);
     let ask = Ask {
         session: &s.id,
@@ -162,23 +176,25 @@ async fn pick(app: &App, s: &Session, retreat: bool) -> Result<Next, Refusal> {
         user: v.user,
         chain: &chain,
         from_pos: v.pos.unwrap_or(0),
-        used_accounts: &v.tried,
-        skip_pools: &[],
+        used_accounts: &used,
+        skip_pools: &skip,
         min_turn: &price,
         serves: &placed,
         wait_max_secs: alloc::WAIT_MAX_SECS,
     };
     let outcome = alloc::pick_in(&mut tx, &ask, &now).await?;
-    // A re-pick that crosses provider or harness is said in the session's own state event.
+    // A re-pick, or the first pick of a failover's attempt, that crosses provider or harness is said
+    // in the session's own state event (a successor's position is the old attempt's until then).
     if let (true, Outcome::Picked(p), Some(was)) = (
-        retreat,
+        retreat || (successor && before.as_ref().is_some_and(|b| b.account.is_none())),
         &outcome,
         before
             .and_then(|b| b.pos.zip(b.chain))
             .and_then(|(i, c)| c.get(i).cloned()),
     ) && (was.provider != p.provider || was.harness != p.harness)
     {
-        let note = serde_json::json!({"session": s.id, "state": "starting", "reason": "repicked",
+        let reason = if retreat { "repicked" } else { "failover" };
+        let note = serde_json::json!({"session": s.id, "state": "starting", "reason": reason,
             "from": {"provider": was.provider, "harness": was.harness},
             "to": {"provider": p.provider, "harness": p.harness}});
         crate::store::events::append(&mut tx, "agent.state", &note).await?;

@@ -18,6 +18,7 @@
 //!   driver, or the harness's slot on it, is full (the runner refuses it too).
 
 mod allocate;
+mod failover;
 pub mod gateway;
 mod launch;
 pub mod login;
@@ -736,6 +737,8 @@ pub async fn resume_all(app: &App) -> Result<usize, sqlx::Error> {
             .insert(s.id.clone(), app.hub.continue_agent_elevation());
         supervise(app, &s.id);
     }
+    // An attempt that ended while the Core was down, before its run moved, moves it now.
+    failover::resume_unfinished(app).await?;
     Ok(live.len())
 }
 
@@ -749,6 +752,8 @@ async fn run(app: &App, id: &str) {
             Ok(Some(s)) => {
                 // Over: nothing left to stop, but an upstream `auth_failed` it reported is checked.
                 gateway::after(app, &s).await;
+                // An attempt that is over may move its run to the next account (once).
+                failover::after_end(app, &s).await;
                 return;
             }
             Ok(None) => return,

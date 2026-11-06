@@ -468,11 +468,13 @@ pub async fn decide(
 }
 
 async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSession> {
-    let s = one(&app, &id).await?;
-    let command = Command::AgentStop(AgentStop {
-        session: s.id.clone(),
-        kill,
-    });
+    let mut s = one(&app, &id).await?;
+    let command = |s: &Session| {
+        Command::AgentStop(AgentStop {
+            session: s.id.clone(),
+            kill,
+        })
+    };
     if s.owner_module.is_some() && kill {
         // Break-glass: a runaway harness of a module whose own routes cannot stop it (the module
         // is gone, its run row lost). Kill only, and only an admin.
@@ -483,14 +485,22 @@ async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSe
                 "killing a module's session requires the admin scope",
             ));
         }
-        send(&app, &s, command, &me).await?;
+        send(&app, &s, command(&s), &me).await?;
     } else {
         not_a_modules(&s)?;
         owns_secrets(&s, &me)?;
+        // A person's stop ends the run: no attempt of it moves on any more (after the checks above,
+        // so a refused caller settles nothing), and the one to stop is the run's newest, which a
+        // failover may have put in place of the one the person knows.
+        let newest = crate::store::failover::cancel_run(&app.pool, &s.id).await?;
+        if newest != s.id {
+            s = one(&app, &newest).await?;
+            owns_secrets(&s, &me)?;
+        }
         // A chain session that never reached its runner (waiting for an account, or picked and not
         // started) is ended here: the runner has nothing to stop.
         if !crate::store::alloc::end_unstarted(&app.pool, &s.id, &app.clock.now()).await? {
-            send(&app, &s, command, &me).await?;
+            send(&app, &s, command(&s), &me).await?;
         }
     }
     let action = if kill {
