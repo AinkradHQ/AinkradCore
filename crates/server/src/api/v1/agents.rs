@@ -296,7 +296,9 @@ fn owns_secrets(s: &Session, me: &Caller) -> Result<(), ApiError> {
         `limit_reached`, 400 when the runner is not in a secret's scope). With `chain` or \
         `agent` (admin only, else 403): the session starts with no account and the allocator \
         picks one from the chain (`waiting` while every account cools); 404 for no such chain, \
-        400 for a harness, a model or an `acct.*` secret beside a chain", body = AgentSession)))]
+        400 for a harness, a model or an `acct.*` secret beside a chain. With a chain the \
+        runner's own capacity is checked here (503 `runner_busy`), but a harness's slot only at \
+        the pick, where an entry the runner cannot serve is skipped", body = AgentSession)))]
 pub async fn create(
     State(app): State<App>,
     Extension(me): Extension<Caller>,

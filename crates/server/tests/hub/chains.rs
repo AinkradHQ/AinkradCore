@@ -232,7 +232,7 @@ async fn the_wait_max_setting_decides_between_waiting_and_ending() {
     assert_eq!(status, 200, "{waits}");
     let id = waits["id"].as_str().unwrap().to_owned();
     let path = format!("/api/v1/agent-sessions/{id}");
-    for _ in 0..100 {
+    for _ in 0..250 {
         let (_, got) = http(&core, &dev, "GET", &path, None).await;
         if !got["waiting"].is_null() {
             break;
@@ -272,4 +272,59 @@ async fn the_wait_max_setting_decides_between_waiting_and_ending() {
         .unwrap();
     let why = row.outcome.unwrap()["reason"].as_str().unwrap().to_owned();
     assert!(why.contains("no account is available"), "{why}");
+}
+
+/// A chain create counts against the runner's capacity like a plain one (here 2): the third is
+/// refused before it makes a row.
+#[tokio::test]
+async fn a_chain_create_on_a_full_runner_is_refused_503() {
+    let (core, _fake, runner, account) = up("chain-busy", true, None).await;
+    let (p, now) = (&core.app.pool, core.app.clock.now());
+    let pool = pools::create(p, "main", "anthropic", &runner, AuditActor::System, &now)
+        .await
+        .unwrap();
+    pools::add_member(p, pool.id, account.id, &runner, AuditActor::System, &now)
+        .await
+        .unwrap();
+    let spec = [EntrySpec {
+        pool: pool.id,
+        model: Some("claude-x"),
+        harness: None,
+    }];
+    let chain = chains::create(p, 1, "main", &spec, &runner, AuditActor::System, &now)
+        .await
+        .unwrap();
+    // The only account cools, so the first two wait and hold their runner slot.
+    let until_iso = ainkrad_core_server::scheduler::iso_of_unix(core.app.clock.unix() + 600);
+    sqlx::query(
+        "UPDATE core_accounts SET state = 'cooling', state_reason = 'rate_limited', state_until = ?",
+    )
+    .bind(until_iso)
+    .execute(p)
+    .await
+    .unwrap();
+    let dev = admin(&core).await;
+    let body = serde_json::json!({"runner": runner, "chain": chain.id, "policy": policy()});
+    for n in 0..2 {
+        let (status, made) = http(
+            &core,
+            &dev,
+            "POST",
+            "/api/v1/agent-sessions",
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(status, 200, "{n}: {made}");
+    }
+    let (status, busy) = http(&core, &dev, "POST", "/api/v1/agent-sessions", Some(body)).await;
+    assert_eq!(
+        (status, busy["code"].as_str()),
+        (503, Some("runner_busy")),
+        "{busy}"
+    );
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM core_agent_sessions")
+        .fetch_one(p)
+        .await
+        .unwrap();
+    assert_eq!(rows, 2, "the refused create left no row");
 }

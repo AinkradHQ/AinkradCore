@@ -118,17 +118,24 @@ pub(super) async fn create_named(
         // The allocator places each entry on the runner (`serves`); here it only has to be there.
         (true, true) => {
             let live = app.hub.runners();
-            let offered = live
+            let driver = live
                 .get(new.runner)
                 .filter(|r| r.online)
-                .map(|r| r.drivers.iter().any(|d| d.name == AGENT_DRIVER));
-            let refused = match offered {
-                Some(true) => None,
-                Some(false) => Some((
+                .map(|r| r.drivers.iter().find(|d| d.name == AGENT_DRIVER));
+            let refused = match driver {
+                None => Some((ErrorCode::Offline, "the runner is not connected")),
+                Some(None) => Some((
                     ErrorCode::UnsupportedCommand,
                     "the runner offers no agent sessions",
                 )),
-                None => Some((ErrorCode::Offline, "the runner is not connected")),
+                // Its capacity, as for a plain create; a harness's own slot is judged at the pick.
+                Some(Some(d)) => {
+                    let held = crate::store::agents::on_runner(&app.pool, new.runner).await?;
+                    (held.len() >= d.capacity as usize).then_some((
+                        ErrorCode::Busy,
+                        "the runner's agent sessions are at their capacity",
+                    ))
+                }
             };
             if let Some((code, why)) = refused {
                 return Err(super::super::runners::failed(&StreamError::new(code, why)));
