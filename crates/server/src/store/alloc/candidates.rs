@@ -117,7 +117,7 @@ pub(super) async fn of_entry(
     }
     let sql = format!(
         "SELECT a.id, a.user_id, a.provider, a.secret_name, a.state, a.state_reason, \
-         a.state_until, a.cap, a.last_used_at, m.position AS seat, \
+         a.state_until, a.cap, a.last_used_at, a.plan_limit, m.position AS seat, \
          EXISTS (SELECT 1 FROM core_secrets s, json_each(s.runners) j \
                  WHERE s.name = a.secret_name AND j.value = ?2) AS leasable, \
          (SELECT count(*) FROM core_agent_sessions x WHERE x.account_id = a.id AND x.id != ?3 \
@@ -169,6 +169,14 @@ pub(super) async fn of_entry(
                 }
                 None => t.unavailable += 1,
             }
+        } else if let Some(u) = r
+            .try_get::<Option<String>, _>("plan_limit")?
+            .and_then(|p| health::plan_cooling_until(&p, now_u))
+        {
+            // A subscription whose plan said `rejected` (or is at its limit) is cooling until it resets,
+            // whether or not a cooldown was ever written for it.
+            t.cooling += 1;
+            out.until = Some(out.until.map_or(u, |o| o.min(u)));
         } else if gw::pending_auth_in(conn, id).await?.is_some() {
             out.tally.auth_pending += 1;
         } else if cap > 0 && live >= cap {

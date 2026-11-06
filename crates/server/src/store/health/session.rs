@@ -2,8 +2,10 @@
 //! session's own row, never from the signal.
 
 use ainkrad_proto::v2::{GatewayReport, PlanLimit, UpstreamStatus};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sqlx::{Row, SqliteConnection};
+
+use crate::scheduler::unix_secs;
 
 use super::super::agents::SessionSecret;
 use super::super::{account_keys::subscription_provider, gateway::account_secret};
@@ -115,7 +117,63 @@ pub async fn on_plan_limit(
 ) -> Result<(), sqlx::Error> {
     let Some(plan) = plan else { return Ok(()) };
     if let Some(account) = harness_account(conn, session).await? {
+        keep_plan(conn, account, plan, now).await?;
         on_signal(conn, account, session, Signal::HarnessPlan { plan }, now).await?;
     }
     Ok(())
+}
+
+/// Keeps the latest snapshot on the account (each one overwrites the last), for the allocator: a
+/// `rejected` plan with no reset time is cooling still when the session that saw it has ended and
+/// its one cooling has run out. Harness output, so it is only ever read as a reason to wait.
+async fn keep_plan(
+    conn: &mut SqliteConnection,
+    account: i64,
+    plan: &PlanLimit,
+    now: &str,
+) -> Result<(), sqlx::Error> {
+    let Some(at) = unix_secs(now) else {
+        return Ok(());
+    };
+    let snapshot = json!({"at": at, "plan": plan}).to_string();
+    sqlx::query("UPDATE core_accounts SET plan_limit = ? WHERE id = ?")
+        .bind(snapshot)
+        .bind(account)
+        .execute(conn)
+        .await
+        .map(drop)
+}
+
+/// How long a `rejected` plan with no reset time keeps its account out of picks.
+pub const REJECTED_SECS: i64 = 15 * 60;
+
+/// Until when (unix seconds) the stored snapshot keeps its account out of new picks, if it still
+/// does: a `rejected` plan until the latest window reset (or [`REJECTED_SECS`] after the snapshot
+/// when none says), a window at 95% or more until it resets. Never longer than
+/// [`HARNESS_MAX_SECS`] from `now`: the snapshot is forgeable, so it can only ever delay a pick.
+pub fn plan_cooling_until(snapshot: &str, now_u: i64) -> Option<i64> {
+    let v: serde_json::Value = serde_json::from_str(snapshot).ok()?;
+    let at = v["at"].as_i64()?;
+    let plan: PlanLimit = serde_json::from_value(v["plan"].clone()).ok()?;
+    let rejected = plan.status == "rejected";
+    let resets = plan
+        .windows
+        .iter()
+        .filter(|w| rejected || w.utilization >= super::PLAN_WARN)
+        .filter_map(|w| w.resets_at)
+        .max();
+    let until = match (rejected, resets) {
+        (true, Some(r)) => r,
+        (true, None) => at + REJECTED_SECS,
+        (false, Some(r))
+            if plan
+                .windows
+                .iter()
+                .any(|w| w.utilization >= super::PLAN_WARN) =>
+        {
+            r
+        }
+        _ => return None,
+    };
+    Some(until.min(now_u + super::HARNESS_MAX_SECS)).filter(|u| *u > now_u)
 }
