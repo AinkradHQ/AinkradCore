@@ -42,6 +42,8 @@ mod gateway_epoch;
 mod gateway_limits;
 mod gateway_negative;
 mod gateway_store;
+mod health;
+mod health_harness;
 mod me;
 mod metrics;
 mod modules;
