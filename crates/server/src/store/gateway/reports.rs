@@ -211,6 +211,8 @@ async fn record(
     if r.status == UpstreamStatus::AuthFailed {
         super::signals::record(conn, account, session, &key, now).await?;
     }
+    // The gateway's own status class: the session's last upstream class and the account's health.
+    super::super::health::on_report(conn, account, session, r, now).await?;
     Ok(())
 }
 

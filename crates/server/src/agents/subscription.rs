@@ -55,6 +55,7 @@ pub(super) async fn lease(
     let Some((provider, id)) = crate::store::gateway::account_secret(&secret.name) else {
         return Err(refuse("the session's account does not exist"));
     };
+    crate::store::health::recover(&app.pool, id, &app.clock.now()).await?;
     let account = match accounts::get(&app.pool, id).await {
         Err(secrets::Error::Refused {
             code: "not_found", ..
@@ -66,7 +67,7 @@ pub(super) async fn lease(
             "the session's account is not the one its secret names",
         ));
     }
-    if account.state != "active" {
+    if !crate::store::health::startable(&account.state, s.state == "interrupted") {
         return Err(refuse(format!(
             "the subscription account is {}, not active",
             account.state
@@ -118,7 +119,10 @@ async fn mint(
             .bind(&secret.name)
             .fetch_optional(&app.pool)
             .await?;
-    if state.as_deref() != Some("active") {
+    if !state
+        .as_deref()
+        .is_some_and(|st| crate::store::health::startable(st, s.state == "interrupted"))
+    {
         crate::store::account_keys::revoke_leases(&app.pool, &secret.name).await?;
         return Err(refuse(
             "the subscription account was disabled or deleted while the session started",

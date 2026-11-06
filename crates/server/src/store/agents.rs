@@ -354,6 +354,7 @@ pub async fn end(
     if changed > 0 {
         // A budget hold is for a live session: what it did not spend goes back.
         super::budgets::guard::release_in(&mut tx, id).await?;
+        super::health::on_end(&mut tx, id, outcome, now).await?;
         let kind = outcome["kind"].as_str().unwrap_or(state);
         emit(
             &mut tx,
@@ -380,6 +381,7 @@ pub async fn apply(
         .fetch_one(&mut *tx)
         .await?;
     let gateway = super::gateway::absorb(&mut tx, id, &ev.gateway, now).await?;
+    super::health::on_plan_limit(&mut tx, id, ev.plan_limit.as_ref(), now).await?;
     let gateway =
         gateway || super::usage_meter::record(&mut tx, id, ev.usage, gateway, now).await?;
     let mut last = u64::try_from(last).unwrap_or(0);

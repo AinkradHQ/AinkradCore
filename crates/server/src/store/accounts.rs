@@ -313,15 +313,21 @@ pub async fn set_state(
     .bind(id)
     .execute(&mut *tx)
     .await?;
-    audit(
-        &mut tx,
-        actor,
-        "account.state_set",
-        id,
-        json!({"label": old.label, "from": old.state, "to": state, "reason": reason,
-               "until": until, "by_device": by_device}),
-    )
-    .await?;
+    let mut details = json!({"label": old.label, "from": old.state, "to": state, "reason": reason,
+               "until": until, "by_device": by_device});
+    if state == "active" {
+        // "It's fine" (or any return to active): the health counts start again, and the audit row
+        // says what the account was suspected of.
+        sqlx::query(
+            "UPDATE core_accounts SET fail_streak = 0, auth_streak = 0, backoff_secs = 0, \
+             fail_since = NULL WHERE id = ?",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        details["was"] = json!(old.state_reason);
+    }
+    audit(&mut tx, actor, "account.state_set", id, details).await?;
     if state != "active" && super::account_keys::subscription_provider(&old.provider) {
         super::account_keys::revoke_leases_in(&mut tx, &old.secret_name).await?;
     }
