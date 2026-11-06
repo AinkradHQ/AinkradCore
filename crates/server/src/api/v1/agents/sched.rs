@@ -1,28 +1,31 @@
 //! A session's scheduling over the API (design `2026-11-06-core-account-scheduler` §4.5, §13, S7):
-//! the chain and account a response shows, and the create of a session that names a chain or an
-//! agent. Both live apart from the routes so `agents.rs` stays as it is.
+//! what a response shows of its chain, account and wait, and the create of a session that names a
+//! chain or an agent. Both live apart from the routes so `agents.rs` stays as it is.
 //!
+//! - **Show.** Nothing here is a key, a secret's name or an upstream's text. A session answers
+//!   only to the user who owns it (another user's is no such session), and the chain it walks,
+//!   its snapshot, the agent and the account it holds are shown to `admin` devices only.
 //! - **Create.** Naming `chain` or `agent` needs `admin` (attaching account secrets stays
 //!   admin-only, KAN-433). With a chain the request names no harness and no model (the allocator's
-//!   entry sets them) and no `acct.*` secret; the store refuses each (400) and leaves no row. Every
-//!   refusal here comes before the runner is asked.
-//! - **Show.** Nothing here is a key, a secret's name or an upstream's text: ids, entry names,
-//!   times and fixed codes.
+//!   entry sets them) and no `acct.*` secret, and it passes the checks a plain create does for
+//!   EVERY entry's harness (the shape, the secrets, the policy) and is placed by at least one entry
+//!   (the runner online, with a slot), all before a row exists: what a plain create refuses, a chain
+//!   create refuses, with no row, no pick and no hold.
 
+use axum::Json;
 use axum::http::StatusCode;
 use serde::Serialize;
 use utoipa::ToSchema;
 
 use super::super::types::{Timestamp, ts};
-use super::super::{ApiError, BY, Caller};
-use super::{AgentSession, Session};
-use crate::agents::{self, Invalid};
+use super::super::{ApiError, ApiResult, BY, Caller};
+use super::{AgentSession, Session, one};
+use crate::agents::{self, Invalid, Refusal};
 use crate::api::App;
 use crate::scheduler::iso_of_unix;
-use crate::store::agents::NewSession;
+use crate::store::agents::{NewSession, SessionSecret};
 use crate::store::chains as ch;
 use crate::store::secrets::ACCOUNT_PREFIX;
-use ainkrad_proto::v2::{AGENT_DRIVER, ErrorCode, StreamError};
 
 /// Why a chain session has not started: it waits for an account to come back.
 #[derive(Debug, Serialize, ToSchema)]
@@ -35,15 +38,33 @@ pub struct AgentWaiting {
     pub why: String,
 }
 
-/// `s` with its chain, account and wait.
-pub(super) async fn present(app: &App, s: Session) -> Result<AgentSession, ApiError> {
+/// Who is asking: their user, and whether they hold `admin`.
+struct Viewer {
+    user: i64,
+    admin: bool,
+}
+
+async fn viewer(app: &App, me: &Caller) -> Result<Viewer, ApiError> {
+    Ok(Viewer {
+        user: ch::user_of(&app.pool, &me.device.id).await?,
+        admin: me.device.scopes.iter().any(|s| s == "admin"),
+    })
+}
+
+/// `s` with its chain, account and wait, for `v`; `None` when it is another user's.
+async fn present(app: &App, v: &Viewer, s: Session) -> Result<Option<AgentSession>, ApiError> {
     let sched = ch::sched_of(&app.pool, &s.id).await?.unwrap_or_default();
+    if sched.user != v.user {
+        return Ok(None);
+    }
     let mut out = AgentSession::from(s);
-    out.agent = sched.agent;
-    out.chain_id = sched.chain_id;
-    out.chain = sched.chain.map(|c| c.into_iter().map(Into::into).collect());
+    if v.admin {
+        out.agent = sched.agent;
+        out.chain_id = sched.chain_id;
+        out.chain = sched.chain.map(|c| c.into_iter().map(Into::into).collect());
+        out.account = sched.account;
+    }
     out.chain_pos = sched.chain_pos;
-    out.account = sched.account;
     out.waiting = sched.waiting.map(|w| AgentWaiting {
         since: w.since.map(|s| ts(&iso_of_unix(s))),
         until: ts(&w.until),
@@ -51,11 +72,41 @@ pub(super) async fn present(app: &App, s: Session) -> Result<AgentSession, ApiEr
     });
     out.repicked = (sched.repicked > 0).then_some(sched.repicked);
     out.upstream_class = sched.upstream_class;
+    Ok(Some(out))
+}
+
+/// The session `id` as the API shows it to the caller.
+pub(super) async fn shown(app: &App, me: &Caller, id: &str) -> ApiResult<AgentSession> {
+    let v = viewer(app, me).await?;
+    match present(app, &v, one(app, id).await?).await? {
+        Some(s) => Ok(Json(s)),
+        None => Err(ApiError::not_found("no such agent session")),
+    }
+}
+
+/// The caller's own sessions among `all`, as shown.
+pub(super) async fn listed(
+    app: &App,
+    me: &Caller,
+    all: Vec<Session>,
+) -> Result<Vec<AgentSession>, ApiError> {
+    let v = viewer(app, me).await?;
+    let mut out = Vec::with_capacity(all.len());
+    for s in all {
+        out.extend(present(app, &v, s).await?);
+    }
     Ok(out)
 }
 
 fn forbidden(why: &'static str) -> ApiError {
     ApiError::new(StatusCode::FORBIDDEN, "forbidden_scope", why)
+}
+
+fn invalid(e: Invalid) -> ApiError {
+    match e {
+        Invalid::Bad(why) => ApiError::bad_request(why),
+        Invalid::Forbidden(why) => forbidden(why),
+    }
 }
 
 /// Creates the session of a request that names a `chain` or an `agent` (design §4.5). A request
@@ -79,71 +130,73 @@ pub(super) async fn create_named(
         ));
     }
     let user = ch::user_of(&app.pool, &me.device.id).await?;
-    let resolved = {
+    let entries = {
         let mut conn = app.pool.acquire().await?;
-        ch::resolve_for(&mut conn, user, chain, agent).await?
+        match ch::resolve_for(&mut conn, user, chain, agent).await? {
+            Some(id) => Some(ch::load(&mut conn, id).await?),
+            None => None,
+        }
     };
-    // The store refuses these too and leaves no row; said here, they come before the runner is asked.
-    if resolved.is_some() {
-        if !new.harness.is_empty() || new.model.is_some() {
-            return Err(ApiError::bad_request(
-                "a session with a chain names no harness or model",
-            ));
-        }
-        if new
-            .secrets
-            .iter()
-            .any(|s| s.name.starts_with(ACCOUNT_PREFIX))
-        {
-            return Err(ApiError::bad_request(
-                "a session with a chain names no account secret",
-            ));
-        }
-    }
-    // The entry the allocator picks sets the harness, so a request with a chain has none: its
-    // other checks run against a placeholder.
-    let probe = NewSession {
-        harness: if resolved.is_some() && new.harness.is_empty() {
-            "claude"
-        } else {
-            new.harness
-        },
-        ..*new
-    };
-    agents::validate_new(&probe, admin).map_err(|e| match e {
-        Invalid::Bad(why) => ApiError::bad_request(why),
-        Invalid::Forbidden(why) => forbidden(why),
-    })?;
-    match (resolved.is_some(), new.harness.is_empty()) {
-        // The allocator places each entry on the runner (`serves`); here it only has to be there.
-        (true, true) => {
-            let live = app.hub.runners();
-            let driver = live
-                .get(new.runner)
-                .filter(|r| r.online)
-                .map(|r| r.drivers.iter().find(|d| d.name == AGENT_DRIVER));
-            let refused = match driver {
-                None => Some((ErrorCode::Offline, "the runner is not connected")),
-                Some(None) => Some((
-                    ErrorCode::UnsupportedCommand,
-                    "the runner offers no agent sessions",
-                )),
-                // Its capacity, as for a plain create; a harness's own slot is judged at the pick.
-                Some(Some(d)) => {
-                    let held = crate::store::agents::on_runner(&app.pool, new.runner).await?;
-                    (held.len() >= d.capacity as usize).then_some((
-                        ErrorCode::Busy,
-                        "the runner's agent sessions are at their capacity",
-                    ))
-                }
-            };
-            if let Some((code, why)) = refused {
-                return Err(super::super::runners::failed(&StreamError::new(code, why)));
-            }
-        }
-        // A named harness with a chain is refused by the store (400); without a chain it is placed.
-        _ => {
+    match &entries {
+        // No chain: a plain create, checked and placed as one.
+        None => {
+            agents::validate_new(new, admin).map_err(invalid)?;
             agents::admit_holding(app, new.runner, new.harness, new.policy, new.secrets).await?;
+        }
+        Some(entries) => {
+            // The store refuses these too and leaves no row; said here, they come first.
+            if !new.harness.is_empty() || new.model.is_some() {
+                return Err(ApiError::bad_request(
+                    "a session with a chain names no harness or model",
+                ));
+            }
+            if new
+                .secrets
+                .iter()
+                .any(|s| s.name.starts_with(ACCOUNT_PREFIX))
+            {
+                return Err(ApiError::bad_request(
+                    "a session with a chain names no account secret",
+                ));
+            }
+            // Whichever entry the allocator picks sets the harness and adds its account's secret, so
+            // the request must pass a plain create's checks as each entry would leave it: the
+            // account secret beside the request's own (a proxy or base URL variable, the sandbox
+            // the policy needs, the subscription rules).
+            for e in entries {
+                let def = crate::store::providers::get(&app.pool, &e.provider).await?;
+                let mut secrets = new.secrets.to_vec();
+                secrets.push(SessionSecret {
+                    name: format!("{ACCOUNT_PREFIX}{}.1", e.provider),
+                    var: def.auth_var,
+                });
+                let probe = NewSession {
+                    harness: &e.harness,
+                    secrets: &secrets,
+                    ..*new
+                };
+                agents::validate_new(&probe, admin).map_err(invalid)?;
+            }
+            // And at least one entry has to be placeable on the runner now (online, a slot); the
+            // allocator places each entry on the pick (`serves`) and skips the others.
+            let mut first: Option<Refusal> = None;
+            let mut placed = false;
+            for e in entries {
+                match agents::admit_holding(app, new.runner, &e.harness, new.policy, new.secrets)
+                    .await
+                {
+                    Ok(()) => {
+                        placed = true;
+                        break;
+                    }
+                    Err(r) => {
+                        first.get_or_insert(r);
+                    }
+                }
+            }
+            if let Some(r) = first.filter(|_| !placed) {
+                return Err(r.into());
+            }
         }
     }
     let req = ch::Request {
@@ -151,6 +204,5 @@ pub(super) async fn create_named(
         chain,
         agent,
     };
-    let s = ch::create_session(&app.pool, new, None, None, req, BY, &app.clock.now()).await?;
-    Ok(s)
+    Ok(ch::create_session(&app.pool, new, None, None, req, BY, &app.clock.now()).await?)
 }

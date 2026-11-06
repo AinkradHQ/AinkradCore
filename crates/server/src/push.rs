@@ -54,6 +54,8 @@ pub struct Notification {
     pub scope: &'static str,
     /// Notifications with the same key in one pass merge into one.
     pub collapse: Option<String>,
+    /// The user whose devices may be sent it; `None` is every user's (the platform's own).
+    pub user: Option<i64>,
 }
 
 impl Notification {
@@ -71,6 +73,7 @@ impl Notification {
             data,
             scope,
             collapse: None,
+            user: None,
         }
     }
 
@@ -300,6 +303,7 @@ impl Pusher {
             return Ok(0);
         }
         let targets = push_targets(&self.pool).await?;
+        let owners = account::device_users(&self.pool, &all).await?;
         for n in &all {
             let mut sends = vec![];
             for to in targets.iter().filter(|t| policy::may_receive(t, n.scope)) {
@@ -309,6 +313,9 @@ impl Pusher {
                     .is_some_and(|k| !k.iter().any(|k| k == n.kind))
                 {
                     continue; // the device did not opt into this kind
+                }
+                if n.user.is_some_and(|u| owners.get(&to.device.0) != Some(&u)) {
+                    continue; // another user's device
                 }
                 let Some(provider) = self.providers.iter().find(|p| p.handles(&to.provider)) else {
                     tracing::debug!(provider = %to.provider, "no push provider for this token");

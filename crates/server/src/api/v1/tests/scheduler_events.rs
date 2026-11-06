@@ -79,7 +79,7 @@ async fn each_change_of_state_raises_one_event_and_a_longer_window_none() {
         (all[2].0.as_str(), &all[2].1),
         (
             "account.health",
-            &json!({"account": id, "state": "unhealthy", "reason": "upstream_errors"})
+            &json!({"account": id, "user": 1, "state": "unhealthy", "reason": "upstream_errors"})
         )
     );
     // Three failed sign-ins in a row (the harness's word) keep it out: `auth_suspected`.
@@ -93,7 +93,7 @@ async fn each_change_of_state_raises_one_event_and_a_longer_window_none() {
     assert_eq!(all.len(), 4);
     assert_eq!(
         all[3].1,
-        json!({"account": id, "state": "unhealthy", "reason": "auth_suspected"})
+        json!({"account": id, "user": 1, "state": "unhealthy", "reason": "auth_suspected"})
     );
     // A plan limit from the harness cools it, saying whose word it is.
     health::recover(&g.fx.app.pool, id, &at(40_000))
@@ -127,7 +127,7 @@ async fn each_change_of_state_raises_one_event_and_a_longer_window_none() {
         keys.sort_unstable();
         let want: &[&str] = match kind.as_str() {
             "account.limited" => &["account", "class", "source", "until"],
-            _ => &["account", "reason", "state"],
+            _ => &["account", "reason", "state", "user"],
         };
         assert_eq!(keys, want, "{kind}");
     }

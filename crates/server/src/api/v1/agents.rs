@@ -14,7 +14,7 @@ use axum::http::StatusCode;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use utoipa::{IntoParams, ToSchema};
+use utoipa::ToSchema;
 
 use super::types::{Timestamp, ts};
 use super::{ApiError, ApiResult, BY, Caller};
@@ -25,20 +25,11 @@ use crate::store::agents::{self as store, Session, SessionSecret};
 use ainkrad_proto::v2::{AgentDecide, AgentSend, AgentStop, Command};
 
 mod sched;
-use sched::{AgentWaiting, create_named, present};
+mod types;
+use sched::{AgentWaiting, create_named, listed, shown};
+use types::*;
 
 const MAX_MESSAGE: usize = 16 * 1024;
-
-/// Tokens used, as the harness reported them.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct AgentUsage {
-    pub input: u64,
-    pub output: u64,
-    pub cache_read: u64,
-    pub cache_write: u64,
-    /// Millionths of a US dollar, when the harness says.
-    pub cost_usd_micros: Option<u64>,
-}
 
 /// An agent session: a harness on a runner.
 #[derive(Debug, Serialize, ToSchema)]
@@ -170,66 +161,6 @@ pub struct NewAgentSession {
     pub agent: Option<String>,
 }
 
-#[derive(Deserialize, ToSchema)]
-pub struct AgentMessage {
-    pub text: String,
-}
-
-#[derive(Deserialize, ToSchema)]
-pub struct AgentDecision {
-    pub approved: bool,
-    /// Told to the agent; a denial's reason.
-    pub reply: Option<String>,
-}
-
-/// A wake for an idle session.
-#[derive(Deserialize, ToSchema)]
-pub struct AgentWakeRequest {
-    /// Makes the wake idempotent: asking again with the same key queues nothing (it is kept for
-    /// 30 days). 1 to 128 of `A-Za-z0-9_.:-`; absent, the Core makes one up.
-    pub key: Option<String>,
-    /// The next turn, 1 byte to 16 KiB; absent, the session just continues.
-    pub text: Option<String>,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct AgentWake {
-    /// The session, `as_…`.
-    pub session: String,
-    /// The wake's key.
-    pub key: String,
-    /// `false` when this key was already used: nothing was queued.
-    pub queued: bool,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct AgentTranscriptEntry {
-    /// From 1, by one: replay from any `seq` with `after`.
-    pub seq: u64,
-    /// Unix milliseconds, on the runner.
-    pub at_ms: i64,
-    /// A harness event, or the session's own (`started`, `message`, `approval_request`,
-    /// `approval_decided`, `interrupted`, `gap`, `ended`), redacted.
-    #[schema(value_type = Object)]
-    pub body: Value,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct AgentTranscript {
-    pub session: String,
-    pub state: String,
-    pub last_seq: i64,
-    pub entries: Vec<AgentTranscriptEntry>,
-}
-
-#[derive(Debug, Default, Deserialize, IntoParams)]
-#[into_params(parameter_in = Query)]
-pub struct Before {
-    /// Sessions with an `index` below this; absent, from the newest.
-    pub before: Option<i64>,
-    pub limit: Option<u32>,
-}
-
 fn parse<T: DeserializeOwned>(body: &[u8]) -> Result<T, ApiError> {
     serde_json::from_slice(body)
         .map_err(|_| ApiError::bad_request("the body is not a valid request for this route"))
@@ -251,11 +182,6 @@ async fn one(app: &App, id: &str) -> Result<Session, ApiError> {
         false => None,
     };
     found.ok_or_else(|| ApiError::not_found("no such agent session"))
-}
-
-/// The session `id` as the API shows it, with its chain, account and wait.
-async fn shown(app: &App, id: &str) -> ApiResult<AgentSession> {
-    Ok(Json(present(app, one(app, id).await?).await?))
 }
 
 /// A session a module drives answers to that module's own routes (its audit, its approvals, its
@@ -296,9 +222,10 @@ fn owns_secrets(s: &Session, me: &Caller) -> Result<(), ApiError> {
         `limit_reached`, 400 when the runner is not in a secret's scope). With `chain` or \
         `agent` (admin only, else 403): the session starts with no account and the allocator \
         picks one from the chain (`waiting` while every account cools); 404 for no such chain, \
-        400 for a harness, a model or an `acct.*` secret beside a chain. With a chain the \
-        runner's own capacity is checked here (503 `runner_busy`), but a harness's slot only at \
-        the pick, where an entry the runner cannot serve is skipped", body = AgentSession)))]
+        400 for a harness, a model or an `acct.*` secret beside a chain. A chain create \
+        passes a plain create's checks for the harness of every entry, and the runner must be \
+        online with room for at least one entry (else its refusal, 409 or 503), all before \
+        any row; an entry the runner cannot serve is skipped at the pick", body = AgentSession)))]
 pub async fn create(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
@@ -332,7 +259,7 @@ pub async fn create(
         let s = create_named(&app, &me, &new, admin, b.chain, b.agent.as_deref()).await?;
         agents::authorize_create(&app, &me, &s.id);
         agents::start(&app, &s).await?;
-        return shown(&app, &s.id).await;
+        return shown(&app, &me, &s.id).await;
     }
     agents::validate_new(&new, admin).map_err(|e| match e {
         agents::Invalid::Bad(why) => ApiError::bad_request(why),
@@ -344,29 +271,33 @@ pub async fn create(
     let s = store::create(&app.pool, &new, BY, &app.clock.now()).await?;
     agents::authorize_create(&app, &me, &s.id);
     agents::start(&app, &s).await?;
-    shown(&app, &s.id).await
+    shown(&app, &me, &s.id).await
 }
 
 #[utoipa::path(get, path = "/api/v1/agent-sessions", operation_id = "listAgentSessions",
     tag = "agents", params(Before),
     responses((status = 200, description = "Sessions, newest first (at most `limit`, 50 by \
         default, 200 at most)", body = Vec<AgentSession>)))]
-pub async fn list(State(app): State<App>, Query(q): Query<Before>) -> ApiResult<Vec<AgentSession>> {
+pub async fn list(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Query(q): Query<Before>,
+) -> ApiResult<Vec<AgentSession>> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let all = store::list(&app.pool, q.before, limit).await?;
-    let mut out = Vec::with_capacity(all.len());
-    for s in all {
-        out.push(present(&app, s).await?);
-    }
-    Ok(Json(out))
+    Ok(Json(listed(&app, &me, all).await?))
 }
 
 #[utoipa::path(get, path = "/api/v1/agent-sessions/{id}", operation_id = "getAgentSession",
     tag = "agents",
     params(("id" = String, Path, description = "The session's id, `as_…`")),
     responses((status = 200, description = "One session", body = AgentSession)))]
-pub async fn get(State(app): State<App>, Path(id): Path<String>) -> ApiResult<AgentSession> {
-    shown(&app, &id).await
+pub async fn get(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<AgentSession> {
+    shown(&app, &me, &id).await
 }
 
 #[utoipa::path(get, path = "/api/v1/agent-sessions/{id}/transcript",
@@ -476,7 +407,7 @@ pub async fn message(
         &me.device.id,
     )
     .await?;
-    shown(&app, &id).await
+    shown(&app, &me, &id).await
 }
 
 /// A tool request id as harnesses make them.
@@ -524,7 +455,7 @@ pub async fn decide(
         &me.device.id,
     )
     .await?;
-    shown(&app, &id).await
+    shown(&app, &me, &id).await
 }
 
 async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSession> {
@@ -598,7 +529,7 @@ async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSe
         "agent.cancelled"
     };
     store::action(&app.pool, &s, BY, action, None, json!({}), &me.device.id).await?;
-    shown(&app, &id).await
+    shown(&app, &me, &id).await
 }
 
 #[utoipa::path(post, path = "/api/v1/agent-sessions/{id}/cancel",
@@ -665,7 +596,7 @@ pub async fn resume(
     )
     .await?;
     agents::supervise(&app, &s.id);
-    shown(&app, &id).await
+    shown(&app, &me, &id).await
 }
 
 #[utoipa::path(post, path = "/api/v1/agent-sessions/{id}/wake",

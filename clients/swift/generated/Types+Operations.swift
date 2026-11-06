@@ -59,7 +59,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Every account: its key's last four characters, never the key, its secret's name or its runner scope; with its `live` session count and `health`
+            /// Every account: its key's last four characters, never the key, its secret's name or its runner scope; with its `live` session count and `health` (`admin` devices only)
             ///
             /// - Remark: Generated from `#/paths//api/v1/accounts/get(listAccounts)/responses/200`.
             ///
@@ -3189,7 +3189,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// One account, with its `live` session count and `health`
+            /// One account, with its `live` session count and `health` (`admin` devices only)
             ///
             /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/get(getAccount)/responses/200`.
             ///
@@ -6173,7 +6173,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Started on the runner (`running`), or `starting` while the runner is away (audited as `agent.created`). 409 `runner_offline` or `unsupported_command` (no agent driver), 503 `runner_busy` (its capacity or the harness's slot is full), the secrets broker's refusals (`secrets_disabled`, `limit_reached`, 400 when the runner is not in a secret's scope). With `chain` or `agent` (admin only, else 403): the session starts with no account and the allocator picks one from the chain (`waiting` while every account cools); 404 for no such chain, 400 for a harness, a model or an `acct.*` secret beside a chain. With a chain the runner's own capacity is checked here (503 `runner_busy`), but a harness's slot only at the pick, where an entry the runner cannot serve is skipped
+            /// Started on the runner (`running`), or `starting` while the runner is away (audited as `agent.created`). 409 `runner_offline` or `unsupported_command` (no agent driver), 503 `runner_busy` (its capacity or the harness's slot is full), the secrets broker's refusals (`secrets_disabled`, `limit_reached`, 400 when the runner is not in a secret's scope). With `chain` or `agent` (admin only, else 403): the session starts with no account and the allocator picks one from the chain (`waiting` while every account cools); 404 for no such chain, 400 for a harness, a model or an `acct.*` secret beside a chain. A chain create passes a plain create's checks for the harness of every entry, and the runner must be online with room for at least one entry (else its refusal, 409 or 503), all before any row; an entry the runner cannot serve is skipped at the pick
             ///
             /// - Remark: Generated from `#/paths//api/v1/agent-sessions/post(createAgentSession)/responses/200`.
             ///

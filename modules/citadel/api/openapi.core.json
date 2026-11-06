@@ -3816,7 +3816,7 @@
             "$ref": "#/components/schemas/Timestamp"
           },
           "kind": {
-            "description": "What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,\n`action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;\na device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a\nmodule writes. The registered kinds are listed in `x-event-kinds`. The payload of\n`agent.state` is `{session, state, reason, …}`: a chain session that waits for an account\nsays `reason: \"waiting\"` and `waiting: {until, why, since}` (`until` an RFC 3339 time, `since`\nthe first wait in unix seconds), and one whose launch refused its account, so another was\npicked across a provider or harness, says `reason: \"repicked\"` with `from` and `to` (each\n`{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account\ncooled or limited until `until` (`class` `rate_limited`, `quota` or `plan_limit`; `source`\n`gateway` or `harness`). `account.health` is `{account, state, reason}`: an account went\n`unhealthy` (`reason` `upstream_errors` or `auth_suspected`). No payload holds a key, a token\nor an upstream's own words.",
+            "description": "What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,\n`action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;\na device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a\nmodule writes. The registered kinds are listed in `x-event-kinds`. The payload of\n`agent.state` is `{session, state, reason, …}`: a chain session that waits for an account\nsays `reason: \"waiting\"` and `waiting: {until, why, since}` (`until` an RFC 3339 time, `since`\nthe first wait in unix seconds), and one whose launch refused its account, so another was\npicked across a provider or harness, says `reason: \"repicked\"` with `from` and `to` (each\n`{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account\ncooled or limited until `until` (`class` `rate_limited`, `quota` or `plan_limit`; `source`\n`gateway` or `harness`). `account.health` is `{account, user, state, reason}`: an account went\n`unhealthy` (`reason` `upstream_errors` or `auth_suspected`). No payload holds a key, a token\nor an upstream's own words.",
             "type": "string"
           },
           "payload": {
@@ -11079,7 +11079,7 @@
                 }
               }
             },
-            "description": "Every account: its key's last four characters, never the key, its secret's name or its runner scope; with its `live` session count and `health`"
+            "description": "Every account: its key's last four characters, never the key, its secret's name or its runner scope; with its `live` session count and `health` (`admin` devices only)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -11712,7 +11712,7 @@
                 }
               }
             },
-            "description": "One account, with its `live` session count and `health`"
+            "description": "One account, with its `live` session count and `health` (`admin` devices only)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -12278,7 +12278,7 @@
                 }
               }
             },
-            "description": "Started on the runner (`running`), or `starting` while the runner is away (audited as `agent.created`). 409 `runner_offline` or `unsupported_command` (no agent driver), 503 `runner_busy` (its capacity or the harness's slot is full), the secrets broker's refusals (`secrets_disabled`, `limit_reached`, 400 when the runner is not in a secret's scope). With `chain` or `agent` (admin only, else 403): the session starts with no account and the allocator picks one from the chain (`waiting` while every account cools); 404 for no such chain, 400 for a harness, a model or an `acct.*` secret beside a chain. With a chain the runner's own capacity is checked here (503 `runner_busy`), but a harness's slot only at the pick, where an entry the runner cannot serve is skipped"
+            "description": "Started on the runner (`running`), or `starting` while the runner is away (audited as `agent.created`). 409 `runner_offline` or `unsupported_command` (no agent driver), 503 `runner_busy` (its capacity or the harness's slot is full), the secrets broker's refusals (`secrets_disabled`, `limit_reached`, 400 when the runner is not in a secret's scope). With `chain` or `agent` (admin only, else 403): the session starts with no account and the allocator picks one from the chain (`waiting` while every account cools); 404 for no such chain, 400 for a harness, a model or an `acct.*` secret beside a chain. A chain create passes a plain create's checks for the harness of every entry, and the runner must be online with room for at least one entry (else its refusal, 409 or 503), all before any row; an entry the runner cannot serve is skipped at the pick"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

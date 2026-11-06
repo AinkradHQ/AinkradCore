@@ -20,6 +20,8 @@ pub struct Waiting {
 /// A session's chain, account and wait, as stored.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Sched {
+    /// The session's user.
+    pub user: i64,
     /// The opaque agent id the create named.
     pub agent: Option<String>,
     pub chain_id: Option<i64>,
@@ -39,7 +41,7 @@ pub struct Sched {
 /// `session`'s scheduling, `None` for no such session.
 pub async fn sched_of(pool: &SqlitePool, session: &str) -> Result<Option<Sched>, sqlx::Error> {
     let Some(r) = sqlx::query(
-        "SELECT agent, chain_id, chain, chain_pos, account_id, waiting, tried_accounts, \
+        "SELECT user_id, agent, chain_id, chain, chain_pos, account_id, waiting, tried_accounts, \
          upstream_class FROM core_agent_sessions WHERE id = ?",
     )
     .bind(session)
@@ -61,6 +63,7 @@ pub async fn sched_of(pool: &SqlitePool, session: &str) -> Result<Option<Sched>,
         .and_then(|v| v.as_array().map(Vec::len))
         .unwrap_or(0);
     Ok(Some(Sched {
+        user: r.try_get("user_id")?,
         agent: r.try_get("agent")?,
         chain_id: r.try_get("chain_id")?,
         chain: json("chain")?.and_then(|v| serde_json::from_value(v).ok()),

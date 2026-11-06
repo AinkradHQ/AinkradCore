@@ -40,6 +40,7 @@ mod budgets_api;
 mod budgets_store;
 mod chains;
 mod chains_api;
+mod chains_guard;
 mod chains_session;
 mod costs_api;
 mod costs_store;

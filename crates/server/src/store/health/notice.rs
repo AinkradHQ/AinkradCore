@@ -5,7 +5,7 @@
 //! - `account.limited {account, class, until, source}`: the account cooled (`rate_limited`,
 //!   `plan_limit`) or was limited (`quota`) until `until`. `source` is `gateway` (trusted) or
 //!   `harness`.
-//! - `account.health {account, state, reason}`: the account went `unhealthy` (`upstream_errors`
+//! - `account.health {account, user, state, reason}`: the account went `unhealthy` (`upstream_errors`
 //!   for ten minutes, `auth_suspected` until an admin answers).
 
 use serde_json::json;
@@ -34,10 +34,18 @@ pub(super) async fn entered(
             "account.limited",
             json!({"account": e.account, "class": e.class, "until": e.until, "source": e.source}),
         ),
-        "unhealthy" => (
-            "account.health",
-            json!({"account": e.account, "state": e.state, "reason": e.reason}),
-        ),
+        "unhealthy" => {
+            // The account's user, so a push reaches only that user's admins.
+            let user: i64 = sqlx::query_scalar("SELECT user_id FROM core_accounts WHERE id = ?")
+                .bind(e.account)
+                .fetch_optional(&mut *conn)
+                .await?
+                .unwrap_or(1);
+            (
+                "account.health",
+                json!({"account": e.account, "user": user, "state": e.state, "reason": e.reason}),
+            )
+        }
         _ => return Ok(()),
     };
     events::append(conn, kind, &payload).await.map(drop)

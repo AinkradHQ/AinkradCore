@@ -202,6 +202,10 @@ async fn a_create_naming_a_chain_or_an_agent_is_admin_only_and_refused_cleanly()
     for (why, extra) in [
         ("a harness", json!({"chain": c.id, "harness": "claude"})),
         ("a model", json!({"chain": c.id, "model": "claude-sonnet"})),
+        (
+            "a redirecting variable a plain create refuses",
+            json!({"chain": c.id, "secrets": [{"name": "proxy", "var": "HTTPS_PROXY"}]}),
+        ),
         ("an account secret", json!({"chain": c.id, "secrets": acct})),
         (
             "an agent that resolves to a chain",
@@ -420,4 +424,67 @@ async fn a_module_stops_its_own_unstarted_session_and_never_owns_a_chain_one() {
         "{r:?}"
     );
     assert_eq!(state(theirs.id.clone()).await, "starting");
+}
+
+#[tokio::test]
+async fn a_session_answers_to_its_user_and_its_chain_and_account_to_admins_only() {
+    let fx = setup().await;
+    let a = pool(&fx, "a", "anthropic").await;
+    let c = make(&fx, "main", &[a]).await;
+    let s = session(&fx, &[], None, ask(Some(c.id), Some("agent-1")))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE core_agent_sessions SET account_id = 7, chain_pos = 0 WHERE id = ?")
+        .bind(&s.id)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    let uri = format!("/api/v1/agent-sessions/{}", s.id);
+    // An admin of the same user sees all of it.
+    let admin = fx.ok(&uri).await;
+    assert_eq!(
+        (&admin["account"], &admin["chain_id"], &admin["agent"]),
+        (&json!(7), &json!(c.id), &json!("agent-1"))
+    );
+    assert!(admin["chain"].is_array());
+    // A device of the same user without admin sees the session, but no chain, agent or account.
+    let agent = super::stepup::plain(&fx, "agent-dev", &["agent", "read"], true).await;
+    let seen = call(&fx, &agent, Method::GET, &uri, Value::Null).await;
+    assert_eq!(seen.0, StatusCode::OK, "{}", seen.1);
+    for hidden in ["chain", "account", "chain_id", "agent"] {
+        assert!(seen.1[hidden].is_null(), "{hidden}: {}", seen.1);
+    }
+    assert_eq!(seen.1["chain_pos"], 0);
+    let list = call(
+        &fx,
+        &agent,
+        Method::GET,
+        "/api/v1/agent-sessions",
+        Value::Null,
+    )
+    .await;
+    assert!(
+        list.1[0]["chain"].is_null() && list.1[0]["account"].is_null(),
+        "{}",
+        list.1
+    );
+    // Another user's devices, admin or not, do not see it at all.
+    sqlx::query("INSERT INTO users (id, name) VALUES (2, 'second')")
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    let other_admin = fx.enroll("second", &["read", "admin", "agent"]).await;
+    let other_agent = fx.enroll("second-agent", &["read", "agent"]).await;
+    for dev in [&other_admin, &other_agent] {
+        sqlx::query("UPDATE core_devices SET user_id = 2 WHERE id = ?")
+            .bind(&dev.id)
+            .execute(&fx.app.pool)
+            .await
+            .unwrap();
+        let r = call(&fx, dev, Method::GET, &uri, Value::Null).await;
+        assert_eq!(r.0, StatusCode::NOT_FOUND, "{}", r.1);
+        let l = call(&fx, dev, Method::GET, "/api/v1/agent-sessions", Value::Null).await;
+        assert_eq!(l.1, json!([]), "{}", l.1);
+        assert!(!l.1.to_string().contains(&s.id));
+    }
 }

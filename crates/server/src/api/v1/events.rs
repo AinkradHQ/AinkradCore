@@ -64,7 +64,7 @@ pub struct Event {
     /// picked across a provider or harness, says `reason: "repicked"` with `from` and `to` (each
     /// `{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account
     /// cooled or limited until `until` (`class` `rate_limited`, `quota` or `plan_limit`; `source`
-    /// `gateway` or `harness`). `account.health` is `{account, state, reason}`: an account went
+    /// `gateway` or `harness`). `account.health` is `{account, user, state, reason}`: an account went
     /// `unhealthy` (`reason` `upstream_errors` or `auth_suspected`). No payload holds a key, a token
     /// or an upstream's own words.
     pub kind: String,

@@ -51,6 +51,7 @@ impl Classifier for Alerts {
             data: json!({"seq": e.seq}),
             scope: "read",
             collapse: None,
+            user: None,
         })
     }
 }
@@ -213,6 +214,7 @@ fn the_apns_request_carries_a_valid_es256_token_and_goes_to_the_right_gateway() 
         data: json!({"approval_id": 3, "seq": 9}),
         scope: "approve",
         collapse: Some("approval".to_owned()),
+        user: None,
     };
     let mut to = PushTarget {
         device: DeviceKeyId(1),

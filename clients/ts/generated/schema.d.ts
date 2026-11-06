@@ -1874,7 +1874,7 @@ export interface components {
              *     picked across a provider or harness, says `reason: "repicked"` with `from` and `to` (each
              *     `{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account
              *     cooled or limited until `until` (`class` `rate_limited`, `quota` or `plan_limit`; `source`
-             *     `gateway` or `harness`). `account.health` is `{account, state, reason}`: an account went
+             *     `gateway` or `harness`). `account.health` is `{account, user, state, reason}`: an account went
              *     `unhealthy` (`reason` `upstream_errors` or `auth_suspected`). No payload holds a key, a token
              *     or an upstream's own words.
              */
@@ -2944,7 +2944,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every account: its key's last four characters, never the key, its secret's name or its runner scope; with its `live` session count and `health` */
+            /** @description Every account: its key's last four characters, never the key, its secret's name or its runner scope; with its `live` session count and `health` (`admin` devices only) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3279,7 +3279,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One account, with its `live` session count and `health` */
+            /** @description One account, with its `live` session count and `health` (`admin` devices only) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3612,7 +3612,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Started on the runner (`running`), or `starting` while the runner is away (audited as `agent.created`). 409 `runner_offline` or `unsupported_command` (no agent driver), 503 `runner_busy` (its capacity or the harness's slot is full), the secrets broker's refusals (`secrets_disabled`, `limit_reached`, 400 when the runner is not in a secret's scope). With `chain` or `agent` (admin only, else 403): the session starts with no account and the allocator picks one from the chain (`waiting` while every account cools); 404 for no such chain, 400 for a harness, a model or an `acct.*` secret beside a chain. With a chain the runner's own capacity is checked here (503 `runner_busy`), but a harness's slot only at the pick, where an entry the runner cannot serve is skipped */
+            /** @description Started on the runner (`running`), or `starting` while the runner is away (audited as `agent.created`). 409 `runner_offline` or `unsupported_command` (no agent driver), 503 `runner_busy` (its capacity or the harness's slot is full), the secrets broker's refusals (`secrets_disabled`, `limit_reached`, 400 when the runner is not in a secret's scope). With `chain` or `agent` (admin only, else 403): the session starts with no account and the allocator picks one from the chain (`waiting` while every account cools); 404 for no such chain, 400 for a harness, a model or an `acct.*` secret beside a chain. A chain create passes a plain create's checks for the harness of every entry, and the runner must be online with room for at least one entry (else its refusal, 409 or 503), all before any row; an entry the runner cannot serve is skipped at the pick */
             200: {
                 headers: {
                     [name: string]: unknown;

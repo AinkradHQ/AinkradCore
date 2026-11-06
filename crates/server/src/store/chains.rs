@@ -5,7 +5,7 @@
 //! choose accounts (the allocator); a chain only says which pool is tried next.
 //!
 //! - **Validation on write** ([`create`], [`update`]): 1 to 4 entries; no pool twice; each pool
-//!   exists and is the chain's user's; the pool's harness is `claude`, `codex` or `agy` (never
+//!   exists and is the chain's user's (another user's is `not_found`, as a missing one); the pool's harness is `claude`, `codex` or `agy` (never
 //!   `opencode`: it has no account binding); a named harness is the pool's own; a model is a valid
 //!   id, and an API-key pool's model has a price (the gateway refuses an unpriced one anyway; this
 //!   says why sooner); at most one subscription pool per chain (Ahmed, 2026-11-06, decision 1).
@@ -157,12 +157,10 @@ async fn check_entries(
                 .bind(s.pool)
                 .fetch_optional(&mut *conn)
                 .await?;
-        let Some((provider, owner)) = row else {
+        // Another user's pool answers as a missing one: a caller learns nothing of its ids.
+        let Some((provider, _)) = row.filter(|(_, owner)| *owner == user) else {
             return refused("not_found", format!("no pool {}", s.pool));
         };
-        if owner != user {
-            return refused("bad_request", "a chain names only its own user's pools");
-        }
         let def = providers::get_in(conn, &provider).await?;
         if !costs::HARNESSES.contains(&def.harness.as_str()) || def.harness == "opencode" {
             return refused("bad_request", "a chain runs claude, codex or agy pools");

@@ -21,6 +21,17 @@ async fn only_a_suspected_sign_in_is_pushed_and_it_carries_the_account_id_alone(
     let (admin, _) = fx.device("admin", &["admin"], 1).await;
     let (reader, _) = fx.device("reader", &["read"], 2).await;
     let (muted, _) = fx.device("muted", &["admin"], 3).await;
+    // An admin of another user is not told about this user's account.
+    sqlx::query("INSERT INTO users (id, name) VALUES (2, 'second')")
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    let (other, _) = fx.device("other", &["admin"], 4).await;
+    sqlx::query("UPDATE core_devices SET user_id = 2 WHERE id = ?")
+        .bind(&other)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
     assert!(
         set_kinds(&fx.pool, &muted, Some(&["approval_needed".to_owned()]))
             .await
@@ -47,7 +58,7 @@ async fn only_a_suspected_sign_in_is_pushed_and_it_carries_the_account_id_alone(
     emit(
         &fx.pool,
         "account.health",
-        json!({"account": 7, "state": "unhealthy", "reason": "upstream_errors"}),
+        json!({"account": 7, "user": 1, "state": "unhealthy", "reason": "upstream_errors"}),
     )
     .await;
     assert_eq!(pusher.tick().await.unwrap(), 0, "in-app only");
@@ -58,7 +69,7 @@ async fn only_a_suspected_sign_in_is_pushed_and_it_carries_the_account_id_alone(
     emit(
         &fx.pool,
         "account.health",
-        json!({"account": 7, "state": "unhealthy", "reason": "auth_suspected",
+        json!({"account": 7, "user": 1, "state": "unhealthy", "reason": "auth_suspected",
                "label": "claude-main", "note": format!("401 {TOKEN}")}),
     )
     .await;
@@ -68,7 +79,7 @@ async fn only_a_suspected_sign_in_is_pushed_and_it_carries_the_account_id_alone(
     assert_eq!(
         to,
         [admin.as_str()],
-        "admins that did not opt out, not {reader} nor {muted}"
+        "this user's admins that did not opt out, not {reader}, {muted} nor {other}"
     );
     let n = &sent[0].1;
     assert_eq!((n.kind, n.scope), ("account_health", "admin"));
@@ -91,6 +102,7 @@ fn a_malformed_health_event_is_no_push() {
     use crate::push::Classifier;
     for payload in [
         json!({"reason": "auth_suspected"}),
+        json!({"account": 7, "reason": "auth_suspected"}),
         json!({"account": "7", "reason": "auth_suspected"}),
         json!({"account": 7, "reason": "auth_confirmed"}),
     ] {
