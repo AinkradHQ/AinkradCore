@@ -155,4 +155,10 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0025_scheduler_allocator.up.sql"),
         down: include_str!("../../../migrations/0025_scheduler_allocator.down.sql"),
     },
+    Migration {
+        version: 26,
+        name: "chains",
+        up: include_str!("../../../migrations/0026_chains.up.sql"),
+        down: include_str!("../../../migrations/0026_chains.down.sql"),
+    },
 ];
