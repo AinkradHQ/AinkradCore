@@ -379,9 +379,9 @@ pub async fn apply(
         .bind(id)
         .fetch_one(&mut *tx)
         .await?;
-    // What the session's gateway reported is recorded in this same transaction (none of it for a
-    // session no gateway serves), so the cursor the Core acknowledges never runs ahead of the ledger.
+    // Ledger rows (gateway reports, else a subscription's meter) share the cursor's transaction.
     let gateway = super::gateway::absorb(&mut tx, id, &ev.gateway, now).await?;
+    super::usage_meter::record(&mut tx, id, ev.usage, gateway, now).await?;
     let mut last = u64::try_from(last).unwrap_or(0);
     let from = last + 1;
     for e in &ev.entries {
