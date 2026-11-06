@@ -26,6 +26,10 @@ pub enum Outcome {
     NotFound,
     /// GitHub refused the input (`400`, `422`, `409`, ...).
     Invalid,
+    /// The number is a pull request, and the operation is for issues.
+    IsPullRequest,
+    /// The number is an issue, and the operation is for pull requests.
+    NotPullRequest,
     ServerError,
     Unexpected,
     Net(NetError),
@@ -40,6 +44,8 @@ impl Outcome {
             Self::Forbidden => "forbidden",
             Self::NotFound => "not_found",
             Self::Invalid => "invalid",
+            Self::IsPullRequest => "is_pull_request",
+            Self::NotPullRequest => "not_pull_request",
             Self::ServerError | Self::Unexpected => "upstream",
             Self::Net(NetError::Refused) => "refused_address",
             Self::Net(NetError::BadRequest) => "bad_request",
@@ -59,6 +65,10 @@ impl Outcome {
             Self::Forbidden => "The connection is not allowed to do that on GitHub.",
             Self::NotFound => "GitHub says this does not exist, or the connection cannot see it.",
             Self::Invalid => "GitHub refused the request as it was written.",
+            Self::IsPullRequest => {
+                "That number is a pull request; use the pull request operations."
+            }
+            Self::NotPullRequest => "That number is an issue, not a pull request.",
             Self::ServerError | Self::Unexpected => "GitHub had a problem. Try again shortly.",
             Self::Net(NetError::TooLarge) => "GitHub's answer was too large to read.",
             Self::Net(NetError::Refused) => "GitHub resolved to an address Core will not use.",
@@ -73,16 +83,21 @@ impl Outcome {
         match self {
             Self::AuthFailed => Some(UpstreamStatus::AuthFailed),
             Self::RateLimited { .. } => Some(UpstreamStatus::RateLimited),
-            Self::ServerError | Self::Unexpected | Self::Net(NetError::TooLarge) => {
-                Some(UpstreamStatus::ServerError)
-            }
+            // Only GitHub's own 5xx. A redirect, a 451, a 413 or an unmapped status can be
+            // provoked by an agent through the repository it names (a renamed, transferred or
+            // blocked repo, a huge issue), and the connection is shared: it must not count.
+            Self::ServerError => Some(UpstreamStatus::ServerError),
             Self::Net(NetError::Refused) => Some(UpstreamStatus::RefusedAddress),
             Self::Net(NetError::Unreachable | NetError::Timeout) => {
                 Some(UpstreamStatus::Unreachable)
             }
-            Self::Forbidden | Self::NotFound | Self::Invalid | Self::Net(NetError::BadRequest) => {
-                None
-            }
+            Self::Forbidden
+            | Self::NotFound
+            | Self::Invalid
+            | Self::IsPullRequest
+            | Self::NotPullRequest
+            | Self::Unexpected
+            | Self::Net(NetError::TooLarge | NetError::BadRequest) => None,
         }
     }
 }

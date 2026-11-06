@@ -23,6 +23,7 @@ use zeroize::Zeroizing;
 use super::http::{Host, Method, Req, Transport};
 use super::outcome::{Outcome, classify};
 use crate::connections::material::Material;
+use crate::scheduler::{iso_of_unix, unix_secs};
 
 /// The App's id and signing key.
 pub struct AppKey {
@@ -46,12 +47,14 @@ impl AppKey {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
         let pkcs1 = pem.contains("BEGIN RSA PRIVATE KEY");
-        let b64: String = pem
-            .lines()
-            .filter(|l| !l.starts_with("-----"))
-            .flat_map(|l| l.trim().chars())
-            .collect();
-        let der = Zeroizing::new(STANDARD.decode(b64).ok()?);
+        // The key's text, wiped when it is dropped.
+        let b64: Zeroizing<String> = Zeroizing::new(
+            pem.lines()
+                .filter(|l| !l.starts_with("-----"))
+                .flat_map(|l| l.trim().chars())
+                .collect(),
+        );
+        let der = Zeroizing::new(STANDARD.decode(b64.as_str()).ok()?);
         let key = if pkcs1 {
             RsaKeyPair::from_der(&der)
         } else {
@@ -111,14 +114,15 @@ pub async fn mint(t: &Transport, app: &AppKey, installation_id: u64) -> Result<M
     let jwt = app
         .jwt(i64::try_from(now.as_secs()).unwrap_or(0))
         .ok_or(Outcome::Unexpected)?;
-    let req = Req {
-        host: Host::Api,
-        method: Method::Post,
-        path: format!("/app/installations/{installation_id}/access_tokens"),
-        body: None,
-    };
+    let path = format!("/app/installations/{installation_id}/access_tokens");
+    let req = Req::new(Host::Api, Method::Post, path, None);
     let resp = t.send(&req, Some(jwt.as_str())).await?;
     classify(&resp)?;
     let m: Minted = serde_json::from_slice(&resp.body).map_err(|_| Outcome::Unexpected)?;
-    Material::new(&m.token, None, m.expires_at.as_deref()).ok_or(Outcome::Unexpected)
+    // Stored in Core's own timestamp format (GitHub says `2026-11-06T12:00:00Z`).
+    let expires_at = match m.expires_at.as_deref() {
+        None => None,
+        Some(at) => Some(iso_of_unix(unix_secs(at).ok_or(Outcome::Unexpected)?)),
+    };
+    Material::new(&m.token, None, expires_at.as_deref()).ok_or(Outcome::Unexpected)
 }

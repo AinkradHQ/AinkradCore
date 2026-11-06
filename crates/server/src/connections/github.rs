@@ -19,14 +19,17 @@ use super::adapter::{
 };
 use super::material::Material;
 
+mod addr;
 pub mod app;
 pub mod device;
+mod guard;
 pub mod http;
 pub mod ops;
 pub mod outcome;
 
+pub use guard::BuildError;
 pub use http::{Rate, Transport};
-pub use ops::{BuildError, Built, Op, build};
+pub use ops::{Built, Op, build};
 pub use outcome::Outcome;
 
 use http::{Host, Req};
@@ -103,7 +106,7 @@ pub const GITHUB: Descriptor = Descriptor {
             name: "pr_write",
             title: "Open pull requests and comment on them",
             write: true,
-            operations: &["github.create_pr", "github.comment_pr"],
+            operations: &["github.create_pr", "github.update_pr", "github.comment_pr"],
         },
         Capability {
             name: "push",
@@ -177,15 +180,40 @@ impl Github {
         &self.transport
     }
 
-    /// Makes a built request with `m`'s token.
+    /// Makes a built request with `m`'s token. An operation that must reach an issue, not a pull
+    /// request (or the reverse) first reads the number and refuses with `is_pull_request` or
+    /// `not_pull_request`: GitHub treats a pull request as an issue, and the two capabilities are
+    /// not the same permission.
     pub async fn execute(&self, m: &Material, b: &Built) -> Result<Done, Outcome> {
-        let resp = self.transport.send(&b.req, Some(m.access())).await?;
+        self.verify(m, b).await?;
+        let resp = self.transport.send(b.req(), Some(m.access())).await?;
         outcome::classify(&resp)?;
         Ok(Done {
             status: resp.status,
             body: scrub(resp.body, &[m.access(), m.refresh().unwrap_or("")]),
             rate: resp.rate,
         })
+    }
+
+    async fn verify(&self, m: &Material, b: &Built) -> Result<(), Outcome> {
+        let want = guard::check_of(b.op().name);
+        if want == guard::Check::Nothing {
+            return Ok(());
+        }
+        let n = b.number().ok_or(Outcome::Invalid)?;
+        let path = format!("/repos/{}/issues/{n}", b.resource());
+        let resp = self
+            .transport
+            .send(&Req::get(Host::Api, path), Some(m.access()))
+            .await?;
+        outcome::classify(&resp)?;
+        let v: Value = serde_json::from_slice(&resp.body).map_err(|_| Outcome::Unexpected)?;
+        let is_pull = v.get("pull_request").is_some_and(|p| !p.is_null());
+        match (want, is_pull) {
+            (guard::Check::NotPull, true) => Err(Outcome::IsPullRequest),
+            (guard::Check::IsPull, false) => Err(Outcome::NotPullRequest),
+            _ => Ok(()),
+        }
     }
 
     /// `GET /user`: whose token this is. An installation token (the GitHub App) cannot read

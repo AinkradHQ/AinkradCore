@@ -7,10 +7,10 @@
 //! every other path part is percent-encoded; a `.` or `..` segment, an empty one, an unknown
 //! field or an unknown query key is refused, so a request cannot leave `/repos/{owner}/{repo}`.
 
-use std::fmt;
-
 use serde_json::Value;
 
+use super::guard;
+pub use super::guard::BuildError;
 use super::http::{Body, Host, Method, Req, encode, safe_path};
 
 /// One operation: what it is called to the broker, and what it asks GitHub.
@@ -109,6 +109,12 @@ pub const OPS: &[Op] = &[
         "issues_write",
     ),
     op(
+        "github.update_pr",
+        Patch,
+        "/repos/{owner}/{repo}/pulls/{number}",
+        "pr_write",
+    ),
+    op(
         "github.create_pr",
         Post,
         "/repos/{owner}/{repo}/pulls",
@@ -139,47 +145,33 @@ pub fn find(name: &str) -> Option<&'static Op> {
     OPS.iter().find(|o| o.name == name)
 }
 
-/// Why an input was refused; the text names a field, never a value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BuildError {
-    UnknownOperation,
-    UnknownField,
-    Missing(&'static str),
-    BadRepo,
-    BadNumber,
-    BadPath,
-    BadQuery,
-    BadBody,
-}
-
-impl fmt::Display for BuildError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnknownOperation => f.write_str("no such GitHub operation"),
-            Self::UnknownField => f.write_str("the input has a field this operation does not take"),
-            Self::Missing(field) => write!(f, "the input needs {field:?}"),
-            Self::BadRepo => f.write_str("\"repo\" is `owner/name`"),
-            Self::BadNumber => f.write_str("\"number\" is a positive whole number"),
-            Self::BadPath => {
-                f.write_str("\"path\" is a file path inside the repository, with no `.` or `..`")
-            }
-            Self::BadQuery => f.write_str("\"query\" is a few plain name and value pairs"),
-            Self::BadBody => {
-                f.write_str("\"body\" is a JSON object this operation takes, at most 256 KiB")
-            }
-        }
-    }
-}
-
-impl std::error::Error for BuildError {}
-
-/// A built request and what the broker needs to judge it.
+/// A built request and what the broker needs to judge it. [`build`] is the only way to make one.
 #[derive(Debug, Clone)]
 pub struct Built {
-    pub op: &'static Op,
+    op: &'static Op,
+    resource: String,
+    number: Option<u64>,
+    req: Req,
+}
+
+impl Built {
+    pub fn op(&self) -> &'static Op {
+        self.op
+    }
+
     /// `owner/name`: the value of the `repos` limit this call is checked against.
-    pub resource: String,
-    pub req: Req,
+    pub fn resource(&self) -> &str {
+        &self.resource
+    }
+
+    /// The issue or pull request number, when the operation has one.
+    pub fn number(&self) -> Option<u64> {
+        self.number
+    }
+
+    pub fn req(&self) -> &Req {
+        &self.req
+    }
 }
 
 const MAX_BODY: usize = 256 * 1024;
@@ -258,6 +250,7 @@ pub fn build(operation: &str, input: &Value) -> Result<Built, BuildError> {
         .and_then(split_repo)
         .ok_or(BuildError::BadRepo)?;
     let mut path = op.path.replace("{owner}", repo.0).replace("{repo}", repo.1);
+    let mut number = None;
     if path.contains("{number}") {
         let n = obj
             .get("number")
@@ -265,15 +258,19 @@ pub fn build(operation: &str, input: &Value) -> Result<Built, BuildError> {
             .as_u64()
             .filter(|n| *n > 0)
             .ok_or(BuildError::BadNumber)?;
+        number = Some(n);
         path = path.replace("{number}", &n.to_string());
     }
     if path.contains("{path}") {
-        let p = obj
+        let raw = obj
             .get("path")
             .ok_or(BuildError::Missing("path"))?
             .as_str()
-            .and_then(file_path)
             .ok_or(BuildError::BadPath)?;
+        let p = file_path(raw).ok_or(BuildError::BadPath)?;
+        if op.method != Method::Get && guard::protected_path(raw) {
+            return Err(BuildError::ProtectedPath);
+        }
         path = path.replace("{path}", &p);
     }
     if let Some(q) = obj.get("query") {
@@ -283,15 +280,13 @@ pub fn build(operation: &str, input: &Value) -> Result<Built, BuildError> {
         }
     }
     let body = match (obj.get("body"), op.method) {
-        (Some(b), Method::Post | Method::Patch | Method::Put) if b.is_object() => {
-            let bytes = serde_json::to_vec(b).map_err(|_| BuildError::BadBody)?;
+        (Some(Value::Object(m)), Method::Post | Method::Patch | Method::Put) => {
+            guard::body(op.name, repo.0, m)?;
+            let bytes = serde_json::to_vec(m).map_err(|_| BuildError::BadBody)?;
             if bytes.len() > MAX_BODY {
                 return Err(BuildError::BadBody);
             }
-            Some(Body {
-                content_type: "application/json",
-                bytes,
-            })
+            Some(Body::json(bytes))
         }
         (None, Method::Get) => None,
         (None, _) => return Err(BuildError::Missing("body")),
@@ -304,12 +299,8 @@ pub fn build(operation: &str, input: &Value) -> Result<Built, BuildError> {
     Ok(Built {
         op,
         resource: format!("{}/{}", repo.0, repo.1),
-        req: Req {
-            host: Host::Api,
-            method: op.method,
-            path,
-            body,
-        },
+        number,
+        req: Req::new(Host::Api, op.method, path, body),
     })
 }
 
@@ -326,13 +317,16 @@ mod tests {
             &json!({"repo": "acme/web", "query": {"state": "open", "per_page": 5}}),
         )
         .unwrap();
-        assert_eq!(b.resource, "acme/web");
-        assert_eq!(b.op.capability, "read_repo");
-        assert_eq!(b.req.method, Method::Get);
-        assert_eq!(b.req.host, Host::Api);
-        assert_eq!(b.req.path, "/repos/acme/web/issues?per_page=5&state=open");
+        assert_eq!(b.resource(), "acme/web");
+        assert_eq!(b.op().capability, "read_repo");
+        assert_eq!(b.req().method(), Method::Get);
+        assert_eq!(b.req().host(), Host::Api);
+        assert_eq!(
+            b.req().path(),
+            "/repos/acme/web/issues?per_page=5&state=open"
+        );
         let b = build("github.get_pr", &json!({"repo": "acme/web", "number": 12})).unwrap();
-        assert_eq!(b.req.path, "/repos/acme/web/pulls/12");
+        assert_eq!(b.req().path(), "/repos/acme/web/pulls/12");
     }
 
     #[test]
@@ -340,7 +334,7 @@ mod tests {
         let v = json!({"repo": "acme/web", "path": "docs/a b/é#?.md", "query": {"ref": "x/y"}});
         let b = build("github.read_file", &v).unwrap();
         assert_eq!(
-            b.req.path,
+            b.req().path(),
             "/repos/acme/web/contents/docs/a%20b/%C3%A9%23%3F.md?ref=x%2Fy"
         );
     }
@@ -353,10 +347,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            (b.op.capability, b.req.method),
+            (b.op().capability, b.req().method()),
             ("issues_write", Method::Post)
         );
-        assert_eq!(b.req.body.unwrap().bytes, br#"{"title":"t"}"#);
+        assert_eq!(b.req().body().unwrap().bytes(), br#"{"title":"t"}"#);
         assert_eq!(
             build("github.create_issue", &json!({"repo": "acme/web"})).unwrap_err(),
             BuildError::Missing("body")
@@ -421,7 +415,7 @@ mod tests {
             let e = build("github.read_file", &json!({"repo": "a/b", "path": path}));
             // `%2e%2e` has no dot segment as a literal: it is encoded to `%252e`, harmless.
             if path == "%2e%2e/x" {
-                assert!(e.unwrap().req.path.contains("%252e%252e"));
+                assert!(e.unwrap().req().path().contains("%252e%252e"));
             } else {
                 assert_eq!(e.unwrap_err(), BuildError::BadPath, "{path:?}");
             }
@@ -459,7 +453,7 @@ mod tests {
             &json!({"repo": "a/b", "query": {"q": "x&y=1#../z"}}),
         )
         .unwrap();
-        assert_eq!(b.req.path, "/repos/a/b?q=x%26y%3D1%23..%2Fz");
+        assert_eq!(b.req().path(), "/repos/a/b?q=x%26y%3D1%23..%2Fz");
     }
 
     #[test]

@@ -107,6 +107,8 @@ pub enum Step {
     /// The person said no on github.com.
     Denied,
     Failed(DeviceError),
+    /// The flow already ended (granted, expired, denied or failed for good): no request was made.
+    Closed,
 }
 
 /// The flow in progress, held by Core. No `Serialize`; `Debug` hides the code.
@@ -115,6 +117,8 @@ pub struct Pending {
     interval: Duration,
     next_at: Instant,
     expires_at: Instant,
+    /// Set when a poll ended the flow: later polls make no request.
+    done: bool,
 }
 
 impl fmt::Debug for Pending {
@@ -204,6 +208,7 @@ pub async fn start(
         interval: Duration::from_secs(interval),
         next_at: now + Duration::from_secs(interval),
         expires_at: now + Duration::from_secs(expires_in),
+        done: false,
     };
     Ok((
         Prompt {
@@ -217,8 +222,25 @@ pub async fn start(
 }
 
 impl Pending {
-    /// One poll at `now`. Before the interval is up, or after the code expired, no request is made.
+    /// One poll at `now`. Before the interval is up, after the code expired, once the flow has
+    /// ended, or with a client id that is not one, no request is made.
     pub async fn poll(&mut self, t: &Transport, client_id: &str, now: Instant) -> Step {
+        if self.done {
+            return Step::Closed;
+        }
+        if !client_id_ok(client_id.trim()) {
+            return Step::Failed(DeviceError::NotConfigured);
+        }
+        let step = self.poll_once(t, client_id, now).await;
+        self.done = match &step {
+            Step::Granted(_) | Step::Expired | Step::Denied => true,
+            Step::Failed(e) => !e.transient(),
+            Step::Wait { .. } | Step::Closed => false,
+        };
+        step
+    }
+
+    async fn poll_once(&mut self, t: &Transport, client_id: &str, now: Instant) -> Step {
         if now >= self.expires_at {
             return Step::Expired;
         }

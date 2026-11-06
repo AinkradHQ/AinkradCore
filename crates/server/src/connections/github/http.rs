@@ -14,10 +14,10 @@
 
 use std::error::Error as StdError;
 use std::fmt;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::addr::public;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::{Client, Url};
 
@@ -52,8 +52,21 @@ impl Method {
 /// A request body; `Debug` shows its size only (a device code travels in one).
 #[derive(Clone, PartialEq, Eq)]
 pub struct Body {
-    pub content_type: &'static str,
-    pub bytes: Vec<u8>,
+    content_type: &'static str,
+    bytes: Vec<u8>,
+}
+
+impl Body {
+    pub(super) fn json(bytes: Vec<u8>) -> Self {
+        Self {
+            content_type: "application/json",
+            bytes,
+        }
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
 impl fmt::Debug for Body {
@@ -63,41 +76,58 @@ impl fmt::Debug for Body {
 }
 
 /// One request: no credential in it (the bearer is given to [`Transport::send`] beside it).
+/// Only this module and the kind's own builders make one; the fields are read through getters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Req {
-    pub host: Host,
-    pub method: Method,
+    host: Host,
+    method: Method,
     /// Starts with `/`; already percent-encoded, query included.
-    pub path: String,
-    pub body: Option<Body>,
+    path: String,
+    body: Option<Body>,
 }
 
 impl Req {
-    pub fn get(host: Host, path: String) -> Self {
+    pub(super) fn new(host: Host, method: Method, path: String, body: Option<Body>) -> Self {
         Self {
             host,
-            method: Method::Get,
+            method,
             path,
-            body: None,
+            body,
         }
     }
 
+    pub(super) fn get(host: Host, path: String) -> Self {
+        Self::new(host, Method::Get, path, None)
+    }
+
     /// A form POST (`application/x-www-form-urlencoded`).
-    pub fn form(host: Host, path: &str, fields: &[(&str, &str)]) -> Self {
+    pub(super) fn form(host: Host, path: &str, fields: &[(&str, &str)]) -> Self {
         let bytes = fields
             .iter()
             .map(|(k, v)| format!("{}={}", encode(k), encode(v)))
             .collect::<Vec<_>>()
             .join("&");
-        Self {
-            host,
-            method: Method::Post,
-            path: path.to_owned(),
-            body: Some(Body {
-                content_type: "application/x-www-form-urlencoded",
-                bytes: bytes.into_bytes(),
-            }),
-        }
+        let body = Body {
+            content_type: "application/x-www-form-urlencoded",
+            bytes: bytes.into_bytes(),
+        };
+        Self::new(host, Method::Post, path.to_owned(), Some(body))
+    }
+
+    pub fn host(&self) -> Host {
+        self.host
+    }
+
+    pub fn method(&self) -> Method {
+        self.method
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub fn body(&self) -> Option<&Body> {
+        self.body.as_ref()
     }
 }
 
@@ -176,46 +206,6 @@ pub fn encode(s: &str) -> String {
         }
     }
     out
-}
-
-/// Whether `ip` is somewhere an upstream may be: not this host, not a private, shared, link-local
-/// (cloud metadata), documentation, multicast, reserved or translation range.
-pub fn public(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(a) => public_v4(a),
-        IpAddr::V6(a) => match a.to_ipv4_mapped() {
-            Some(v4) => public_v4(v4),
-            None => public_v6(a),
-        },
-    }
-}
-
-fn public_v4(a: Ipv4Addr) -> bool {
-    let [o0, o1, o2, _] = a.octets();
-    !(a.is_loopback()
-        || a.is_private()
-        || a.is_link_local()
-        || a.is_unspecified()
-        || a.is_broadcast()
-        || a.is_multicast()
-        || a.is_documentation()
-        || o0 == 0
-        || o0 >= 240
-        || (o0 == 100 && (o1 & 0xc0) == 64)
-        || (o0 == 192 && o1 == 0 && o2 == 0)
-        || (o0 == 198 && (o1 & 0xfe) == 18))
-}
-
-fn public_v6(a: Ipv6Addr) -> bool {
-    let s = a.segments();
-    !(a.is_loopback()
-        || a.is_unspecified()
-        || a.is_multicast()
-        || (s[0] & 0xfe00) == 0xfc00
-        || (s[0] & 0xffc0) == 0xfe80
-        || (s[0] == 0x2001 && s[1] == 0x0db8)
-        || s[0] == 0x2002
-        || (s[0] == 0x0064 && s[1] == 0xff9b))
 }
 
 /// The lookup, every answer checked; the client connects to what this returns, never to a second
@@ -325,6 +315,10 @@ impl Transport {
     /// Sends `req`, with `bearer` as the credential when there is one. A redirect is a reply
     /// like any other (its status), never followed.
     pub async fn send(&self, req: &Req, bearer: Option<&str>) -> Result<Resp, NetError> {
+        // A credential goes to the REST API only, never to the device flow host.
+        if bearer.is_some() && req.host != Host::Api {
+            return Err(NetError::BadRequest);
+        }
         let url = self.url(req.host, &req.path)?;
         let method = match req.method {
             Method::Get => reqwest::Method::GET,
@@ -404,32 +398,6 @@ mod tests {
     #[test]
     fn encodes_everything_but_unreserved() {
         assert_eq!(encode("a b/c?d=é~-._"), "a%20b%2Fc%3Fd%3D%C3%A9~-._");
-    }
-
-    #[test]
-    fn only_public_addresses_pass() {
-        let v4 = |a, b, c, d| IpAddr::V4(Ipv4Addr::new(a, b, c, d));
-        for ip in [
-            v4(127, 0, 0, 1),
-            v4(10, 0, 0, 1),
-            v4(192, 168, 1, 1),
-            v4(172, 16, 0, 1),
-            v4(169, 254, 169, 254),
-            v4(100, 64, 0, 1),
-            v4(0, 0, 0, 0),
-            v4(224, 0, 0, 1),
-            v4(240, 0, 0, 1),
-            v4(198, 18, 0, 1),
-            IpAddr::V6(Ipv6Addr::LOCALHOST),
-            IpAddr::V6("fd00::1".parse().unwrap()),
-            IpAddr::V6("fe80::1".parse().unwrap()),
-            IpAddr::V6("::ffff:127.0.0.1".parse().unwrap()),
-            IpAddr::V6("64:ff9b::7f00:1".parse().unwrap()),
-        ] {
-            assert!(!public(ip), "{ip}");
-        }
-        assert!(public(v4(140, 82, 112, 5)));
-        assert!(public(IpAddr::V6("2606:50c0:8000::1".parse().unwrap())));
     }
 
     #[test]

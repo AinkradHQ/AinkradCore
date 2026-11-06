@@ -44,7 +44,7 @@ async fn mints_an_installation_token_with_a_signed_app_jwt() {
     );
     let m = mint(&fake.transport(), &key, 4242).await.unwrap();
     assert_eq!(m.access(), "ghs_installtoken0000");
-    assert_eq!(m.expires_at.as_deref(), Some("2026-11-06T12:00:00Z"));
+    assert_eq!(m.expires_at.as_deref(), Some("2026-11-06T12:00:00.000Z"));
     assert_eq!(m.refresh(), None);
 
     let s = &fake.seen()[0];
@@ -89,6 +89,21 @@ async fn a_refused_mint_is_a_plain_outcome() {
         Outcome::NotFound
     );
     fake.push(201, &[], r#"{"nope":1}"#);
+    assert_eq!(
+        mint(&fake.transport(), &key, 1).await.unwrap_err(),
+        Outcome::Unexpected
+    );
+}
+
+#[tokio::test]
+async fn an_expiry_that_is_not_a_time_is_refused() {
+    let fake = Fake::start().await;
+    let key = AppKey::new("1", &pem()).unwrap();
+    fake.push(
+        201,
+        &[],
+        r#"{"token":"ghs_installtoken0000","expires_at":"tomorrow"}"#,
+    );
     assert_eq!(
         mint(&fake.transport(), &key, 1).await.unwrap_err(),
         Outcome::Unexpected
