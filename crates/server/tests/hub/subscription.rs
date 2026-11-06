@@ -378,7 +378,7 @@ async fn a_stored_session_is_refused_at_launch_for_the_wrong_harness_and_for_a_m
         why.contains("module") && why.contains("subscription"),
         "{why}"
     );
-    assert_eq!(agents::state_of(&w.core, &row.id).await.state, "failed");
+    assert_eq!(agents::state_of(&w.core, &row.id).await.state, "ended");
     assert_eq!(
         count(
             &w.core,
@@ -453,7 +453,7 @@ async fn a_disabled_or_deleted_account_is_not_leased_and_an_earlier_lease_is_rev
     let row = make(&w, "claude", &sub(&w.account), None).await;
     let why = refused_start(&w, &row).await;
     assert!(why.contains("no longer exists"), "{why}");
-    assert_eq!(agents::state_of(&w.core, &row.id).await.state, "failed");
+    assert_eq!(agents::state_of(&w.core, &row.id).await.state, "ended");
     let all = everything(&w.core).await;
     assert!(!all.contains(TOKEN));
     // The only leases ever minted here were the two this test made by hand.
