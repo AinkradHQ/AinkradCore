@@ -16,6 +16,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 pub mod account_keys;
 pub mod accounts;
 pub mod agents;
+pub mod alloc;
 pub mod audit;
 mod backup;
 pub mod budgets;
