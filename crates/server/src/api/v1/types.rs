@@ -119,7 +119,9 @@
 /// 42: the harness's plan-limit signal (KAN-436 S2): `PlanLimit` and `PlanWindow` in the runner schema,
 ///    `AgentEvents.plan_limit` (optional, sent only by a runner that lists the `plan-limit` command); no
 ///    operation changes.
-pub const API_MINOR: u32 = 42;
+/// 43: chain audit actions (`chain.created`, `chain.updated`, `chain.deleted`, `chain.default_set`,
+///    `chain.bound`, `chain.unbound`) in `x-audit-actions` (S5); no operation changes.
+pub const API_MINOR: u32 = 43;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
