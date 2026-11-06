@@ -58,7 +58,8 @@ pub async fn record(
         return Ok(false);
     }
     let Some(row) = sqlx::query(
-        "SELECT harness, model, secrets, resumes, owner_module, hm_epoch, hm_in, hm_out, hm_cache \
+        "SELECT harness, model, secrets, resumes, owner_module, account_id, hm_epoch, hm_in, hm_out, \
+         hm_cache \
          FROM core_agent_sessions WHERE id = ?",
     )
     .bind(session)
@@ -78,11 +79,24 @@ pub async fn record(
                 return Ok(false);
             }
         };
-    let Some((provider, account)) = secrets
-        .iter()
-        .filter_map(|s| account_secret(&s.name))
-        .find(|(p, _)| subscription_provider(p))
-    else {
+    // The account the allocator (or the create) wrote on the row; a row from before `account_id`
+    // names it by its secret only.
+    let held: Option<i64> = row.try_get("account_id")?;
+    let Some((provider, account)) = (match held {
+        Some(id) => {
+            sqlx::query_scalar::<_, String>("SELECT provider FROM core_accounts WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&mut *conn)
+                .await?
+                .filter(|p| subscription_provider(p))
+                .map(|p| (p, id))
+        }
+        None => secrets
+            .iter()
+            .filter_map(|s| account_secret(&s.name))
+            .find(|(p, _)| subscription_provider(p))
+            .map(|(p, id)| (p.to_owned(), id)),
+    }) else {
         return Ok(false);
     };
     let Some(u) = usage else { return Ok(true) };
@@ -115,7 +129,7 @@ pub async fn record(
         epoch,
         account_id: Some(account),
         legacy_account_id: None,
-        provider,
+        provider: &provider,
         harness: &harness,
         model: model
             .as_deref()

@@ -147,6 +147,12 @@ pub fn placement(app: &App, s: &Session) -> Placement {
 /// Starts (or resumes) `s` on its runner with fresh leases; its state moves to `running`.
 /// A refusal that retrying cannot fix ends the session as failed.
 pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), Refusal> {
+    // A chain session with no account is never started: the runner would use its own login. The
+    // supervisor picks first (`allocate::ready`); this is the refusal behind it.
+    if crate::store::alloc::unassigned(&app.pool, &s.id, &s.secrets).await? {
+        let why = "the session is waiting for an account";
+        return Err(Refusal::Runner(StreamError::new(ErrorCode::Offline, why)));
+    }
     // No lease for a runner that cannot redeem it now: they would only pile up to the cap.
     if !app.hub.online(&s.runner) {
         let why = "the runner is not connected";
@@ -208,6 +214,13 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
                 l
             }
             Err(e) => {
+                // The account the pick chose was refused after a race (disabled, cooled, out of
+                // budget): another is picked, at most twice. Not a failover hop.
+                if matches!(&e, Refusal::Runner(r) if r.code == ErrorCode::InvalidArgs)
+                    && allocate::repick(app, s).await?
+                {
+                    return Ok(());
+                }
                 fail(app, s, &format!("leasing its secrets: {}", describe(&e))).await;
                 return Err(e);
             }

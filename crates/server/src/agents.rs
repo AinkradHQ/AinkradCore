@@ -17,6 +17,7 @@
 //! - **Capacity** (E2-08.1): a create is refused `runner_busy` when the runner's `agent`
 //!   driver, or the harness's slot on it, is full (the runner refuses it too).
 
+mod allocate;
 pub mod gateway;
 mod launch;
 pub mod login;
@@ -754,7 +755,15 @@ async fn run(app: &App, id: &str) {
         // A budget stop or an auth failure the last answer recorded.
         gateway::after(app, &s).await;
         let step = match s.state.as_str() {
-            "starting" => launch(app, &s, false).await.map(drop),
+            // A chain session has no account until the pick has given it one (it waits, never launches).
+            "starting" => match allocate::ready(app, &s).await {
+                Ok(Some(row)) => launch(app, &row, false).await.map(drop),
+                Ok(None) => {
+                    tokio::time::sleep(cfg.retry).await;
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            },
             "interrupted" => launch(app, &s, true).await.map(drop),
             _ => read(app, &s, &cfg).await,
         };

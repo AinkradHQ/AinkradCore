@@ -257,12 +257,19 @@ pub async fn create_owned_ref(
     // The account a gateway serves is the Core's own row behind the secret's name, nothing a caller
     // or a runner says; no such row leaves it NULL and the launch refuses the session.
     let gateway_secret = super::gateway::gateway_secret(new.secrets).map(|s| s.name.as_str());
+    // The account it holds, whatever its delivery: what the allocator's cap counts (S4).
+    let account_secret = new
+        .secrets
+        .iter()
+        .find(|s| super::gateway::account_secret(&s.name).is_some())
+        .map(|s| s.name.as_str());
     let mut tx = super::begin_write(pool).await?;
     let n: i64 = sqlx::query_scalar(
         "INSERT INTO core_agent_sessions (id, runner, harness, model, prompt, workspace, policy, \
          secrets, state, created_by, created_at, updated_at, owner_module, owner_ref, \
-         gateway_account_id) \
+         gateway_account_id, account_id) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, \
+         (SELECT id FROM core_accounts WHERE secret_name = ?), \
          (SELECT id FROM core_accounts WHERE secret_name = ?)) RETURNING n",
     )
     .bind(&id)
@@ -279,6 +286,7 @@ pub async fn create_owned_ref(
     .bind(owner)
     .bind(owner_ref)
     .bind(gateway_secret)
+    .bind(account_secret)
     .fetch_one(&mut *tx)
     .await?;
     let names: Vec<&str> = new.secrets.iter().map(|s| s.name.as_str()).collect();
