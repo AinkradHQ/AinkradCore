@@ -7,8 +7,8 @@
 //! - **Never pooled.** A session names its subscription account itself, and nothing picks or fails
 //!   over between accounts: a restart or resume leases the same secret again, and a subscription is
 //!   alone in its pool.
-//! - **Money.** No gateway serves it (`gateway_account_id` stays NULL), so no hold, no ledger row,
-//!   no stop and no top-up exist for it; nothing writes a dollar cost for a plan that bills none.
+//! - **Money.** No gateway serves it (`gateway_account_id` stays NULL), so no hold, stop or top-up
+//!   exists for it. Its ledger rows are the harness meter's (`store::usage_meter`): tokens, unpriced.
 
 use ainkrad_proto::v2::{
     AGENT_DRIVER, CAP_SUBSCRIPTION_ENV, SUBSCRIPTION_HARNESS, is_subscription_secret,

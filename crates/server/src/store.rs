@@ -37,6 +37,7 @@ pub mod secrets;
 mod secrets_user;
 pub mod settings;
 pub mod usage;
+pub mod usage_meter;
 
 pub use backup::{BackupError, backup, restore};
 pub use migrate::{MigrateError, Migration};
