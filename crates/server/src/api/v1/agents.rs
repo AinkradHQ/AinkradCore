@@ -508,17 +508,28 @@ async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSe
             if moved {
                 owns_secrets(&s, &me)?;
             }
+            // An attempt that is over has nothing to stop: the cancel stands (the run is settled).
+            if !s.live() {
+                return Ok::<(), ApiError>(());
+            }
             // A chain session that never reached its runner (waiting for an account, or picked and not
             // started) is ended here: the runner has nothing to stop.
             if !crate::store::alloc::end_unstarted(&app.pool, &s.id, &app.clock.now()).await? {
                 send(&app, &s, command(&s), &me).await?;
             }
-            Ok::<(), ApiError>(())
+            Ok(())
         }
         .await;
         if let Err(e) = stopped {
-            crate::store::failover::restore_run(&app.pool, &cancelled.settled).await?;
-            return Err(e);
+            // Opened again only when a stop to a harness that is still live did not get through; one
+            // that ended meanwhile is as cancelled as it was.
+            let live = one(&app, &s.id).await.map_or(true, |x| x.live());
+            if live {
+                let over =
+                    crate::store::failover::restore_run(&app.pool, &cancelled.settled).await?;
+                agents::drive_failover(&app, &over);
+                return Err(e);
+            }
         }
     }
     let action = if kill {

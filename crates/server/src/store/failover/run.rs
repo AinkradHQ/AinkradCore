@@ -110,15 +110,30 @@ pub async fn cancel_run(pool: &SqlitePool, id: &str) -> Result<Cancelled, sqlx::
 
 /// Opens again exactly the attempts a [`cancel_run`] settled, when the stop it was for never reached
 /// the runner: the run is no more cancelled than it was.
-pub async fn restore_run(pool: &SqlitePool, settled: &[String]) -> Result<(), sqlx::Error> {
+/// Returns the restored attempts that are over: nobody drives those any more (their driver may
+/// have read them settled), so the caller hands them to the failover driver again.
+pub async fn restore_run(
+    pool: &SqlitePool,
+    settled: &[String],
+) -> Result<Vec<String>, sqlx::Error> {
     let mut tx = crate::store::begin_write(pool).await?;
+    let mut over = Vec::new();
     for id in settled {
         sqlx::query("UPDATE core_agent_sessions SET failover_done = 0 WHERE id = ?")
             .bind(id)
             .execute(&mut *tx)
             .await?;
+        let state: Option<String> =
+            sqlx::query_scalar("SELECT state FROM core_agent_sessions WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if state.is_some_and(|s| matches!(s.as_str(), "ended" | "lost")) {
+            over.push(id.clone());
+        }
     }
-    tx.commit().await
+    tx.commit().await?;
+    Ok(over)
 }
 
 /// Settles an attempt whose run goes no further (the decision was to end).
@@ -178,7 +193,8 @@ pub async fn unfinished_since(pool: &SqlitePool, since: &str) -> Result<Vec<Stri
     .await
 }
 
-/// The attempts that are over and whose failover was never settled: what a restart finishes.
+/// Every attempt that is over and unsettled, whatever its age. For tests: a restart uses
+/// [`unfinished_since`], so an attempt that ended long ago is never moved.
 pub async fn unfinished(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT id FROM core_agent_sessions WHERE state IN ('ended', 'lost') AND failover_done = 0 \

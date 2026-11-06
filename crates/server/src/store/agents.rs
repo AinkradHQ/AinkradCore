@@ -381,6 +381,13 @@ pub async fn end(
         // A budget hold is for a live session: what it did not spend goes back.
         super::budgets::guard::release_in(&mut tx, id).await?;
         super::health::on_end(&mut tx, id, outcome, now).await?;
+        // A lost session never moves a run (the runner's failure, not the account's): settled with the end.
+        if state == "lost" {
+            sqlx::query("UPDATE core_agent_sessions SET failover_done = 1 WHERE id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
         let kind = outcome["kind"].as_str().unwrap_or(state);
         emit(
             &mut tx,

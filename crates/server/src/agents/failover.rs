@@ -140,6 +140,23 @@ pub(super) async fn live(app: &App, s: &Session) -> bool {
     true
 }
 
+/// Hands over attempts to the failover driver again (a cancel that was undone leaves them unsettled
+/// with nobody driving them).
+pub fn drive(app: &App, ids: &[String]) {
+    for id in ids {
+        let (app, id) = (app.clone(), id.clone());
+        tokio::spawn(async move {
+            let mut closing = app.closing.subscribe();
+            tokio::select! {
+                r = settle(&app, &id) => if let Err(e) = r {
+                    tracing::warn!(session = id, why = describe(&e), "settling a failover");
+                },
+                () = crate::api::stopping(&mut closing) => {}
+            }
+        });
+    }
+}
+
 /// What a starting Core finishes: every attempt that is over and whose failover was never
 /// settled (the Core went down between the end and the move).
 pub(super) async fn resume_unfinished(app: &App) -> Result<usize, sqlx::Error> {

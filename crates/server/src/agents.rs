@@ -25,6 +25,7 @@ pub mod login;
 pub mod subscription;
 mod topup;
 pub mod wake;
+pub use failover::drive as drive_failover;
 use launch::launch;
 pub use launch::{Placement, placement};
 
@@ -451,6 +452,21 @@ async fn fail(app: &App, s: &Session, why: &str) {
     }
 }
 
+/// Best effort, before the Core ends a session itself: tells the runner to kill it so a harness that
+/// may still run stops spending. An answer that does not come is logged (never a secret) and passed.
+async fn stop_for_end(app: &App, s: &Session) {
+    let Some(proof) = app.agents.elevated.lock().unwrap().get(&s.id).copied() else {
+        return;
+    };
+    let stop = Command::AgentStop(ainkrad_proto::v2::AgentStop {
+        session: s.id.clone(),
+        kill: true,
+    });
+    if let Err(e) = ask(app, &s.runner, stop, app.agents.config.answer, Some(proof)).await {
+        tracing::warn!(session = s.id, code = ?e.code, "the kill before an end did not get through");
+    }
+}
+
 pub fn describe(r: &Refusal) -> String {
     match r {
         Refusal::Runner(e) => e.message.clone(),
@@ -810,6 +826,8 @@ async fn run(app: &App, id: &str) {
             Err(e) => {
                 let since = *away.get_or_insert_with(tokio::time::Instant::now);
                 if since.elapsed() >= cfg.lost_after {
+                    // The harness may be alive behind the failing answers: stopped before the end.
+                    stop_for_end(app, &s).await;
                     fail(app, &s, "bounded agent retries exhausted").await;
                     app.agents.leases.lock().unwrap().remove(id);
                     return;
