@@ -172,6 +172,11 @@ mod tests {
             "a kind registers once"
         );
         assert_eq!(r.descriptors().len(), 2);
-        assert!(Registry::builtin().descriptors().is_empty());
+        let kinds: Vec<_> = Registry::builtin()
+            .descriptors()
+            .iter()
+            .map(|d| d.kind)
+            .collect();
+        assert_eq!(kinds, ["github"]);
     }
 }

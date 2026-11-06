@@ -2,7 +2,7 @@
 //! proves a credential works (design §3). Capabilities and the operations each one allows are
 //! data, so a new kind needs no new screen and no new store code.
 //!
-//! `Registry::builtin()` is empty until C2 (GitHub) and C3 (Jira) register theirs.
+//! `Registry::builtin()` holds GitHub (C2); C3 (Jira) registers its own.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -234,9 +234,12 @@ impl Registry {
         Self::default()
     }
 
-    /// The shipped kinds: none yet (C2 adds `github`, C3 `jira`).
+    /// The shipped kinds: `github` (C2); C3 adds `jira`.
     pub fn builtin() -> Self {
-        Self::new()
+        let mut r = Self::new();
+        r.register(Arc::new(super::github::Github::strict()))
+            .expect("the github descriptor is well formed");
+        r
     }
 
     /// Adds an adapter; refuses a malformed descriptor or a kind already registered.
