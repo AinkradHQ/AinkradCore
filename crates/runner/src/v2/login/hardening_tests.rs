@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 
 use super::run::Guard;
 use super::tests::{
-    CODE, TOKEN, Tmp, URL, done, driver, driver_with, scratch_gone, standin, start,
+    CODE, TOKEN, Tmp, URL, done, driver, driver_with, good, scratch_gone, standin, start,
 };
 use super::{LoginDriver, Msg, sweep};
 
@@ -139,7 +139,7 @@ async fn the_sign_in_url_is_told_from_a_docs_link() {
 #[tokio::test]
 async fn a_panic_in_the_task_still_removes_the_scratch_dir_and_the_slot() {
     let t = Tmp::new();
-    let d: Arc<LoginDriver> = driver(&t, "true");
+    let d: Arc<LoginDriver> = driver(&t, &good("code: "));
     let scratch = t.file("logins").join("l_p");
     std::fs::create_dir_all(scratch.join("home")).unwrap();
     let (tx, _rx) = mpsc::unbounded_channel::<Msg>();

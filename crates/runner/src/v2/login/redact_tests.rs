@@ -37,7 +37,7 @@ async fn the_token_and_the_code_are_in_no_log_error_or_debug() {
     // A failing sign-in whose child echoes the code and a token back in its last words.
     let t = Tmp::new();
     let body = format!(
-        "printf '{URL}\\r\\ncode: '\nread -r c\nprintf \"bad code: $c token {TOKEN}\\r\\n\"\nexit 1"
+        "printf '{URL}\\r\\ncode: '\nread -r c\nprintf \"bad code: $c key sk-ant-api03-LEAKLEAKLEAK\\r\\n\"\nexit 1"
     );
     let d = driver(&t, &body);
     d.start(start("l_1")).await.unwrap();
