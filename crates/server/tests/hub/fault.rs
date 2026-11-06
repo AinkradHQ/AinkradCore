@@ -129,6 +129,7 @@ async fn a_cut_mid_stream_loses_nothing_and_answers_once() {
         exec: Arc::new(ExecDriver::new(exec, Redactor::new())),
         pty: None,
         agents: None,
+        login: None,
         tls: None,
         backoff: Backoff {
             min: Duration::from_millis(50),

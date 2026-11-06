@@ -31,6 +31,7 @@ pub mod daemon;
 pub mod dial;
 mod exec;
 pub mod key;
+pub mod login;
 pub mod pair;
 pub mod pty;
 mod sandbox;

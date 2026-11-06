@@ -89,6 +89,7 @@ fn spawn_daemon(
         exec: driver(),
         pty: Some(Arc::new(PtyDriver::new(cfg))),
         agents: None,
+        login: None,
         tls: None,
         backoff: Backoff {
             min: Duration::from_millis(50),

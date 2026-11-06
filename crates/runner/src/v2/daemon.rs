@@ -63,6 +63,8 @@ pub struct Daemon {
     pub pty: Option<Arc<PtyDriver>>,
     /// Agent sessions (`--enable-agents`), if offered.
     pub agents: Option<Arc<super::agent::AgentDriver>>,
+    /// Subscription sign-in (KAN-441 L2), when the vendor CLI is installed in a pinned version.
+    pub login: Option<Arc<super::login::LoginDriver>>,
     pub tls: Option<Arc<rustls::ClientConfig>>,
     pub backoff: Backoff,
 }
@@ -76,6 +78,9 @@ impl Daemon {
         }
         if let Some(agents) = &self.agents {
             session = session.with_agents(Arc::clone(agents));
+            if let Some(login) = &self.login {
+                session.login = Some(Arc::clone(login));
+            }
         }
         let mut delay = self.backoff.min;
         let mut refused = 0;
@@ -177,6 +182,12 @@ pub async fn from_state(
         agent.watch_isolation(std::time::Duration::from_secs(5));
         agent
     });
+    // Whatever is enabled, a crash may have left a sign-in's scratch HOME behind.
+    super::login::sweep(&state.0);
+    let login = match agents.is_some() {
+        true => super::login::detect(&state.0).await,
+        false => None,
+    };
     let daemon = Daemon {
         client: Client::new(&url, tls.clone())?,
         key,
@@ -185,6 +196,7 @@ pub async fn from_state(
         exec,
         pty,
         agents,
+        login,
         tls,
         backoff: Backoff::default(),
     };
@@ -250,6 +262,7 @@ mod tests {
             exec: Arc::new(super::super::exec::tests::driver(1)),
             pty: None,
             agents: None,
+            login: None,
             tls: None,
             backoff: Backoff {
                 min: Duration::from_millis(10),

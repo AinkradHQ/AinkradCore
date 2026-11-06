@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Close, Command, CoreWelcome, DriverInfo, ExecResult, ExecRun, NO_CHANNEL_BINDING, OP_EXEC_RUN,
-    OP_NOOP, Reply, Rotation, rotation_message,
+    CAP_LOGIN, Close, Command, CoreWelcome, DriverInfo, ExecResult, ExecRun, LoginStart,
+    NO_CHANNEL_BINDING, OP_EXEC_RUN, OP_NOOP, Reply, Rotation, rotation_message,
 };
 use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair};
 
@@ -235,6 +235,25 @@ fn error(body: Body) -> ErrorCode {
         Body::Error(e) => e.code,
         other => panic!("{other:?}"),
     }
+}
+
+/// KAN-441 L2: a runner without the sign-in driver lists no `login` and refuses its commands.
+#[tokio::test]
+async fn login_ops_are_refused_where_the_runner_offers_no_sign_in() {
+    let (mut core, hello) = Core::start(1).await;
+    assert!(
+        hello
+            .drivers
+            .iter()
+            .all(|d| !d.commands.iter().any(|c| c == CAP_LOGIN))
+    );
+    let start = LoginStart {
+        login_id: "l_1".to_owned(),
+        harness: "claude".to_owned(),
+    };
+    core.send(1, Body::Command(Command::LoginStart(start)))
+        .await;
+    assert_eq!(error(core.answer(1).await), ErrorCode::UnsupportedCommand);
 }
 
 #[tokio::test]

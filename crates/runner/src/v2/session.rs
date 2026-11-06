@@ -114,6 +114,7 @@ pub struct Session {
     pty: Option<Arc<PtyDriver>>,
     /// Agent sessions (`--enable-agents`), if offered.
     agent: Option<Arc<AgentDriver>>,
+    pub(super) login: Option<Arc<super::login::LoginDriver>>, // KAN-441 L2, set with `agent`
     /// Where wall time comes from: a monotonic clock stands still while the machine sleeps.
     clock: Clock,
     boot: String,
@@ -130,6 +131,7 @@ impl Session {
             exec,
             pty: None,
             agent: None,
+            login: None,
             clock: Arc::new(SystemTime::now),
             boot: format!("b_{}", key::b64(&key::random::<16>())),
             core_boot: None,
@@ -187,10 +189,11 @@ impl Session {
             Some(p) => (p.info(), p.terminals().await),
             None => (None, Vec::new()),
         };
+        let agent_info = super::login::advertise(self.agent.as_ref(), self.login.as_ref()).await;
         let hello = RunnerHello {
             drivers: std::iter::once(self.exec.info())
                 .chain(pty_info)
-                .chain(self.agent.as_ref().map(|a| a.info()))
+                .chain(agent_info)
                 .collect(),
             boot: Some(self.boot.clone()),
             isolation: self.agent.as_ref().map(|a| a.isolation()),
@@ -428,16 +431,12 @@ impl Session {
             // runner has proven the gateway and lists it.
             | Command::AgentLimit(_)
             | Command::GatewayTest(_) => self.start_agent(stream, command),
-            // L2 (KAN-441) gives these a driver; until then the runner never lists the `login`
-            // command, so the Core never sends them, and one that arrives anyway is refused.
+            // The sign-in driver's, or (an op of a newer Core) `unsupported_command`.
             Command::LoginStart(_)
             | Command::LoginCode(_)
             | Command::LoginCancel(_)
             | Command::Unknown => {
-                Some(Body::Error(StreamError::new(
-                    ErrorCode::UnsupportedCommand,
-                    "no driver of this runner takes that command",
-                )))
+                super::login::dispatch(self.login.as_ref(), stream, command, &self.done_tx)
             }
         }
     }
