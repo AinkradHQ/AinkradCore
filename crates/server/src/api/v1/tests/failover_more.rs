@@ -161,3 +161,50 @@ async fn the_migration_goes_down_and_up_and_settles_what_was_over() {
         (1, 0)
     );
 }
+
+#[tokio::test]
+async fn a_cancel_between_attempts_stands_even_when_there_is_nothing_to_stop() {
+    let w = w().await;
+    let (a1, a2) = (w.acct("a1").await, w.acct("a2").await);
+    let chain = [w.keys("main", &[a1.id, a2.id]).await];
+    // The attempt ended for a moving class and its move waits (the runner is away).
+    let (old, _) = over(&w, &chain, limited(), 0).await;
+    let uri = format!("/api/v1/agent-sessions/{}/cancel", old.id);
+    let r = call(&w.fx, &w.fx.dev, Method::POST, &uri, Value::Null).await;
+    assert_eq!(r.0, StatusCode::OK, "{:?}", r.1);
+    assert_eq!(row(&w, &old.id).await.2, 1, "the cancel stays settled");
+    // Whenever the runner comes back, the move finds the run cancelled: no successor, ever.
+    assert_eq!(
+        mv(&w, &old.id, "rate_limited", &at(60), true).await,
+        crate::store::failover::Moved::Skipped
+    );
+    assert_eq!(
+        w.count(
+            "SELECT count(*) FROM core_agent_sessions WHERE failover_of = ?",
+            &old.id
+        )
+        .await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn a_lost_session_is_settled_with_its_end() {
+    let w = w().await;
+    let pool = &w.fx.app.pool;
+    let a = w.acct("a").await;
+    let chain = [w.keys("main", &[a.id]).await];
+    let s = w.session(&chain, &[]).await;
+    took(w.pick(&s.id, &chain, &at(0)).await);
+    let lost = json!({"kind": "lost", "reason": "the runner never came back"});
+    store::end(pool, &s.id, "lost", &lost, &at(5))
+        .await
+        .unwrap();
+    assert_eq!(row(&w, &s.id).await.2, 1);
+    assert!(
+        crate::store::failover::unfinished(pool)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

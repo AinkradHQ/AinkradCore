@@ -382,3 +382,99 @@ async fn an_end_the_core_makes_itself_settles_the_run_so_no_restart_moves_it() {
             .is_empty()
     );
 }
+
+/// An attempt over for a moving class, with its cancel undone: handed to the driver again, it moves.
+#[tokio::test]
+async fn an_undone_cancel_hands_the_ended_attempt_back_to_the_driver() {
+    use ainkrad_core_server::store::agents::NewSession;
+    let (core, mut fake, runner, a) = up("fo-restore", true, None).await;
+    let b = second(&core, &runner).await;
+    let chain = [pool_of(&core, &runner, &[a.id, b.id]).await];
+    let policy = super::gateway::policy();
+    let new = NewSession {
+        runner: &runner,
+        harness: "claude",
+        model: Some("claude-x"),
+        prompt: Some("go"),
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: &runner,
+    };
+    let now = core.app.clock.now();
+    let old = sessions::create(&core.app.pool, &new, AuditActor::System, &now)
+        .await
+        .unwrap();
+    let secret = serde_json::json!([{"name": a.secret_name, "var": "ANTHROPIC_API_KEY"}]);
+    let outcome =
+        serde_json::json!({"kind": "failed", "reason": "429", "fingerprint": "rate_limited"});
+    sqlx::query(
+        "UPDATE core_agent_sessions SET chain = ?, chain_pos = 0, account_id = ?, gateway_account_id = ?, \
+         secrets = ?, state = 'ended', outcome = ?, ended_at = ?, start_sent = 1 WHERE id = ?",
+    )
+    .bind(serde_json::json!(chain).to_string())
+    .bind(a.id)
+    .bind(a.id)
+    .bind(secret.to_string())
+    .bind(outcome.to_string())
+    .bind(&now)
+    .bind(&old.id)
+    .execute(&core.app.pool)
+    .await
+    .unwrap();
+    // A cancel settled it, its stop failed, and the settle was undone: nobody drives it yet.
+    let cancelled = failover::cancel_run(&core.app.pool, &old.id).await.unwrap();
+    let over = failover::restore_run(&core.app.pool, &cancelled.settled)
+        .await
+        .unwrap();
+    assert_eq!(over, std::slice::from_ref(&old.id));
+    service::drive_failover(&core.app, &over);
+    let (_, cmd) = command(&mut fake).await;
+    let Command::AgentStart(start) = cmd else {
+        panic!("expected agent.start, got {cmd:?}")
+    };
+    assert_ne!(start.session, old.id);
+}
+
+/// A runner that answers every read with an error until the Core gives up: the Core kills the
+/// session before it ends it, so a harness that may still run stops spending.
+#[tokio::test]
+async fn retries_that_run_out_kill_the_harness_before_the_end() {
+    let cfg = ainkrad_core_server::agents::AgentsConfig {
+        read_wait: std::time::Duration::from_millis(300),
+        retry: std::time::Duration::from_millis(50),
+        lost_after: std::time::Duration::from_secs(1),
+        answer: std::time::Duration::from_secs(2),
+    };
+    let (core, fake, runner, a) = super::gateway::up_with("fo-kill", true, None, cfg).await;
+    let session = super::gateway::start(&core, &runner, &a).await;
+    let mut w = W {
+        core,
+        fake,
+        runner,
+        account: a,
+        session: session.clone(),
+    };
+    started(&mut w, u64::MAX).await;
+    let mut killed = false;
+    for _ in 0..200 {
+        let (stream, cmd) = command(&mut w.fake).await;
+        match cmd {
+            Command::AgentStop(st) => {
+                assert!(st.kill && st.session == session);
+                killed = true;
+                let ev = events(&session, AgentState::Ended, vec![]);
+                w.fake
+                    .send(stream, Body::Result(Reply::AgentStop(ev)))
+                    .await;
+                break;
+            }
+            _ => {
+                let busy = StreamError::new(ErrorCode::Busy, "busy");
+                w.fake.send(stream, Body::Error(busy)).await;
+            }
+        }
+    }
+    assert!(killed, "no kill was sent before the end");
+    until("the end", &w.core, &session, |s| !s.live()).await;
+}
