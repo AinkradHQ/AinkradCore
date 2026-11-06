@@ -249,3 +249,22 @@ async fn a_launch_that_refuses_the_picked_account_picks_another() {
             .unwrap();
     assert_eq!((account, tried), (b.id, json!([a.id]).to_string()));
 }
+
+#[tokio::test]
+async fn a_runner_without_the_gateway_cannot_serve_an_api_key_entry() {
+    // The real placement rules, not an injected closure: no `gateway` command, no API-key account.
+    let (core, mut fake, runner, account) = up("alloc-nogw", false, None).await;
+    let chain = [pool_of(&core, &runner, &[account.id]).await];
+    let session = chain_session(&core, &runner, &chain).await;
+    until("the end", &core, &session, |s| !s.live()).await;
+    let s = sessions::get(&core.app.pool, &session)
+        .await
+        .unwrap()
+        .unwrap();
+    let why = s.outcome.unwrap().to_string();
+    assert!(
+        why.contains("the runner cannot serve it") && why.contains("offers the gateway"),
+        "{why}"
+    );
+    no_start(&mut fake).await;
+}

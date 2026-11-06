@@ -186,3 +186,48 @@ async fn a_chain_row_is_not_launchable_until_the_copy_in_hand_names_its_account(
     // A session that names its account itself (no chain) is never held back.
     assert!(!alloc::unassigned(pool, &plain.id, &[]).await.unwrap());
 }
+
+#[tokio::test]
+async fn a_session_that_has_run_never_leaves_its_account() {
+    let w = w().await;
+    let (a, b) = (w.acct("a").await, w.acct("b").await);
+    let chain = [w.keys("main", &[a.id, b.id]).await];
+    let pool = &w.fx.app.pool;
+    for how in ["interrupted", "started", "woken"] {
+        let s = w.session(&chain, &[]).await;
+        let first = took(w.pick(&s.id, &chain, NOW).await).account;
+        match how {
+            "interrupted" => store::set_state(pool, &s.id, "interrupted", "t", false, NOW)
+                .await
+                .unwrap(),
+            "started" => {
+                sqlx::query("UPDATE core_agent_sessions SET harness_session = 'h_1' WHERE id = ?")
+                    .bind(&s.id)
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+            _ => {
+                sqlx::query("UPDATE core_agent_sessions SET last_seq = 4 WHERE id = ?")
+                    .bind(&s.id)
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+        }
+        let mut tx = begin_write(pool).await.unwrap();
+        assert_eq!(
+            alloc::retreat_in(&mut tx, &s.id).await.unwrap(),
+            None,
+            "{how}"
+        );
+        tx.commit().await.unwrap();
+        let held: Option<i64> =
+            sqlx::query_scalar("SELECT account_id FROM core_agent_sessions WHERE id = ?")
+                .bind(&s.id)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(held, Some(first), "{how}");
+    }
+}
