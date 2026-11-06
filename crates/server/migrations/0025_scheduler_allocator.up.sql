@@ -10,12 +10,15 @@ ALTER TABLE core_agent_sessions ADD COLUMN chain TEXT;
 ALTER TABLE core_agent_sessions ADD COLUMN chain_pos INTEGER;
 ALTER TABLE core_agent_sessions ADD COLUMN waiting TEXT;
 ALTER TABLE core_agent_sessions ADD COLUMN tried_accounts TEXT NOT NULL DEFAULT '[]';
+-- 1 once the Core has sent `agent.start` for the row (or may have): the pick is final from then on.
+ALTER TABLE core_agent_sessions ADD COLUMN start_sent INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX core_agent_sessions_account ON core_agent_sessions (account_id, state);
 
--- Sessions already live under an account name hold that account, as a new one is bound at create.
+-- Every session under an account name (over ones too: a wake brings them back) is bound to that
+-- account, as a new one is bound at create.
 UPDATE core_agent_sessions SET account_id = (
     SELECT min(a.id) FROM core_accounts a
     WHERE a.secret_name GLOB 'acct.*'
       AND a.secret_name IN (SELECT json_extract(j.value, '$.name')
                             FROM json_each(core_agent_sessions.secrets) j)
-) WHERE state NOT IN ('ended', 'lost');
+) WHERE account_id IS NULL;

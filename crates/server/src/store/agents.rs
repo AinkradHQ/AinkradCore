@@ -267,10 +267,11 @@ pub async fn create_owned_ref(
     let n: i64 = sqlx::query_scalar(
         "INSERT INTO core_agent_sessions (id, runner, harness, model, prompt, workspace, policy, \
          secrets, state, created_by, created_at, updated_at, owner_module, owner_ref, \
-         gateway_account_id, account_id) \
+         gateway_account_id, account_id, user_id) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, \
          (SELECT id FROM core_accounts WHERE secret_name = ?), \
-         (SELECT id FROM core_accounts WHERE secret_name = ?)) RETURNING n",
+         (SELECT id FROM core_accounts WHERE secret_name = ?), \
+         coalesce((SELECT user_id FROM core_devices WHERE id = ?), 1)) RETURNING n",
     )
     .bind(&id)
     .bind(new.runner)
@@ -287,6 +288,7 @@ pub async fn create_owned_ref(
     .bind(owner_ref)
     .bind(gateway_secret)
     .bind(account_secret)
+    .bind(new.created_by)
     .fetch_one(&mut *tx)
     .await?;
     let names: Vec<&str> = new.secrets.iter().map(|s| s.name.as_str()).collect();
@@ -533,6 +535,11 @@ pub async fn action(
 /// A `lost` or `interrupted` session back to `interrupted`, for its supervisor to resume.
 pub async fn reopen(pool: &SqlitePool, id: &str, now: &str) -> Result<bool, sqlx::Error> {
     let mut tx = super::begin_write(pool).await?;
+    // A chain session takes its account's slot again, or stays lost (the cap, KAN-437).
+    if !super::alloc::may_return_in(&mut tx, id).await? {
+        return Ok(false);
+    }
+    super::alloc::stamp_account_in(&mut tx, id).await?;
     let changed = sqlx::query(
         "UPDATE core_agent_sessions SET state = 'interrupted', outcome = NULL, ended_at = NULL, \
          updated_at = ? WHERE id = ? AND state IN ('lost', 'interrupted')",
@@ -603,6 +610,11 @@ pub async fn wake(
         "ended" if succeeded && harness.is_some() => {}
         _ => return Ok(Woken::Gone),
     }
+    // Not over its account's cap (it queues: the wake job asks again), and counted by it from now on.
+    if !super::alloc::may_return_in(&mut tx, id).await? {
+        return Ok(Woken::Busy);
+    }
+    super::alloc::stamp_account_in(&mut tx, id).await?;
     sqlx::query(
         "UPDATE core_agent_sessions SET state = 'interrupted', outcome = NULL, ended_at = NULL, \
          prompt = coalesce(?, prompt), updated_at = ? WHERE id = ?",

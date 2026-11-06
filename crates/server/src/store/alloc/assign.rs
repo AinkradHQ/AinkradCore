@@ -159,6 +159,76 @@ pub(super) async fn assign_in(
     .map(drop)
 }
 
+/// The state of the session's row, if it has one.
+pub(super) async fn state_in(
+    conn: &mut SqliteConnection,
+    session: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT state FROM core_agent_sessions WHERE id = ?")
+        .bind(session)
+        .fetch_optional(conn)
+        .await
+}
+
+/// When (unix seconds) the session's current wait began.
+pub(super) async fn waiting_since_in(
+    conn: &mut SqliteConnection,
+    session: &str,
+) -> Result<Option<i64>, sqlx::Error> {
+    let since: Option<Option<i64>> = sqlx::query_scalar(
+        "SELECT json_extract(waiting, '$.since') FROM core_agent_sessions WHERE id = ?",
+    )
+    .bind(session)
+    .fetch_optional(conn)
+    .await?;
+    Ok(since.flatten())
+}
+
+/// Records that the Core sends (or may have sent) `agent.start` for a `starting` session: its
+/// account is final from now on, a re-pick could put a running harness on a second account.
+/// `false` when the session is not `starting` any more (it was cancelled meanwhile): nothing is to
+/// be sent. The mark is written before the ask and lives in the row, so a Core restart keeps it.
+pub async fn mark_start_sent(pool: &SqlitePool, session: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query("UPDATE core_agent_sessions SET start_sent = 1 WHERE id = ? AND state = 'starting'")
+        .bind(session)
+        .execute(pool)
+        .await
+        .map(|r| r.rows_affected() > 0)
+}
+
+/// Ends a chain session that never reached its runner (waiting for an account, or picked and not
+/// started) as cancelled, in the Core: there is no runner session to ask, and a cancel sent
+/// to the runner would be answered `no_session` while the row stayed `starting` and launched later.
+/// Its holds go back. Atomic with [`mark_start_sent`]: whichever commits first wins. Whether it
+/// ended it.
+pub async fn end_unstarted(
+    pool: &SqlitePool,
+    session: &str,
+    now: &str,
+) -> Result<bool, sqlx::Error> {
+    let mut tx = crate::store::begin_write(pool).await?;
+    let outcome = json!({"kind": "cancelled", "reason": "cancelled before it started"});
+    let changed = sqlx::query(
+        "UPDATE core_agent_sessions SET state = 'ended', outcome = ?, updated_at = ?, \
+         ended_at = ?, waiting = NULL WHERE id = ? AND state = 'starting' \
+         AND chain IS NOT NULL AND start_sent = 0",
+    )
+    .bind(outcome.to_string())
+    .bind(now)
+    .bind(now)
+    .bind(session)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if changed > 0 {
+        crate::store::budgets::guard::release_in(&mut tx, session).await?;
+        let kind = json!({"session": session, "state": "ended", "outcome": "cancelled"});
+        events::append(&mut tx, "agent.ended", &kind).await?;
+    }
+    tx.commit().await?;
+    Ok(changed > 0)
+}
+
 /// The session stays `starting` and says until when and why: in its row, and once in an
 /// `agent.state` event per change (the supervisor asks again every few seconds).
 pub(super) async fn waiting_in(
@@ -166,8 +236,9 @@ pub(super) async fn waiting_in(
     session: &str,
     until: &str,
     why: &str,
+    since: i64,
 ) -> Result<(), sqlx::Error> {
-    let waiting = json!({"until": until, "why": why});
+    let waiting = json!({"until": until, "why": why, "since": since});
     let changed = sqlx::query(
         "UPDATE core_agent_sessions SET waiting = ?1 WHERE id = ?2 AND state = 'starting' \
          AND account_id IS NULL AND waiting IS NOT ?1",
@@ -199,7 +270,7 @@ pub async fn retreat_in(
     // leave the account the pick gave it (a session that ran, or is woken, ends instead).
     let fresh: bool = sqlx::query_scalar(
         "SELECT count(*) > 0 FROM core_agent_sessions WHERE id = ? AND state = 'starting' \
-         AND resumes = 0 AND last_seq = 0 AND harness_session IS NULL",
+         AND resumes = 0 AND last_seq = 0 AND harness_session IS NULL AND start_sent = 0",
     )
     .bind(session)
     .fetch_one(&mut *conn)

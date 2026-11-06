@@ -28,12 +28,13 @@ use crate::scheduler::{iso_of_unix, unix_secs};
 
 mod assign;
 mod candidates;
+mod live;
 pub use assign::*;
+pub use candidates::room_in;
+pub use live::*;
 
 /// A pick waits at most this long for a cooling account (`scheduler.wait_max`, S7 makes it a setting).
 pub const WAIT_MAX_SECS: i64 = 15 * 60;
-/// A session this long `interrupted` no longer holds a slot of its account's cap.
-pub const LOST_AFTER_SECS: i64 = 3600;
 
 /// One step of a chain: a pool, and the harness and model its accounts run. (Chains themselves, and
 /// how a session names one, are S5; the snapshot is the JSON of these in `core_agent_sessions.chain`.)
@@ -62,7 +63,6 @@ pub struct Ask<'a> {
     /// Why the runner cannot serve the entry, if it cannot (`placement_refusal_with`).
     pub serves: &'a (dyn Fn(&Entry) -> Option<String> + Sync),
     pub wait_max_secs: i64,
-    pub lost_after_secs: i64,
 }
 
 /// The account chosen, and what the session runs with.
@@ -88,11 +88,13 @@ pub enum Outcome {
         until: i64,
         why: String,
     },
+    /// The session is not `starting` any more (it ended or was stopped): nothing was taken.
+    Gone,
     /// Nothing, and nothing soon: one reason per entry that was looked at (chain position, why).
     Exhausted(Vec<(usize, String)>),
 }
 
-const WAITING: &str = "every account the chain can use is cooling or limited";
+const WAITING: &str = "every account the chain can use is cooling, limited or at its cap";
 
 /// Picks an account for `ask.session`, in the caller's write transaction. A session that already
 /// holds an account (a retry after a commit) gets it back, with no second hold.
@@ -110,7 +112,14 @@ pub async fn pick_in(
     if let Some(p) = assign::existing_in(conn, ask).await? {
         return Ok(Outcome::Picked(p));
     }
-    let (mut reasons, mut earliest) = (Vec::new(), None::<i64>);
+    // A session stopped since the caller read it takes no hold and no account.
+    if assign::state_in(conn, ask.session)
+        .await?
+        .is_some_and(|s| s != "starting")
+    {
+        return Ok(Outcome::Gone);
+    }
+    let (mut reasons, mut earliest, mut full) = (Vec::new(), None::<i64>, false);
     for pos in ask.from_pos..ask.chain.len() {
         let e = &ask.chain[pos];
         if let Some(why) = (ask.serves)(e) {
@@ -130,6 +139,7 @@ pub async fn pick_in(
         };
         let mut found = candidates::of_entry(conn, ask, e, now, now_u).await?;
         earliest = [earliest, found.until].into_iter().flatten().min();
+        full |= found.full;
         found
             .ready
             .sort_by(|a, b| (a.live, &a.last, a.seat).cmp(&(b.live, &b.last, b.seat)));
@@ -171,9 +181,21 @@ pub async fn pick_in(
         }
         reasons.push((pos, found.tally.text()));
     }
-    match earliest.filter(|t| t - now_u <= ask.wait_max_secs) {
+    // However often the supervisor asks, a session waits at most `wait_max` in all, counted from
+    // its first wait.
+    let since = assign::waiting_since_in(conn, ask.session).await?;
+    let spent = since.is_some_and(|s| now_u - s >= ask.wait_max_secs);
+    if spent {
+        reasons.push((ask.from_pos, "it has waited as long as it may".to_owned()));
+    }
+    // A cap that is full frees when a session ends, which nothing here can say when: it waits
+    // too, but only as long as `wait_max` allows in all.
+    let soon = earliest.filter(|t| t - now_u <= ask.wait_max_secs);
+    let waiting = !spent && (soon.is_some() || full);
+    match waiting.then(|| soon.unwrap_or_else(|| since.unwrap_or(now_u) + ask.wait_max_secs)) {
         Some(until) => {
-            assign::waiting_in(conn, ask.session, &iso_of_unix(until), WAITING).await?;
+            let since = since.unwrap_or(now_u);
+            assign::waiting_in(conn, ask.session, &iso_of_unix(until), WAITING, since).await?;
             Ok(Outcome::Wait {
                 until,
                 why: WAITING.to_owned(),

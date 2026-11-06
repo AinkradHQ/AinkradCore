@@ -3,7 +3,7 @@
 use sqlx::{Row, SqliteConnection};
 
 use super::{Ask, Entry};
-use crate::scheduler::{iso_of_unix, unix_secs};
+use crate::scheduler::unix_secs;
 use crate::store::account_keys::subscription_provider;
 use crate::store::budgets::guard;
 use crate::store::gateway::{self as gw, MIN_CEILING_TOKENS};
@@ -59,6 +59,8 @@ impl Tally {
 
 pub(super) struct Found {
     pub ready: Vec<Cand>,
+    /// An account that could take the session is at its cap: a slot may free soon.
+    pub full: bool,
     pub tally: Tally,
     /// The earliest end (unix seconds) of a window that is cooling an account the session could
     /// otherwise use.
@@ -79,19 +81,22 @@ pub(super) async fn auth_var(
     })
 }
 
-/// Whether the budgets of the account and its pools leave room for one turn.
-async fn has_room(
+/// Whether the budgets of the account and its pools leave room for one turn of `min_turn`
+/// micro-dollars. A subscription (`plan`) bills no dollars: its dollar budgets do not apply, its
+/// token budgets do.
+pub async fn room_in(
     conn: &mut SqliteConnection,
     account: i64,
-    ask: &Ask<'_>,
-    e: &Entry,
+    session: &str,
+    plan: bool,
+    min_turn: u64,
     now: &str,
 ) -> Result<bool, sqlx::Error> {
     let owned = gw::subjects_of(conn, account).await?;
-    let standings = guard::standings_for(conn, &gw::refs(&owned), now, ask.session, true).await?;
+    let standings = guard::standings_for(conn, &gw::refs(&owned), now, session, true).await?;
     let (tokens, usd) = gw::room(&standings);
-    let min = (ask.min_turn)(e);
-    Ok(tokens.is_none_or(|t| t >= MIN_CEILING_TOKENS) && usd.is_none_or(|u| u >= min))
+    Ok(tokens.is_none_or(|t| t >= MIN_CEILING_TOKENS)
+        && (plan || usd.is_none_or(|u| u >= min_turn)))
 }
 
 pub(super) async fn of_entry(
@@ -110,25 +115,26 @@ pub(super) async fn of_entry(
     for id in seats {
         health::recover_in(conn, id, now).await?;
     }
-    let rows = sqlx::query(
+    let sql = format!(
         "SELECT a.id, a.user_id, a.provider, a.secret_name, a.state, a.state_reason, \
          a.state_until, a.cap, a.last_used_at, m.position AS seat, \
          EXISTS (SELECT 1 FROM core_secrets s, json_each(s.runners) j \
                  WHERE s.name = a.secret_name AND j.value = ?2) AS leasable, \
          (SELECT count(*) FROM core_agent_sessions x WHERE x.account_id = a.id AND x.id != ?3 \
-          AND (x.state IN ('starting', 'running') OR (x.state = 'interrupted' \
-               AND julianday(x.updated_at) > julianday(?4)))) AS live \
+          AND x.state IN ({})) AS live \
          FROM core_pool_members m JOIN core_accounts a ON a.id = m.account_id \
          WHERE m.pool_id = ?1 ORDER BY m.position",
-    )
-    .bind(e.pool)
-    .bind(ask.runner)
-    .bind(ask.session)
-    .bind(iso_of_unix(now_u - ask.lost_after_secs))
-    .fetch_all(&mut *conn)
-    .await?;
+        super::live::HOLDING
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(e.pool)
+        .bind(ask.runner)
+        .bind(ask.session)
+        .fetch_all(&mut *conn)
+        .await?;
     let mut out = Found {
         ready: Vec::new(),
+        full: false,
         tally: Tally::default(),
         until: None,
     };
@@ -167,7 +173,16 @@ pub(super) async fn of_entry(
             out.tally.auth_pending += 1;
         } else if cap > 0 && live >= cap {
             out.tally.at_cap += 1;
-        } else if !subscription_provider(&e.provider) && !has_room(conn, id, ask, e, now).await? {
+        } else if !room_in(
+            conn,
+            id,
+            ask.session,
+            subscription_provider(&e.provider),
+            (ask.min_turn)(e),
+            now,
+        )
+        .await?
+        {
             out.tally.no_room += 1;
         } else {
             out.ready.push(Cand {
@@ -179,5 +194,6 @@ pub(super) async fn of_entry(
             });
         }
     }
+    out.full = out.tally.at_cap > 0;
     Ok(out)
 }

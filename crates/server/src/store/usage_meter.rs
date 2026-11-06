@@ -82,22 +82,31 @@ pub async fn record(
     // The account the allocator (or the create) wrote on the row; a row from before `account_id`
     // names it by its secret only.
     let held: Option<i64> = row.try_get("account_id")?;
-    let Some((provider, account)) = (match held {
+    // An account deleted under a live session leaves the row's id and the secret's name: the
+    // session's last readings are still that account's (ids are never reused).
+    let named = secrets
+        .iter()
+        .filter_map(|s| account_secret(&s.name))
+        .find(|(p, _)| subscription_provider(p))
+        .map(|(p, id)| (p.to_owned(), id));
+    let (provider, account) = match held {
         Some(id) => {
-            sqlx::query_scalar::<_, String>("SELECT provider FROM core_accounts WHERE id = ?")
-                .bind(id)
-                .fetch_optional(&mut *conn)
-                .await?
-                .filter(|p| subscription_provider(p))
-                .map(|p| (p, id))
+            let found: Option<String> =
+                sqlx::query_scalar("SELECT provider FROM core_accounts WHERE id = ?")
+                    .bind(id)
+                    .fetch_optional(&mut *conn)
+                    .await?;
+            match (found, named) {
+                (Some(p), _) if subscription_provider(&p) => (p, id),
+                (Some(_), _) => return Ok(false),
+                (None, Some((p, n))) if n == id => (p, id),
+                (None, _) => return Ok(false),
+            }
         }
-        None => secrets
-            .iter()
-            .filter_map(|s| account_secret(&s.name))
-            .find(|(p, _)| subscription_provider(p))
-            .map(|(p, id)| (p.to_owned(), id)),
-    }) else {
-        return Ok(false);
+        None => match named {
+            Some(n) => n,
+            None => return Ok(false),
+        },
     };
     let Some(u) = usage else { return Ok(true) };
     let epoch: i64 = row.try_get("resumes")?;
