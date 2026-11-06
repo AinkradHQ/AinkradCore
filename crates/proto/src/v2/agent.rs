@@ -18,6 +18,7 @@
 //! harness, and `streams` is how many of its commands may be in flight (reads included), which
 //! the hub counts per driver.
 
+use super::subscription::is_subscription_secret;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -136,7 +137,10 @@ pub fn account_var_problem<'a>(
     let allowed = account_vars(harness);
     let provider = harness_provider(harness);
     for (name, var) in grants {
+        // A subscription's token has its own rule (`subscription_problem`); a variable that
+        // redirects traffic is still refused beside it.
         if name.starts_with(ACCOUNT_PREFIX)
+            && !is_subscription_secret(name)
             && (provider.is_none() || account_provider(name) != provider)
         {
             return Some(
