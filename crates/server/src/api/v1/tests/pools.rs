@@ -100,8 +100,18 @@ async fn a_pool_keeps_one_providers_accounts_in_order() {
     assert!(pl::get(p, other.id).await.unwrap().members.is_empty());
 }
 
+async fn bound(p: &sqlx::SqlitePool, agent: &str) -> Vec<(String, i64)> {
+    pl::list_bindings(p)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|b| b.agent == agent)
+        .map(|b| (b.provider, b.pool_id))
+        .collect()
+}
+
 #[tokio::test]
-async fn an_agents_binding_beats_the_providers_default_and_falls_back_to_it() {
+async fn an_agents_binding_replaces_per_provider_and_unbinds() {
     let fx = setup().await;
     let p = &fx.app.pool;
     let main = pl::create(p, "main", "anthropic", "d_x", BY, NOW)
@@ -110,68 +120,14 @@ async fn an_agents_binding_beats_the_providers_default_and_falls_back_to_it() {
     let side = pl::create(p, "side", "anthropic", "d_x", BY, NOW)
         .await
         .unwrap();
-    let oai = pl::create(p, "oai", "openai", "d_x", BY, NOW)
-        .await
-        .unwrap();
-    let mut conn = p.acquire().await.unwrap();
-    assert_eq!(
-        pl::resolve(&mut conn, Some("ag1"), "anthropic")
-            .await
-            .unwrap(),
-        None,
-        "no default yet"
-    );
-    pl::set_default(p, main.id, "d_x", BY, NOW).await.unwrap();
-    pl::set_default(p, oai.id, "d_x", BY, NOW).await.unwrap();
-    assert_eq!(
-        pl::resolve(&mut conn, Some("ag1"), "anthropic")
-            .await
-            .unwrap(),
-        Some(main.id)
-    );
-    assert_eq!(
-        pl::resolve(&mut conn, None, "anthropic").await.unwrap(),
-        Some(main.id)
-    );
-    assert_eq!(
-        pl::resolve(&mut conn, None, "openai").await.unwrap(),
-        Some(oai.id),
-        "a default per provider"
-    );
+    assert!(bound(p, "ag1").await.is_empty());
     pl::bind(p, "ag1", side.id, "d_x", BY, NOW).await.unwrap();
-    assert_eq!(
-        pl::resolve(&mut conn, Some("ag1"), "anthropic")
-            .await
-            .unwrap(),
-        Some(side.id)
-    );
-    assert_eq!(
-        pl::resolve(&mut conn, Some("ag2"), "anthropic")
-            .await
-            .unwrap(),
-        Some(main.id)
-    );
-    assert_eq!(
-        pl::resolve(&mut conn, Some("ag1"), "openai").await.unwrap(),
-        Some(oai.id),
-        "per provider"
-    );
-    // Rebinding replaces; unbinding falls back; a second unbind is not_found.
+    assert_eq!(bound(p, "ag1").await, [("anthropic".to_owned(), side.id)]);
+    // Rebinding replaces; unbinding drops; a second unbind is not_found.
     pl::bind(p, "ag1", main.id, "d_x", BY, NOW).await.unwrap();
-    assert_eq!(
-        pl::resolve(&mut conn, Some("ag1"), "anthropic")
-            .await
-            .unwrap(),
-        Some(main.id)
-    );
-    pl::bind(p, "ag1", side.id, "d_x", BY, NOW).await.unwrap();
+    assert_eq!(bound(p, "ag1").await, [("anthropic".to_owned(), main.id)]);
     pl::unbind(p, "ag1", "anthropic", "d_x", BY).await.unwrap();
-    assert_eq!(
-        pl::resolve(&mut conn, Some("ag1"), "anthropic")
-            .await
-            .unwrap(),
-        Some(main.id)
-    );
+    assert!(bound(p, "ag1").await.is_empty());
     assert_eq!(
         code(pl::unbind(p, "ag1", "anthropic", "d_x", BY).await),
         "not_found"
@@ -205,12 +161,8 @@ async fn one_default_per_provider_and_the_default_is_not_deleted() {
     assert_eq!(code(pl::delete(p, two.id, "d_x", BY).await), "conflict");
     pl::bind(p, "ag1", one.id, "d_x", BY, NOW).await.unwrap();
     pl::delete(p, one.id, "d_x", BY).await.unwrap();
-    let mut conn = p.acquire().await.unwrap();
-    assert_eq!(
-        pl::resolve(&mut conn, Some("ag1"), "anthropic")
-            .await
-            .unwrap(),
-        Some(two.id),
+    assert!(
+        pl::list_bindings(p).await.unwrap().is_empty(),
         "its binding went with it"
     );
     // The database itself refuses a second default.

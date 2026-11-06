@@ -253,6 +253,22 @@ pub async fn create_owned_ref(
     actor: AuditActor,
     now: &str,
 ) -> Result<Session, sqlx::Error> {
+    let mut tx = super::begin_write(pool).await?;
+    let id = create_in(&mut tx, new, owner, owner_ref, actor, now).await?;
+    tx.commit().await?;
+    Ok(get(pool, &id).await?.expect("just stored"))
+}
+
+/// [`create_owned_ref`] inside the caller's write transaction (`chains::create_session` assigns the
+/// chain in the same one); returns the new id.
+pub(super) async fn create_in(
+    tx: &mut sqlx::SqliteConnection,
+    new: &NewSession<'_>,
+    owner: Option<&str>,
+    owner_ref: Option<&str>,
+    actor: AuditActor,
+    now: &str,
+) -> Result<String, sqlx::Error> {
     let id = crate::auth::crypto::random_id("as_");
     // The account a gateway serves is the Core's own row behind the secret's name, nothing a caller
     // or a runner says; no such row leaves it NULL and the launch refuses the session.
@@ -263,7 +279,6 @@ pub async fn create_owned_ref(
         .iter()
         .find(|s| super::gateway::account_secret(&s.name).is_some())
         .map(|s| s.name.as_str());
-    let mut tx = super::begin_write(pool).await?;
     let n: i64 = sqlx::query_scalar(
         "INSERT INTO core_agent_sessions (id, runner, harness, model, prompt, workspace, policy, \
          secrets, state, created_by, created_at, updated_at, owner_module, owner_ref, \
@@ -296,10 +311,9 @@ pub async fn create_owned_ref(
     let mut details = about.clone();
     // Names only; not under a key the log redactor takes for a secret.
     details["leased"] = json!(names);
-    audit(&mut tx, actor, "agent.created", n, details, new.created_by).await?;
-    emit(&mut tx, "agent.created", about).await?;
-    tx.commit().await?;
-    Ok(get(pool, &id).await?.expect("just stored"))
+    audit(tx, actor, "agent.created", n, details, new.created_by).await?;
+    emit(tx, "agent.created", about).await?;
+    Ok(id)
 }
 
 /// Moves the session to `state` (a resume counted when `resumed`); `agent.state` with why.
