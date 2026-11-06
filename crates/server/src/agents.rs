@@ -758,9 +758,11 @@ async fn run(app: &App, id: &str) {
             // A chain session has no account until the pick has given it one (it waits, never launches).
             "starting" => match allocate::ready(app, &s).await {
                 Ok(Some(row)) => launch(app, &row, false).await.map(drop),
+                // Waiting for an account: the wait is bounded in the pick itself (`wait_max` from
+                // the first wait), and this does not look like progress to the give-up timer.
                 Ok(None) => {
                     tokio::time::sleep(cfg.retry).await;
-                    Ok(())
+                    continue;
                 }
                 Err(e) => Err(e),
             },

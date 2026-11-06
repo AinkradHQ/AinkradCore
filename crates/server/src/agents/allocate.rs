@@ -9,12 +9,22 @@
 //!   cooled or out of budget in between): the hold goes back, the account is left out and the pick
 //!   runs again, at most twice. It is not a failover hop.
 
+use std::collections::HashMap;
+
 use ainkrad_proto::v2::ModelPrice;
 
 use super::*;
 use crate::store::alloc::{self, Ask, Entry, Outcome};
 use crate::store::gateway as gw;
 use crate::store::prices;
+
+/// The entries of the session's chain snapshot.
+async fn chain_of(app: &App, s: &Session) -> Result<Vec<Entry>, Refusal> {
+    Ok(alloc::view(&app.pool, &s.id)
+        .await?
+        .and_then(|v| v.chain)
+        .unwrap_or_default())
+}
 
 fn offline() -> Refusal {
     Refusal::Runner(StreamError::new(
@@ -53,13 +63,66 @@ pub(super) async fn ready(app: &App, s: &Session) -> Result<Option<Session>, Ref
     }
 }
 
+/// Prices a turn per provider of the chain from the grant's own source (`prices::book_of`).
+async fn books(app: &App, chain: &[Entry]) -> Result<HashMap<String, Vec<ModelPrice>>, Refusal> {
+    let all = prices::list(&app.pool).await?;
+    let mut books = HashMap::new();
+    for e in chain {
+        if let Ok(def) = crate::store::providers::get(&app.pool, &e.provider).await {
+            let book = prices::book_of(all.clone(), &e.provider, &def);
+            books.insert(e.provider.clone(), prices::model_prices(&book));
+        }
+    }
+    Ok(books)
+}
+
+fn min_turn(books: &HashMap<String, Vec<ModelPrice>>, e: &Entry) -> u64 {
+    let none = Vec::new();
+    gw::min_turn_usd(books.get(&e.provider).unwrap_or(&none), e.model.as_deref())
+}
+
+/// Whether the account the pick chose is refused for a reason of its own state, which a race
+/// between the pick and the launch can cause: gone, no longer startable (disabled, cooling,
+/// limited, unhealthy) or out of budget room. An unpriced model, a harness that is not the
+/// provider's, a bad base URL or a vanished provider are the entry's, and ending beats moving.
+async fn account_refused(app: &App, s: &Session, v: &alloc::View) -> Result<bool, Refusal> {
+    let (Some(account), Some(pos)) = (v.account, v.pos) else {
+        return Ok(false);
+    };
+    let now = app.clock.now();
+    crate::store::health::recover(&app.pool, account, &now).await?;
+    let a = match crate::store::accounts::get(&app.pool, account).await {
+        Ok(a) => a,
+        Err(crate::store::secrets::Error::Refused {
+            code: "not_found", ..
+        }) => return Ok(true),
+        Err(crate::store::secrets::Error::Db(e)) => return Err(e.into()),
+        Err(_) => return Ok(false),
+    };
+    if !crate::store::health::startable(&a.state, a.state_reason.as_deref(), false) {
+        return Ok(true);
+    }
+    let Some(e) = v.chain.as_ref().and_then(|c| c.get(pos)) else {
+        return Ok(false);
+    };
+    let books = books(app, std::slice::from_ref(e)).await?;
+    let plan = crate::store::account_keys::subscription_provider(&a.provider);
+    let mut conn = app.pool.acquire().await?;
+    let room = alloc::room_in(&mut conn, account, &s.id, plan, min_turn(&books, e), &now).await?;
+    Ok(!room)
+}
+
 /// A launch refused the account of a chain session: leaves it out and picks again. Whether it did
-/// (the supervisor goes round again); `false` for a session with no chain or no account, or with
-/// its re-picks used.
+/// (the supervisor goes round again); `false` when the refusal is not about the account's state
+/// or budget, for a session with no chain or no account, or with its re-picks used, or whose
+/// start was ever sent (see `alloc::retreat_in`).
 pub(super) async fn repick(app: &App, s: &Session) -> Result<bool, Refusal> {
     app.agents.leases.lock().unwrap().remove(&s.id);
     match alloc::view(&app.pool, &s.id).await? {
         Some(v) if v.chain.is_some() && v.account.is_some() => {
+            if !account_refused(app, s, &v).await? {
+                return Ok(false);
+            }
             pick(app, s, true).await.map(|p| p != Next::Refused)
         }
         _ => Ok(false),
@@ -80,24 +143,11 @@ async fn pick(app: &App, s: &Session, retreat: bool) -> Result<Next, Refusal> {
     let Some(runner) = live.get(&s.runner).filter(|r| r.online) else {
         return Err(offline());
     };
-    let book = prices::list(&app.pool).await?;
-    let min_turn = |e: &Entry| {
-        let rate = |n: i64| u64::try_from(n).unwrap_or(0);
-        let ps: Vec<ModelPrice> = book
-            .iter()
-            .filter(|p| p.provider == e.provider)
-            .map(|p| ModelPrice {
-                model: p.model.clone(),
-                input: rate(p.input_per_mtok_micro),
-                output: rate(p.output_per_mtok_micro),
-                cache_read: rate(p.cache_per_mtok_micro),
-                cache_write: rate(p.cache_per_mtok_micro),
-            })
-            .collect();
-        gw::min_turn_usd(&ps, e.model.as_deref())
-    };
+    let books = books(app, &chain_of(app, s).await?).await?;
+    let price = |e: &Entry| min_turn(&books, e);
     let now = app.clock.now();
     let mut tx = crate::store::begin_write(&app.pool).await?;
+    let before = alloc::view_in(&mut tx, &s.id).await?;
     if retreat && alloc::retreat_in(&mut tx, &s.id).await?.is_none() {
         return Ok(Next::Refused);
     }
@@ -114,17 +164,31 @@ async fn pick(app: &App, s: &Session, retreat: bool) -> Result<Next, Refusal> {
         from_pos: v.pos.unwrap_or(0),
         used_accounts: &v.tried,
         skip_pools: &[],
-        min_turn: &min_turn,
+        min_turn: &price,
         serves: &placed,
         wait_max_secs: alloc::WAIT_MAX_SECS,
-        lost_after_secs: i64::try_from(app.agents.config.lost_after.as_secs()).unwrap_or(i64::MAX),
     };
     let outcome = alloc::pick_in(&mut tx, &ask, &now).await?;
+    // A re-pick that crosses provider or harness is said in the session's own state event.
+    if let (true, Outcome::Picked(p), Some(was)) = (
+        retreat,
+        &outcome,
+        before
+            .and_then(|b| b.pos.zip(b.chain))
+            .and_then(|(i, c)| c.get(i).cloned()),
+    ) && (was.provider != p.provider || was.harness != p.harness)
+    {
+        let note = serde_json::json!({"session": s.id, "state": "starting", "reason": "repicked",
+            "from": {"provider": was.provider, "harness": was.harness},
+            "to": {"provider": p.provider, "harness": p.harness}});
+        crate::store::events::append(&mut tx, "agent.state", &note).await?;
+    }
     // Committed whatever it says: the recoveries it audited and the wait it recorded stay.
     tx.commit().await?;
     Ok(match outcome {
         Outcome::Picked(_) => Next::Launch,
         Outcome::Wait { .. } => Next::Wait,
+        Outcome::Gone => Next::Ended,
         Outcome::Exhausted(reasons) => {
             let said: Vec<String> = reasons
                 .iter()

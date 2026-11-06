@@ -15,8 +15,7 @@
 //!   disables it.
 
 use ainkrad_proto::v2::{
-    AgentLimit, AgentStop, Ceiling, GatewayGrant, GatewayTest, ModelPrice, Rate, Upstream,
-    UpstreamStatus, Wire,
+    AgentLimit, AgentStop, Ceiling, GatewayGrant, GatewayTest, Rate, Upstream, UpstreamStatus, Wire,
 };
 
 mod route;
@@ -123,43 +122,8 @@ pub(super) async fn grant(app: &App, s: &Session) -> Result<Option<Issued>, Refu
     let route = route::of(&def, &account.base_url)?;
     let upstream = upstream_of(&account.base_url, route.wire)?;
     // The allowlist is the price book: a model with no price is refused, so dollar ceilings mean something.
-    let mut book: Vec<_> = prices::list(&app.pool)
-        .await?
-        .into_iter()
-        .filter(|p| p.provider == provider)
-        .collect();
-    // A user definition's own priced models are the fallback, as `prices::rates` reads them (the
-    // book wins; the cache rate is the input rate).
-    let fallback: Vec<prices::Price> = def
-        .models
-        .iter()
-        .filter(|m| !book.iter().any(|p| p.model == m.id))
-        .filter_map(|m| {
-            let at = def.priced_at.as_ref().filter(|_| !def.builtin)?;
-            Some(prices::Price {
-                provider: provider.to_owned(),
-                model: m.id.clone(),
-                version: 0,
-                input_per_mtok_micro: m.input_per_mtok_micro,
-                output_per_mtok_micro: m.output_per_mtok_micro,
-                cache_per_mtok_micro: m.input_per_mtok_micro,
-                priced_at: at.clone(),
-                created_at: String::new(),
-            })
-        })
-        .collect();
-    book.extend(fallback);
-    let rate = |n: i64| u64::try_from(n).unwrap_or(0);
-    let prices: Vec<ModelPrice> = book
-        .iter()
-        .map(|p| ModelPrice {
-            model: p.model.clone(),
-            input: rate(p.input_per_mtok_micro),
-            output: rate(p.output_per_mtok_micro),
-            cache_read: rate(p.cache_per_mtok_micro),
-            cache_write: rate(p.cache_per_mtok_micro),
-        })
-        .collect();
+    let book = prices::book_of(prices::list(&app.pool).await?, provider, &def);
+    let prices = prices::model_prices(&book);
     let models: Vec<String> = book.iter().map(|p| p.model.clone()).collect();
     if models.is_empty() {
         return Err(refuse(format!(
