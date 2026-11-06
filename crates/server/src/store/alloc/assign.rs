@@ -196,6 +196,25 @@ pub async fn mark_start_sent(pool: &SqlitePool, session: &str) -> Result<bool, s
         .map(|r| r.rows_affected() > 0)
 }
 
+/// [`mark_start_sent`] for a launch that has already taken its hold (the grant reserves before
+/// the mark): when the session was cancelled meanwhile there is nothing to start, and the hold
+/// the grant just took on the ended row goes back now (it would live a week otherwise).
+pub async fn mark_or_release(pool: &SqlitePool, session: &str) -> Result<bool, sqlx::Error> {
+    if mark_start_sent(pool, session).await? {
+        return Ok(true);
+    }
+    let mut tx = crate::store::begin_write(pool).await?;
+    crate::store::budgets::guard::release_in(&mut tx, session).await?;
+    tx.commit().await?;
+    Ok(false)
+}
+
+/// Whether a lost session cannot come back only because its account's cap is full.
+pub async fn account_full(pool: &SqlitePool, session: &str) -> Result<bool, sqlx::Error> {
+    let mut conn = pool.acquire().await?;
+    Ok(!super::live::may_return_in(&mut conn, session).await?)
+}
+
 /// Ends a chain session that never reached its runner (waiting for an account, or picked and not
 /// started) as cancelled, in the Core: there is no runner session to ask, and a cancel sent
 /// to the runner would be answered `no_session` while the row stayed `starting` and launched later.

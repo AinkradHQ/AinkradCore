@@ -544,10 +544,15 @@ pub async fn resume(
     not_a_modules(&s)?;
     owns_secrets(&s, &me)?;
     if !store::reopen(&app.pool, &s.id, &app.clock.now()).await? {
+        let full = crate::store::alloc::account_full(&app.pool, &s.id).await?;
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "not_resumable",
-            "only a lost or interrupted session is resumed",
+            if full {
+                "the session's account is full: resume again when one of its sessions ends"
+            } else {
+                "only a lost or interrupted session is resumed"
+            },
         ));
     }
     store::action(

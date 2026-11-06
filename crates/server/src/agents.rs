@@ -689,6 +689,12 @@ impl ModuleAgents {
         if *session != s.id {
             return Err(invalid("the command is about another session"));
         }
+        // A chain session that never started has no runner session to stop: ended here.
+        if matches!(command, Command::AgentStop(_))
+            && crate::store::alloc::end_unstarted(&app.pool, &s.id, &app.clock.now()).await?
+        {
+            return Ok(());
+        }
         let ev = ask(
             app,
             &s.runner,
@@ -761,6 +767,8 @@ async fn run(app: &App, id: &str) {
                 // Waiting for an account: the wait is bounded in the pick itself (`wait_max` from
                 // the first wait), and this does not look like progress to the give-up timer.
                 Ok(None) => {
+                    // The pick found the runner online: not away.
+                    away = None;
                     tokio::time::sleep(cfg.retry).await;
                     continue;
                 }

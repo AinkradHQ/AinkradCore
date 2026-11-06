@@ -285,3 +285,55 @@ async fn a_session_is_its_creators_users_and_a_waiting_one_is_cancelled_in_the_c
         .unwrap();
     assert!(!alloc::end_unstarted(pool, &plain.id, &at(5)).await.unwrap());
 }
+
+#[tokio::test]
+async fn a_cancel_between_the_grant_and_the_start_mark_leaves_no_hold() {
+    use crate::store::gateway as gw;
+    let w = w().await;
+    let pool = &w.fx.app.pool;
+    let a = w.acct("a").await;
+    let entry = w.keys("main", &[a.id]).await;
+    let subject = entry.pool.to_string();
+    let b = NewBudget {
+        kind: "pool",
+        subject: &subject,
+        company: None,
+        period: "day",
+        token_cap: 100_000_000,
+        usd_cap_micros: None,
+        warn_at_percent: None,
+        hard_stop: true,
+    };
+    budgets::set(pool, &b, &w.fx.dev.id, BY, NOW).await.unwrap();
+    let chain = [entry];
+    let s = w.session(&chain, &[]).await;
+    took(w.pick(&s.id, &chain, &at(1)).await);
+    // The cancel lands first (it releases the hold and ends the row) ...
+    assert!(alloc::end_unstarted(pool, &s.id, &at(2)).await.unwrap());
+    // ... then the launch's grant reserves a fresh hold on the ended row ...
+    let hold = gw::reserve(pool, &s.id, a.id, 0, &at(3)).await.unwrap();
+    assert!(matches!(hold, gw::Hold::Granted(_)));
+    let holds = "SELECT count(*) FROM core_budget_holds WHERE session = ?";
+    assert_eq!(w.count(holds, &s.id).await, 1);
+    // ... and the start mark refuses: the hold goes back at once.
+    assert!(!alloc::mark_or_release(pool, &s.id).await.unwrap());
+    assert_eq!(w.count(holds, &s.id).await, 0);
+    // A live session's mark keeps its hold.
+    let live = w.session(&chain, &[]).await;
+    took(w.pick(&live.id, &chain, &at(4)).await);
+    assert!(alloc::mark_or_release(pool, &live.id).await.unwrap());
+    assert_eq!(w.count(holds, &live.id).await, 1);
+    // A lost session whose account is full says so (the resume route's own message).
+    acc::set_cap(pool, a.id, 1, &w.fx.dev.id, BY, NOW)
+        .await
+        .unwrap();
+    let lost = w.session(&chain, &[]).await;
+    sqlx::query("UPDATE core_agent_sessions SET account_id = ? WHERE id = ?")
+        .bind(a.id)
+        .bind(&lost.id)
+        .execute(pool)
+        .await
+        .unwrap();
+    lose(pool, &lost.id, &at(5)).await;
+    assert!(alloc::account_full(pool, &lost.id).await.unwrap());
+}

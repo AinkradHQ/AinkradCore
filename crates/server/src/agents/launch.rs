@@ -258,7 +258,8 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
     }
     // From here the harness may start on this account whatever the answer: it is final.
     // A session cancelled meanwhile is not started.
-    if !resume && !crate::store::alloc::mark_start_sent(&app.pool, &s.id).await? {
+    if !resume && !crate::store::alloc::mark_or_release(&app.pool, &s.id).await? {
+        app.agents.leases.lock().unwrap().remove(&s.id);
         return Ok(());
     }
     let wait = app.agents.config.answer;
