@@ -170,28 +170,90 @@ async fn the_same_sum_with_another_split_is_a_new_row_never_a_ledger_conflict() 
     );
 }
 
-#[tokio::test]
-async fn a_new_epoch_starts_the_mark_at_zero() {
-    let m = m().await;
+/// What `agents::launch` does on a resume or a wake, restart included: the state moves to
+/// `running` with the resume counted (the epoch), then the start answer is applied.
+async fn resume(m: &M, answer: Option<Tokens>) {
     let id = &m.session.id;
-    feed(&m.fx, id, tokens(500, 0, 0)).await;
-    sqlx::query("UPDATE core_agent_sessions SET resumes = 1 WHERE id = ?")
-        .bind(id)
-        .execute(&m.fx.app.pool)
+    let p = &m.fx.app.pool;
+    store::set_state(p, id, "interrupted", "the runner restarted", false, NOW)
         .await
         .unwrap();
-    // The new process's meter began again at 0: a total of 30 is 30 new tokens, not below 500.
+    store::set_state(p, id, "running", "resumed", true, NOW)
+        .await
+        .unwrap();
+    let mut ev = events(id, tokens(0, 0, 0), vec![]);
+    ev.usage = answer;
+    store::apply(p, id, &ev, NOW).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_resumed_runs_stale_total_is_not_booked_again_and_its_real_total_counts_from_zero() {
+    let m = m().await;
+    let id = &m.session.id;
+    feed(&m.fx, id, tokens(500, 40, 10)).await;
+    // An older runner still carries the last run's total in the start answer and the reads until
+    // the new run reports: nothing is recorded, and the epoch's mark does not move.
+    resume(&m, Some(tokens(500, 40, 10))).await;
+    feed(&m.fx, id, tokens(500, 40, 10)).await;
+    assert_eq!(meter(&m.fx, id).await.len(), 1);
+    // The new run's first real total is small: all of it is new.
     feed(&m.fx, id, tokens(30, 0, 0)).await;
     feed(&m.fx, id, tokens(30, 0, 0)).await;
-    feed(&m.fx, id, tokens(80, 0, 0)).await;
+    feed(&m.fx, id, tokens(80, 5, 0)).await;
+    // And again, a second resume (a wake): the same.
+    resume(&m, Some(tokens(80, 5, 0))).await;
+    feed(&m.fx, id, tokens(80, 5, 0)).await;
+    feed(&m.fx, id, tokens(7, 0, 0)).await;
     assert_eq!(
         meter(&m.fx, id).await,
         [
-            (key(id, 0, "500.0.0"), 500, 0, 0),
+            (key(id, 0, "500.40.10"), 500, 40, 10),
             (key(id, 1, "30.0.0"), 30, 0, 0),
-            (key(id, 1, "80.0.0"), 50, 0, 0),
+            (key(id, 1, "80.5.0"), 50, 5, 0),
+            (key(id, 2, "7.0.0"), 7, 0, 0),
         ]
     );
+}
+
+#[tokio::test]
+async fn a_runner_that_clears_its_total_at_a_start_counts_the_new_run_from_zero() {
+    let m = m().await;
+    let id = &m.session.id;
+    feed(&m.fx, id, tokens(500, 0, 0)).await;
+    resume(&m, None).await; // the start answer carries no usage
+    feed(&m.fx, id, tokens(30, 0, 0)).await;
+    let rows = meter(&m.fx, id).await;
+    assert_eq!(rows[1], (key(id, 1, "30.0.0"), 30, 0, 0), "{rows:?}");
+}
+
+#[tokio::test]
+async fn the_sessions_row_agrees_with_the_ledger_and_shows_no_notional_dollars() {
+    let m = m().await;
+    let id = &m.session.id;
+    feed(&m.fx, id, tokens(100, 20, 5)).await;
+    resume(&m, Some(tokens(100, 20, 5))).await; // stale: the row does not change
+    feed(&m.fx, id, tokens(10, 0, 0)).await;
+    let row = store::get(&m.fx.app.pool, id).await.unwrap().unwrap();
+    assert_eq!(
+        (row.usage.input, row.usage.output, row.usage.cache_read),
+        (110, 20, 5)
+    );
+    assert_eq!(
+        row.usage.cost_usd_micros, None,
+        "the harness's figure is notional"
+    );
+}
+
+#[tokio::test]
+async fn a_sessions_unreadable_secrets_record_nothing() {
+    let m = m().await;
+    sqlx::query("UPDATE core_agent_sessions SET secrets = '[1]' WHERE id = ?")
+        .bind(&m.session.id)
+        .execute(&m.fx.app.pool)
+        .await
+        .unwrap();
+    feed(&m.fx, &m.session.id, tokens(10, 0, 0)).await;
+    assert!(meter(&m.fx, &m.session.id).await.is_empty());
 }
 
 #[tokio::test]

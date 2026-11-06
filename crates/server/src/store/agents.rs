@@ -379,9 +379,9 @@ pub async fn apply(
         .bind(id)
         .fetch_one(&mut *tx)
         .await?;
-    // Ledger rows (gateway reports, else a subscription's meter) share the cursor's transaction.
     let gateway = super::gateway::absorb(&mut tx, id, &ev.gateway, now).await?;
-    super::usage_meter::record(&mut tx, id, ev.usage, gateway, now).await?;
+    let gateway =
+        gateway || super::usage_meter::record(&mut tx, id, ev.usage, gateway, now).await?;
     let mut last = u64::try_from(last).unwrap_or(0);
     let from = last + 1;
     for e in &ev.entries {
@@ -409,8 +409,8 @@ pub async fn apply(
         )
         .await?;
     }
-    // A gateway session's usage columns are the ledger's (`gateway::absorb`): its harness's own
-    // meter is display-only, and nothing here may overwrite them.
+    // A ledger-written session's usage columns (gateway, meter) are the ledger's: its harness's
+    // own meter is display-only, and nothing here may overwrite them.
     let u = if gateway {
         Tokens::default()
     } else {
