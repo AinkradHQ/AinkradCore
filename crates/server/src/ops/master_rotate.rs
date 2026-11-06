@@ -83,9 +83,11 @@ fn load(path: &Path) -> Result<SecretBox, Box<dyn std::error::Error>> {
 }
 
 async fn row_key_ids(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
-    sqlx::query_scalar("SELECT DISTINCT key_id FROM core_secrets")
-        .fetch_all(pool)
-        .await
+    sqlx::query_scalar(
+        "SELECT key_id FROM core_secrets UNION SELECT key_id FROM core_connection_secrets",
+    )
+    .fetch_all(pool)
+    .await
 }
 
 /// Rotates the master key of the home whose database is `db`; `keys` is its `keys/` directory.

@@ -939,6 +939,16 @@ pub async fn reseal_all(
             );
         }
     }
+    // Connections' credentials are sealed under the same master key and move with the rest.
+    let (conn_total, conn_moved, conn_from) =
+        super::connections::secret::reseal_in(&mut tx, keys, target).await?;
+    moved += conn_moved;
+    for id in conn_from {
+        if !from.contains(&id) {
+            from.push(id);
+        }
+    }
+    let total = rows.len() + conn_total;
     let audited: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM audit_events WHERE action = 'secret.master_rotated' \
          AND json_extract(details, '$.to_key_id') = ?",
@@ -952,7 +962,7 @@ pub async fn reseal_all(
             action: "secret.master_rotated".to_owned(),
             entity: None,
             details: json!({"to_key_id": target.key_id(), "from_key_ids": from,
-                            "total": rows.len(), "resealed": moved})
+                            "total": total, "resealed": moved})
             .to_string(),
         };
         super::audit::append(&mut tx, &event).await?;
@@ -962,7 +972,7 @@ pub async fn reseal_all(
     }
     tx.commit().await?;
     Ok(Resealed {
-        secrets: rows.len(),
+        secrets: total,
         moved,
         from,
     })
