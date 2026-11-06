@@ -31,6 +31,8 @@ fn row(v: &Value) -> String {
     )
 }
 
+const RUN_USAGE: &str = "agent run <runner-id> <harness> [prompt…], or agent run <runner-id> [prompt…] --chain <id> [--agent <name>]";
+
 fn sid(id: &str) -> Result<&str, Error> {
     let ok = id
         .strip_prefix("as_")
@@ -51,16 +53,36 @@ fn secrets(spec: &str) -> Result<Value, Error> {
     Ok(Value::Array(all))
 }
 
-/// `agent …`; `secrets_flag` is `--secrets`.
+/// The flags `agent …` reads.
+#[derive(Default)]
+pub struct Opts<'a> {
+    /// `--secrets`.
+    pub secrets: Option<&'a str>,
+    /// `--after`.
+    pub after: Option<i64>,
+    /// Whether `tail` follows (no `--no-follow`).
+    pub follow: bool,
+    /// `--chain`: the fallback chain's id; the session draws its account from it.
+    pub chain: Option<i64>,
+    /// `--agent`: the agent id, whose bound (else the default) chain serves the session.
+    pub agent: Option<&'a str>,
+}
+
+/// `agent …`.
 pub async fn agent(
     c: &mut Client,
     words: &[&str],
-    secrets_flag: Option<&str>,
-    after: Option<i64>,
-    follow: bool,
+    opts: &Opts<'_>,
     json: bool,
     out: &mut impl Write,
 ) -> Result<(), Error> {
+    let Opts {
+        secrets: secrets_flag,
+        after,
+        follow,
+        chain,
+        agent,
+    } = *opts;
     let shown = |out: &mut _, v: Value| match json {
         true => print(out, v),
         false => print(out, row(&v)),
@@ -76,8 +98,24 @@ pub async fn agent(
             }
             Ok(())
         }
-        ["run", runner, harness, prompt @ ..] => {
-            let mut body = json!({"runner": runner, "harness": harness});
+        ["run" | "start", runner, rest @ ..] => {
+            // With a chain (or an agent, whose chain serves it) the allocated account sets the
+            // harness and the model, so none is given: everything after the runner is the prompt.
+            let scheduled = chain.is_some() || agent.is_some();
+            let (mut body, prompt) = match (scheduled, rest) {
+                (true, prompt) => {
+                    let mut b = json!({"runner": runner});
+                    if let Some(id) = chain {
+                        b["chain"] = json!(id);
+                    }
+                    if let Some(a) = agent {
+                        b["agent"] = json!(crate::chains::agent_id(a)?);
+                    }
+                    (b, prompt)
+                }
+                (false, [harness, prompt @ ..]) => (json!({"runner": runner, "harness": harness}), prompt),
+                (false, []) => return Err(Error::Usage(RUN_USAGE.into())),
+            };
             if !prompt.is_empty() {
                 body["prompt"] = json!(prompt.join(" "));
             }
@@ -95,6 +133,9 @@ pub async fn agent(
             shown(out, v.clone())?;
             if json {
                 return Ok(());
+            }
+            for l in crate::sessions::detail(&v) {
+                print(out, l)?;
             }
             let path = format!("/api/v1/agent-sessions/{id}/transcript");
             let t: Value = c.get(&path, "after=0&limit=1000").await?;
@@ -136,7 +177,7 @@ pub async fn agent(
             shown(out, parse(&res)?)
         }
         _ => Err(Error::Usage(
-            "agent ls | run <runner-id> <harness> [prompt…] | show <id> | tail <id> | send <id> <message…> | approve/deny <id> <request> | cancel/kill <id>"
+            "agent ls | run <runner-id> <harness> [prompt…] (or, with --chain <id> / --agent <name>: run <runner-id> [prompt…]) | show <id> | tail <id> | send <id> <message…> | approve/deny <id> <request> | cancel/kill <id>"
                 .into(),
         )),
     }

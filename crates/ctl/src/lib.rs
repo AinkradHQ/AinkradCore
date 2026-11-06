@@ -5,7 +5,9 @@
 //! Nothing here prints or logs a private key, a pairing code or secret it was given, a nonce
 //! or a signature.
 
+pub mod accounts;
 pub mod agents;
+pub mod chains;
 pub mod client;
 pub mod cmd;
 pub mod devices;
@@ -16,6 +18,8 @@ pub mod pair;
 pub mod proto;
 pub mod runners;
 pub mod secrets;
+pub mod sessions;
+pub mod settings;
 pub mod stepup;
 pub mod terminals;
 

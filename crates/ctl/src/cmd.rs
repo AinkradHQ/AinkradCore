@@ -13,7 +13,10 @@ use crate::keystore::{self, Keystore};
 use crate::net::{Endpoint, Net};
 use crate::pair::{Credential, Pairing};
 use crate::stepup::{self, Passphrase};
-use crate::{EXIT_CODES, Error, agents, devices, events, pair, runners, secrets, terminals};
+use crate::{
+    EXIT_CODES, Error, accounts, agents, chains, devices, events, pair, runners, secrets, settings,
+    terminals,
+};
 
 pub const USAGE: &str =
     "usage: ainkradctl [--socket <path> | --url <http(s)://host:port>] [--host <name>]
@@ -65,7 +68,29 @@ pub const USAGE: &str =
   agent cancel <id>*  |  agent kill <id>*
       Agent sessions on runners (scope agent): run starts one (the runner must offer
       agents: ainkrad-runner connect --enable-agents); --secrets leases each named secret
-      to that runner for the session, delivered under VAR; show prints its transcript.
+      to that runner for the session, delivered under VAR; show prints its transcript, and
+      above it the scheduler's fields when it has them: agent, chain and position, account,
+      waiting (until, why), repicked, upstream_class.
+  agent run <runner-id> [prompt...] --chain <id> [--agent <name>]*
+  agent run <runner-id> [prompt...] --agent <name>*
+      A session served by a fallback chain (scope admin): --chain names the chain, --agent
+      the agent whose bound (else the default) chain serves it. Give no harness and no model:
+      the account the Core picks from the chain sets them. `agent start` is `agent run`.
+  chains ls | show <id> | bindings
+  chains create <name> <pool[:model]>...*  |  update <id> <name> <pool[:model]>...*
+  chains delete <id>*  |  default <id>*  |  bind <agent> <chain-id>*  |  unbind <agent>*
+      Fallback chains (scope admin): 1 to 4 entries in fallback order, each a pool's id and,
+      after a colon, a model (none: the harness's default). update replaces the whole entry
+      list. The Core checks the lot; its 400 (bad input), 404 (no such chain or pool) and 409
+      (name taken, a live session walks the chain, ...) are printed in plain words, exit 4.
+  account ls | show <id>
+      The provider accounts (scope admin): state, the sessions holding a slot now against the
+      cap (live N/cap, `-` is no cap) and the health counters; show adds the cooldown's reason
+      and end, the last success and the gateway's last status class.
+  setting ls [prefix] | get <key> | set <key> <number>* | reset <key>*
+      The Core's server-wide settings (scope admin), e.g. `setting ls scheduler.`: the value,
+      its unit, default and bounds as the Core reports them. The Core validates a set (400 on
+      an unknown key or a value out of bounds); ctl keeps no list of either.
   events tail [--after <seq>] [--no-follow]
       Events after <seq> (default: from now), one JSON object per line (every kind this
       device may see, runner.connected/.disconnected/.degraded included); follows the live
@@ -81,7 +106,7 @@ signed or sent before the Core signs a fresh nonce with that key (POST /handshak
 admin socket answers to the Core's own host name).
 ";
 
-const VALUED: [&str; 18] = [
+const VALUED: [&str; 20] = [
     "--socket",
     "--url",
     "--host",
@@ -100,6 +125,8 @@ const VALUED: [&str; 18] = [
     "--cols",
     "--cwd",
     "--signal",
+    "--chain",
+    "--agent",
 ];
 const SWITCHES: [&str; 4] = ["--json", "--no-follow", "--help", "--no-stepup"];
 
@@ -256,18 +283,24 @@ pub async fn run(args: &[String], out: &mut impl Write) -> Result<(), Error> {
             let delivery = a.value("--delivery");
             secrets::secret(&mut a.client()?, rest, runners, delivery, json, out).await
         }
-        ["agent", rest @ ..] => {
-            let secrets = a.value("--secrets");
-            agents::agent(
-                &mut a.client()?,
-                rest,
-                secrets,
-                a.number("--after")?,
-                !a.on("--no-follow"),
-                json,
-                out,
-            )
-            .await
+        ["agent", rest @ ..] | ["agents", rest @ ..] => {
+            let opts = agents::Opts {
+                secrets: a.value("--secrets"),
+                after: a.number("--after")?,
+                follow: !a.on("--no-follow"),
+                chain: a.number("--chain")?,
+                agent: a.value("--agent"),
+            };
+            agents::agent(&mut a.client()?, rest, &opts, json, out).await
+        }
+        ["chains", rest @ ..] | ["chain", rest @ ..] => {
+            chains::chains(&mut a.client()?, rest, json, out).await
+        }
+        ["account", rest @ ..] | ["accounts", rest @ ..] => {
+            accounts::account(&mut a.client()?, rest, json, out).await
+        }
+        ["setting", rest @ ..] | ["settings", rest @ ..] => {
+            settings::setting(&mut a.client()?, rest, json, out).await
         }
         ["term", rest @ ..] | ["terminal", rest @ ..] => {
             let options = terminals::Options {
