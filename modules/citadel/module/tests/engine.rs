@@ -67,7 +67,7 @@ impl Host for Fake {
         .await
         .unwrap();
         if self.cancel_during_start.load(Ordering::SeqCst) {
-            let ev = AgentEvents { gateway: vec![],
+            let ev = AgentEvents { gateway: vec![], plan_limit: None,
                 session: s.id.clone(),
                 state: AgentState::Running,
                 last_seq: 0,
@@ -208,7 +208,7 @@ impl W {
             .unwrap()
             .unwrap();
         let last = entries.last().map_or(s.last_seq as u64, |e| e.seq);
-        let ev = AgentEvents { gateway: vec![],
+        let ev = AgentEvents { gateway: vec![], plan_limit: None,
             session: sid.clone(),
             state,
             last_seq: last,

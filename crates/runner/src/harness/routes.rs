@@ -113,7 +113,9 @@ impl HarnessExecutor {
                 _ => ErrorClass::Permanent,
             };
             // The server's settings may keep a class from falling back (1.20).
-            let allowed = job.limits.is_none_or(|l| l.falls_back_on(class.as_str()));
+            // Auth never falls back here (see `RunLimits::falls_back_on`), settings or none.
+            let allowed = class != ErrorClass::Auth
+                && job.limits.is_none_or(|l| l.falls_back_on(class.as_str()));
             if !class.falls_back() || !allowed {
                 return outcome;
             }

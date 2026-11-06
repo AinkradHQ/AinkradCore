@@ -116,7 +116,10 @@
 ///    `getAccountLogin`, `sendAccountLoginCode` and `cancelAccountLogin` (`admin`); `AccountLogin`; the
 ///    `account.login.started|url|done|failed` events and the `account.login_started|failed|cancelled`
 ///    audit actions; the `login.*` ops in the runner schema.
-pub const API_MINOR: u32 = 41;
+/// 42: the harness's plan-limit signal (KAN-436 S2): `PlanLimit` and `PlanWindow` in the runner schema,
+///    `AgentEvents.plan_limit` (optional, sent only by a runner that lists the `plan-limit` command); no
+///    operation changes.
+pub const API_MINOR: u32 = 42;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

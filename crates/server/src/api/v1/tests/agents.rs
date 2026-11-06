@@ -170,6 +170,7 @@ async fn sessions_list_read_and_replay_their_transcript_by_seq() {
         harness_session: Some("h-1".into()),
         usage: None,
         outcome: None,
+        plan_limit: None,
     };
     assert_eq!(
         store::apply(&fx.app.pool, &s.id, &ev, NOW).await.unwrap(),

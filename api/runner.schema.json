@@ -104,6 +104,17 @@
           ],
           "description": "Once `ended`."
         },
+        "plan_limit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanLimit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The harness's latest plan-limit event (KAN-436), a snapshot that each newer one replaces.\nSent only by a runner that lists `CAP_PLAN_LIMIT`. The agent can influence it (its tools can\nforge the harness's own output), so it is a hint: cool an account from it, never disable one."
+        },
         "session": {
           "type": "string"
         },
@@ -1789,6 +1800,51 @@
           "type": "string"
         }
       ]
+    },
+    "PlanLimit": {
+      "description": "The latest plan-limit event of a session, overwritten by each newer one (no sequence number).",
+      "properties": {
+        "status": {
+          "description": "The harness's own word: `allowed`, `allowed_warning`, `rejected`.",
+          "type": "string"
+        },
+        "windows": {
+          "items": {
+            "$ref": "#/$defs/PlanWindow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "PlanWindow": {
+      "description": "One plan window, e.g. Claude's `five_hour` and `seven_day`.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "resets_at": {
+          "description": "When the window resets, in seconds since the epoch.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "utilization": {
+          "description": "A fraction of the window's limit: 0.0 to 1.0, and past it at the limit.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "utilization"
+      ],
+      "type": "object"
     },
     "Policy": {
       "additionalProperties": false,

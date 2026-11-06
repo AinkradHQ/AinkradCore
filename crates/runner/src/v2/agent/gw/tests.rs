@@ -350,6 +350,7 @@ async fn reports_have_their_own_numbering_and_acknowledgement_and_a_harness_line
         harness_session: None,
         usage: None,
         outcome: None,
+        plan_limit: None,
     };
     for _ in 0..50 {
         if forged(&ev) {

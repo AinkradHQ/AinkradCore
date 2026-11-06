@@ -621,6 +621,7 @@ fn v2_agent_frames_are_pinned() {
         0,
         Body::Result(Reply::AgentRead(AgentEvents {
             gateway: vec![],
+            plan_limit: None,
             session: "as_a".to_owned(),
             state: AgentState::Ended,
             last_seq: 4,
@@ -694,6 +695,14 @@ fn v2_agent_frames_are_pinned() {
             harness_session: None,
             usage: None,
             outcome: None,
+            plan_limit: Some(PlanLimit {
+                status: "allowed_warning".to_owned(),
+                windows: vec![PlanWindow {
+                    name: "five_hour".to_owned(),
+                    utilization: 0.96,
+                    resets_at: Some(1792608000),
+                }],
+            }),
         })),
     );
     v2(

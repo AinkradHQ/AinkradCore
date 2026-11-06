@@ -45,6 +45,7 @@ use crate::{Answer, Control, Executor, Job, Report};
 pub mod secrets;
 use secrets::{Delivered, Redeem};
 mod gw;
+mod signals;
 mod sub;
 
 /// The variable the Core delivers a run's token under (`Module::credentials` of Citadel).
@@ -76,6 +77,9 @@ pub struct AgentConfig {
     pub max_entries: usize,
     /// After a cancel, how long the harness has before it is killed.
     pub stop_grace: Duration,
+    /// Report the harness's plan limits (`AgentEvents::plan_limit`), and say so: the driver lists
+    /// `CAP_PLAN_LIMIT`. Off, the field is never sent.
+    pub plan_limit: bool,
 }
 
 /// `slots` for `harness`, cut to one where its runs share state. agy reads its MCP config
@@ -100,6 +104,7 @@ impl AgentConfig {
             slots: BTreeMap::new(),
             max_entries: 10_000,
             stop_grace: Duration::from_secs(30),
+            plan_limit: true,
         }
     }
 }
@@ -228,6 +233,9 @@ struct Meta {
     /// The newest gateway report the Core holds (`AgentRead::gw_after`).
     #[serde(default)]
     gw_acked: u64,
+    /// The harness's latest plan-limit event, when the driver reports them.
+    #[serde(default)]
+    plan_limit: Option<ainkrad_proto::v2::PlanLimit>,
 }
 
 struct Live {
@@ -326,6 +334,11 @@ impl AgentDriver {
             commands: AGENT_OPS
                 .iter()
                 .chain(self.sandbox.capabilities())
+                .chain(
+                    self.config
+                        .plan_limit
+                        .then_some(&ainkrad_proto::v2::CAP_PLAN_LIMIT),
+                )
                 .map(|o| (*o).to_owned())
                 .collect(),
             capacity: self.config.capacity,
@@ -453,6 +466,7 @@ impl AgentDriver {
                 outcome: None,
                 epoch: 0,
                 gw_acked: 0,
+                plan_limit: None,
             },
             run,
             entries: VecDeque::new(),
@@ -475,6 +489,7 @@ impl AgentDriver {
         live.required = req.policy.required_tier();
         live.meta.state = AgentState::Running;
         live.meta.outcome = None;
+        live.meta.plan_limit = None;
         live.meta.usage = None; // the last run's total is not this run's
         live.meta.epoch = req.epoch;
         live.run = run;
@@ -720,6 +735,11 @@ impl AgentDriver {
                     {
                         live.meta.harness_session = Some(id.to_owned());
                     }
+                    if cfg.plan_limit
+                        && let Some(p) = signals::plan_limit(&v)
+                    {
+                        live.meta.plan_limit = Some(p);
+                    }
                     v
                 }
                 Report::Usage(t) => {
@@ -756,6 +776,7 @@ impl AgentDriver {
     fn end(&self, session: &str, outcome: Outcome) {
         self.with(session, |live, cfg, s| {
             let mut outcome = outcome;
+            signals::stamp(&mut outcome, &live.meta.harness);
             if let Outcome::Failed { reason, .. } | Outcome::Cancelled { reason } = &mut outcome {
                 *reason = live.redactor.text(reason);
             }
@@ -1060,6 +1081,7 @@ fn events(session: &str, live: &Live, after: u64) -> AgentEvents {
             live.meta.outcome.clone()
         },
         gateway: live.reports.batch(),
+        plan_limit: live.meta.plan_limit.clone(),
     }
 }
 
@@ -1098,6 +1120,9 @@ fn reload(cfg: &AgentConfig) -> HashMap<String, Live> {
         else {
             continue;
         };
+        if !cfg.plan_limit {
+            meta.plan_limit = None;
+        }
         let text = std::fs::read_to_string(d.path().join("transcript.jsonl")).unwrap_or_default();
         let mut entries: VecDeque<TranscriptEntry> = text
             .lines()

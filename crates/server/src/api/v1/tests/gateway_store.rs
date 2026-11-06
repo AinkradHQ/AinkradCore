@@ -95,6 +95,7 @@ fn events(g: &G, reports: Vec<GatewayReport>, entries: Vec<TranscriptEntry>) -> 
         usage: None,
         outcome: None,
         gateway: reports,
+        plan_limit: None,
     }
 }
 

@@ -51,6 +51,10 @@ impl RunLimits {
             "rate_limited" => self.fallback_on_rate_limited,
             "quota" => self.fallback_on_quota,
             "unhealthy" => self.fallback_on_unhealthy,
+            // An auth failure moved no v1 run before (it was `permanent`) and still moves none:
+            // the Core-driven failover (S6) notifies and records the switch, a silent v1 hop
+            // would not. A `fallback_on_auth` setting is a follow-up.
+            "auth" => false,
             _ => true,
         }
     }
@@ -150,4 +154,25 @@ pub struct Login {
     pub harness: Option<String>,
     /// `logged_in`, `logged_out`, or `unknown` (the login lives in the keychain).
     pub state: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_never_falls_back_in_the_v1_path_and_the_rest_follow_their_settings() {
+        let l: RunLimits = serde_json::from_str(
+            r#"{"approval_timeout_secs": 1, "max_resumes": 1, "resume_backoff_ms": 1,
+                "resume_backoff_max_ms": 1}"#,
+        )
+        .unwrap();
+        assert!(!l.falls_back_on("auth"));
+        assert!(l.falls_back_on("quota") && l.falls_back_on("protocol"));
+        let off = RunLimits {
+            fallback_on_quota: false,
+            ..l
+        };
+        assert!(!off.falls_back_on("quota") && !off.falls_back_on("auth"));
+    }
 }
