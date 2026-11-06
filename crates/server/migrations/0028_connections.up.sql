@@ -2,7 +2,9 @@
 -- outside service (a kind: `github`, `jira`) with one credential. The credential is sealed in
 -- `core_connection_secrets` and is never read back by any API. Every table carries `user_id` (the workspace
 -- owner whose connections these are). Additive only.
--- AUTOINCREMENT: an id (and the sealing label built from it) is never reused after a delete.
+-- AUTOINCREMENT: an id is never reused after a delete (a down migration drops the table, so ids restart
+-- then; dev only). `nonce` is random per row and part of the sealing label, so a sealed blob never opens
+-- under another row, even one that reuses its id.
 -- `status` is the S3 health state (active, cooling, limited, unhealthy, disabled); `disabled` is the admin's
 -- own switch. `auth_pending` is an upstream auth failure not yet confirmed by a test: it never disables.
 CREATE TABLE core_connections (
@@ -11,6 +13,7 @@ CREATE TABLE core_connections (
     kind            TEXT    NOT NULL CHECK (length(kind) BETWEEN 1 AND 32),
     name            TEXT    NOT NULL CHECK (length(name) BETWEEN 1 AND 64),
     label           TEXT    NOT NULL CHECK (length(label) BETWEEN 1 AND 80),
+    nonce           TEXT    NOT NULL CHECK (length(nonce) = 32),
     identity        TEXT    CHECK (identity IS NULL OR length(identity) <= 200),
     auth_method     TEXT    NOT NULL CHECK (auth_method IN ('oauth', 'app_install', 'token')),
     status          TEXT    NOT NULL DEFAULT 'active'
@@ -61,7 +64,9 @@ CREATE TABLE core_connection_grants (
 );
 
 -- Where a connection applies, per kind: the workspace default (`scope_ref` ''), a project or repo, an agent,
--- a session. One binding per (user, kind, scope).
+-- a session. One binding per (user, kind, scope). Only the workspace default (the kind's default
+-- connection, which breaks a tie between several that cover a use) is read; the other scopes are unused
+-- capacity.
 CREATE TABLE core_connection_bindings (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id       INTEGER NOT NULL DEFAULT 1 REFERENCES users(id),

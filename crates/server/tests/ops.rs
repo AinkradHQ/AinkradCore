@@ -650,6 +650,163 @@ async fn an_export_never_carries_secrets_and_a_backup_does() {
     pool.close().await;
 }
 
+/// A connection's credential is sealed under the master key, which an export carries in clear:
+/// so an export carries neither it nor its ciphertext, and marks the connection as needing a new
+/// credential. An encrypted backup keeps it.
+#[tokio::test]
+async fn an_export_never_carries_a_connection_credential_and_a_backup_does() {
+    use ainkrad_core::audit::AuditActor;
+    use ainkrad_core::settings::{Key, Scope};
+    use ainkrad_core_server::connections::adapter::{
+        AuthMethodSpec, Capability, Descriptor, Identity, KindAdapter, Registry, TestError,
+    };
+    use ainkrad_core_server::connections::material::Material;
+    use ainkrad_core_server::ops::secretbox::SecretBox;
+    use ainkrad_core_server::store::connections::{self as conns, NewConnection, Who};
+    use futures_util::future::{BoxFuture, FutureExt};
+    static KIND: Descriptor = Descriptor {
+        kind: "probe",
+        title: "Probe",
+        summary: "",
+        auth_methods: &[AuthMethodSpec {
+            id: "token",
+            title: "Token",
+            help: "",
+            steps: &[],
+            advanced: false,
+        }],
+        capabilities: &[Capability {
+            name: "read_things",
+            title: "Read",
+            write: false,
+            operations: &["probe.get"],
+        }],
+        hosts: &["api.probe.test"],
+        limits: &[],
+        token_shapes: &[],
+    };
+    struct Probe;
+    impl KindAdapter for Probe {
+        fn descriptor(&self) -> &Descriptor {
+            &KIND
+        }
+        fn test<'a>(&'a self, _: &'a Material) -> BoxFuture<'a, Result<Identity, TestError>> {
+            async { Err(TestError::Inconclusive) }.boxed()
+        }
+    }
+    const TOKEN: &str = "conn-export-planted-token-5d2e";
+    let d = dir("conn-export");
+    let home = d.0.join("home");
+    let fp = home_with_state(&home).await;
+    let pool = store::connect(&home.join("core.db")).await.unwrap();
+    let now = "2026-11-06T10:00:00.000Z";
+    store::settings::set(
+        &pool,
+        Key::SecretsMode,
+        Scope::Server,
+        "1",
+        AuditActor::System,
+        now,
+    )
+    .await
+    .unwrap();
+    let sealer = SecretBox::from_file(&home.join("keys/master.key")).unwrap();
+    let mut reg = Registry::new();
+    reg.register(std::sync::Arc::new(Probe)).unwrap();
+    let new = NewConnection {
+        kind: "probe",
+        name: "main",
+        label: "Main",
+        auth_method: "token",
+    };
+    let who = Who {
+        workspace: 1,
+        by_device: "d_test",
+        actor: AuditActor::System,
+        now,
+    };
+    let m = Material::new(TOKEN, None, None).unwrap();
+    let c = conns::create(&pool, &sealer, &reg, &new, &m, who)
+        .await
+        .unwrap();
+    let sealed: Vec<u8> = sqlx::query_scalar("SELECT sealed FROM core_connection_secrets")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    let config = home.join("config.toml");
+    let file = d.0.join("core.export");
+    ok(&["export", "--config", s(&config), s(&file)], &[]);
+    let plain = std::fs::read(&file).unwrap();
+    let has = |hay: &[u8], needle: &[u8]| hay.windows(needle.len()).any(|w| w == needle);
+    assert!(!has(&plain, TOKEN.as_bytes()));
+    assert!(
+        !has(&plain, &sealed[13..45]),
+        "a sealed credential in the export"
+    );
+    let imported = d.0.join("imported");
+    ok(&["import", s(&file), "--signer", &fp, s(&imported)], &[]);
+    let pool = store::connect(&imported.join("core.db")).await.unwrap();
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_connection_secrets")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+    let got = conns::get(&pool, 1, c.id).await.unwrap();
+    assert_eq!(
+        (got.status.as_str(), got.state_reason.as_deref()),
+        ("disabled", Some("exported")),
+        "it needs a new credential"
+    );
+    assert_eq!(got.name, "main", "the row, its name and its label stay");
+    // A new credential brings it back.
+    let sealer = SecretBox::from_file(&imported.join("keys/master.key")).unwrap();
+    store::settings::set(
+        &pool,
+        Key::SecretsMode,
+        Scope::Server,
+        "1",
+        AuditActor::System,
+        now,
+    )
+    .await
+    .unwrap();
+    let again = Material::new("conn-second-token-91af", None, None).unwrap();
+    let back = conns::secret::replace(&pool, &sealer, c.id, &again, who)
+        .await
+        .unwrap();
+    assert_eq!(back.status, "active");
+    pool.close().await;
+
+    let keygen = ok(&["backup-keygen"], &[]);
+    let identity = d.0.join("identity.txt");
+    std::fs::write(&identity, &keygen).unwrap();
+    let recipient = keygen
+        .lines()
+        .find_map(|l| l.strip_prefix("# public key: "))
+        .unwrap();
+    let env = [("AINKRAD_BACKUP_RECIPIENT", recipient)];
+    let backup = ok(&["backup", "--config", s(&config), "--local-only"], &env);
+    let restored = d.0.join("restored");
+    ok_err(&[
+        "restore",
+        &backup,
+        "--identity",
+        s(&identity),
+        "--signer",
+        &fp,
+        s(&restored),
+    ]);
+    let pool = store::connect(&restored.join("core.db")).await.unwrap();
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_connection_secrets")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 1, "a backup keeps it");
+    pool.close().await;
+}
+
 /// KAN-441: a subscription sign-in is the moment's state, so neither an export nor a backup
 /// carries one (the table is dropped from the snapshot, free pages included).
 #[tokio::test]

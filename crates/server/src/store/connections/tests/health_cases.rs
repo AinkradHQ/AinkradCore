@@ -13,12 +13,12 @@ fn up(status: U) -> Signal<'static> {
 }
 
 async fn state(fx: &Fx, id: i64) -> (String, Option<String>) {
-    let c = get(&fx.pool, id).await.unwrap();
+    let c = get(&fx.pool, 1, id).await.unwrap();
     (c.status, c.state_reason)
 }
 
 async fn sig(fx: &Fx, id: i64, s: Signal<'_>, secs: i64) {
-    health::signal(&fx.pool, id, s, &at(secs)).await.unwrap();
+    health::signal(&fx.pool, 1, id, s, &at(secs)).await.unwrap();
 }
 
 fn st(status: &str, reason: Option<&str>) -> (String, Option<String>) {
@@ -31,14 +31,14 @@ async fn a_rate_limit_cools_with_a_doubling_backoff_and_recovers_lazily() {
     let c = make(&fx, "fake", "a").await;
     sig(&fx, c.id, up(U::RateLimited), 0).await;
     assert_eq!(state(&fx, c.id).await, st("cooling", Some("rate_limited")));
-    let until = get(&fx.pool, c.id).await.unwrap().state_until.unwrap();
+    let until = get(&fx.pool, 1, c.id).await.unwrap().state_until.unwrap();
     assert_eq!(until, at(60));
     // Past the window the next look makes it active again, audited by the system.
     assert!(!usable_at(&fx, c.id, 30).await);
     assert!(usable_at(&fx, c.id, 61).await);
     sig(&fx, c.id, up(U::RateLimited), 100).await;
     assert_eq!(
-        get(&fx.pool, c.id).await.unwrap().state_until.unwrap(),
+        get(&fx.pool, 1, c.id).await.unwrap().state_until.unwrap(),
         at(220),
         "60 doubled to 120"
     );
@@ -52,7 +52,7 @@ async fn a_rate_limit_cools_with_a_doubling_backoff_and_recovers_lazily() {
 
 async fn usable_at(fx: &Fx, id: i64, secs: i64) -> bool {
     health::recover(&fx.pool, id, &at(secs)).await.unwrap();
-    verdict::usable(&get(&fx.pool, id).await.unwrap()).is_ok()
+    verdict::usable(&get(&fx.pool, 1, id).await.unwrap()).is_ok()
 }
 
 #[tokio::test]
@@ -101,7 +101,7 @@ async fn quota_limits_and_a_higher_state_is_not_shortened() {
         "a lower rank never overwrites"
     );
     assert_eq!(
-        get(&fx.pool, c.id).await.unwrap().state_until.unwrap(),
+        get(&fx.pool, 1, c.id).await.unwrap().state_until.unwrap(),
         reset
     );
 }
@@ -121,7 +121,7 @@ async fn agent_signals_may_only_cool_an_active_connection() {
         "active",
         "nothing an agent says but a limit counts"
     );
-    assert!(!get(&fx.pool, c.id).await.unwrap().disabled);
+    assert!(!get(&fx.pool, 1, c.id).await.unwrap().disabled);
     sig(
         &fx,
         c.id,
@@ -148,7 +148,7 @@ async fn agent_signals_may_only_cool_an_active_connection() {
     // Never the auth path, whatever it claims, and its cooling is clamped.
     let d = make(&fx, "fake", "d").await;
     sig(&fx, d.id, Signal::Agent { class: "quota" }, 0).await;
-    let until = unix_secs(&get(&fx.pool, d.id).await.unwrap().state_until.unwrap()).unwrap();
+    let until = unix_secs(&get(&fx.pool, 1, d.id).await.unwrap().state_until.unwrap()).unwrap();
     assert!(until <= unix_secs(NOW).unwrap() + crate::store::health::HARNESS_MAX_SECS);
 }
 
@@ -158,7 +158,7 @@ async fn an_auth_failure_needs_a_test_before_anything_is_disabled() {
     let c = make_with(&fx, "fake", "a", "reject-me-0001").await;
     sig(&fx, c.id, up(U::AuthFailed), 0).await;
     sig(&fx, c.id, up(U::AuthFailed), 1).await;
-    let after = get(&fx.pool, c.id).await.unwrap();
+    let after = get(&fx.pool, 1, c.id).await.unwrap();
     assert_eq!(
         (after.status.as_str(), after.state_reason.as_deref()),
         ("unhealthy", Some("auth_suspected"))
@@ -258,9 +258,15 @@ async fn a_passing_test_clears_a_suspicion_and_an_inconclusive_one_never_disable
             .contains(&"connection.auth_inconclusive".to_owned())
     );
     // A test that says nothing about a healthy connection changes nothing but the time.
-    let h = verdict::record_test(&fx.pool, ok.id, TestOutcome::Inconclusive, w(&at(9)))
-        .await
-        .unwrap();
+    let h = verdict::record_test(
+        &fx.pool,
+        ok.id,
+        version(&fx, ok.id).await,
+        TestOutcome::Inconclusive,
+        w(&at(9)),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         (h.status.as_str(), h.last_tested_at.as_deref()),
         ("active", Some(at(9).as_str()))
@@ -276,15 +282,33 @@ async fn a_changed_identity_is_audited() {
             subject: s.to_owned(),
         })
     };
-    verdict::record_test(&fx.pool, c.id, id("octocat"), w(NOW))
-        .await
-        .unwrap();
-    verdict::record_test(&fx.pool, c.id, id("octocat"), w(NOW))
-        .await
-        .unwrap();
-    verdict::record_test(&fx.pool, c.id, id("someone-else"), w(NOW))
-        .await
-        .unwrap();
+    verdict::record_test(
+        &fx.pool,
+        c.id,
+        version(&fx, c.id).await,
+        id("octocat"),
+        w(NOW),
+    )
+    .await
+    .unwrap();
+    verdict::record_test(
+        &fx.pool,
+        c.id,
+        version(&fx, c.id).await,
+        id("octocat"),
+        w(NOW),
+    )
+    .await
+    .unwrap();
+    verdict::record_test(
+        &fx.pool,
+        c.id,
+        version(&fx, c.id).await,
+        id("someone-else"),
+        w(NOW),
+    )
+    .await
+    .unwrap();
     let rows: Vec<String> = sqlx::query_scalar(
         "SELECT details FROM audit_events WHERE action = 'connection.tested' ORDER BY seq",
     )
@@ -297,7 +321,7 @@ async fn a_changed_identity_is_audited() {
         .collect();
     assert_eq!(flags, [false, false, true]);
     assert_eq!(
-        get(&fx.pool, c.id).await.unwrap().identity.as_deref(),
+        get(&fx.pool, 1, c.id).await.unwrap().identity.as_deref(),
         Some("someone-else")
     );
 }

@@ -55,17 +55,26 @@ pub enum TestOutcome {
     Inconclusive,
 }
 
-/// Records a test: `last_tested_at`, the identity when it passed, and the verdict on a pending
-/// or any other auth failure (see the module docs). Audited `connection.tested` with the result
-/// class only.
-pub async fn record_test(
+/// Records a test of credential `version`: `last_tested_at`, the identity when it passed, and the
+/// verdict on a pending or any other auth failure (see the module docs). Audited
+/// `connection.tested` with the result class only. Refused (`conflict`) when the credential is no
+/// longer that version: a verdict on an old credential must not settle the new one. Only
+/// [`run_test`] calls it outside tests, so a verdict always comes from an adapter.
+pub(super) async fn record_test(
     pool: &SqlitePool,
     id: i64,
+    version: i64,
     outcome: TestOutcome,
     who: Who<'_>,
 ) -> Result<Connection, Error> {
     let mut tx = crate::store::begin_write(pool).await?;
-    let old = find(&mut tx, id).await?;
+    let old = find(&mut tx, who.workspace, id).await?;
+    if super::secret::version_in(&mut tx, id).await? != version {
+        return refused(
+            "conflict",
+            "the credential changed while it was tested; the result was dropped",
+        );
+    }
     recover_in(&mut tx, id, who.now).await?;
     sqlx::query("UPDATE core_connections SET last_tested_at = ?, updated_at = ? WHERE id = ?")
         .bind(who.now)
@@ -121,7 +130,7 @@ pub async fn record_test(
         }
     }
     audit(&mut tx, who.actor, "connection.tested", id, details).await?;
-    let c = find(&mut tx, id).await?;
+    let c = find(&mut tx, who.workspace, id).await?;
     tx.commit().await?;
     Ok(c)
 }
@@ -135,17 +144,17 @@ pub async fn run_test(
     id: i64,
     who: Who<'_>,
 ) -> Result<Connection, Error> {
-    let c = super::get(pool, id).await?;
+    let c = super::get(pool, who.workspace, id).await?;
     let Some(adapter) = reg.get(&c.kind) else {
         return refused("unknown_kind", "no adapter for this kind");
     };
-    let material = super::secret::open(pool, sealer, id).await?;
+    let (material, version) = super::secret::open(pool, sealer, who.workspace, id).await?;
     let outcome = match adapter.test(&material).await {
         Ok(identity) => TestOutcome::Passed(identity),
         Err(TestError::Rejected) => TestOutcome::Rejected,
         Err(TestError::Inconclusive) => TestOutcome::Inconclusive,
     };
-    record_test(pool, id, outcome, who).await
+    record_test(pool, id, version, outcome, who).await
 }
 
 /// Whether the connection may be used now: `Ok`, or the refusal's code and message. Call after
@@ -156,6 +165,10 @@ pub fn usable(c: &Connection) -> Result<(), (&'static str, String)> {
     }
     match (c.status.as_str(), c.state_reason.as_deref()) {
         ("active", _) => Ok(()),
+        ("disabled", Some("exported")) => Err((
+            "no_credential",
+            "exported without its credential: store a new one".to_owned(),
+        )),
         ("disabled", _) => Err((
             "auth_failed",
             "the service refused its credential; replace it and test again".to_owned(),

@@ -56,6 +56,10 @@ pub struct Descriptor {
     /// The only upstream hosts a call for this kind may reach.
     pub hosts: &'static [&'static str],
     pub limits: &'static [LimitKey],
+    /// The redactor shape names (`github_pat`, `github_token`) of the tokens this kind's own
+    /// credentials look like. Data only in C1; C2 reads it (with `secrets.connections`) to admit
+    /// exactly one such token as a connection credential.
+    pub token_shapes: &'static [&'static str],
 }
 
 fn ident(s: &str, max: usize) -> bool {
@@ -150,6 +154,9 @@ impl Descriptor {
             return Some(format!(
                 "{kind}: host {h:?} is not a bare lowercase host name"
             ));
+        }
+        if let Some(t) = self.token_shapes.iter().find(|t| !ident(t, 40)) {
+            return Some(format!("{kind}: token shape {t:?} is malformed"));
         }
         for (i, l) in self.limits.iter().enumerate() {
             if !ident(l.key, 32) || self.limits[..i].iter().any(|o| o.key == l.key) {

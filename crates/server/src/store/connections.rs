@@ -3,7 +3,7 @@
 //! workspace, used by those it is granted to.
 //!
 //! - **Write-only credential.** The access and refresh tokens are sealed in
-//!   `core_connection_secrets` (master key, label `core.connection:<id>:v<n>`, rotated with the
+//!   `core_connection_secrets` (master key, label `core.connection:<id>:<nonce>:v<n>`, rotated with the
 //!   broker's secrets by `reseal_all`). [`Connection`] has no field for them; the only reader is
 //!   [`secret::open`], for the broker and an adapter's test. No row, event, audit row or error
 //!   built here names a token, and `Material` prints nothing.
@@ -13,16 +13,19 @@
 //!   (admin, with step-up). Here a grant says who may USE (a user, a role, an agent), with which
 //!   capabilities (read-only unless it names write ones) and which resources. Managing a
 //!   connection is not using it: an admin needs a grant too.
-//! - **Bindings** pick the connection for a kind: session, then agent, then project or repo,
-//!   then the workspace default. The most specific binding DECIDES: if its connection is refused
-//!   (disabled, unhealthy, not granted) the use is refused and says why; it never falls through to
-//!   a less specific one, which could silently be another account.
-//! - **Delete** is refused (`conflict`) while a workspace, project or agent binding names the
-//!   connection; its grants, secret and session bindings go with it.
+//! - **Routing** (decision 7): a session never names a connection. A use goes to the connection
+//!   of the kind whose grant limits cover the resource; if several cover it, the kind's default
+//!   (the workspace binding) wins; none, or several without a default, refuses with the reason
+//!   (`ambiguous` lists them). The project, agent and session binding scopes are unused capacity.
+//! - **Delete** is refused (`conflict`) while the connection is its kind's default (the workspace
+//!   binding). Its grants, secret (overwritten, page wiped by `secure_delete`) and unused-scope
+//!   bindings go with it.
+//! - **Workspaces.** Every function takes the acting workspace (`Who::workspace`, or an argument)
+//!   and finds a connection only there: another workspace's id is `not_found`.
 //! - **Health** is S3's states, cooldowns and lazy recovery; an upstream auth failure is pending
 //!   until a test confirms it, and only a test that the service rejects disables ([`verdict`]).
 //! - **Audit.** Every write appends a `connection.*` row naming ids, kinds and results, never a
-//!   payload. The names are registered ([`AUDIT_ACTIONS`]) but, until C5, not in the contract.
+//!   payload. The names are registered ([`AUDIT_ACTIONS`]) but, until C4, not in the contract.
 //! - **Limits.** Per user (the workspace owner): [`MAX_PER_USER`] connections,
 //!   [`MAX_BINDINGS`] bindings; per connection [`MAX_GRANTS`] grants.
 
@@ -48,8 +51,10 @@ pub const MAX_PER_USER: i64 = 32;
 pub const MAX_GRANTS: i64 = 32;
 pub const MAX_BINDINGS: i64 = 128;
 
-/// The audit actions this module writes. Registered with the platform's by `kinds::register_platform`;
-/// C5 moves them into the contract list with its API_MINOR bump.
+/// The audit actions this module writes. Registered with the platform's by `kinds::register_platform`
+/// but kept out of the contract list (`PLATFORM_AUDIT_ACTIONS`) while nothing writes them in
+/// production. C4, the first story that does (it writes `connection.used`), must move them into
+/// `PLATFORM_AUDIT_ACTIONS`, drop the second `register` call and bump API_MINOR.
 pub const AUDIT_ACTIONS: &[&str] = &[
     "connection.auth_failed",
     "connection.auth_inconclusive",
@@ -69,9 +74,11 @@ pub const AUDIT_ACTIONS: &[&str] = &[
     "connection.used",
 ];
 
-/// Who did it and when; the audit row's actor, the device named in its details, the clock.
+/// Who did it and when; the audit row's actor, the device named in its details, the clock, and
+/// the workspace (the owner user) the call acts in.
 #[derive(Clone, Copy)]
 pub struct Who<'a> {
+    pub workspace: i64,
     pub by_device: &'a str,
     pub actor: AuditActor,
     pub now: &'a str,
@@ -149,11 +156,18 @@ pub fn valid_text(s: &str, max: usize) -> bool {
     (1..=max).contains(&s.chars().count()) && !s.chars().any(char::is_control)
 }
 
-/// A project, repo or session id: 1 to 128 of `[A-Za-z0-9._:/-]`.
+/// A path of non-empty segments, none of them `.` or `..`.
+pub fn clean_path(s: &str) -> bool {
+    s.split('/')
+        .all(|seg| !seg.is_empty() && seg != "." && seg != "..")
+}
+
+/// A project, repo or session id: 1 to 128 of `[A-Za-z0-9._:/-]`, as a clean path.
 pub fn valid_ref(s: &str) -> bool {
     (1..=128).contains(&s.len())
         && s.bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"._:/-".contains(&b))
+        && clean_path(s)
 }
 
 pub(crate) async fn audit(
@@ -176,9 +190,15 @@ pub(crate) async fn audit(
     Ok(())
 }
 
-pub(crate) async fn find(conn: &mut SqliteConnection, id: i64) -> Result<Connection, Error> {
-    match sqlx::query(concat!(select!(), " WHERE c.id = ?"))
+/// The connection `id` of workspace `ws`; another workspace's is `not_found`.
+pub(crate) async fn find(
+    conn: &mut SqliteConnection,
+    ws: i64,
+    id: i64,
+) -> Result<Connection, Error> {
+    match sqlx::query(concat!(select!(), " WHERE c.id = ? AND c.user_id = ?"))
         .bind(id)
+        .bind(ws)
         .fetch_optional(&mut *conn)
         .await?
     {
@@ -187,9 +207,9 @@ pub(crate) async fn find(conn: &mut SqliteConnection, id: i64) -> Result<Connect
     }
 }
 
-pub async fn get(pool: &SqlitePool, id: i64) -> Result<Connection, Error> {
+pub async fn get(pool: &SqlitePool, ws: i64, id: i64) -> Result<Connection, Error> {
     let mut conn = pool.acquire().await?;
-    find(&mut conn, id).await
+    find(&mut conn, ws, id).await
 }
 
 /// `user_id`'s connections (of `kind` when given), oldest first.

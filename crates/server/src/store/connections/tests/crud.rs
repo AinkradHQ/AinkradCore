@@ -10,7 +10,7 @@ async fn create_stores_a_sealed_credential_and_audits_without_it() {
     );
     assert_eq!(c.identity, None, "an identity comes from a test");
     assert_eq!(c.expires_at.as_deref(), Some("2026-11-06T11:00:00Z"));
-    let m = secret::open(&fx.pool, &fx.sealer, c.id).await.unwrap();
+    let m = secret::open(&fx.pool, &fx.sealer, 1, c.id).await.unwrap().0;
     assert_eq!((m.access(), m.refresh()), (SECRET, Some(REFRESH)));
     assert_eq!(actions(&fx).await, ["connection.created"]);
     let stored: Vec<u8> =
@@ -39,7 +39,6 @@ async fn many_connections_per_kind_with_a_unique_name() {
     assert_eq!(list(&fx.pool, 1, Some("fake")).await.unwrap().len(), 2);
     assert!(a.id != b.id && a.id != o.id);
     let new = NewConnection {
-        user_id: 1,
         kind: "fake",
         name: "work",
         label: "x",
@@ -83,7 +82,6 @@ async fn many_connections_per_kind_with_a_unique_name() {
 async fn create_refuses_what_is_not_valid() {
     let fx = fx().await;
     let ok = |kind, name, label, auth| NewConnection {
-        user_id: 1,
         kind,
         name,
         label,
@@ -96,17 +94,20 @@ async fn create_refuses_what_is_not_valid() {
         (ok("fake", "Bad Name", "A", "token"), "bad_request"),
         (ok("fake", "a", "", "token"), "bad_request"),
         (ok("fake", "a", "tab\there", "token"), "bad_request"),
-        (
-            NewConnection {
-                user_id: 99,
-                ..ok("fake", "a", "A", "token")
-            },
-            "bad_request",
-        ),
     ] {
         let r = create(&fx.pool, &fx.sealer, &fx.reg, &new, &m, w(NOW)).await;
         assert_eq!(code(r), want, "{}", new.name);
     }
+    let nobody = create(
+        &fx.pool,
+        &fx.sealer,
+        &fx.reg,
+        &ok("fake", "a", "A", "token"),
+        &m,
+        ww(99, NOW),
+    )
+    .await;
+    assert_eq!(code(nobody), "bad_request", "no such workspace user");
     assert!(
         list(&fx.pool, 1, None).await.unwrap().is_empty(),
         "nothing half-made"
@@ -165,21 +166,24 @@ async fn disable_and_enable_are_idempotent_and_audited_once() {
 }
 
 #[tokio::test]
-async fn delete_refuses_while_bound_and_takes_its_dependents_with_it() {
+async fn delete_refuses_while_it_is_the_default_and_takes_its_dependents_with_it() {
     let fx = fx().await;
     let (a, b) = (make(&fx, "fake", "a").await, make(&fx, "fake", "b").await);
     grant_role(&fx, a.id, "member", None).await;
     bind(&fx, a.id, ("workspace", "")).await;
     bind(&fx, a.id, ("session", "s1")).await;
     assert_eq!(code(delete(&fx.pool, a.id, w(NOW)).await), "conflict");
-    assert!(get(&fx.pool, a.id).await.is_ok(), "refused, so untouched");
     assert!(
-        bindings::clear(&fx.pool, 1, "fake", ("workspace", ""), w(NOW))
+        get(&fx.pool, 1, a.id).await.is_ok(),
+        "refused, so untouched"
+    );
+    assert!(
+        bindings::clear(&fx.pool, "fake", ("workspace", ""), w(NOW))
             .await
             .unwrap()
     );
     delete(&fx.pool, a.id, w(NOW)).await.unwrap();
-    assert_eq!(code(get(&fx.pool, a.id).await), "not_found");
+    assert_eq!(code(get(&fx.pool, 1, a.id).await), "not_found");
     for table in [
         "core_connection_secrets",
         "core_connection_grants",
@@ -194,7 +198,13 @@ async fn delete_refuses_while_bound_and_takes_its_dependents_with_it() {
         .unwrap();
         assert_eq!(n, 0, "{table}");
     }
-    assert!(get(&fx.pool, b.id).await.is_ok());
+    // With the default gone the kind has none: the only granted connection is still used alone.
+    grant_role(&fx, b.id, "member", None).await;
+    let r = resolve::resolve(&fx.pool, &fx.reg, "fake", &cx("read_items"), NOW)
+        .await
+        .unwrap();
+    assert_eq!((r.connection.id, r.via), (b.id, "only"));
+    assert!(get(&fx.pool, 1, b.id).await.is_ok());
     assert_eq!(code(delete(&fx.pool, a.id, w(NOW)).await), "not_found");
     assert_eq!(
         make(&fx, "fake", "a").await.id,
@@ -214,7 +224,6 @@ async fn per_user_limits_hold_and_users_are_apart() {
         make(&fx, "fake", &format!("c{i}")).await;
     }
     let new = NewConnection {
-        user_id: 1,
         kind: "fake",
         name: "one-more",
         label: "x",
@@ -230,14 +239,13 @@ async fn per_user_limits_hold_and_users_are_apart() {
     )
     .await;
     assert_eq!(code(over), "limit_reached");
-    let other = NewConnection { user_id: 2, ..new };
     let c = create(
         &fx.pool,
         &fx.sealer,
         &fx.reg,
-        &other,
+        &new,
         &material(SECRET),
-        w(NOW),
+        ww(2, NOW),
     )
     .await
     .unwrap();
@@ -251,6 +259,7 @@ async fn replacing_the_credential_is_a_new_version_and_clears_an_auth_suspicion(
     let c = make(&fx, "fake", "a").await;
     health::signal(
         &fx.pool,
+        1,
         c.id,
         health::Signal::Upstream {
             status: ainkrad_proto::v2::UpstreamStatus::AuthFailed,
@@ -262,7 +271,11 @@ async fn replacing_the_credential_is_a_new_version_and_clears_an_auth_suspicion(
     .await
     .unwrap();
     assert_eq!(
-        get(&fx.pool, c.id).await.unwrap().state_reason.as_deref(),
+        get(&fx.pool, 1, c.id)
+            .await
+            .unwrap()
+            .state_reason
+            .as_deref(),
         Some("auth_suspected")
     );
     let new = Material::new("c1probe-second-0000", None, None).unwrap();
@@ -270,7 +283,7 @@ async fn replacing_the_credential_is_a_new_version_and_clears_an_auth_suspicion(
         .await
         .unwrap();
     assert_eq!(c2.status, "active");
-    let m = secret::open(&fx.pool, &fx.sealer, c.id).await.unwrap();
+    let m = secret::open(&fx.pool, &fx.sealer, 1, c.id).await.unwrap().0;
     assert_eq!((m.access(), m.refresh()), ("c1probe-second-0000", None));
     let v: i64 =
         sqlx::query_scalar("SELECT version FROM core_connection_secrets WHERE connection_id = ?")

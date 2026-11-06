@@ -183,10 +183,11 @@ async fn build(
 /// the backup). The caller removes the half-built home.
 async fn unheld_keys(h: &Home) -> Result_ {
     let pool = store::connect(&h.db()).await?;
-    let named: Result<Vec<String>, _> =
-        sqlx::query_scalar("SELECT DISTINCT key_id FROM core_secrets")
-            .fetch_all(&pool)
-            .await;
+    let named: Result<Vec<String>, _> = sqlx::query_scalar(
+        "SELECT key_id FROM core_secrets UNION SELECT key_id FROM core_connection_secrets",
+    )
+    .fetch_all(&pool)
+    .await;
     pool.close().await;
     let mut held = vec![SecretBox::from_file(&h.master_key())?.key_id().to_owned()];
     held.extend(key_files(&h.keys())?.into_iter().map(|f| f.0));

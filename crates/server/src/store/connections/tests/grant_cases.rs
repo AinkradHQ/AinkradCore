@@ -122,7 +122,7 @@ async fn grants_are_validated() {
         code(grant(&fx, 999, "role", "member", None, &none).await),
         "not_found"
     );
-    assert!(grants::list(&fx.pool, c.id).await.unwrap().is_empty());
+    assert!(grants::list(&fx.pool, 1, c.id).await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -143,7 +143,7 @@ async fn one_grant_per_grantee_replaced_in_place_and_revocable() {
     .await
     .unwrap();
     assert_eq!(first.id, second.id);
-    assert_eq!(grants::list(&fx.pool, c.id).await.unwrap(), [second]);
+    assert_eq!(grants::list(&fx.pool, 1, c.id).await.unwrap(), [second]);
     assert!(
         grants::revoke(&fx.pool, c.id, ("agent", "bot"), w(NOW))
             .await

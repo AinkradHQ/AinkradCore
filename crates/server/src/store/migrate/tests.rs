@@ -140,6 +140,41 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
     assert_eq!(versions(&db.pool, CORE).await, first, "nothing re-applied");
 }
 
+/// Branches merge in any order: a database that has the newest migration applied but not the one
+/// before it (the other branch merged second) still gets the missing one, and nothing twice.
+#[tokio::test]
+async fn a_lower_version_missing_below_an_applied_one_is_still_applied() {
+    let db = db().await;
+    let all = CORE_MIGRATIONS;
+    let n = all.len();
+    let skipped = all[n - 2];
+    undo(&db.pool, CORE, all, all[n - 3].version).await.unwrap();
+    let without: Vec<Migration> = all
+        .iter()
+        .copied()
+        .filter(|m| m.version != skipped.version)
+        .collect();
+    apply(&db.pool, CORE, &without, None).await.unwrap();
+    let got: Vec<i64> = versions(&db.pool, CORE).await.iter().map(|v| v.0).collect();
+    assert!(
+        !got.contains(&skipped.version),
+        "set up: the lower one is missing"
+    );
+    assert!(
+        got.contains(&all[n - 1].version),
+        "set up: the newest is applied"
+    );
+    migrate_core(&db.pool).await.unwrap();
+    let got: Vec<i64> = versions(&db.pool, CORE).await.iter().map(|v| v.0).collect();
+    assert_eq!(got, all.iter().map(|m| m.version).collect::<Vec<_>>());
+    migrate_core(&db.pool).await.unwrap();
+    assert_eq!(
+        versions(&db.pool, CORE).await.len(),
+        n,
+        "nothing applied twice"
+    );
+}
+
 #[tokio::test]
 async fn a_tampered_migration_is_refused() {
     let db = db().await;

@@ -10,8 +10,6 @@ use crate::ops::secretbox::SecretBox;
 use crate::store::secrets::Error;
 
 pub struct NewConnection<'a> {
-    /// The workspace owner the connection belongs to.
-    pub user_id: i64,
     pub kind: &'a str,
     pub name: &'a str,
     pub label: &'a str,
@@ -43,17 +41,18 @@ pub async fn create(
             "a label is 1 to 80 characters, no control characters",
         );
     }
+    let nonce = secret::new_nonce()?;
     let mut tx = crate::store::begin_write(pool).await?;
     secret::gate(&mut tx, material).await?;
     let owner: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE id = ?")
-        .bind(new.user_id)
+        .bind(who.workspace)
         .fetch_one(&mut *tx)
         .await?;
     if owner == 0 {
         return refused("bad_request", "no such user");
     }
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_connections WHERE user_id = ?")
-        .bind(new.user_id)
+        .bind(who.workspace)
         .fetch_one(&mut *tx)
         .await?;
     if n >= MAX_PER_USER {
@@ -62,7 +61,7 @@ pub async fn create(
     let taken: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM core_connections WHERE user_id = ? AND kind = ? AND name = ?",
     )
-    .bind(new.user_id)
+    .bind(who.workspace)
     .bind(new.kind)
     .bind(new.name)
     .fetch_one(&mut *tx)
@@ -72,9 +71,9 @@ pub async fn create(
     }
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO core_connections (user_id, kind, name, label, auth_method, created_by, \
-         created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+         created_at, updated_at, nonce) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
-    .bind(new.user_id)
+    .bind(who.workspace)
     .bind(new.kind)
     .bind(new.name)
     .bind(new.label)
@@ -82,9 +81,16 @@ pub async fn create(
     .bind(who.by_device)
     .bind(who.now)
     .bind(who.now)
+    .bind(&nonce)
     .fetch_one(&mut *tx)
     .await?;
-    secret::store_in(&mut tx, sealer, id, new.user_id, 1, material, who.now).await?;
+    let seal = secret::Seal {
+        id,
+        user_id: who.workspace,
+        nonce: &nonce,
+        version: 1,
+    };
+    secret::store_in(&mut tx, sealer, &seal, material, who.now).await?;
     audit(
         &mut tx,
         who.actor,
@@ -94,7 +100,7 @@ pub async fn create(
                "auth_method": new.auth_method, "by_device": who.by_device}),
     )
     .await?;
-    let c = find(&mut tx, id).await?;
+    let c = find(&mut tx, who.workspace, id).await?;
     tx.commit().await?;
     Ok(c)
 }
@@ -113,7 +119,7 @@ pub async fn update_label(
         );
     }
     let mut tx = crate::store::begin_write(pool).await?;
-    let old = find(&mut tx, id).await?;
+    let old = find(&mut tx, who.workspace, id).await?;
     sqlx::query("UPDATE core_connections SET label = ?, updated_at = ? WHERE id = ?")
         .bind(label)
         .bind(who.now)
@@ -122,7 +128,7 @@ pub async fn update_label(
         .await?;
     let details = json!({"from": old.label, "to": label, "by_device": who.by_device});
     audit(&mut tx, who.actor, "connection.updated", id, details).await?;
-    let c = find(&mut tx, id).await?;
+    let c = find(&mut tx, who.workspace, id).await?;
     tx.commit().await?;
     Ok(c)
 }
@@ -138,7 +144,7 @@ pub async fn rename(
         return refused("bad_request", "a name is [a-z][a-z0-9._-]{0,63}");
     }
     let mut tx = crate::store::begin_write(pool).await?;
-    let old = find(&mut tx, id).await?;
+    let old = find(&mut tx, who.workspace, id).await?;
     let taken: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM core_connections WHERE user_id = ? AND kind = ? AND name = ? \
          AND id != ?",
@@ -160,7 +166,7 @@ pub async fn rename(
         .await?;
     let details = json!({"from": old.name, "to": name, "by_device": who.by_device});
     audit(&mut tx, who.actor, "connection.renamed", id, details).await?;
-    let c = find(&mut tx, id).await?;
+    let c = find(&mut tx, who.workspace, id).await?;
     tx.commit().await?;
     Ok(c)
 }
@@ -174,7 +180,7 @@ pub async fn set_disabled(
     who: Who<'_>,
 ) -> Result<Connection, Error> {
     let mut tx = crate::store::begin_write(pool).await?;
-    let old = find(&mut tx, id).await?;
+    let old = find(&mut tx, who.workspace, id).await?;
     if old.disabled != disabled {
         sqlx::query("UPDATE core_connections SET disabled = ?, updated_at = ? WHERE id = ?")
             .bind(disabled)
@@ -199,53 +205,49 @@ pub async fn set_disabled(
     if !disabled {
         super::verdict::clear_auth_in(&mut tx, id, who.now, "admin").await?;
     }
-    let c = find(&mut tx, id).await?;
+    let c = find(&mut tx, who.workspace, id).await?;
     tx.commit().await?;
     Ok(c)
 }
 
-/// Deletes a connection with its grants, credential and session bindings. Refused (`conflict`)
-/// while a workspace, project or agent binding names it: unbind first, so no default is left
-/// pointing at nothing.
+/// Deletes a connection with its grants, credential (wiped) and unused-scope bindings. Refused
+/// (`conflict`) while it is its kind's default (the workspace binding): clear or move the default
+/// first.
 pub async fn delete(pool: &SqlitePool, id: i64, who: Who<'_>) -> Result<(), Error> {
     let mut tx = crate::store::begin_write(pool).await?;
-    let c = find(&mut tx, id).await?;
-    let held: Vec<String> = sqlx::query_scalar(
-        "SELECT scope_kind FROM core_connection_bindings WHERE connection_id = ? \
-         AND scope_kind != 'session' ORDER BY scope_kind",
+    secret::secure(&mut tx).await?;
+    let c = find(&mut tx, who.workspace, id).await?;
+    let default: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM core_connection_bindings WHERE connection_id = ? \
+         AND scope_kind = 'workspace'",
     )
     .bind(id)
-    .fetch_all(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
-    if !held.is_empty() {
+    if default > 0 {
         return refused(
             "conflict",
-            format!(
-                "the connection is bound ({}); unbind it first",
-                held.join(", ")
-            ),
+            "the connection is its kind's default; name another default or clear it first",
         );
     }
-    let sessions = sqlx::query("DELETE FROM core_connection_bindings WHERE connection_id = ?")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
+    // Any other binding (unused scopes) goes with it.
+    let sessions: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM core_connection_bindings WHERE connection_id = ?")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
     let grants = sqlx::query("DELETE FROM core_connection_grants WHERE connection_id = ?")
         .bind(id)
         .execute(&mut *tx)
         .await?
         .rows_affected();
-    sqlx::query("DELETE FROM core_connection_secrets WHERE connection_id = ?")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+    secret::wipe_in(&mut tx, id).await?;
     sqlx::query("DELETE FROM core_connections WHERE id = ?")
         .bind(id)
         .execute(&mut *tx)
         .await?;
     let details = json!({"kind": c.kind, "name": c.name, "grants_dropped": grants,
-                         "session_bindings_dropped": sessions, "by_device": who.by_device});
+                         "bindings_dropped": sessions, "by_device": who.by_device});
     audit(&mut tx, who.actor, "connection.deleted", id, details).await?;
     tx.commit().await?;
     Ok(())

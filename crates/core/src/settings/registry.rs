@@ -89,4 +89,10 @@ registry! {
          mode); mode 2 behaves as before, except that an acct.* secret is never delivered by \
          askpass. Setting it needs admin and a step-up and is audited. Read at each store and \
          rotation.";
+    SecretsConnections "secrets.connections" Count 0, 0, 1, SO,
+        "The narrow gate for connection credentials (GitHub, Jira, ...): 1 lets C2 admit ONE token \
+         of the kind's own declared shape (the adapter descriptor's token_shapes) as a connection \
+         credential while secrets.mode is 1. 0 (the default) refuses real token shapes like any \
+         other secret. C1 only registers it; it admits nothing yet. Setting it needs admin and a \
+         step-up and is audited.";
 }

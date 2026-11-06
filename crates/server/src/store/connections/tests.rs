@@ -22,6 +22,7 @@ mod health_cases;
 mod leak;
 mod migration;
 mod resolve_cases;
+mod security;
 
 pub(super) const NOW: &str = "2026-11-06T10:00:00.000Z";
 /// Shapeless on purpose: the redactor must not be what hides a leak.
@@ -67,11 +68,34 @@ pub(super) async fn fx() -> Fx {
 }
 
 pub(super) fn w(now: &str) -> Who<'_> {
+    ww(1, now)
+}
+
+/// As [`w`], acting in workspace `ws`.
+pub(super) fn ww(ws: i64, now: &str) -> Who<'_> {
     Who {
+        workspace: ws,
         by_device: "d_test",
         actor: AuditActor::System,
         now,
     }
+}
+
+/// A second workspace (user 2).
+pub(super) async fn second_user(fx: &Fx) {
+    sqlx::query("INSERT INTO users (id, name) VALUES (2, 'second')")
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+}
+
+/// The version of the credential now stored.
+pub(super) async fn version(fx: &Fx, id: i64) -> i64 {
+    sqlx::query_scalar("SELECT version FROM core_connection_secrets WHERE connection_id = ?")
+        .bind(id)
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap()
 }
 
 /// `secs` after [`NOW`].
@@ -89,7 +113,6 @@ pub(super) async fn make(fx: &Fx, kind: &str, name: &str) -> Connection {
 
 pub(super) async fn make_with(fx: &Fx, kind: &str, name: &str, access: &str) -> Connection {
     let new = NewConnection {
-        user_id: 1,
         kind,
         name,
         label: "A test connection",
@@ -122,9 +145,7 @@ pub(super) fn cx(cap: &str) -> Context<'_> {
         user: 1,
         role: "member",
         agent: None,
-        project: None,
         session: None,
-        pick: None,
         capability: cap,
         resource: None,
         allowlist: None,
@@ -156,5 +177,27 @@ pub(super) async fn grant_role(fx: &Fx, id: i64, role: &str, caps: Option<&[Stri
 }
 
 pub(super) async fn bind(fx: &Fx, id: i64, scope: (&str, &str)) {
-    bindings::set(&fx.pool, 1, id, scope, w(NOW)).await.unwrap();
+    bindings::set(&fx.pool, id, scope, w(NOW)).await.unwrap();
+}
+
+pub(super) static ALL_CAPS: std::sync::LazyLock<Vec<String>> =
+    std::sync::LazyLock::new(|| vec!["read_items".to_owned(), "write_items".to_owned()]);
+
+/// Grants agent `agent` (read-only unless `caps`) on `id`, with `limits`.
+pub(super) async fn grant_agent(
+    fx: &Fx,
+    id: i64,
+    agent: &str,
+    caps: Option<&[String]>,
+    limits: &grants::Limits,
+) {
+    let new = grants::NewGrant {
+        grantee_kind: "agent",
+        grantee: agent,
+        capabilities: caps,
+        limits,
+    };
+    grants::set(&fx.pool, &fx.reg, id, &new, w(NOW))
+        .await
+        .unwrap();
 }

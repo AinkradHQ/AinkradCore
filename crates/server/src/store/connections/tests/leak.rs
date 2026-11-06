@@ -15,6 +15,7 @@ async fn the_secret_appears_nowhere_it_could_be_read() {
     bind(&fx, c.id, ("workspace", "")).await;
     health::signal(
         &fx.pool,
+        1,
         c.id,
         Signal::Agent {
             class: "rate_limited",
@@ -32,6 +33,7 @@ async fn the_secret_appears_nowhere_it_could_be_read() {
         .unwrap();
     resolve::record_use(
         &fx.pool,
+        &fx.reg,
         Some(c.id),
         "fake",
         ("fake.get_item", "ok", None),
@@ -41,17 +43,19 @@ async fn the_secret_appears_nowhere_it_could_be_read() {
     .unwrap();
     seen.push(format!(
         "{:?}{:?}",
-        get(&fx.pool, c.id).await.unwrap(),
+        get(&fx.pool, 1, c.id).await.unwrap(),
         list(&fx.pool, 1, None).await.unwrap()
     ));
-    seen.push(format!("{:?}", grants::list(&fx.pool, c.id).await.unwrap()));
+    seen.push(format!(
+        "{:?}",
+        grants::list(&fx.pool, 1, c.id).await.unwrap()
+    ));
     seen.push(format!(
         "{:?}",
         bindings::list(&fx.pool, 1, None).await.unwrap()
     ));
     // Every refusal, as an error string and as Debug.
     let clash = NewConnection {
-        user_id: 1,
         kind: "fake",
         name: "a",
         label: "x",
@@ -73,7 +77,7 @@ async fn the_secret_appears_nowhere_it_could_be_read() {
         resolve::resolve(&fx.pool, &fx.reg, "fake", &cx("write_items"), NOW)
             .await
             .map(drop),
-        secret::open(&fx.pool, &SecretBox::new(&[9; 32]), c.id)
+        secret::open(&fx.pool, &SecretBox::new(&[9; 32]), 1, c.id)
             .await
             .map(drop),
     ];
@@ -109,7 +113,7 @@ async fn the_secret_appears_nowhere_it_could_be_read() {
         }
     }
     // The one reader still has it.
-    let open = secret::open(&fx.pool, &fx.sealer, c.id).await.unwrap();
+    let open = secret::open(&fx.pool, &fx.sealer, 1, c.id).await.unwrap().0;
     assert_eq!(open.access(), REFRESH);
     assert_eq!(open.refresh(), Some(SECRET));
 }
@@ -125,14 +129,14 @@ async fn a_credential_under_another_label_or_key_does_not_open() {
     sqlx::query("UPDATE core_connection_secrets SET sealed = (SELECT sealed FROM core_connection_secrets WHERE connection_id = ?) WHERE connection_id = ?")
         .bind(a.id).bind(b.id).execute(&fx.pool).await.unwrap();
     assert_eq!(
-        code(secret::open(&fx.pool, &fx.sealer, b.id).await),
+        code(secret::open(&fx.pool, &fx.sealer, 1, b.id).await),
         "secrets_unavailable"
     );
     assert_eq!(
-        code(secret::open(&fx.pool, &SecretBox::new(&[1; 32]), a.id).await),
+        code(secret::open(&fx.pool, &SecretBox::new(&[1; 32]), 1, a.id).await),
         "secrets_unavailable"
     );
-    assert!(secret::open(&fx.pool, &fx.sealer, a.id).await.is_ok());
+    assert!(secret::open(&fx.pool, &fx.sealer, 1, a.id).await.is_ok());
 }
 
 #[tokio::test]
@@ -150,7 +154,7 @@ async fn master_rotation_moves_connection_credentials_too() {
         .await
         .unwrap();
     assert_eq!(key, target.key_id());
-    let m = secret::open(&fx.pool, &target, c.id).await.unwrap();
+    let m = secret::open(&fx.pool, &target, 1, c.id).await.unwrap().0;
     assert_eq!(m.access(), SECRET, "opens under the new key alone");
     let again = crate::store::secrets::reseal_all(&fx.pool, &keys, &target, false)
         .await

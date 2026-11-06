@@ -211,6 +211,8 @@ async fn enter(
     let old = h.reason.as_deref().and_then(rank);
     let allowed = match (h.state.as_str(), old) {
         ("active", _) => true,
+        // Nothing an agent says changes a state that is already set.
+        _ if !cx.trusted => false,
         ("cooling" | "limited" | "unhealthy", Some(old)) => {
             new > old || (cx.trusted && new == old && until > h.until)
         }
@@ -261,6 +263,17 @@ async fn rate_limited(
     cx: &Ctx<'_>,
 ) -> Result<(), sqlx::Error> {
     let open = h.state == "cooling" && h.reason.as_deref() == Some("rate_limited");
+    // An agent's word cools for the first step only and never moves the backoff.
+    if !cx.trusted {
+        let e = Entry {
+            reason: "rate_limited",
+            until: Some(cx.now_u + BACKOFF_START_SECS),
+            backoff: None,
+            clear_fails: false,
+            class,
+        };
+        return enter(conn, id, h, e, cx).await.map(drop);
+    }
     let (until, backoff) = match open {
         true => (h.until.unwrap_or(cx.now_u).max(reset.unwrap_or(0)), None),
         false => {
@@ -278,10 +291,11 @@ async fn rate_limited(
     enter(conn, id, h, e, cx).await.map(drop)
 }
 
-/// What `signal` does to connection `id`, in the caller's write transaction. The single entry
+/// What `signal` does to workspace `ws`'s connection `id` (`RowNotFound` for another's), in the caller's write transaction. The single entry
 /// for connection health.
 pub async fn on_signal(
     conn: &mut SqliteConnection,
+    ws: i64,
     id: i64,
     signal: Signal<'_>,
     now: &str,
@@ -289,6 +303,15 @@ pub async fn on_signal(
     let Some(now_u) = unix_secs(now) else {
         return Ok(());
     };
+    let own: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM core_connections WHERE id = ? AND user_id = ?")
+            .bind(id)
+            .bind(ws)
+            .fetch_one(&mut *conn)
+            .await?;
+    if own == 0 {
+        return Err(sqlx::Error::RowNotFound);
+    }
     recover_in(conn, id, now).await?;
     let Some(h) = load(conn, id).await? else {
         return Ok(());
@@ -327,12 +350,13 @@ pub async fn on_signal(
 /// [`on_signal`] in a write transaction of its own.
 pub async fn signal(
     pool: &SqlitePool,
+    ws: i64,
     id: i64,
     signal: Signal<'_>,
     now: &str,
 ) -> Result<(), sqlx::Error> {
     let mut tx = crate::store::begin_write(pool).await?;
-    on_signal(&mut tx, id, signal, now).await?;
+    on_signal(&mut tx, ws, id, signal, now).await?;
     tx.commit().await
 }
 

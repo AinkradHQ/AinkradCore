@@ -49,6 +49,7 @@ pub const FAKE: Descriptor = Descriptor {
         title: "Projects",
         help: "Only these projects.",
     }],
+    token_shapes: &["fake_token"],
 };
 
 pub const OTHER: Descriptor = Descriptor {
@@ -70,6 +71,7 @@ pub const OTHER: Descriptor = Descriptor {
     }],
     hosts: &["api.other.test"],
     limits: &[],
+    token_shapes: &[],
 };
 
 pub struct Fake(pub &'static Descriptor);

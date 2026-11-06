@@ -75,10 +75,10 @@ fn grant(r: &SqliteRow) -> Result<Grant, sqlx::Error> {
 fn value_ok(v: &str) -> bool {
     let body = v.strip_suffix("/*").unwrap_or(v);
     (1..=MAX_VALUE_LEN).contains(&v.len())
-        && !body.is_empty()
         && body
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"._:/-".contains(&b))
+        && super::clean_path(body)
 }
 
 /// Whether `value` is within the limit list `allowed`.
@@ -86,7 +86,8 @@ pub fn value_matches(allowed: &[String], value: &str) -> bool {
     allowed.iter().any(|a| match a.strip_suffix("/*") {
         Some(prefix) => value
             .strip_prefix(prefix)
-            .is_some_and(|r| r.starts_with('/') && r.len() > 1),
+            .and_then(|r| r.strip_prefix('/'))
+            .is_some_and(super::clean_path),
         None => a == value,
     })
 }
@@ -109,27 +110,30 @@ fn check_limits(d: &Descriptor, limits: &Limits) -> Result<(), Error> {
     Ok(())
 }
 
+/// A user grantee is a member of the connection's workspace: today a workspace is its owner
+/// user, so only that user (more members come with user membership, #18).
 async fn check_grantee(
     conn: &mut SqliteConnection,
+    workspace: i64,
     kind: &str,
     grantee: &str,
 ) -> Result<(), Error> {
     match kind {
         "user" => {
             let n: i64 = match grantee.parse::<i64>() {
-                Ok(id) => {
+                Ok(id) if id == workspace => {
                     sqlx::query_scalar("SELECT count(*) FROM users WHERE id = ?")
                         .bind(id)
                         .fetch_one(&mut *conn)
                         .await?
                 }
-                Err(_) => 0,
+                _ => 0,
             };
             match n {
                 1 => Ok(()),
                 _ => refused(
                     "bad_request",
-                    "a user grantee is the id of an existing user",
+                    "a user grantee is a member of the connection's workspace",
                 ),
             }
         }
@@ -158,8 +162,24 @@ pub(super) async fn list_in(
     .collect()
 }
 
-pub async fn list(pool: &SqlitePool, connection_id: i64) -> Result<Vec<Grant>, sqlx::Error> {
-    list_in(&mut *pool.acquire().await?, connection_id).await
+/// Workspace `ws`'s grants on `connection_id` (none for another workspace's connection).
+pub async fn list(
+    pool: &SqlitePool,
+    ws: i64,
+    connection_id: i64,
+) -> Result<Vec<Grant>, sqlx::Error> {
+    let mut conn = pool.acquire().await?;
+    let mut all = list_in(&mut conn, connection_id).await?;
+    let own: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM core_connections WHERE id = ? AND user_id = ?")
+            .bind(connection_id)
+            .bind(ws)
+            .fetch_one(&mut *conn)
+            .await?;
+    if own == 0 {
+        all.clear();
+    }
+    Ok(all)
 }
 
 /// Grants (or changes the grant of) a user, role or agent on a connection: one grant per
@@ -172,12 +192,12 @@ pub async fn set(
     who: Who<'_>,
 ) -> Result<Grant, Error> {
     let mut tx = crate::store::begin_write(pool).await?;
-    let c = find(&mut tx, connection_id).await?;
+    let c = find(&mut tx, who.workspace, connection_id).await?;
     let Some(adapter) = reg.get(&c.kind) else {
         return refused("unknown_kind", "no adapter for this kind");
     };
     let d = adapter.descriptor();
-    check_grantee(&mut tx, new.grantee_kind, new.grantee).await?;
+    check_grantee(&mut tx, c.user_id, new.grantee_kind, new.grantee).await?;
     let caps = match new.capabilities {
         None => d.read_only(),
         Some([]) => {
@@ -267,7 +287,7 @@ pub async fn revoke(
     who: Who<'_>,
 ) -> Result<bool, Error> {
     let mut tx = crate::store::begin_write(pool).await?;
-    find(&mut tx, connection_id).await?;
+    find(&mut tx, who.workspace, connection_id).await?;
     let n = sqlx::query(
         "DELETE FROM core_connection_grants WHERE connection_id = ? AND grantee_kind = ? \
          AND grantee = ?",

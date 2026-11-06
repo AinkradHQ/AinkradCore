@@ -1,7 +1,9 @@
-//! Where a connection applies, per kind (design §2): the workspace default, a project or repo,
-//! an agent, a session. One binding per (user, kind, scope); setting it again replaces it, so
-//! two writers of one default end with exactly one row (writes queue on `begin_write`, and the
-//! table's unique key backs it). Resolution order is in `resolve`.
+//! Where a connection applies, per kind (design §2, decision 7): the **workspace default** is the
+//! kind's default connection, which `resolve` prefers when several connections cover a use. The
+//! project, agent and session scopes are accepted and stored but unused: a session never names a
+//! connection. One binding per (user, kind, scope); setting it again replaces it, so two writers
+//! of one default end with exactly one row (writes queue on `begin_write`, and the table's unique
+//! key backs it).
 
 use serde_json::json;
 use sqlx::Row;
@@ -10,7 +12,7 @@ use sqlx::sqlite::{SqlitePool, SqliteRow};
 use super::{MAX_BINDINGS, Who, audit, find, refused, valid_ref};
 use crate::store::secrets::Error;
 
-/// Least specific first; resolution walks it from the end.
+/// Only `workspace` is read by `resolve`; the rest are unused capacity.
 pub const SCOPES: [&str; 4] = ["workspace", "project", "agent", "session"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,21 +54,18 @@ fn check_scope(scope_kind: &str, scope_ref: &str) -> Result<(), Error> {
     }
 }
 
-/// Binds `connection_id` as `user_id`'s connection of its kind at the scope, replacing the one
+/// Binds `connection_id` as the workspace's connection of its kind at the scope, replacing the one
 /// there. Audited `connection.bound`.
 pub async fn set(
     pool: &SqlitePool,
-    user_id: i64,
     connection_id: i64,
     (scope_kind, scope_ref): (&str, &str),
     who: Who<'_>,
 ) -> Result<Binding, Error> {
     check_scope(scope_kind, scope_ref)?;
+    let user_id = who.workspace;
     let mut tx = crate::store::begin_write(pool).await?;
-    let c = find(&mut tx, connection_id).await?;
-    if c.user_id != user_id {
-        return refused("not_found", "no such connection");
-    }
+    let c = find(&mut tx, user_id, connection_id).await?;
     let previous: Option<i64> = sqlx::query_scalar(
         "SELECT connection_id FROM core_connection_bindings WHERE user_id = ? AND kind = ? \
          AND scope_kind = ? AND scope_ref = ?",
@@ -119,12 +118,12 @@ pub async fn set(
 /// Drops the binding of `kind` at the scope; whether there was one. Audited `connection.unbound`.
 pub async fn clear(
     pool: &SqlitePool,
-    user_id: i64,
     kind: &str,
     (scope_kind, scope_ref): (&str, &str),
     who: Who<'_>,
 ) -> Result<bool, Error> {
     check_scope(scope_kind, scope_ref)?;
+    let user_id = who.workspace;
     let mut tx = crate::store::begin_write(pool).await?;
     let gone: Option<i64> = sqlx::query_scalar(
         "DELETE FROM core_connection_bindings WHERE user_id = ? AND kind = ? AND scope_kind = ? \
