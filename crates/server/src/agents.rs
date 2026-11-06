@@ -17,6 +17,7 @@
 //! - **Capacity** (E2-08.1): a create is refused `runner_busy` when the runner's `agent`
 //!   driver, or the harness's slot on it, is full (the runner refuses it too).
 
+mod allocate;
 pub mod gateway;
 mod launch;
 pub mod login;
@@ -688,6 +689,12 @@ impl ModuleAgents {
         if *session != s.id {
             return Err(invalid("the command is about another session"));
         }
+        // A chain session that never started has no runner session to stop: ended here.
+        if matches!(command, Command::AgentStop(_))
+            && crate::store::alloc::end_unstarted(&app.pool, &s.id, &app.clock.now()).await?
+        {
+            return Ok(());
+        }
         let ev = ask(
             app,
             &s.runner,
@@ -754,7 +761,19 @@ async fn run(app: &App, id: &str) {
         // A budget stop or an auth failure the last answer recorded.
         gateway::after(app, &s).await;
         let step = match s.state.as_str() {
-            "starting" => launch(app, &s, false).await.map(drop),
+            // A chain session has no account until the pick has given it one (it waits, never launches).
+            "starting" => match allocate::ready(app, &s).await {
+                Ok(Some(row)) => launch(app, &row, false).await.map(drop),
+                // Waiting for an account: the wait is bounded in the pick itself (`wait_max` from
+                // the first wait), and this does not look like progress to the give-up timer.
+                Ok(None) => {
+                    // The pick found the runner online: not away.
+                    away = None;
+                    tokio::time::sleep(cfg.retry).await;
+                    continue;
+                }
+                Err(e) => Err(e),
+            },
             "interrupted" => launch(app, &s, true).await.map(drop),
             _ => read(app, &s, &cfg).await,
         };

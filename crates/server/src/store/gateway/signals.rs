@@ -60,12 +60,20 @@ pub async fn pending_auth(
     pool: &SqlitePool,
     account: i64,
 ) -> Result<Option<(i64, i64)>, sqlx::Error> {
+    pending_auth_in(&mut *pool.acquire().await?, account).await
+}
+
+/// [`pending_auth`] in the caller's transaction (the allocator's).
+pub async fn pending_auth_in(
+    conn: &mut sqlx::SqliteConnection,
+    account: i64,
+) -> Result<Option<(i64, i64)>, sqlx::Error> {
     sqlx::query_as(
         "SELECT id, tries FROM core_account_auth_signals WHERE account_id = ? AND state = 'pending' \
          ORDER BY id LIMIT 1",
     )
     .bind(account)
-    .fetch_optional(pool)
+    .fetch_optional(conn)
     .await
 }
 

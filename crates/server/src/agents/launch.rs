@@ -147,6 +147,12 @@ pub fn placement(app: &App, s: &Session) -> Placement {
 /// Starts (or resumes) `s` on its runner with fresh leases; its state moves to `running`.
 /// A refusal that retrying cannot fix ends the session as failed.
 pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), Refusal> {
+    // A chain session with no account is never started: the runner would use its own login. The
+    // supervisor picks first (`allocate::ready`); this is the refusal behind it.
+    if crate::store::alloc::unassigned(&app.pool, &s.id, &s.secrets).await? {
+        let why = "the session is waiting for an account";
+        return Err(Refusal::Runner(StreamError::new(ErrorCode::Offline, why)));
+    }
     // No lease for a runner that cannot redeem it now: they would only pile up to the cap.
     if !app.hub.online(&s.runner) {
         let why = "the runner is not connected";
@@ -208,6 +214,15 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
                 l
             }
             Err(e) => {
+                // The account the pick chose was refused after a race (disabled, cooled, out of
+                // budget): another is picked, at most twice. Only before the session has ever run (a
+                // resume keeps its account for good: one session, one account), and not a failover hop.
+                if !resume
+                    && matches!(&e, Refusal::Runner(r) if r.code == ErrorCode::InvalidArgs)
+                    && allocate::repick(app, s).await?
+                {
+                    return Ok(());
+                }
                 fail(app, s, &format!("leasing its secrets: {}", describe(&e))).await;
                 return Err(e);
             }
@@ -240,6 +255,12 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
             fail(app, s, &describe(&e)).await;
             return Err(e);
         }
+    }
+    // From here the harness may start on this account whatever the answer: it is final.
+    // A session cancelled meanwhile is not started.
+    if !resume && !crate::store::alloc::mark_or_release(&app.pool, &s.id).await? {
+        app.agents.leases.lock().unwrap().remove(&s.id);
+        return Ok(());
     }
     let wait = app.agents.config.answer;
     let proof = app.agents.elevated.lock().unwrap().get(&s.id).copied();

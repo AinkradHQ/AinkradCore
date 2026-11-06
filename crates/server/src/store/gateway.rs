@@ -98,7 +98,7 @@ pub use reports::*;
 pub use signals::*;
 
 /// The budgets' subjects of an account: itself and every pool it is in.
-async fn subjects_of(
+pub(super) async fn subjects_of(
     conn: &mut SqliteConnection,
     account: i64,
 ) -> Result<Vec<(String, String)>, sqlx::Error> {
@@ -117,7 +117,7 @@ async fn subjects_of(
     Ok(out)
 }
 
-fn refs(owned: &[(String, String)]) -> Vec<(&str, &str)> {
+pub(super) fn refs(owned: &[(String, String)]) -> Vec<(&str, &str)> {
     owned
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -125,7 +125,7 @@ fn refs(owned: &[(String, String)]) -> Vec<(&str, &str)> {
 }
 
 /// What is left to spend across `standings`: `None` in a dimension no budget limits.
-fn room(standings: &[Standing]) -> (Option<u64>, Option<u64>) {
+pub(super) fn room(standings: &[Standing]) -> (Option<u64>, Option<u64>) {
     let (mut tokens, mut usd): (Option<u64>, Option<u64>) = (None, None);
     let least = |so_far: Option<u64>, n: i64| {
         let n = u64::try_from(n.max(0)).unwrap_or(0);
@@ -167,9 +167,27 @@ pub async fn reserve(
     now: &str,
 ) -> Result<Hold, Error> {
     let mut tx = super::begin_write(pool).await?;
-    let owned = subjects_of(&mut tx, account).await?;
+    // A denial drops `tx` unwritten: what `reserve_in` released first comes back with it.
+    let hold = reserve_in(&mut tx, session, account, min_usd, now).await?;
+    if matches!(hold, Hold::Granted(_)) {
+        tx.commit().await?;
+    }
+    Ok(hold)
+}
+
+/// [`reserve`] in the caller's write transaction (the allocator's pick and its hold are one
+/// write). A denial can leave the session's own earlier hold released in the transaction: the
+/// caller rolls back, or (the allocator) has none to lose.
+pub async fn reserve_in(
+    tx: &mut SqliteConnection,
+    session: &str,
+    account: i64,
+    min_usd: u64,
+    now: &str,
+) -> Result<Hold, Error> {
+    let owned = subjects_of(tx, account).await?;
     let subjects = refs(&owned);
-    let standings = guard::standings_for(&mut tx, &subjects, now, session, true).await?;
+    let standings = guard::standings_for(tx, &subjects, now, session, true).await?;
     let (tokens, usd) = room(&standings);
     let tokens = tokens.map(|r| r.min(HOLD_TOKENS));
     let usd = usd.map(|r| r.min(HOLD_USD_MICROS));
@@ -187,7 +205,7 @@ pub async fn reserve(
     }
     // The account's session limits cap what the hold may be, and are the ceiling alone where no
     // budget limits a dimension (nothing is held then, there is nothing to hold it from).
-    let (left_t, left_u) = ceiling::session_left(&mut tx, account, session).await?;
+    let (left_t, left_u) = ceiling::session_left(tx, account, session).await?;
     if let Some(t) = left_t.filter(|t| *t < MIN_CEILING_TOKENS) {
         return Ok(Hold::Denied(format!(
             "the account's session limit leaves {t} tokens, and one turn needs at least \
@@ -206,9 +224,9 @@ pub async fn reserve(
     // The old hold goes first, in this transaction: `reserve_in` only replaces the holds of the
     // budgets that apply now, so one on a pool the account has left would otherwise stay until it
     // lapses (a hold lasts a week; a session that outlives it is counted by its spend alone).
-    guard::release_in(&mut tx, session).await?;
+    guard::release_in(tx, session).await?;
     let granted = guard::reserve_in(
-        &mut tx,
+        tx,
         session,
         &subjects,
         held(tokens_held),
@@ -234,9 +252,8 @@ pub async fn reserve(
     }
     sqlx::query("UPDATE core_agent_sessions SET gw_stop = NULL, gw_stopped_at = NULL WHERE id = ?")
         .bind(session)
-        .execute(&mut *tx)
+        .execute(tx)
         .await?;
-    tx.commit().await?;
     Ok(Hold::Granted(Ceiling {
         tokens: tokens_held.or(left_t).unwrap_or(u64::MAX),
         usd_micros: usd_held.or(left_u).unwrap_or(u64::MAX),

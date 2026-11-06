@@ -32,6 +32,48 @@ pub struct Price {
     pub created_at: String,
 }
 
+/// The prices a gateway session of `provider` runs with: the price book's newest rows, and the
+/// priced models of a user definition that the book does not have (its cache rate is its input
+/// rate). The one source for the grant and for the allocator's one-turn room, so they cannot
+/// disagree.
+pub fn book_of(all: Vec<Price>, provider: &str, def: &providers::Definition) -> Vec<Price> {
+    let mut book: Vec<Price> = all.into_iter().filter(|p| p.provider == provider).collect();
+    let fallback: Vec<Price> = def
+        .models
+        .iter()
+        .filter(|m| !book.iter().any(|p| p.model == m.id))
+        .filter_map(|m| {
+            let at = def.priced_at.as_ref().filter(|_| !def.builtin)?;
+            Some(Price {
+                provider: provider.to_owned(),
+                model: m.id.clone(),
+                version: 0,
+                input_per_mtok_micro: m.input_per_mtok_micro,
+                output_per_mtok_micro: m.output_per_mtok_micro,
+                cache_per_mtok_micro: m.input_per_mtok_micro,
+                priced_at: at.clone(),
+                created_at: String::new(),
+            })
+        })
+        .collect();
+    book.extend(fallback);
+    book
+}
+
+/// A book as the gateway's grant carries it.
+pub fn model_prices(book: &[Price]) -> Vec<ainkrad_proto::v2::ModelPrice> {
+    let rate = |n: i64| u64::try_from(n).unwrap_or(0);
+    book.iter()
+        .map(|p| ainkrad_proto::v2::ModelPrice {
+            model: p.model.clone(),
+            input: rate(p.input_per_mtok_micro),
+            output: rate(p.output_per_mtok_micro),
+            cache_read: rate(p.cache_per_mtok_micro),
+            cache_write: rate(p.cache_per_mtok_micro),
+        })
+        .collect()
+}
+
 /// The rates that priced an event, and when they were read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rates {

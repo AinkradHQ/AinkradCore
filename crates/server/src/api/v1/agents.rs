@@ -485,7 +485,13 @@ async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSe
         }
         send(&app, &s, command, &me).await?;
     } else {
-        tell(&app, &s, command, &me).await?;
+        not_a_modules(&s)?;
+        owns_secrets(&s, &me)?;
+        // A chain session that never reached its runner (waiting for an account, or picked and not
+        // started) is ended here: the runner has nothing to stop.
+        if !crate::store::alloc::end_unstarted(&app.pool, &s.id, &app.clock.now()).await? {
+            send(&app, &s, command, &me).await?;
+        }
     }
     let action = if kill {
         "agent.killed"
@@ -538,10 +544,15 @@ pub async fn resume(
     not_a_modules(&s)?;
     owns_secrets(&s, &me)?;
     if !store::reopen(&app.pool, &s.id, &app.clock.now()).await? {
+        let full = crate::store::alloc::account_full(&app.pool, &s.id).await?;
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "not_resumable",
-            "only a lost or interrupted session is resumed",
+            if full {
+                "the session's account is full: resume again when one of its sessions ends"
+            } else {
+                "only a lost or interrupted session is resumed"
+            },
         ));
     }
     store::action(

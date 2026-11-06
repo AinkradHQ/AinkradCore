@@ -58,7 +58,8 @@ pub async fn record(
         return Ok(false);
     }
     let Some(row) = sqlx::query(
-        "SELECT harness, model, secrets, resumes, owner_module, hm_epoch, hm_in, hm_out, hm_cache \
+        "SELECT harness, model, secrets, resumes, owner_module, account_id, hm_epoch, hm_in, hm_out, \
+         hm_cache \
          FROM core_agent_sessions WHERE id = ?",
     )
     .bind(session)
@@ -78,12 +79,34 @@ pub async fn record(
                 return Ok(false);
             }
         };
-    let Some((provider, account)) = secrets
+    // The account the allocator (or the create) wrote on the row; a row from before `account_id`
+    // names it by its secret only.
+    let held: Option<i64> = row.try_get("account_id")?;
+    // An account deleted under a live session leaves the row's id and the secret's name: the
+    // session's last readings are still that account's (ids are never reused).
+    let named = secrets
         .iter()
         .filter_map(|s| account_secret(&s.name))
         .find(|(p, _)| subscription_provider(p))
-    else {
-        return Ok(false);
+        .map(|(p, id)| (p.to_owned(), id));
+    let (provider, account) = match held {
+        Some(id) => {
+            let found: Option<String> =
+                sqlx::query_scalar("SELECT provider FROM core_accounts WHERE id = ?")
+                    .bind(id)
+                    .fetch_optional(&mut *conn)
+                    .await?;
+            match (found, named) {
+                (Some(p), _) if subscription_provider(&p) => (p, id),
+                (Some(_), _) => return Ok(false),
+                (None, Some((p, n))) if n == id => (p, id),
+                (None, _) => return Ok(false),
+            }
+        }
+        None => match named {
+            Some(n) => n,
+            None => return Ok(false),
+        },
     };
     let Some(u) = usage else { return Ok(true) };
     let epoch: i64 = row.try_get("resumes")?;
@@ -115,7 +138,7 @@ pub async fn record(
         epoch,
         account_id: Some(account),
         legacy_account_id: None,
-        provider,
+        provider: &provider,
         harness: &harness,
         model: model
             .as_deref()
