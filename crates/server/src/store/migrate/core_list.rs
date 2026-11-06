@@ -167,4 +167,10 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0027_failover.up.sql"),
         down: include_str!("../../../migrations/0027_failover.down.sql"),
     },
+    Migration {
+        version: 28,
+        name: "connections",
+        up: include_str!("../../../migrations/0028_connections.up.sql"),
+        down: include_str!("../../../migrations/0028_connections.down.sql"),
+    },
 ];
