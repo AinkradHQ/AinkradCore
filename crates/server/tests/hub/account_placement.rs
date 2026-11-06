@@ -79,7 +79,11 @@ fn an_account_session_must_ask_for_a_sandbox_whoever_creates_it() {
     assert!(checked(&key, &sandboxed()).is_ok());
     assert!(checked(&key, &json!({"mode": "ask", "min_isolation": "microvm"})).is_ok());
     // Control: other secrets and no secrets keep needing nothing.
-    assert!(checked(&[secret("git.token")], &json!({"mode": "ask"})).is_ok());
+    let other = SessionSecret {
+        name: "git.token".into(),
+        var: "GH_TOKEN".into(),
+    };
+    assert!(checked(&[other], &json!({"mode": "ask"})).is_ok());
     assert!(checked(&[], &json!({"mode": "ask"})).is_ok());
 }
 
