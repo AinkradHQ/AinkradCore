@@ -490,6 +490,7 @@ impl AgentDriver {
         live.meta.state = AgentState::Running;
         live.meta.outcome = None;
         live.meta.plan_limit = None;
+        live.meta.usage = None; // the last run's total is not this run's
         live.meta.epoch = req.epoch;
         live.run = run;
         save_meta(&self.config, &req.session, &live.meta);

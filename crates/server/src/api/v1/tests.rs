@@ -62,6 +62,7 @@ mod settings;
 mod signed;
 mod stepup;
 mod token;
+mod usage_meter;
 mod wake;
 mod web;
 mod web_socket;

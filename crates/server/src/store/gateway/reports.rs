@@ -215,7 +215,7 @@ async fn record(
 }
 
 /// A gateway session's usage columns are the ledger's, not its harness's meter.
-async fn refresh_usage(conn: &mut SqliteConnection, session: &str) -> Result<(), sqlx::Error> {
+pub async fn refresh_usage(conn: &mut SqliteConnection, session: &str) -> Result<(), sqlx::Error> {
     let [input, output, cache, _] = costs::session_totals(conn, session).await?;
     let cost = costs::session_cost(conn, session).await?;
     sqlx::query(
