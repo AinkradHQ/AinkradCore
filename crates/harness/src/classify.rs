@@ -13,9 +13,9 @@
 //!   the plan's quota; `httpConnectionFailed`, `responseStreamConnectionFailed`,
 //!   `responseStreamDisconnected`, `internalServerError` and `responseTooManyFailedAttempts`
 //!   are the provider dropping the turn; `unauthorized`, `badRequest`, `contextWindowExceeded`
-//!   are permanent.
+//!   are permanent, except `unauthorized`, which is `Auth`.
 //! - OpenCode: the `session.error` name, plus `data.statusCode` for an `APIError`
-//!   (`APIError:429`).
+//!   (`APIError:429`); `ProviderAuthError` is `Auth`.
 //! - agy: the result status (`error`); only its text says more (Google's
 //!   `RESOURCE_EXHAUSTED`, `NOT_FOUND` for a model, `UNAVAILABLE` / `DEADLINE_EXCEEDED`).
 //! - Every harness: a process that ends mid-turn without a result (`harness_exit`) is a reset
@@ -35,6 +35,9 @@ pub enum ErrorClass {
     RateLimited,
     /// The account's plan or credit is used up.
     Quota,
+    /// The provider refused the account's credentials (401/403, an invalid or expired key or
+    /// token). Another account may work; the same one will not.
+    Auth,
     /// The provider dropped the turn (network, 5xx, overloaded, a reset stream): resume the
     /// same session (E15.4).
     Transient,
@@ -53,6 +56,7 @@ impl ErrorClass {
             Self::ModelUnavailable => "model_unavailable",
             Self::RateLimited => "rate_limited",
             Self::Quota => "quota",
+            Self::Auth => "auth",
             Self::Transient => "transient",
             Self::Unhealthy => "unhealthy",
             Self::Protocol => "protocol",
@@ -80,6 +84,20 @@ const RATE: &[&str] = &[
     "ratelimit",
     "too many requests",
     "resource_exhausted",
+];
+const AUTH: &[&str] = &[
+    "unauthorized",
+    "authentication_error",
+    "authentication failed",
+    "invalid api key",
+    "invalid x-api-key",
+    "invalid_api_key",
+    "incorrect api key",
+    "oauth token has expired",
+    "oauth token expired",
+    "token has expired",
+    "please run /login",
+    "permission_denied",
 ];
 const MODEL: &[&str] = &[
     "not found",
@@ -138,12 +156,16 @@ pub fn classify(code: &str, reason: &str) -> ErrorClass {
             | "responseTooManyFailedAttempts",
             _,
         ) => return ErrorClass::Transient,
-        ("unauthorized" | "badRequest" | "contextWindowExceeded", _) => {
-            return ErrorClass::Permanent;
-        }
+        ("unauthorized" | "ProviderAuthError", _) => return ErrorClass::Auth,
+        ("badRequest" | "contextWindowExceeded", _) => return ErrorClass::Permanent,
         (_, Some(429)) if says(QUOTA) => return ErrorClass::Quota,
         (_, Some(429)) => return ErrorClass::RateLimited,
         (_, Some(404)) => return ErrorClass::ModelUnavailable,
+        // A 403 about a model is the model's access, not the credentials.
+        (_, Some(403)) if text.contains("model") && says(MODEL) => {
+            return ErrorClass::ModelUnavailable;
+        }
+        (_, Some(401 | 403)) => return ErrorClass::Auth,
         (_, Some(500 | 502 | 503 | 504 | 529)) => return ErrorClass::Transient,
         _ => {}
     }
@@ -153,6 +175,8 @@ pub fn classify(code: &str, reason: &str) -> ErrorClass {
         ErrorClass::RateLimited
     } else if text.contains("model") && says(MODEL) {
         ErrorClass::ModelUnavailable
+    } else if says(AUTH) {
+        ErrorClass::Auth
     } else if says(TRANSIENT) {
         ErrorClass::Transient
     } else {
@@ -193,11 +217,11 @@ mod tests {
             ),
             // Codex
             ("usageLimitExceeded", "You've hit your usage limit.", Quota),
-            ("unauthorized", "401 Unauthorized", Permanent),
+            ("unauthorized", "401 Unauthorized", Auth),
             ("other", "model gpt-9 does not exist", ModelUnavailable),
             // OpenCode
             ("APIError:429", "Too Many Requests", RateLimited),
-            ("ProviderAuthError", "key expired", Permanent),
+            ("ProviderAuthError", "key expired", Auth),
             ("APIError:404", "Not Found", ModelUnavailable),
             // agy
             (
@@ -240,7 +264,72 @@ mod tests {
             assert_eq!(classify(code, reason), want, "{code}: {reason}");
         }
         assert!(Quota.falls_back() && Unhealthy.falls_back() && Protocol.falls_back());
+        assert!(Auth.falls_back() && Auth.as_str() == "auth");
         assert_eq!(classify(PROTOCOL, "exited after a 429"), Protocol);
         assert!(!Permanent.falls_back() && !Transient.falls_back());
+    }
+
+    /// 401/403/429/5xx as status codes and as bare text, whatever the harness.
+    #[test]
+    fn status_and_text_variants_of_auth_rate_and_server_errors() {
+        let cases = [
+            (
+                "error_during_execution:401",
+                "API Error: 401 authentication_error",
+                Auth,
+            ),
+            ("error_during_execution:401", "", Auth),
+            ("success:403", "API Error: 403 forbidden", Auth),
+            ("APIError:403", "Forbidden", Auth),
+            (
+                "APIError:403",
+                "model gpt-9 is not available to you",
+                ModelUnavailable,
+            ),
+            ("success", "Invalid API key · Please run /login", Auth),
+            (
+                "success",
+                "OAuth token has expired. Please obtain a new token",
+                Auth,
+            ),
+            (
+                "error",
+                "PERMISSION_DENIED: the caller does not have permission",
+                Auth,
+            ),
+            ("error", "Incorrect API key provided: sk-...", Auth),
+            (
+                "error_during_execution:429",
+                "Too Many Requests",
+                RateLimited,
+            ),
+            ("error_during_execution:429", "5-hour limit reached", Quota),
+            ("success", "rate_limit_error: slow down", RateLimited),
+            ("success:500", "boom", Transient),
+            ("success:502", "Bad Gateway", Transient),
+            ("success:503", "Service Unavailable", Transient),
+            ("success:504", "", Transient),
+            ("success:529", "overloaded_error", Transient),
+            ("success", "Internal server error", Transient),
+        ];
+        for (code, reason, want) in cases {
+            assert_eq!(classify(code, reason), want, "{code}: {reason}");
+        }
+    }
+
+    /// Quota and rate words win over an auth word in the same text, and a 4xx number inside
+    /// ordinary text is no status: only the adapter's `code` carries one.
+    #[test]
+    fn auth_is_never_guessed_from_a_number_or_beaten_by_a_limit() {
+        assert_eq!(
+            classify("success", "usage limit reached, unauthorized"),
+            Quota
+        );
+        assert_eq!(classify("success", "rate limit; forbidden"), RateLimited);
+        assert_eq!(
+            classify("error", "wrote 401 lines and 403 tests"),
+            Permanent
+        );
+        assert_eq!(classify("error", "exit 401"), Permanent);
     }
 }
