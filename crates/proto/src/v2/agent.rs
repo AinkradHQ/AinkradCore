@@ -127,16 +127,24 @@ pub fn account_var_problem<'a>(
     harness: &str,
     grants: impl IntoIterator<Item = (&'a str, &'a str)> + Clone,
 ) -> Option<&'static str> {
+    let allowed = account_vars(harness);
+    // An ordinary secret may not take a harness authentication variable either: it would carry a
+    // credential past every rule below.
     if !grants
         .clone()
         .into_iter()
-        .any(|(name, _)| name.starts_with(ACCOUNT_PREFIX))
+        .any(|(name, var)| name.starts_with(ACCOUNT_PREFIX) || allowed.contains(&var))
     {
         return None;
     }
-    let allowed = account_vars(harness);
     let provider = harness_provider(harness);
     for (name, var) in grants {
+        if !name.starts_with(ACCOUNT_PREFIX) && allowed.contains(&var) {
+            return Some(
+                "a harness authentication variable carries only a provider-account secret \
+                 (acct.<provider>.<id>)",
+            );
+        }
         // A subscription's token has its own rule (`subscription_problem`); a variable that
         // redirects traffic is still refused beside it.
         if name.starts_with(ACCOUNT_PREFIX)

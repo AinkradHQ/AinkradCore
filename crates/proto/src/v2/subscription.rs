@@ -17,6 +17,10 @@ use super::ACCOUNT_PREFIX;
 pub const SUBSCRIPTION_VAR: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 /// The only harness that takes a subscription's token.
 pub const SUBSCRIPTION_HARNESS: &str = "claude";
+/// The command an agent driver lists when its runner applies the subscription rules before it
+/// redeems a lease (KAN-434). The Core places a subscription session only on a runner that lists
+/// it, so an older runner never redeems the token.
+pub const CAP_SUBSCRIPTION_ENV: &str = "subscription-env";
 /// The built-in subscription providers (`acct.<provider>.<id>`). The Core's tests keep this equal
 /// to the built-in definitions that sign in by browser code.
 pub const SUBSCRIPTION_PROVIDERS: [&str; 1] = ["claude-sub"];
