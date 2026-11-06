@@ -23,6 +23,7 @@ pub mod budgets;
 pub mod chains;
 pub mod costs;
 pub mod events;
+pub mod failover;
 pub mod gateway;
 pub mod gov;
 pub mod health;

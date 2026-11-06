@@ -327,12 +327,14 @@ pub async fn set_state(
 ) -> Result<(), sqlx::Error> {
     let mut tx = super::begin_write(pool).await?;
     let changed = sqlx::query(
-        "UPDATE core_agent_sessions SET state = ?, resumes = resumes + ?, updated_at = ? \
+        "UPDATE core_agent_sessions SET state = ?, resumes = resumes + ?, updated_at = ?, \
+         upstream_class = iif(? != 0, NULL, upstream_class) \
          WHERE id = ? AND state NOT IN ('ended', 'lost') AND state != ?",
     )
     .bind(state)
     .bind(i64::from(resumed))
     .bind(now)
+    .bind(i64::from(resumed))
     .bind(id)
     .bind(state)
     .execute(&mut *tx)
@@ -379,6 +381,13 @@ pub async fn end(
         // A budget hold is for a live session: what it did not spend goes back.
         super::budgets::guard::release_in(&mut tx, id).await?;
         super::health::on_end(&mut tx, id, outcome, now).await?;
+        // A lost session never moves a run (the runner's failure, not the account's): settled with the end.
+        if state == "lost" {
+            sqlx::query("UPDATE core_agent_sessions SET failover_done = 1 WHERE id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
         let kind = outcome["kind"].as_str().unwrap_or(state);
         emit(
             &mut tx,
@@ -556,7 +565,8 @@ pub async fn reopen(pool: &SqlitePool, id: &str, now: &str) -> Result<bool, sqlx
     super::alloc::stamp_account_in(&mut tx, id).await?;
     let changed = sqlx::query(
         "UPDATE core_agent_sessions SET state = 'interrupted', outcome = NULL, ended_at = NULL, \
-         updated_at = ? WHERE id = ? AND state IN ('lost', 'interrupted')",
+         failover_done = 0, failover_class = NULL, upstream_class = NULL, updated_at = ? \
+         WHERE id = ? AND state IN ('lost', 'interrupted')",
     )
     .bind(now)
     .bind(id)
@@ -614,6 +624,10 @@ pub async fn wake(
     let Some((state, harness, outcome, owner)) = found else {
         return Ok(Woken::Gone);
     };
+    // An attempt a failover replaced is never brought back: the run lives on in its successor.
+    if super::failover::has_successor_in(&mut tx, id).await? {
+        return Ok(Woken::Gone);
+    }
     let succeeded = outcome
         .and_then(|o| serde_json::from_str::<Value>(&o).ok())
         .is_some_and(|o| o["kind"] == "succeeded");
@@ -631,7 +645,8 @@ pub async fn wake(
     super::alloc::stamp_account_in(&mut tx, id).await?;
     sqlx::query(
         "UPDATE core_agent_sessions SET state = 'interrupted', outcome = NULL, ended_at = NULL, \
-         prompt = coalesce(?, prompt), updated_at = ? WHERE id = ?",
+         failover_done = 0, failover_class = NULL, upstream_class = NULL, prompt = coalesce(?, prompt), updated_at = ? \
+         WHERE id = ?",
     )
     .bind(text)
     .bind(now)

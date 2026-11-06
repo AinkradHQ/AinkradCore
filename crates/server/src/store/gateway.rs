@@ -250,7 +250,7 @@ pub async fn reserve_in(
             named.join(", ")
         )));
     }
-    sqlx::query("UPDATE core_agent_sessions SET gw_stop = NULL, gw_stopped_at = NULL WHERE id = ?")
+    sqlx::query("UPDATE core_agent_sessions SET gw_stop = NULL, gw_stop_budget = NULL, gw_stopped_at = NULL WHERE id = ?")
         .bind(session)
         .execute(tx)
         .await?;

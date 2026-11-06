@@ -27,7 +27,7 @@ fn entry(pool: i64) -> Entry {
     }
 }
 
-async fn pool_of(core: &Core, runner: &str, accounts: &[i64]) -> Entry {
+pub(super) async fn pool_of(core: &Core, runner: &str, accounts: &[i64]) -> Entry {
     let (p, now) = (&core.app.pool, core.app.clock.now());
     let made = pools::create(p, "main", "anthropic", runner, AuditActor::System, &now)
         .await
@@ -41,7 +41,7 @@ async fn pool_of(core: &Core, runner: &str, accounts: &[i64]) -> Entry {
 }
 
 /// A `starting` chain session with no account, supervised in the background.
-async fn chain_session(core: &Core, runner: &str, chain: &[Entry]) -> String {
+pub(super) async fn chain_session(core: &Core, runner: &str, chain: &[Entry]) -> String {
     let policy = policy();
     let new = NewSession {
         runner,

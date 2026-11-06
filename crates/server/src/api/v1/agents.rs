@@ -468,11 +468,13 @@ pub async fn decide(
 }
 
 async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSession> {
-    let s = one(&app, &id).await?;
-    let command = Command::AgentStop(AgentStop {
-        session: s.id.clone(),
-        kill,
-    });
+    let mut s = one(&app, &id).await?;
+    let command = |s: &Session| {
+        Command::AgentStop(AgentStop {
+            session: s.id.clone(),
+            kill,
+        })
+    };
     if s.owner_module.is_some() && kill {
         // Break-glass: a runaway harness of a module whose own routes cannot stop it (the module
         // is gone, its run row lost). Kill only, and only an admin.
@@ -483,14 +485,51 @@ async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSe
                 "killing a module's session requires the admin scope",
             ));
         }
-        send(&app, &s, command, &me).await?;
+        send(&app, &s, command(&s), &me).await?;
     } else {
         not_a_modules(&s)?;
         owns_secrets(&s, &me)?;
-        // A chain session that never reached its runner (waiting for an account, or picked and not
-        // started) is ended here: the runner has nothing to stop.
-        if !crate::store::alloc::end_unstarted(&app.pool, &s.id, &app.clock.now()).await? {
-            send(&app, &s, command, &me).await?;
+        // A person's stop ends the run, and the one to stop is its newest attempt (a failover may have
+        // replaced the one the person knows): found without writing, checked, and only then is the
+        // whole run settled so no attempt of it moves on.
+        let newest = crate::store::failover::newest(&app.pool, &s.id).await?;
+        if newest != s.id {
+            s = one(&app, &newest).await?;
+            owns_secrets(&s, &me)?;
+        }
+        // Settled before the stop so no move slips in; opened again if the stop never reaches the
+        // runner (it is offline): the run is then no more cancelled than it was.
+        let cancelled = crate::store::failover::cancel_run(&app.pool, &s.id).await?;
+        let moved = cancelled.newest != s.id;
+        if moved {
+            s = one(&app, &cancelled.newest).await?;
+        }
+        let stopped = async {
+            if moved {
+                owns_secrets(&s, &me)?;
+            }
+            // An attempt that is over has nothing to stop: the cancel stands (the run is settled).
+            if !s.live() {
+                return Ok::<(), ApiError>(());
+            }
+            // A chain session that never reached its runner (waiting for an account, or picked and not
+            // started) is ended here: the runner has nothing to stop.
+            if !crate::store::alloc::end_unstarted(&app.pool, &s.id, &app.clock.now()).await? {
+                send(&app, &s, command(&s), &me).await?;
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(e) = stopped {
+            // Opened again only when a stop to a harness that is still live did not get through; one
+            // that ended meanwhile is as cancelled as it was.
+            let live = one(&app, &s.id).await.map_or(true, |x| x.live());
+            if live {
+                let over =
+                    crate::store::failover::restore_run(&app.pool, &cancelled.settled).await?;
+                agents::drive_failover(&app, &over);
+                return Err(e);
+            }
         }
     }
     let action = if kill {

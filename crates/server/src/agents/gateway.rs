@@ -197,8 +197,11 @@ pub(super) async fn after(app: &App, s: &Session) {
     let Some(account) = s.gateway_account_id else {
         return;
     };
+    // A session that is being stopped for a move is not topped up: a raise would lift the refusal
+    // the stop began with.
+    let moving = super::failover::live(app, s).await;
     // A gateway that has too little left for a turn is raised, or its session marked to stop.
-    if s.state == "running" && s.gw_stop.is_none() {
+    if !moving && s.state == "running" && s.gw_stop.is_none() {
         super::topup::run(app, s).await;
     }
     // Only a running session is stopped: another one has nothing to refuse or cancel on its runner,
@@ -208,11 +211,14 @@ pub(super) async fn after(app: &App, s: &Session) {
         Ok(Some(row)) => row,
         _ => s.clone(),
     };
-    if let Some(why) = fresh
-        .gw_stop
-        .as_deref()
-        .filter(|_| fresh.state == "running")
-        && let Err(e) = enforce(app, &fresh, why).await
+    // A stop for a move (quota, auth, an account or pool budget) is the failover's; any other budget
+    // or ceiling stop ends the run.
+    if !moving
+        && let Some(why) = fresh
+            .gw_stop
+            .as_deref()
+            .filter(|_| fresh.state == "running")
+        && let Err(e) = enforce(app, &fresh, gw::stop_details(why)).await
     {
         tracing::warn!(
             session = s.id,
@@ -237,10 +243,14 @@ fn stopped(r: Result<AgentEvents, StreamError>) -> Result<Option<AgentEvents>, R
     }
 }
 
-/// Orders the stop of `s` (`why`: the budget that ran out): the gateway refuses everything and
+/// Orders the stop of `s` (`details`: what the audit row says, a budget that ran out or a move): the gateway refuses everything and
 /// aborts open streams, then the session is cancelled, and killed after a grace if it is still
 /// there. The time of the order is kept only once both went through.
-async fn enforce(app: &App, s: &Session, why: &str) -> Result<(), Refusal> {
+pub(super) async fn enforce(
+    app: &App,
+    s: &Session,
+    details: serde_json::Value,
+) -> Result<(), Refusal> {
     let Some(proof) = app.agents.elevated.lock().unwrap().get(&s.id).copied() else {
         return Err(refuse("a stop needs the session's elevation"));
     };
@@ -274,7 +284,7 @@ async fn enforce(app: &App, s: &Session, why: &str) -> Result<(), Refusal> {
                 AuditActor::System,
                 "agent.cancelled",
                 None,
-                gw::stop_details(why),
+                details,
                 "core",
             )
             .await?;

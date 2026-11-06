@@ -323,7 +323,7 @@ pub async fn set_state(
         // says what the account was suspected of.
         sqlx::query(
             "UPDATE core_accounts SET fail_streak = 0, auth_streak = 0, backoff_secs = 0, \
-             fail_since = NULL WHERE id = ?",
+             fail_since = NULL, plan_limit = NULL WHERE id = ?",
         )
         .bind(id)
         .execute(&mut *tx)

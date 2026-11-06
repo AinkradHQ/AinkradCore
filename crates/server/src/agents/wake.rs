@@ -100,7 +100,11 @@ async fn wake(app: &App, run: &Run) -> Result<(), String> {
     let p: Payload = serde_json::from_value(run.payload.clone())
         .map_err(|_| "a wake payload does not have its shape".to_owned())?;
     let db = |e: sqlx::Error| e.to_string();
-    let Some(s) = store::get(&app.pool, &p.session).await.map_err(db)? else {
+    // A wake for an attempt a failover replaced goes to the run's newest attempt.
+    let session = crate::store::failover::newest(&app.pool, &p.session)
+        .await
+        .map_err(db)?;
+    let Some(s) = store::get(&app.pool, &session).await.map_err(db)? else {
         run.idle();
         return Ok(());
     };

@@ -18,12 +18,14 @@
 //!   driver, or the harness's slot on it, is full (the runner refuses it too).
 
 mod allocate;
+mod failover;
 pub mod gateway;
 mod launch;
 pub mod login;
 pub mod subscription;
 mod topup;
 pub mod wake;
+pub use failover::drive as drive_failover;
 use launch::launch;
 pub use launch::{Placement, placement};
 
@@ -444,6 +446,25 @@ async fn fail(app: &App, s: &Session, why: &str) {
     if let Err(e) = store::end(&app.pool, &s.id, "ended", &outcome, &app.clock.now()).await {
         tracing::error!(session = s.id, error = %e, "ending a session failed");
     }
+    // The Core's own end never moves a run: settled here, so no restart finds it unsettled.
+    if let Err(e) = crate::store::failover::settle(&app.pool, &s.id).await {
+        tracing::error!(session = s.id, error = %e, "settling a failover failed");
+    }
+}
+
+/// Best effort, before the Core ends a session itself: tells the runner to kill it so a harness that
+/// may still run stops spending. An answer that does not come is logged (never a secret) and passed.
+async fn stop_for_end(app: &App, s: &Session) {
+    let Some(proof) = app.agents.elevated.lock().unwrap().get(&s.id).copied() else {
+        return;
+    };
+    let stop = Command::AgentStop(ainkrad_proto::v2::AgentStop {
+        session: s.id.clone(),
+        kill: true,
+    });
+    if let Err(e) = ask(app, &s.runner, stop, app.agents.config.answer, Some(proof)).await {
+        tracing::warn!(session = s.id, code = ?e.code, "the kill before an end did not get through");
+    }
 }
 
 pub fn describe(r: &Refusal) -> String {
@@ -736,6 +757,8 @@ pub async fn resume_all(app: &App) -> Result<usize, sqlx::Error> {
             .insert(s.id.clone(), app.hub.continue_agent_elevation());
         supervise(app, &s.id);
     }
+    // An attempt that ended while the Core was down, before its run moved, moves it now.
+    failover::resume_unfinished(app).await?;
     Ok(live.len())
 }
 
@@ -749,6 +772,8 @@ async fn run(app: &App, id: &str) {
             Ok(Some(s)) => {
                 // Over: nothing left to stop, but an upstream `auth_failed` it reported is checked.
                 gateway::after(app, &s).await;
+                // An attempt that is over may move its run to the next account (once).
+                failover::after_end(app, &s).await;
                 return;
             }
             Ok(None) => return,
@@ -801,6 +826,8 @@ async fn run(app: &App, id: &str) {
             Err(e) => {
                 let since = *away.get_or_insert_with(tokio::time::Instant::now);
                 if since.elapsed() >= cfg.lost_after {
+                    // The harness may be alive behind the failing answers: stopped before the end.
+                    stop_for_end(app, &s).await;
                     fail(app, &s, "bounded agent retries exhausted").await;
                     app.agents.leases.lock().unwrap().remove(id);
                     return;

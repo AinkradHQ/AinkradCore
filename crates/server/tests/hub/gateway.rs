@@ -52,11 +52,20 @@ pub(super) async fn up(
     gateway: bool,
     budget: Option<i64>,
 ) -> (Core, Fake, String, accounts::Account) {
+    up_with(name, gateway, budget, agents::quick()).await
+}
+
+pub(super) async fn up_with(
+    name: &str,
+    gateway: bool,
+    budget: Option<i64>,
+    cfg: ainkrad_core_server::agents::AgentsConfig,
+) -> (Core, Fake, String, accounts::Account) {
     let hub = HubConfig {
         heartbeat: Duration::from_secs(30),
         ..quick()
     };
-    let core = Core::start_agents(name, hub, agents::quick()).await;
+    let core = Core::start_agents(name, hub, cfg).await;
     let dev = core.runner().await;
     let mut fake = Fake::plain(&core, &dev).await;
     fake.os = Some("linux".to_owned());
