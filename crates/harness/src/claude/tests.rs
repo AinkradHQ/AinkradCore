@@ -311,7 +311,32 @@ fn the_permission_mode_follows_the_spec() {
     assert_eq!(mode(&edits), "acceptEdits");
 }
 
-/// The recorded `rate_limit_event` (E15.2): both plan windows, their use and reset times.
+/// A tool's output that is itself a `rate_limit_event` line is a `tool_result` and nothing else:
+/// the decoder never reads a plan limit out of a result's content (only a top-level message of
+/// that type), so an agent's printed JSON is no snapshot here.
+#[test]
+fn a_rate_limit_event_inside_a_tool_result_is_no_rate_limit() {
+    let event = json!({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected",
+        "unifiedWindows": {"five_hour": {"utilization": 1.0, "resetsAt": 1792608000}}}});
+    for content in [
+        json!(event.to_string()),
+        json!([{"type": "text", "text": event.to_string()}]),
+    ] {
+        let message = json!({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": content}]}});
+        let events = Decoder::default().decode(&message);
+        assert!(
+            events
+                .iter()
+                .all(|e| !matches!(e, HarnessEvent::RateLimit { .. })),
+            "{events:?}"
+        );
+        assert!(matches!(events[..], [HarnessEvent::ToolResult { .. }]));
+    }
+}
+
+/// The recorded `rate_limit_event` (E15.2): both plan windows, their use and reset times. This
+/// proves the decoding of the CLI's own message, not where the message came from.
 #[test]
 fn rate_limit_events_carry_the_plan_windows() {
     let (events, _) = replay(APPROVE_INTERRUPT, Some(1));

@@ -77,6 +77,7 @@ const QUOTA: &[&str] = &[
     "quota",
     "credit balance",
     "billing",
+    "key limit exceeded",
 ];
 const RATE: &[&str] = &[
     "rate limit",
@@ -98,6 +99,13 @@ const AUTH: &[&str] = &[
     "token has expired",
     "please run /login",
     "permission_denied",
+];
+/// A 403 or a permission error that is the project's or API's setup, not the credentials.
+const SETUP: &[&str] = &[
+    "has not been used in project",
+    "has not been enabled",
+    "api is not enabled",
+    "service_disabled",
 ];
 const MODEL: &[&str] = &[
     "not found",
@@ -161,10 +169,14 @@ pub fn classify(code: &str, reason: &str) -> ErrorClass {
         (_, Some(429)) if says(QUOTA) => return ErrorClass::Quota,
         (_, Some(429)) => return ErrorClass::RateLimited,
         (_, Some(404)) => return ErrorClass::ModelUnavailable,
+        // A key's own spending limit is a quota, whatever status carries it.
+        (_, Some(401 | 403)) if says(QUOTA) => return ErrorClass::Quota,
         // A 403 about a model is the model's access, not the credentials.
         (_, Some(403)) if text.contains("model") && says(MODEL) => {
             return ErrorClass::ModelUnavailable;
         }
+        // A project or API that is not set up fails the same way for every account.
+        (_, Some(403)) if says(SETUP) => return ErrorClass::Permanent,
         (_, Some(401 | 403)) => return ErrorClass::Auth,
         (_, Some(500 | 502 | 503 | 504 | 529)) => return ErrorClass::Transient,
         _ => {}
@@ -175,7 +187,7 @@ pub fn classify(code: &str, reason: &str) -> ErrorClass {
         ErrorClass::RateLimited
     } else if text.contains("model") && says(MODEL) {
         ErrorClass::ModelUnavailable
-    } else if says(AUTH) {
+    } else if says(AUTH) && !says(SETUP) {
         ErrorClass::Auth
     } else if says(TRANSIENT) {
         ErrorClass::Transient
@@ -315,6 +327,36 @@ mod tests {
         for (code, reason, want) in cases {
             assert_eq!(classify(code, reason), want, "{code}: {reason}");
         }
+    }
+
+    #[test]
+    fn a_key_limit_is_quota_and_a_setup_error_is_not_auth() {
+        assert_eq!(
+            classify("APIError:403", "Key limit exceeded (monthly)"),
+            Quota
+        );
+        assert_eq!(
+            classify("APIError:401", "billing hard limit reached"),
+            Quota
+        );
+        for (code, reason) in [
+            (
+                "error",
+                "PERMISSION_DENIED: Gemini API has not been used in project 123 before",
+            ),
+            (
+                "error:403",
+                "PERMISSION_DENIED: the API has not been enabled for this project",
+            ),
+            (
+                "APIError:403",
+                "Cloud Resource Manager API has not been used in project x",
+            ),
+            ("error", "SERVICE_DISABLED: PERMISSION_DENIED"),
+        ] {
+            assert_eq!(classify(code, reason), Permanent, "{code}: {reason}");
+        }
+        assert_eq!(classify("error", "PERMISSION_DENIED: no access"), Auth);
     }
 
     /// Quota and rate words win over an auth word in the same text, and a 4xx number inside
