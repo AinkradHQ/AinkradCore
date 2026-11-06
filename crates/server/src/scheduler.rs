@@ -50,16 +50,35 @@ impl Clock for SystemClock {
     }
 }
 
-/// Whole unix seconds of a stored `YYYY-MM-DDTHH:MM:SS[.fff]Z` time; `None` for anything else.
+/// Whole unix seconds of `YYYY-MM-DDTHH:MM:SS[.fff]Z`, or of the same with a `+hh:mm` / `-hh:mm`
+/// offset (what a provider's header says); `None` for anything else.
 pub fn unix_secs(iso: &str) -> Option<i64> {
-    let b = iso.as_bytes();
-    let shape = b.len() >= 20
+    let (body, offset) = match iso.strip_suffix('Z') {
+        Some(body) => (body, 0),
+        None => {
+            let cut = iso.len().checked_sub(6)?;
+            let (body, zone) = (iso.get(..cut)?, iso.get(cut..)?.as_bytes());
+            let digit = |i: usize| zone[i].is_ascii_digit().then(|| i64::from(zone[i] - b'0'));
+            let sign = match zone[0] {
+                b'+' => 1,
+                b'-' => -1,
+                _ => return None,
+            };
+            let (h, m) = (digit(1)? * 10 + digit(2)?, digit(4)? * 10 + digit(5)?);
+            if zone[3] != b':' || h > 23 || m > 59 {
+                return None;
+            }
+            (body, sign * (h * 3600 + m * 60))
+        }
+    };
+    let b = body.as_bytes();
+    let shape = b.len() >= 19
         && b[4] == b'-'
         && b[7] == b'-'
         && b[10] == b'T'
         && b[13] == b':'
-        && b[16] == b':'
-        && iso.ends_with('Z');
+        && b[16] == b':';
+    let iso = body;
     let num = |r: std::ops::Range<usize>| iso.get(r)?.parse::<i64>().ok();
     let (y, mo, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
     let (h, mi, s) = (num(11..13)?, num(14..16)?, num(17..19)?);
@@ -74,7 +93,7 @@ pub fn unix_secs(iso: &str) -> Option<i64> {
     let doy = (153 * mp + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146_097 + doe - 719_468;
-    Some(days * 86_400 + h * 3600 + mi * 60 + s)
+    Some(days * 86_400 + h * 3600 + mi * 60 + s - offset)
 }
 
 /// Unix seconds as the stored format.
@@ -188,6 +207,28 @@ mod tests {
             assert_eq!(unix_secs(&iso8601(ms)), Some(ms / 1000), "{ms}");
         }
         assert_eq!(unix_secs("2026-10-21T10:00:00Z"), Some(1_792_576_800));
+        // An offset moves the instant, fraction or none.
+        for ok in [
+            "2026-10-21T12:00:00+02:00",
+            "2026-10-21T08:00:00-02:00",
+            "2026-10-21T12:00:00.500+02:00",
+            "2026-10-21T15:30:00+05:30",
+        ] {
+            assert_eq!(unix_secs(ok), Some(1_792_576_800), "{ok}");
+        }
+        for bad in [
+            "2026-10-21T10:00:00",
+            "2026-10-21T10:00:00+0200",
+            "2026-10-21T10:00:00+2:00",
+            "2026-10-21T10:00:00+25:00",
+            "2026-10-21T10:00:00+02:60",
+            "2026-10-21T10:00:00*02:00",
+            "2026-10-21T10:00:00+ab:cd",
+            "+02:00",
+            "é",
+        ] {
+            assert_eq!(unix_secs(bad), None, "{bad}");
+        }
         for bad in [
             "",
             "2026-10-21 10:00:00.000Z",
