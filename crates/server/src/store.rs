@@ -20,6 +20,7 @@ pub mod alloc;
 pub mod audit;
 mod backup;
 pub mod budgets;
+pub mod chains;
 pub mod costs;
 pub mod events;
 pub mod gateway;

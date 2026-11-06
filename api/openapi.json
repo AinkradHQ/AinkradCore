@@ -648,6 +648,12 @@
           "budget.recomputed",
           "budget.set",
           "budget.warning",
+          "chain.bound",
+          "chain.created",
+          "chain.default_set",
+          "chain.deleted",
+          "chain.unbound",
+          "chain.updated",
           "device.enrolled",
           "device.last_admin_refused",
           "device.renamed",
@@ -3630,7 +3636,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.42.0"
+    "version": "1.43.0"
   },
   "openapi": "3.1.0",
   "paths": {

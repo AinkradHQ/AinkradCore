@@ -186,7 +186,8 @@ pub async fn create(
 }
 
 /// Deletes a pool with its memberships and bindings (the agents fall back to the default). The
-/// default pool is not deleted: name another default first.
+/// default pool is not deleted: name another default first. A pool a fallback chain names is
+/// refused (`conflict`, naming the chain).
 pub async fn delete(
     pool: &SqlitePool,
     id: i64,
@@ -199,6 +200,20 @@ pub async fn delete(
         return refused(
             "conflict",
             "the default pool is not deleted; make another pool the default first",
+        );
+    }
+    // A chain that names the pool keeps it (the table says RESTRICT; this says which chain).
+    let chains: Vec<String> = sqlx::query_scalar(
+        "SELECT c.name FROM core_chains c WHERE c.id IN \
+         (SELECT chain_id FROM core_chain_entries WHERE pool_id = ?) ORDER BY c.name",
+    )
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
+    if !chains.is_empty() {
+        return refused(
+            "conflict",
+            &format!("the pool is in the fallback chain {}", chains.join(", ")),
         );
     }
     let bound: i64 =
@@ -446,31 +461,6 @@ pub async fn unbind(
     .await?;
     tx.commit().await?;
     Ok(())
-}
-
-/// The pool an agent draws `provider` accounts from: its own binding, else the provider's
-/// default, else none. `agent` is `None` for a session that names no agent.
-pub async fn resolve(
-    conn: &mut SqliteConnection,
-    agent: Option<&str>,
-    provider: &str,
-) -> Result<Option<i64>, sqlx::Error> {
-    if let Some(agent) = agent {
-        let bound: Option<i64> = sqlx::query_scalar(
-            "SELECT pool_id FROM core_pool_bindings WHERE agent = ? AND provider = ?",
-        )
-        .bind(agent)
-        .bind(provider)
-        .fetch_optional(&mut *conn)
-        .await?;
-        if bound.is_some() {
-            return Ok(bound);
-        }
-    }
-    sqlx::query_scalar("SELECT id FROM core_pools WHERE provider = ? AND is_default = 1")
-        .bind(provider)
-        .fetch_optional(&mut *conn)
-        .await
 }
 
 /// One agent's binding.

@@ -179,11 +179,6 @@ async fn nothing_binds_or_picks_a_subscription_account_for_an_agent() {
     let (code, why) = refusal(bound);
     assert_eq!(code, "bad_request");
     assert!(why.contains("never bound"), "{why}");
-    let mut conn = pool.acquire().await.unwrap();
-    assert_eq!(
-        pools::resolve(&mut conn, Some("agent-1"), "claude-sub")
-            .await
-            .unwrap(),
-        None
-    );
+    // The refused bind left nothing behind.
+    assert!(pools::list_bindings(pool).await.unwrap().is_empty());
 }
