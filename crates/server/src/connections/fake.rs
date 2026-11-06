@@ -50,6 +50,7 @@ pub const FAKE: Descriptor = Descriptor {
         help: "Only these projects.",
     }],
     token_shapes: &["fake_token"],
+    self_limited: &["fake.list_items"],
 };
 
 pub const OTHER: Descriptor = Descriptor {
@@ -72,6 +73,7 @@ pub const OTHER: Descriptor = Descriptor {
     hosts: &["api.other.test"],
     limits: &[],
     token_shapes: &[],
+    self_limited: &[],
 };
 
 pub struct Fake(pub &'static Descriptor);

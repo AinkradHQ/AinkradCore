@@ -60,6 +60,11 @@ pub struct Descriptor {
     /// credentials look like. Data only in C1; C2 reads it (with `secrets.connections`) to admit
     /// exactly one such token as a connection credential.
     pub token_shapes: &'static [&'static str],
+    /// Operations that enforce the resource limit themselves (a Jira search, a project list):
+    /// they may be asked with no resource under a limited grant, and the adapter is handed the
+    /// effective limits (`Resolved::limits`). Every other operation under a limited grant needs
+    /// a resource. Each must be one of the capabilities' operations.
+    pub self_limited: &'static [&'static str],
 }
 
 fn ident(s: &str, max: usize) -> bool {
@@ -105,6 +110,10 @@ impl Descriptor {
     pub fn read_only(&self) -> Vec<String> {
         let reads = self.capabilities.iter().filter(|c| !c.write);
         reads.map(|c| c.name.to_owned()).collect()
+    }
+
+    pub fn is_self_limited(&self, operation: &str) -> bool {
+        self.self_limited.contains(&operation)
     }
 
     pub fn allows_host(&self, host: &str) -> bool {
@@ -153,6 +162,15 @@ impl Descriptor {
         if let Some(h) = self.hosts.iter().find(|h| !host(h)) {
             return Some(format!(
                 "{kind}: host {h:?} is not a bare lowercase host name"
+            ));
+        }
+        if let Some(o) = self
+            .self_limited
+            .iter()
+            .find(|o| self.capability_of(o).is_none())
+        {
+            return Some(format!(
+                "{kind}: self-limited operation {o:?} is not an operation"
             ));
         }
         if let Some(t) = self.token_shapes.iter().find(|t| !ident(t, 40)) {

@@ -25,7 +25,7 @@ use ainkrad_core::audit::AuditActor;
 use serde_json::json;
 use sqlx::sqlite::SqlitePool;
 
-use super::grants::{Grant, value_matches};
+use super::grants::{Grant, Limits, value_matches};
 use super::{Connection, audit, health, refused, valid_ref, verdict};
 use crate::connections::adapter::Registry;
 use crate::store::secrets::Error;
@@ -44,6 +44,9 @@ pub struct Context<'a> {
     pub session: Option<&'a str>,
     /// The capability the operation needs (`Descriptor::capability_of`).
     pub capability: &'a str,
+    /// The operation itself, when known: one the descriptor marks `self_limited` may omit the
+    /// resource under a limited grant (the adapter enforces the limits it is handed).
+    pub operation: Option<&'a str>,
     /// The resource it touches: a limit key and a concrete value (`repos`, `owner/repo`).
     pub resource: Option<(&'a str, &'a str)>,
     /// The session's allowlist of capabilities; `None`: no further limit.
@@ -56,6 +59,10 @@ pub struct Resolved {
     /// `only` (the one candidate) or `default` (the kind's default won among several).
     pub via: &'static str,
     pub grant: i64,
+    /// The EFFECTIVE resource limits: the user or role grant's, intersected per key with the
+    /// agent grant's in an agent's session (an agent grant narrows an unlimited one). Empty:
+    /// unlimited. A key with an empty list allows nothing. C4 hands exactly these to the adapter.
+    pub limits: Limits,
 }
 
 /// Why one grant does not cover the use, weakest first.
@@ -66,7 +73,7 @@ enum Miss {
     ResourceDenied,
 }
 
-fn covers(g: &Grant, cx: &Context<'_>) -> Result<(), Miss> {
+fn covers(g: &Grant, cx: &Context<'_>, self_limited: bool) -> Result<(), Miss> {
     if !g.capabilities.iter().any(|c| c == cx.capability) {
         return Err(Miss::Capability);
     }
@@ -74,7 +81,10 @@ fn covers(g: &Grant, cx: &Context<'_>) -> Result<(), Miss> {
         return Ok(());
     }
     let Some((key, value)) = cx.resource else {
-        return Err(Miss::ResourceRequired);
+        return match self_limited {
+            true => Ok(()),
+            false => Err(Miss::ResourceRequired),
+        };
     };
     match g.limits.get(key) {
         Some(allowed) if value_matches(allowed, value) => Ok(()),
@@ -114,6 +124,17 @@ pub async fn resolve(
             format!("{kind} has no such capability"),
         );
     }
+    let d = adapter.descriptor();
+    if cx
+        .operation
+        .is_some_and(|op| d.capability_of(op).is_none_or(|c| c.name != cx.capability))
+    {
+        return refused(
+            "bad_request",
+            "the operation does not belong to the capability",
+        );
+    }
+    let sl = cx.operation.is_some_and(|op| d.is_self_limited(op));
     // A session with an agent must say what it may call.
     if cx.agent.is_some() && cx.allowlist.is_none() {
         return refused(
@@ -151,23 +172,23 @@ pub async fn resolve(
     let mut conn = pool.acquire().await?;
     // The weakest reason first; the strongest one seen is the refusal.
     let mut worst: Option<Why> = None;
-    let mut usable: Vec<(Connection, i64)> = Vec::new();
+    let mut usable: Vec<(Connection, i64, Limits)> = Vec::new();
     for c in all {
         let grants = super::grants::list_in(&mut conn, c.id).await?;
         let base: Vec<&Grant> = grants.iter().filter(|g| mine(g, cx)).collect();
-        let judged = judge(&base, cx).and_then(|g| match cx.agent {
+        let judged = judge(&base, cx, sl).and_then(|g| match cx.agent {
             // An agent only narrows: its own grant must cover the use too.
             Some(a) => {
                 let own: Vec<&Grant> = grants
                     .iter()
                     .filter(|g| g.grantee_kind == "agent" && g.grantee == a)
                     .collect();
-                judge(&own, cx).map(|_| g)
+                judge(&own, cx, sl).map(|ag| (g.id, effective(g, Some(ag))))
             }
-            None => Ok(g),
+            None => Ok((g.id, effective(g, None))),
         });
         match (judged, verdict::usable(&c)) {
-            (Ok(grant), Ok(())) => usable.push((c, grant)),
+            (Ok((grant, limits)), Ok(())) => usable.push((c, grant, limits)),
             (Ok(_), Err((code, msg))) => worst = worst.max(Some(Why::Health(code, msg))),
             (Err(miss), _) => worst = worst.max(Some(Why::Grant(miss))),
         }
@@ -182,11 +203,12 @@ pub async fn resolve(
             },
         }),
         1 => {
-            let (connection, grant) = usable.remove(0);
+            let (connection, grant, limits) = usable.remove(0);
             Ok(Resolved {
                 connection,
                 via: "only",
                 grant,
+                limits,
             })
         }
         _ => {
@@ -198,17 +220,18 @@ pub async fn resolve(
             .bind(kind)
             .fetch_optional(pool)
             .await?;
-            match usable.iter().position(|(c, _)| Some(c.id) == default) {
+            match usable.iter().position(|(c, ..)| Some(c.id) == default) {
                 Some(i) => {
-                    let (connection, grant) = usable.swap_remove(i);
+                    let (connection, grant, limits) = usable.swap_remove(i);
                     Ok(Resolved {
                         connection,
                         via: "default",
                         grant,
+                        limits,
                     })
                 }
                 None => {
-                    let names: Vec<&str> = usable.iter().map(|(c, _)| c.name.as_str()).collect();
+                    let names: Vec<&str> = usable.iter().map(|(c, ..)| c.name.as_str()).collect();
                     refused(
                         "ambiguous",
                         format!(
@@ -239,15 +262,47 @@ impl Why {
 }
 
 /// The first grant of `list` covering the use, or the weakest-to-strongest miss (`None`: no grant).
-fn judge(list: &[&Grant], cx: &Context<'_>) -> Result<i64, Option<Miss>> {
+fn judge<'g>(
+    list: &[&'g Grant],
+    cx: &Context<'_>,
+    self_limited: bool,
+) -> Result<&'g Grant, Option<Miss>> {
     let mut worst = None;
     for g in list {
-        match covers(g, cx) {
-            Ok(()) => return Ok(g.id),
+        match covers(g, cx, self_limited) {
+            Ok(()) => return Ok(g),
             Err(miss) => worst = worst.max(Some(miss)),
         }
     }
     Err(worst)
+}
+
+/// `base`'s limits, intersected per key with the agent grant's: a value stays if the other side
+/// covers it (exactly, or under its `prefix/*`). A key only one side limits is kept as it is.
+fn effective(base: &Grant, agent: Option<&Grant>) -> Limits {
+    let Some(a) = agent else {
+        return base.limits.clone();
+    };
+    let mut out = Limits::new();
+    for key in base.limits.keys().chain(a.limits.keys()) {
+        let values = match (base.limits.get(key), a.limits.get(key)) {
+            (Some(b), Some(x)) => {
+                let mut v: Vec<String> = b
+                    .iter()
+                    .filter(|v| value_matches(x, v))
+                    .chain(x.iter().filter(|v| value_matches(b, v)))
+                    .cloned()
+                    .collect();
+                v.sort();
+                v.dedup();
+                v
+            }
+            (Some(v), None) | (None, Some(v)) => v.clone(),
+            (None, None) => continue,
+        };
+        out.insert(key.clone(), values);
+    }
+    out
 }
 
 fn denial(miss: Option<Miss>) -> Error {

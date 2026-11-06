@@ -17,6 +17,7 @@ use crate::scheduler::{iso_of_unix, unix_secs};
 use crate::store::connect;
 
 mod crud;
+mod effective_limits;
 mod grant_cases;
 mod health_cases;
 mod leak;
@@ -148,6 +149,7 @@ pub(super) fn cx(cap: &str) -> Context<'_> {
         agent: None,
         session: None,
         capability: cap,
+        operation: None,
         resource: None,
         allowlist: None,
     }
