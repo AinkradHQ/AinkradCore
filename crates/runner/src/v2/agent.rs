@@ -397,6 +397,8 @@ impl AgentDriver {
                 ),
             ));
         }
+        sub::early(&req, self.sandbox.as_ref())
+            .map_err(|why| refuse(ErrorCode::InvalidArgs, why))?;
         let slots = &self.config.slots;
         if !slots.is_empty() && !slots.contains_key(&req.harness) {
             return Err(refuse(
@@ -685,9 +687,7 @@ impl AgentDriver {
         }
         // The runner applies the broker's rule again, whatever the Core believed: an account
         // secret only in its harness's own variable, and no variable that redirects traffic.
-        if let Some(why) = sub::problem(req, self.sandbox.as_ref(), &granted, &modes) {
-            return Err(why.to_owned());
-        }
+        sub::problem(req, self.sandbox.as_ref(), &granted, &modes)?;
         if let Some(why) = ainkrad_proto::v2::account_var_problem(
             &req.harness,
             granted.iter().map(|(n, v)| (n.as_str(), v.as_str())),

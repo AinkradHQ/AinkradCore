@@ -27,7 +27,13 @@ impl Sandbox for Proven {
 }
 
 fn redeem() -> Redeem {
-    Arc::new(|lease: String| {
+    counted(Arc::default())
+}
+
+/// A redeemer that counts how many leases it was asked to redeem.
+fn counted(calls: Arc<std::sync::atomic::AtomicUsize>) -> Redeem {
+    Arc::new(move |lease: String| {
+        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Box::pin(async move {
             let (name, delivery) = match lease.as_str() {
                 "l_sub" => ("acct.claude-sub.7", "env"),
@@ -145,13 +151,14 @@ async fn the_runner_runs_a_subscription_token_only_where_every_rule_holds() {
     ];
     for (n, (harness, grants, sandboxed, filter, runs, why)) in cases.into_iter().enumerate() {
         let (_root, config) = dirs(&format!("sub-{n}"));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::default());
         let d = Arc::new(
             AgentDriver::new(
                 config,
                 script("echo \"tok=${CLAUDE_CODE_OAUTH_TOKEN:-none}\""),
             )
             .unwrap()
-            .with_redeem(redeem())
+            .with_redeem(counted(calls.clone()))
             .with_sandbox(Arc::new(Proven(filter))),
         );
         let mut req = start("as_sub", harness);
@@ -159,7 +166,18 @@ async fn the_runner_runs_a_subscription_token_only_where_every_rule_holds() {
         if sandboxed {
             req.policy.min_isolation = Some(Isolation::Process);
         }
-        d.start(req).unwrap();
+        // A refusal the runner can make from the request alone comes before any lease is redeemed:
+        // the single-use lease stays valid and the token never reaches the runner.
+        let started = d.start(req);
+        if let Err(e) = &started {
+            assert!(!runs && e.message.contains(why), "case {n}: {}", e.message);
+            assert_eq!(
+                calls.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "case {n}: redeemed"
+            );
+            continue;
+        }
         let (entries, ev) = drain(&d, "as_sub").await;
         let text = serde_json::to_string(&entries).unwrap();
         let line = |t: &str| text.contains(&format!(r#""text":"{t}""#));
