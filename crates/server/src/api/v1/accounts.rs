@@ -223,15 +223,14 @@ pub async fn set_state(
     Path(id): Path<String>,
     Json(b): Json<SetState>,
 ) -> ApiResult<ProviderAccount> {
-    let a = acc::set_state(
-        &app.pool,
+    let a = crate::agents::subscription::set_state(
+        &app,
         num(&id, "account")?,
         &b.state,
         b.reason.as_deref(),
         b.until.as_deref(),
         &me.device.id,
         BY,
-        &app.clock.now(),
     )
     .await
     .map_err(err)?;
@@ -345,7 +344,7 @@ pub async fn delete(
     Extension(me): Extension<Caller>,
     Path(id): Path<String>,
 ) -> ApiResult<AccountsDeleted> {
-    acc::delete(&app.pool, num(&id, "account")?, &me.device.id, BY)
+    crate::agents::subscription::delete(&app, num(&id, "account")?, &me.device.id, BY)
         .await
         .map_err(err)?;
     Ok(Json(AccountsDeleted { deleted: true }))

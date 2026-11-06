@@ -212,10 +212,12 @@ pub(super) async fn grant(app: &App, s: &Session) -> Result<Option<Issued>, Refu
 /// session against its account and pools only, so a module's agent, company and issue budgets
 /// would not bind it. Until a module's subjects are carried to the gateway's rows, it is refused.
 pub(super) fn module_refusal(secrets: &[store::SessionSecret]) -> Option<&'static str> {
-    gw::gateway_secret(secrets).map(|_| {
-        "a module's session may not use an API-key account yet: its agent, company and issue \
-         budgets would not bind the gateway's spend"
-    })
+    gw::gateway_secret(secrets)
+        .map(|_| {
+            "a module's session may not use an API-key account yet: its agent, company and issue \
+             budgets would not bind the gateway's spend"
+        })
+        .or_else(|| super::subscription::module_refusal(secrets))
 }
 
 /// What the Core does about a gateway session after each answer it stored: a stop a budget ordered,

@@ -31,15 +31,15 @@ fn wire_named(name: &str) -> Option<Wire> {
     }
 }
 
-/// Why a subscription account is refused: its env-token delivery is not built yet.
-const SUBSCRIPTION_NOT_YET: &str =
-    "a subscription account's token is not delivered to a session yet (it lands with L5, KAN-434)";
+/// Why the gateway refuses a subscription account: its token is a leased env variable (L5, KAN-434).
+const SUBSCRIPTION_NOT_GATEWAY: &str =
+    "a subscription account's token is a leased environment variable, never served by the gateway";
 
 /// The route of an account of `def` whose frozen base URL is `base_url`. A provider that is not
 /// delivered through the gateway, has no wire, or (a user definition) declares no key shape has none.
 pub(super) fn of(def: &Definition, base_url: &str) -> Result<Route, Refusal> {
     if crate::store::account_keys::is_subscription(def) {
-        return Err(refuse(SUBSCRIPTION_NOT_YET));
+        return Err(refuse(SUBSCRIPTION_NOT_GATEWAY));
     }
     if !def.delivery.iter().any(|m| m == "gateway") {
         return Err(refuse("the provider is not delivered through the gateway"));
@@ -76,8 +76,9 @@ fn builtin(provider: &str) -> bool {
 ///   variable, nothing that redirects traffic). An API-key account of a user-defined provider is
 ///   served by the gateway and delivers no variable, so it is not judged by a variable list that
 ///   knows three providers; the launch checks its definition's harness against the session's.
-/// - **No subscription account** (`acct.claude-sub.<id>` parses as an account name, but it is not an
-///   API key and nothing delivers it yet): refused until L5 (KAN-434).
+/// - **A subscription account** (`acct.claude-sub.<id>`, not an API key) is the opposite: env only,
+///   judged by `subscription_problem` (claude, `CLAUDE_CODE_OAUTH_TOKEN`, one account, no other
+///   provider account). Its delivery is `agents::subscription`.
 /// - **Never in `secrets`** (design §4.3, §10 Q4): a name under `acct.` that is not the account
 ///   model's own `acct.<provider>.<id>` would be leased into the sandbox as an environment variable,
 ///   with the key in it. It is refused, whatever the label.
@@ -85,12 +86,14 @@ pub(in crate::agents) fn secrets_problem(
     harness: &str,
     secrets: &[crate::store::agents::SessionSecret],
 ) -> Option<&'static str> {
-    let subscription = secrets.iter().any(|s| {
-        crate::store::gateway::account_secret(&s.name)
-            .is_some_and(|(p, _)| crate::store::account_keys::subscription_provider(p))
-    });
-    if subscription {
-        return Some(SUBSCRIPTION_NOT_YET);
+    if let Some(why) = ainkrad_proto::v2::subscription_problem(
+        harness,
+        false,
+        secrets
+            .iter()
+            .map(|s| (s.name.as_str(), s.var.as_str(), None)),
+    ) {
+        return Some(why);
     }
     let served_by_gateway =
         |name: &str| crate::store::gateway::account_secret(name).is_some_and(|(p, _)| !builtin(p));
@@ -205,10 +208,37 @@ mod tests {
         ] {
             assert!(secrets_problem("codex", &[s(name)]).is_some(), "{name}");
         }
-        assert_eq!(secrets_problem("codex", &[s("git.token")]), None);
-        // A subscription account's secret is no API key and has no delivery yet: refused.
-        let why = secrets_problem("claude", &[s("acct.claude-sub.7")]);
-        assert!(why.is_some_and(|w| w.contains("L5")));
+        assert_eq!(
+            secrets_problem(
+                "codex",
+                &[SessionSecret {
+                    name: "git.token".to_owned(),
+                    var: "GH_TOKEN".to_owned()
+                }]
+            ),
+            None
+        );
+        // An ordinary secret may not take the harness's authentication variable.
+        assert!(secrets_problem("codex", &[s("git.token")]).is_some());
+        // A subscription account's secret is no API key: env only, claude only, its own variable.
+        let sub = |var: &str| SessionSecret {
+            name: "acct.claude-sub.7".to_owned(),
+            var: var.to_owned(),
+        };
+        assert_eq!(
+            secrets_problem("claude", &[sub("CLAUDE_CODE_OAUTH_TOKEN")]),
+            None
+        );
+        for (harness, var) in [
+            ("claude", "ANTHROPIC_API_KEY"),
+            ("codex", "CLAUDE_CODE_OAUTH_TOKEN"),
+            ("agy", "CLAUDE_CODE_OAUTH_TOKEN"),
+        ] {
+            assert!(
+                secrets_problem(harness, &[sub(var)]).is_some(),
+                "{harness} {var}"
+            );
+        }
         // A sibling secret may not steer traffic beside a user provider's account either.
         for var in ["OPENAI_BASE_URL", "HTTPS_PROXY", "SSL_CERT_FILE"] {
             let both = [

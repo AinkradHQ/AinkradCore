@@ -322,6 +322,9 @@ pub async fn set_state(
                "until": until, "by_device": by_device}),
     )
     .await?;
+    if state != "active" && super::account_keys::subscription_provider(&old.provider) {
+        super::account_keys::revoke_leases_in(&mut tx, &old.secret_name).await?;
+    }
     let a = find(&mut tx, id).await?;
     tx.commit().await?;
     Ok(a)

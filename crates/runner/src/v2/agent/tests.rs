@@ -19,6 +19,8 @@ use zeroize::Zeroizing;
 use super::*;
 use crate::{Executor, Job, Report};
 
+mod sub;
+
 /// Throwaway values: at least 8 bytes (the redactor's floor), shaped like no real key.
 const ENV_VALUE: &str = "throwaway-env-value-41c7";
 const FILE_VALUE: &str = "throwaway-file-value-9d2e";
@@ -1310,9 +1312,15 @@ async fn an_account_secret_marks_its_session_and_no_other_secret_does() {
                 .with_redeem(redeem.clone()),
         );
         let mut req = start("as_acct", "claude");
+        // An ordinary secret may not take the harness's authentication variable.
+        let var = if lease == "l_acct" {
+            "ANTHROPIC_API_KEY"
+        } else {
+            "GH_TOKEN"
+        };
         req.secrets = vec![SecretGrant {
             lease: lease.to_owned(),
-            var: "ANTHROPIC_API_KEY".to_owned(),
+            var: var.to_owned(),
         }];
         d.start(req).unwrap();
         let (entries, _) = drain(&d, "as_acct").await;

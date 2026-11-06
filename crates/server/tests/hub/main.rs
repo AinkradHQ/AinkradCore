@@ -21,6 +21,9 @@ mod resume;
 mod routing;
 mod runner;
 mod sandbox;
+mod subscription;
+mod subscription_gone;
+mod subscription_rules;
 mod terminals;
 mod wake;
 

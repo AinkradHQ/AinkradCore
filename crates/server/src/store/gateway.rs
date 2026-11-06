@@ -69,7 +69,9 @@ pub fn account_secret(name: &str) -> Option<(&str, i64)> {
 
 /// The secret of `secrets` that a gateway serves, if any.
 pub fn gateway_secret(secrets: &[SessionSecret]) -> Option<&SessionSecret> {
-    secrets.iter().find(|s| account_secret(&s.name).is_some())
+    secrets
+        .iter()
+        .find(|s| super::account_keys::gateway_served(&s.name))
 }
 
 /// What the session's own `model` (the cheapest priced one when it names none) needs for one turn to be admitted: `MIN_CONTEXT_TOKENS` of input

@@ -45,6 +45,7 @@ use crate::{Answer, Control, Executor, Job, Report};
 pub mod secrets;
 use secrets::{Delivered, Redeem};
 mod gw;
+mod sub;
 
 /// The variable the Core delivers a run's token under (`Module::credentials` of Citadel).
 pub const RUN_TOKEN_VAR: &str = ainkrad_proto::v2::RUN_TOKEN_VAR;
@@ -396,6 +397,8 @@ impl AgentDriver {
                 ),
             ));
         }
+        sub::early(&req, self.sandbox.as_ref())
+            .map_err(|why| refuse(ErrorCode::InvalidArgs, why))?;
         let slots = &self.config.slots;
         if !slots.is_empty() && !slots.contains_key(&req.harness) {
             return Err(refuse(
@@ -664,6 +667,7 @@ impl AgentDriver {
         let mut run_token = String::new();
         // Each redeemed secret's name beside the variable it was granted under.
         let mut granted: Vec<(String, String)> = Vec::new();
+        let mut modes: Vec<String> = Vec::new();
         if !req.secrets.is_empty() {
             let redeem = self
                 .redeem
@@ -673,6 +677,7 @@ impl AgentDriver {
                 let secret = redeem(grant.lease.clone()).await?;
                 redactor.known(&secret.name, &secret.value);
                 granted.push((secret.name.clone(), grant.var.clone()));
+                modes.push(secret.delivery.clone());
                 if grant.var == RUN_TOKEN_VAR {
                     run_token = secret.value.to_string();
                     continue;
@@ -682,6 +687,7 @@ impl AgentDriver {
         }
         // The runner applies the broker's rule again, whatever the Core believed: an account
         // secret only in its harness's own variable, and no variable that redirects traffic.
+        sub::problem(req, self.sandbox.as_ref(), &granted, &modes)?;
         if let Some(why) = ainkrad_proto::v2::account_var_problem(
             &req.harness,
             granted.iter().map(|(n, v)| (n.as_str(), v.as_str())),
