@@ -9,6 +9,7 @@ use super::{Ask, Entry, Picked};
 use crate::store::agents::SessionSecret;
 use crate::store::events;
 use crate::store::gateway::account_secret;
+use crate::store::secrets::ACCOUNT_PREFIX;
 
 /// How many accounts a launch may refuse after the pick before the session ends (design §5).
 pub const MAX_REPICKS: usize = 2;
@@ -139,7 +140,7 @@ pub(super) async fn assign_in(
     p: &Picked,
 ) -> Result<(), sqlx::Error> {
     let mut secrets = secrets_of(conn, session).await?;
-    secrets.retain(|s| account_secret(&s.name).is_none());
+    secrets.retain(|s| !s.name.starts_with(ACCOUNT_PREFIX));
     secrets.push(p.secret.clone());
     sqlx::query(
         "UPDATE core_agent_sessions SET account_id = ?, gateway_account_id = ?, secrets = ?, \
@@ -194,13 +195,22 @@ pub async fn retreat_in(
     let Some(v) = view_in(conn, session).await? else {
         return Ok(None);
     };
-    let Some(account) = v.account.filter(|_| v.tried.len() < MAX_REPICKS) else {
+    // One session, one account, for its whole life: only a row that never reached its runner may
+    // leave the account the pick gave it (a session that ran, or is woken, ends instead).
+    let fresh: bool = sqlx::query_scalar(
+        "SELECT count(*) > 0 FROM core_agent_sessions WHERE id = ? AND state = 'starting' \
+         AND resumes = 0 AND last_seq = 0 AND harness_session IS NULL",
+    )
+    .bind(session)
+    .fetch_one(&mut *conn)
+    .await?;
+    let Some(account) = v.account.filter(|_| fresh && v.tried.len() < MAX_REPICKS) else {
         return Ok(None);
     };
     let mut tried = v.tried;
     tried.push(account);
     let mut secrets = secrets_of(conn, session).await?;
-    secrets.retain(|s| account_secret(&s.name).is_none());
+    secrets.retain(|s| !s.name.starts_with(ACCOUNT_PREFIX));
     crate::store::budgets::guard::release_in(conn, session).await?;
     sqlx::query(
         "UPDATE core_agent_sessions SET account_id = NULL, gateway_account_id = NULL, \

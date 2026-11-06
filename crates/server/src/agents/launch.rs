@@ -215,8 +215,10 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
             }
             Err(e) => {
                 // The account the pick chose was refused after a race (disabled, cooled, out of
-                // budget): another is picked, at most twice. Not a failover hop.
-                if matches!(&e, Refusal::Runner(r) if r.code == ErrorCode::InvalidArgs)
+                // budget): another is picked, at most twice. Only before the session has ever run (a
+                // resume keeps its account for good: one session, one account), and not a failover hop.
+                if !resume
+                    && matches!(&e, Refusal::Runner(r) if r.code == ErrorCode::InvalidArgs)
                     && allocate::repick(app, s).await?
                 {
                     return Ok(());
