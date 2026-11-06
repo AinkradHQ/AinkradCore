@@ -13,7 +13,7 @@ use super::health::at;
 use super::*;
 use crate::ops::secretbox::SecretBox;
 use crate::store::agents::{self as store, NewSession, SessionSecret};
-use crate::store::alloc::{self, Ask, Entry, LOST_AFTER_SECS, Outcome, Picked, WAIT_MAX_SECS};
+use crate::store::alloc::{self, Ask, Entry, Outcome, Picked, WAIT_MAX_SECS};
 use crate::store::health::{self, Signal};
 use crate::store::pools as pl;
 use crate::store::{accounts as acc, begin_write, settings};
@@ -79,7 +79,6 @@ pub(super) async fn pick_owned(
         min_turn: &min,
         serves: &serves,
         wait_max_secs: WAIT_MAX_SECS,
-        lost_after_secs: LOST_AFTER_SECS,
     };
     let mut tx = begin_write(&pool).await.unwrap();
     let o = alloc::pick_in(&mut tx, &ask, &now).await.unwrap();
@@ -150,6 +149,16 @@ impl W {
 
     /// A `starting` session of the chain, with `secrets` of its own.
     pub async fn session(&self, chain: &[Entry], secrets: &[SessionSecret]) -> store::Session {
+        self.session_by(chain, secrets, &self.fx.dev.id).await
+    }
+
+    /// The same, created by the device `by` (its user is the session's).
+    pub async fn session_by(
+        &self,
+        chain: &[Entry],
+        secrets: &[SessionSecret],
+        by: &str,
+    ) -> store::Session {
         let policy = json!({"mode": "ask", "min_isolation": "process"});
         let new = NewSession {
             runner: &self.vm.id,
@@ -159,7 +168,7 @@ impl W {
             workspace: None,
             policy: &policy,
             secrets,
-            created_by: &self.fx.dev.id,
+            created_by: by,
         };
         let s = store::create(&self.fx.app.pool, &new, BY, NOW)
             .await
@@ -285,18 +294,24 @@ async fn fifty_concurrent_picks_never_take_more_than_the_cap() {
             args,
         )));
     }
-    let mut picked = 0;
+    let (mut picked, mut waiting) = (0, 0);
     for t in tasks {
-        picked += i32::from(matches!(t.await.unwrap(), Outcome::Picked(_)));
+        match t.await.unwrap() {
+            Outcome::Picked(_) => picked += 1,
+            Outcome::Wait { .. } => waiting += 1,
+            other => panic!("{other:?}"),
+        }
     }
     assert_eq!(picked, 3);
+    // The rest wait for a slot (a full cap frees when a session ends), none is given a fourth.
+    assert_eq!(waiting, 47);
     let live =
         "SELECT count(*) FROM core_agent_sessions WHERE account_id = ? AND state = 'starting'";
     assert_eq!(w.count(live, &a.id.to_string()).await, 3);
 }
 
 #[tokio::test]
-async fn a_cap_of_zero_is_off_and_an_interrupted_session_holds_its_slot_until_lost_after() {
+async fn a_cap_of_zero_is_off_and_an_interrupted_session_holds_its_slot_at_any_age() {
     let w = w().await;
     let (a, b) = (w.acct("a").await, w.acct("b").await);
     acc::set_cap(&w.fx.app.pool, b.id, 1, &w.fx.dev.id, BY, NOW)
@@ -317,13 +332,22 @@ async fn a_cap_of_zero_is_off_and_an_interrupted_session_holds_its_slot_until_lo
         .await
         .unwrap();
     let next = w.session(&one, &[]).await;
-    let soon = at(LOST_AFTER_SECS - 1);
-    assert!(matches!(
-        w.pick(&next.id, &one, &soon).await,
-        Outcome::Exhausted(_)
-    ));
-    let late = at(LOST_AFTER_SECS + 1);
-    assert_eq!(took(w.pick(&next.id, &one, &late).await).account, b.id);
+    // An interrupted session can still resume on its account: it holds its slot at any age (the
+    // supervisor ends it as lost when it gives up, and a Core restart restarts that timer).
+    // A full cap waits for a slot, but only wait_max in all from the first wait.
+    for secs in [100, 500] {
+        let got = w.pick(&next.id, &one, &at(secs)).await;
+        assert!(matches!(got, Outcome::Wait { .. }), "{secs}: {got:?}");
+    }
+    for secs in [1000, 3601, 86_400] {
+        let got = w.pick(&next.id, &one, &at(secs)).await;
+        assert!(matches!(got, Outcome::Exhausted(_)), "{secs}: {got:?}");
+    }
+    w.end(&held.id, &at(90_000)).await;
+    assert_eq!(
+        took(w.pick(&next.id, &one, &at(90_001)).await).account,
+        b.id
+    );
 }
 
 #[tokio::test]

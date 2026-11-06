@@ -11,7 +11,7 @@ use super::allocator::{P, W, took, w};
 use super::health::at;
 use crate::store::accounts as acc;
 use crate::store::agents as store;
-use crate::store::alloc::{Entry, LOST_AFTER_SECS, Outcome};
+use crate::store::alloc::{Entry, Outcome};
 
 const BY: ainkrad_core::audit::AuditActor = super::super::BY;
 
@@ -41,12 +41,20 @@ struct Sim {
     sessions: Vec<(String, i64)>,
     t: i64,
     picked: u32,
+    /// A device of the second user: its sessions are that user's.
+    other: String,
 }
 
 impl Sim {
     async fn new(seed: u64) -> Self {
         let w = w().await;
         sqlx::query("INSERT INTO users (id, name) VALUES (2, 'second')")
+            .execute(&w.fx.app.pool)
+            .await
+            .unwrap();
+        let other = super::secrets::runner(&w.fx, "second").await.id;
+        sqlx::query("UPDATE core_devices SET user_id = 2 WHERE id = ?")
+            .bind(&other)
             .execute(&w.fx.app.pool)
             .await
             .unwrap();
@@ -86,20 +94,16 @@ impl Sim {
             sessions: Vec::new(),
             t: 0,
             picked: 0,
+            other,
         }
     }
 
     async fn live(&self, account: i64) -> i64 {
-        let floor = crate::scheduler::iso_of_unix(
-            crate::scheduler::unix_secs(&at(self.t)).unwrap() - LOST_AFTER_SECS,
-        );
         sqlx::query_scalar(
-            "SELECT count(*) FROM core_agent_sessions WHERE account_id = ? AND (state IN \
-             ('starting', 'running') OR (state = 'interrupted' AND julianday(updated_at) > \
-             julianday(?)))",
+            "SELECT count(*) FROM core_agent_sessions WHERE account_id = ? AND state IN \
+             ('starting', 'running', 'interrupted')",
         )
         .bind(account)
-        .bind(floor)
         .fetch_one(&self.w.fx.app.pool)
         .await
         .unwrap()
@@ -151,13 +155,8 @@ impl Sim {
         let used: Vec<i64> = (0..self.rng.below(3))
             .map(|_| self.accounts[self.rng.below(self.accounts.len())])
             .collect();
-        let s = self.w.session(&chain, &[]).await;
-        sqlx::query("UPDATE core_agent_sessions SET user_id = ? WHERE id = ?")
-            .bind(user as i64)
-            .bind(&s.id)
-            .execute(&self.w.fx.app.pool)
-            .await
-            .unwrap();
+        let by = [&self.w.fx.dev.id, &self.other][user - 1].clone();
+        let s = self.w.session_by(&chain, &[], &by).await;
         let ask = P {
             user: user as i64,
             used: &used,

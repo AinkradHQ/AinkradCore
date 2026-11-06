@@ -295,7 +295,6 @@ async fn a_pool_or_account_without_room_for_one_turn_is_skipped_for_the_next_ent
         min_turn: &min,
         serves: &serves,
         wait_max_secs: WAIT_MAX_SECS,
-        lost_after_secs: crate::store::alloc::LOST_AFTER_SECS,
     };
     let mut tx = begin_write(pool).await.unwrap();
     let got = crate::store::alloc::pick_in(&mut tx, &ask, NOW)
@@ -360,7 +359,6 @@ async fn skip_pools_and_the_runner_placement_leave_an_entry_out_with_a_reason() 
         min_turn: &min,
         serves: &serves,
         wait_max_secs: WAIT_MAX_SECS,
-        lost_after_secs: crate::store::alloc::LOST_AFTER_SECS,
     };
     let mut tx = begin_write(&w.fx.app.pool).await.unwrap();
     let got = crate::store::alloc::pick_in(&mut tx, &ask, NOW)
@@ -411,4 +409,76 @@ async fn a_subscription_session_is_metered_to_the_account_the_pick_wrote() {
             .await
             .unwrap();
     assert_eq!(account, plan.id);
+}
+
+#[tokio::test]
+async fn a_subscription_obeys_its_token_budgets_and_not_its_dollar_budgets() {
+    let w = w().await;
+    let (by, pool) = (&w.fx.dev.id, &w.fx.app.pool);
+    let (tokens, dollars) = (w.sub("tokens").await, w.sub("dollars").await);
+    let t = [w.pool("pt", "claude-sub", &[tokens.id]).await];
+    let d = [w.pool("pd", "claude-sub", &[dollars.id]).await];
+    let subject = tokens.id.to_string();
+    budgets::set(pool, &budget("account", &subject, 1000, None), by, BY, NOW)
+        .await
+        .unwrap();
+    let subject = dollars.id.to_string();
+    budgets::set(pool, &budget("account", &subject, 0, Some(10)), by, BY, NOW)
+        .await
+        .unwrap();
+    let s = w.session(&t, &[]).await;
+    let r = exhausted(w.pick(&s.id, &t, NOW).await);
+    assert!(r[0].1.contains("out of budget"), "{r:?}");
+    let s = w.session(&d, &[]).await;
+    assert_eq!(took(w.pick(&s.id, &d, NOW).await).account, dollars.id);
+}
+
+#[test]
+fn the_allocator_and_the_grant_price_a_turn_from_one_book() {
+    use crate::store::gateway::min_turn_usd;
+    use crate::store::prices::{self, Price};
+    use crate::store::providers::{Definition, Model};
+    let def = Definition {
+        id: "openrouter".to_owned(),
+        name: "OpenRouter".to_owned(),
+        harness: "codex".to_owned(),
+        auth_var: "OPENAI_API_KEY".to_owned(),
+        base_url: "https://openrouter.ai/api/v1".to_owned(),
+        usage_parser: "openai".to_owned(),
+        delivery: vec!["gateway".to_owned()],
+        login_methods: vec!["paste".to_owned()],
+        models: vec![Model {
+            id: "m1".to_owned(),
+            input_per_mtok_micro: 3_000_000,
+            output_per_mtok_micro: 15_000_000,
+        }],
+        priced_at: Some("2026-11-01T00:00:00Z".to_owned()),
+        wire: "openai-responses".to_owned(),
+        key_prefix: Some("sk-or-".to_owned()),
+        test_path: None,
+        builtin: false,
+        version: 1,
+    };
+    // No book price: the definition's own model is priced (the grant would admit it).
+    let book = prices::book_of(vec![], "openrouter", &def);
+    assert_eq!(
+        min_turn_usd(&prices::model_prices(&book), Some("m1")),
+        2_520_000
+    );
+    // A book price wins over the definition's.
+    let cheap = Price {
+        provider: "openrouter".to_owned(),
+        model: "m1".to_owned(),
+        version: 1,
+        input_per_mtok_micro: 1_000_000,
+        output_per_mtok_micro: 5_000_000,
+        cache_per_mtok_micro: 0,
+        priced_at: "2026-11-02T00:00:00Z".to_owned(),
+        created_at: String::new(),
+    };
+    let book = prices::book_of(vec![cheap], "openrouter", &def);
+    assert_eq!(
+        min_turn_usd(&prices::model_prices(&book), Some("m1")),
+        840_000
+    );
 }

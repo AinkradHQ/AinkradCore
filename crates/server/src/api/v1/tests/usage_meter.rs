@@ -427,3 +427,26 @@ async fn a_module_session_and_a_session_with_no_account_are_untouched() {
     feed(&m.fx, &owned.id, tokens(100, 1, 1)).await;
     assert!(meter(&m.fx, &owned.id).await.is_empty());
 }
+
+#[tokio::test]
+async fn an_account_deleted_under_a_live_session_still_gets_its_last_readings() {
+    let m = m().await;
+    let id = &m.session.id;
+    feed(&m.fx, id, tokens(100, 20, 5)).await;
+    let by = &m.fx.dev.id;
+    acc::delete(&m.fx.app.pool, m.account.id, by, BY)
+        .await
+        .unwrap();
+    // The runner's final reading arrives after the delete: the row's account id and the secret's
+    // name still say whose it is (ids are never reused).
+    feed(&m.fx, id, tokens(150, 30, 5)).await;
+    let rows: Vec<(String, Option<i64>)> = sqlx::query_as(
+        "SELECT idempotency_key, account_id FROM core_cost_events WHERE session = ? ORDER BY id",
+    )
+    .bind(id)
+    .fetch_all(&m.fx.app.pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert!(rows.iter().all(|r| r.1 == Some(m.account.id)));
+}
