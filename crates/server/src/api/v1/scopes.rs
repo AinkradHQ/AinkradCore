@@ -10,6 +10,7 @@
 //! - Agent sessions (E2-08): `agent`; deciding a tool call `approve`.
 //! - Secrets (E2-07): managing them and granting a lease is `admin` (and destructive); the one
 //!   route a `runner` device may call is redeeming a lease granted to it.
+//! - Fallback chains and their bindings (S7): every route is `admin`; every write is destructive.
 //! - Accounts, pools, bindings and provider definitions (KAN-432): reading is `read`; every write is
 //!   `admin` and destructive.
 //! - The cost ledger, prices and account usage (KAN-449): the price list is `read`; the cost ledger and the
@@ -98,6 +99,16 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/bindings", "read"),
     ("PUT", "/api/v1/bindings", "admin"),
     ("DELETE", "/api/v1/bindings/{agent}/{provider}", "admin"),
+    // Fallback chains (S7): reading says which accounts a run may walk, so it is `admin` too.
+    ("GET", "/api/v1/chains", "admin"),
+    ("POST", "/api/v1/chains", "admin"),
+    ("GET", "/api/v1/chains/bindings", "admin"),
+    ("PUT", "/api/v1/chains/bindings/{agent}", "admin"),
+    ("DELETE", "/api/v1/chains/bindings/{agent}", "admin"),
+    ("GET", "/api/v1/chains/{id}", "admin"),
+    ("PUT", "/api/v1/chains/{id}", "admin"),
+    ("DELETE", "/api/v1/chains/{id}", "admin"),
+    ("PUT", "/api/v1/chains/{id}/default", "admin"),
     ("PUT", "/api/v1/accounts/{id}/limits", "admin"),
     (
         "DELETE",
@@ -183,6 +194,13 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("PUT", "/api/v1/pools/{id}/default"),
     ("PUT", "/api/v1/bindings"),
     ("DELETE", "/api/v1/bindings/{agent}/{provider}"),
+    // Chains (S7): a chain decides which key a run spends next.
+    ("POST", "/api/v1/chains"),
+    ("PUT", "/api/v1/chains/bindings/{agent}"),
+    ("DELETE", "/api/v1/chains/bindings/{agent}"),
+    ("PUT", "/api/v1/chains/{id}"),
+    ("DELETE", "/api/v1/chains/{id}"),
+    ("PUT", "/api/v1/chains/{id}/default"),
     // The cost ledger (KAN-449): a price decides what every later turn costs, a limit what an account may spend.
     ("PUT", "/api/v1/prices"),
     ("PUT", "/api/v1/accounts/{id}/limits"),
@@ -401,100 +419,4 @@ pub fn required(method: &Method, path: &str, modules: &[Arc<dyn Module>]) -> Opt
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn templates_match_whole_segments_only() {
-        let m = |s: &str| Method::from_bytes(s.as_bytes()).unwrap();
-        assert_eq!(required(&m("GET"), "/api/v1/me", &[]), Some("read"));
-        assert_eq!(
-            required(&m("DELETE"), "/api/v1/devices/d_x", &[]),
-            Some("admin")
-        );
-        assert_eq!(
-            required(&m("PUT"), "/api/v1/settings/server/k", &[]),
-            Some("admin")
-        );
-        assert_eq!(
-            required(&m("GET"), "/api/v1/settings/server/k", &[]),
-            Some("read")
-        );
-        for (method, path) in [
-            ("POST", "/api/v1/me"),
-            ("GET", "/api/v1/devices/"),
-            ("GET", "/api/v1/devices/d_x/extra"),
-            ("GET", "/api/v1/nope"),
-            ("GET", "/modules/x/v1/y"),
-        ] {
-            assert_eq!(required(&m(method), path, &[]), None, "{method} {path}");
-        }
-        assert!(destructive(&m("DELETE"), "/api/v1/devices/d_x", &[]));
-        assert!(!destructive(&m("GET"), "/api/v1/devices/d_x", &[]));
-        assert!(!destructive(&m("DELETE"), "/api/v1/devices/d_x/y", &[]));
-    }
-
-    /// Review S3: independent of `DESTRUCTIVE`. Every state-changing route whose scope is not
-    /// `read` or `runner` is destructive, unless it is named here with the reason. The list is
-    /// inverted on purpose: a new scope is covered without anyone remembering to add it here.
-    #[test]
-    fn every_state_changing_privileged_route_is_destructive_or_excepted() {
-        const EXCEPTED: &[(&str, &str)] = &[
-            // Fixed op, no input, changes nothing on the runner (see `DESTRUCTIVE`).
-            ("POST", "/api/v1/runners/{id}/noop"),
-            // One fixed, free request to the host the key was bound to when it was stored, through
-            // a runner in the key's scope (design 2026-11-04 section 5.2 says it is not
-            // destructive); its only effect is the account's last-test record.
-            ("POST", "/api/v1/accounts/{id}/test"),
-            // The caller's own sign-in: a cancel grants nothing, a code acts once on one a step-up began.
-            ("DELETE", "/api/v1/accounts/logins/{id}"),
-            ("POST", "/api/v1/accounts/logins/{id}/code"),
-        ];
-        for (m, t, scope) in ROUTES {
-            let privileged = !matches!(*scope, "read" | "runner");
-            let writes = *m != "GET";
-            // A terminal socket is a GET but is a live shell.
-            let shell = t.ends_with("/terminals/{id}/ws");
-            if !(privileged && (writes || shell)) {
-                continue;
-            }
-            assert!(
-                declared_destructive(m, t) || EXCEPTED.contains(&(*m, *t)),
-                "{m} {t} ({scope}) changes state but is neither destructive nor excepted"
-            );
-        }
-        for e in EXCEPTED {
-            assert!(
-                !declared_destructive(e.0, e.1),
-                "{e:?} is excepted but listed"
-            );
-        }
-    }
-
-    /// Review S5 (KAN-298): the refusal throttle keys on the template, so varying an id adds no key.
-    #[test]
-    fn a_destructive_route_is_keyed_by_its_template() {
-        let m = Method::DELETE;
-        for id in ["d_a", "d_b", "d_c"] {
-            assert_eq!(
-                destructive_template(&m, &format!("/api/v1/devices/{id}"), &[]).as_deref(),
-                Some("/api/v1/devices/{id}")
-            );
-        }
-        assert_eq!(
-            destructive_template(&Method::GET, "/api/v1/devices/d_a", &[]),
-            None
-        );
-        assert_eq!(destructive_template(&m, "/api/v1/nope/x", &[]), None);
-    }
-
-    #[test]
-    fn every_destructive_route_is_a_declared_route() {
-        for (m, t) in DESTRUCTIVE {
-            assert!(
-                declared(m, t).is_some(),
-                "{m} {t} is destructive but not in ROUTES"
-            );
-        }
-    }
-}
+mod tests;

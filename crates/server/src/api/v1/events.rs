@@ -57,7 +57,16 @@ pub struct Event {
     /// What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,
     /// `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;
     /// a device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a
-    /// module writes. The registered kinds are listed in `x-event-kinds`.
+    /// module writes. The registered kinds are listed in `x-event-kinds`. The payload of
+    /// `agent.state` is `{session, state, reason, …}`: a chain session that waits for an account
+    /// says `reason: "waiting"` and `waiting: {until, why, since}` (`until` an RFC 3339 time, `since`
+    /// the first wait in unix seconds), and one whose launch refused its account, so another was
+    /// picked across a provider or harness, says `reason: "repicked"` with `from` and `to` (each
+    /// `{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account
+    /// cooled or limited until `until` (`class` `rate_limited`, `quota` or `plan_limit`; `source`
+    /// `gateway` or `harness`). `account.health` is `{account, state, reason}`: an account went
+    /// `unhealthy` (`reason` `upstream_errors` or `auth_suspected`). No payload holds a key, a token
+    /// or an upstream's own words.
     pub kind: String,
     #[schema(value_type = Object)]
     pub payload: Value,

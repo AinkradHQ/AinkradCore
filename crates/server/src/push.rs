@@ -32,6 +32,7 @@ use crate::store::gov::{
 };
 use crate::store::{audit, begin_write};
 
+mod account;
 pub mod apns;
 pub mod modules;
 pub mod policy;
@@ -191,6 +192,9 @@ impl Classifier for Platform {
                 collapse: Some(format!("alarm:{alarm}")),
                 ..Notification::new(kind, "admin", title, "", data)
             });
+        }
+        if e.kind.starts_with("account.") {
+            return account::notification(e);
         }
         let session = p["session"].as_str()?;
         match e.kind.as_str() {
@@ -443,6 +447,8 @@ pub fn providers(apns: Option<apns::ApnsNotifier>) -> Vec<Arc<dyn PushProvider>>
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_account;
 #[cfg(test)]
 mod tests_apns;
 #[cfg(test)]

@@ -16,6 +16,8 @@
 package ainkrad.client.models
 
 import ainkrad.client.models.AgentUsage
+import ainkrad.client.models.AgentWaiting
+import ainkrad.client.models.ChainEntry
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
@@ -32,14 +34,22 @@ import kotlinx.serialization.Contextual
  * @param runner The runner's device id, `d_…`.
  * @param state `starting`, `running`, `interrupted` (its runner restarted; it is resumed), `ended`, `lost`.
  * @param updatedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param account The account the session holds, whatever its delivery (an API key or a subscription).
+ * @param agent The opaque agent id the create named (the key of its chain binding).
+ * @param chain The chain as it was when the session began (an edit never moves a running run).
+ * @param chainId The chain the run draws its accounts from; absent for a session that names its account itself or uses the runner's own login.
+ * @param chainPos The entry of `chain` the run sits on, from 0.
  * @param endedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param harnessSession The harness's own session id, what a resume continues.
  * @param index Its row: page `listAgentSessions` with `before`.
  * @param model 
  * @param outcome Once over: `{\"kind\": \"succeeded\" | \"failed\" | \"cancelled\" | \"token_cap\" | \"stalled\" | \"lost\", \"reason\": …}`.
+ * @param repicked How many accounts a launch refused after the pick before the one it holds (at most 2).
  * @param resumes How many times it was resumed.
  * @param secrets The secrets it is leased at each start, by name.
+ * @param upstreamClass The last status class its own gateway reported: `ok`, `rate_limited`, `quota`, `server_error`, `auth_failed`, …
  * @param usage 
+ * @param waiting Set while a chain session waits for an account: it stays `starting` until `until`, or until `scheduler.wait_max_secs` ends the run.
  */
 @Serializable
 
@@ -75,6 +85,26 @@ data class AgentSession (
     @Contextual @SerialName(value = "updated_at")
     val updatedAt: java.time.OffsetDateTime,
 
+    /* The account the session holds, whatever its delivery (an API key or a subscription). */
+    @SerialName(value = "account")
+    val account: kotlin.Long? = null,
+
+    /* The opaque agent id the create named (the key of its chain binding). */
+    @SerialName(value = "agent")
+    val agent: kotlin.String? = null,
+
+    /* The chain as it was when the session began (an edit never moves a running run). */
+    @SerialName(value = "chain")
+    val chain: kotlin.collections.List<ChainEntry>? = null,
+
+    /* The chain the run draws its accounts from; absent for a session that names its account itself or uses the runner's own login. */
+    @SerialName(value = "chain_id")
+    val chainId: kotlin.Long? = null,
+
+    /* The entry of `chain` the run sits on, from 0. */
+    @SerialName(value = "chain_pos")
+    val chainPos: kotlin.Long? = null,
+
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "ended_at")
     val endedAt: java.time.OffsetDateTime? = null,
@@ -94,6 +124,10 @@ data class AgentSession (
     @Contextual @SerialName(value = "outcome")
     val outcome: kotlin.Any? = null,
 
+    /* How many accounts a launch refused after the pick before the one it holds (at most 2). */
+    @SerialName(value = "repicked")
+    val repicked: kotlin.Long? = null,
+
     /* How many times it was resumed. */
     @SerialName(value = "resumes")
     val resumes: kotlin.Long? = null,
@@ -102,8 +136,16 @@ data class AgentSession (
     @SerialName(value = "secrets")
     val secrets: kotlin.collections.List<kotlin.String>? = null,
 
+    /* The last status class its own gateway reported: `ok`, `rate_limited`, `quota`, `server_error`, `auth_failed`, … */
+    @SerialName(value = "upstream_class")
+    val upstreamClass: kotlin.String? = null,
+
     @SerialName(value = "usage")
-    val usage: AgentUsage? = null
+    val usage: AgentUsage? = null,
+
+    /* Set while a chain session waits for an account: it stays `starting` until `until`, or until `scheduler.wait_max_secs` ends the run. */
+    @SerialName(value = "waiting")
+    val waiting: AgentWaiting? = null
 
 ) {
 

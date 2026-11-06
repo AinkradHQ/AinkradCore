@@ -15,6 +15,7 @@
 
 package ainkrad.client.models
 
+import ainkrad.client.models.AccountHealth
 import ainkrad.client.models.LastTest
 import ainkrad.client.models.SessionLimits
 
@@ -34,8 +35,10 @@ import kotlinx.serialization.Contextual
  * @param provider `anthropic`, `openai`, `google` or a user definition's id.
  * @param state `active`, `cooling`, `limited`, `unhealthy` or `disabled`.
  * @param updatedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param health What the scheduler keeps of its health. Only the reads say it; `state`, `state_reason` and `state_until` (a cooldown's end) are above.
  * @param lastTest The last one-shot test of the key; absent when it was never tested.
  * @param lastUsedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param live Sessions that hold a slot of its cap now (`starting`, `running`, `interrupted`). Only the reads (`listAccounts`, `getAccount`) say it.
  * @param sessionLimits What one session may spend through this account; absent when only the budgets limit it.
  * @param stateReason 
  * @param stateUntil RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
@@ -78,6 +81,10 @@ data class ProviderAccount (
     @Contextual @SerialName(value = "updated_at")
     val updatedAt: java.time.OffsetDateTime,
 
+    /* What the scheduler keeps of its health. Only the reads say it; `state`, `state_reason` and `state_until` (a cooldown's end) are above. */
+    @SerialName(value = "health")
+    val health: AccountHealth? = null,
+
     /* The last one-shot test of the key; absent when it was never tested. */
     @SerialName(value = "last_test")
     val lastTest: LastTest? = null,
@@ -85,6 +92,10 @@ data class ProviderAccount (
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "last_used_at")
     val lastUsedAt: java.time.OffsetDateTime? = null,
+
+    /* Sessions that hold a slot of its cap now (`starting`, `running`, `interrupted`). Only the reads (`listAccounts`, `getAccount`) say it. */
+    @SerialName(value = "live")
+    val live: kotlin.Long? = null,
 
     /* What one session may spend through this account; absent when only the budgets limit it. */
     @SerialName(value = "session_limits")

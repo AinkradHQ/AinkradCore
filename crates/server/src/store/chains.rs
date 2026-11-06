@@ -34,7 +34,9 @@ pub const MAX_ENTRIES: usize = 4;
 const MAX_BINDINGS: i64 = 1024;
 
 mod assign;
+mod view;
 pub use assign::*;
+pub use view::*;
 
 /// One step of a chain, resolved: the allocator's own `Entry` (`{pool, provider, harness, model}`),
 /// so the snapshot a session stores in `core_agent_sessions.chain` is the JSON `pick_in` reads.

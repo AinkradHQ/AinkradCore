@@ -121,7 +121,14 @@
 ///    operation changes.
 /// 43: chain audit actions (`chain.created`, `chain.updated`, `chain.deleted`, `chain.default_set`,
 ///    `chain.bound`, `chain.unbound`) in `x-audit-actions` (S5); no operation changes.
-pub const API_MINOR: u32 = 43;
+/// 44: the scheduler's API (S7): `listChains`, `getChain`, `createChain`, `replaceChain`, `deleteChain`,
+///    `setDefaultChain`, `listChainBindings`, `bindAgentChain` and `unbindAgentChain` (`admin`; every write
+///    destructive); `createAgentSession` takes `chain` and `agent` (`admin`) and `harness` is optional with a
+///    chain; `AgentSession` gains `agent`, `chain_id`, `chain`, `chain_pos`, `account`, `waiting`, `repicked`
+///    and `upstream_class`; `ProviderAccount` gains `live` and `health`; the `account.limited` and
+///    `account.health` events; the payloads of `agent.state` (`waiting`, `repicked`) documented in the events
+///    schema; the `scheduler.*` settings; the pool-binding routes (`/api/v1/bindings`) deprecated.
+pub const API_MINOR: u32 = 44;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

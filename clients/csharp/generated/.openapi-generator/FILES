@@ -9,6 +9,7 @@ src/Ainkrad.Client/Ainkrad.Client.csproj
 src/Ainkrad.Client/Api/AccountsApi.cs
 src/Ainkrad.Client/Api/AgentsApi.cs
 src/Ainkrad.Client/Api/BudgetsApi.cs
+src/Ainkrad.Client/Api/ChainsApi.cs
 src/Ainkrad.Client/Api/CostsApi.cs
 src/Ainkrad.Client/Api/DevicesApi.cs
 src/Ainkrad.Client/Api/EventsApi.cs
@@ -38,6 +39,7 @@ src/Ainkrad.Client/Client/RetryConfiguration.cs
 src/Ainkrad.Client/Client/WebRequestPathBuilder.cs
 src/Ainkrad.Client/Model/AbstractOpenAPISchema.cs
 src/Ainkrad.Client/Model/AccountDetail.cs
+src/Ainkrad.Client/Model/AccountHealth.cs
 src/Ainkrad.Client/Model/AccountLogin.cs
 src/Ainkrad.Client/Model/AccountSpend.cs
 src/Ainkrad.Client/Model/AccountTested.cs
@@ -49,14 +51,19 @@ src/Ainkrad.Client/Model/AgentSession.cs
 src/Ainkrad.Client/Model/AgentTranscript.cs
 src/Ainkrad.Client/Model/AgentTranscriptEntry.cs
 src/Ainkrad.Client/Model/AgentUsage.cs
+src/Ainkrad.Client/Model/AgentWaiting.cs
 src/Ainkrad.Client/Model/AgentWake.cs
 src/Ainkrad.Client/Model/AgentWakeRequest.cs
 src/Ainkrad.Client/Model/ApiVersion.cs
 src/Ainkrad.Client/Model/ApproveBody.cs
 src/Ainkrad.Client/Model/AuditEntry.cs
 src/Ainkrad.Client/Model/AuditPage.cs
+src/Ainkrad.Client/Model/BindChain.cs
 src/Ainkrad.Client/Model/Binding.cs
 src/Ainkrad.Client/Model/BudgetDeleted.cs
+src/Ainkrad.Client/Model/Chain.cs
+src/Ainkrad.Client/Model/ChainBinding.cs
+src/Ainkrad.Client/Model/ChainEntry.cs
 src/Ainkrad.Client/Model/Challenge.cs
 src/Ainkrad.Client/Model/ChallengeRequest.cs
 src/Ainkrad.Client/Model/ClaimBody.cs
@@ -88,6 +95,8 @@ src/Ainkrad.Client/Model/ModelPrice.cs
 src/Ainkrad.Client/Model/Named.cs
 src/Ainkrad.Client/Model/NewAgentSession.cs
 src/Ainkrad.Client/Model/NewBinding.cs
+src/Ainkrad.Client/Model/NewChain.cs
+src/Ainkrad.Client/Model/NewChainEntry.cs
 src/Ainkrad.Client/Model/NewLease.cs
 src/Ainkrad.Client/Model/NewLogin.cs
 src/Ainkrad.Client/Model/NewPairingBody.cs

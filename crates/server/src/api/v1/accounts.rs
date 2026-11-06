@@ -118,27 +118,33 @@ pub async fn delete_provider(
 
 #[utoipa::path(get, path = "/api/v1/accounts", operation_id = "listAccounts", tag = "accounts",
     responses((status = 200, description = "Every account: its key's last four characters, \
-        never the key, its secret's name or its runner scope", body = Vec<ProviderAccount>)))]
+        never the key, its secret's name or its runner scope; with its `live` session count and \
+        `health`", body = Vec<ProviderAccount>)))]
 pub async fn list(State(app): State<App>) -> ApiResult<Vec<ProviderAccount>> {
+    let status = crate::store::health::statuses(&app.pool).await?;
     Ok(Json(
         acc::list(&app.pool)
             .await?
             .into_iter()
-            .map(Into::into)
+            .map(|a| {
+                let st = status.get(&a.id);
+                ProviderAccount::from(a).with_status(st)
+            })
             .collect(),
     ))
 }
 
 #[utoipa::path(get, path = "/api/v1/accounts/{id}", operation_id = "getAccount", tag = "accounts",
     params(("id" = String, Path, description = "The account's id")),
-    responses((status = 200, description = "One account", body = ProviderAccount)))]
+    responses((status = 200, description = "One account, with its `live` session count and \
+        `health`", body = ProviderAccount)))]
 pub async fn get(State(app): State<App>, Path(id): Path<String>) -> ApiResult<ProviderAccount> {
-    Ok(Json(
-        acc::get(&app.pool, num(&id, "account")?)
-            .await
-            .map_err(err)?
-            .into(),
-    ))
+    let a = acc::get(&app.pool, num(&id, "account")?)
+        .await
+        .map_err(err)?;
+    let status = crate::store::health::statuses(&app.pool).await?;
+    let st = status.get(&a.id);
+    Ok(Json(ProviderAccount::from(a).with_status(st)))
 }
 
 #[utoipa::path(post, path = "/api/v1/accounts", operation_id = "createAccount", tag = "accounts",

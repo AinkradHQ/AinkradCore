@@ -112,12 +112,15 @@ public protocol APIProtocol: Sendable {
     func createStepUpChallenge(_ input: Operations.CreateStepUpChallenge.Input) async throws -> Operations.CreateStepUpChallenge.Output
     /// - Remark: HTTP `GET /api/v1/bindings`.
     /// - Remark: Generated from `#/paths//api/v1/bindings/get(listBindings)`.
+    @available(*, deprecated)
     func listBindings(_ input: Operations.ListBindings.Input) async throws -> Operations.ListBindings.Output
     /// - Remark: HTTP `PUT /api/v1/bindings`.
     /// - Remark: Generated from `#/paths//api/v1/bindings/put(bindAgent)`.
+    @available(*, deprecated)
     func bindAgent(_ input: Operations.BindAgent.Input) async throws -> Operations.BindAgent.Output
     /// - Remark: HTTP `DELETE /api/v1/bindings/{agent}/{provider}`.
     /// - Remark: Generated from `#/paths//api/v1/bindings/{agent}/{provider}/delete(unbindAgent)`.
+    @available(*, deprecated)
     func unbindAgent(_ input: Operations.UnbindAgent.Input) async throws -> Operations.UnbindAgent.Output
     /// - Remark: HTTP `GET /api/v1/budgets`.
     /// - Remark: Generated from `#/paths//api/v1/budgets/get(listBudgets)`.
@@ -131,6 +134,33 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/budgets/{id}/raise`.
     /// - Remark: Generated from `#/paths//api/v1/budgets/{id}/raise/post(raiseBudget)`.
     func raiseBudget(_ input: Operations.RaiseBudget.Input) async throws -> Operations.RaiseBudget.Output
+    /// - Remark: HTTP `GET /api/v1/chains`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/get(listChains)`.
+    func listChains(_ input: Operations.ListChains.Input) async throws -> Operations.ListChains.Output
+    /// - Remark: HTTP `POST /api/v1/chains`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/post(createChain)`.
+    func createChain(_ input: Operations.CreateChain.Input) async throws -> Operations.CreateChain.Output
+    /// - Remark: HTTP `GET /api/v1/chains/bindings`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/bindings/get(listChainBindings)`.
+    func listChainBindings(_ input: Operations.ListChainBindings.Input) async throws -> Operations.ListChainBindings.Output
+    /// - Remark: HTTP `PUT /api/v1/chains/bindings/{agent}`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/bindings/{agent}/put(bindAgentChain)`.
+    func bindAgentChain(_ input: Operations.BindAgentChain.Input) async throws -> Operations.BindAgentChain.Output
+    /// - Remark: HTTP `DELETE /api/v1/chains/bindings/{agent}`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/bindings/{agent}/delete(unbindAgentChain)`.
+    func unbindAgentChain(_ input: Operations.UnbindAgentChain.Input) async throws -> Operations.UnbindAgentChain.Output
+    /// - Remark: HTTP `GET /api/v1/chains/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/{id}/get(getChain)`.
+    func getChain(_ input: Operations.GetChain.Input) async throws -> Operations.GetChain.Output
+    /// - Remark: HTTP `PUT /api/v1/chains/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/{id}/put(replaceChain)`.
+    func replaceChain(_ input: Operations.ReplaceChain.Input) async throws -> Operations.ReplaceChain.Output
+    /// - Remark: HTTP `DELETE /api/v1/chains/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/{id}/delete(deleteChain)`.
+    func deleteChain(_ input: Operations.DeleteChain.Input) async throws -> Operations.DeleteChain.Output
+    /// - Remark: HTTP `PUT /api/v1/chains/{id}/default`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/{id}/default/put(setDefaultChain)`.
+    func setDefaultChain(_ input: Operations.SetDefaultChain.Input) async throws -> Operations.SetDefaultChain.Output
     /// - Remark: HTTP `GET /api/v1/costs`.
     /// - Remark: Generated from `#/paths//api/v1/costs/get(listCosts)`.
     func listCosts(_ input: Operations.ListCosts.Input) async throws -> Operations.ListCosts.Output
@@ -693,11 +723,13 @@ extension APIProtocol {
     }
     /// - Remark: HTTP `GET /api/v1/bindings`.
     /// - Remark: Generated from `#/paths//api/v1/bindings/get(listBindings)`.
+    @available(*, deprecated)
     public func listBindings(headers: Operations.ListBindings.Input.Headers = .init()) async throws -> Operations.ListBindings.Output {
         try await listBindings(Operations.ListBindings.Input(headers: headers))
     }
     /// - Remark: HTTP `PUT /api/v1/bindings`.
     /// - Remark: Generated from `#/paths//api/v1/bindings/put(bindAgent)`.
+    @available(*, deprecated)
     public func bindAgent(
         headers: Operations.BindAgent.Input.Headers = .init(),
         body: Operations.BindAgent.Input.Body
@@ -709,6 +741,7 @@ extension APIProtocol {
     }
     /// - Remark: HTTP `DELETE /api/v1/bindings/{agent}/{provider}`.
     /// - Remark: Generated from `#/paths//api/v1/bindings/{agent}/{provider}/delete(unbindAgent)`.
+    @available(*, deprecated)
     public func unbindAgent(
         path: Operations.UnbindAgent.Input.Path,
         headers: Operations.UnbindAgent.Input.Headers = .init()
@@ -762,6 +795,97 @@ extension APIProtocol {
             path: path,
             headers: headers,
             body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/chains`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/get(listChains)`.
+    public func listChains(headers: Operations.ListChains.Input.Headers = .init()) async throws -> Operations.ListChains.Output {
+        try await listChains(Operations.ListChains.Input(headers: headers))
+    }
+    /// - Remark: HTTP `POST /api/v1/chains`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/post(createChain)`.
+    public func createChain(
+        headers: Operations.CreateChain.Input.Headers = .init(),
+        body: Operations.CreateChain.Input.Body
+    ) async throws -> Operations.CreateChain.Output {
+        try await createChain(Operations.CreateChain.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/chains/bindings`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/bindings/get(listChainBindings)`.
+    public func listChainBindings(headers: Operations.ListChainBindings.Input.Headers = .init()) async throws -> Operations.ListChainBindings.Output {
+        try await listChainBindings(Operations.ListChainBindings.Input(headers: headers))
+    }
+    /// - Remark: HTTP `PUT /api/v1/chains/bindings/{agent}`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/bindings/{agent}/put(bindAgentChain)`.
+    public func bindAgentChain(
+        path: Operations.BindAgentChain.Input.Path,
+        headers: Operations.BindAgentChain.Input.Headers = .init(),
+        body: Operations.BindAgentChain.Input.Body
+    ) async throws -> Operations.BindAgentChain.Output {
+        try await bindAgentChain(Operations.BindAgentChain.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `DELETE /api/v1/chains/bindings/{agent}`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/bindings/{agent}/delete(unbindAgentChain)`.
+    public func unbindAgentChain(
+        path: Operations.UnbindAgentChain.Input.Path,
+        headers: Operations.UnbindAgentChain.Input.Headers = .init()
+    ) async throws -> Operations.UnbindAgentChain.Output {
+        try await unbindAgentChain(Operations.UnbindAgentChain.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/chains/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/{id}/get(getChain)`.
+    public func getChain(
+        path: Operations.GetChain.Input.Path,
+        headers: Operations.GetChain.Input.Headers = .init()
+    ) async throws -> Operations.GetChain.Output {
+        try await getChain(Operations.GetChain.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `PUT /api/v1/chains/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/{id}/put(replaceChain)`.
+    public func replaceChain(
+        path: Operations.ReplaceChain.Input.Path,
+        headers: Operations.ReplaceChain.Input.Headers = .init(),
+        body: Operations.ReplaceChain.Input.Body
+    ) async throws -> Operations.ReplaceChain.Output {
+        try await replaceChain(Operations.ReplaceChain.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `DELETE /api/v1/chains/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/{id}/delete(deleteChain)`.
+    public func deleteChain(
+        path: Operations.DeleteChain.Input.Path,
+        headers: Operations.DeleteChain.Input.Headers = .init()
+    ) async throws -> Operations.DeleteChain.Output {
+        try await deleteChain(Operations.DeleteChain.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `PUT /api/v1/chains/{id}/default`.
+    /// - Remark: Generated from `#/paths//api/v1/chains/{id}/default/put(setDefaultChain)`.
+    public func setDefaultChain(
+        path: Operations.SetDefaultChain.Input.Path,
+        headers: Operations.SetDefaultChain.Input.Headers = .init()
+    ) async throws -> Operations.SetDefaultChain.Output {
+        try await setDefaultChain(Operations.SetDefaultChain.Input(
+            path: path,
+            headers: headers
         ))
     }
     /// - Remark: HTTP `GET /api/v1/costs`.

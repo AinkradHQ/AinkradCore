@@ -27,6 +27,43 @@ pub struct ProviderAccount {
     pub last_used_at: Option<Timestamp>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// Sessions that hold a slot of its cap now (`starting`, `running`, `interrupted`). Only the
+    /// reads (`listAccounts`, `getAccount`) say it.
+    pub live: Option<i64>,
+    /// What the scheduler keeps of its health. Only the reads say it; `state`, `state_reason`
+    /// and `state_until` (a cooldown's end) are above.
+    pub health: Option<AccountHealth>,
+}
+
+/// An account's health counters, as the scheduler keeps them.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AccountHealth {
+    /// Upstream errors counted in the current ten-minute window; three put it out for ten minutes.
+    pub fail_streak: i64,
+    /// A subscription's failed sessions in a row; the third keeps it out of new runs
+    /// (`state_reason` `auth_suspected`) until an admin answers.
+    pub auth_streak: i64,
+    /// The last time a request or a session on it went well.
+    pub last_success_at: Option<Timestamp>,
+    /// The last status class its gateway reported on any of its sessions.
+    pub upstream_class: Option<String>,
+}
+
+impl ProviderAccount {
+    /// With its load and health, from [`crate::store::health::statuses`]; an account with no row
+    /// there (just made) has none.
+    pub(super) fn with_status(mut self, st: Option<&crate::store::health::Status>) -> Self {
+        if let Some(st) = st {
+            self.live = Some(st.live);
+            self.health = Some(AccountHealth {
+                fail_streak: st.fail_streak,
+                auth_streak: st.auth_streak,
+                last_success_at: opt_ts(st.last_success_at.as_deref()),
+                upstream_class: st.upstream_class.clone(),
+            });
+        }
+        self
+    }
 }
 
 impl From<acc::Account> for ProviderAccount {
@@ -54,6 +91,8 @@ impl From<acc::Account> for ProviderAccount {
             last_used_at: opt_ts(a.last_used_at.as_deref()),
             created_at: ts(&a.created_at),
             updated_at: ts(&a.updated_at),
+            live: None,
+            health: None,
         }
     }
 }

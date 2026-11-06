@@ -32,8 +32,8 @@ use crate::module::Module;
 use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{
-    accounts, agents, audit, budgets, costs, devices, events, handshake, lockouts, me, pair,
-    pairing, passkey, runners, secrets, session, settings, stepup, terminals, ticket, types,
+    accounts, agents, audit, budgets, chains, costs, devices, events, handshake, lockouts, me,
+    pair, pairing, passkey, runners, secrets, session, settings, stepup, terminals, ticket, types,
     websession,
 };
 
@@ -116,6 +116,15 @@ use super::{
         accounts::list_bindings,
         accounts::bind,
         accounts::unbind,
+        chains::list,
+        chains::get,
+        chains::create,
+        chains::replace,
+        chains::delete,
+        chains::set_default,
+        chains::list_bindings,
+        chains::bind,
+        chains::unbind,
         costs::list,
         costs::list_prices,
         costs::set_price,
@@ -538,6 +547,8 @@ mod tests {
         assert_eq!(
             s["Event"]["x-event-kinds"],
             json!([
+                "account.health",
+                "account.limited",
                 "account.login.done",
                 "account.login.failed",
                 "account.login.started",
@@ -568,7 +579,8 @@ mod tests {
         // A module's kinds default to its route scope (`admin`); runner presence is `read`.
         assert_eq!(
             s["Event"]["x-event-scopes"],
-            json!({"account.login.done": "admin", "account.login.failed": "admin",
+            json!({"account.health": "admin", "account.limited": "admin",
+                "account.login.done": "admin", "account.login.failed": "admin",
                 "account.login.started": "admin", "account.login.url": "admin",
                 "agent.approval_decided": "approve", "agent.approval_requested": "approve",
                 "agent.created": "agent", "agent.ended": "agent", "agent.message": "agent",
@@ -586,6 +598,8 @@ mod tests {
         assert_eq!(
             plain["components"]["schemas"]["Event"]["x-event-kinds"],
             json!([
+                "account.health",
+                "account.limited",
                 "account.login.done",
                 "account.login.failed",
                 "account.login.started",

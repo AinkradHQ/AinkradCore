@@ -24,6 +24,9 @@ use crate::auth::crypto::is_id;
 use crate::store::agents::{self as store, Session, SessionSecret};
 use ainkrad_proto::v2::{AgentDecide, AgentSend, AgentStop, Command};
 
+mod sched;
+use sched::{AgentWaiting, create_named, present};
+
 const MAX_MESSAGE: usize = 16 * 1024;
 
 /// Tokens used, as the harness reported them.
@@ -68,6 +71,25 @@ pub struct AgentSession {
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     pub ended_at: Option<Timestamp>,
+    /// The opaque agent id the create named (the key of its chain binding).
+    pub agent: Option<String>,
+    /// The chain the run draws its accounts from; absent for a session that names its account
+    /// itself or uses the runner's own login.
+    pub chain_id: Option<i64>,
+    /// The chain as it was when the session began (an edit never moves a running run).
+    pub chain: Option<Vec<super::chains::ChainEntry>>,
+    /// The entry of `chain` the run sits on, from 0.
+    pub chain_pos: Option<i64>,
+    /// The account the session holds, whatever its delivery (an API key or a subscription).
+    pub account: Option<i64>,
+    /// Set while a chain session waits for an account: it stays `starting` until `until`, or
+    /// until `scheduler.wait_max_secs` ends the run.
+    pub waiting: Option<AgentWaiting>,
+    /// How many accounts a launch refused after the pick before the one it holds (at most 2).
+    pub repicked: Option<i64>,
+    /// The last status class its own gateway reported: `ok`, `rate_limited`, `quota`,
+    /// `server_error`, `auth_failed`, …
+    pub upstream_class: Option<String>,
 }
 
 impl From<Session> for AgentSession {
@@ -95,6 +117,14 @@ impl From<Session> for AgentSession {
             created_at: ts(&s.created_at),
             updated_at: ts(&s.updated_at),
             ended_at: s.ended_at.as_deref().map(ts),
+            agent: None,
+            chain_id: None,
+            chain: None,
+            chain_pos: None,
+            account: None,
+            waiting: None,
+            repicked: None,
+            upstream_class: None,
         }
     }
 }
@@ -113,7 +143,10 @@ pub struct AgentSecret {
 pub struct NewAgentSession {
     /// The runner's device id, `d_…`.
     pub runner: String,
-    /// `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes).
+    /// `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it
+    /// (and `model`) when the session draws from a chain: the account the allocator picks sets them.
+    #[serde(default)]
+    #[schema(required = false)]
     pub harness: String,
     /// The model id as the provider names it. For a session served by the auth gateway it must be
     /// one of the ids priced for its provider, exactly: the gateway resolves no alias.
@@ -128,6 +161,13 @@ pub struct NewAgentSession {
     pub policy: Option<Value>,
     /// At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).
     pub secrets: Option<Vec<AgentSecret>>,
+    /// A fallback chain's id: the session draws its account from it, one at a time. Needs
+    /// `admin`. It must not come with a harness, a model or an `acct.*` secret.
+    pub chain: Option<i64>,
+    /// An opaque agent id (1 to 64 of `[A-Za-z0-9._:-]`): its bound chain, else the user's
+    /// default chain, serves the session. Needs `admin`. With no chain either way the session
+    /// runs as a plain one and names its harness.
+    pub agent: Option<String>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -213,6 +253,11 @@ async fn one(app: &App, id: &str) -> Result<Session, ApiError> {
     found.ok_or_else(|| ApiError::not_found("no such agent session"))
 }
 
+/// The session `id` as the API shows it, with its chain, account and wait.
+async fn shown(app: &App, id: &str) -> ApiResult<AgentSession> {
+    Ok(Json(present(app, one(app, id).await?).await?))
+}
+
 /// A session a module drives answers to that module's own routes (its audit, its approvals, its
 /// run state): a client's write on it would bypass them, so it is refused.
 fn not_a_modules(s: &Session) -> Result<(), ApiError> {
@@ -248,7 +293,10 @@ fn owns_secrets(s: &Session, me: &Caller) -> Result<(), ApiError> {
         while the runner is away (audited as `agent.created`). 409 `runner_offline` or \
         `unsupported_command` (no agent driver), 503 `runner_busy` (its capacity or the \
         harness's slot is full), the secrets broker's refusals (`secrets_disabled`, \
-        `limit_reached`, 400 when the runner is not in a secret's scope)", body = AgentSession)))]
+        `limit_reached`, 400 when the runner is not in a secret's scope). With `chain` or \
+        `agent` (admin only, else 403): the session starts with no account and the allocator \
+        picks one from the chain (`waiting` while every account cools); 404 for no such chain, \
+        400 for a harness, a model or an `acct.*` secret beside a chain", body = AgentSession)))]
 pub async fn create(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
@@ -278,6 +326,12 @@ pub async fn create(
         created_by: &me.device.id,
     };
     let admin = me.device.scopes.iter().any(|scope| scope == "admin");
+    if b.chain.is_some() || b.agent.is_some() {
+        let s = create_named(&app, &me, &new, admin, b.chain, b.agent.as_deref()).await?;
+        agents::authorize_create(&app, &me, &s.id);
+        agents::start(&app, &s).await?;
+        return shown(&app, &s.id).await;
+    }
     agents::validate_new(&new, admin).map_err(|e| match e {
         agents::Invalid::Bad(why) => ApiError::bad_request(why),
         agents::Invalid::Forbidden(why) => {
@@ -288,7 +342,7 @@ pub async fn create(
     let s = store::create(&app.pool, &new, BY, &app.clock.now()).await?;
     agents::authorize_create(&app, &me, &s.id);
     agents::start(&app, &s).await?;
-    Ok(Json(one(&app, &s.id).await?.into()))
+    shown(&app, &s.id).await
 }
 
 #[utoipa::path(get, path = "/api/v1/agent-sessions", operation_id = "listAgentSessions",
@@ -298,7 +352,11 @@ pub async fn create(
 pub async fn list(State(app): State<App>, Query(q): Query<Before>) -> ApiResult<Vec<AgentSession>> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let all = store::list(&app.pool, q.before, limit).await?;
-    Ok(Json(all.into_iter().map(Into::into).collect()))
+    let mut out = Vec::with_capacity(all.len());
+    for s in all {
+        out.push(present(&app, s).await?);
+    }
+    Ok(Json(out))
 }
 
 #[utoipa::path(get, path = "/api/v1/agent-sessions/{id}", operation_id = "getAgentSession",
@@ -306,7 +364,7 @@ pub async fn list(State(app): State<App>, Query(q): Query<Before>) -> ApiResult<
     params(("id" = String, Path, description = "The session's id, `as_…`")),
     responses((status = 200, description = "One session", body = AgentSession)))]
 pub async fn get(State(app): State<App>, Path(id): Path<String>) -> ApiResult<AgentSession> {
-    Ok(Json(one(&app, &id).await?.into()))
+    shown(&app, &id).await
 }
 
 #[utoipa::path(get, path = "/api/v1/agent-sessions/{id}/transcript",
@@ -416,7 +474,7 @@ pub async fn message(
         &me.device.id,
     )
     .await?;
-    Ok(Json(one(&app, &id).await?.into()))
+    shown(&app, &id).await
 }
 
 /// A tool request id as harnesses make them.
@@ -464,7 +522,7 @@ pub async fn decide(
         &me.device.id,
     )
     .await?;
-    Ok(Json(one(&app, &id).await?.into()))
+    shown(&app, &id).await
 }
 
 async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSession> {
@@ -538,7 +596,7 @@ async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSe
         "agent.cancelled"
     };
     store::action(&app.pool, &s, BY, action, None, json!({}), &me.device.id).await?;
-    Ok(Json(one(&app, &id).await?.into()))
+    shown(&app, &id).await
 }
 
 #[utoipa::path(post, path = "/api/v1/agent-sessions/{id}/cancel",
@@ -605,7 +663,7 @@ pub async fn resume(
     )
     .await?;
     agents::supervise(&app, &s.id);
-    Ok(Json(one(&app, &id).await?.into()))
+    shown(&app, &id).await
 }
 
 #[utoipa::path(post, path = "/api/v1/agent-sessions/{id}/wake",
