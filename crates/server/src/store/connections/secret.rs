@@ -34,10 +34,20 @@ pub(super) struct Seal<'a> {
     pub version: i64,
 }
 
-/// Wipes freed pages for the writes that drop a credential (`secure_delete` stays on for this
-/// pooled connection; harmless elsewhere).
+/// Turns `secure_delete` on for the writes that drop a credential: freed pages are zero-filled in
+/// the database file as they are freed. Call [`secure_off`] before the transaction ends, so the
+/// pooled connection does not carry it into unrelated writes. This wipes the database file only:
+/// an older copy of the page stays in the write-ahead log until a checkpoint recycles it, and a
+/// copy-on-write or flash disk may keep old blocks.
 pub(super) async fn secure(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     sqlx::query("PRAGMA secure_delete = ON")
+        .execute(conn)
+        .await
+        .map(drop)
+}
+
+pub(super) async fn secure_off(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    sqlx::query("PRAGMA secure_delete = OFF")
         .execute(conn)
         .await
         .map(drop)
@@ -130,7 +140,7 @@ pub(super) async fn store_in(
 /// Replaces the credential (a rotation, or an OAuth refresh): a new version, audited
 /// `connection.secret_replaced` with the version and key id, never the value. A pending or
 /// confirmed auth failure is cleared: the credential it judged is gone. The old bytes are
-/// overwritten first.
+/// overwritten in the file first (the write-ahead log keeps an older copy until a checkpoint).
 pub async fn replace(
     pool: &SqlitePool,
     sealer: &SecretBox,
@@ -140,7 +150,6 @@ pub async fn replace(
 ) -> Result<Connection, Error> {
     let mut tx = crate::store::begin_write(pool).await?;
     gate(&mut tx, m).await?;
-    secure(&mut tx).await?;
     let c = find(&mut tx, who.workspace, id).await?;
     let nonce: String = sqlx::query_scalar("SELECT nonce FROM core_connections WHERE id = ?")
         .bind(id)
@@ -152,6 +161,7 @@ pub async fn replace(
             .fetch_optional(&mut *tx)
             .await?
             .unwrap_or(0);
+    secure(&mut tx).await?;
     sqlx::query(
         "UPDATE core_connection_secrets SET sealed = zeroblob(length(sealed)) WHERE connection_id = ?",
     )
@@ -165,6 +175,7 @@ pub async fn replace(
         version: old + 1,
     };
     store_in(&mut tx, sealer, &at, m, who.now).await?;
+    secure_off(&mut tx).await?;
     super::verdict::clear_auth_in(&mut tx, id, who.now, "replaced").await?;
     // An export left it without a credential; this one is the new one.
     sqlx::query(

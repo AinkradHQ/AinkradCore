@@ -18,8 +18,9 @@
 //!   (the workspace binding) wins; none, or several without a default, refuses with the reason
 //!   (`ambiguous` lists them). The project, agent and session binding scopes are unused capacity.
 //! - **Delete** is refused (`conflict`) while the connection is its kind's default (the workspace
-//!   binding). Its grants, secret (overwritten, page wiped by `secure_delete`) and unused-scope
-//!   bindings go with it.
+//!   binding). Its grants, secret (overwritten, freed pages zero-filled in the file by
+//!   `secure_delete`; the WAL keeps an older copy until a checkpoint) and unused-scope bindings go
+//!   with it.
 //! - **Workspaces.** Every function takes the acting workspace (`Who::workspace`, or an argument)
 //!   and finds a connection only there: another workspace's id is `not_found`.
 //! - **Health** is S3's states, cooldowns and lazy recovery; an upstream auth failure is pending

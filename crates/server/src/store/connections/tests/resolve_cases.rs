@@ -172,10 +172,9 @@ async fn an_ungranted_connection_is_never_a_candidate_and_never_described() {
                 ..cx("read_items")
             }
         )
-        .await
-        .map(drop),
-        Ok(()),
-        "the role grant covers any member"
+        .await,
+        Err("not_a_member"),
+        "a role grant covers members of the workspace, not any caller"
     );
     let r = resolve::resolve(&fx.pool, &fx.reg, "other", &cx("read_things"), NOW).await;
     assert_eq!(code(r), "no_connection");
@@ -203,6 +202,7 @@ async fn another_workspaces_connections_are_invisible() {
     second_user(&fx).await;
     let theirs = Context {
         workspace: 2,
+        user: 2,
         ..cx("read_items")
     };
     assert_eq!(via(&fx, &theirs).await, Err("no_connection"));

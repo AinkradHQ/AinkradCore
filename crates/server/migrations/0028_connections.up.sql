@@ -35,7 +35,7 @@ CREATE TABLE core_connections (
 );
 
 -- Sealed material (JSON of access and refresh token, AES-256-GCM under the master key, label
--- `core.connection:<id>:v<version>`). `expires_at` is the access token's expiry, not secret.
+-- `core.connection:<id>:<nonce>:v<version>`, the nonce being the row's). `expires_at` is the access token's expiry, not secret.
 CREATE TABLE core_connection_secrets (
     connection_id INTEGER PRIMARY KEY REFERENCES core_connections(id) ON DELETE CASCADE,
     user_id       INTEGER NOT NULL DEFAULT 1 REFERENCES users(id),

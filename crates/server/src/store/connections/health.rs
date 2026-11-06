@@ -127,7 +127,7 @@ pub(super) async fn sys_audit(
 /// Puts a connection whose timed state has ended back to `active` (audited), in the caller's
 /// write transaction; whether it did. Only a state this module set ends; `auth_suspected` and
 /// `disabled` stay until a test or an admin decides.
-pub async fn recover_in(
+pub(super) async fn recover_in(
     conn: &mut SqliteConnection,
     id: i64,
     now: &str,
@@ -161,7 +161,7 @@ pub async fn recover_in(
 
 /// [`recover_in`] for a caller with no transaction: it looks first and takes the write lock only
 /// when a window has ended.
-pub async fn recover(pool: &SqlitePool, id: i64, now: &str) -> Result<(), sqlx::Error> {
+pub(super) async fn recover(pool: &SqlitePool, id: i64, now: &str) -> Result<(), sqlx::Error> {
     let due: bool = sqlx::query_scalar(
         "SELECT count(*) > 0 FROM core_connections WHERE id = ?1 \
          AND status IN ('cooling', 'limited', 'unhealthy') AND state_until IS NOT NULL \

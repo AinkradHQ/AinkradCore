@@ -15,7 +15,7 @@
 //! none is granted), `no_connection` (the workspace has none of the kind). A connection the caller
 //! is not granted is never a candidate and never described.
 //!
-//! **Checks before any of that**, each its own code: `unknown_kind`, `capability_unknown`,
+//! **Checks before any of that**, each its own code: `not_a_member`, `unknown_kind`, `capability_unknown`,
 //! `allowlist_required` (an agent's session needs an allowlist), `not_allowlisted`, `bad_request`
 //! (a resource is a known limit key and a clean path). An agent grant alone grants nothing; an
 //! agent grant only narrows. Managing a connection is not using it: an admin needs a grant too.
@@ -98,6 +98,13 @@ pub async fn resolve(
     cx: &Context<'_>,
     now: &str,
 ) -> Result<Resolved, Error> {
+    // A caller is a member of the workspace it asks in (today: its owner user; #18 adds more).
+    if cx.user != cx.workspace {
+        return refused(
+            "not_a_member",
+            "the caller is not a member of this workspace",
+        );
+    }
     let Some(adapter) = reg.get(kind) else {
         return refused("unknown_kind", "no such kind");
     };
@@ -281,7 +288,9 @@ pub async fn record_use(
     };
     let known = reg.get(kind).is_some_and(|a| {
         let d = a.descriptor();
-        d.capability(cx.capability).is_some() && d.capability_of(action).is_some()
+        // The operation must belong to the capability the use names.
+        d.capability_of(action)
+            .is_some_and(|c| c.name == cx.capability)
     });
     let plain = cx.agent.is_none_or(crate::store::pools::valid_agent)
         && cx.session.is_none_or(valid_ref)

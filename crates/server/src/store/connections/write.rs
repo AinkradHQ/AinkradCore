@@ -215,7 +215,6 @@ pub async fn set_disabled(
 /// first.
 pub async fn delete(pool: &SqlitePool, id: i64, who: Who<'_>) -> Result<(), Error> {
     let mut tx = crate::store::begin_write(pool).await?;
-    secret::secure(&mut tx).await?;
     let c = find(&mut tx, who.workspace, id).await?;
     let default: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM core_connection_bindings WHERE connection_id = ? \
@@ -241,11 +240,13 @@ pub async fn delete(pool: &SqlitePool, id: i64, who: Who<'_>) -> Result<(), Erro
         .execute(&mut *tx)
         .await?
         .rows_affected();
+    secret::secure(&mut tx).await?;
     secret::wipe_in(&mut tx, id).await?;
     sqlx::query("DELETE FROM core_connections WHERE id = ?")
         .bind(id)
         .execute(&mut *tx)
         .await?;
+    secret::secure_off(&mut tx).await?;
     let details = json!({"kind": c.kind, "name": c.name, "grants_dropped": grants,
                          "bindings_dropped": sessions, "by_device": who.by_device});
     audit(&mut tx, who.actor, "connection.deleted", id, details).await?;
