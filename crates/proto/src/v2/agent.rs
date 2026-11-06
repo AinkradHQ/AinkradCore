@@ -334,4 +334,9 @@ pub struct AgentEvents {
     /// of its own, never the transcript: only the gateway task writes it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gateway: Vec<super::GatewayReport>,
+    /// The harness's latest plan-limit event (KAN-436), a snapshot that each newer one replaces.
+    /// Sent only by a runner that lists `CAP_PLAN_LIMIT`; the harness's structured event, never
+    /// its text, and a hint (the Core may cool an account from it, never disable one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_limit: Option<super::PlanLimit>,
 }

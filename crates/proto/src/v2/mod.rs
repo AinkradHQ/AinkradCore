@@ -43,6 +43,7 @@ mod auth;
 mod command;
 mod gateway;
 mod login;
+mod plan_limit;
 mod subscription;
 mod terminal;
 pub use agent::*;
@@ -50,6 +51,7 @@ pub use auth::*;
 pub use command::*;
 pub use gateway::*;
 pub use login::*;
+pub use plan_limit::*;
 pub use subscription::*;
 pub use terminal::*;
 
