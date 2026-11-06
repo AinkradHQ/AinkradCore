@@ -9,6 +9,7 @@ mod agents;
 use ainkrad_core_server::agents::AgentsConfig;
 mod account_placement;
 mod allocator;
+mod chains;
 mod fault;
 mod gateway;
 mod gateway_auth;

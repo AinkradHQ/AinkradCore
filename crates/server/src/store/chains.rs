@@ -21,7 +21,6 @@
 //! The routes that call the writes need admin and a step-up (S7); nothing here checks a device.
 
 use ainkrad_core::audit::{AuditActor, AuditEntity, NewAuditEvent};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::SqliteConnection;
 use sqlx::sqlite::SqlitePool;
@@ -31,21 +30,15 @@ use super::{account_keys, costs, pools, prices, providers};
 
 pub const MAX_CHAINS: i64 = 64;
 pub const MAX_ENTRIES: usize = 4;
+/// Per user, as are the bindings below.
 const MAX_BINDINGS: i64 = 1024;
 
 mod assign;
 pub use assign::*;
 
-/// One step of a chain, resolved: the shape the allocator's `Ask.chain` takes and the session's
-/// snapshot stores.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChainEntry {
-    pub pool: i64,
-    pub provider: String,
-    pub harness: String,
-    /// The model for the entry's harness; `None` is the harness default.
-    pub model: Option<String>,
-}
+/// One step of a chain, resolved: the allocator's own `Entry` (`{pool, provider, harness, model}`),
+/// so the snapshot a session stores in `core_agent_sessions.chain` is the JSON `pick_in` reads.
+pub use super::alloc::Entry as ChainEntry;
 
 /// An entry as a caller writes it. `harness`, when given, must be the pool's own.
 #[derive(Debug, Clone, Copy)]
@@ -69,6 +62,7 @@ pub struct Chain {
 /// One agent's binding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
+    pub user_id: i64,
     pub agent: String,
     pub chain_id: i64,
 }
@@ -274,7 +268,8 @@ pub async fn create(
         return refused("bad_request", "a chain name is [a-z][a-z0-9._-]{0,63}");
     }
     let mut tx = super::begin_write(pool).await?;
-    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_chains")
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_chains WHERE user_id = ?")
+        .bind(user_id)
         .fetch_one(&mut *tx)
         .await?;
     if n >= MAX_CHAINS {

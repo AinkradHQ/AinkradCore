@@ -27,12 +27,14 @@ CREATE TABLE core_chain_entries (
 
 CREATE INDEX core_chain_entries_pool ON core_chain_entries (pool_id);
 
--- An agent (an opaque id, as in `core_pool_bindings`) and the chain its sessions walk.
+-- An agent (an opaque id, as in `core_pool_bindings`) and the chain its sessions walk. One binding per
+-- user and agent: one user never replaces another's.
 CREATE TABLE core_chain_bindings (
     user_id    INTEGER NOT NULL DEFAULT 1 REFERENCES users(id),
-    agent      TEXT    NOT NULL PRIMARY KEY CHECK (length(agent) BETWEEN 1 AND 64),
+    agent      TEXT    NOT NULL CHECK (length(agent) BETWEEN 1 AND 64),
     chain_id   INTEGER NOT NULL REFERENCES core_chains(id) ON DELETE CASCADE,
-    created_at TEXT    NOT NULL
+    created_at TEXT    NOT NULL,
+    PRIMARY KEY (user_id, agent)
 );
 
 CREATE INDEX core_chain_bindings_chain ON core_chain_bindings (chain_id);

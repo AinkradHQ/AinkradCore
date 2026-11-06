@@ -374,7 +374,7 @@ async fn every_write_is_audited_without_a_value() {
         .unwrap();
     ch::set_default(p, c.id, "d_x", BY, NOW).await.unwrap();
     ch::bind(p, "ag", c.id, "d_x", BY, NOW).await.unwrap();
-    ch::unbind(p, "ag", "d_x", BY).await.unwrap();
+    ch::unbind(p, 1, "ag", "d_x", BY).await.unwrap();
     ch::delete(p, c.id, "d_x", BY).await.unwrap();
     let rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT action, details FROM audit_events WHERE action LIKE 'chain.%' ORDER BY seq",
@@ -414,4 +414,92 @@ async fn at_most_sixty_four_chains() {
         make_named(&fx, &format!("n{i}"), a).await.unwrap();
     }
     assert_eq!(code(make_named(&fx, "one-more", a).await), "limit_reached");
+}
+
+/// 0026 on a database that already has 0025: undoing it drops only its own tables and columns
+/// (`agent`, `chain_id`), leaves the allocator's (`chain`, `chain_pos`, `account_id`, ...) and their
+/// data, and applying it again restores them.
+#[tokio::test]
+async fn the_migration_goes_down_and_up_over_the_allocators_columns() {
+    use crate::store::migrate::{CORE, CORE_MIGRATIONS, migrate_core, undo};
+    let fx = setup().await;
+    let p = &fx.app.pool;
+    let a = pool(&fx, "a", "anthropic").await;
+    let c = make(&fx, "main", &[a]).await;
+    let policy = serde_json::json!({});
+    let new = crate::store::agents::NewSession {
+        runner: &fx.dev.id,
+        harness: "claude",
+        model: None,
+        prompt: None,
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: &fx.dev.id,
+    };
+    let s = crate::store::agents::create(p, &new, BY, NOW)
+        .await
+        .unwrap();
+    let snapshot = serde_json::to_string(&c.entries).unwrap();
+    sqlx::query(
+        "UPDATE core_agent_sessions SET chain = ?, chain_pos = 0, chain_id = ?, agent = 'ag' \
+         WHERE id = ?",
+    )
+    .bind(&snapshot)
+    .bind(c.id)
+    .bind(&s.id)
+    .execute(p)
+    .await
+    .unwrap();
+    let columns = |p: sqlx::SqlitePool| async move {
+        sqlx::query_scalar::<_, String>(
+            "SELECT name FROM pragma_table_info('core_agent_sessions') \
+             WHERE name IN ('chain', 'chain_pos', 'account_id', 'waiting', 'tried_accounts', \
+                            'chain_id', 'agent') ORDER BY name",
+        )
+        .fetch_all(&p)
+        .await
+        .unwrap()
+    };
+    let all = columns(p.clone()).await;
+    assert_eq!(all.len(), 7, "{all:?}");
+    undo(p, CORE, CORE_MIGRATIONS, 25).await.unwrap();
+    assert_eq!(
+        columns(p.clone()).await,
+        [
+            "account_id",
+            "chain",
+            "chain_pos",
+            "tried_accounts",
+            "waiting"
+        ]
+    );
+    let kept: Option<String> =
+        sqlx::query_scalar("SELECT chain FROM core_agent_sessions WHERE id = ?")
+            .bind(&s.id)
+            .fetch_one(p)
+            .await
+            .unwrap();
+    assert_eq!(
+        kept.as_deref(),
+        Some(snapshot.as_str()),
+        "the allocator's data survives"
+    );
+    for t in ["core_chains", "core_chain_entries", "core_chain_bindings"] {
+        let n: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name = ?")
+            .bind(t)
+            .fetch_one(p)
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "{t}");
+    }
+    migrate_core(p).await.unwrap();
+    assert_eq!(columns(p.clone()).await, all);
+    let again: Option<String> =
+        sqlx::query_scalar("SELECT chain FROM core_agent_sessions WHERE id = ?")
+            .bind(&s.id)
+            .fetch_one(p)
+            .await
+            .unwrap();
+    assert_eq!(again.as_deref(), Some(snapshot.as_str()));
 }
