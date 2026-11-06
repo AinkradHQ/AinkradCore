@@ -115,9 +115,13 @@ pub(super) async fn live(app: &App, s: &Session) -> bool {
     if v.done || v.module || v.chain.is_none() || v.account.is_none() {
         return false;
     }
-    let class = match (&v.class, &v.gw_stop, v.upstream.as_deref()) {
+    // A stop of the Core's own that is no budget (a ceiling, a session limit) ends the run: no move.
+    if v.gw_stop.is_some() && v.budget.is_none() {
+        return false;
+    }
+    let class = match (&v.class, v.budget, v.upstream.as_deref()) {
         (Some(c), _, _) => c.clone(),
-        (_, Some(why), _) if rows::budget_stop(why).is_some() => "budget_pool".to_owned(),
+        (_, Some(_), _) => "budget_pool".to_owned(),
         (_, _, Some("quota")) => "quota".to_owned(),
         (_, _, Some("auth_failed")) => "auth".to_owned(),
         _ => return false,
@@ -139,7 +143,11 @@ pub(super) async fn live(app: &App, s: &Session) -> bool {
 /// What a starting Core finishes: every attempt that is over and whose failover was never
 /// settled (the Core went down between the end and the move).
 pub(super) async fn resume_unfinished(app: &App) -> Result<usize, sqlx::Error> {
-    let ids = rows::unfinished(&app.pool).await?;
+    // Only what ended within the last `lost_after`: an older attempt is not moved by a restart.
+    let since = crate::scheduler::iso_of_unix(
+        app.clock.unix() - i64::try_from(app.agents.config.lost_after.as_secs()).unwrap_or(3600),
+    );
+    let ids = rows::unfinished_since(&app.pool, &since).await?;
     for id in &ids {
         let (app, id) = (app.clone(), id.clone());
         tokio::spawn(async move {

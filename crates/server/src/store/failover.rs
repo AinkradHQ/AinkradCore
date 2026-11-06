@@ -34,7 +34,7 @@ pub use run::*;
 
 /// New attempts a run may have (`scheduler.max_hops`, S7 makes it a setting).
 pub const MAX_HOPS: i64 = 4;
-/// Failovers the Core starts in [`WINDOW_SECS`] (`scheduler.failovers_per_10min`, S7 makes it a setting).
+/// Failovers one user's runs on one runner start in [`WINDOW_SECS`] (`scheduler.failovers_per_10min`, S7 makes it a setting).
 pub const PER_WINDOW: i64 = 10;
 pub const WINDOW_SECS: i64 = 600;
 /// The one line a restarted attempt's prompt starts with: its workspace may hold the old one's work.
@@ -61,6 +61,8 @@ pub struct View {
     pub done: bool,
     pub upstream: Option<String>,
     pub gw_stop: Option<String>,
+    /// The budget the stop names (`pool:12`, `account:5`); `None` for a ceiling or a session limit.
+    pub budget: Option<BudgetStop>,
     /// Served by the auth gateway: its own reports are the authority for what went wrong.
     pub gateway: bool,
     pub module: bool,
@@ -71,7 +73,7 @@ pub struct View {
 pub async fn view_in(conn: &mut SqliteConnection, id: &str) -> Result<Option<View>, sqlx::Error> {
     let Some(r) = sqlx::query(
         "SELECT n, state, runner, user_id, coalesce(run_id, id) AS run, attempt, chain, chain_pos, \
-         account_id, outcome, failover_class, failover_done, upstream_class, gw_stop, \
+         account_id, outcome, failover_class, failover_done, upstream_class, gw_stop, gw_stop_budget, \
          gateway_account_id, owner_module, skip_pools, created_by \
          FROM core_agent_sessions WHERE id = ?",
     )
@@ -105,6 +107,10 @@ pub async fn view_in(conn: &mut SqliteConnection, id: &str) -> Result<Option<Vie
         done: r.try_get::<i64, _>("failover_done")? != 0,
         upstream: r.try_get("upstream_class")?,
         gw_stop: r.try_get("gw_stop")?,
+        budget: r
+            .try_get::<Option<String>, _>("gw_stop_budget")?
+            .as_deref()
+            .and_then(budget_stop),
         gateway: r.try_get::<Option<i64>, _>("gateway_account_id")?.is_some(),
         module: r.try_get::<Option<String>, _>("owner_module")?.is_some(),
         skip_pools: json("skip_pools")?
@@ -180,8 +186,10 @@ pub async fn move_in(
     let since = iso_of_unix(now_u - WINDOW_SECS);
     let recent: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM core_agent_sessions WHERE failover_of IS NOT NULL \
-         AND julianday(created_at) > julianday(?)",
+         AND user_id = ? AND runner = ? AND julianday(created_at) > julianday(?)",
     )
+    .bind(v.user)
+    .bind(&v.runner)
     .bind(&since)
     .fetch_one(&mut *conn)
     .await?;
@@ -189,8 +197,7 @@ pub async fn move_in(
         return ended(conn, old, "failover storm guard", vec![]).await;
     }
     let mut skip = v.skip_pools.clone();
-    if class == "budget_pool"
-        && let Some(BudgetStop::Pool(p)) = v.gw_stop.as_deref().and_then(budget_stop)
+    if let Some(BudgetStop::Pool(p)) = v.budget
         && !skip.contains(&p)
     {
         skip.push(p);

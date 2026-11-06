@@ -25,18 +25,16 @@ pub enum Decision {
     End(&'static str),
 }
 
-/// The budget a gateway stop names (`gateway::exhausted` writes `budget exhausted: <kind> <subject>
-/// (<period>, <key>)` itself, so this reads the Core's own text, never a runner's).
+/// The budget a gateway stop names, as the Core wrote it with the stop (`<kind>:<subject>`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BudgetStop {
     Account(i64),
     Pool(i64),
 }
 
-pub fn budget_stop(why: &str) -> Option<BudgetStop> {
-    let rest = why.strip_prefix("budget exhausted: ")?;
-    let (kind, rest) = rest.split_once(' ')?;
-    let subject: i64 = rest.split(' ').next()?.parse().ok()?;
+pub fn budget_stop(code: &str) -> Option<BudgetStop> {
+    let (kind, subject) = code.split_once(':')?;
+    let subject: i64 = subject.parse().ok()?;
     match kind {
         "account" => Some(BudgetStop::Account(subject)),
         "pool" => Some(BudgetStop::Pool(subject)),
@@ -63,16 +61,22 @@ pub fn decide(v: &View) -> Decision {
     if matches!(kind, "succeeded" | "token_cap" | "stalled") {
         return End("the attempt finished");
     }
+    // The Core's own end (a transcript-ceiling kill, exhausted retries, a failed launch, no account) is
+    // never an account failure, whatever class the attempt last saw (rows 1 and 5).
+    if outcome["fingerprint"].as_str() == Some("core") {
+        return End("the Core ended the attempt itself");
+    }
+    // A stop of the Core's own that no other account would lift (the gateway's ceiling, the account's
+    // session limit) ends the run, whatever class the attempt saw; an account or pool budget moves it (2).
+    if v.gw_stop.is_some() && v.budget.is_none() {
+        return End("the session reached its own limit");
+    }
     // The move was decided, and written before the stop that ended it was sent (0).
     if let Some(class) = &v.class {
         return Move(class.clone());
     }
-    // A budget stop (2): an account or pool budget moves the run, a session limit or ceiling ends it.
-    if let Some(why) = &v.gw_stop {
-        return match budget_stop(why) {
-            Some(_) => Move("budget_pool".to_owned()),
-            None => End("the session reached its own limit"),
-        };
+    if v.budget.is_some() {
+        return Move("budget_pool".to_owned());
     }
     match kind {
         // A person's cancel or kill, or the runner's own stop (1).

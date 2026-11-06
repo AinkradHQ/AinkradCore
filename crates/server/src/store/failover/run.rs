@@ -52,12 +52,18 @@ pub async fn context_in(
     conn: &mut SqliteConnection,
     session: &str,
 ) -> Result<(Vec<i64>, Vec<i64>), sqlx::Error> {
+    let run: Option<String> =
+        sqlx::query_scalar("SELECT coalesce(run_id, id) FROM core_agent_sessions WHERE id = ?")
+            .bind(session)
+            .fetch_optional(&mut *conn)
+            .await?;
+    // `run_id = ? OR id = ?` uses the run index (a `coalesce` over the column would scan).
     let used: Vec<i64> = sqlx::query_scalar(
         "SELECT DISTINCT account_id FROM core_agent_sessions \
-         WHERE account_id IS NOT NULL AND id != ?1 AND coalesce(run_id, id) = \
-         (SELECT coalesce(run_id, id) FROM core_agent_sessions WHERE id = ?1)",
+         WHERE account_id IS NOT NULL AND id != ?1 AND (run_id = ?2 OR id = ?2)",
     )
     .bind(session)
+    .bind(run)
     .fetch_all(&mut *conn)
     .await?;
     let skip: Option<String> =
@@ -71,23 +77,48 @@ pub async fn context_in(
     Ok((used, skip))
 }
 
+/// What [`cancel_run`] settled.
+pub struct Cancelled {
+    /// The run's newest attempt: the one to stop.
+    pub newest: String,
+    /// The attempts whose failover this call settled (and [`restore_run`] opens again).
+    pub settled: Vec<String>,
+}
+
 /// A person cancels or kills the run `id` belongs to: no attempt of it moves any more, and the
 /// attempt to stop is the run's newest (the one the person may not know of yet). One write, so a
 /// move that commits first has its successor found here, and a move that follows finds its
 /// attempt settled and starts nothing.
-pub async fn cancel_run(pool: &SqlitePool, id: &str) -> Result<String, sqlx::Error> {
+pub async fn cancel_run(pool: &SqlitePool, id: &str) -> Result<Cancelled, sqlx::Error> {
     let mut tx = crate::store::begin_write(pool).await?;
-    sqlx::query(
+    let run: Option<String> =
+        sqlx::query_scalar("SELECT coalesce(run_id, id) FROM core_agent_sessions WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let settled: Vec<String> = sqlx::query_scalar(
         "UPDATE core_agent_sessions SET failover_done = 1 WHERE failover_done = 0 \
-         AND coalesce(run_id, id) = (SELECT coalesce(run_id, id) FROM core_agent_sessions \
-         WHERE id = ?)",
+         AND (run_id = ?1 OR id = ?1) RETURNING id",
     )
-    .bind(id)
-    .execute(&mut *tx)
+    .bind(run)
+    .fetch_all(&mut *tx)
     .await?;
     let newest = newest_in(&mut tx, id).await?;
     tx.commit().await?;
-    Ok(newest)
+    Ok(Cancelled { newest, settled })
+}
+
+/// Opens again exactly the attempts a [`cancel_run`] settled, when the stop it was for never reached
+/// the runner: the run is no more cancelled than it was.
+pub async fn restore_run(pool: &SqlitePool, settled: &[String]) -> Result<(), sqlx::Error> {
+    let mut tx = crate::store::begin_write(pool).await?;
+    for id in settled {
+        sqlx::query("UPDATE core_agent_sessions SET failover_done = 0 WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await
 }
 
 /// Settles an attempt whose run goes no further (the decision was to end).
@@ -132,6 +163,19 @@ pub async fn set_class(pool: &SqlitePool, id: &str, class: &str) -> Result<bool,
     .execute(pool)
     .await
     .map(|r| r.rows_affected() > 0)
+}
+
+/// [`unfinished`], only those that ended after `since` (an ISO time): a Core that comes back long
+/// after an attempt ended does not start a run the person saw end.
+pub async fn unfinished_since(pool: &SqlitePool, since: &str) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT id FROM core_agent_sessions WHERE state IN ('ended', 'lost') AND failover_done = 0 \
+         AND chain IS NOT NULL AND owner_module IS NULL AND julianday(updated_at) > julianday(?) \
+         ORDER BY n",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await
 }
 
 /// The attempts that are over and whose failover was never settled: what a restart finishes.

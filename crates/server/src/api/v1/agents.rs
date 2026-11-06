@@ -489,18 +489,36 @@ async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSe
     } else {
         not_a_modules(&s)?;
         owns_secrets(&s, &me)?;
-        // A person's stop ends the run: no attempt of it moves on any more (after the checks above,
-        // so a refused caller settles nothing), and the one to stop is the run's newest, which a
-        // failover may have put in place of the one the person knows.
-        let newest = crate::store::failover::cancel_run(&app.pool, &s.id).await?;
+        // A person's stop ends the run, and the one to stop is its newest attempt (a failover may have
+        // replaced the one the person knows): found without writing, checked, and only then is the
+        // whole run settled so no attempt of it moves on.
+        let newest = crate::store::failover::newest(&app.pool, &s.id).await?;
         if newest != s.id {
             s = one(&app, &newest).await?;
             owns_secrets(&s, &me)?;
         }
-        // A chain session that never reached its runner (waiting for an account, or picked and not
-        // started) is ended here: the runner has nothing to stop.
-        if !crate::store::alloc::end_unstarted(&app.pool, &s.id, &app.clock.now()).await? {
-            send(&app, &s, command(&s), &me).await?;
+        // Settled before the stop so no move slips in; opened again if the stop never reaches the
+        // runner (it is offline): the run is then no more cancelled than it was.
+        let cancelled = crate::store::failover::cancel_run(&app.pool, &s.id).await?;
+        let moved = cancelled.newest != s.id;
+        if moved {
+            s = one(&app, &cancelled.newest).await?;
+        }
+        let stopped = async {
+            if moved {
+                owns_secrets(&s, &me)?;
+            }
+            // A chain session that never reached its runner (waiting for an account, or picked and not
+            // started) is ended here: the runner has nothing to stop.
+            if !crate::store::alloc::end_unstarted(&app.pool, &s.id, &app.clock.now()).await? {
+                send(&app, &s, command(&s), &me).await?;
+            }
+            Ok::<(), ApiError>(())
+        }
+        .await;
+        if let Err(e) = stopped {
+            crate::store::failover::restore_run(&app.pool, &cancelled.settled).await?;
+            return Err(e);
         }
     }
     let action = if kill {

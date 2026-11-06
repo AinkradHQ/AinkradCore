@@ -12,6 +12,9 @@ ALTER TABLE core_agent_sessions ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE core_agent_sessions ADD COLUMN failover_of TEXT;
 ALTER TABLE core_agent_sessions ADD COLUMN failover_class TEXT;
 ALTER TABLE core_agent_sessions ADD COLUMN failover_done INTEGER NOT NULL DEFAULT 0;
+-- `gw_stop_budget` is the budget a stop names, as `<kind>:<subject>` (`pool:12`, `account:5`): written by the Core
+-- with `gw_stop` when an account or pool budget ran out, NULL for a stop that is a ceiling or a session limit.
+ALTER TABLE core_agent_sessions ADD COLUMN gw_stop_budget TEXT;
 ALTER TABLE core_agent_sessions ADD COLUMN skip_pools TEXT NOT NULL DEFAULT '[]';
 CREATE UNIQUE INDEX core_agent_sessions_failover_of ON core_agent_sessions (failover_of)
     WHERE failover_of IS NOT NULL;

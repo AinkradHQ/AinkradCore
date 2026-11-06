@@ -63,7 +63,13 @@ async fn topup(app: &App, s: &Session) -> Result<(), Refusal> {
         gw::Hold::Denied(why) => {
             let why =
                 format!("the gateway's ceiling is used up and the budgets leave too little: {why}");
-            gw::stop(&app.pool, &s.id, &why).await?;
+            // A budget that is short is a budget stop (the run moves); anything else (the account's
+            // session limit) ends the run.
+            let now = app.clock.now();
+            let mut conn = app.pool.acquire().await?;
+            let budget = gw::short_budget(&mut conn, account, &s.id, min_usd, &now).await?;
+            drop(conn);
+            gw::stop(&app.pool, &s.id, &why, budget.as_deref()).await?;
             return Ok(());
         }
     };

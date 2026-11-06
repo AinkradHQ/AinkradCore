@@ -445,6 +445,10 @@ async fn fail(app: &App, s: &Session, why: &str) {
     if let Err(e) = store::end(&app.pool, &s.id, "ended", &outcome, &app.clock.now()).await {
         tracing::error!(session = s.id, error = %e, "ending a session failed");
     }
+    // The Core's own end never moves a run: settled here, so no restart finds it unsettled.
+    if let Err(e) = crate::store::failover::settle(&app.pool, &s.id).await {
+        tracing::error!(session = s.id, error = %e, "settling a failover failed");
+    }
 }
 
 pub fn describe(r: &Refusal) -> String {

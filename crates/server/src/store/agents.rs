@@ -327,12 +327,14 @@ pub async fn set_state(
 ) -> Result<(), sqlx::Error> {
     let mut tx = super::begin_write(pool).await?;
     let changed = sqlx::query(
-        "UPDATE core_agent_sessions SET state = ?, resumes = resumes + ?, updated_at = ? \
+        "UPDATE core_agent_sessions SET state = ?, resumes = resumes + ?, updated_at = ?, \
+         upstream_class = iif(? != 0, NULL, upstream_class) \
          WHERE id = ? AND state NOT IN ('ended', 'lost') AND state != ?",
     )
     .bind(state)
     .bind(i64::from(resumed))
     .bind(now)
+    .bind(i64::from(resumed))
     .bind(id)
     .bind(state)
     .execute(&mut *tx)
@@ -556,7 +558,7 @@ pub async fn reopen(pool: &SqlitePool, id: &str, now: &str) -> Result<bool, sqlx
     super::alloc::stamp_account_in(&mut tx, id).await?;
     let changed = sqlx::query(
         "UPDATE core_agent_sessions SET state = 'interrupted', outcome = NULL, ended_at = NULL, \
-         failover_done = 0, failover_class = NULL, updated_at = ? \
+         failover_done = 0, failover_class = NULL, upstream_class = NULL, updated_at = ? \
          WHERE id = ? AND state IN ('lost', 'interrupted')",
     )
     .bind(now)
@@ -636,7 +638,7 @@ pub async fn wake(
     super::alloc::stamp_account_in(&mut tx, id).await?;
     sqlx::query(
         "UPDATE core_agent_sessions SET state = 'interrupted', outcome = NULL, ended_at = NULL, \
-         failover_done = 0, failover_class = NULL, prompt = coalesce(?, prompt), updated_at = ? \
+         failover_done = 0, failover_class = NULL, upstream_class = NULL, prompt = coalesce(?, prompt), updated_at = ? \
          WHERE id = ?",
     )
     .bind(text)

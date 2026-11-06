@@ -150,7 +150,7 @@ pub const REJECTED_SECS: i64 = 15 * 60;
 /// Until when (unix seconds) the stored snapshot keeps its account out of new picks, if it still
 /// does: a `rejected` plan until the latest window reset (or [`REJECTED_SECS`] after the snapshot
 /// when none says), a window at 95% or more until it resets. Never longer than
-/// [`HARNESS_MAX_SECS`] from `now`: the snapshot is forgeable, so it can only ever delay a pick.
+/// [`HARNESS_MAX_SECS`] after the snapshot itself: the snapshot is forgeable, so it can only ever delay a pick.
 pub fn plan_cooling_until(snapshot: &str, now_u: i64) -> Option<i64> {
     let v: serde_json::Value = serde_json::from_str(snapshot).ok()?;
     let at = v["at"].as_i64()?;
@@ -175,5 +175,6 @@ pub fn plan_cooling_until(snapshot: &str, now_u: i64) -> Option<i64> {
         }
         _ => return None,
     };
-    Some(until.min(now_u + super::HARNESS_MAX_SECS)).filter(|u| *u > now_u)
+    // Anchored on the snapshot time, not on the pick: the cap must run out, however often it is read.
+    Some(until.min(at + super::HARNESS_MAX_SECS)).filter(|u| *u > now_u)
 }

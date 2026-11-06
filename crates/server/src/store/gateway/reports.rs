@@ -26,14 +26,15 @@ async fn exhausted(
     account: i64,
     session: &str,
     now: &str,
-) -> Result<Option<String>, sqlx::Error> {
+) -> Result<Option<(String, String)>, sqlx::Error> {
     let owned = subjects_of(conn, account).await?;
     let all = guard::standings_for(conn, &refs(&owned), now, session, true).await?;
     Ok(all.iter().find(|s| s.exhausted()).map(|s| {
-        format!(
+        let why = format!(
             "budget exhausted: {} {} ({}, {})",
             s.budget.kind, s.budget.subject, s.budget.period, s.period_key
-        )
+        );
+        (why, format!("{}:{}", s.budget.kind, s.budget.subject))
     }))
 }
 
@@ -119,13 +120,14 @@ pub async fn absorb(
     }
     // After every answer, not only after a new report: a stop a crash lost is found again here.
     if row.try_get::<Option<String>, _>("gw_stop")?.is_none()
-        && let Some(why) = exhausted(conn, account, session, now).await?
+        && let Some((why, budget)) = exhausted(conn, account, session, now).await?
     {
         sqlx::query(
-            "UPDATE core_agent_sessions SET gw_stop = ? WHERE id = ? AND gw_stop IS NULL \
-             AND state NOT IN ('ended', 'lost')",
+            "UPDATE core_agent_sessions SET gw_stop = ?, gw_stop_budget = ? WHERE id = ? \
+             AND gw_stop IS NULL AND state NOT IN ('ended', 'lost')",
         )
         .bind(why)
+        .bind(budget)
         .bind(session)
         .execute(&mut *conn)
         .await?;
@@ -256,12 +258,18 @@ pub async fn mark_stopped(pool: &SqlitePool, session: &str, at: i64) -> Result<(
 }
 
 /// A reason to stop the session, set once (the supervisor cancels it, as for a budget that ran out).
-pub async fn stop(pool: &SqlitePool, session: &str, why: &str) -> Result<(), sqlx::Error> {
+pub async fn stop(
+    pool: &SqlitePool,
+    session: &str,
+    why: &str,
+    budget: Option<&str>,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE core_agent_sessions SET gw_stop = ? WHERE id = ? AND gw_stop IS NULL \
-         AND state NOT IN ('ended', 'lost')",
+        "UPDATE core_agent_sessions SET gw_stop = ?, gw_stop_budget = ? WHERE id = ? \
+         AND gw_stop IS NULL AND state NOT IN ('ended', 'lost')",
     )
     .bind(why)
+    .bind(budget)
     .bind(session)
     .execute(pool)
     .await
@@ -271,4 +279,30 @@ pub async fn stop(pool: &SqlitePool, session: &str, why: &str) -> Result<(), sql
 /// The details an `agent.cancelled` audit row of a budget stop carries.
 pub fn stop_details(why: &str) -> serde_json::Value {
     json!({"reason": "budget", "detail": why})
+}
+
+/// The account or pool budget (`<kind>:<subject>`) that leaves too little for one turn of `min_usd`
+/// micro-dollars, if one does: what a denied top-up names, so a budget stop is told from a session limit.
+pub async fn short_budget(
+    conn: &mut SqliteConnection,
+    account: i64,
+    session: &str,
+    min_usd: u64,
+    now: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    let owned = subjects_of(conn, account).await?;
+    let all = guard::standings_for(conn, &refs(&owned), now, session, true).await?;
+    let short = |s: &&super::super::budgets::Standing| {
+        let tokens = !s.dollars_only()
+            && u64::try_from(s.left().saturating_sub(s.held).max(0)).unwrap_or(0)
+                < super::MIN_CEILING_TOKENS;
+        let usd = s.usd_left().is_some_and(|l| {
+            u64::try_from(l.saturating_sub(s.held_usd).max(0)).unwrap_or(0) < min_usd
+        });
+        s.exhausted() || tokens || usd
+    };
+    Ok(all
+        .iter()
+        .find(short)
+        .map(|s| format!("{}:{}", s.budget.kind, s.budget.subject)))
 }
