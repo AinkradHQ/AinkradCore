@@ -19,6 +19,8 @@ use zeroize::Zeroizing;
 use super::*;
 use crate::{Executor, Job, Report};
 
+mod sub;
+
 /// Throwaway values: at least 8 bytes (the redactor's floor), shaped like no real key.
 const ENV_VALUE: &str = "throwaway-env-value-41c7";
 const FILE_VALUE: &str = "throwaway-file-value-9d2e";
