@@ -6,8 +6,16 @@ use super::fake::Fake;
 use crate::connections::github::Outcome;
 use crate::connections::github::app::{AppKey, mint};
 
-/// A throwaway key made for this test; it signs nothing real.
-const PEM: &str = include_str!("app-test-key.pem");
+/// A throwaway key made for each test run with the `openssl` tool (ring cannot make RSA keys);
+/// it signs nothing real and is never written to the repository.
+fn pem() -> String {
+    let out = std::process::Command::new("openssl")
+        .args(["genrsa", "2048"])
+        .output()
+        .expect("the openssl tool makes the test key");
+    assert!(out.status.success(), "openssl genrsa failed");
+    String::from_utf8(out.stdout).unwrap()
+}
 
 #[test]
 fn a_bad_key_or_id_is_refused_and_debug_hides_it() {
@@ -19,16 +27,16 @@ fn a_bad_key_or_id_is_refused_and_debug_hides_it() {
         )
         .is_none()
     );
-    assert!(AppKey::new("", PEM).is_none());
-    assert!(AppKey::new("1 2", PEM).is_none());
-    let k = AppKey::new("123", PEM).unwrap();
+    assert!(AppKey::new("", &pem()).is_none());
+    assert!(AppKey::new("1 2", &pem()).is_none());
+    let k = AppKey::new("123", &pem()).unwrap();
     assert!(!format!("{k:?}").contains("123"));
 }
 
 #[tokio::test]
 async fn mints_an_installation_token_with_a_signed_app_jwt() {
     let fake = Fake::start().await;
-    let key = AppKey::new("123456", PEM).unwrap();
+    let key = AppKey::new("123456", &pem()).unwrap();
     fake.push(
         201,
         &[],
@@ -65,7 +73,7 @@ async fn mints_an_installation_token_with_a_signed_app_jwt() {
 #[tokio::test]
 async fn a_refused_mint_is_a_plain_outcome() {
     let fake = Fake::start().await;
-    let key = AppKey::new("1", PEM).unwrap();
+    let key = AppKey::new("1", &pem()).unwrap();
     fake.push(
         401,
         &[],
