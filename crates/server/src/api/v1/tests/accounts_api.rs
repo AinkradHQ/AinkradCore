@@ -252,7 +252,7 @@ async fn an_account_is_replaced_disabled_capped_and_deleted_through_the_routes()
     .await;
     assert_eq!(
         (s, b["state"].as_str(), b["state_reason"].as_str()),
-        (StatusCode::OK, Some("disabled"), Some("rotating"))
+        (StatusCode::OK, Some("disabled"), Some("manual"))
     );
     let (s, b) = call(
         &fx,

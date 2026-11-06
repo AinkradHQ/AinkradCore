@@ -137,7 +137,11 @@ async fn three_failed_auth_sessions_in_a_row_keep_a_subscription_out_and_a_succe
         .await
         .unwrap();
     assert_eq!(view(&s.fx, id).await.0, "unhealthy");
-    assert!(!health::startable("unhealthy", true));
+    assert!(!health::startable(
+        "unhealthy",
+        Some("auth_suspected"),
+        true
+    ));
     // The other account never saw any of it.
     assert_eq!(
         (view(&s.fx, s.b.id).await.0, counts(&s.fx, s.b.id).await),
@@ -233,7 +237,7 @@ async fn forged_harness_signals_never_disable_and_unknown_fingerprints_are_ignor
             }
         }
         let a = view(&s.fx, id).await;
-        assert_eq!((a.0.as_str(), a.1.as_deref()), (state, Some(reason)));
+        assert_eq!((a.0.as_str(), a.1.as_deref()), (state, Some("manual")));
     }
     // A forged end cannot disable even from active: the worst state any class reaches is timed or
     // auth_suspected, never `disabled`.
@@ -408,10 +412,75 @@ async fn a_gateway_sessions_harness_signals_are_ignored() {
 }
 
 #[test]
-fn only_a_resumed_run_may_start_in_a_cooldown() {
-    assert!(health::startable("active", false));
-    assert!(!health::startable("cooling", false) && health::startable("cooling", true));
-    for st in ["limited", "unhealthy", "disabled"] {
-        assert!(!health::startable(st, true) && !health::startable(st, false));
+fn only_a_resumed_run_may_start_in_the_modules_own_short_windows() {
+    let st = health::startable;
+    assert!(st("active", None, false) && st("active", None, true));
+    // A fresh start never passes a window; a resume passes a rate-limit cooldown and the ten-minute
+    // upstream_errors window, and nothing else.
+    assert!(
+        !st("cooling", Some("rate_limited"), false) && st("cooling", Some("rate_limited"), true)
+    );
+    assert!(!st("unhealthy", Some("upstream_errors"), false));
+    assert!(st("unhealthy", Some("upstream_errors"), true));
+    for (state, reason) in [
+        ("limited", Some("quota")),
+        ("unhealthy", Some("auth_suspected")),
+        ("cooling", Some("manual")),
+        ("limited", Some("manual")),
+        ("unhealthy", Some("manual")),
+        ("disabled", Some("manual")),
+        ("cooling", None),
+    ] {
+        assert!(
+            !st(state, reason, true) && !st(state, reason, false),
+            "{state} {reason:?}"
+        );
     }
+}
+
+#[tokio::test]
+async fn an_admins_hold_is_stored_manual_and_never_ends_or_changes_by_itself() {
+    let s = subs().await;
+    let id = s.a.id;
+    // Free text that looks like a code is only a note: the state's reason reads `manual`.
+    let held = acc::set_state(
+        &s.fx.app.pool,
+        id,
+        "limited",
+        Some("quota"),
+        Some(&at(100)),
+        "d",
+        BY,
+        &at(0),
+    )
+    .await
+    .unwrap();
+    assert_eq!(held.state_reason.as_deref(), Some("manual"));
+    // Its `until` passes: it stays limited (no lazy recovery) until an admin changes it.
+    health::recover(&s.fx.app.pool, id, &at(500)).await.unwrap();
+    assert_eq!(view(&s.fx, id).await.0, "limited");
+    // A forged harness quota or rate limit does not shorten or replace a 3-day admin cooling.
+    acc::set_state(
+        &s.fx.app.pool,
+        id,
+        "cooling",
+        Some("rate_limited"),
+        Some(&at(3 * 86_400)),
+        "d",
+        BY,
+        &at(1),
+    )
+    .await
+    .unwrap();
+    for c in ["quota", "rate_limited", "auth"] {
+        attempt(&s, &s.a, failed(c), 600).await;
+    }
+    assert_eq!(
+        view(&s.fx, id).await,
+        (
+            "cooling".into(),
+            Some("manual".into()),
+            Some(at(3 * 86_400))
+        )
+    );
 }
