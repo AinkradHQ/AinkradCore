@@ -10,7 +10,9 @@
 //! - **Money.** No gateway serves it (`gateway_account_id` stays NULL), so no hold, no ledger row,
 //!   no stop and no top-up exist for it; nothing writes a dollar cost for a plan that bills none.
 
-use ainkrad_proto::v2::{SUBSCRIPTION_HARNESS, is_subscription_secret};
+use ainkrad_proto::v2::{
+    AGENT_DRIVER, CAP_SUBSCRIPTION_ENV, SUBSCRIPTION_HARNESS, is_subscription_secret,
+};
 
 use super::*;
 use crate::store::{accounts, providers, secrets};
@@ -86,7 +88,19 @@ pub(super) async fn lease(
             "a subscription account's token is an environment variable, never a file",
         ));
     }
-    secrets::lease_to(
+    mint(app, s, secret).await
+}
+
+/// The lease itself, then a second look at the account. A disable or delete that commits before
+/// this lease is written has revoked every lease it knew of and cannot see this one, so the state
+/// is read again after it and the lease is revoked here if the account is no longer active. One
+/// that commits after revokes it itself (`accounts::set_state`).
+async fn mint(
+    app: &App,
+    s: &Session,
+    secret: &store::SessionSecret,
+) -> Result<(String, i64), Refusal> {
+    let got = secrets::lease_to(
         &app.pool,
         &secret.name,
         &s.runner,
@@ -98,5 +112,140 @@ pub(super) async fn lease(
         Some("env"),
     )
     .await
-    .map_err(lift)
+    .map_err(lift)?;
+    let state: Option<String> =
+        sqlx::query_scalar("SELECT state FROM core_accounts WHERE secret_name = ?")
+            .bind(&secret.name)
+            .fetch_optional(&app.pool)
+            .await?;
+    if state.as_deref() != Some("active") {
+        crate::store::account_keys::revoke_leases(&app.pool, &secret.name).await?;
+        return Err(refuse(
+            "the subscription account was disabled or deleted while the session started",
+        ));
+    }
+    Ok(got)
+}
+
+/// [`mint`] without the first, live check of the account: the interleaving a test cannot otherwise
+/// reach (the account goes away after that check, before the lease is written).
+#[cfg(feature = "test-support")]
+pub async fn mint_for_tests(
+    app: &App,
+    s: &Session,
+    secret: &store::SessionSecret,
+) -> Result<(String, i64), Refusal> {
+    mint(app, s, secret).await
+}
+
+/// Whether `runner` lists the `subscription-env` command beside its agent driver's ops: it applies
+/// the subscription rules before it redeems a lease. An older runner does not, and is never sent
+/// the token.
+fn lists_cap(runner: &RunnerState) -> bool {
+    runner
+        .drivers
+        .iter()
+        .filter(|d| d.name == AGENT_DRIVER)
+        .any(|d| d.commands.iter().any(|c| c == CAP_SUBSCRIPTION_ENV))
+}
+
+/// [`account_refusal`] plus, for a session holding a subscription's token, the capability above.
+pub(super) fn account_refusal(
+    runner: &RunnerState,
+    secrets: &[store::SessionSecret],
+) -> Option<String> {
+    super::account_refusal(runner).or_else(|| {
+        (secrets.iter().any(is_subscription) && !lists_cap(runner)).then(|| {
+            "a session holding a subscription account's token needs a runner that checks it \
+             before redeeming (the subscription-env command): update the runner"
+                .to_owned()
+        })
+    })
+}
+
+/// Sets account `id`'s state, and when a subscription account leaves `active` also kills the live
+/// sessions holding its token (the lease is revoked; a running harness still has the value). This
+/// does NOT revoke the token at Anthropic: the user does that.
+pub async fn set_state(
+    app: &App,
+    id: i64,
+    state: &str,
+    reason: Option<&str>,
+    until: Option<&str>,
+    by_device: &str,
+    actor: AuditActor,
+) -> Result<accounts::Account, secrets::Error> {
+    let now = app.clock.now();
+    let a =
+        accounts::set_state(&app.pool, id, state, reason, until, by_device, actor, &now).await?;
+    if state != "active" && crate::store::account_keys::subscription_provider(&a.provider) {
+        stop_live(
+            app,
+            &a.secret_name,
+            &format!("the subscription account is {state}"),
+        )
+        .await;
+    }
+    Ok(a)
+}
+
+/// Deletes account `id`, and kills the live sessions holding a subscription account's token.
+pub async fn delete(
+    app: &App,
+    id: i64,
+    by_device: &str,
+    actor: AuditActor,
+) -> Result<(), secrets::Error> {
+    let a = accounts::get(&app.pool, id).await?;
+    accounts::delete(&app.pool, id, by_device, actor).await?;
+    if crate::store::account_keys::subscription_provider(&a.provider) {
+        stop_live(app, &a.secret_name, "the subscription account was deleted").await;
+    }
+    Ok(())
+}
+
+/// Kills every live session whose secrets name `secret_name`, audited `agent.killed` with `why`. A
+/// session the runner cannot be asked about (away, no elevation) is logged and left to end at its
+/// next start, which refuses the account.
+async fn stop_live(app: &App, secret_name: &str, why: &str) {
+    let live = match store::live(&app.pool).await {
+        Ok(l) => l,
+        Err(e) => return tracing::warn!(error = %e, "listing the sessions to stop"),
+    };
+    for s in live
+        .iter()
+        .filter(|s| s.secrets.iter().any(|x| x.name == secret_name))
+    {
+        let proof = app.agents.elevated.lock().unwrap().get(&s.id).copied();
+        let stop = Command::AgentStop(ainkrad_proto::v2::AgentStop {
+            session: s.id.clone(),
+            kill: true,
+        });
+        match ask(app, &s.runner, stop, app.agents.config.answer, proof).await {
+            Ok(ev) => {
+                let at = app.clock.now();
+                if let Err(e) = store::apply(&app.pool, &s.id, &ev, &at).await {
+                    tracing::warn!(session = s.id, error = %e, "storing a killed session's answer");
+                }
+                let details = json!({"reason": why});
+                let act = store::action(
+                    &app.pool,
+                    s,
+                    AuditActor::System,
+                    "agent.killed",
+                    None,
+                    details,
+                    "core",
+                );
+                if let Err(e) = act.await {
+                    tracing::warn!(session = s.id, error = %e, "auditing a killed session");
+                }
+            }
+            Err(e) => tracing::warn!(
+                session = s.id,
+                why = e.message,
+                "stopping a session of a gone account"
+            ),
+        }
+    }
 }

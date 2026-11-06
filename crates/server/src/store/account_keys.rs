@@ -95,13 +95,23 @@ pub(super) async fn revoke_leases_in(
     .map(drop)
 }
 
-/// A subscription pool is not bound to an agent: an agent names its subscription account itself
-/// (a session's secret), and nothing picks or fails over between accounts (never pool them).
+/// Drops every unredeemed lease on `secret_name` (an account that is not active leases nothing).
+pub async fn revoke_leases(pool: &sqlx::SqlitePool, secret_name: &str) -> Result<(), sqlx::Error> {
+    revoke_leases_in(&mut *pool.acquire().await?, secret_name).await
+}
+
+/// A subscription pool is never bound to an agent: an agent names its subscription account itself
+/// (a session's secret), and nothing picks or fails over between accounts (a subscription is never
+/// pooled). If binding is ever opened, `resolve` must refuse a pool of other than exactly one
+/// member and never fail over.
 pub(super) fn check_bind(provider: &str) -> Result<(), Error> {
     match subscription_provider(provider) {
         true => Err(Error::Refused {
             code: "bad_request",
-            message: "a subscription pool is not bound to an agent yet".to_owned(),
+            message:
+                "a subscription pool is never bound to an agent: a session names its subscription \
+                account itself, and nothing fails over between accounts"
+                    .to_owned(),
         }),
         false => Ok(()),
     }

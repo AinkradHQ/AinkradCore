@@ -20,7 +20,7 @@
 pub mod gateway;
 mod launch;
 pub mod login;
-mod subscription;
+pub mod subscription;
 mod topup;
 pub mod wake;
 use launch::launch;
@@ -384,7 +384,7 @@ pub fn placement_refusal_with(
         if let Some(why) = account_policy_problem(&parsed) {
             return Some(why.to_owned());
         }
-        if let Some(why) = account_refusal(runner) {
+        if let Some(why) = subscription::account_refusal(runner, secrets) {
             return Some(why);
         }
     }

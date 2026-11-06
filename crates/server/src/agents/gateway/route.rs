@@ -208,7 +208,18 @@ mod tests {
         ] {
             assert!(secrets_problem("codex", &[s(name)]).is_some(), "{name}");
         }
-        assert_eq!(secrets_problem("codex", &[s("git.token")]), None);
+        assert_eq!(
+            secrets_problem(
+                "codex",
+                &[SessionSecret {
+                    name: "git.token".to_owned(),
+                    var: "GH_TOKEN".to_owned()
+                }]
+            ),
+            None
+        );
+        // An ordinary secret may not take the harness's authentication variable.
+        assert!(secrets_problem("codex", &[s("git.token")]).is_some());
         // A subscription account's secret is no API key: env only, claude only, its own variable.
         let sub = |var: &str| SessionSecret {
             name: "acct.claude-sub.7".to_owned(),
