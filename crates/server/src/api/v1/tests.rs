@@ -48,6 +48,7 @@ mod failover;
 mod failover_more;
 mod failover_props;
 mod failover_races;
+mod failover_review;
 mod failover_table;
 mod gateway_ceiling;
 mod gateway_epoch;

@@ -179,7 +179,7 @@ impl Sim {
                     .get(self.rng.below(self.runs.len().max(1)))
                     .cloned();
                 if let Some(id) = id {
-                    let newest = fo::cancel_run(&pool, &id).await.unwrap();
+                    let newest = fo::cancel_run(&pool, &id).await.unwrap().newest;
                     if !alloc::end_unstarted(&pool, &newest, &at(self.t))
                         .await
                         .unwrap()

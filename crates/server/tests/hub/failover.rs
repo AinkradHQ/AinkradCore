@@ -358,3 +358,27 @@ async fn a_core_that_went_down_between_the_end_and_the_move_finishes_the_move_on
         2
     );
 }
+
+#[tokio::test]
+async fn an_end_the_core_makes_itself_settles_the_run_so_no_restart_moves_it() {
+    // A runner with no gateway cannot serve an API-key entry: the Core ends the session itself.
+    let (core, _fake, runner, a) = up("fo-core-end", false, None).await;
+    let chain = [pool_of(&core, &runner, &[a.id]).await];
+    let session = chain_session(&core, &runner, &chain).await;
+    until("the end", &core, &session, |s| !s.live()).await;
+    let mut settled = 0;
+    for _ in 0..50 {
+        settled = count(&core, "SELECT failover_done FROM core_agent_sessions").await;
+        if settled == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    }
+    assert_eq!(settled, 1);
+    assert!(
+        failover::unfinished(&core.app.pool)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

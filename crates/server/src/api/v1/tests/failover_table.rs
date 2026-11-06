@@ -22,6 +22,7 @@ fn view() -> View {
         done: false,
         upstream: None,
         gw_stop: None,
+        budget: None,
         gateway: false,
         module: false,
         skip_pools: vec![],
@@ -75,11 +76,16 @@ fn the_decision_table_row_by_row() {
     let mut budget = view();
     kind(&mut budget, "cancelled", None);
     budget.gw_stop = Some("budget exhausted: pool 3 (day, 2026-11-06)".into());
+    budget.budget = Some(fo::BudgetStop::Pool(3));
     assert_eq!(moves(fo::decide(&budget)), "budget_pool");
-    budget.gw_stop = Some("budget exhausted: account 9 (day, 2026-11-06)".into());
+    budget.budget = Some(fo::BudgetStop::Account(9));
     assert_eq!(moves(fo::decide(&budget)), "budget_pool");
+    // A ceiling or session-limit stop names no budget: it ends the run, even with a class on the row (G).
+    budget.budget = None;
     budget.gw_stop =
         Some("the gateway's ceiling is used up and the budgets leave too little".into());
+    ends(&budget);
+    budget.class = Some("quota".into());
     ends(&budget);
     // 3: a gateway attempt is judged by the gateway's own reports.
     let mut gw = view();
@@ -131,22 +137,26 @@ fn the_decision_table_row_by_row() {
 }
 
 #[test]
-fn a_budget_stop_is_read_from_the_cores_own_text_only() {
+fn a_budget_stop_is_read_from_the_code_the_core_wrote_with_it() {
     use fo::BudgetStop::{Account, Pool};
-    assert_eq!(
-        fo::budget_stop("budget exhausted: pool 12 (day, 2026-11-06)"),
-        Some(Pool(12))
-    );
-    assert_eq!(
-        fo::budget_stop("budget exhausted: account 4 (month, 2026-11)"),
-        Some(Account(4))
-    );
-    for no in [
-        "",
-        "budget exhausted: agent 4 (day, x)",
-        "budget exhausted: pool x (day, y)",
-        "the ceiling is used up",
-    ] {
+    assert_eq!(fo::budget_stop("pool:12"), Some(Pool(12)));
+    assert_eq!(fo::budget_stop("account:4"), Some(Account(4)));
+    for no in ["", "agent:4", "pool:x", "pool", "the ceiling is used up"] {
         assert_eq!(fo::budget_stop(no), None, "{no}");
     }
+}
+
+#[test]
+fn the_cores_own_end_never_moves_a_run_whatever_class_the_attempt_last_saw() {
+    let mut v = view();
+    v.gateway = true;
+    v.upstream = Some("rate_limited".into());
+    kind(&mut v, "failed", Some("core"));
+    assert!(matches!(fo::decide(&v), Decision::End(_)));
+    v.class = Some("quota".into());
+    assert!(matches!(fo::decide(&v), Decision::End(_)));
+    v.gateway = false;
+    v.upstream = None;
+    v.class = None;
+    assert!(matches!(fo::decide(&v), Decision::End(_)));
 }

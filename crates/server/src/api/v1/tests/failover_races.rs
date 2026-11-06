@@ -6,7 +6,7 @@ use ainkrad_proto::v2::{PlanLimit, PlanWindow, UpstreamStatus};
 use serde_json::json;
 
 use super::allocator::{W, took, w};
-use super::failover::{HOLDS, budget, limited, mv, over, row, to};
+use super::failover::{budget, limited, mv, over, row, to};
 use super::health::at;
 use super::*;
 use crate::store::agents::{self as store, SessionSecret, Woken};
@@ -84,12 +84,12 @@ async fn a_persons_cancel_racing_a_move_leaves_no_live_successor_and_no_hold() {
     // ends it in the Core, which has nothing to ask a runner for.
     let (old, _) = over(&w, &chain, limited(), 0).await;
     let (new, _) = to(mv(&w, &old.id, "rate_limited", &at(5), true).await);
-    assert_eq!(fo::cancel_run(pool, &old.id).await.unwrap(), new);
+    assert_eq!(fo::cancel_run(pool, &old.id).await.unwrap().newest, new);
     assert!(alloc::end_unstarted(pool, &new, &at(6)).await.unwrap());
     assert_eq!((w.count(live, "x").await, w.count(held, "x").await), (0, 0));
     // The cancel first: it settles every attempt, so the move that follows starts nothing.
     let (old, _) = over(&w, &chain, limited(), 20).await;
-    assert_eq!(fo::cancel_run(pool, &old.id).await.unwrap(), old.id);
+    assert_eq!(fo::cancel_run(pool, &old.id).await.unwrap().newest, old.id);
     assert_eq!(
         mv(&w, &old.id, "rate_limited", &at(30), true).await,
         Moved::Skipped
@@ -228,8 +228,10 @@ async fn a_budget_stop_skips_the_pool_it_shares_and_an_account_budget_only_the_a
     )
     .await;
     let stop = format!("budget exhausted: pool {} (day, 2026-11-06)", chain[0].pool);
-    sqlx::query("UPDATE core_agent_sessions SET gw_stop = ? WHERE id = ?")
+    let code = format!("pool:{}", chain[0].pool);
+    sqlx::query("UPDATE core_agent_sessions SET gw_stop = ?, gw_stop_budget = ? WHERE id = ?")
         .bind(&stop)
+        .bind(&code)
         .bind(&old.id)
         .execute(pool)
         .await
@@ -252,8 +254,9 @@ async fn a_budget_stop_skips_the_pool_it_shares_and_an_account_budget_only_the_a
     )
     .await;
     let stop = format!("budget exhausted: account {was} (day, 2026-11-06)");
-    sqlx::query("UPDATE core_agent_sessions SET gw_stop = ? WHERE id = ?")
+    sqlx::query("UPDATE core_agent_sessions SET gw_stop = ?, gw_stop_budget = ? WHERE id = ?")
         .bind(stop)
+        .bind(format!("account:{was}"))
         .bind(&old.id)
         .execute(pool)
         .await
@@ -330,74 +333,6 @@ async fn a_successor_never_gets_a_disabled_cooling_limited_or_another_users_acco
     );
 }
 
-#[tokio::test]
-async fn a_move_across_account_types_carries_one_account_and_says_so() {
-    let w = w().await;
-    let pool = &w.fx.app.pool;
-    let (sub, key) = (w.sub("plan").await, w.acct("key").await);
-    let mut plan = w.pool("plan", "claude-sub", &[sub.id]).await;
-    plan.harness = "claude".to_owned();
-    let chain = [plan, w.keys("keys", &[key.id]).await];
-    let s = w.session(&chain, &[]).await;
-    let got = took(w.pick(&s.id, &chain, &at(0)).await);
-    assert!(!got.gateway);
-    alloc::mark_start_sent(pool, &s.id).await.unwrap();
-    store::end(
-        pool,
-        &s.id,
-        "ended",
-        &json!({"kind": "failed", "fingerprint": "auth"}),
-        &at(1),
-    )
-    .await
-    .unwrap();
-    let (new, picked) = to(mv(&w, &s.id, "auth", &at(2), true).await);
-    let picked = picked.unwrap();
-    assert!(picked.gateway && picked.account == key.id);
-    let n = store::get(pool, &new).await.unwrap().unwrap();
-    assert_eq!(
-        n.secrets.len(),
-        1,
-        "a subscription is never in a session with another account"
-    );
-    assert_eq!(n.gateway_account_id, Some(key.id));
-    // The provider changed, so the successor's own state event says from and to.
-    let note: String = sqlx::query_scalar(
-        "SELECT payload FROM events WHERE kind = 'agent.state' ORDER BY seq DESC LIMIT 1",
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    let note: serde_json::Value = serde_json::from_str(&note).unwrap();
-    assert_eq!(
-        (note["reason"].as_str(), note["session"].as_str()),
-        (Some("failover"), Some(new.as_str()))
-    );
-    assert_eq!(note["from"]["provider"], "claude-sub");
-    assert_eq!(note["to"]["provider"], "anthropic");
-    // And the other way: an API key to a subscription is delivered as the token, never a gateway.
-    let back = [
-        w.keys("keys2", &[key.id]).await,
-        w.pool("plan2", "claude-sub", &[sub.id]).await,
-    ];
-    let s = w.session(&back, &[]).await;
-    took(w.pick(&s.id, &back, &at(10)).await);
-    alloc::mark_start_sent(pool, &s.id).await.unwrap();
-    store::end(pool, &s.id, "ended", &limited(), &at(11))
-        .await
-        .unwrap();
-    let (new, picked) = to(mv(&w, &s.id, "rate_limited", &at(12), true).await);
-    assert!(!picked.unwrap().gateway);
-    let n = store::get(pool, &new).await.unwrap().unwrap();
-    assert_eq!((n.gateway_account_id, n.secrets.len()), (None, 1));
-    assert_eq!(row(&w, &new).await.0, Some(sub.id));
-    assert_eq!(
-        w.count(HOLDS, &new).await,
-        0,
-        "a subscription takes no dollar hold"
-    );
-}
-
 fn rejected(windows: Vec<PlanWindow>) -> PlanLimit {
     PlanLimit {
         status: "rejected".to_owned(),
@@ -432,8 +367,27 @@ fn a_plan_snapshot_only_ever_delays_a_pick_and_never_for_long() {
     let p = rejected(vec![win(1.0, Some(1_000_000_000))]);
     assert_eq!(
         health::plan_cooling_until(&snap(&p, 1000), 1100),
-        Some(1100 + health::HARNESS_MAX_SECS)
+        Some(1000 + health::HARNESS_MAX_SECS)
     );
+    // The cap is anchored on the snapshot, so it runs out however many picks read it (the forged
+    // reset can never hold an account for ever): at 1000 + 6 h it is over, and stays over.
+    for now in [1100, 5000, 1000 + health::HARNESS_MAX_SECS - 1] {
+        assert!(
+            health::plan_cooling_until(&snap(&p, 1000), now).is_some(),
+            "{now}"
+        );
+    }
+    for now in [
+        1000 + health::HARNESS_MAX_SECS,
+        1000 + 2 * health::HARNESS_MAX_SECS,
+        100_000_000,
+    ] {
+        assert_eq!(
+            health::plan_cooling_until(&snap(&p, 1000), now),
+            None,
+            "{now}"
+        );
+    }
     // A window near its limit counts, one with room does not, and an allowed plan clears it.
     let warn = PlanLimit {
         status: "allowed_warning".to_owned(),

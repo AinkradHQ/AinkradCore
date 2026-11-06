@@ -14,7 +14,13 @@ use crate::store::agents as store;
 use crate::store::alloc;
 use crate::store::begin_write;
 
-async fn call(fx: &Fx, dev: &TestDevice, m: Method, uri: &str, body: Value) -> (StatusCode, Value) {
+pub(super) async fn call(
+    fx: &Fx,
+    dev: &TestDevice,
+    m: Method,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, Value) {
     let body = (!body.is_null()).then_some(body);
     send(&fx.app, req(m, uri, Some(dev), body)).await
 }
