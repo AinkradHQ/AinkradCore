@@ -123,7 +123,8 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
             (23, "usage_meter"),
             (24, "account_health"),
             (25, "scheduler_allocator"),
-            (26, "chains")
+            (26, "chains"),
+            (27, "failover")
         ]
     );
     let sum: Vec<u8> =
