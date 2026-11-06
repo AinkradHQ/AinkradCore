@@ -659,6 +659,7 @@ pub async fn lease_to(
     if let Some(to) = to {
         details["to"] = json!(to);
     }
+    super::account_keys::tag_lease(&mut details, name);
     audit(&mut tx, actor, "secret.leased", s.id, details).await?;
     tx.commit().await?;
     Ok((id, expires_at))

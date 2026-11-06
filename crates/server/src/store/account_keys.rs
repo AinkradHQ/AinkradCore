@@ -63,7 +63,40 @@ pub(super) async fn check_pool(
     }
 }
 
-/// A subscription pool is not bound to an agent yet (L5 widens the bindings).
+/// Whether `name` is the account model's own name for an API-key account the gateway serves
+/// (`acct.<provider>.<id>`, not a subscription's: that token is a leased env variable, L5).
+pub fn gateway_served(name: &str) -> bool {
+    super::gateway::account_secret(name).is_some_and(|(p, _)| !subscription_provider(p))
+}
+
+/// Adds what a lease of account secret `name` says about the account to its audit `details`: the
+/// account id, and `method=subscription` for a subscription's token. Never a value.
+pub(super) fn tag_lease(details: &mut serde_json::Value, name: &str) {
+    if let Some((provider, id)) = super::gateway::account_secret(name) {
+        details["account"] = json!(id);
+        if subscription_provider(provider) {
+            details["method"] = json!("subscription");
+        }
+    }
+}
+
+/// Drops the unredeemed leases on `secret_name`: an account taken out of use (disabled, cooling,
+/// limited) must not be redeemable from a lease minted before.
+pub(super) async fn revoke_leases_in(
+    conn: &mut sqlx::SqliteConnection,
+    secret_name: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM core_secret_leases WHERE secret_id = (SELECT id FROM core_secrets WHERE name = ?)",
+    )
+    .bind(secret_name)
+    .execute(conn)
+    .await
+    .map(drop)
+}
+
+/// A subscription pool is not bound to an agent: an agent names its subscription account itself
+/// (a session's secret), and nothing picks or fails over between accounts (never pool them).
 pub(super) fn check_bind(provider: &str) -> Result<(), Error> {
     match subscription_provider(provider) {
         true => Err(Error::Refused {

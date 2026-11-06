@@ -20,6 +20,7 @@
 pub mod gateway;
 mod launch;
 pub mod login;
+mod subscription;
 mod topup;
 pub mod wake;
 use launch::launch;
@@ -308,7 +309,7 @@ pub fn placement_refusal(
 /// Whether a secret is an API-key account the runner's gateway serves (the account model's own
 /// `acct.<provider>.<id>`), not an env secret.
 fn gateway_bound(s: &store::SessionSecret) -> bool {
-    crate::store::gateway::account_secret(&s.name).is_some()
+    crate::store::account_keys::gateway_served(&s.name)
 }
 
 /// Whether the runner lists the `gateway` command beside its agent driver's ops (KAN-435).

@@ -6,22 +6,23 @@ use super::*;
 async fn leases(app: &App, s: &Session) -> Result<Leased, Refusal> {
     let mut expires = i64::MAX;
     let mut out = Vec::with_capacity(s.secrets.len());
-    for secret in s
-        .secrets
-        .iter()
-        .filter(|x| crate::store::gateway::account_secret(&x.name).is_none())
-    {
-        let (lease, until) = crate::store::secrets::lease(
-            &app.pool,
-            &secret.name,
-            &s.runner,
-            None,
-            &s.created_by,
-            AuditActor::System,
-            &app.clock.now(),
-            app.clock.unix(),
-        )
-        .await?;
+    for secret in s.secrets.iter().filter(|x| !gateway_bound(x)) {
+        // A subscription's token is leased as env after its account is read live (L5).
+        let (lease, until) = if subscription::is_subscription(secret) {
+            subscription::lease(app, s, secret).await?
+        } else {
+            crate::store::secrets::lease(
+                &app.pool,
+                &secret.name,
+                &s.runner,
+                None,
+                &s.created_by,
+                AuditActor::System,
+                &app.clock.now(),
+                app.clock.unix(),
+            )
+            .await?
+        };
         expires = expires.min(until);
         out.push(SecretGrant {
             lease,
