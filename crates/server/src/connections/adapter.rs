@@ -252,11 +252,14 @@ impl Registry {
         Self::default()
     }
 
-    /// The shipped kinds: `github` (C2); C3 adds `jira`.
+    /// The shipped kinds: `github` (C2) and `jira` (C3). Sign in with Atlassian is off in this
+    /// one (no app id); the server builds its own `jira::Jira::new(Some(app))` and registers that.
     pub fn builtin() -> Self {
         let mut r = Self::new();
         r.register(Arc::new(super::github::Github::strict()))
             .expect("the github descriptor is well formed");
+        r.register(Arc::new(super::jira::Jira::new(None)))
+            .expect("the shipped descriptors are valid");
         r
     }
 
