@@ -284,10 +284,13 @@ pub async fn set_state(
             "state is active, cooling, limited, unhealthy or disabled",
         );
     }
+    // An admin's note stays in the audit row; the state's own reason reads `manual`, so no free
+    // text can pass for one of the health module's codes (`store::health`).
     let (reason, until) = match state {
         "active" => (None, None),
         _ => (reason.map(str::trim).filter(|r| !r.is_empty()), until),
     };
+    let stored = (state != "active").then_some("manual");
     if reason.is_some_and(|r| r.len() > 200) {
         return refused("bad_request", "a reason is at most 200 bytes");
     }
@@ -307,7 +310,7 @@ pub async fn set_state(
          WHERE id = ?",
     )
     .bind(state)
-    .bind(reason)
+    .bind(stored)
     .bind(until)
     .bind(now)
     .bind(id)

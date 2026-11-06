@@ -67,7 +67,11 @@ pub(super) async fn lease(
             "the session's account is not the one its secret names",
         ));
     }
-    if !crate::store::health::startable(&account.state, s.state == "interrupted") {
+    if !crate::store::health::startable(
+        &account.state,
+        account.state_reason.as_deref(),
+        s.state == "interrupted",
+    ) {
         return Err(refuse(format!(
             "the subscription account is {}, not active",
             account.state
@@ -114,18 +118,27 @@ async fn mint(
     )
     .await
     .map_err(lift)?;
-    let state: Option<String> =
-        sqlx::query_scalar("SELECT state FROM core_accounts WHERE secret_name = ?")
+    let row: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT state, state_reason FROM core_accounts WHERE secret_name = ?")
             .bind(&secret.name)
             .fetch_optional(&app.pool)
             .await?;
-    if !state
-        .as_deref()
-        .is_some_and(|st| crate::store::health::startable(st, s.state == "interrupted"))
+    let resumed = s.state == "interrupted";
+    if !row
+        .as_ref()
+        .is_some_and(|(st, why)| crate::store::health::startable(st, why.as_deref(), resumed))
     {
-        crate::store::account_keys::revoke_leases(&app.pool, &secret.name).await?;
+        // A disabled or deleted account has no lease left. A cooldown or health state only refuses
+        // this start: another session's unredeemed lease is its own, and only ours is dropped.
+        if row.as_ref().is_none_or(|(st, _)| st == "disabled") {
+            crate::store::account_keys::revoke_leases(&app.pool, &secret.name).await?;
+            return Err(refuse(
+                "the subscription account was disabled or deleted while the session started",
+            ));
+        }
+        crate::store::account_keys::revoke_unused_lease(&app.pool, &got.0).await?;
         return Err(refuse(
-            "the subscription account was disabled or deleted while the session started",
+            "the subscription account became unavailable while the session started",
         ));
     }
     Ok(got)

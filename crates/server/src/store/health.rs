@@ -14,7 +14,7 @@
 //! - **What a harness signal may write.** Only over `active`, or to a higher rank than one of this
 //!   module's own timed states (`rate_limited` < `upstream_errors` < `quota` < `auth_suspected`).
 //!   It never extends a window that is open, never writes over `disabled` or an admin's own state
-//!   (a reason that is not one of the codes), and its `until` is clamped to [`HARNESS_MAX_SECS`].
+//!   (an admin's state is stored with the reason `manual`, never one of the codes), and its `until` is clamped to [`HARNESS_MAX_SECS`].
 //! - **Closed class set.** A harness end counts only when its fingerprint is exactly one of the
 //!   eight `ErrorClass::as_str` values ([`CLASSES`]); a runner step name, `core`, `harness_*` or a
 //!   raw `<harness>:<code>` is no signal, and the Core never classifies text itself.
@@ -166,7 +166,7 @@ async fn enter(
     cx: &Ctx<'_>,
 ) -> Result<bool, sqlx::Error> {
     let new = rank(e.reason).unwrap_or(i32::MAX);
-    let until = e.until.map(|u| match cx.trusted {
+    let mut until = e.until.map(|u| match cx.trusted {
         true => u,
         false => u.min(cx.now_u + HARNESS_MAX_SECS),
     });
@@ -180,6 +180,11 @@ async fn enter(
     };
     if !allowed {
         return Ok(false);
+    }
+    // A window this module opened is never shortened by a stronger state: the provider's own
+    // 24 h still holds when three 5xx follow its 429. A state with no end stays open-ended.
+    if let (Some(n), Some(o)) = (until, h.until) {
+        until = Some(n.max(o));
     }
     let (state, until_iso) = (state_of(e.reason), until.map(iso_of_unix));
     sqlx::query(
@@ -197,10 +202,14 @@ async fn enter(
     .bind(account)
     .execute(&mut *conn)
     .await?;
-    let source = if cx.trusted { "gateway" } else { "harness" };
-    let details = json!({"label": h.label, "from": h.state, "to": state, "reason": e.reason,
-        "until": until_iso, "source": source, "class": e.class, "session": cx.session});
-    audited(conn, account, details).await?;
+    // One audit row per change of state or reason, not per report: a sustained 429 that only
+    // lengthens the open window is written silently.
+    if h.state != state || h.reason.as_deref() != Some(e.reason) {
+        let source = if cx.trusted { "gateway" } else { "harness" };
+        let details = json!({"label": h.label, "from": h.state, "to": state, "reason": e.reason,
+            "until": until_iso, "source": source, "class": e.class, "session": cx.session});
+        audited(conn, account, details).await?;
+    }
     Ok(true)
 }
 

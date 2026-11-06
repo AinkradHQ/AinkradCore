@@ -103,7 +103,11 @@ pub(super) async fn grant(app: &App, s: &Session) -> Result<Option<Issued>, Refu
             "the session's account is not the one its secret names",
         ));
     }
-    if !crate::store::health::startable(&account.state, s.state == "interrupted") {
+    if !crate::store::health::startable(
+        &account.state,
+        account.state_reason.as_deref(),
+        s.state == "interrupted",
+    ) {
         return Err(refuse(format!(
             "the account is {}, not active",
             account.state
