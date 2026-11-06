@@ -95,13 +95,19 @@ pub(super) async fn grant(app: &App, s: &Session) -> Result<Option<Issued>, Refu
         Some(id) if id == named => id,
         _ => return Err(refuse("the session's account does not exist")),
     };
+    // A cooldown that has ended is over: the account is looked at as it is now.
+    crate::store::health::recover(&app.pool, id, &app.clock.now()).await?;
     let account = accounts::get(&app.pool, id).await.map_err(lift)?;
     if account.secret_name != secret.name || account.provider != provider {
         return Err(refuse(
             "the session's account is not the one its secret names",
         ));
     }
-    if account.state != "active" {
+    if !crate::store::health::startable(
+        &account.state,
+        account.state_reason.as_deref(),
+        s.state == "interrupted",
+    ) {
         return Err(refuse(format!(
             "the account is {}, not active",
             account.state

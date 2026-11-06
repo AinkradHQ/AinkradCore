@@ -120,7 +120,8 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
             (20, "gateway_session"),
             (21, "gateway_api"),
             (22, "account_logins"),
-            (23, "usage_meter")
+            (23, "usage_meter"),
+            (24, "account_health")
         ]
     );
     let sum: Vec<u8> =

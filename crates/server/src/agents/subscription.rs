@@ -55,6 +55,7 @@ pub(super) async fn lease(
     let Some((provider, id)) = crate::store::gateway::account_secret(&secret.name) else {
         return Err(refuse("the session's account does not exist"));
     };
+    crate::store::health::recover(&app.pool, id, &app.clock.now()).await?;
     let account = match accounts::get(&app.pool, id).await {
         Err(secrets::Error::Refused {
             code: "not_found", ..
@@ -66,7 +67,11 @@ pub(super) async fn lease(
             "the session's account is not the one its secret names",
         ));
     }
-    if account.state != "active" {
+    if !crate::store::health::startable(
+        &account.state,
+        account.state_reason.as_deref(),
+        s.state == "interrupted",
+    ) {
         return Err(refuse(format!(
             "the subscription account is {}, not active",
             account.state
@@ -113,15 +118,27 @@ async fn mint(
     )
     .await
     .map_err(lift)?;
-    let state: Option<String> =
-        sqlx::query_scalar("SELECT state FROM core_accounts WHERE secret_name = ?")
+    let row: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT state, state_reason FROM core_accounts WHERE secret_name = ?")
             .bind(&secret.name)
             .fetch_optional(&app.pool)
             .await?;
-    if state.as_deref() != Some("active") {
-        crate::store::account_keys::revoke_leases(&app.pool, &secret.name).await?;
+    let resumed = s.state == "interrupted";
+    if !row
+        .as_ref()
+        .is_some_and(|(st, why)| crate::store::health::startable(st, why.as_deref(), resumed))
+    {
+        // A disabled or deleted account has no lease left. A cooldown or health state only refuses
+        // this start: another session's unredeemed lease is its own, and only ours is dropped.
+        if row.as_ref().is_none_or(|(st, _)| st == "disabled") {
+            crate::store::account_keys::revoke_leases(&app.pool, &secret.name).await?;
+            return Err(refuse(
+                "the subscription account was disabled or deleted while the session started",
+            ));
+        }
+        crate::store::account_keys::revoke_unused_lease(&app.pool, &got.0).await?;
         return Err(refuse(
-            "the subscription account was disabled or deleted while the session started",
+            "the subscription account became unavailable while the session started",
         ));
     }
     Ok(got)

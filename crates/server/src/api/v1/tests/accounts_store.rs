@@ -340,7 +340,7 @@ async fn state_and_cap_changes_are_audited_and_bounded() {
     .unwrap();
     assert_eq!(
         (d.state.as_str(), d.state_reason.as_deref()),
-        ("disabled", Some("rotated by hand"))
+        ("disabled", Some("manual"))
     );
     let e = acc::set_state(
         p,

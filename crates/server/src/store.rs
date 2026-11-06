@@ -23,6 +23,7 @@ pub mod costs;
 pub mod events;
 pub mod gateway;
 pub mod gov;
+pub mod health;
 pub mod kinds;
 pub mod logins;
 pub mod migrate;

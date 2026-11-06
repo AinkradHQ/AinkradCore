@@ -102,7 +102,10 @@ pub struct ReplaceKey {
 pub struct SetState {
     /// `active`, `cooling`, `limited`, `unhealthy` or `disabled`.
     pub state: String,
+    // `reason` is kept in the audit row; the account's own `state_reason` then reads `manual`.
     pub reason: Option<String>,
+    // `until` is stored with the state, but a state an admin sets stays until an admin changes it:
+    // only a cooldown the Core itself set (rate_limited, quota, upstream_errors) ends by itself.
     pub until: Option<String>,
 }
 
