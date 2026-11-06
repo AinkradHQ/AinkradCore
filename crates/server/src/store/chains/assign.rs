@@ -25,7 +25,8 @@ pub async fn bind(
     }
     let mut tx = crate::store::begin_write(pool).await?;
     let c = find(&mut tx, id).await?;
-    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_chain_bindings")
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_chain_bindings WHERE user_id = ?")
+        .bind(c.user_id)
         .fetch_one(&mut *tx)
         .await?;
     if n >= MAX_BINDINGS {
@@ -33,8 +34,8 @@ pub async fn bind(
     }
     sqlx::query(
         "INSERT INTO core_chain_bindings (user_id, agent, chain_id, created_at) VALUES (?, ?, ?, ?) \
-         ON CONFLICT (agent) DO UPDATE SET chain_id = excluded.chain_id, \
-         user_id = excluded.user_id, created_at = excluded.created_at",
+         ON CONFLICT (user_id, agent) DO UPDATE SET chain_id = excluded.chain_id, \
+         created_at = excluded.created_at",
     )
     .bind(c.user_id)
     .bind(agent)
@@ -57,16 +58,19 @@ pub async fn bind(
 /// Drops `agent`'s binding (its sessions fall back to the default chain): `chain.unbound`.
 pub async fn unbind(
     pool: &SqlitePool,
+    user_id: i64,
     agent: &str,
     by_device: &str,
     actor: AuditActor,
 ) -> Result<(), Error> {
     let mut tx = crate::store::begin_write(pool).await?;
-    let id: Option<i64> =
-        sqlx::query_scalar("DELETE FROM core_chain_bindings WHERE agent = ? RETURNING chain_id")
-            .bind(agent)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let id: Option<i64> = sqlx::query_scalar(
+        "DELETE FROM core_chain_bindings WHERE user_id = ? AND agent = ? RETURNING chain_id",
+    )
+    .bind(user_id)
+    .bind(agent)
+    .fetch_optional(&mut *tx)
+    .await?;
     let Some(id) = id else {
         return refused("not_found", "that agent has no chain binding");
     };
@@ -84,19 +88,25 @@ pub async fn unbind(
 
 /// Every binding, by agent.
 pub async fn list_bindings(pool: &SqlitePool) -> Result<Vec<Binding>, sqlx::Error> {
-    let rows: Vec<(String, i64)> =
-        sqlx::query_as("SELECT agent, chain_id FROM core_chain_bindings ORDER BY agent")
-            .fetch_all(pool)
-            .await?;
+    let rows: Vec<(i64, String, i64)> = sqlx::query_as(
+        "SELECT user_id, agent, chain_id FROM core_chain_bindings ORDER BY agent, user_id",
+    )
+    .fetch_all(pool)
+    .await?;
     Ok(rows
         .into_iter()
-        .map(|(agent, chain_id)| Binding { agent, chain_id })
+        .map(|(user_id, agent, chain_id)| Binding {
+            user_id,
+            agent,
+            chain_id,
+        })
         .collect())
 }
 
 /// Which chain a new session of `user` gets (design §4.5): the one it names (`not_found` if it is
-/// missing or another user's), else the one its `agent` is bound to, else the user's default,
-/// else none (the harness then uses the runner's own login, as before).
+/// missing or another user's), else, when it names an `agent`, the one that agent is bound to, else
+/// the user's default; a request naming neither gets none (the harness then uses the runner's own
+/// login, as before).
 pub async fn resolve_for(
     conn: &mut SqliteConnection,
     user: i64,
@@ -116,22 +126,26 @@ pub async fn resolve_for(
     if let Some(agent) = agent {
         let bound: Option<i64> = sqlx::query_scalar(
             "SELECT b.chain_id FROM core_chain_bindings b JOIN core_chains c ON c.id = b.chain_id \
-             WHERE b.agent = ? AND c.user_id = ?",
+             WHERE b.agent = ? AND b.user_id = ? AND c.user_id = ?",
         )
         .bind(agent)
+        .bind(user)
         .bind(user)
         .fetch_optional(&mut *conn)
         .await?;
         if bound.is_some() {
             return Ok(bound);
         }
+        // The default serves an agent bound to none (design §4.5 item 2), never a request that names
+        // neither a chain nor an agent (item 3: that one has no account, as before).
+        return Ok(sqlx::query_scalar(
+            "SELECT id FROM core_chains WHERE user_id = ? AND is_default = 1",
+        )
+        .bind(user)
+        .fetch_optional(&mut *conn)
+        .await?);
     }
-    Ok(
-        sqlx::query_scalar("SELECT id FROM core_chains WHERE user_id = ? AND is_default = 1")
-            .bind(user)
-            .fetch_optional(&mut *conn)
-            .await?,
-    )
+    Ok(None)
 }
 
 /// Gives the `starting` session `session` the chain `chain_id`: its `chain_id`, `agent` and a
@@ -168,7 +182,10 @@ pub async fn assign_in(
     if owner.is_some() {
         return refused("bad_request", "a module's session takes no chain");
     }
-    let named: Vec<SessionSecret> = serde_json::from_str(&secrets).unwrap_or_default();
+    // Unreadable secrets fail closed: a session whose secrets cannot be read takes no chain.
+    let Ok(named) = serde_json::from_str::<Vec<SessionSecret>>(&secrets) else {
+        return refused("bad_request", "the session's secrets are unreadable");
+    };
     if named.iter().any(|s| s.name.starts_with(ACCOUNT_PREFIX)) {
         return refused(
             "bad_request",
@@ -206,8 +223,9 @@ pub async fn session_chain(
 /// `agents::create_owned_ref` with the chains of design §4.5: [`resolve_for`] says which chain, and
 /// the row is inserted and given its chain in ONE transaction, so a chain session is never seen
 /// (and never launched on the runner's own login) before its chain is on it. With a chain, the row's
-/// harness and model are placeholders: the first entry's, until the allocator picks. With none, the
-/// session is exactly `create_owned_ref`'s, with the agent recorded.
+/// harness and model are placeholders: the first entry's, until the allocator picks; the caller
+/// passes `harness: ""` and no model (a named one is `bad_request`). With none, the session is exactly
+/// `create_owned_ref`'s (its harness required), with the agent recorded.
 pub async fn create_session(
     pool: &SqlitePool,
     new: &NewSession<'_>,
@@ -222,6 +240,17 @@ pub async fn create_session(
     }
     let mut tx = crate::store::begin_write(pool).await?;
     let chain = resolve_for(&mut tx, req.user_id, req.chain, req.agent).await?;
+    // The entry the allocator picks sets the harness and the model, so a request with a chain names
+    // neither (`harness: ""`, no model; design §4.5), and one without a chain names its harness.
+    if chain.is_some() && (!new.harness.is_empty() || new.model.is_some()) {
+        return refused(
+            "bad_request",
+            "a session with a chain names no harness or model",
+        );
+    }
+    if chain.is_none() && new.harness.is_empty() {
+        return refused("bad_request", "a session with no chain names its harness");
+    }
     let first = match chain {
         Some(id) => load(&mut tx, id).await?.into_iter().next(),
         None => None,

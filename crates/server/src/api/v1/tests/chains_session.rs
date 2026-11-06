@@ -9,17 +9,34 @@ use crate::store::agents::{self as store, NewSession, SessionSecret};
 use crate::store::chains::{self as ch, EntrySpec, Request};
 use crate::store::secrets::Error;
 
+/// A session as a request that names a chain makes it: no harness, no model.
 pub(super) async fn session(
     fx: &Fx,
     secrets: &[SessionSecret],
     owner: Option<&str>,
     req: Request<'_>,
 ) -> Result<store::Session, Error> {
+    session_as(fx, secrets, owner, req, "", None).await
+}
+
+/// A session as a request that names no chain makes it: its own harness and model.
+async fn plain(fx: &Fx, owner: Option<&str>, req: Request<'_>) -> Result<store::Session, Error> {
+    session_as(fx, &[], owner, req, "claude", Some("placeholder")).await
+}
+
+async fn session_as(
+    fx: &Fx,
+    secrets: &[SessionSecret],
+    owner: Option<&str>,
+    req: Request<'_>,
+    harness: &str,
+    model: Option<&str>,
+) -> Result<store::Session, Error> {
     let policy = json!({"mode": "ask", "min_isolation": "process"});
     let new = NewSession {
         runner: &fx.dev.id,
-        harness: "claude",
-        model: Some("placeholder"),
+        harness,
+        model,
         prompt: None,
         workspace: None,
         policy: &policy,
@@ -128,7 +145,8 @@ async fn a_session_snapshots_its_chain_and_an_edit_does_not_move_it() {
 }
 
 #[tokio::test]
-async fn a_new_session_gets_the_named_chain_then_the_agents_then_the_default_then_none() {
+async fn a_new_session_gets_the_named_chain_then_the_agents_then_the_default_for_an_agent_and_else_none()
+ {
     let fx = setup().await;
     let p = &fx.app.pool;
     let (a, o, g) = (
@@ -155,9 +173,7 @@ async fn a_new_session_gets_the_named_chain_then_the_agents_then_the_default_the
         }
     };
     // Nothing configured: a plain session, as before, with the agent recorded.
-    let none = session(&fx, &[], None, ask(None, Some("agent-1")))
-        .await
-        .unwrap();
+    let none = plain(&fx, None, ask(None, Some("agent-1"))).await.unwrap();
     assert_eq!(chain_of(&none).await, None);
     assert_eq!(
         none.model.as_deref(),
@@ -190,9 +206,24 @@ async fn a_new_session_gets_the_named_chain_then_the_agents_then_the_default_the
         .await
         .unwrap();
     assert_eq!(chain_of(&s).await, Some(default.id), "then the default");
-    let s = session(&fx, &[], None, ask(None, None)).await.unwrap();
-    assert_eq!(chain_of(&s).await, Some(default.id));
-    ch::unbind(p, "agent-1", "d_x", BY).await.unwrap();
+    // A request that names no chain and no agent gets NO chain, whatever the default (§4.5 item 3):
+    // plain, and a module's session alike, with the harness and model they asked for.
+    for owner in [None, Some("citadel")] {
+        let s = plain(&fx, owner, ask(None, None)).await.unwrap();
+        assert_eq!(chain_of(&s).await, None, "{owner:?}");
+        assert_eq!(
+            (s.harness.as_str(), s.model.as_deref()),
+            ("claude", Some("placeholder"))
+        );
+        let chain: Option<String> =
+            sqlx::query_scalar("SELECT chain FROM core_agent_sessions WHERE id = ?")
+                .bind(&s.id)
+                .fetch_one(p)
+                .await
+                .unwrap();
+        assert_eq!(chain, None);
+    }
+    ch::unbind(p, 1, "agent-1", "d_x", BY).await.unwrap();
     let s = session(&fx, &[], None, ask(None, Some("agent-1")))
         .await
         .unwrap();
@@ -201,7 +232,10 @@ async fn a_new_session_gets_the_named_chain_then_the_agents_then_the_default_the
         Some(default.id),
         "an unbound agent falls back"
     );
-    assert_eq!(code(ch::unbind(p, "agent-1", "d_x", BY).await), "not_found");
+    assert_eq!(
+        code(ch::unbind(p, 1, "agent-1", "d_x", BY).await),
+        "not_found"
+    );
     // Setting another default moves it.
     ch::set_default(p, named.id, "d_x", BY, NOW).await.unwrap();
     let defaults: Vec<i64> = sqlx::query_scalar("SELECT id FROM core_chains WHERE is_default = 1")
@@ -293,4 +327,141 @@ async fn bindings_need_a_chain_and_a_valid_agent() {
         (1, d.id),
         "rebinding replaces"
     );
+}
+
+#[tokio::test]
+async fn a_chain_session_names_no_harness_or_model_and_a_plain_one_names_its_harness() {
+    let fx = setup().await;
+    let a = pool(&fx, "a", "anthropic").await;
+    let c = make(&fx, "main", &[a]).await;
+    let before = sessions(&fx).await;
+    for (harness, model) in [
+        ("claude", None),
+        ("", Some("claude-sonnet")),
+        ("codex", Some("x")),
+    ] {
+        let r = session_as(&fx, &[], None, ask(Some(c.id), None), harness, model).await;
+        assert_eq!(code(r), "bad_request", "{harness} {model:?}");
+    }
+    // The same through the agent's binding and the default.
+    ch::bind(&fx.app.pool, "ag", c.id, "d_x", BY, NOW)
+        .await
+        .unwrap();
+    let r = session_as(&fx, &[], None, ask(None, Some("ag")), "claude", None).await;
+    assert_eq!(code(r), "bad_request");
+    assert_eq!(
+        code(session_as(&fx, &[], None, ask(None, None), "", None).await),
+        "bad_request"
+    );
+    assert_eq!(sessions(&fx).await, before, "nothing was stored");
+}
+
+/// Two users may bind the same agent id, each to their own chain; neither replaces, resolves or
+/// drops the other's, and the limits count per user.
+#[tokio::test]
+async fn bindings_are_per_user() {
+    let fx = setup().await;
+    let p = &fx.app.pool;
+    sqlx::query("INSERT INTO users (id, name) VALUES (2, 'second')")
+        .execute(p)
+        .await
+        .unwrap();
+    let (a, b) = (
+        pool(&fx, "a", "anthropic").await,
+        pool(&fx, "b", "openai").await,
+    );
+    sqlx::query("UPDATE core_pools SET user_id = 2 WHERE id = ?")
+        .bind(b)
+        .execute(p)
+        .await
+        .unwrap();
+    let mine = make(&fx, "mine", &[a]).await;
+    let theirs = ch::create(p, 2, "theirs", &[spec(b)], "d_x", BY, NOW)
+        .await
+        .unwrap();
+    ch::bind(p, "shared-agent", mine.id, "d_x", BY, NOW)
+        .await
+        .unwrap();
+    ch::bind(p, "shared-agent", theirs.id, "d_x", BY, NOW)
+        .await
+        .unwrap();
+    let all = ch::list_bindings(p).await.unwrap();
+    assert_eq!(
+        all.iter()
+            .map(|b| (b.user_id, b.chain_id))
+            .collect::<Vec<_>>(),
+        [(1, mine.id), (2, theirs.id)]
+    );
+    let mut conn = p.acquire().await.unwrap();
+    for (user, want) in [(1, mine.id), (2, theirs.id)] {
+        let got = ch::resolve_for(&mut conn, user, None, Some("shared-agent"))
+            .await
+            .unwrap();
+        assert_eq!(got, Some(want), "user {user}");
+    }
+    drop(conn);
+    // User 1 unbinding leaves user 2's binding; a user with none gets not_found.
+    ch::unbind(p, 1, "shared-agent", "d_x", BY).await.unwrap();
+    assert_eq!(
+        code(ch::unbind(p, 1, "shared-agent", "d_x", BY).await),
+        "not_found"
+    );
+    let left = ch::list_bindings(p).await.unwrap();
+    assert_eq!((left.len(), left[0].user_id), (1, 2));
+}
+
+#[tokio::test]
+async fn a_session_whose_secrets_cannot_be_read_takes_no_chain() {
+    let fx = setup().await;
+    let p = &fx.app.pool;
+    let a = pool(&fx, "a", "anthropic").await;
+    let c = make(&fx, "main", &[a]).await;
+    let s = plain(&fx, None, ask(None, None)).await.unwrap();
+    // The column's own CHECK keeps the JSON valid, so corrupt it to valid JSON of the wrong shape.
+    sqlx::query("UPDATE core_agent_sessions SET secrets = '[{\"name\": 5}]' WHERE id = ?")
+        .bind(&s.id)
+        .execute(p)
+        .await
+        .unwrap();
+    let mut conn = p.acquire().await.unwrap();
+    assert_eq!(
+        code(ch::assign_in(&mut conn, &s.id, c.id, None).await),
+        "bad_request"
+    );
+    let chain: Option<String> =
+        sqlx::query_scalar("SELECT chain FROM core_agent_sessions WHERE id = ?")
+            .bind(&s.id)
+            .fetch_one(p)
+            .await
+            .unwrap();
+    assert_eq!(chain, None);
+}
+
+#[tokio::test]
+async fn the_limits_count_per_user() {
+    let fx = setup().await;
+    let p = &fx.app.pool;
+    sqlx::query("INSERT INTO users (id, name) VALUES (2, 'second')")
+        .execute(p)
+        .await
+        .unwrap();
+    let a = pool(&fx, "a", "anthropic").await;
+    let b = pool(&fx, "b", "anthropic").await;
+    sqlx::query("UPDATE core_pools SET user_id = 2 WHERE id = ?")
+        .bind(b)
+        .execute(p)
+        .await
+        .unwrap();
+    for i in 0..ch::MAX_CHAINS {
+        ch::create(p, 1, &format!("n{i}"), &[spec(a)], "d_x", BY, NOW)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        code(ch::create(p, 1, "one-more", &[spec(a)], "d_x", BY, NOW).await),
+        "limit_reached"
+    );
+    ch::create(p, 2, "second-users", &[spec(b)], "d_x", BY, NOW)
+        .await
+        .expect("another user's count is their own");
 }
