@@ -113,7 +113,7 @@
               "type": "null"
             }
           ],
-          "description": "The harness's latest plan-limit event (KAN-436), a snapshot that each newer one replaces.\nSent only by a runner that lists `CAP_PLAN_LIMIT`; the harness's structured event, never\nits text, and a hint (the Core may cool an account from it, never disable one)."
+          "description": "The harness's latest plan-limit event (KAN-436), a snapshot that each newer one replaces.\nSent only by a runner that lists `CAP_PLAN_LIMIT`. The agent can influence it (its tools can\nforge the harness's own output), so it is a hint: cool an account from it, never disable one."
         },
         "session": {
           "type": "string"

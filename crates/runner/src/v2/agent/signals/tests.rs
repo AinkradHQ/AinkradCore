@@ -48,10 +48,36 @@ fn a_harness_failure_carries_its_class_and_a_runner_step_keeps_its_name() {
         ("claude:success:403", "API Error: 403", "auth"),
         ("claude:success", "OAuth token has expired", "auth"),
         ("claude:success:503", "Service Unavailable", "transient"),
-        ("claude:success", "API Error: 500", "permanent"),
+        // Nothing matches: the raw fingerprint stays, so the loop breaker keeps its codes apart.
+        ("claude:success", "API Error: 500", "claude:success"),
+        (
+            "claude:error_max_turns",
+            "hit the turn limit of 5",
+            "claude:error_max_turns",
+        ),
+        (
+            "claude:error_during_execution",
+            "[ede_diagnostic]",
+            "claude:error_during_execution",
+        ),
         ("claude:provider_dropped", "dropped 3 times", "unhealthy"),
         ("claude:protocol", "a newer CLI", "protocol"),
-        ("harness_exit", "claude ended without a result", "transient"),
+        // A CLI that died with nothing to classify keeps its name; one that said why is classed.
+        (
+            "harness_exit",
+            "claude ended without a result",
+            "harness_exit",
+        ),
+        (
+            "harness_exit",
+            "claude exited with Some(1): Invalid API key",
+            "auth",
+        ),
+        (
+            "harness_exit",
+            "claude exited: connection reset",
+            "transient",
+        ),
         // The runner's own steps are not classes: they stay.
         ("sandbox", "refused", "sandbox"),
         ("secrets", "401 unauthorized", "secrets"),
@@ -364,4 +390,103 @@ async fn a_failed_run_ends_with_its_class_as_the_fingerprint() {
         panic!("{:?}", off.outcome)
     };
     assert_eq!(fingerprint.as_deref(), Some("auth"));
+}
+
+/// Runs of one session: the first reports `first`, a later one reports nothing.
+#[derive(Clone)]
+struct Twice {
+    runs: Arc<std::sync::atomic::AtomicUsize>,
+    first: Vec<Value>,
+}
+
+impl Executor for Twice {
+    async fn start(&self, _: &Job) -> Result<Option<String>, String> {
+        Ok(Some("h-1".to_owned()))
+    }
+
+    async fn run(&self, _: &Job, _: RunToken, reports: mpsc::Sender<Report>) -> Outcome {
+        if self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            for b in &self.first {
+                let _ = reports.send(Report::Event(b.clone())).await;
+            }
+        }
+        Outcome::Succeeded
+    }
+
+    fn control(&self, _: i64, _: Control) {}
+}
+
+async fn read(d: &Arc<AgentDriver>) -> AgentEvents {
+    d.read(&AgentRead {
+        session: SESSION.to_owned(),
+        after: 0,
+        wait_ms: Some(0),
+        gw_after: 0,
+    })
+    .await
+    .unwrap()
+}
+
+async fn settle(d: &Arc<AgentDriver>, runs: usize, ex: &Twice) {
+    for _ in 0..300 {
+        let ev = read(d).await;
+        if ev.state == AgentState::Ended
+            && ex.runs.load(std::sync::atomic::Ordering::SeqCst) == runs
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the run did not end");
+}
+
+#[tokio::test]
+async fn a_wake_does_not_resend_the_last_runs_snapshot() {
+    let (_root, config) = dirs("sig-wake");
+    let ex = Twice {
+        runs: Arc::default(),
+        first: vec![recorded()],
+    };
+    let d = Arc::new(AgentDriver::new(config, ex.clone()).unwrap());
+    d.start(start(SESSION, "claude")).unwrap();
+    settle(&d, 1, &ex).await;
+    assert!(read(&d).await.plan_limit.is_some());
+    // The wake: a newer epoch resuming the harness's session. The old snapshot is not the new
+    // run's; the answer to the start itself and every read after carry none until it reports.
+    let wake = AgentStart {
+        epoch: 1,
+        resume: Some("h-1".to_owned()),
+        ..start(SESSION, "claude")
+    };
+    let answered = d.start(wake).unwrap();
+    assert!(answered.plan_limit.is_none());
+    settle(&d, 2, &ex).await;
+    assert!(read(&d).await.plan_limit.is_none());
+}
+
+#[tokio::test]
+async fn a_saved_snapshot_is_never_sent_by_a_runner_with_the_capability_off() {
+    let seed = |name: &str, on: bool| {
+        let (root, mut config) = dirs(name);
+        config.plan_limit = on;
+        let dir = config.dir.join(SESSION);
+        secrets::private_dir(&dir).unwrap();
+        std::fs::write(
+            dir.join("meta.json"),
+            json!({"harness": "claude", "state": "ended", "last_seq": 0, "acked": 0,
+                   "plan_limit": {"status": "rejected"}})
+            .to_string(),
+        )
+        .unwrap();
+        let ex = Twice {
+            runs: Arc::default(),
+            first: vec![],
+        };
+        (root, Arc::new(AgentDriver::new(config, ex).unwrap()))
+    };
+    // With it on, the saved one is read back (so the check below is not vacuous).
+    let (_a, on) = seed("sig-saved-on", true);
+    assert_eq!(read(&on).await.plan_limit.unwrap().status, "rejected");
+    let (_b, off) = seed("sig-saved-off", false);
+    assert!(read(&off).await.plan_limit.is_none());
 }

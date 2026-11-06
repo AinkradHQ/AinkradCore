@@ -5,8 +5,10 @@
 //! utilisation and reset time). The runner keeps the latest one and sends it in
 //! `AgentEvents::plan_limit`, so the Core can cool the account before the run dies.
 //!
-//! It is the harness's own structured event, never text the agent wrote, and still only a hint:
-//! the Core may cool or exclude an account from it, never disable one or move money.
+//! It is the harness's own structured event, but the agent can influence it: its tools run beside
+//! the harness, and on Linux a tool can write a line into the harness process's own output. So it
+//! is only a hint. The Core may cool or exclude an account from it, move a run and notify, and
+//! must never disable an account, change a secret or move money from it.
 //!
 //! A runner lists [`CAP_PLAN_LIMIT`] among its agent driver's commands when it sends the field;
 //! one that does not never sends it, and an older Core ignores it (a plain optional field).

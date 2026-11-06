@@ -489,6 +489,7 @@ impl AgentDriver {
         live.required = req.policy.required_tier();
         live.meta.state = AgentState::Running;
         live.meta.outcome = None;
+        live.meta.plan_limit = None;
         live.meta.epoch = req.epoch;
         live.run = run;
         save_meta(&self.config, &req.session, &live.meta);
@@ -1118,6 +1119,9 @@ fn reload(cfg: &AgentConfig) -> HashMap<String, Live> {
         else {
             continue;
         };
+        if !cfg.plan_limit {
+            meta.plan_limit = None;
+        }
         let text = std::fs::read_to_string(d.path().join("transcript.jsonl")).unwrap_or_default();
         let mut entries: VecDeque<TranscriptEntry> = text
             .lines()
