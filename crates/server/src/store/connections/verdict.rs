@@ -59,8 +59,9 @@ pub enum TestOutcome {
 /// verdict on a pending or any other auth failure (see the module docs). Audited
 /// `connection.tested` with the result class only. Refused (`conflict`) when the credential is no
 /// longer that version: a verdict on an old credential must not settle the new one. Only
-/// [`run_test`] calls it outside tests, so a verdict always comes from an adapter.
-pub(super) async fn record_test(
+/// [`run_test`] and an adapter's own test path (`jira::Jira::test_connection`, which renews the
+/// token first) call it outside tests, so a verdict always comes from an adapter.
+pub(crate) async fn record_test(
     pool: &SqlitePool,
     id: i64,
     version: i64,

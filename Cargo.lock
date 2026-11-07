@@ -95,6 +95,7 @@ dependencies = [
  "ainkrad-core",
  "ainkrad-core-server",
  "ainkrad-proto",
+ "ainkrad-providers",
  "ainkrad-runner",
  "axum",
  "base64 0.22.1",

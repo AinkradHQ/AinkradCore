@@ -13,7 +13,7 @@ use ainkrad_proto::v2::*;
 use super::allocator::{chain_session, pool_of};
 use super::gateway::{W, command, count, events, started, until, up, usage};
 
-async fn second(core: &super::Core, runner: &str) -> accounts::Account {
+pub(super) async fn second(core: &super::Core, runner: &str) -> accounts::Account {
     let now = core.app.clock.now();
     let sealer = core.app.secrets.as_deref().unwrap();
     let runners = [runner.to_owned()];

@@ -179,6 +179,6 @@ mod tests {
             .iter()
             .map(|d| d.kind)
             .collect();
-        assert_eq!(kinds, ["github"]);
+        assert_eq!(kinds, ["github", "jira"]);
     }
 }
