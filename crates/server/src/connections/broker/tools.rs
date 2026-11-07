@@ -32,6 +32,7 @@ fn tools_of(d: &Descriptor, caps: &[String], out: &mut Vec<ConnTool>) {
                 name: (*op).to_owned(),
                 description: format!("{}: {op}. {}", cap.title, arguments(d.kind)),
                 write: cap.write,
+                input_schema: super::schemas::input_schema(op),
             });
         }
     }

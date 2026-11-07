@@ -35,6 +35,7 @@ mod fail;
 mod gate;
 mod health;
 mod run;
+mod schemas;
 mod scrub;
 mod supervise;
 mod tools;
