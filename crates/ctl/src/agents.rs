@@ -1,4 +1,4 @@
-//! `agent ls | run | show | cancel | kill` (E2-08.2): agent sessions on runners
+//! `agent ls | wake <id> [text…] | run | show | cancel | kill` (E2-08.2): agent sessions on runners
 //! (`/api/v1/agent-sessions`, scope `agent`). Starting, cancelling and killing one need a
 //! step-up, which `Client::call` does once when the Core asks. Secrets are named, never given:
 //! `--secrets name:VAR,…` leases each broker secret to the session's runner at each start.
@@ -31,6 +31,8 @@ fn row(v: &Value) -> String {
     )
 }
 
+const RUN_USAGE: &str = "agent run <runner-id> <harness> [prompt…], or agent run <runner-id> [prompt…] --chain <id> [--agent <name>]";
+
 fn sid(id: &str) -> Result<&str, Error> {
     let ok = id
         .strip_prefix("as_")
@@ -51,23 +53,49 @@ fn secrets(spec: &str) -> Result<Value, Error> {
     Ok(Value::Array(all))
 }
 
-/// `agent …`; `secrets_flag` is `--secrets`.
+/// The flags `agent …` reads.
+#[derive(Default)]
+pub struct Opts<'a> {
+    /// `--secrets`.
+    pub secrets: Option<&'a str>,
+    /// `--after`.
+    pub after: Option<i64>,
+    /// Whether `tail` follows (no `--no-follow`).
+    pub follow: bool,
+    /// `--chain`: the fallback chain's id; the session draws its account from it.
+    pub chain: Option<i64>,
+    /// `--agent`: the agent id, whose bound (else the default) chain serves the session.
+    pub agent: Option<&'a str>,
+    /// `--run`: `ls` lists only the attempts of this run (its first attempt's id).
+    pub run: Option<&'a str>,
+}
+
+/// `agent …`.
 pub async fn agent(
     c: &mut Client,
     words: &[&str],
-    secrets_flag: Option<&str>,
-    after: Option<i64>,
-    follow: bool,
+    opts: &Opts<'_>,
     json: bool,
     out: &mut impl Write,
 ) -> Result<(), Error> {
+    let Opts {
+        secrets: secrets_flag,
+        after,
+        follow,
+        chain,
+        agent,
+        run,
+    } = *opts;
     let shown = |out: &mut _, v: Value| match json {
         true => print(out, v),
         false => print(out, row(&v)),
     };
     match words {
         ["ls" | "list"] => {
-            let v: Value = c.get("/api/v1/agent-sessions", "").await?;
+            let query = run.map(|r| sid(r).map(|r| format!("run={r}"))).transpose()?;
+            let v: Value = c
+                .get("/api/v1/agent-sessions", query.as_deref().unwrap_or(""))
+                .await?;
             if json {
                 return print(out, v);
             }
@@ -76,8 +104,24 @@ pub async fn agent(
             }
             Ok(())
         }
-        ["run", runner, harness, prompt @ ..] => {
-            let mut body = json!({"runner": runner, "harness": harness});
+        ["run" | "start", runner, rest @ ..] => {
+            // With a chain (or an agent, whose chain serves it) the allocated account sets the
+            // harness and the model, so none is given: everything after the runner is the prompt.
+            let scheduled = chain.is_some() || agent.is_some();
+            let (mut body, prompt) = match (scheduled, rest) {
+                (true, prompt) => {
+                    let mut b = json!({"runner": runner});
+                    if let Some(id) = chain {
+                        b["chain"] = json!(id);
+                    }
+                    if let Some(a) = agent {
+                        b["agent"] = json!(crate::chains::agent_id(a)?);
+                    }
+                    (b, prompt)
+                }
+                (false, [harness, prompt @ ..]) => (json!({"runner": runner, "harness": harness}), prompt),
+                (false, []) => return Err(Error::Usage(RUN_USAGE.into())),
+            };
             if !prompt.is_empty() {
                 body["prompt"] = json!(prompt.join(" "));
             }
@@ -95,6 +139,9 @@ pub async fn agent(
             shown(out, v.clone())?;
             if json {
                 return Ok(());
+            }
+            for l in crate::sessions::detail(&v) {
+                print(out, l)?;
             }
             let path = format!("/api/v1/agent-sessions/{id}/transcript");
             let t: Value = c.get(&path, "after=0&limit=1000").await?;
@@ -130,13 +177,31 @@ pub async fn agent(
             let res = c.call("POST", &format!("/api/v1/agent-sessions/{}/approvals/{request}", sid(id)?), "", Some(&body)).await?;
             shown(out, parse(&res)?)
         }
+        ["wake", id, text @ ..] => {
+            let id = sid(id)?;
+            let mut body = json!({});
+            if !text.is_empty() {
+                body["text"] = json!(text.join(" "));
+            }
+            let path = format!("/api/v1/agent-sessions/{id}/wake");
+            let res = c
+                .call("POST", &path, "", Some(&body))
+                .await
+                .map_err(|e| crate::chains::friendly(e, &format!("waking {id}")))?;
+            let v: Value = parse(&res)?;
+            match (json, v["queued"].as_bool()) {
+                (true, _) => print(out, v),
+                (false, Some(false)) => print(out, format_args!("not queued: key {} was used", s(&v["key"]))),
+                (false, _) => print(out, format_args!("queued wake for {} key {}", s(&v["session"]), s(&v["key"]))),
+            }
+        }
         [verb @ ("cancel" | "kill"), id] => {
             let path = format!("/api/v1/agent-sessions/{}/{verb}", sid(id)?);
             let res = c.call("POST", &path, "", None).await?;
             shown(out, parse(&res)?)
         }
         _ => Err(Error::Usage(
-            "agent ls | run <runner-id> <harness> [prompt…] | show <id> | tail <id> | send <id> <message…> | approve/deny <id> <request> | cancel/kill <id>"
+            "agent ls | run <runner-id> <harness> [prompt…] (or, with --chain <id> / --agent <name>: run <runner-id> [prompt…]) | show <id> | tail <id> | send <id> <message…> | approve/deny <id> <request> | cancel/kill <id>"
                 .into(),
         )),
     }
