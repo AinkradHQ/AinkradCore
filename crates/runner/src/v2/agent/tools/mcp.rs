@@ -11,6 +11,9 @@ use serde_json::{Value, json};
 
 use super::Tools;
 
+/// The most bytes of tool entries one `tools/list` answer carries.
+pub const MAX_LIST_BYTES: usize = 256 * 1024;
+
 const PROTOCOL: &str = "2025-03-26";
 
 fn mcp_name(op: &str) -> String {
@@ -64,19 +67,29 @@ pub async fn handle(tools: &Tools, session: &str, body: &[u8]) -> Option<Vec<u8>
         }
         "ping" => Some(result(id, json!({}))),
         "tools/list" => {
-            let list: Vec<Value> = tools
-                .list(session)
-                .iter()
-                .map(|t| {
-                    let schema = t
-                        .input_schema
-                        .clone()
-                        .unwrap_or_else(|| json!({"type": "object", "additionalProperties": true}));
-                    json!({"name": mcp_name(&t.name), "description": t.description,
-                        "inputSchema": schema})
-                })
-                .collect();
-            Some(result(id, json!({"tools": list})))
+            // The whole answer is bounded: past `MAX_LIST_BYTES` the rest of the tools are left out
+            // and the answer says so (`_meta`), not sent as an ever bigger message.
+            let mut list: Vec<Value> = Vec::new();
+            let (mut size, mut omitted) = (0, 0);
+            for t in tools.list(session) {
+                let schema = t
+                    .input_schema
+                    .clone()
+                    .unwrap_or_else(|| json!({"type": "object", "additionalProperties": true}));
+                let one = json!({"name": mcp_name(&t.name), "description": t.description,
+                    "inputSchema": schema});
+                size += one.to_string().len();
+                if size > MAX_LIST_BYTES {
+                    omitted += 1;
+                } else {
+                    list.push(one);
+                }
+            }
+            let mut answer = json!({"tools": list});
+            if omitted > 0 {
+                answer["_meta"] = json!({"truncated": true, "omitted": omitted});
+            }
+            Some(result(id, answer))
         }
         "tools/call" => {
             let p = &req["params"];
@@ -129,6 +142,65 @@ mod tests {
             results,
             tools,
         }
+    }
+
+    /// 64 tools of 16 KiB schemas do not make a 1 MiB answer: the answer is cut, and says so.
+    #[tokio::test]
+    async fn a_list_over_the_cap_is_cut_and_says_so() {
+        let t = Tools::default();
+        let fat = |i: usize| ConnTool {
+            name: format!("github.op_{i}"),
+            description: "d".to_owned(),
+            write: false,
+            input_schema: Some(json!({"type": "object",
+                "description": "x".repeat(ainkrad_proto::v2::MAX_SCHEMA_BYTES - 200)})),
+        };
+        let list: Vec<ConnTool> = (0..64).map(fat).collect();
+        t.poll(&poll(0, vec![], Some(list)), Duration::from_millis(50))
+            .await;
+        let l = ask(
+            &t,
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+        )
+        .await;
+        let n = l["result"]["tools"].as_array().unwrap().len();
+        assert!(n > 0 && n < 64, "{n}");
+        assert_eq!(l["result"]["_meta"]["truncated"], true);
+        assert_eq!(l["result"]["_meta"]["omitted"], 64 - n);
+        assert!(l.to_string().len() < MAX_LIST_BYTES + 4096);
+    }
+
+    /// A schema that is not an object schema is not passed on: the tool is listed open.
+    #[tokio::test]
+    async fn a_schema_that_is_not_an_object_schema_is_not_passed_on() {
+        let t = Tools::default();
+        let odd = |name: &str, schema: Value| ConnTool {
+            name: name.to_owned(),
+            description: "d".to_owned(),
+            write: false,
+            input_schema: Some(schema),
+        };
+        let list = vec![
+            odd("github.a", json!("not a schema")),
+            odd("github.b", json!({"type": "string"})),
+            odd("github.c", json!({"type": "object", "properties": {}})),
+        ];
+        t.poll(&poll(0, vec![], Some(list)), Duration::from_millis(50))
+            .await;
+        let l = ask(
+            &t,
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+        )
+        .await;
+        let schemas: Vec<&Value> = l["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| &t["inputSchema"])
+            .collect();
+        assert_eq!(schemas[0]["additionalProperties"], true);
+        assert_eq!(schemas[1]["additionalProperties"], true);
+        assert_eq!(schemas[2]["properties"], json!({}));
     }
 
     #[tokio::test]

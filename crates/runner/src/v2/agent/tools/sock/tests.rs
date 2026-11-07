@@ -9,6 +9,7 @@ use ainkrad_proto::v2::{ConnTool, ToolResult, ToolsPoll};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
+use tokio::task::JoinHandle;
 
 use super::*;
 
@@ -84,6 +85,13 @@ impl Client {
             Ok(0) | Err(_) => None,
             Ok(_) => Some(serde_json::from_str(&line).unwrap()),
         }
+    }
+
+    /// Whether the connection is still open and answers a ping after a call was sent on it.
+    async fn ping_after_wait(&mut self) -> bool {
+        self.send(br#"{"jsonrpc":"2.0","id":99,"method":"ping"}"#)
+            .await;
+        self.next().await.is_some_and(|v| v["id"] == 99)
     }
 
     async fn ask(&mut self, body: Value) -> Value {
@@ -440,4 +448,256 @@ async fn the_whole_flow_runs_and_a_result_over_the_cap_is_a_plain_refusal() {
     for needle in ["Authorization", "Bearer", "ghp_", "cit_run"] {
         assert!(!seen.contains(needle), "{needle} on the socket");
     }
+}
+
+/// An acceptor that fails `fail` times, then hands out the real listener's connections.
+struct Flaky {
+    inner: UnixListener,
+    fail: u32,
+    always: bool,
+}
+
+impl Accept for Flaky {
+    fn accept(&mut self) -> impl std::future::Future<Output = io::Result<UnixStream>> + Send {
+        async move {
+            if self.always || self.fail > 0 {
+                self.fail = self.fail.saturating_sub(1);
+                return Err(io::Error::other("too many open files"));
+            }
+            UnixListener::accept(&self.inner).await.map(|(s, _)| s)
+        }
+    }
+}
+
+fn flaky(
+    tag: &str,
+    fail: u32,
+    always: bool,
+    give_up: u32,
+) -> (Arc<Tools>, JoinHandle<()>, PathBuf) {
+    let t = Arc::new(Tools::default());
+    let sock = socket_in(&dir(tag));
+    let inner = UnixListener::bind(&sock).unwrap();
+    let retry = Tuning {
+        pause: Duration::from_millis(5),
+        give_up,
+        ..Tuning::default()
+    };
+    let task = tokio::spawn(accept_loop(
+        Flaky {
+            inner,
+            fail,
+            always,
+        },
+        t.clone(),
+        "as_a".into(),
+        Arc::new(Semaphore::new(PER_SESSION)),
+        sock.clone(),
+        retry,
+    ));
+    (t, task, sock)
+}
+
+#[tokio::test]
+async fn a_transient_accept_error_does_not_end_the_socket_or_its_connections() {
+    let (_t, task, sock) = flaky("acc-ok", 5, false, 100);
+    // The listener meets five errors in a row and carries on: the socket is still served.
+    let mut c = Client::open(&sock).await;
+    let p = c
+        .ask(json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}))
+        .await;
+    assert_eq!(p["id"], 1);
+    assert!(sock.exists());
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_listener_that_never_recovers_is_given_up_loudly_and_withdraws_its_tools() {
+    let (t, task, sock) = flaky("acc-dead", 0, true, 40);
+    list(&t, "as_a", &["github.get_issue"]).await;
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("never gave up")
+        .unwrap();
+    assert!(
+        !sock.exists(),
+        "a socket nothing listens on was left behind"
+    );
+    assert!(
+        t.list("as_a").is_empty(),
+        "the tool list still offers tools nobody can reach"
+    );
+}
+
+/// A peer that sends requests and never reads the answers loses the whole connection (the review's
+/// #4): its reading stops, it does not hold the queue.
+#[tokio::test]
+async fn a_peer_that_never_reads_its_answers_loses_the_connection() {
+    let t = Arc::new(Tools::default());
+    let sock = socket_in(&dir("noread"));
+    let inner = UnixListener::bind(&sock).unwrap();
+    let retry = Tuning {
+        pause: Duration::from_millis(5),
+        write: Duration::from_millis(200),
+        ..Tuning::default()
+    };
+    let task = tokio::spawn(accept_loop(
+        inner,
+        t.clone(),
+        "as_a".into(),
+        Arc::new(Semaphore::new(PER_SESSION)),
+        sock.clone(),
+        retry,
+    ));
+    // A tool whose listing is ~15 KB: a few hundred answers fill the socket's buffers.
+    let fat = ConnTool {
+        input_schema: Some(json!({"type": "object", "description": "x".repeat(15_000)})),
+        ..tool("github.get_issue")
+    };
+    t.poll(&poll("as_a", 0, vec![], Some(vec![fat])), SHORT)
+        .await;
+    let (mut r, mut w) = UnixStream::connect(&sock).await.unwrap().into_split();
+    tokio::spawn(async move {
+        let line = format!(
+            "{}\n",
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        );
+        for _ in 0..2000 {
+            if w.write_all(line.as_bytes()).await.is_err() {
+                return;
+            }
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    // Reading at last: what was buffered, then the end. Without the fix the connection is still
+    // open (its reader parked) and this never reaches the end.
+    let mut sink = tokio::io::sink();
+    let ended =
+        tokio::time::timeout(Duration::from_secs(10), tokio::io::copy(&mut r, &mut sink)).await;
+    assert!(
+        ended.is_ok(),
+        "the connection of a peer that does not read was kept open"
+    );
+    task.abort();
+}
+
+/// A real listener served by `accept_loop` with `tuning`.
+fn tuned(tag: &str, tuning: Tuning) -> (Arc<Tools>, JoinHandle<()>, PathBuf) {
+    let t = Arc::new(Tools::default());
+    let sock = socket_in(&dir(tag));
+    let inner = UnixListener::bind(&sock).unwrap();
+    let task = tokio::spawn(accept_loop(
+        inner,
+        t.clone(),
+        "as_a".into(),
+        Arc::new(Semaphore::new(PER_SESSION)),
+        sock.clone(),
+        tuning,
+    ));
+    (t, task, sock)
+}
+
+fn quick() -> Tuning {
+    Tuning {
+        pause: Duration::from_millis(5),
+        ..Tuning::default()
+    }
+}
+
+/// Slow-loris: a line begun and never finished does not hold a connection (or its slot) for ever.
+#[tokio::test]
+async fn a_line_begun_and_never_finished_loses_the_connection() {
+    let (_t, task, sock) = tuned(
+        "loris",
+        Tuning {
+            line: Duration::from_millis(150),
+            ..quick()
+        },
+    );
+    let mut c = UnixStream::connect(&sock).await.unwrap();
+    c.write_all(br#"{"jsonrpc":"2.0","id":1,"meth"#)
+        .await
+        .unwrap();
+    let mut buf = [0; 16];
+    let n = tokio::time::timeout(Duration::from_secs(5), c.read(&mut buf))
+        .await
+        .expect("the half-written line held the connection open");
+    assert!(matches!(n, Ok(0) | Err(_)), "{n:?}");
+    // The listener serves on.
+    let mut d = Client::open(&sock).await;
+    assert_eq!(
+        d.ask(json!({"jsonrpc": "2.0", "id": 2, "method": "ping"}))
+            .await["id"],
+        2
+    );
+    task.abort();
+}
+
+/// A parked connection is closed after the idle spell, and its slot is free for another session; a
+/// connection with a call in flight is not idle.
+#[tokio::test]
+async fn an_idle_connection_is_closed_but_one_with_a_call_in_flight_is_not() {
+    let (t, task, sock) = tuned(
+        "idle",
+        Tuning {
+            idle: Duration::from_millis(250),
+            ..quick()
+        },
+    );
+    list(&t, "as_a", &["github.get_issue"]).await;
+    let mut parked = Client::open(&sock).await;
+    parked
+        .ask(json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}))
+        .await;
+    let mut busy = Client::open(&sock).await;
+    // A call the Core never answers: in flight for longer than the idle spell.
+    busy.send(
+        call(5, "github_get_issue", json!({}))
+            .to_string()
+            .as_bytes(),
+    )
+    .await;
+    assert!(parked.next().await.is_none(), "an idle connection was kept");
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let p = busy.ping_after_wait().await;
+    assert!(p, "a connection with a call in flight was closed as idle");
+    task.abort();
+}
+
+/// At the runner-wide cap the listener stops accepting (the peer waits in the backlog, it is not
+/// accepted and closed in a spin), and serves it as soon as a slot frees.
+#[tokio::test]
+async fn at_the_runner_wide_cap_connections_wait_instead_of_being_accepted_and_closed() {
+    let (_t, task, sock) = tuned(
+        "global",
+        Tuning {
+            global: Arc::new(Semaphore::new(2)),
+            ..quick()
+        },
+    );
+    let mut a = Client::open(&sock).await;
+    let mut b = Client::open(&sock).await;
+    a.ask(json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}))
+        .await;
+    b.ask(json!({"jsonrpc": "2.0", "id": 2, "method": "ping"}))
+        .await;
+    let (mut r, mut w) = UnixStream::connect(&sock).await.unwrap().into_split();
+    w.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ping\"}\n")
+        .await
+        .unwrap();
+    let mut buf = [0; 64];
+    // Neither answered nor closed while the two slots are held.
+    let waited = tokio::time::timeout(Duration::from_millis(400), r.read(&mut buf)).await;
+    assert!(
+        waited.is_err(),
+        "a connection over the cap was answered or closed: {waited:?}"
+    );
+    drop(a);
+    let n = tokio::time::timeout(Duration::from_secs(5), r.read(&mut buf))
+        .await
+        .expect("not served after a slot freed")
+        .unwrap();
+    assert!(String::from_utf8_lossy(&buf[..n]).contains("\"id\":3"));
+    drop(b);
+    task.abort();
 }

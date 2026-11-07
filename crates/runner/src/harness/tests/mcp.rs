@@ -164,3 +164,51 @@ async fn a_session_with_the_tools_slot_gets_the_connections_server_and_nothing_s
     assert_eq!(left(&dir.join("work/private")), Vec::<String>::new());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// C4b review: the connection tools skip the reviewer only for a session that has the slot, under
+/// exactly this server's namespace, and for a tool the Core listed for that session. A repo's own MCP
+/// server that reuses the name is not trusted.
+#[tokio::test]
+async fn a_connection_tool_is_trusted_only_with_the_slot_and_only_when_listed() {
+    use ainkrad_proto::v2::{ConnTool, ToolsPoll};
+    let dir = scratch("conn-trust");
+    let tools = Arc::new(crate::v2::agent::tools::Tools::default());
+    let mut ex = HarnessExecutor::new(dir.join("work"), dir.join("config"));
+    ex.tools = Some(tools.clone());
+    let job = job("claude");
+    let listed = ToolsPoll {
+        session: job.context_ref.clone(),
+        after: 0,
+        wait_ms: None,
+        results: vec![],
+        tools: Some(vec![ConnTool {
+            name: "github.get_issue".to_owned(),
+            description: "d".to_owned(),
+            write: false,
+            input_schema: None,
+        }]),
+    };
+    tools.poll(&listed, Duration::ZERO).await;
+    let slot: Vec<(String, std::ffi::OsString)> = vec![
+        ("AINKRAD_SANDBOX_TOOLS_SOCK".to_owned(), "/s".into()),
+        ("AINKRAD_SANDBOX_TOOLS_FWD".to_owned(), "/f".into()),
+    ];
+    let name = "mcp__ainkrad-connections__github_get_issue";
+    assert!(ex.connection_call(&job, &slot, name));
+    assert!(ex.connection_call(&job, &slot, "ainkrad-connections_github_get_issue"));
+    // No slot: a name alone is nothing. Not listed, or another server, or another session: no.
+    assert!(!ex.connection_call(&job, &[], name));
+    assert!(!ex.connection_call(&job, &slot, "mcp__ainkrad-connections__github_drop_repo"));
+    assert!(!ex.connection_call(&job, &slot, "mcp__repo-server__github_get_issue"));
+    let other = Job {
+        context_ref: "as_other".to_owned(),
+        ..job.clone()
+    };
+    assert!(!ex.connection_call(&other, &slot, name));
+    // And the permission policy itself has no shortcut for it any more.
+    assert!(
+        ex.decide(&Policy::default(), name, &json!({}), &dir)
+            .is_err()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

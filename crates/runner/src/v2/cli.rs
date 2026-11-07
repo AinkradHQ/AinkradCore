@@ -461,14 +461,6 @@ async fn gateway_selftest(agents: &std::path::Path) -> Result<(), String> {
     crate::gateway::selftest(agents, &exe).await
 }
 
-/// The connection tools socket's start-up check (Linux): a real sandbox must reach its own
-/// session's socket, see no other session's, and nothing of the session directories.
-async fn tools_selftest(agents: &std::path::Path) -> Result<(), String> {
-    let exe =
-        std::env::current_exe().map_err(|_| "cannot find the runner executable".to_owned())?;
-    super::agent::tools::selftest::selftest(agents, &exe).await
-}
-
 /// The egress proxy of `--terminal-network=filtered` (KAN-416): the policy of the agent sessions
 /// (`AINKRAD_AGENT_EGRESS_*`), proven by the same start-up check, on a socket in `dir` (0700) that
 /// the shells get bound in. A socket left by an earlier runner is replaced.
@@ -508,6 +500,10 @@ async fn agents(
 ) -> Result<super::agent::AgentDriver, String> {
     let [secrets, work] = runtime_paths(state);
     let mut executor = crate::HarnessExecutor::new(work, state.join("agents-config"));
+    // The connection tools the Core lists, shared by the driver (its socket) and the executor (its
+    // approvals): one `Tools`.
+    let tools = Arc::new(super::agent::tools::Tools::default());
+    executor.tools = Some(tools.clone());
     let egress_ready = egress_filter(&mut executor).await?;
     // The auth gateway is offered only once its socket has been seen to answer; a failure
     // withholds the capability, it does not stop the driver.
@@ -518,17 +514,7 @@ async fn agents(
             false
         }
     };
-    // The connection tools socket is offered only once a real sandbox has been seen to reach its
-    // own session's socket and no other's.
-    let tools_ready = match tools_selftest(&state.join("agents")).await {
-        Ok(()) => true,
-        Err(why) => {
-            tracing::warn!(
-                "the connection tools are not offered: their start-up check failed: {why}"
-            );
-            false
-        }
-    };
+    let tools_ready = super::agent::tools::selftest::offered(&state.join("agents")).await;
     // The Citadel MCP server at the Core this runner is enrolled with: without it a run's harness
     // is given no MCP config, whatever token the Core minted.
     executor.mcp_url = core_url.and_then(|u| crate::core_mcp_url(&u));
@@ -549,6 +535,7 @@ async fn agents(
     }
     super::agent::AgentDriver::new(config, executor)
         .map(|d| {
+            let d = d.with_tools(tools);
             let sandbox = super::sandbox::ProcessSandbox::new(state.to_path_buf(), secrets)
                 .with_network(std::env::var("AINKRAD_AGENT_NETWORK").ok());
             let sandbox = if egress_ready {

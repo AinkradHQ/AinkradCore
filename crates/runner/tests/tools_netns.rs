@@ -258,3 +258,50 @@ async fn a_half_set_slot_refuses_the_sandbox() {
         "a sandbox with a non-socket ran"
     );
 }
+
+/// C4b review: the sandbox builder refuses a layout that would put another session's socket in
+/// reach. A harness binary kept in a directory that holds the agents dir binds that whole tree (via
+/// `program_dirs`), so the session fails closed; one kept elsewhere is fine.
+#[tokio::test]
+async fn a_bound_path_that_holds_another_sessions_socket_refuses_the_sandbox() {
+    require_sandbox();
+    let root = scratch("holds");
+    let tools = Arc::new(Tools::default());
+    let (_fa, sa) = session(&root, &tools, "as_aaaa", "github.alpha").await;
+    let (_fb, _sb) = session(&root, &tools, "as_bbbb", "github.beta").await;
+    let spec_for = || {
+        let mut env: Vec<(String, std::ffi::OsString)> = vec![
+            ("AINKRAD_SANDBOX".into(), "1".into()),
+            ("AINKRAD_SANDBOX_TMP".into(), root.join("tmp").into()),
+            ("AINKRAD_SANDBOX_NETWORK".into(), "deny".into()),
+        ];
+        env.extend(
+            sandbox_env(&sa, &exe())
+                .into_iter()
+                .map(|(n, v)| (n, v.into())),
+        );
+        ainkrad_harness::Spec {
+            cwd: root.join("work"),
+            config_dir: root.join("config"),
+            env,
+            ..ainkrad_harness::Spec::default()
+        }
+    };
+    // The harness binary sits directly in `root`, which holds `agents/` (every session's socket).
+    let bad = root.join("claude");
+    std::fs::copy("/bin/true", &bad).unwrap();
+    let mut cmd = ainkrad_harness::sandbox_command(bad.as_os_str(), &[], &spec_for());
+    assert!(
+        cmd.output().await.is_err(),
+        "a sandbox that binds the agents dir ran"
+    );
+    // The same binary in a directory away from the sockets runs.
+    let away = std::env::temp_dir().join(format!("tn-away-{}", std::process::id()));
+    std::fs::create_dir_all(&away).unwrap();
+    let good = away.join("claude");
+    std::fs::copy("/bin/true", &good).unwrap();
+    let mut cmd = ainkrad_harness::sandbox_command(good.as_os_str(), &[], &spec_for());
+    let out = cmd.output().await.expect("the sandbox was refused");
+    assert!(out.status.success(), "{out:?}");
+    let _ = std::fs::remove_dir_all(&away);
+}

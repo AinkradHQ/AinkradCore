@@ -44,6 +44,7 @@ use crate::{Answer, Control, Executor, Job, Report};
 
 pub mod secrets;
 use secrets::{Delivered, Redeem};
+mod front;
 mod gw;
 mod signals;
 mod sub;
@@ -383,49 +384,6 @@ impl AgentDriver {
         }
     }
 
-    /// The Core's `agent.tools` poll (C4): see [`tools::Tools::poll`]. A session this runner does
-    /// not hold is refused, as every `agent.*` op is.
-    pub async fn tools(
-        &self,
-        req: &ainkrad_proto::v2::ToolsPoll,
-    ) -> Result<ainkrad_proto::v2::ToolBatch, StreamError> {
-        if !self
-            .sandbox
-            .capabilities()
-            .contains(&ainkrad_proto::v2::CAP_TOOLS)
-        {
-            return Err(refuse(
-                ErrorCode::UnsupportedCommand,
-                "this runner does not offer the connection tools",
-            ));
-        }
-        // An ended session is as good as unknown: a late poll must not make its state again.
-        let running = self
-            .sessions
-            .lock()
-            .unwrap()
-            .get(&req.session)
-            .is_some_and(|l| l.meta.state == AgentState::Running);
-        if !running {
-            return Err(no_session());
-        }
-        Ok(self.tools.poll(req, MAX_WAIT).await)
-    }
-
-    /// Opens the session's tools socket in its private dir and gives the sandbox's slot variables.
-    fn open_tools(
-        &self,
-        session: &str,
-    ) -> Result<(tools::sock::Front, Vec<(String, String)>), String> {
-        let dir = self.config.dir.join(session);
-        secrets::private_dir(&dir).map_err(|e| format!("the session directory: {e}"))?;
-        let sock = tools::sock::socket_in(&dir);
-        let exe = std::env::current_exe().map_err(|e| format!("the shim: {e}"))?;
-        let front = tools::sock::start(&sock, Arc::clone(&self.tools), session)
-            .map_err(|e| format!("the tools socket: {e}"))?;
-        Ok((front, tools::sock::sandbox_env(&sock, &exe)))
-    }
-
     /// The harness-facing end of the connection tools (the MCP front calls through this).
     pub fn tools_port(&self) -> &tools::Tools {
         &self.tools
@@ -641,31 +599,7 @@ impl AgentDriver {
                 }
             }
         }
-        // The connection tools socket (C4b), before the sandbox is built: it is bound into it. A
-        // runner that does not offer the capability opens none.
-        let mut tools_env = Vec::new();
-        if self
-            .sandbox
-            .capabilities()
-            .contains(&ainkrad_proto::v2::CAP_TOOLS)
-        {
-            match self.open_tools(&session) {
-                Ok((front, env)) => {
-                    tools_env = env;
-                    self.with(&session, |live, _, _| {
-                        if !live.stopped {
-                            live.front = Some(front);
-                        }
-                    });
-                }
-                Err(why) => {
-                    // The session still runs, without connection tools: said in its transcript.
-                    tracing::warn!(session = %session, "connection tools unavailable: {why}");
-                    let entry = json!({"type": "connection_tools_unavailable", "reason": why});
-                    self.with(&session, |live, cfg, s| push(cfg, s, live, entry));
-                }
-            }
-        }
+        let tools_env = self.start_front(&session);
         let hosts = std::env::var("CITADEL_GIT_HOSTS")
             .unwrap_or_default()
             .split(',')

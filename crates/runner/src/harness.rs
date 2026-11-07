@@ -135,6 +135,9 @@ pub struct HarnessExecutor {
     /// Where harness processes start (E8a-06); `None` is the local backend (bubblewrap or
     /// Seatbelt, as `AINKRAD_SANDBOX*` say). Set it before the first run.
     pub backend: Option<Arc<dyn ainkrad_harness::exec::ExecBackend>>,
+    /// The connection tools the Core lists for each session (C4b), which the policy checks a
+    /// connection tool's name against (`connection_call`); the agent driver is given the same.
+    pub tools: Option<Arc<crate::v2::agent::tools::Tools>>,
 }
 
 impl HarnessExecutor {
@@ -189,6 +192,7 @@ impl HarnessExecutor {
             credentials: Mutex::new(HashMap::new()),
             versions: Mutex::new(BTreeMap::new()),
             backend: None,
+            tools: None,
         }
     }
 

@@ -13,11 +13,13 @@
 //! a request line is at most [`MAX_REQUEST`] bytes and is read with a bound (over it: one error
 //! reply, then the connection is closed, it cannot be resynchronised), a line that is started must
 //! be finished within [`LINE_DEADLINE`], at most [`PER_CONN`] requests of a connection are
-//! worked at once (more are refused at once, `busy`), a session has at most [`PER_SESSION`]
-//! connections and the runner [`GLOBAL`], a peer that does not read its answers is dropped
-//! after [`WRITE_TIMEOUT`], and a call's wait and result size are bounded by `Tools` itself.
-//! A connection has no idle timeout (a harness holds its MCP server open for the whole session):
-//! it ends with the peer, or with the session ([`Front`] dropped).
+//! worked at once (more are refused at once, `-32001`), a session has at most [`PER_SESSION`]
+//! connections and the runner [`GLOBAL`] (taken before a connection is accepted, so at the cap
+//! listeners stop accepting; a connection with no request for [`IDLE`] is closed, which frees its slot), a peer that does not take an answer within
+//! [`WRITE_TIMEOUT`] loses the WHOLE connection (its reading stops and its calls still in flight
+//! are dropped, which takes the ones not yet sent out of the queue), and a call's wait, result
+//! size and what is held per session and per runner are bounded by `Tools` itself.
+//! A connection ends with the peer, an idle spell, or the session ([`Front`] dropped).
 //!
 //! No credential passes here: a request is a tool name and arguments, an answer is the Core's
 //! plain result or refusal.
@@ -44,7 +46,11 @@ pub const MAX_REQUEST: usize = 512 * 1024;
 pub const PER_CONN: usize = 8;
 /// Open connections per session, and across the runner.
 pub const PER_SESSION: usize = 4;
-pub const GLOBAL: usize = 64;
+pub const GLOBAL: usize = 256;
+/// A connection that sends no request for this long, with none in flight, is closed. A harness holds
+/// its MCP server for the whole session, and it may think for minutes between tool calls, so this is
+/// not short: a connection that lost its place is simply opened again by the shim's next start.
+pub const IDLE: Duration = Duration::from_secs(600);
 /// A line that has begun must end within this.
 pub const LINE_DEADLINE: Duration = Duration::from_secs(30);
 /// A peer that takes this long to accept an answer is dropped.
@@ -52,7 +58,8 @@ pub const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// A unix socket path is 108 bytes at most; the gateway keeps to 100.
 pub const MAX_SOCK_PATH: usize = 100;
 
-static OPEN: Semaphore = Semaphore::const_new(GLOBAL);
+static OPEN: std::sync::LazyLock<Arc<Semaphore>> =
+    std::sync::LazyLock::new(|| Arc::new(Semaphore::new(GLOBAL)));
 
 /// The socket a session's tools are served on, in its private dir.
 pub fn socket_in(dir: &Path) -> PathBuf {
@@ -96,30 +103,111 @@ pub fn start(sock: &Path, tools: Arc<Tools>, session: &str) -> io::Result<Front>
     std::fs::set_permissions(sock, std::fs::Permissions::from_mode(0o600))?;
     let session: Arc<str> = session.into();
     let mine = Arc::new(Semaphore::new(PER_SESSION));
-    let task = tokio::spawn(async move {
-        let mut conns = JoinSet::new();
-        loop {
-            tokio::select! {
-                accepted = listener.accept() => {
-                    let Ok((client, _)) = accepted else { break };
-                    // Over a limit: closed at once, nothing queued.
-                    let (Ok(mine), Ok(global)) = (mine.clone().try_acquire_owned(), OPEN.try_acquire()) else {
-                        continue;
-                    };
-                    let (tools, session) = (tools.clone(), session.clone());
-                    conns.spawn(async move {
-                        let _held = (mine, global);
-                        serve(client, tools, session).await;
-                    });
-                }
-                Some(_) = conns.join_next(), if !conns.is_empty() => {}
-            }
-        }
-    });
+    let path = sock.to_owned();
+    let task = tokio::spawn(accept_loop(
+        listener,
+        tools,
+        session,
+        mine,
+        path,
+        Tuning::default(),
+    ));
     Ok(Front {
         task,
         sock: sock.to_owned(),
     })
+}
+
+/// What accepts connections: the listener, or (in a test) one that fails on demand.
+trait Accept: Send + 'static {
+    fn accept(&mut self) -> impl std::future::Future<Output = io::Result<UnixStream>> + Send;
+}
+
+impl Accept for UnixListener {
+    fn accept(&mut self) -> impl std::future::Future<Output = io::Result<UnixStream>> + Send {
+        async move { UnixListener::accept(self).await.map(|(stream, _)| stream) }
+    }
+}
+
+/// The clocks and counts of a socket, in one place so a test can shorten them.
+#[derive(Clone)]
+struct Tuning {
+    /// The pause after an accept error (grown with each one in a row) and the number in a row
+    /// after which the listener is given up.
+    pause: Duration,
+    give_up: u32,
+    /// How long a peer may take to accept an answer ([`WRITE_TIMEOUT`]), to finish a line it has
+    /// begun ([`LINE_DEADLINE`]), and to send nothing while no request of it is in flight
+    /// ([`IDLE`]).
+    write: Duration,
+    line: Duration,
+    idle: Duration,
+    /// The runner-wide connection slots, taken BEFORE a connection is accepted: at the cap the
+    /// listeners stop accepting (the peers wait in the backlog) instead of accepting to close.
+    global: Arc<Semaphore>,
+}
+
+impl Default for Tuning {
+    fn default() -> Self {
+        Self {
+            pause: Duration::from_millis(100),
+            give_up: 100,
+            write: WRITE_TIMEOUT,
+            line: LINE_DEADLINE,
+            idle: IDLE,
+            global: OPEN.clone(),
+        }
+    }
+}
+
+/// Accepts until the session ends. An accept error (EMFILE, ENFILE, a connection aborted before it
+/// was taken) is not the end of the socket: it is logged (the error text names no secret), waited
+/// out and retried, so live connections and the socket file stay. Only a failure that does not
+/// pass gives the listener up: the socket file is removed (nothing listens), the session's tool
+/// list is emptied and the reason is logged.
+async fn accept_loop<A: Accept>(
+    mut listener: A,
+    tools: Arc<Tools>,
+    session: Arc<str>,
+    mine: Arc<Semaphore>,
+    sock: PathBuf,
+    tuning: Tuning,
+) {
+    let mut conns = JoinSet::new();
+    let mut failures = 0u32;
+    loop {
+        let Ok(global) = tuning.global.clone().acquire_owned().await else {
+            return;
+        };
+        tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok(client) => {
+                    failures = 0;
+                    // Over a limit: closed at once, nothing queued.
+                    let Ok(mine) = mine.clone().try_acquire_owned() else {
+                        continue;
+                    };
+                    let (tools, session, tuning) = (tools.clone(), session.clone(), tuning.clone());
+                    conns.spawn(async move {
+                        let _held = (mine, global);
+                        serve(client, tools, session, &tuning).await;
+                    });
+                }
+                Err(e) => {
+                    failures += 1;
+                    tracing::warn!(session = %session, error = %e, failures, "accepting on the tools socket failed");
+                    if failures >= tuning.give_up {
+                        tracing::error!(session = %session, "the tools socket is given up: its connection tools are withdrawn");
+                        let _ = std::fs::remove_file(&sock);
+                        tools.unlist(&session);
+                        return;
+                    }
+                    tokio::time::sleep(tuning.pause * failures.min(10)).await;
+                }
+            },
+            Some(_) = conns.join_next(), if !conns.is_empty() => {}
+        }
+    }
 }
 
 enum Line {
@@ -185,7 +273,8 @@ impl Drop for Abort {
     }
 }
 
-async fn serve(stream: UnixStream, tools: Arc<Tools>, session: Arc<str>) {
+async fn serve(stream: UnixStream, tools: Arc<Tools>, session: Arc<str>, tuning: &Tuning) {
+    let write_timeout = tuning.write;
     let (read, mut write) = stream.into_split();
     let mut reader = BufReader::new(read);
     // Answers wait in a bounded queue for the one writer; a slow peer stops being served instead
@@ -195,7 +284,7 @@ async fn serve(stream: UnixStream, tools: Arc<Tools>, session: Arc<str>) {
         while let Some(mut line) = queue.recv().await {
             line.push(b'\n');
             if !matches!(
-                timeout(WRITE_TIMEOUT, write.write_all(&line)).await,
+                timeout(write_timeout, write.write_all(&line)).await,
                 Ok(Ok(()))
             ) {
                 return;
@@ -226,14 +315,31 @@ async fn serve(stream: UnixStream, tools: Arc<Tools>, session: Arc<str>) {
     };
     let inflight = Arc::new(Semaphore::new(PER_CONN));
     let mut requests = JoinSet::new();
+    let mut writer_done = false;
     let clean = loop {
         while requests.try_join_next().is_some() {}
         // Wait for the first byte of a request without a clock; once one has begun, it must end.
-        match reader.fill_buf().await {
-            Ok(b) if !b.is_empty() => {}
-            _ => break true, // the peer closed (or failed): finish what is in flight
+        // A peer that stopped reading its answers (the writer gave up) loses the connection: no
+        // more of its calls are forwarded.
+        let ready = tokio::select! {
+            r = reader.fill_buf() => matches!(r, Ok(b) if !b.is_empty()),
+            _ = &mut writer.0 => {
+                writer_done = true;
+                break false;
+            }
+            // Nothing sent, and nothing of this peer in flight, for too long: it is parked.
+            () = tokio::time::sleep(tuning.idle) => {
+                while requests.try_join_next().is_some() {}
+                if requests.is_empty() {
+                    break false;
+                }
+                continue; // a call is in flight: not idle
+            }
+        };
+        if !ready {
+            break true; // the peer closed (or failed): finish what is in flight
         }
-        let line = match timeout(LINE_DEADLINE, read_line(&mut reader, MAX_REQUEST)).await {
+        let line = match timeout(tuning.line, read_line(&mut reader, MAX_REQUEST)).await {
             Ok(Ok(Line::Data(line))) => line,
             Ok(Ok(Line::Eof)) => break true,
             Ok(Ok(Line::TooLong)) => {
@@ -261,16 +367,27 @@ async fn serve(stream: UnixStream, tools: Arc<Tools>, session: Arc<str>) {
             }
         });
     };
-    if clean {
-        // The peer is done sending (a shim whose stdin ended): let its calls finish and be told.
-        while requests.join_next().await.is_some() {}
+    if clean && !writer_done {
+        // The peer is done sending (a shim whose stdin ended): let its calls finish and be told,
+        // unless it stops reading its answers meanwhile.
+        let mut died = false;
+        tokio::select! {
+            () = async { while requests.join_next().await.is_some() {} } => {}
+            _ = &mut writer.0 => died = true,
+        }
+        if died {
+            writer_done = true;
+            requests.abort_all();
+        }
     } else {
         requests.abort_all();
     }
     drop(notifier);
     drop(out);
     // The writer ends when the queue is closed and drained, or when the peer stopped reading.
-    let _ = (&mut writer.0).await;
+    if !writer_done {
+        let _ = (&mut writer.0).await;
+    }
 }
 
 /// `ainkrad-runner mcp-stdio <sock>`: runs inside the sandbox as the harness's MCP server. A byte

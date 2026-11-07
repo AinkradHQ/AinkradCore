@@ -67,6 +67,24 @@ async fn tell(tools: &Tools, session: &str, tool: &str) {
     tools.poll(&poll, Duration::ZERO).await;
 }
 
+/// Whether this runner offers the connection tools: the check passed (a failure is logged and
+/// withholds the capability; it does not stop the driver).
+pub async fn offered(agents: &Path) -> bool {
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(_) => return false,
+    };
+    match selftest(agents, &exe).await {
+        Ok(()) => true,
+        Err(why) => {
+            tracing::warn!(
+                "the connection tools are not offered: their start-up check failed: {why}"
+            );
+            false
+        }
+    }
+}
+
 /// Runs the check. `agents` is where sessions' directories live (`<state>/agents`) and `forwarder`
 /// the runner executable the sandbox runs as the shim. The error is a reason fit for the log.
 pub async fn selftest(agents: &Path, forwarder: &Path) -> Result<(), String> {
@@ -121,6 +139,8 @@ async fn run(root: &Path, a: &str, b: &str, forwarder: &Path) -> Result<(), Stri
         ("AINKRAD_SANDBOX".into(), "1".into()),
         ("AINKRAD_SANDBOX_TMP".into(), root.join("tmp").into()),
         ("AINKRAD_SANDBOX_NETWORK".into(), "deny".into()),
+        // As a session's has it: the builder judges every bind against `<state>/agents`.
+        ("AINKRAD_SANDBOX_STATE".into(), root.into()),
     ];
     // The first session's slot only: the second session's socket is not given to this sandbox.
     env.extend(
@@ -146,6 +166,16 @@ echo "peek=$(printf '%s\n' "$q" | "{fwd}" mcp-stdio "{sb_s}" 2>/dev/null)"
         agents = agents.display(),
         da = da.display(),
     );
+    // The negative control, through the same builder: a harness binary whose folder holds the agents
+    // dir has that folder bound whole (`program_dirs`), and every session's socket with it. The
+    // builder must refuse; a runner whose builder runs that is not offered the capability.
+    let prog = root.join("prog");
+    std::fs::copy("/bin/true", &prog).map_err(|e| format!("self-test program: {e}"))?;
+    let mut leaky = ainkrad_harness::sandbox_command(prog.as_os_str(), &[], &spec);
+    leaky.stdin(std::process::Stdio::null());
+    if timeout(STEP, leaky.output()).await.is_ok_and(|r| r.is_ok()) {
+        return Err("a sandbox that binds the state dir was built: other sessions' sockets would be reachable".to_owned());
+    }
     let mut cmd = ainkrad_harness::sandbox_command(
         std::ffi::OsStr::new("/bin/bash"),
         &["-c".into(), script],

@@ -13,6 +13,24 @@ use super::HarnessExecutor;
 use crate::{Answer, Reply, Report};
 
 impl HarnessExecutor {
+    /// Whether `tool` is one of the connection tools of this run's session (C4b): the run's sandbox
+    /// has the tools slot, the name is exactly this server's namespace, and the Core listed that
+    /// tool for the session. The Core decides each call (user, agent, allowlist), so such a call
+    /// needs no reviewer; any other tool of that name (a repo's own MCP server) does.
+    pub(super) fn connection_call(
+        &self,
+        job: &crate::Job,
+        env: &[(String, std::ffi::OsString)],
+        tool: &str,
+    ) -> bool {
+        ainkrad_harness::connections::slot(env).is_some()
+            && ainkrad_harness::connections::tool_suffix(tool).is_some_and(|name| {
+                self.tools
+                    .as_ref()
+                    .is_some_and(|t| t.knows(&job.context_ref, name))
+            })
+    }
+
     /// Whether `policy` lets the tool call go ahead, or why it needs a reviewer.
     pub(super) fn decide(
         &self,
@@ -26,8 +44,7 @@ impl HarnessExecutor {
         }
         // The Citadel MCP tools (E4.2) and CLI (E15.18) are scoped by the run token, not by
         // the policy.
-        // The connection tools (C4b) are decided by the Core, call by call (user, agent, allowlist).
-        if citadel_call(tool, input) || ainkrad_harness::connections::is_tool(tool) {
+        if citadel_call(tool, input) {
             return Ok(());
         }
         // The usable rules for this tool: an entry that `rule_problem` finds fault with (a shell,
