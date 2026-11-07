@@ -542,19 +542,6 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/ToolsPoll",
-          "properties": {
-            "op": {
-              "const": "agent.tools",
-              "type": "string"
-            }
-          },
-          "required": [
-            "op"
-          ],
-          "type": "object"
-        },
-        {
           "$ref": "#/$defs/LoginStart",
           "properties": {
             "op": {
@@ -585,6 +572,19 @@
           "properties": {
             "op": {
               "const": "login.cancel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ToolsPoll",
+          "properties": {
+            "op": {
+              "const": "agent.tools",
               "type": "string"
             }
           },
@@ -2268,20 +2268,6 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/ToolBatch",
-          "description": "The answer to `agent.tools`: the calls the harness made.",
-          "properties": {
-            "op": {
-              "const": "agent.tools",
-              "type": "string"
-            }
-          },
-          "required": [
-            "op"
-          ],
-          "type": "object"
-        },
-        {
           "$ref": "#/$defs/LoginUrl",
           "description": "The answer to `login.start`.",
           "properties": {
@@ -2301,6 +2287,20 @@
           "properties": {
             "op": {
               "const": "login.result",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ToolBatch",
+          "description": "(After every older op, as `Command`'s.) The answer to `agent.tools`: the calls the harness made.",
+          "properties": {
+            "op": {
+              "const": "agent.tools",
               "type": "string"
             }
           },
