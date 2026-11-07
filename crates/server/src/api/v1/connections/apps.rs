@@ -68,7 +68,7 @@ async fn shown(app: &App, kind: &str, full: bool) -> Result<ConnectionApp, ApiEr
                     .map(|v| v.to_string()),
             })
             .collect(),
-        redirect_uri: (kind == "jira" && full).then(|| {
+        redirect_uri: (matches!(kind, "jira" | "linear") && full).then(|| {
             let port = values
                 .get("loopback_port")
                 .and_then(|p| p.parse().ok())
