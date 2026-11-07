@@ -236,7 +236,7 @@ pub trait KindAdapter: Send + Sync {
 /// The built-in kinds' descriptors by kind name, without making an adapter (no HTTP client): for
 /// a check that has only a kind name in hand.
 pub fn builtin_descriptor(kind: &str) -> Option<&'static Descriptor> {
-    [&super::github::GITHUB]
+    [&super::github::GITHUB, &super::jira::DESCRIPTOR]
         .into_iter()
         .find(|d| d.kind == kind)
 }

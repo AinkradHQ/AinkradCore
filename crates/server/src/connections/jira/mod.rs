@@ -109,6 +109,7 @@ pub const DESCRIPTOR: Descriptor = Descriptor {
     }],
     // Atlassian's own tokens are not a shape the redactor names (C2 reads this for GitHub).
     token_shapes: &[],
+    refresh_prefixes: &[],
     self_limited: &["jira.search_issues", "jira.list_projects"],
 };
 
