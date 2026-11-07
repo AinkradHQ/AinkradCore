@@ -131,7 +131,7 @@
 /// 45: the connection broker (C4): the `agent.tools` op in the runner schema (`ToolsPoll`, `ToolBatch`,
 ///    `ToolCall`, `ToolResult`, `ConnTool`); the `connection.*` audit actions in `x-audit-actions`
 ///    (`connection.used` is written by the broker); no operation changes.
-pub const API_MINOR: u32 = 45;
+pub const API_MINOR: u32 = 46;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
