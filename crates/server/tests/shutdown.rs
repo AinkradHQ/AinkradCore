@@ -117,10 +117,18 @@ async fn sigterm_closes_event_sockets_checkpoints_and_exits_zero() {
         None
     });
     assert_eq!(close.await.unwrap(), Some(1012), "a clean close: reconnect");
-    assert!(
-        tokio::net::TcpStream::connect(&bind).await.is_err(),
-        "no longer accepting"
-    );
+    // The event sockets and the accept loop both react to the same stop signal, so on a loaded or
+    // slow host the listener can outlive the close frame by a moment: it must be refused soon, not
+    // at that very instant.
+    let mut refused = false;
+    for _ in 0..100 {
+        if tokio::net::TcpStream::connect(&bind).await.is_err() {
+            refused = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(refused, "still accepting after 5s");
     let status = tokio::time::timeout(Duration::from_secs(15), server.wait())
         .await
         .expect("serve stops within its grace")
