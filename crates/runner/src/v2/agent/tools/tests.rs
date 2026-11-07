@@ -142,3 +142,45 @@ async fn forgetting_a_session_ends_its_waiting_calls() {
     let r = caller.await.unwrap();
     assert_eq!(r.code.as_deref(), Some("session_over"));
 }
+
+#[tokio::test]
+async fn an_unknown_session_makes_no_state_and_a_stale_epochs_result_matches_nothing() {
+    let t = Arc::new(Tools::default());
+    let r = t
+        .call_within("as_nobody", "github.get_issue", json!({}), SHORT)
+        .await;
+    assert_eq!(r.code.as_deref(), Some("unknown_tool"));
+    assert!(
+        t.sessions.lock().unwrap().is_empty(),
+        "no entry for a session nobody polled"
+    );
+    t.poll(
+        &poll(0, vec![], Some(vec![tool("github.get_issue")])),
+        SHORT,
+    )
+    .await;
+    let caller = {
+        let t = t.clone();
+        tokio::spawn(async move { t.call("as_a", "github.get_issue", json!({})).await })
+    };
+    let batch = t.poll(&poll(0, vec![], None), SHORT).await;
+    let id = batch.calls[0].id.clone();
+    assert!(id.contains('-') && id.len() > 4, "{id}");
+    // A result for the same counter of another epoch (a call from before a restart) is dropped.
+    let (epoch, n) = id.split_once('-').unwrap();
+    let stale = format!(
+        "{}-{n}",
+        if epoch == "00000000" {
+            "00000001"
+        } else {
+            "00000000"
+        }
+    );
+    t.poll(&poll(1, vec![ok(&stale)], None), SHORT).await;
+    assert!(
+        !caller.is_finished(),
+        "the stale result did not resolve the call"
+    );
+    t.poll(&poll(1, vec![ok(&id)], None), SHORT).await;
+    assert!(caller.await.unwrap().ok);
+}

@@ -26,7 +26,6 @@ pub mod mcp;
 /// A call the Core never answers ends here.
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(120);
 
-#[derive(Default)]
 struct One {
     tools: Vec<ConnTool>,
     pending: HashMap<String, oneshot::Sender<ToolResult>>,
@@ -36,6 +35,27 @@ struct One {
     sent: Vec<ToolCall>,
     next: u64,
     n: u64,
+    /// Random per session state (so per runner start): a call id carries it, and a result for an
+    /// id of an older epoch (a call of before a restart) can never match a new call.
+    epoch: String,
+}
+
+impl One {
+    fn new() -> Self {
+        use std::hash::{BuildHasher, Hasher};
+        let epoch = std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish();
+        Self {
+            tools: Vec::new(),
+            pending: HashMap::new(),
+            queued: VecDeque::new(),
+            sent: Vec::new(),
+            next: 0,
+            n: 0,
+            epoch: format!("{:08x}", epoch & 0xffff_ffff),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -73,7 +93,10 @@ impl Tools {
     ) -> ToolResult {
         let (id, rx) = {
             let mut all = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
-            let one = all.entry(session.to_owned()).or_default();
+            // No state is made for a session string nobody started: the Core's first poll does.
+            let Some(one) = all.get_mut(session) else {
+                return refusal("", "unknown_tool", "no such tool in this session");
+            };
             if !one.tools.iter().any(|t| t.name == tool) {
                 return refusal("", "unknown_tool", "no such tool in this session");
             }
@@ -84,7 +107,7 @@ impl Tools {
                 return refusal("", "rate_limited", "too many calls are waiting");
             }
             one.n += 1;
-            let id = format!("c{}", one.n);
+            let id = format!("{}-{}", one.epoch, one.n);
             let (tx, rx) = oneshot::channel();
             one.pending.insert(id.clone(), tx);
             one.queued.push_back((id.clone(), tool.to_owned(), args));
@@ -116,7 +139,7 @@ impl Tools {
             let notified = self.changed.notified();
             {
                 let mut all = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
-                let one = all.entry(req.session.clone()).or_default();
+                let one = all.entry(req.session.clone()).or_insert_with(One::new);
                 if let Some(list) = &req.tools {
                     one.tools = list.iter().take(MAX_BATCH.max(64)).cloned().collect();
                 }
