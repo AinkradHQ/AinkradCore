@@ -2,6 +2,8 @@
 //! oversize arguments; hostile tool and session names are tried; the call cursor is walked against
 //! a model and raced; none of it reaches a service, changes health or flows into the audit log.
 
+use std::time::Duration;
+
 use super::*;
 use crate::store::connections::access::Step;
 
@@ -256,33 +258,79 @@ async fn sixteen_runners_sending_one_number_at_once_take_it_exactly_once() {
     }
 }
 
-/// BUG (found by C6): the per-session rate gate is keyed by the session name the runner SENDS, so
-/// a runner that invents a new name per call is never limited, and each call about a session that
-/// does not exist writes its own `connection.used` row (attributed to user 0). Audit growth is
-/// linear in what an authenticated runner chooses to send. Fixing it means deciding what an
-/// unattributable refusal is worth in the audit log (the existing
-/// `a_session_that_is_over_the_wrong_runner_and_a_stranger_are_refused` expects a row each), so
-/// it is reported, not changed here.
+/// Calls about sessions that do not exist (a runner may invent a name per call) write no row of
+/// their own and open no window per name: the runner's one flood row per window carries the exact
+/// count, by registered operation name only, and none of the invented text.
 #[tokio::test]
-#[ignore = "BUG: calls about invented session names each write an audit row (no per-runner flood gate)"]
 async fn a_runner_cannot_write_an_audit_row_per_invented_session_name() {
-    let f = fx().await;
+    let f = fx_with(Limits {
+        flood_window: Duration::from_millis(300),
+        ..Limits::default()
+    })
+    .await;
     let c = f.github("main", GH_TOKEN).await;
     f.member(c.id, &["read_repo"], &[]).await;
+    let known = f.session(&["read_repo"]).await;
     let before = f.uses().await.len();
     for n in 0..400 {
+        let name = format!("as_invented{n:04}");
         let r = f
             .ask(
-                &format!("as_invented{n:04}"),
+                &name,
                 "github.get_issue",
                 json!({"repo": "a/b", "number": 1}),
             )
             .await;
         assert_eq!((r.ok, code(&r)), (false, "session"));
+        // An unknown tool about an invented session is counted the same way.
+        let r = f.ask(&name, &format!("nope.{n}"), json!({})).await;
+        assert_eq!((r.ok, code(&r)), (false, "session"));
     }
-    let rows = f.uses().await.len() - before;
+    for n in 0..3 {
+        let r = f
+            .call(
+                OTHER_RUNNER,
+                &format!("as_other{n}"),
+                "github.get_issue",
+                json!({}),
+            )
+            .await;
+        assert_eq!(code(&r), "session");
+    }
+    // A known session keeps its row per call.
+    f.ask(
+        &known,
+        "github.get_issue",
+        json!({"repo": "a/b", "number": 1}),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let rows = f.uses().await;
+    assert_eq!(
+        rows.len() - before,
+        1 + 2,
+        "one per known call, one flood row per runner: {rows:?}"
+    );
+    let mut floods: Vec<(&str, u64)> = rows
+        .iter()
+        .filter(|r| r.get("count").is_some())
+        .map(|r| (r["session"].as_str().unwrap(), r["count"].as_u64().unwrap()))
+        .collect();
+    floods.sort_unstable();
+    let (a, b) = (format!("runner:{RUNNER}"), format!("runner:{OTHER_RUNNER}"));
+    let mut want = vec![(a.as_str(), 800), (b.as_str(), 3)];
+    want.sort_unstable();
+    assert_eq!(floods, want);
+    let first = rows.iter().find(|r| r["session"] == a.as_str()).unwrap();
+    let ops = first["ops"].as_object().unwrap();
     assert!(
-        rows <= 64,
-        "400 calls with invented session names wrote {rows} audit rows"
+        ops.keys()
+            .all(|k| k == "unknown" || k == "github.get_issue"),
+        "{ops:?}"
+    );
+    let audit = f.audit_text().await;
+    assert!(
+        !audit.contains("as_invented") && !audit.contains("nope."),
+        "invented text in the audit log"
     );
 }

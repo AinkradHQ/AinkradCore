@@ -200,7 +200,14 @@ impl Gate {
         if take(&mut g.sessions, &key, (max, WINDOW), now) {
             return Rate::Ok;
         }
-        // A flood being gathered is never swept: its row is still to be written.
+        Rate::Over {
+            first: Self::note(&mut g, key, op),
+        }
+    }
+
+    /// Counts one refused call into the flood of `key`; whether it is the first of the window.
+    /// A flood being gathered is never swept: its row is still to be written.
+    fn note(g: &mut Inner, key: String, op: Option<&str>) -> bool {
         let first = !g.over.contains_key(&key);
         let f = g.over.entry(key).or_default();
         f.count += 1;
@@ -210,7 +217,28 @@ impl Gate {
         } else {
             *f.ops.entry("other".to_owned()).or_default() += 1;
         }
-        Rate::Over { first }
+        first
+    }
+
+    /// Whether `session` has a minute window (it has passed a lookup and is being counted).
+    pub fn has_window(&self, session: &str) -> bool {
+        self.lock()
+            .sessions
+            .get(session)
+            .is_some_and(|w| !w.is_empty())
+    }
+
+    /// Counts a call about a session that does not exist, for the RUNNER that sent it: such a call
+    /// has no session to attribute a row to, and a runner may invent a new name per call, so
+    /// none gets a row of its own. `first` when it starts the runner's flood for the window.
+    pub fn stranger(&self, runner: &str, op: Option<&str>) -> bool {
+        let key = Self::runner_key(runner);
+        Self::note(&mut self.lock(), key, op)
+    }
+
+    /// The flood key of a runner's calls about sessions that do not exist.
+    pub fn runner_key(runner: &str) -> String {
+        format!("runner:{}", runner.chars().take(48).collect::<String>())
     }
 
     /// Ends the flood of `session` and hands its exact counts over to be written.
