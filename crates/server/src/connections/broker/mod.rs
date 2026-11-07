@@ -58,7 +58,7 @@ use super::adapter::Registry;
 use super::github::{self, Built, Github};
 use super::jira::{self, Jira};
 use crate::ops::secretbox::SecretBox;
-use crate::store::connections::access::{self, Access};
+use crate::store::connections::access::{self, Access, Granted};
 use crate::store::connections::resolve::{self, Context};
 
 /// What a call needs from the process: the store, the master key (`None`: no connection is ever
@@ -80,7 +80,16 @@ pub struct Broker {
     intake: tokio::sync::Mutex<()>,
     /// Finished calls' results waiting to go to their runner, by session, and the sessions with a
     /// drainer open (one delivery stream each at most).
-    outbox: std::sync::Mutex<std::collections::HashMap<String, Vec<ToolResult>>>,
+    outbox: std::sync::Mutex<
+        std::collections::HashMap<String, std::collections::VecDeque<supervise::Pending>>,
+    >,
+    /// The last finished results per session, to answer a call the runner sends again.
+    done: std::sync::Mutex<
+        std::collections::HashMap<
+            String,
+            std::collections::VecDeque<(std::time::Instant, ToolResult)>,
+        >,
+    >,
     delivering: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
@@ -102,8 +111,45 @@ impl Broker {
             supervised: std::sync::Mutex::default(),
             intake: tokio::sync::Mutex::new(()),
             outbox: std::sync::Mutex::default(),
+            done: std::sync::Mutex::default(),
             delivering: std::sync::Mutex::default(),
         }
+    }
+
+    /// The allowlist `g` really has. An explicit one is itself. A plain session with none gets the
+    /// READ-class capabilities only: write is an explicit grant (design §4). An agent's session
+    /// with none gets `None`, which `resolve` refuses (`allowlist_required`).
+    fn allowlist(&self, g: &Granted) -> Option<Vec<String>> {
+        match (&g.allowlist, &g.agent) {
+            (Some(list), _) => Some(list.clone()),
+            (None, Some(_)) => None,
+            (None, None) => Some(
+                self.reg
+                    .descriptors()
+                    .iter()
+                    .flat_map(|d| d.capabilities.iter().filter(|c| !c.write))
+                    .map(|c| c.name.to_owned())
+                    .collect(),
+            ),
+        }
+    }
+
+    /// Writes the one audit row of a flood when its window ends, with the exact counts.
+    fn schedule_flood(&self, pool: SqlitePool, session: String) {
+        let gate = Arc::clone(&self.gate);
+        let wait = gate.limits().flood_window;
+        tokio::spawn(async move {
+            tokio::time::sleep(wait).await;
+            let Some(flood) = gate.flood(&session) else {
+                return;
+            };
+            let user = access::load(&pool, &session).await.ok().flatten();
+            let user = user.map_or(0, |a| a.user);
+            let row = access::audit_flood(&pool, user, &session, flood.count, &flood.ops).await;
+            if let Err(e) = row {
+                tracing::error!(error = ?e, "auditing a flood of tool calls failed");
+            }
+        });
     }
 
     /// Whether a supervisor of session `id`'s tool channel runs in this process.
@@ -189,19 +235,6 @@ impl Broker {
         session: &str,
         call: &ToolCall,
     ) -> Result<Value, Fail> {
-        // Every call of a session, known or not, refused or not, counts against its minute FIRST;
-        // past it a call costs nothing but at most one aggregated audit row per window.
-        let key: String = session.chars().take(64).collect();
-        if let Rate::Over(report) = self.gate.rate(&key) {
-            if let Some(n) = report {
-                let user = access::load(env.pool, &key).await.ok().flatten();
-                let aggregated = access::audit_flood(env.pool, user.as_ref(), &key, n).await;
-                if let Err(e) = aggregated {
-                    tracing::error!(error = ?e, "auditing a flood of tool calls failed");
-                }
-            }
-            return Err(refuse("rate_limited", "too many calls from this session"));
-        }
         let known = call
             .tool
             .split_once('.')
@@ -210,6 +243,17 @@ impl Broker {
                 let d = a.descriptor();
                 d.capability_of(&call.tool).map(|c| (d.kind, c.name))
             });
+        // Every call of a session, known or not, refused or not, counts against its minute FIRST;
+        // past it a call costs nothing but its share of the flood's one audit row, written when
+        // the window ends with the exact count.
+        let key: String = session.chars().take(64).collect();
+        let op = known.map(|_| call.tool.as_str());
+        if let Rate::Over { first } = self.gate.rate(&key, op) {
+            if first {
+                self.schedule_flood(env.pool.clone(), key);
+            }
+            return Err(refuse("rate_limited", "too many calls from this session"));
+        }
         let acc = access::load(env.pool, session)
             .await
             .map_err(|e| of_store(e.into()))?;
@@ -232,6 +276,7 @@ impl Broker {
             Err(f) => (f.result, Some(f.code.as_str())),
         };
         let granted = acc.as_ref().map(|a| &a.grant);
+        let allow = granted.and_then(|g| self.allowlist(g));
         let cx = Context {
             workspace: acc.as_ref().map_or(0, |a| a.user),
             user: acc.as_ref().map_or(0, |a| a.user),
@@ -241,7 +286,7 @@ impl Broker {
             capability: cap,
             operation: Some(&call.tool),
             resource: None,
-            allowlist: granted.and_then(|g| g.allowlist.as_deref()),
+            allowlist: allow.as_deref(),
         };
         let rec = resolve::record_use(
             env.pool,
@@ -258,15 +303,19 @@ impl Broker {
         out
     }
 
-    async fn decide(
+    /// Whether this call may run NOW: the session is live and on this runner, `secrets.mode` is on,
+    /// and `resolve` finds a connection (grants, limits, health). Run before a call waits for its
+    /// place and again after, so a call that queued while a grant was revoked, a session ended or
+    /// the broker was switched off does not run.
+    async fn admit(
         &self,
         env: &Env<'_>,
         runner: &str,
         acc: Option<&Access>,
         call: &ToolCall,
         (kind, cap): (&'static str, &'static str),
-        used: &mut Option<i64>,
-    ) -> Result<Value, Fail> {
+        prep: &Prepared,
+    ) -> Result<resolve::Resolved, Fail> {
         // The runner that calls must be the one the session is on.
         let acc = acc
             .filter(|a| a.runner == runner)
@@ -274,18 +323,17 @@ impl Broker {
         if !acc.live {
             return Err(refuse("session_over", "the session is over"));
         }
-        let g = &acc.grant;
-        let sealer = env
-            .sealer
-            .ok_or_else(|| refuse("secrets_unavailable", "connections are not available"))?;
+        if env.sealer.is_none() {
+            return Err(refuse(
+                "secrets_unavailable",
+                "connections are not available",
+            ));
+        }
         if !secrets_on(env.pool).await.map_err(|e| of_store(e.into()))? {
             return Err(refuse("secrets_disabled", "connections are off"));
         }
-        let size = serde_json::to_string(&call.args).map_or(usize::MAX, |s| s.len());
-        if size > MAX_ARGS_BYTES {
-            return Err(refuse("bad_args", "the arguments are too large"));
-        }
-        let prep = prepare(kind, &call.tool, &call.args)?;
+        let g = &acc.grant;
+        let allow = self.allowlist(g);
         let cx = Context {
             workspace: acc.user,
             user: acc.user,
@@ -295,18 +343,72 @@ impl Broker {
             capability: cap,
             operation: Some(&call.tool),
             resource: prep.resource.as_ref().map(|(k, v)| (*k, v.as_str())),
-            allowlist: g.allowlist.as_deref(),
+            allowlist: allow.as_deref(),
         };
-        let r = resolve::resolve(env.pool, &self.reg, kind, &cx, env.now)
+        resolve::resolve(env.pool, &self.reg, kind, &cx, env.now)
             .await
-            .map_err(of_store)?;
+            .map_err(of_store)
+    }
+
+    async fn decide(
+        &self,
+        env: &Env<'_>,
+        runner: &str,
+        acc: Option<&Access>,
+        call: &ToolCall,
+        (kind, cap): (&'static str, &'static str),
+        used: &mut Option<i64>,
+    ) -> Result<Value, Fail> {
+        let size = serde_json::to_string(&call.args).map_or(usize::MAX, |s| s.len());
+        if size > MAX_ARGS_BYTES {
+            return Err(refuse("bad_args", "the arguments are too large"));
+        }
+        let prep = prepare(kind, &call.tool, &call.args)?;
+        // Early: refuse what is already refused without waiting for a place.
+        let first = self
+            .admit(env, runner, acc, call, (kind, cap), &prep)
+            .await?;
+        *used = Some(first.connection.id);
+        let acc = acc.ok_or_else(|| refuse("session", "no such session on this runner"))?;
+        // A place among the session's, the user's and everyone's calls: waits (bounded) when they
+        // are taken, and is refused when the session's queue is full.
+        let placed = tokio::time::timeout(
+            self.gate.limits().queue_wait,
+            self.gate.acquire(&acc.session, acc.user),
+        )
+        .await;
+        let _permit = match placed {
+            Err(_) => return Err(refuse("queue_timeout", "no place came free in time")),
+            Ok(None) => return Err(refuse("rate_limited", "too many calls are waiting")),
+            Ok(Some(p)) => p,
+        };
+        // Late: everything may have changed while it waited.
+        let fresh = access::load(env.pool, &acc.session)
+            .await
+            .map_err(|e| of_store(e.into()))?;
+        let r = self
+            .admit(env, runner, fresh.as_ref(), call, (kind, cap), &prep)
+            .await?;
         *used = Some(r.connection.id);
+        let acc = fresh.as_ref().unwrap_or(acc);
+        let g = &acc.grant;
+        let sealer = env
+            .sealer
+            .ok_or_else(|| refuse("secrets_unavailable", "connections are not available"))?;
         let d = self.reg.get(kind).map(|a| a.descriptor());
         let hourly = d.map_or(1, |d| d.hourly_calls);
         let write = d.and_then(|d| d.capability(cap)).is_some_and(|c| c.write);
-        if let Err(busy) = self.gate.connection(r.connection.id, &acc.session, hourly) {
+        // Only now that the call WILL run does it use any of the connection's budget.
+        if let Err(busy) = self
+            .gate
+            .connection(r.connection.id, &acc.session, acc.user, hourly)
+        {
             return Err(match busy {
                 Busy::Rate => refuse("rate_limited", "too many calls on this connection"),
+                Busy::Share => refuse(
+                    "connection_busy",
+                    "this session or user has used its share of the connection's hour",
+                ),
                 Busy::Until(at) => refuse(
                     "connection_busy",
                     &match at {
@@ -319,12 +421,6 @@ impl Broker {
                 ),
             });
         }
-        // A place among the session's, the user's and everyone's calls: waits when they are taken.
-        let _permit = self
-            .gate
-            .acquire(&acc.session, acc.user)
-            .await
-            .ok_or_else(|| refuse("rate_limited", "too many calls are waiting"))?;
         let job = run::Job {
             github: self.github.clone(),
             jira: Arc::clone(&self.jira),
@@ -358,7 +454,7 @@ impl Broker {
                     user: acc.user,
                     agent: g.agent.clone(),
                     session: acc.session.clone(),
-                    allowlist: g.allowlist.clone(),
+                    allowlist: self.allowlist(g),
                     connection: r.connection.id,
                     kind,
                     cap,

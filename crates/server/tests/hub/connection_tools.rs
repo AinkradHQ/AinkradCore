@@ -190,7 +190,9 @@ async fn a_call_is_taken_once_answered_in_its_own_poll_and_names_no_connection()
     }
     let mut ids: Vec<String> = results.iter().map(|r| r.id.clone()).collect();
     ids.sort();
-    assert_eq!(ids, ["c1", "c2"], "each call answered once: {results:?}");
+    // The resend of call 1 is answered from its stored result (so c1 may come twice), never run.
+    ids.dedup();
+    assert_eq!(ids, ["c1", "c2"], "each call answered: {results:?}");
     let by = |id: &str| results.iter().find(|r| r.id == id).unwrap();
     assert_eq!(
         (by("c1").ok, by("c1").code.as_deref()),
@@ -346,4 +348,138 @@ async fn service_set_access(w: &W, id: &str) {
     )
     .await
     .unwrap();
+}
+
+/// The next delivery (a poll that carries results), skipping long polls; `answer` says how it ends.
+async fn delivery(w: &mut W, how: Option<ErrorCode>) -> ToolsPoll {
+    loop {
+        let (stream, cmd) = next(w).await.expect("a delivery");
+        let Command::AgentTools(p) = cmd else {
+            continue;
+        };
+        if p.results.is_empty() {
+            continue;
+        }
+        match how {
+            Some(code) => {
+                let e = StreamError::new(code, "the runner is busy");
+                w.fake.send(stream, Body::Error(e)).await;
+            }
+            None => {
+                let empty = ToolBatch {
+                    session: w.session.clone(),
+                    calls: vec![],
+                };
+                w.fake
+                    .send(stream, Body::Result(Reply::AgentTools(empty)))
+                    .await;
+            }
+        }
+        return p;
+    }
+}
+
+#[tokio::test]
+async fn a_result_is_kept_through_failed_deliveries_until_the_runner_takes_it() {
+    let mut w = world("tools-keep", true).await;
+    let (stream, _) = next(&mut w).await.expect("a tools poll");
+    let batch = ToolBatch {
+        session: w.session.clone(),
+        calls: vec![call(1, "c1", "github.get_issue")],
+    };
+    w.fake
+        .send(stream, Body::Result(Reply::AgentTools(batch)))
+        .await;
+    // Six failed deliveries (past the old three tries): the same result is offered each time.
+    for _ in 0..6 {
+        let p = delivery(&mut w, Some(ErrorCode::Busy)).await;
+        assert_eq!(p.results[0].id, "c1");
+    }
+    let p = delivery(&mut w, None).await;
+    assert_eq!(
+        (p.results[0].id.as_str(), p.results[0].code.as_deref()),
+        ("c1", Some("no_connection"))
+    );
+    assert_eq!(
+        uses(&w).await,
+        1,
+        "one call, one row, however often it was offered"
+    );
+}
+
+#[tokio::test]
+async fn a_call_the_core_already_took_is_answered_from_its_stored_result_not_run_again() {
+    let mut w = world("tools-resend", true).await;
+    let mut answers = Vec::new();
+    let mut resent = false;
+    let mut first = true;
+    for _ in 0..40 {
+        let Some((stream, cmd)) = next(&mut w).await else {
+            break;
+        };
+        let Command::AgentTools(p) = cmd else {
+            continue;
+        };
+        let calls = if p.results.is_empty() && first {
+            first = false;
+            vec![call(1, "c1", "github.get_issue")]
+        } else if p.results.is_empty() && !resent && !answers.is_empty() {
+            // The runner reconnected and sends the same call again.
+            resent = true;
+            vec![call(1, "c1", "github.get_issue")]
+        } else {
+            vec![]
+        };
+        answers.extend(p.results.clone());
+        let batch = ToolBatch {
+            session: w.session.clone(),
+            calls,
+        };
+        w.fake
+            .send(stream, Body::Result(Reply::AgentTools(batch)))
+            .await;
+        if answers.len() >= 2 {
+            break;
+        }
+    }
+    assert_eq!(answers.len(), 2, "answered twice: {answers:?}");
+    assert_eq!(answers[0].id, "c1");
+    assert_eq!(
+        (&answers[1].id, &answers[1].code),
+        (&answers[0].id, &answers[0].code),
+        "from the stored result"
+    );
+    assert_eq!(uses(&w).await, 1, "it did not run again");
+}
+
+#[tokio::test]
+async fn a_result_that_can_never_be_delivered_is_audited_when_its_session_ends() {
+    let mut w = world("tools-undelivered", true).await;
+    let (stream, _) = next(&mut w).await.expect("a tools poll");
+    let batch = ToolBatch {
+        session: w.session.clone(),
+        calls: vec![call(1, "c1", "github.get_issue")],
+    };
+    w.fake
+        .send(stream, Body::Result(Reply::AgentTools(batch)))
+        .await;
+    let _ = delivery(&mut w, Some(ErrorCode::Busy)).await;
+    let over = json!({"kind": "succeeded"});
+    let now = w.core.app.clock.now();
+    sessions::end(&w.core.app.pool, &w.session, "ended", &over, &now)
+        .await
+        .unwrap();
+    for _ in 0..80 {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM audit_events WHERE action = 'connection.used' AND details LIKE '%result_undelivered%'",
+        )
+        .fetch_one(&w.core.app.pool)
+        .await
+        .unwrap();
+        if n == 1 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("no result_undelivered row");
 }

@@ -184,3 +184,27 @@ async fn an_unknown_session_makes_no_state_and_a_stale_epochs_result_matches_not
     t.poll(&poll(1, vec![ok(&id)], None), SHORT).await;
     assert!(caller.await.unwrap().ok);
 }
+
+#[tokio::test]
+async fn a_write_that_the_core_never_answers_is_outcome_unknown_and_a_read_is_timed_out() {
+    let t = Tools::default();
+    let list = vec![
+        tool("github.get_issue"),
+        ConnTool {
+            name: "github.create_issue".to_owned(),
+            description: "d".to_owned(),
+            write: true,
+        },
+    ];
+    t.poll(&poll(0, vec![], Some(list)), SHORT).await;
+    let short = Duration::from_millis(80);
+    let w = t
+        .call_within("as_a", "github.create_issue", json!({}), short)
+        .await;
+    assert_eq!(w.code.as_deref(), Some("outcome_unknown"));
+    assert!(w.message.unwrap().contains("check before retrying"));
+    let r = t
+        .call_within("as_a", "github.get_issue", json!({}), short)
+        .await;
+    assert_eq!(r.code.as_deref(), Some("timed_out"));
+}

@@ -46,9 +46,10 @@ impl Broker {
         if !acc.live || env.sealer.is_none() || !secrets_on(env.pool).await? {
             return Ok(Vec::new());
         }
+        let allow = self.allowlist(&acc.grant);
         let mut out = Vec::new();
         for d in self.reg.descriptors() {
-            let caps = access::usable_caps(env.pool, &acc, d.kind).await?;
+            let caps = access::usable_caps(env.pool, &acc, d.kind, allow.as_deref()).await?;
             tools_of(d, &caps, &mut out);
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));

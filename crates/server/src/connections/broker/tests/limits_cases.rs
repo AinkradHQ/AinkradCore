@@ -128,6 +128,7 @@ async fn the_default_wins_and_without_one_an_ambiguous_use_refuses() {
 async fn a_session_over_its_rate_gets_a_plain_rate_limited_refusal() {
     let f = fx_with(Limits {
         per_session_per_min: 2,
+        flood_window: Duration::from_millis(100),
         ..Limits::default()
     })
     .await;
@@ -142,6 +143,7 @@ async fn a_session_over_its_rate_gets_a_plain_rate_limited_refusal() {
     let r = f.ask(&s, "github.get_issue", get("acme/app")).await;
     assert_eq!((r.ok, code(&r)), (false, "rate_limited"));
     assert_eq!(f.gh.seen().len(), 2);
+    tokio::time::sleep(Duration::from_millis(400)).await;
     assert_eq!(f.uses().await.last().unwrap()["code"], "rate_limited");
     // Another session has its own budget.
     let other = f.session(&["read_repo"]).await;
@@ -209,10 +211,11 @@ async fn parallel_calls_past_the_cap_wait_and_only_a_full_queue_refuses() {
 }
 
 #[tokio::test]
-async fn ten_thousand_refused_calls_write_a_handful_of_audit_rows() {
+async fn ten_thousand_refused_calls_write_one_row_with_the_exact_count_by_operation() {
     for mode in ["1", "0"] {
         let f = fx_with(Limits {
             per_session_per_min: 5,
+            flood_window: Duration::from_millis(300),
             ..Limits::default()
         })
         .await;
@@ -220,33 +223,29 @@ async fn ten_thousand_refused_calls_write_a_handful_of_audit_rows() {
         f.member(c.id, &["read_repo"], &[]).await;
         let s = f.session(&["read_repo"]).await;
         f.mode(mode).await;
-        let before = f.uses().await.len();
-        let mut refused = 0;
         for i in 0..10_000u64 {
-            let r = f
-                .ask(
-                    &s,
-                    "github.get_issue",
-                    json!({"repo": "acme/app", "number": i + 1}),
-                )
+            let tool = if i % 2 == 0 {
+                "github.get_issue"
+            } else {
+                "github.get_repo"
+            };
+            f.ask(&s, tool, json!({"repo": "acme/app", "number": i + 1}))
                 .await;
-            refused += usize::from(!r.ok);
         }
-        assert_eq!(
-            refused, 10_000,
-            "mode {mode}: none can run (off, or over the rate)"
-        );
+        tokio::time::sleep(Duration::from_millis(800)).await;
         let rows = f.uses().await;
-        assert!(
-            rows.len() - before <= 7,
-            "mode {mode}: {} rows",
-            rows.len() - before
-        );
-        let aggregate = rows.iter().filter(|r| r.get("count").is_some()).count();
+        assert!(rows.len() <= 7, "mode {mode}: {} rows", rows.len());
+        let flood: Vec<_> = rows.iter().filter(|r| r.get("count").is_some()).collect();
+        assert_eq!(flood.len(), 1, "one aggregated row for the window");
         assert_eq!(
-            aggregate, 1,
-            "one aggregated refusal row for the whole window"
+            flood[0]["count"],
+            10_000 - 5,
+            "the exact count, mode {mode}"
         );
+        let ops = flood[0]["ops"].as_object().unwrap();
+        let sum: u64 = ops.values().map(|v| v.as_u64().unwrap()).sum();
+        assert_eq!(sum, 10_000 - 5);
+        assert!(ops.keys().all(|k| k.starts_with("github.")), "{ops:?}");
         assert!(f.gh.seen().is_empty());
     }
 }
@@ -398,4 +397,107 @@ async fn a_call_that_does_not_come_back_in_time_is_timed_out() {
         (u["result"].as_str(), u["code"].as_str()),
         (Some("error"), Some("timed_out"))
     );
+}
+
+async fn jira_pair(limits: Limits) -> (Fx, Connection, String, String) {
+    let f = fx_with(limits).await;
+    let c = f.jira("acme").await;
+    f.member(c.id, &["read_issues"], &[]).await;
+    f.grant(c.id, ("agent", "bot"), &["read_issues"], &[]).await;
+    let s = f.session(&["read_issues"]).await;
+    let one = format!("GET {}", jt::site_path("/issue/ABC-1"));
+    f.j.fake.on(&one, |_| {
+        jt::Reply::json(
+            200,
+            json!({"key": "ABC-1", "fields": {"project": {"key": "ABC"}}}),
+        )
+        .delayed(400)
+    });
+    (f, c, s, one)
+}
+
+#[tokio::test]
+async fn a_call_that_waited_does_not_run_if_its_grant_was_revoked_meanwhile() {
+    let (f, c, s, one) = jira_pair(Limits {
+        concurrent_per_session: 1,
+        ..Limits::default()
+    })
+    .await;
+    let args = || json!({"key": "ABC-1"});
+    let (a, b, ()) = tokio::join!(
+        f.ask(&s, "jira.get_issue", args()),
+        async {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            f.ask(&s, "jira.get_issue", args()).await
+        },
+        async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            grants::revoke(&f.j.pool, c.id, ("role", "member"), who())
+                .await
+                .unwrap();
+        }
+    );
+    assert!(a.ok, "the running call was already admitted");
+    assert_eq!((b.ok, code(&b)), (false, "not_granted"), "{b:?}");
+    assert_eq!(
+        f.j.fake.count(&one),
+        1,
+        "the queued call never went upstream"
+    );
+}
+
+#[tokio::test]
+async fn a_call_that_waited_does_not_run_if_its_session_ended_or_the_broker_went_off() {
+    for ending in ["ended", "mode"] {
+        let (f, _c, s, one) = jira_pair(Limits {
+            concurrent_per_session: 1,
+            ..Limits::default()
+        })
+        .await;
+        let args = || json!({"key": "ABC-1"});
+        let (_a, b, ()) = tokio::join!(
+            f.ask(&s, "jira.get_issue", args()),
+            async {
+                tokio::time::sleep(Duration::from_millis(60)).await;
+                f.ask(&s, "jira.get_issue", args()).await
+            },
+            async {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                match ending {
+                    "ended" => {
+                        let over = json!({"kind": "succeeded"});
+                        sessions::end(&f.j.pool, &s, "ended", &over, NOW)
+                            .await
+                            .unwrap();
+                    }
+                    _ => f.mode("0").await,
+                }
+            }
+        );
+        let want = if ending == "ended" {
+            "session_over"
+        } else {
+            "secrets_disabled"
+        };
+        assert_eq!((b.ok, code(&b)), (false, want), "{ending}");
+        assert_eq!(f.j.fake.count(&one), 1, "{ending}: not run");
+    }
+}
+
+#[tokio::test]
+async fn a_call_that_waits_too_long_for_its_place_is_refused_queue_timeout() {
+    let (f, _c, s, one) = jira_pair(Limits {
+        concurrent_per_session: 1,
+        queue_wait: Duration::from_millis(100),
+        ..Limits::default()
+    })
+    .await;
+    let args = || json!({"key": "ABC-1"});
+    let (a, b) = tokio::join!(f.ask(&s, "jira.get_issue", args()), async {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        f.ask(&s, "jira.get_issue", args()).await
+    });
+    assert!(a.ok);
+    assert_eq!((b.ok, code(&b)), (false, "queue_timeout"));
+    assert_eq!(f.j.fake.count(&one), 1);
 }

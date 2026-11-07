@@ -276,3 +276,39 @@ async fn an_agent_session_without_an_allowlist_has_none_until_one_is_set() {
     f.gh.push(200, &[], ISSUE);
     assert!(f.ask(&s, "github.get_issue", get(7)).await.ok);
 }
+
+/// Write is an explicit grant (design §4): a plain session defaults to read-class capabilities.
+#[tokio::test]
+async fn a_plain_session_is_read_only_until_an_allowlist_names_write() {
+    let f = fx().await;
+    let c = f.github("main", GH_TOKEN).await;
+    f.member(c.id, &["read_repo", "issues_write"], &[]).await; // the user may write
+    let s = f.bare_session(RUNNER).await;
+    let names = |t: Vec<ainkrad_proto::v2::ConnTool>| -> Vec<String> {
+        t.into_iter().map(|t| t.name).collect()
+    };
+    let seen = names(f.b.tools(&f.env(), &s).await.unwrap());
+    assert!(seen.contains(&"github.get_issue".to_owned()), "{seen:?}");
+    assert!(
+        !seen.iter().any(|n| n == "github.create_issue"),
+        "no write tool: {seen:?}"
+    );
+    let write = json!({"repo": "acme/app", "body": {"title": "x"}});
+    let r = f.ask(&s, "github.create_issue", write.clone()).await;
+    assert_eq!((r.ok, code(&r)), (false, "not_allowlisted"));
+    assert!(f.gh.seen().is_empty(), "nothing sent");
+    // An explicit allowlist (the only way) makes it work, and the list follows.
+    access::set(
+        &f.j.pool,
+        &s,
+        &["read_repo".to_owned(), "issues_write".to_owned()],
+    )
+    .await
+    .unwrap();
+    let seen = names(f.b.tools(&f.env(), &s).await.unwrap());
+    assert!(seen.contains(&"github.create_issue".to_owned()), "{seen:?}");
+    f.gh.push(201, &[], r#"{"number":8}"#);
+    let r = f.ask(&s, "github.create_issue", write).await;
+    assert!(r.ok, "{r:?}");
+    assert_eq!(f.gh.seen().len(), 1);
+}

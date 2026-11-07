@@ -91,15 +91,16 @@ impl Tools {
         args: Value,
         wait: Duration,
     ) -> ToolResult {
-        let (id, rx) = {
+        let (id, rx, write) = {
             let mut all = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
             // No state is made for a session string nobody started: the Core's first poll does.
             let Some(one) = all.get_mut(session) else {
                 return refusal("", "unknown_tool", "no such tool in this session");
             };
-            if !one.tools.iter().any(|t| t.name == tool) {
+            let Some(listed) = one.tools.iter().find(|t| t.name == tool) else {
                 return refusal("", "unknown_tool", "no such tool in this session");
-            }
+            };
+            let write = listed.write;
             if serde_json::to_string(&args).map_or(usize::MAX, |s| s.len()) > MAX_ARGS_BYTES {
                 return refusal("", "bad_args", "the arguments are too large");
             }
@@ -111,7 +112,7 @@ impl Tools {
             let (tx, rx) = oneshot::channel();
             one.pending.insert(id.clone(), tx);
             one.queued.push_back((id.clone(), tool.to_owned(), args));
-            (id, rx)
+            (id, rx, write)
         };
         self.changed.notify_waiters();
         let answer = tokio::time::timeout(wait, rx).await;
@@ -123,6 +124,13 @@ impl Tools {
         match answer {
             Ok(Ok(r)) => r,
             Ok(Err(_)) => refusal(&id, "session_over", "the session ended"),
+            // A write the Core may still have made: the same words as the Core's own (a retry of
+            // it could repeat it). A read simply timed out.
+            Err(_) if write => refusal(
+                &id,
+                "outcome_unknown",
+                "the call may have been applied; check before retrying",
+            ),
             Err(_) => refusal(&id, "timed_out", "the Core did not answer in time"),
         }
     }

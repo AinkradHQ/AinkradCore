@@ -4,10 +4,11 @@
 //! user, an agent or an allowlist.
 //!
 //! Every session has access, with no row to write: its user is the session row's `user_id`, its
-//! agent the session row's `agent`, its allowlist none (every operation that user is granted). An
-//! optional `core_session_connections` row narrows it with an allowlist ([`set`]). An agent's
-//! session with no allowlist keeps C1's rule: `resolve` refuses it (`allowlist_required`), so it
-//! has no tools until an allowlist is set (C5's API).
+//! agent the session row's `agent`. Its allowlist defaults to READ-class capabilities only
+//! (design §4: write is an explicit grant); the broker computes that default from the descriptors.
+//! An explicit `core_session_connections` row sets the allowlist ([`set`]), which is the only way a
+//! session may call a write operation. An agent's session with no allowlist keeps C1's rule:
+//! `resolve` refuses it (`allowlist_required`), so it has no tools until one is set (C5's API).
 //!
 //! `tc_seq` is the cursor over the runner's numbered tool calls. [`advance`] moves it BEFORE a
 //! call runs (creating the row on the first call), so a call the runner resends after a lost
@@ -38,7 +39,7 @@ pub struct Access {
 pub struct Granted {
     /// The session row's agent.
     pub agent: Option<String>,
-    /// `None`: no further limit (see the module docs for an agent's session).
+    /// `None`: no row set one: the broker's default applies (see the module docs).
     pub allowlist: Option<Vec<String>>,
     pub tc_seq: u64,
 }
@@ -155,10 +156,11 @@ pub async fn usable_caps(
     pool: &SqlitePool,
     acc: &Access,
     kind: &str,
+    allowlist: Option<&[String]>,
 ) -> Result<Vec<String>, sqlx::Error> {
     let g = &acc.grant;
     // An agent's session with no allowlist is refused by `resolve`: it sees no tools.
-    if g.agent.is_some() && g.allowlist.is_none() {
+    if g.agent.is_some() && allowlist.is_none() {
         return Ok(Vec::new());
     }
     let mut conn = pool.acquire().await?;
@@ -186,7 +188,7 @@ pub async fn usable_caps(
             .map(|a| caps(&|gr: &Grant| gr.grantee_kind == "agent" && gr.grantee == a));
         for cap in user_side {
             let by_agent = agent_side.as_ref().is_none_or(|own| own.contains(&cap));
-            let allowed = g.allowlist.as_ref().is_none_or(|l| l.contains(cap));
+            let allowed = allowlist.is_none_or(|l| l.contains(cap));
             if by_agent && allowed && !out.contains(cap) {
                 out.push(cap.clone());
             }
@@ -230,17 +232,38 @@ pub async fn audit_unknown(
     Ok(())
 }
 
-/// The one aggregated audit row of a flood: `count` calls of `session` were refused for rate since
-/// the last row, none of them with a row of its own. Plain codes and numbers only.
+/// The one aggregated audit row of a flood, written when its window ends: `count` calls of `session`
+/// were refused for rate, none with a row of its own; `ops` counts them by registered operation
+/// (at most eight names and `other`; the caller passes only validated names). Plain codes and numbers.
 pub async fn audit_flood(
     pool: &SqlitePool,
-    acc: Option<&Access>,
+    user: i64,
     session: &str,
     count: usize,
+    ops: &std::collections::BTreeMap<String, usize>,
 ) -> Result<(), Error> {
     let session = valid_ref(session).then_some(session);
-    let details = json!({"result": "refused", "code": "rate_limited", "count": count,
-        "user": acc.map_or(0, |a| a.user), "session": session});
+    let details = json!({"result": "refused", "code": "rate_limited", "count": count, "ops": ops,
+        "user": user, "session": session});
+    write_unnamed(pool, details).await
+}
+
+/// A finished call whose result never reached its runner (the runner stayed away, or the session
+/// ended): the audit row says so, so the audit and the agent do not disagree. `op` is a registered
+/// operation name.
+pub async fn audit_undelivered(
+    pool: &SqlitePool,
+    user: i64,
+    session: &str,
+    op: Option<&str>,
+) -> Result<(), Error> {
+    let session = valid_ref(session).then_some(session);
+    let details = json!({"result": "error", "code": "result_undelivered", "action": op,
+        "user": user, "session": session});
+    write_unnamed(pool, details).await
+}
+
+async fn write_unnamed(pool: &SqlitePool, details: serde_json::Value) -> Result<(), Error> {
     let mut tx = crate::store::begin_write(pool).await?;
     let event = ainkrad_core::audit::NewAuditEvent {
         actor: AuditActor::System,
