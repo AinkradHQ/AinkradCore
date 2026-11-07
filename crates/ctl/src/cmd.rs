@@ -71,6 +71,11 @@ pub const USAGE: &str =
       to that runner for the session, delivered under VAR; show prints its transcript, and
       above it the scheduler's fields when it has them: agent, chain and position, account,
       waiting (until, why), repicked, upstream_class.
+  agent ls --run <id>  |  agent wake <id> [text...]*
+      --run lists only the attempts of one run (its first attempt's id): a failover is a new
+      session of the same run. show adds run, attempt, failover_of, failed_over_to and, for an
+      admin, failover_class and skip_pools. wake queues a turn for an idle session; a session a
+      failover replaced is a 409 whose message names the attempt to wake.
   agent run <runner-id> [prompt...] --chain <id> [--agent <name>]*
   agent run <runner-id> [prompt...] --agent <name>*
       A session served by a fallback chain (scope admin): --chain names the chain, --agent
@@ -86,7 +91,8 @@ pub const USAGE: &str =
   account ls | show <id>
       The provider accounts (scope admin): state, the sessions holding a slot now against the
       cap (live N/cap, `-` is no cap) and the health counters; show adds the cooldown's reason
-      and end, the last success and the gateway's last status class.
+      and end, the last success, the gateway's last status class and a subscription's plan
+      limit (status, then each window's use and reset).
   setting ls [prefix] | get <key> | set <key> <number>* | reset <key>*
       The Core's server-wide settings (scope admin), e.g. `setting ls scheduler.`: the value,
       its unit, default and bounds as the Core reports them. The Core validates a set (400 on
@@ -106,7 +112,7 @@ signed or sent before the Core signs a fresh nonce with that key (POST /handshak
 admin socket answers to the Core's own host name).
 ";
 
-const VALUED: [&str; 20] = [
+const VALUED: [&str; 21] = [
     "--socket",
     "--url",
     "--host",
@@ -127,6 +133,7 @@ const VALUED: [&str; 20] = [
     "--signal",
     "--chain",
     "--agent",
+    "--run",
 ];
 const SWITCHES: [&str; 4] = ["--json", "--no-follow", "--help", "--no-stepup"];
 
@@ -290,6 +297,7 @@ pub async fn run(args: &[String], out: &mut impl Write) -> Result<(), Error> {
                 follow: !a.on("--no-follow"),
                 chain: a.number("--chain")?,
                 agent: a.value("--agent"),
+                run: a.value("--run"),
             };
             agents::agent(&mut a.client()?, rest, &opts, json, out).await
         }

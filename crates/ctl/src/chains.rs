@@ -102,7 +102,7 @@ fn entries(specs: &[&str]) -> Result<Vec<Value>, Error> {
 
 /// A 400, 404 or 409 from the Core, said plainly: what was being done, then the Core's reason.
 /// The exit code stays that of a refusal (4).
-fn friendly(e: Error, what: &str) -> Error {
+pub fn friendly(e: Error, what: &str) -> Error {
     match e {
         Error::Refused {
             status: status @ (400 | 404 | 409),

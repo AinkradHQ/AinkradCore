@@ -14,7 +14,7 @@ use crate::scheduler_fake::{
     CHAIN, DEVICE, ELEVATED, GATED, SESSION, body_json, core, device, gated,
 };
 
-fn run(ks: &str, words: &[&str]) -> Output {
+fn run_ctl(ks: &str, words: &[&str]) -> Output {
     ctl(&args(&[&s(&["--keystore", ks]), &s(words)]))
 }
 
@@ -53,7 +53,7 @@ const ENTRIES: &str =
 fn chains_read_commands_print_the_golden_output() {
     let (_fake, ks) = device("ch-read", core, false);
     let ok = |w: &[&str]| {
-        let o = run(&ks, w);
+        let o = run_ctl(&ks, w);
         assert!(o.status.success(), "{w:?}: {o:?}");
         stdout(&o)
     };
@@ -68,7 +68,7 @@ fn chains_read_commands_print_the_golden_output() {
 fn chains_write_commands_send_the_entries_and_say_what_they_did() {
     let (fake, ks) = device("ch-write", core, false);
     let ok = |w: &[&str]| {
-        let o = run(&ks, w);
+        let o = run_ctl(&ks, w);
         assert!(o.status.success(), "{w:?}: {o:?}");
         stdout(&o)
     };
@@ -135,7 +135,7 @@ fn a_400_404_409_is_said_plainly_and_exits_4() {
             "404 not_found: unbinding agent none: that agent has no binding",
         ),
     ] {
-        let o = run(&ks, w);
+        let o = run_ctl(&ks, w);
         assert_eq!(o.status.code(), Some(4), "{w:?}: {o:?}");
         assert_eq!(err(&o), format!("ainkradctl: {say}\n"), "{w:?}");
         assert!(stdout(&o).is_empty());
@@ -167,7 +167,7 @@ fn wrong_usage_exits_2_and_sends_nothing() {
         &["setting", "get", "../x"],
         &["setting", "set", "scheduler.max_hops"],
     ] {
-        let o = run(&ks, w);
+        let o = run_ctl(&ks, w);
         assert_eq!(o.status.code(), Some(2), "{w:?}: {o:?}");
         assert!(!err(&o).is_empty() && stdout(&o).is_empty(), "{w:?}");
     }
@@ -178,7 +178,7 @@ fn wrong_usage_exits_2_and_sends_nothing() {
 #[test]
 fn a_step_up_is_done_once_and_the_write_retried_once() {
     let (fake, ks) = device("ch-step", gated, true);
-    let o = run(&ks, &["chains", "create", "main", "2"]);
+    let o = run_ctl(&ks, &["chains", "create", "main", "2"]);
     assert!(o.status.success(), "{o:?}");
     assert_eq!(stdout(&o), format!("{ROW}{ENTRIES}"));
     let hits = |line: &str| {
@@ -194,7 +194,7 @@ fn a_step_up_is_done_once_and_the_write_retried_once() {
     // A device with no step-up key: exit 9, the write tried once, no step-up sent.
     ELEVATED.store(false, Ordering::SeqCst);
     let (fake, ks) = device("ch-nokey", gated, false);
-    let o = run(&ks, &["chains", "create", "main", "2"]);
+    let o = run_ctl(&ks, &["chains", "create", "main", "2"]);
     assert_eq!(o.status.code(), Some(9), "{o:?}");
     assert!(err(&o).contains("no step-up key"), "{o:?}");
     let hits = |line: &str| {
@@ -213,7 +213,7 @@ fn json_mode_prints_the_cores_json_untouched() {
     let json_of = |w: &[&str]| -> Value {
         let mut all = vec!["--json"];
         all.extend_from_slice(w);
-        let o = run(&ks, &all);
+        let o = run_ctl(&ks, &all);
         assert!(o.status.success(), "{w:?}: {o:?}");
         serde_json::from_str(&stdout(&o)).unwrap_or_else(|e| panic!("{w:?}: {e}: {o:?}"))
     };
@@ -250,7 +250,7 @@ fn json_mode_prints_the_cores_json_untouched() {
 #[test]
 fn agent_run_with_a_chain_names_no_harness_and_plain_runs_are_unchanged() {
     let (fake, ks) = device("ch-run", core, false);
-    let o = run(
+    let o = run_ctl(
         &ks,
         &["agent", "run", DEVICE, "fix", "the", "bug", "--chain", "1"],
     );
@@ -259,7 +259,7 @@ fn agent_run_with_a_chain_names_no_harness_and_plain_runs_are_unchanged() {
         sent(&fake, "post /api/v1/agent-sessions "),
         json!({"runner": DEVICE, "chain": 1, "prompt": "fix the bug"})
     );
-    let o = run(
+    let o = run_ctl(
         &ks,
         &["agent", "start", DEVICE, "--chain", "1", "--agent", "bot"],
     );
@@ -268,7 +268,7 @@ fn agent_run_with_a_chain_names_no_harness_and_plain_runs_are_unchanged() {
         sent_nth(&fake, "post /api/v1/agent-sessions ", 1),
         json!({"runner": DEVICE, "chain": 1, "agent": "bot"})
     );
-    let o = run(&ks, &["agents", "run", DEVICE, "--agent", "bot"]);
+    let o = run_ctl(&ks, &["agents", "run", DEVICE, "--agent", "bot"]);
     assert!(o.status.success(), "{o:?}");
     assert_eq!(
         sent_nth(&fake, "post /api/v1/agent-sessions ", 2),
@@ -277,7 +277,7 @@ fn agent_run_with_a_chain_names_no_harness_and_plain_runs_are_unchanged() {
 
     // Plain: the harness is the first word after the runner, as before.
     let (fake, ks) = device("ch-plain", core, false);
-    let o = run(&ks, &["agent", "run", DEVICE, "claude", "hello", "there"]);
+    let o = run_ctl(&ks, &["agent", "run", DEVICE, "claude", "hello", "there"]);
     assert!(o.status.success(), "{o:?}");
     assert_eq!(
         sent(&fake, "post /api/v1/agent-sessions "),
@@ -292,7 +292,7 @@ fn agent_run_with_a_chain_names_no_harness_and_plain_runs_are_unchanged() {
 #[test]
 fn agent_show_prints_the_scheduler_fields_after_the_row() {
     let (_fake, ks) = device("ch-show", core, false);
-    let o = run(&ks, &["agent", "show", SESSION]);
+    let o = run_ctl(&ks, &["agent", "show", SESSION]);
     assert!(o.status.success(), "{o:?}");
     assert_eq!(
         stdout(&o),
@@ -306,6 +306,10 @@ account 9\n\
 waiting until 2026-11-06T00:10:00.000Z since 2026-11-06T00:00:00.000Z: every account is cooling\n\
 repicked 1\n\
 upstream_class rate_limited\n\
+run as_00000000000000000000000000 attempt 1\n\
+failover_of as_000000000000000000000000p0\n\
+failover_class quota\n\
+skip_pools 2\n\
 1\t\"hello\"\n"
         )
     );
@@ -314,48 +318,92 @@ upstream_class rate_limited\n\
 #[test]
 fn accounts_show_their_live_count_and_health() {
     let (_fake, ks) = device("ch-acct", core, false);
-    let o = run(&ks, &["account", "ls"]);
+    let o = run_ctl(&ks, &["account", "ls"]);
     assert!(o.status.success(), "{o:?}");
     assert_eq!(
         stdout(&o),
         "7\tanthropic\twork\tcooling\tlive 2/3\tfail 1 auth 0\n8\topenai\thome\tactive\tlive 0/-\tfail 0 auth 0\n"
     );
-    let o = run(&ks, &["accounts", "show", "7"]);
+    let o = run_ctl(&ks, &["accounts", "show", "7"]);
     assert_eq!(
         stdout(&o),
         "7\tanthropic\twork\tcooling\tlive 2/3\tfail 1 auth 0\n\
 state_reason rate_limited until 2026-11-06T02:00:00.000Z\n\
 last_success 2026-11-06T01:30:00.000Z\n\
-upstream_class rate_limited\n"
+upstream_class rate_limited\n\
+plan_limit allowed_warning at 2026-11-06T01:31:00.000Z\n\
+\x20 window five_hour 83% resets 2026-11-06T05:00:00.000Z\n\
+\x20 window seven_day 20%\n"
     );
 }
 
 #[test]
 fn scheduler_settings_are_read_and_set_through_the_core() {
     let (fake, ks) = device("ch-set", core, false);
-    let o = run(&ks, &["setting", "ls", "scheduler."]);
+    let o = run_ctl(&ks, &["setting", "ls", "scheduler."]);
     assert_eq!(
         stdout(&o),
         "scheduler.max_hops\t3 count\t(default 3, 0..8)\tdefault\n\
 scheduler.wait_max_secs\t600 seconds\t(default 900, 1..86400)\tserver\n"
     );
-    let o = run(&ks, &["settings", "set", "scheduler.max_hops", "3"]);
+    let o = run_ctl(&ks, &["settings", "set", "scheduler.max_hops", "3"]);
     assert!(o.status.success(), "{o:?}");
     assert_eq!(
         sent(&fake, "put /api/v1/settings/server/scheduler.max_hops "),
         json!({"value": 3})
     );
     // The range is the Core's: a value out of it is the Core's refusal, not ctl's.
-    let o = run(&ks, &["setting", "set", "scheduler.max_hops", "9"]);
+    let o = run_ctl(&ks, &["setting", "set", "scheduler.max_hops", "9"]);
     assert_eq!(o.status.code(), Some(4), "{o:?}");
     assert!(
         err(&o).contains("400 out_of_bounds: scheduler.max_hops is 0 to 8"),
         "{o:?}"
     );
-    let o = run(&ks, &["setting", "get", "nope"]);
+    let o = run_ctl(&ks, &["setting", "get", "nope"]);
     assert_eq!(o.status.code(), Some(4), "{o:?}");
-    let o = run(&ks, &["setting", "reset", "scheduler.max_hops"]);
+    let o = run_ctl(&ks, &["setting", "reset", "scheduler.max_hops"]);
     assert!(o.status.success(), "{o:?}");
     let deleted = "delete /api/v1/settings/server/scheduler.max_hops ";
     assert!(fake.requests().iter().any(|r| r.starts_with(deleted)));
+}
+
+#[test]
+fn a_run_lists_its_attempts_and_a_wake_says_when_it_was_replaced() {
+    let (fake, ks) = device("ch-run-ls", core, false);
+    let run = "as_00000000000000000000000000";
+    let o = run_ctl(&ks, &["agent", "ls", "--run", run]);
+    assert!(o.status.success(), "{o:?}");
+    assert!(stdout(&o).starts_with(SESSION), "{o:?}");
+    assert!(
+        fake.requests()
+            .iter()
+            .any(|r| r.starts_with(&format!("get /api/v1/agent-sessions?run={run} ")))
+    );
+    // Without --run: no query. A bad run id is usage.
+    run_ctl(&ks, &["agent", "ls"]);
+    assert!(
+        fake.requests()
+            .iter()
+            .any(|r| r.starts_with("get /api/v1/agent-sessions http"))
+    );
+    assert_eq!(
+        run_ctl(&ks, &["agent", "ls", "--run", "x"]).status.code(),
+        Some(2)
+    );
+
+    let o = run_ctl(&ks, &["agent", "wake", SESSION, "go", "on"]);
+    assert_eq!(stdout(&o), format!("queued wake for {SESSION} key k1\n"));
+    assert_eq!(
+        sent(
+            &fake,
+            &format!("post /api/v1/agent-sessions/{SESSION}/wake ")
+        ),
+        json!({"text": "go on"})
+    );
+    let o = run_ctl(&ks, &["agent", "wake", "as_000000000000000000000000p0"]);
+    assert_eq!(o.status.code(), Some(4), "{o:?}");
+    assert_eq!(
+        err(&o),
+        "ainkradctl: 409 failed_over: waking as_000000000000000000000000p0: the session was replaced: wake as_0000000000000000000000000b\n"
+    );
 }

@@ -47,8 +47,28 @@ pub fn detail(v: &Value) -> Vec<String> {
     if present("upstream_class") {
         lines.push(format!("upstream_class {}", s(&v["upstream_class"])));
     }
-    // S6 (#144, failover) adds its own lines here: run, attempt, failover_of, failed_over_to.
-    // They do not exist in the contract yet; nothing is read for them.
+    // The failover surface (S6): the run this attempt belongs to and its neighbours.
+    if present("run") {
+        let attempt = v["attempt"]
+            .as_i64()
+            .map(|a| format!(" attempt {a}"))
+            .unwrap_or_default();
+        lines.push(format!("run {}{attempt}", s(&v["run"])));
+    }
+    if present("failover_of") {
+        lines.push(format!("failover_of {}", s(&v["failover_of"])));
+    }
+    if present("failed_over_to") {
+        lines.push(format!("failed_over_to {}", s(&v["failed_over_to"])));
+    }
+    // Admin only: a field the Core did not send prints no line.
+    if present("failover_class") {
+        lines.push(format!("failover_class {}", s(&v["failover_class"])));
+    }
+    if let Some(p) = v["skip_pools"].as_array().filter(|p| !p.is_empty()) {
+        let pools: Vec<String> = p.iter().map(|x| x.to_string()).collect();
+        lines.push(format!("skip_pools {}", pools.join(",")));
+    }
     lines
 }
 
@@ -72,7 +92,9 @@ mod tests {
               {"pool": 2, "provider": "anthropic", "harness": "claude", "model": null},
               {"pool": 5, "provider": "openai", "harness": "codex", "model": "m"}],
             "waiting": {"until": "U", "since": "S", "why": "every account is cooling"},
-            "repicked": 1, "upstream_class": "rate_limited"});
+            "repicked": 1, "upstream_class": "rate_limited",
+            "run": "as_r", "attempt": 1, "failover_of": "as_p", "failed_over_to": "as_n",
+            "failover_class": "quota", "skip_pools": [2, 5]});
         assert_eq!(
             detail(&v),
             [
@@ -84,6 +106,11 @@ mod tests {
                 "waiting until U since S: every account is cooling",
                 "repicked 1",
                 "upstream_class rate_limited",
+                "run as_r attempt 1",
+                "failover_of as_p",
+                "failed_over_to as_n",
+                "failover_class quota",
+                "skip_pools 2,5",
             ]
         );
     }

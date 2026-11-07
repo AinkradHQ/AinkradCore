@@ -53,7 +53,25 @@ pub fn detail(a: &Value) -> Vec<String> {
     if let Some(c) = h["upstream_class"].as_str() {
         lines.push(format!("upstream_class {c}"));
     }
-    // S6 (#144) adds health.plan_limit here; it is not in the contract yet.
+    // A subscription's plan-limit snapshot (S6), as its harness last said it.
+    let pl = &h["plan_limit"];
+    if pl.is_object() {
+        lines.push(format!(
+            "plan_limit {} at {}",
+            s(&pl["status"]),
+            s(&pl["at"])
+        ));
+        for w in pl["windows"].as_array().into_iter().flatten() {
+            let used = w["utilization"]
+                .as_f64()
+                .map_or_else(|| "-".to_owned(), |u| format!("{:.0}%", u * 100.0));
+            let resets = w["resets_at"]
+                .as_str()
+                .map(|t| format!(" resets {t}"))
+                .unwrap_or_default();
+            lines.push(format!("  window {} {used}{resets}", s(&w["name"])));
+        }
+    }
     lines
 }
 
@@ -115,13 +133,19 @@ mod tests {
     #[test]
     fn detail_says_why_it_is_cooling() {
         let a = json!({"state_reason": "rate_limited", "state_until": "U",
-            "health": {"last_success_at": "L", "upstream_class": "rate_limited"}});
+            "health": {"last_success_at": "L", "upstream_class": "rate_limited",
+              "plan_limit": {"status": "allowed_warning", "at": "P", "windows": [
+                {"name": "five_hour", "utilization": 0.834, "resets_at": "R"},
+                {"name": "seven_day", "utilization": 1.2}]}}});
         assert_eq!(
             detail(&a),
             [
                 "state_reason rate_limited until U",
                 "last_success L",
-                "upstream_class rate_limited"
+                "upstream_class rate_limited",
+                "plan_limit allowed_warning at P",
+                "  window five_hour 83% resets R",
+                "  window seven_day 120%"
             ]
         );
         assert!(detail(&json!({"state": "active"})).is_empty());

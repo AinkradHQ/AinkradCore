@@ -1,4 +1,4 @@
-//! `agent ls | run | show | cancel | kill` (E2-08.2): agent sessions on runners
+//! `agent ls | wake <id> [text…] | run | show | cancel | kill` (E2-08.2): agent sessions on runners
 //! (`/api/v1/agent-sessions`, scope `agent`). Starting, cancelling and killing one need a
 //! step-up, which `Client::call` does once when the Core asks. Secrets are named, never given:
 //! `--secrets name:VAR,…` leases each broker secret to the session's runner at each start.
@@ -66,6 +66,8 @@ pub struct Opts<'a> {
     pub chain: Option<i64>,
     /// `--agent`: the agent id, whose bound (else the default) chain serves the session.
     pub agent: Option<&'a str>,
+    /// `--run`: `ls` lists only the attempts of this run (its first attempt's id).
+    pub run: Option<&'a str>,
 }
 
 /// `agent …`.
@@ -82,6 +84,7 @@ pub async fn agent(
         follow,
         chain,
         agent,
+        run,
     } = *opts;
     let shown = |out: &mut _, v: Value| match json {
         true => print(out, v),
@@ -89,7 +92,10 @@ pub async fn agent(
     };
     match words {
         ["ls" | "list"] => {
-            let v: Value = c.get("/api/v1/agent-sessions", "").await?;
+            let query = run.map(|r| sid(r).map(|r| format!("run={r}"))).transpose()?;
+            let v: Value = c
+                .get("/api/v1/agent-sessions", query.as_deref().unwrap_or(""))
+                .await?;
             if json {
                 return print(out, v);
             }
@@ -170,6 +176,24 @@ pub async fn agent(
             let body = json!({"approved": *verb == "approve", "reply": (!reason.is_empty()).then(|| reason.join(" "))});
             let res = c.call("POST", &format!("/api/v1/agent-sessions/{}/approvals/{request}", sid(id)?), "", Some(&body)).await?;
             shown(out, parse(&res)?)
+        }
+        ["wake", id, text @ ..] => {
+            let id = sid(id)?;
+            let mut body = json!({});
+            if !text.is_empty() {
+                body["text"] = json!(text.join(" "));
+            }
+            let path = format!("/api/v1/agent-sessions/{id}/wake");
+            let res = c
+                .call("POST", &path, "", Some(&body))
+                .await
+                .map_err(|e| crate::chains::friendly(e, &format!("waking {id}")))?;
+            let v: Value = parse(&res)?;
+            match (json, v["queued"].as_bool()) {
+                (true, _) => print(out, v),
+                (false, Some(false)) => print(out, format_args!("not queued: key {} was used", s(&v["key"]))),
+                (false, _) => print(out, format_args!("queued wake for {} key {}", s(&v["session"]), s(&v["key"]))),
+            }
         }
         [verb @ ("cancel" | "kill"), id] => {
             let path = format!("/api/v1/agent-sessions/{}/{verb}", sid(id)?);

@@ -88,6 +88,16 @@ pub fn core(method: &str, path: &str, body: &str) -> (u16, String) {
         ("GET" | "PUT", "/api/v1/settings/server/nope") => {
             refusal(404, "not_found", "no such setting")
         }
+        ("GET", "/api/v1/agent-sessions") => (200, format!("[{SESSION_JSON}]")),
+        ("POST", p) if p == format!("/api/v1/agent-sessions/{SESSION}/wake") => (
+            200,
+            format!(r#"{{"session":"{SESSION}","key":"k1","queued":true}}"#),
+        ),
+        ("POST", "/api/v1/agent-sessions/as_000000000000000000000000p0/wake") => refusal(
+            409,
+            "failed_over",
+            "the session was replaced: wake as_0000000000000000000000000b",
+        ),
         ("POST", "/api/v1/agent-sessions") => (200, session_for(&b)),
         ("GET", p) if p == format!("/api/v1/agent-sessions/{SESSION}") => {
             (200, SESSION_JSON.into())
@@ -100,12 +110,12 @@ pub fn core(method: &str, path: &str, body: &str) -> (u16, String) {
     }
 }
 
-pub const ACCOUNT: &str = r#"{"id":7,"provider":"anthropic","label":"work","masked_tail":"abcd","base_url":"https://x","state":"cooling","state_reason":"rate_limited","state_until":"2026-11-06T02:00:00.000Z","cap":3,"live":2,"created_at":"T","updated_at":"T","health":{"fail_streak":1,"auth_streak":0,"last_success_at":"2026-11-06T01:30:00.000Z","upstream_class":"rate_limited"}}"#;
+pub const ACCOUNT: &str = r#"{"id":7,"provider":"anthropic","label":"work","masked_tail":"abcd","base_url":"https://x","state":"cooling","state_reason":"rate_limited","state_until":"2026-11-06T02:00:00.000Z","cap":3,"live":2,"created_at":"T","updated_at":"T","health":{"fail_streak":1,"auth_streak":0,"last_success_at":"2026-11-06T01:30:00.000Z","upstream_class":"rate_limited","plan_limit":{"status":"allowed_warning","at":"2026-11-06T01:31:00.000Z","windows":[{"name":"five_hour","utilization":0.834,"resets_at":"2026-11-06T05:00:00.000Z"},{"name":"seven_day","utilization":0.2}]}}}"#;
 pub const PLAIN: &str = r#"{"id":8,"provider":"openai","label":"home","masked_tail":"wxyz","base_url":"https://y","state":"active","cap":0,"live":0,"created_at":"T","updated_at":"T","health":{"fail_streak":0,"auth_streak":0}}"#;
 pub const HOPS: &str = r#"{"key":"scheduler.max_hops","description":"d","unit":"count","default":3,"min":0,"max":8,"scopes":["server"],"value":3}"#;
 pub const WAIT: &str = r#"{"key":"scheduler.wait_max_secs","description":"d","unit":"seconds","default":900,"min":1,"max":86400,"scopes":["server"],"value":600,"source":"server"}"#;
 pub const BURST: &str = r#"{"key":"api.request_burst","description":"d","unit":"count","default":60,"min":1,"max":1000,"scopes":["server"],"value":60}"#;
-pub const SESSION_JSON: &str = r#"{"id":"as_0000000000000000000000000a","runner":"d_00000000000000000000000000","harness":"claude","state":"starting","last_seq":1,"created_by":"d","created_at":"2026-11-06T00:00:00.000Z","updated_at":"T","usage":{"input":0,"output":0},"agent":"bot","chain_id":1,"chain_pos":1,"account":9,"repicked":1,"upstream_class":"rate_limited","waiting":{"until":"2026-11-06T00:10:00.000Z","since":"2026-11-06T00:00:00.000Z","why":"every account is cooling"},"chain":[{"pool":2,"provider":"anthropic","harness":"claude","model":"sonnet-x"},{"pool":5,"provider":"openai","harness":"codex","model":null}]}"#;
+pub const SESSION_JSON: &str = r#"{"id":"as_0000000000000000000000000a","runner":"d_00000000000000000000000000","harness":"claude","state":"starting","last_seq":1,"created_by":"d","created_at":"2026-11-06T00:00:00.000Z","updated_at":"T","usage":{"input":0,"output":0},"agent":"bot","chain_id":1,"chain_pos":1,"account":9,"repicked":1,"upstream_class":"rate_limited","run":"as_00000000000000000000000000","attempt":1,"failover_of":"as_000000000000000000000000p0","failed_over_to":null,"failover_class":"quota","skip_pools":[2],"waiting":{"until":"2026-11-06T00:10:00.000Z","since":"2026-11-06T00:00:00.000Z","why":"every account is cooling"},"chain":[{"pool":2,"provider":"anthropic","harness":"claude","model":"sonnet-x"},{"pool":5,"provider":"openai","harness":"codex","model":null}]}"#;
 
 /// A created session echoing the request's runner and harness, as the Core does.
 pub fn session_for(b: &Value) -> String {
