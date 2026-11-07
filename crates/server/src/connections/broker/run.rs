@@ -99,6 +99,18 @@ async fn github(j: &Job) -> Ran {
             "the repository is outside the grant",
         )));
     }
+    // An installation token is minted again before it ends; a failure here leaves the old token,
+    // which the expiry check below then refuses.
+    let who = Who {
+        workspace: j.user,
+        by_device: &j.device,
+        actor: AuditActor::System,
+        now: &j.now,
+    };
+    let _ = j
+        .github
+        .renew_installation(&j.pool, &j.sealer, who, r.connection.id)
+        .await;
     let m = match secret::open(&j.pool, &j.sealer, j.user, r.connection.id).await {
         Ok((m, _)) => m,
         Err(e) => return none(Err(of_store(e))),

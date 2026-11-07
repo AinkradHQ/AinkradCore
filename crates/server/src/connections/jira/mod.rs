@@ -133,7 +133,9 @@ pub struct Myself {
 
 pub struct Jira {
     http: http::Http,
-    app: Option<OAuthApp>,
+    /// Ainkrad's Atlassian app. Swapped in place by [`Jira::set_app`] (the API's config change):
+    /// the server has ONE `Jira`, shared by the registry, the broker and the API.
+    app: std::sync::RwLock<Option<OAuthApp>>,
     flows: Mutex<oauth::Flows>,
     locks: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
     /// When each connection's token was last renewed (see `oauth::Job::run`).
@@ -158,11 +160,39 @@ impl Jira {
     fn with(http: http::Http, app: Option<OAuthApp>) -> Self {
         Self {
             http,
-            app,
+            app: std::sync::RwLock::new(app),
             flows: Mutex::default(),
             locks: Mutex::default(),
             recent: Arc::default(),
         }
+    }
+
+    /// A copy of the OAuth app in force (it holds no token).
+    pub(super) fn app(&self) -> Option<OAuthApp> {
+        self.app.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Whether Sign in with Atlassian is set up.
+    pub fn app_configured(&self) -> bool {
+        self.app().is_some()
+    }
+
+    /// The redirect addresses registered with Atlassian (none when no app is set).
+    pub fn redirects(&self) -> Vec<String> {
+        self.app()
+            .map(|a| a.redirects().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// Replaces Ainkrad's Atlassian app in place (a config change), keeping this one instance:
+    /// its locks and the registry's and broker's handles to it stay valid. Sign-ins started
+    /// under the old app are dropped: a code issued for one client id cannot be exchanged by
+    /// another. Tokens already stored are renewed with the NEW app; a changed client id makes
+    /// them fail to renew, and those connections need signing in again.
+    pub fn set_app(&self, app: Option<OAuthApp>) {
+        let mut cur = self.app.write().unwrap_or_else(|e| e.into_inner());
+        self.flows.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        *cur = app;
     }
 
     fn url(&self, cred: &Cred, path: &str) -> String {

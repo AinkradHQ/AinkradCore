@@ -163,6 +163,17 @@ async fn strip_secrets(db: &Path) -> Result_ {
         .execute(&mut conn)
         .await?;
     }
+    // The OAuth apps' sealed config (client secrets, the GitHub App's key) goes too.
+    let apps: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_master WHERE name = 'core_connection_apps'",
+    )
+    .fetch_one(&mut conn)
+    .await?;
+    if apps > 0 {
+        sqlx::raw_sql("PRAGMA secure_delete = ON; DELETE FROM core_connection_apps; VACUUM;")
+            .execute(&mut conn)
+            .await?;
+    }
     conn.close().await?;
     Ok(())
 }

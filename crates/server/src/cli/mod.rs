@@ -787,6 +787,10 @@ async fn serve(
     }
     let master = ainkrad_core_server::ops::config::Home(state_dir(db).to_path_buf()).master_key();
     app.secrets = ainkrad_core_server::ops::secretbox::SecretBox::for_serve(&master).map(Arc::new);
+    // Ainkrad's OAuth apps (C5): the sealed config goes into the shared adapters.
+    if let Err(e) = ainkrad_core_server::connections::apps::reload(&app).await {
+        tracing::warn!(error = ?e, "the connection apps' config was not loaded");
+    }
     // Every agent session not over is supervised again: its runner re-claims it (E2-08.5).
     let supervised = ainkrad_core_server::agents::resume_all(&app).await?;
     tracing::info!(supervised, "agent sessions");

@@ -4,7 +4,9 @@
 //! `store::connections`. GitHub (C2) and Jira (C3) ship; no HTTP route (C5).
 
 pub mod adapter;
+pub mod apps;
 pub mod broker;
+pub mod flows;
 pub mod github;
 pub mod jira;
 pub mod material;

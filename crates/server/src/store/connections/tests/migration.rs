@@ -20,6 +20,7 @@ async fn migrates_up_down_up_over_a_database_with_data() {
     assert_eq!(
         before,
         [
+            "core_connection_apps",
             "core_connection_bindings",
             "core_connection_grants",
             "core_connection_secrets",
@@ -33,7 +34,7 @@ async fn migrates_up_down_up_over_a_database_with_data() {
             .await
             .unwrap();
     undo(&fx.pool, CORE, CORE_MIGRATIONS, 26).await.unwrap();
-    assert!(tables(&fx).await.is_empty(), "down drops all four");
+    assert!(tables(&fx).await.is_empty(), "down drops all five");
     let (core, audit): (i64, i64) = sqlx::query_as(
         "SELECT (SELECT count(*) FROM core_pools) + (SELECT count(*) FROM core_accounts), \
          (SELECT count(*) FROM audit_events WHERE action = 'connection.created')",

@@ -184,7 +184,8 @@ async fn build(
 async fn unheld_keys(h: &Home) -> Result_ {
     let pool = store::connect(&h.db()).await?;
     let named: Result<Vec<String>, _> = sqlx::query_scalar(
-        "SELECT key_id FROM core_secrets UNION SELECT key_id FROM core_connection_secrets",
+        "SELECT key_id FROM core_secrets UNION SELECT key_id FROM core_connection_secrets \
+         UNION SELECT key_id FROM core_connection_apps",
     )
     .fetch_all(&pool)
     .await;

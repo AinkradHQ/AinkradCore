@@ -948,7 +948,16 @@ pub async fn reseal_all(
             from.push(id);
         }
     }
-    let total = rows.len() + conn_total;
+    // So are the OAuth apps' config rows (C5).
+    let (app_total, app_moved, app_from) =
+        super::connections::apps::reseal_in(&mut tx, keys, target).await?;
+    moved += app_moved;
+    for id in app_from {
+        if !from.contains(&id) {
+            from.push(id);
+        }
+    }
+    let total = rows.len() + conn_total + app_total;
     let audited: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM audit_events WHERE action = 'secret.master_rotated' \
          AND json_extract(details, '$.to_key_id') = ?",

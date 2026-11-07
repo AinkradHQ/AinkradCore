@@ -26,6 +26,20 @@ pub async fn create(
     material: &Material,
     who: Who<'_>,
 ) -> Result<Connection, Error> {
+    create_with(pool, sealer, reg, new, material, None, who).await
+}
+
+/// [`create`] for a GitHub App connection: the installation its token is minted for is stored in
+/// the same transaction, so a connection never exists without it.
+pub async fn create_with(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    reg: &Registry,
+    new: &NewConnection<'_>,
+    material: &Material,
+    installation: Option<i64>,
+    who: Who<'_>,
+) -> Result<Connection, Error> {
     let Some(adapter) = reg.get(new.kind) else {
         return refused("bad_request", "no such kind");
     };
@@ -71,7 +85,8 @@ pub async fn create(
     }
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO core_connections (user_id, kind, name, label, auth_method, created_by, \
-         created_at, updated_at, nonce) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+         created_at, updated_at, nonce, installation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         RETURNING id",
     )
     .bind(who.workspace)
     .bind(new.kind)
@@ -82,6 +97,7 @@ pub async fn create(
     .bind(who.now)
     .bind(who.now)
     .bind(&nonce)
+    .bind(installation)
     .fetch_one(&mut *tx)
     .await?;
     let seal = secret::Seal {

@@ -16,6 +16,7 @@ use crate::ops::secretbox::SecretBox;
 use crate::scheduler::{iso_of_unix, unix_secs};
 use crate::store::connect;
 
+mod apps_cases;
 mod crud;
 mod effective_limits;
 mod gate_cases;

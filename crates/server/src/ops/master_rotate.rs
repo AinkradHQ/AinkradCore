@@ -84,7 +84,8 @@ fn load(path: &Path) -> Result<SecretBox, Box<dyn std::error::Error>> {
 
 async fn row_key_ids(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
     sqlx::query_scalar(
-        "SELECT key_id FROM core_secrets UNION SELECT key_id FROM core_connection_secrets",
+        "SELECT key_id FROM core_secrets UNION SELECT key_id FROM core_connection_secrets \
+         UNION SELECT key_id FROM core_connection_apps",
     )
     .fetch_all(pool)
     .await
