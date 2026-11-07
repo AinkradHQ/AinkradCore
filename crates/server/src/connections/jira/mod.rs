@@ -20,7 +20,7 @@ mod oauth;
 mod ops;
 mod renew;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -31,7 +31,7 @@ use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 
 pub use cred::{
-    Cred, issue_key, oauth_material, project_key, site_host, site_host_of, token_material,
+    Cred, issue_key, oauth_material, project_key, site_host, site_host_of, token_material, unpack,
 };
 pub use http::CallError;
 pub use oauth::{Finished, FlowError, OAuthApp, SCOPES, Site, Started};
@@ -149,7 +149,7 @@ impl Jira {
     }
 
     #[cfg(test)]
-    fn loopback(app: Option<OAuthApp>, addr: std::net::SocketAddr) -> Self {
+    pub(crate) fn loopback(app: Option<OAuthApp>, addr: std::net::SocketAddr) -> Self {
         Self::with(http::Http::loopback(addr), app)
     }
 

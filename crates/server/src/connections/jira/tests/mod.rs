@@ -195,7 +195,7 @@ impl Fake {
         self.seen().iter().rev().find(hit).cloned()
     }
 
-    async fn serve(&self) -> SocketAddr {
+    pub async fn serve(&self) -> SocketAddr {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = l.local_addr().unwrap();
         let app = Router::new().fallback(handle).with_state(self.clone());
