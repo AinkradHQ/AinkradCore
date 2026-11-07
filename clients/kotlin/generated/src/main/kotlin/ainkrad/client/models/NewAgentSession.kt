@@ -27,6 +27,7 @@ import kotlinx.serialization.Contextual
  * @param runner The runner's device id, `d_…`.
  * @param agent An opaque agent id (1 to 64 of `[A-Za-z0-9._:-]`): its bound chain, else the user's default chain, serves the session. Needs `admin`. With no chain either way the session runs as a plain one and names its harness.
  * @param chain A fallback chain's id: the session draws its account from it, one at a time. Needs `admin`. It must not come with a harness, a model or an `acct.*` secret.
+ * @param connectionAccess Capability names the session may call through its connections (`read_repo`, `issues_write`, `read_issues`, ...; see `listConnectionKinds`). Needs `admin`. Absent or empty: the default, read-class capabilities only (write is an explicit grant); an agent's session with none has no connection tools. Operation names and `*` are refused (400).
  * @param harness `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it (and `model`) when the session draws from a chain: the account the allocator picks sets them.
  * @param model The model id as the provider names it. For a session served by the auth gateway it must be one of the ids priced for its provider, exactly: the gateway resolves no alias.
  * @param policy `{\"mode\": \"ask\" | \"accept_edits\" | \"sandboxed\", \"allow\": […]}`; default `ask`.
@@ -49,6 +50,10 @@ data class NewAgentSession (
     /* A fallback chain's id: the session draws its account from it, one at a time. Needs `admin`. It must not come with a harness, a model or an `acct.*` secret. */
     @SerialName(value = "chain")
     val chain: kotlin.Long? = null,
+
+    /* Capability names the session may call through its connections (`read_repo`, `issues_write`, `read_issues`, ...; see `listConnectionKinds`). Needs `admin`. Absent or empty: the default, read-class capabilities only (write is an explicit grant); an agent's session with none has no connection tools. Operation names and `*` are refused (400). */
+    @SerialName(value = "connection_access")
+    val connectionAccess: kotlin.collections.List<kotlin.String>? = null,
 
     /* `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it (and `model`) when the session draws from a chain: the account the allocator picks sets them. */
     @SerialName(value = "harness")

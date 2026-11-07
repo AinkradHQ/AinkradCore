@@ -2119,6 +2119,7 @@
           "citadel.team.updated",
           "citadel.wake.dispatched",
           "citadel.wake.dropped",
+          "connection.app_set",
           "connection.auth_failed",
           "connection.auth_inconclusive",
           "connection.bound",
@@ -3271,6 +3272,480 @@
         ],
         "type": "object"
       },
+      "Connection": {
+        "description": "A connection: never its credential.",
+        "properties": {
+          "auth_method": {
+            "type": "string"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "created_by": {
+            "description": "`admin` devices: the device that made it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "disabled": {
+            "description": "The admin's own off switch.",
+            "type": "boolean"
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When the access token ends, when known."
+          },
+          "grant_count": {
+            "description": "`admin` devices: how many grants say who may use it.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "identity": {
+            "description": "The account or site the last test read (a GitHub login, an Atlassian account at a site).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_default": {
+            "description": "The kind's default connection: used when several cover a call.",
+            "type": "boolean"
+          },
+          "kind": {
+            "description": "`github` or `jira`.",
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "last_tested_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "my_capabilities": {
+            "description": "Other devices: what the caller may do with it (the capabilities of the grants that name\nthe caller); never anyone else's grants or limits.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "state_reason": {
+            "description": "A fixed code: `rate_limited`, `quota`, `upstream_errors`, `auth_suspected`, `auth_failed`,\n`exported`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state_until": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "status": {
+            "description": "`active`, `cooling`, `limited`, `unhealthy` or `disabled`.",
+            "type": "string"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "label",
+          "auth_method",
+          "status",
+          "disabled",
+          "is_default",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "ConnectionApp": {
+        "description": "Ainkrad's OAuth app for a kind, as configured: never a secret.",
+        "properties": {
+          "app_install_configured": {
+            "description": "GitHub: the GitHub App (repositories) is set up.",
+            "type": "boolean"
+          },
+          "configured": {
+            "description": "Sign in works for the kind.",
+            "type": "boolean"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectionAppField"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "redirect_uri": {
+            "description": "Atlassian: the redirect address to register with Atlassian, exactly.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "configured",
+          "app_install_configured",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "ConnectionAppField": {
+        "description": "One field of an app's config.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "secret": {
+            "description": "A secret is write-only: only `set` is ever said.",
+            "type": "boolean"
+          },
+          "set": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "value": {
+            "description": "The value of a field that is no secret.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "title",
+          "secret",
+          "set"
+        ],
+        "type": "object"
+      },
+      "ConnectionFlow": {
+        "description": "A sign-in as it stands: poll it.",
+        "properties": {
+          "authorize_url": {
+            "description": "Atlassian: what the Mac app opens in the browser.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "connection": {
+            "description": "Once `connected`: the connection.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "error_code": {
+            "description": "When `failed`: a fixed code and a plain sentence with the fix.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_in_secs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "id": {
+            "description": "`cf_…`, the flow's own id.",
+            "type": "string"
+          },
+          "identity": {
+            "description": "Once `connected`: who it is connected as.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "interval": {
+            "description": "GitHub: seconds between polls.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "sites": {
+            "description": "Atlassian, `choose_site`: the sites to pick from.",
+            "items": {
+              "$ref": "#/components/schemas/ConnectionFlowSite"
+            },
+            "type": "array"
+          },
+          "state": {
+            "description": "Atlassian: the `state` the redirect must carry; hand it back with the `code`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "step": {
+            "description": "`waiting`, `approved`, `choose_site`, `connected`, `expired`, `denied` or `failed`.",
+            "type": "string"
+          },
+          "user_code": {
+            "description": "GitHub: the code to type, large.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verification_uri": {
+            "description": "GitHub: the address to open.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "step",
+          "expires_in_secs",
+          "sites"
+        ],
+        "type": "object"
+      },
+      "ConnectionFlowCallback": {
+        "description": "What the Mac app's loopback listener received. No `Debug`.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "state"
+        ],
+        "type": "object"
+      },
+      "ConnectionFlowChoice": {
+        "properties": {
+          "site": {
+            "description": "A site's `id` from the flow.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "site"
+        ],
+        "type": "object"
+      },
+      "ConnectionFlowSite": {
+        "description": "One Jira site to choose.",
+        "properties": {
+          "id": {
+            "description": "The Atlassian cloud id: what `chooseConnectionSite` takes.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "url"
+        ],
+        "type": "object"
+      },
+      "ConnectionGrant": {
+        "description": "What someone may do with a connection.",
+        "properties": {
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "grantee": {
+            "type": "string"
+          },
+          "grantee_kind": {
+            "description": "`user` (a user id), `role` (`admin`, `member`) or `agent` (an agent id).",
+            "type": "string"
+          },
+          "limits": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "description": "The resources it reaches, by the kind's limit key; none: any.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "grantee_kind",
+          "grantee",
+          "capabilities",
+          "limits",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "ConnectionKind": {
+        "description": "What a screen draws a kind's setup from.",
+        "properties": {
+          "auth_methods": {
+            "items": {
+              "$ref": "#/components/schemas/KindAuthMethod"
+            },
+            "type": "array"
+          },
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/KindCapability"
+            },
+            "type": "array"
+          },
+          "configured": {
+            "description": "Whether Sign in works: Ainkrad's app for the kind is set up on this Core.",
+            "type": "boolean"
+          },
+          "install_url": {
+            "description": "GitHub: where the person installs the GitHub App to choose repositories, when it is set up.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "limits": {
+            "items": {
+              "$ref": "#/components/schemas/KindLimit"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "title",
+          "summary",
+          "auth_methods",
+          "capabilities",
+          "limits",
+          "configured"
+        ],
+        "type": "object"
+      },
+      "ConnectionUse": {
+        "description": "A use of a connection, from its audit rows: no payload.",
+        "properties": {
+          "action": {
+            "description": "The operation, `github.get_issue`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "code": {
+            "description": "The refusal code or the upstream class.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result": {
+            "description": "`ok`, `refused` or `error`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seq": {
+            "description": "The audit row's number: page with `before`.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "seq",
+          "at"
+        ],
+        "type": "object"
+      },
       "CostEvent": {
         "properties": {
           "account_id": {
@@ -3492,6 +3967,23 @@
         },
         "required": [
           "approve"
+        ],
+        "type": "object"
+      },
+      "DefaultConnection": {
+        "properties": {
+          "connection": {
+            "description": "The connection used when several of the kind cover a call.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "connection"
         ],
         "type": "object"
       },
@@ -3929,7 +4421,7 @@
             "$ref": "#/components/schemas/Timestamp"
           },
           "kind": {
-            "description": "What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,\n`action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;\na device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a\nmodule writes. The registered kinds are listed in `x-event-kinds`. The payload of\n`agent.state` is `{session, state, reason, …}`: a chain session that waits for an account\nsays `reason: \"waiting\"` and `waiting: {until, why, since}` (`until` an RFC 3339 time, `since`\nthe first wait in unix seconds), and one whose launch refused its account, so another was\npicked across a provider or harness, says `reason: \"repicked\"`, and a run a failover moved across\nthem says `reason: \"failover\"`, both with `from` and `to` (each `{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account\ncooled or limited until `until` (`class` `rate_limited`, `quota` or `plan_limit`; `source`\n`gateway` or `harness`). `account.health` is `{account, user, state, reason}`: an account went\n`unhealthy` (`reason` `upstream_errors` or `auth_suspected`). `account.failover` is `{run,\nuser, from_session, to_session, from_account, to_account, from_pool, to_pool, class, hop}`: a\nrun moved to `to_session`, or ended (`to_session` null: its chain has nothing left, the hop cap\nor the storm guard; `to_account` is null while the successor waits for one). `account.budget` is\n`{subject_kind, subject, state}` for an account's or a pool's budget (`state` `warning` or\n`exhausted`). `account.expired` is `{account, user, reason}`: a key the provider refused was\nconfirmed and the account disabled. `alarm.raised` with `alarm` `failover_storm` and a\n`user` says the bound on that user's failovers stopped a run of theirs from moving (once per\nwindow and user). No payload holds a key, a token or an\nupstream's own words.",
+            "description": "What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,\n`action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;\na device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a\nmodule writes. The registered kinds are listed in `x-event-kinds`. The payload of\n`agent.state` is `{session, state, reason, …}`: a chain session that waits for an account\nsays `reason: \"waiting\"` and `waiting: {until, why, since}` (`until` an RFC 3339 time, `since`\nthe first wait in unix seconds), and one whose launch refused its account, so another was\npicked across a provider or harness, says `reason: \"repicked\"`, and a run a failover moved across\nthem says `reason: \"failover\"`, both with `from` and `to` (each `{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account\ncooled or limited until `until` (`class` `rate_limited`, `quota` or `plan_limit`; `source`\n`gateway` or `harness`). `account.health` is `{account, user, state, reason}`: an account went\n`unhealthy` (`reason` `upstream_errors` or `auth_suspected`). `account.failover` is `{run,\nuser, from_session, to_session, from_account, to_account, from_pool, to_pool, class, hop}`: a\nrun moved to `to_session`, or ended (`to_session` null: its chain has nothing left, the hop cap\nor the storm guard; `to_account` is null while the successor waits for one). `account.budget` is\n`{subject_kind, subject, state}` for an account's or a pool's budget (`state` `warning` or\n`exhausted`). `account.expired` is `{account, user, reason}`: a key the provider refused was\nconfirmed and the account disabled. `alarm.raised` with `alarm` `failover_storm` and a\n`user` says the bound on that user's failovers stopped a run of theirs from moving (once per\nwindow and user). `connection.health` is `{connection, user, kind, state, reason}`: a connection's\nhealth changed (`state` `active`, `cooling`, `limited`, `unhealthy` or `disabled`; `reason` a fixed\ncode: `rate_limited`, `quota`, `upstream_errors`, `auth_suspected`, `auth_failed`, `recovered`,\n`auth_cleared`). No payload holds a key, a token or an\nupstream's own words.",
             "type": "string"
           },
           "payload": {
@@ -3969,6 +4461,7 @@
           "audit",
           "citadel.transcript",
           "citadel.wake",
+          "connection.health",
           "notify.delivery",
           "runner.connected",
           "runner.degraded",
@@ -4002,6 +4495,7 @@
           "audit": "admin",
           "citadel.transcript": "admin",
           "citadel.wake": "admin",
+          "connection.health": "admin",
           "notify.delivery": "admin",
           "runner.connected": "read",
           "runner.degraded": "read",
@@ -4542,6 +5036,93 @@
         "required": [
           "issue_id",
           "lead_secs"
+        ],
+        "type": "object"
+      },
+      "KindAuthMethod": {
+        "description": "One way to sign in to a kind, easiest first.",
+        "properties": {
+          "advanced": {
+            "description": "Shown under \"Advanced\", not as the first choice.",
+            "type": "boolean"
+          },
+          "available": {
+            "description": "`false` while the Core lacks what the method needs (Ainkrad's app is not set up yet, an\nadmin enters it with `setConnectionApp`): the screen says \"not set up yet\".",
+            "type": "boolean"
+          },
+          "help": {
+            "description": "A plain sentence for the screen.",
+            "type": "string"
+          },
+          "id": {
+            "description": "`oauth` (the kind's own sign-in), `app_install` (a GitHub App installation) or `token`.",
+            "type": "string"
+          },
+          "steps": {
+            "description": "The steps the screen shows, in order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "help",
+          "steps",
+          "advanced",
+          "available"
+        ],
+        "type": "object"
+      },
+      "KindCapability": {
+        "description": "A named permission of a kind.",
+        "properties": {
+          "class": {
+            "description": "`read` or `write`: a write capability is only ever granted by naming it.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "title": {
+            "description": "A plain label.",
+            "type": "string"
+          },
+          "write": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "title",
+          "class",
+          "write"
+        ],
+        "type": "object"
+      },
+      "KindLimit": {
+        "description": "A key of the resource limit a grant may carry.",
+        "properties": {
+          "help": {
+            "type": "string"
+          },
+          "key": {
+            "description": "`repos` (GitHub), `projects` (Jira).",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "title",
+          "help"
         ],
         "type": "object"
       },
@@ -5326,6 +5907,16 @@
               "null"
             ]
           },
+          "connection_access": {
+            "description": "Capability names the session may call through its connections (`read_repo`,\n`issues_write`, `read_issues`, ...; see `listConnectionKinds`). Needs `admin`. Absent or\nempty: the default, read-class capabilities only (write is an explicit grant); an agent's\nsession with none has no connection tools. Operation names and `*` are refused (400).",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "harness": {
             "description": "`claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it\n(and `model`) when the session draws from a chain: the account the allocator picks sets them.",
             "type": "string"
@@ -5525,6 +6116,97 @@
         "required": [
           "name"
         ],
+        "type": "object"
+      },
+      "NewConnection": {
+        "description": "A connection to make with a pasted credential (the Advanced way) or a GitHub App\ninstallation. No `Debug`.",
+        "properties": {
+          "auth_method": {
+            "description": "`token` or `app_install`.",
+            "type": "string"
+          },
+          "email": {
+            "description": "Jira token: the Atlassian account email.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "installation_id": {
+            "description": "`app_install`: the GitHub App installation id the setup page returned.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "description": "What people see, 1 to 80 characters; absent, the kind's title.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "`[a-z][a-z0-9._-]{0,63}`, unique per kind; absent, `<kind>-<n>`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "site": {
+            "description": "Jira token: the site, `acme.atlassian.net`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "token": {
+            "description": "The token or API token; written, never read back.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "auth_method"
+        ],
+        "type": "object"
+      },
+      "NewConnectionCredential": {
+        "description": "A replacement credential; the same fields as [`NewConnection`]'s. No `Debug`.",
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "installation_id": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "site": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "NewDepartment": {
@@ -9178,6 +9860,82 @@
         ],
         "type": "object"
       },
+      "SetConnectionApp": {
+        "description": "Fields to set (`\"name\": \"value\"`) or clear (`\"name\": null`). No `Debug`.",
+        "properties": {
+          "fields": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "fields"
+        ],
+        "type": "object"
+      },
+      "SetConnectionGrant": {
+        "description": "Who may use a connection and how far; replaces that grantee's grant.",
+        "properties": {
+          "capabilities": {
+            "description": "Capability names of the kind; absent, its read-only ones. Never `*`: a write capability\nis named.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "grantee": {
+            "type": "string"
+          },
+          "grantee_kind": {
+            "description": "`user`, `role` or `agent`.",
+            "type": "string"
+          },
+          "limits": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "description": "Resource limits by the kind's limit key (`repos`: `owner/name` or `owner/*`; `projects`:\nkeys); absent or empty, any resource.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "grantee_kind",
+          "grantee"
+        ],
+        "type": "object"
+      },
+      "SetDefaultConnection": {
+        "properties": {
+          "connection": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "connection"
+        ],
+        "type": "object"
+      },
       "SetLimit": {
         "properties": {
           "cap": {
@@ -9725,6 +10483,40 @@
             "type": "string"
           }
         ]
+      },
+      "StartConnectionFlow": {
+        "description": "A sign-in to start.",
+        "properties": {
+          "connection": {
+            "description": "Sign in again for this connection: its credential is replaced, nothing else changes.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "`github` or `jira`.",
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Names the connection it makes; absent, `<kind>-<n>`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
       },
       "StepUpRequest": {
         "additionalProperties": false,
@@ -10850,6 +11642,31 @@
         ],
         "type": "object"
       },
+      "UpdateConnection": {
+        "description": "What to change about a connection; at least one field.",
+        "properties": {
+          "disabled": {
+            "description": "The admin's off switch.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "UsageByCompany": {
         "properties": {
           "company": {
@@ -11179,7 +11996,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.45.0"
+    "version": "1.46.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -14092,6 +14909,1267 @@
           "chains"
         ],
         "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/connection-apps/{kind}": {
+      "get": {
+        "operationId": "getConnectionApp",
+        "parameters": [
+          {
+            "description": "`github` or `jira`",
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionApp"
+                }
+              }
+            },
+            "description": "Whether Ainkrad's OAuth app for the kind is set up on this Core, and which fields are set. A field that is no secret shows its value (the client id); a secret (`client_secret`, `app_key`) only whether it is `set`, never the value. For Atlassian, `redirect_uri` is the address to register with Atlassian. 404 for an unknown kind"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "put": {
+        "operationId": "setConnectionApp",
+        "parameters": [
+          {
+            "description": "`github` or `jira`",
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetConnectionApp"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionApp"
+                }
+              }
+            },
+            "description": "The named fields stored sealed (a string) or cleared (null), audited `connection.app_set` with the field names only; the kind's adapters use the new app at once, and sign-ins started under the old one end. Changing Atlassian's client id or secret makes existing Jira sign-ins fail to renew: those connections sign in again. 400 for an unknown field or a bad value (the private key must parse and goes with an `app_id`); 409 `secrets_disabled` while the broker is off; 503 without a master key"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/connection-defaults": {
+      "get": {
+        "operationId": "listConnectionDefaults",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DefaultConnection"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The default connection of each kind that has one: the one used when several of the kind cover a call"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/connection-defaults/{kind}": {
+      "delete": {
+        "operationId": "clearConnectionDefault",
+        "parameters": [
+          {
+            "description": "`github` or `jira`",
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountsDeleted"
+                }
+              }
+            },
+            "description": "The kind has no default any more (audited `connection.unbound`): a call several connections cover is then refused as ambiguous. 404 when it had none"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      },
+      "put": {
+        "operationId": "setConnectionDefault",
+        "parameters": [
+          {
+            "description": "`github` or `jira`",
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDefaultConnection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefaultConnection"
+                }
+              }
+            },
+            "description": "That connection is the kind's default from now on, replacing the previous one (audited `connection.bound`). 400 when the connection is not of this kind or the kind is unknown; 404 for another workspace's connection"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/connection-kinds": {
+      "get": {
+        "operationId": "listConnectionKinds",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ConnectionKind"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The kinds of connection a Core knows, as data a screen draws its setup from: the sign-in methods in order of preference, the capabilities with their read or write class and plain titles, the resource limit shape, help text, and whether Ainkrad's app for the kind is set up on this Core (`configured`, and each method's `available`)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/connections": {
+      "get": {
+        "operationId": "listConnections",
+        "parameters": [
+          {
+            "description": "Only this kind's connections.",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Connection"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The caller's workspace's connections, oldest first (of `kind` when given). An `admin` device sees all of them with their `grant_count`; another device only the ones granted to it, with `my_capabilities`. Never a credential"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "post": {
+        "operationId": "createConnection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewConnection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            },
+            "description": "Stored for the caller's workspace, its credential sealed and tested once (audited `connection.created`, `connection.tested`). `auth_method` `token` pastes a token (GitHub), or an email, a site and an API token (Jira); `app_install` takes a GitHub App `installation_id`. The credential is never returned. 400 for a bad name, label or credential, or one the service refuses (`credential_rejected`); 409 `conflict` (the name is taken), `limit_reached` or the secrets gates (`secrets_disabled`, `real_secret_refused`); 502 when the service could not be reached (`upstream_failed`)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/connections/flows/{id}": {
+      "delete": {
+        "operationId": "cancelConnectionFlow",
+        "parameters": [
+          {
+            "description": "The flow's id, `cf_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountsDeleted"
+                }
+              }
+            },
+            "description": "The sign-in cancelled and forgotten; Core stops polling. 404 for anyone else's or one that is gone"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "get": {
+        "operationId": "getConnectionFlow",
+        "parameters": [
+          {
+            "description": "The flow's id, `cf_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionFlow"
+                }
+              }
+            },
+            "description": "The sign-in's live step: `waiting` (the person acts in the browser), `approved` (a credential came; being stored and tested), `choose_site` (Jira, several sites: `sites`), `connected` (`connection`, `identity`), `expired`, `denied`, `failed` (`error_code`, `error_message`: a plain sentence with the fix). A finished flow is kept for five minutes. 404 for another user's or device's flow and one that is gone"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/connections/flows/{id}/callback": {
+      "post": {
+        "operationId": "connectionFlowCallback",
+        "parameters": [
+          {
+            "description": "The flow's id, `cf_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectionFlowCallback"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionFlow"
+                }
+              }
+            },
+            "description": "What the Mac app's loopback listener received for an Atlassian sign-in: Core exchanges the `code` (its own PKCE verifier, never sent out), reads the sites and, with one, connects it; with several the flow waits at `choose_site`. The result is the flow's new step (a failure is `failed`). 400 when `state` is not the one this flow started with (the flow stays as it was); 409 when the flow is not waiting for a redirect (already handled, over, or a GitHub flow); 404 for anyone else's flow"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/connections/flows/{id}/choose": {
+      "post": {
+        "operationId": "chooseConnectionSite",
+        "parameters": [
+          {
+            "description": "The flow's id, `cf_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectionFlowChoice"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionFlow"
+                }
+              }
+            },
+            "description": "The Jira site picked at `choose_site`: exactly one connection is made and the tokens are dropped. 400 for a site that is not a choice, 409 when the flow is not at `choose_site`, 404 for anyone else's flow"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/connections/start": {
+      "post": {
+        "operationId": "startConnectionFlow",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartConnectionFlow"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionFlow"
+                }
+              }
+            },
+            "description": "A sign-in begun, held in Core: GitHub's device flow returns `user_code`, `verification_uri` and `interval` (Core polls GitHub itself, so the person can close the window); Atlassian returns `authorize_url` (the Mac app opens it, catches the redirect on 127.0.0.1 and posts `code` and `state` to `connectionFlowCallback`) and `state`. With `connection`, the credential of that connection is replaced (CN5, sign in again). A flow ends in ONE connection. 409 `not_configured` while Ainkrad's app for the kind is not set up (see `listConnectionKinds`), 409 `limit_reached` (4 waiting per user), 502 when GitHub could not give a code, 400 for a bad name, label or kind, 404 for another workspace's connection"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/connections/{id}": {
+      "delete": {
+        "operationId": "deleteConnection",
+        "parameters": [
+          {
+            "description": "The connection's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountsDeleted"
+                }
+              }
+            },
+            "description": "Deleted with its grants and its credential, which is wiped (audited `connection.deleted`). 409 `conflict` while it is its kind's default: set another default first (`setConnectionDefault`) or clear it; 404 for another workspace's"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      },
+      "get": {
+        "operationId": "getConnection",
+        "parameters": [
+          {
+            "description": "The connection's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            },
+            "description": "One connection; 404 for another workspace's, and for one a non-admin device is not granted"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "patch": {
+        "operationId": "updateConnection",
+        "parameters": [
+          {
+            "description": "The connection's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateConnection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            },
+            "description": "Renamed, relabelled, switched off or on (audited `connection.renamed`, `.updated`, `.disabled`, `.enabled`). Switching on also clears a confirmed auth failure: the next test decides again. 400 for no field or a bad one, 409 when the name is taken, 404 for another workspace's"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/connections/{id}/activity": {
+      "get": {
+        "operationId": "listConnectionActivity",
+        "parameters": [
+          {
+            "description": "The connection's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Uses with a `seq` below this; absent, from the newest.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ConnectionUse"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "What agents and features did with the connection, newest first (at most `limit`, 50 by default, 200 at most): the operation, the result class, a refusal code, the session and agent. No payload, no secret, ever. 404 for another workspace's"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/connections/{id}/credential": {
+      "put": {
+        "operationId": "replaceConnectionCredential",
+        "parameters": [
+          {
+            "description": "The connection's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewConnectionCredential"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            },
+            "description": "The credential replaced (audited `connection.secret_replaced`) and tested; a pending or confirmed auth failure is cleared first, the test then decides. For a `token` connection a token (and for Jira an email and site); for an `app_install` one an `installation_id`. A connection made by signing in is refreshed by signing in again (`startConnectionFlow` with `connection`), not here (400). Never returned. 404 for another workspace's"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/connections/{id}/grants": {
+      "get": {
+        "operationId": "listConnectionGrants",
+        "parameters": [
+          {
+            "description": "The connection's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ConnectionGrant"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Who may use the connection, with their capabilities and resource limits; 404 for another workspace's"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "put": {
+        "operationId": "setConnectionGrant",
+        "parameters": [
+          {
+            "description": "The connection's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetConnectionGrant"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionGrant"
+                }
+              }
+            },
+            "description": "That grantee's grant, replaced (one per grantee; audited `connection.granted`, naming any write capabilities). 400 for a grantee that is not a user of the workspace, a role (`admin`, `member`) or an agent id, a capability or limit key the kind does not have, a bad limit value (`owner/name`, `owner/*`, a project key; never `*` alone or `..`), or an empty capability list; 409 `limit_reached` (32 per connection); 404 for another workspace's connection"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/connections/{id}/grants/{grantee_kind}/{grantee}": {
+      "delete": {
+        "operationId": "revokeConnectionGrant",
+        "parameters": [
+          {
+            "description": "The connection's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`user`, `role` or `agent`",
+            "in": "path",
+            "name": "grantee_kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "A user id, a role or an agent id",
+            "in": "path",
+            "name": "grantee",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountsDeleted"
+                }
+              }
+            },
+            "description": "The grantee's grant taken away (audited `connection.grant_revoked`); a call in flight is refused at once. 404 when there was none, or for another workspace's connection"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/connections/{id}/test": {
+      "post": {
+        "operationId": "testConnection",
+        "parameters": [
+          {
+            "description": "The connection's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            },
+            "description": "Tested now (audited `connection.tested`, with the result class only): Jira renews its token first, a GitHub App connection mints a new one when the old is near its end. A pending auth failure (`state_reason` `auth_suspected`) is decided by this: a service that refuses the credential disables the connection (`auth_failed`: sign in again), one that accepts clears it. The connection as the test left it; 404 for another workspace's"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
         "x-ainkrad-scope": "admin"
       }
     },

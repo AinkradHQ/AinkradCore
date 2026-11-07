@@ -131,7 +131,15 @@
 /// 45: the connection broker (C4): the `agent.tools` op in the runner schema (`ToolsPoll`, `ToolBatch`,
 ///    `ToolCall`, `ToolResult`, `ConnTool`); the `connection.*` audit actions in `x-audit-actions`
 ///    (`connection.used` is written by the broker); no operation changes.
-pub const API_MINOR: u32 = 45;
+/// 46: the connections API (C5): `listConnectionKinds`, `listConnections`, `getConnection` (`read`),
+///    `createConnection`, `updateConnection`, `deleteConnection`, `replaceConnectionCredential`,
+///    `testConnection`, `listConnectionActivity`, `startConnectionFlow`, `getConnectionFlow`,
+///    `cancelConnectionFlow`, `connectionFlowCallback`, `chooseConnectionSite`, `listConnectionGrants`,
+///    `setConnectionGrant`, `revokeConnectionGrant`, `listConnectionDefaults`, `setConnectionDefault`,
+///    `clearConnectionDefault`, `getConnectionApp`, `setConnectionApp` (`admin`, every write destructive);
+///    `createAgentSession` takes `connection_access` (`admin`); the `connection.health` event; the
+///    `connection.app_set` audit action.
+pub const API_MINOR: u32 = 46;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
