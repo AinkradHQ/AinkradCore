@@ -20,6 +20,7 @@ use std::time::Duration;
 use super::addr::public;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::{Client, Url};
+use zeroize::Zeroizing;
 
 /// The hosts a request may name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,14 +54,15 @@ impl Method {
 #[derive(Clone, PartialEq, Eq)]
 pub struct Body {
     content_type: &'static str,
-    bytes: Vec<u8>,
+    /// Wiped on drop: a form body carries a device code.
+    bytes: Zeroizing<Vec<u8>>,
 }
 
 impl Body {
     pub(super) fn json(bytes: Vec<u8>) -> Self {
         Self {
             content_type: "application/json",
-            bytes,
+            bytes: Zeroizing::new(bytes),
         }
     }
 
@@ -109,7 +111,7 @@ impl Req {
             .join("&");
         let body = Body {
             content_type: "application/x-www-form-urlencoded",
-            bytes: bytes.into_bytes(),
+            bytes: Zeroizing::new(bytes.into_bytes()),
         };
         Self::new(host, Method::Post, path.to_owned(), Some(body))
     }
@@ -149,7 +151,8 @@ pub struct Resp {
     pub rate: Rate,
     /// `X-OAuth-Scopes`: what a classic token may do.
     pub scopes: Option<String>,
-    pub body: Vec<u8>,
+    /// Wiped on drop: a token exchange answers with a token.
+    pub body: Zeroizing<Vec<u8>>,
 }
 
 impl fmt::Debug for Resp {
@@ -341,7 +344,7 @@ impl Transport {
         if let Some(b) = &req.body {
             rb = rb
                 .header("content-type", b.content_type)
-                .body(b.bytes.clone());
+                .body(b.bytes.to_vec());
         }
         let mut resp = rb.send().await.map_err(|e| net(&e))?;
         let h = resp.headers();
@@ -371,7 +374,7 @@ impl Transport {
             status,
             rate,
             scopes,
-            body,
+            body: Zeroizing::new(body),
         })
     }
 }

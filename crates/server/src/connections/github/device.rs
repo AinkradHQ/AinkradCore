@@ -129,13 +129,13 @@ impl fmt::Debug for Pending {
 
 #[derive(Deserialize, Default)]
 struct Reply {
-    device_code: Option<String>,
+    device_code: Option<Zeroizing<String>>,
     user_code: Option<String>,
     verification_uri: Option<String>,
     expires_in: Option<u64>,
     interval: Option<u64>,
-    access_token: Option<String>,
-    refresh_token: Option<String>,
+    access_token: Option<Zeroizing<String>>,
+    refresh_token: Option<Zeroizing<String>>,
     scope: Option<String>,
     error: Option<String>,
 }
@@ -204,7 +204,7 @@ pub async fn start(
     let interval = r.interval.unwrap_or(5).clamp(MIN_INTERVAL, MAX_INTERVAL);
     let expires_in = expires_in.min(3600);
     let pending = Pending {
-        device_code: Zeroizing::new(code),
+        device_code: code,
         interval: Duration::from_secs(interval),
         next_at: now + Duration::from_secs(interval),
         expires_at: now + Duration::from_secs(expires_in),
@@ -297,7 +297,11 @@ impl Pending {
             .expires_in
             .filter(|n| *n > 0)
             .map(|n| iso_of_unix(unix_now().saturating_add(i64::try_from(n).unwrap_or(0))));
-        match Material::new(token, r.refresh_token.as_deref(), at.as_deref()) {
+        match Material::new(
+            token,
+            r.refresh_token.as_ref().map(|t| t.as_str()),
+            at.as_deref(),
+        ) {
             Some(material) => Step::Granted(Granted {
                 material,
                 scopes: r

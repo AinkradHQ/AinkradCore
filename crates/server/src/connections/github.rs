@@ -123,6 +123,8 @@ pub const GITHUB: Descriptor = Descriptor {
     }],
     // The redactor's name for `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` and `github_pat_` tokens.
     token_shapes: &["github_token"],
+    // `github_token` also matches `ghr_` refresh tokens; those are never the access token.
+    refresh_prefixes: &["ghr_"],
     // Every GitHub operation carries a repository, so none judges its own limits.
     self_limited: &[],
 };
@@ -190,7 +192,7 @@ impl Github {
         outcome::classify(&resp)?;
         Ok(Done {
             status: resp.status,
-            body: scrub(resp.body, &[m.access(), m.refresh().unwrap_or("")]),
+            body: scrub(resp.body.to_vec(), &[m.access(), m.refresh().unwrap_or("")]),
             rate: resp.rate,
         })
     }

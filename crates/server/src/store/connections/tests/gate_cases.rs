@@ -79,6 +79,8 @@ async fn on_it_still_refuses_anything_that_is_not_one_own_token() {
         one(&format!("{a} {b}")),
         one(&format!("{a}{b}")),
         one(&format!("{a}\u{2028}{b}")),
+        // GitHub's refresh token shares the shape but is never an access token.
+        one(&own("ghr_")),
         // An own token as the refresh token, or beside a real access token.
         Material::new(SECRET, Some(&a), None).unwrap(),
         Material::new(&a, Some(&b), None).unwrap(),

@@ -157,7 +157,7 @@ mod tests {
             status,
             rate,
             scopes: None,
-            body: body.as_bytes().to_vec(),
+            body: zeroize::Zeroizing::new(body.as_bytes().to_vec()),
         }
     }
 

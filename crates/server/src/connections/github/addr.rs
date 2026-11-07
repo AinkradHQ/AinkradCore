@@ -40,6 +40,8 @@ fn public_v6(a: Ipv6Addr) -> bool {
         || (s[0] & 0xffc0) == 0xfe80
         || (s[0] & 0xffc0) == 0xfec0
         || s[..6] == [0; 6]
+        // ::ffff:0:0:0/96, IPv4-translated (SIIT).
+        || (s[..4] == [0; 4] && s[4] == 0xffff && s[5] == 0)
         || (s[0] == 0x2001 && s[1] == 0)
         || (s[0] == 0x2001 && s[1] == 0x0db8)
         || s[0] == 0x2002
@@ -75,6 +77,8 @@ mod tests {
             IpAddr::V6("2001:0:4136:e378:8000:63bf:3fff:fdd2".parse().unwrap()),
             IpAddr::V6("fec0::1".parse().unwrap()),
             v4(192, 88, 99, 1),
+            IpAddr::V6("::ffff:0:7f00:1".parse().unwrap()),
+            IpAddr::V6("::ffff:0:8c52:7005".parse().unwrap()),
         ] {
             assert!(!public(ip), "{ip}");
         }

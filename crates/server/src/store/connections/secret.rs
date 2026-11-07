@@ -8,6 +8,7 @@ use sqlx::{Row, SqliteConnection};
 use zeroize::Zeroizing;
 
 use super::{Connection, Who, audit, find, refused};
+use crate::connections::adapter::Descriptor;
 use crate::connections::material::Material;
 use crate::ops::secretbox::SecretBox;
 use crate::store::secrets::Error;
@@ -99,7 +100,7 @@ fn unavailable<T>() -> Result<T, Error> {
 pub(super) async fn gate(
     conn: &mut SqliteConnection,
     m: &Material,
-    shapes: &[&str],
+    kind: Option<&Descriptor>,
 ) -> Result<(), Error> {
     let mode = enabled(conn).await?;
     if mode < 2 {
@@ -108,11 +109,14 @@ pub(super) async fn gate(
         let refresh_real = m.refresh().is_some_and(real);
         if real(m.access()) || refresh_real {
             let admitted = !refresh_real
-                && !shapes.is_empty()
+                && kind
+                    .is_some_and(|d| !d.refresh_prefixes.iter().any(|p| m.access().starts_with(p)))
                 && value_in(conn, Key::SecretsConnections, Scope::Server).await? == 1
-                && shapes
-                    .iter()
-                    .any(|s| single_own_key(&redactor, m.access(), s));
+                && kind.is_some_and(|d| {
+                    d.token_shapes
+                        .iter()
+                        .any(|s| single_own_key(&redactor, m.access(), s))
+                });
             if !admitted {
                 return refused(
                     "real_secret_refused",
@@ -175,10 +179,8 @@ pub async fn replace(
             .bind(who.workspace)
             .fetch_optional(&mut *tx)
             .await?;
-    let shapes = kind
-        .and_then(|k| crate::connections::adapter::builtin_descriptor(&k))
-        .map_or(&[][..], |d| d.token_shapes);
-    gate(&mut tx, m, shapes).await?;
+    let descriptor = kind.and_then(|k| crate::connections::adapter::builtin_descriptor(&k));
+    gate(&mut tx, m, descriptor).await?;
     let c = find(&mut tx, who.workspace, id).await?;
     let nonce: String = sqlx::query_scalar("SELECT nonce FROM core_connections WHERE id = ?")
         .bind(id)

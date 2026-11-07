@@ -60,6 +60,9 @@ pub struct Descriptor {
     /// credentials look like. Data only in C1; C2 reads it (with `secrets.connections`) to admit
     /// exactly one such token as a connection credential.
     pub token_shapes: &'static [&'static str],
+    /// Prefixes of tokens that look like this kind's shape but are never an access token (a
+    /// refresh token): refused in the access slot even when the shape matches.
+    pub refresh_prefixes: &'static [&'static str],
     /// Operations that enforce the resource limit themselves (a Jira search, a project list):
     /// they may be asked with no resource under a limited grant, and the adapter is handed the
     /// effective limits (`Resolved::limits`). Every other operation under a limited grant needs
@@ -175,6 +178,13 @@ impl Descriptor {
         }
         if let Some(t) = self.token_shapes.iter().find(|t| !ident(t, 40)) {
             return Some(format!("{kind}: token shape {t:?} is malformed"));
+        }
+        if let Some(p) = self
+            .refresh_prefixes
+            .iter()
+            .find(|p| p.is_empty() || p.len() > 16 || !p.is_ascii())
+        {
+            return Some(format!("{kind}: refresh prefix {p:?} is malformed"));
         }
         for (i, l) in self.limits.iter().enumerate() {
             if !ident(l.key, 32) || self.limits[..i].iter().any(|o| o.key == l.key) {

@@ -28,7 +28,7 @@ fn resp(status: u16) -> Resp {
         status,
         rate: Rate::default(),
         scopes: None,
-        body: Vec::new(),
+        body: zeroize::Zeroizing::new(Vec::new()),
     }
 }
 
@@ -211,10 +211,67 @@ fn a_pull_request_head_is_a_branch_of_this_repository() {
         json!({"head": ""}),
         json!({"head": 3}),
         json!({"base": "main"}),
+    ] {
+        assert_eq!(pr(bad.clone()).unwrap_err(), BuildError::BadHead, "{bad}");
+    }
+    for extra in [
         json!({"head": "feature", "head_repo": "evil/web"}),
         json!({"head": "acme:feature", "head_repo": "acme/web"}),
     ] {
-        assert_eq!(pr(bad.clone()).unwrap_err(), BuildError::BadHead, "{bad}");
+        assert_eq!(pr(extra).unwrap_err(), BuildError::UnknownField);
+    }
+}
+
+// Delta review 1: a body carries only the fields its operation names.
+#[test]
+fn a_body_carries_only_the_fields_its_operation_names() {
+    let pr =
+        |b: serde_json::Value| build("github.create_pr", &json!({"repo": "acme/web", "body": b}));
+    // `issue` would turn an existing issue into a pull request.
+    let e = pr(json!({"issue": 42, "head": "feature", "base": "main"})).unwrap_err();
+    assert_eq!(e, BuildError::UnknownField);
+    let all = json!({"title": "t", "head": "feature", "base": "main", "body": "b", "draft": true, "maintainer_can_modify": false});
+    assert!(pr(all).is_ok());
+    // Every operation that sends a body refuses a field it does not list.
+    for op in crate::connections::github::ops::OPS
+        .iter()
+        .filter(|o| o.method != crate::connections::github::http::Method::Get)
+    {
+        let input = json!({"repo": "acme/web", "number": 5, "path": "a.txt", "body": {"zzz": 1, "ref": "refs/heads/x", "head": "x"}});
+        assert_eq!(
+            build(op.name, &input).unwrap_err(),
+            BuildError::UnknownField,
+            "{}",
+            op.name
+        );
+    }
+    for (op, field) in [
+        ("github.update_issue", "pull_request"),
+        ("github.comment_issue", "labels"),
+        ("github.update_pr", "head"),
+        ("github.put_file", "committer"),
+        ("github.create_branch", "force"),
+    ] {
+        let input = json!({"repo": "acme/web", "number": 5, "path": "a.txt", "body": {field: 1}});
+        assert_eq!(
+            build(op, &input).unwrap_err(),
+            BuildError::UnknownField,
+            "{op}"
+        );
+    }
+    let ok = json!({"repo": "acme/web", "number": 5, "body": {"state": "closed", "title": "t"}});
+    assert!(build("github.update_issue", &ok).is_ok());
+}
+
+// Delta review 3: the registry's descriptors and the built-in table cannot drift apart.
+#[test]
+fn every_builtin_kind_is_in_the_builtin_table_with_the_same_shapes() {
+    let reg = crate::connections::adapter::Registry::builtin();
+    for d in reg.descriptors() {
+        let t = crate::connections::adapter::builtin_descriptor(d.kind)
+            .unwrap_or_else(|| panic!("{} is not in builtin_descriptor", d.kind));
+        assert_eq!(t.token_shapes, d.token_shapes, "{}", d.kind);
+        assert_eq!(t.refresh_prefixes, d.refresh_prefixes, "{}", d.kind);
     }
 }
 

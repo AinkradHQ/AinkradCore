@@ -87,8 +87,43 @@ fn branch_ok(s: &str) -> bool {
             .all(|b| b.is_ascii_graphic() && !b"~^:?*[\\".contains(&b))
 }
 
+/// The fields each operation's body may carry; nothing else passes through. (GitHub's `issue`
+/// field on a pull request create would turn an existing issue into a pull request, so an
+/// unknown field is never "probably harmless".)
+fn fields(operation: &str) -> &'static [&'static str] {
+    match operation {
+        "github.create_issue" => &["title", "body", "assignees", "labels", "milestone"],
+        "github.update_issue" => &[
+            "title",
+            "body",
+            "state",
+            "state_reason",
+            "assignees",
+            "labels",
+            "milestone",
+        ],
+        "github.comment_issue" | "github.comment_pr" => &["body"],
+        "github.create_pr" => &[
+            "title",
+            "head",
+            "base",
+            "body",
+            "draft",
+            "maintainer_can_modify",
+        ],
+        "github.update_pr" => &["title", "body", "state", "base", "maintainer_can_modify"],
+        "github.create_branch" => &["ref", "sha"],
+        "github.put_file" => &["message", "content", "sha", "branch"],
+        _ => &[],
+    }
+}
+
 /// The body rules of the operations that need them; `owner` is the repository's owner.
 pub fn body(operation: &str, owner: &str, b: &Map<String, Value>) -> Result<(), BuildError> {
+    let allowed = fields(operation);
+    if b.keys().any(|k| !allowed.contains(&k.as_str())) {
+        return Err(BuildError::UnknownField);
+    }
     match operation {
         "github.create_branch" => {
             let name = b

@@ -50,6 +50,7 @@ pub const FAKE: Descriptor = Descriptor {
         help: "Only these projects.",
     }],
     token_shapes: &["fake_token"],
+    refresh_prefixes: &[],
     self_limited: &["fake.list_items"],
 };
 
@@ -73,6 +74,7 @@ pub const OTHER: Descriptor = Descriptor {
     hosts: &["api.other.test"],
     limits: &[],
     token_shapes: &[],
+    refresh_prefixes: &[],
     self_limited: &[],
 };
 
