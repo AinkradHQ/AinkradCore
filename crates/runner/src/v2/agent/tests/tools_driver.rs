@@ -46,6 +46,9 @@ async fn the_capability_is_listed_only_when_the_sandbox_gives_it_and_the_op_foll
     let _ = std::fs::remove_dir_all(root2);
 }
 
+// Linux only, as the gateway's tests are: a macOS temp dir is too long for a socket path (the
+// driver then runs the session without the tools socket, as it should).
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_poll_serves_a_running_session_only_and_the_socket_goes_with_the_session() {
     let (root, config) = dirs("tools-life");
