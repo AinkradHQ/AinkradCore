@@ -410,7 +410,7 @@ async fn a_poll_in_flight_across_the_end_makes_no_state_and_ends_at_once() {
     let started = tokio::time::Instant::now();
     let h = {
         let t = t.clone();
-        tokio::spawn(async move { t.poll_live(&p, Duration::from_secs(5)).await })
+        tokio::spawn(async move { t.poll_live(&p, Duration::from_secs(5)).await.unwrap() })
     };
     tokio::time::sleep(Duration::from_millis(100)).await;
     t.forget("as_a");
@@ -430,7 +430,15 @@ async fn a_poll_in_flight_across_the_end_makes_no_state_and_ends_at_once() {
         wait_ms: Some(100),
         ..poll(0, vec![], Some(vec![tool("github.get_issue")]))
     };
-    t.poll_live(&p, Duration::from_secs(1)).await;
+    let started = tokio::time::Instant::now();
+    assert!(
+        t.poll_live(&p, Duration::from_secs(1)).await.is_none(),
+        "taken before it was open"
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(80),
+        "it waited for a session that is not open"
+    );
     assert!(!t.holds("as_z"));
     assert!(t.list("as_z").is_empty());
 }

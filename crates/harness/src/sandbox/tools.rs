@@ -9,7 +9,7 @@
 use std::ffi::OsStr;
 use std::io;
 use std::os::unix::fs::FileTypeExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tokio::process::Command;
 
@@ -60,14 +60,44 @@ pub(super) fn apply<'a>(
     only_own_sockets(c, spec)
 }
 
+/// `path` with every symlink resolved. A tail that does not exist yet (a state dir with no `agents/`
+/// made so far) is kept as written after its longest existing ancestor is resolved; a `..` in that
+/// tail cannot be judged, and refuses.
+fn resolve(path: &Path) -> io::Result<PathBuf> {
+    let mut tail: Vec<&OsStr> = Vec::new();
+    let mut at = path;
+    loop {
+        match at.canonicalize() {
+            Ok(mut real) => {
+                real.extend(tail.iter().rev());
+                return Ok(real);
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                let (Some(name), Some(up)) = (at.file_name(), at.parent()) else {
+                    return Err(e);
+                };
+                tail.push(name);
+                at = up;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+fn refused() -> io::Error {
+    io::Error::other("a sandbox path would expose the sockets of other sessions")
+}
+
 /// Refuses the sandbox when a bind could hand it another session's sockets (tools or gateway) in the
 /// runner's `agents/` dir: a bound path that is, or contains, the agents dir (a harness binary kept
 /// in a folder that holds the state dir: `program_dirs` binds that folder whole, and a read-only bind
 /// does not stop `connect()` on a unix socket), or one inside it but outside this session's own
 /// directory. `c` holds every bind by now; the session's own socket files and the shim are exempt.
 /// The agents dir is `<AINKRAD_SANDBOX_STATE>/agents`, else the one above the tools socket's
-/// directory. It is the same builder the start-up self-test uses, so a layout that fails here also
-/// leaves the capability off.
+/// directory (the gateway socket's layout is not assumed). Every path is compared with its symlinks
+/// resolved (a state path given through a symlink or with `..`, a harness folder that is a symlink),
+/// and a path that cannot be resolved refuses the sandbox. It is the same builder the start-up
+/// self-test uses, so a layout that fails here also leaves the capability off.
 fn only_own_sockets(c: &Command, spec: &Spec) -> io::Result<()> {
     let socks: Vec<&Path> = ["AINKRAD_SANDBOX_TOOLS_SOCK", "AINKRAD_SANDBOX_GW_SOCK"]
         .iter()
@@ -76,34 +106,41 @@ fn only_own_sockets(c: &Command, spec: &Spec) -> io::Result<()> {
         .collect();
     let state = super::env(spec, "AINKRAD_SANDBOX_STATE");
     let agents = if !state.is_empty() {
-        Path::new(state).join("agents")
+        resolve(&Path::new(state).join("agents"))?
     } else if let Some(own) = Some(Path::new(super::env(spec, SLOT_SOCK)))
         .filter(|s| !s.as_os_str().is_empty())
         .and_then(|s| s.parent().and_then(Path::parent))
     {
         // Without the state dir the layout is the tools socket's: `<agents>/<session>/tools.sock`.
-        // (The gateway socket's layout is not assumed.)
-        own.to_owned()
+        resolve(own)?
     } else {
         return Ok(());
     };
-    let owns: Vec<&Path> = socks.iter().filter_map(|s| s.parent()).collect();
-    let fwd = Path::new(super::env(spec, SLOT_FWD));
+    let real = |p: &Path| p.canonicalize().map_err(|_| refused());
+    let sockets = socks
+        .iter()
+        .map(|s| real(s))
+        .collect::<io::Result<Vec<_>>>()?;
+    let owns: Vec<&Path> = sockets.iter().filter_map(|s| s.parent()).collect();
+    let fwd_arg = super::env(spec, SLOT_FWD);
+    let fwd = if fwd_arg.is_empty() {
+        None
+    } else {
+        Some(real(Path::new(fwd_arg))?)
+    };
     let args: Vec<&OsStr> = c.as_std().get_args().collect();
     for pair in args.windows(2) {
         if pair[0] != "--bind" && pair[0] != "--ro-bind" {
             continue;
         }
-        let src = Path::new(pair[1]);
-        if socks.contains(&src) || src == fwd {
+        let src = real(Path::new(pair[1]))?;
+        if sockets.contains(&src) || fwd.as_ref() == Some(&src) {
             continue;
         }
-        let holds = agents.starts_with(src);
+        let holds = agents.starts_with(&src);
         let inside_other = src.starts_with(&agents) && !owns.iter().any(|o| src.starts_with(o));
         if holds || inside_other {
-            return Err(io::Error::other(
-                "a sandbox path would expose the sockets of other sessions",
-            ));
+            return Err(refused());
         }
     }
     Ok(())

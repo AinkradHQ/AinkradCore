@@ -14,8 +14,8 @@
 //! reply, then the connection is closed, it cannot be resynchronised), a line that is started must
 //! be finished within [`LINE_DEADLINE`], at most [`PER_CONN`] requests of a connection are
 //! worked at once (more are refused at once, `-32001`), a session has at most [`PER_SESSION`]
-//! connections and the runner [`GLOBAL`] (taken before a connection is accepted, so at the cap
-//! listeners stop accepting; a connection with no request for [`IDLE`] is closed, which frees its slot), a peer that does not take an answer within
+//! connections and the runner [`GLOBAL`] (taken as a connection is accepted, so at the cap a
+//! listener waits; a connection with no request for [`IDLE`] is closed, which frees its slot), a peer that does not take an answer within
 //! [`WRITE_TIMEOUT`] loses the WHOLE connection (its reading stops and its calls still in flight
 //! are dropped, which takes the ones not yet sent out of the queue), and a call's wait, result
 //! size and what is held per session and per runner are bounded by `Tools` itself.
@@ -142,8 +142,8 @@ struct Tuning {
     write: Duration,
     line: Duration,
     idle: Duration,
-    /// The runner-wide connection slots, taken BEFORE a connection is accepted: at the cap the
-    /// listeners stop accepting (the peers wait in the backlog) instead of accepting to close.
+    /// The runner-wide connection slots, taken right after a connection is accepted: at the cap the
+    /// listener waits for one (the peers queue in the backlog) instead of accepting to close.
     global: Arc<Semaphore>,
 }
 
@@ -176,9 +176,6 @@ async fn accept_loop<A: Accept>(
     let mut conns = JoinSet::new();
     let mut failures = 0u32;
     loop {
-        let Ok(global) = tuning.global.clone().acquire_owned().await else {
-            return;
-        };
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok(client) => {
@@ -186,6 +183,12 @@ async fn accept_loop<A: Accept>(
                     // Over a limit: closed at once, nothing queued.
                     let Ok(mine) = mine.clone().try_acquire_owned() else {
                         continue;
+                    };
+                    // At the runner-wide cap the accepted peer waits here, and this loop with it:
+                    // the rest queue in the backlog, nothing is accepted to be closed. (The slot is
+                    // taken after the accept, not before, so an idle listener holds none.)
+                    let Ok(global) = tuning.global.clone().acquire_owned().await else {
+                        return;
                     };
                     let (tools, session, tuning) = (tools.clone(), session.clone(), tuning.clone());
                     conns.spawn(async move {

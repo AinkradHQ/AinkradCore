@@ -280,10 +280,18 @@ impl Tools {
     }
 
     /// The Core's `agent.tools` poll for a session that was opened (see the module docs). It never
-    /// makes state: a session that is not open, or was forgotten while the poll waited, gets an
-    /// empty answer (after the wait, in the first case) and nothing is left behind.
-    pub async fn poll_live(&self, req: &ToolsPoll, max_wait: Duration) -> ToolBatch {
-        self.poll_with(req, max_wait, false).await
+    /// makes state. `None` when the session is not open (yet): the poll, tool list included, is
+    /// not taken, and the caller says so, so the Core sends it again. One forgotten while the poll
+    /// waited gets an empty answer at once.
+    pub async fn poll_live(&self, req: &ToolsPoll, max_wait: Duration) -> Option<ToolBatch> {
+        let open = {
+            let all = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            all.contains_key(&req.session)
+        };
+        if !open {
+            return None;
+        }
+        Some(self.poll_with(req, max_wait, false).await)
     }
 
     /// `poll_live`, but the first pass makes the session's state if there is none (the Core's first

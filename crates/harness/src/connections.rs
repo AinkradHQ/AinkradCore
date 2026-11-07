@@ -72,20 +72,15 @@ pub fn add(harness: &str, config: Option<Value>, exe: &str, sock: &str) -> Optio
     Some(config)
 }
 
-/// The tool part of `tool` as a harness names it in an approval request when it is one of this
-/// server's (Claude `mcp__ainkrad-connections__<tool>`, OpenCode `<server>_<tool>` with the dashes
-/// as underscores or kept), the operation with `.` as `_` (`github_get_issue`); `None` for any
-/// other name. A name alone proves nothing: the runner accepts it only for a session that has the
-/// tools slot and only when the Core listed that tool for the session (`Tools::knows`).
+/// The tool part of `tool` when it is named under this server's Claude namespace
+/// (`mcp__ainkrad-connections__<tool>`), the operation with `.` as `_` (`github_get_issue`); `None`
+/// for any other name. Only the exact namespace, with its double underscores, is taken: a looser
+/// form (`ainkrad-connections_<tool>`, as OpenCode joins names) is a name any server could choose, so
+/// it goes through the normal policy. A name alone proves nothing, either: the runner accepts it only
+/// for a session that has the tools slot and only when the Core listed that tool for the session
+/// (`Tools::knows`).
 pub fn tool_suffix(tool: &str) -> Option<&str> {
-    [
-        "mcp__ainkrad-connections__",
-        "ainkrad-connections_",
-        "ainkrad_connections_",
-    ]
-    .iter()
-    .find_map(|p| tool.strip_prefix(p))
-    .filter(|t| {
+    tool.strip_prefix("mcp__ainkrad-connections__").filter(|t| {
         !t.is_empty()
             && t.bytes()
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
@@ -186,11 +181,9 @@ mod tests {
             tool_suffix("mcp__ainkrad-connections__github_get_issue"),
             Some("github_get_issue")
         );
-        assert_eq!(
-            tool_suffix("ainkrad-connections_github_get_issue"),
-            Some("github_get_issue")
-        );
         for no in [
+            "ainkrad-connections_github_get_issue",
+            "ainkrad_connections_github_get_issue",
             "mcp__citadel__x",
             "mcp__ainkrad-connectionsX__x",
             "mcp__ainkrad-connections__",

@@ -195,7 +195,9 @@ async fn a_connection_tool_is_trusted_only_with_the_slot_and_only_when_listed() 
     ];
     let name = "mcp__ainkrad-connections__github_get_issue";
     assert!(ex.connection_call(&job, &slot, name));
-    assert!(ex.connection_call(&job, &slot, "ainkrad-connections_github_get_issue"));
+    // The looser forms another server could pick are not taken.
+    assert!(!ex.connection_call(&job, &slot, "ainkrad-connections_github_get_issue"));
+    assert!(!ex.connection_call(&job, &slot, "ainkrad_connections_github_get_issue"));
     // No slot: a name alone is nothing. Not listed, or another server, or another session: no.
     assert!(!ex.connection_call(&job, &[], name));
     assert!(!ex.connection_call(&job, &slot, "mcp__ainkrad-connections__github_drop_repo"));

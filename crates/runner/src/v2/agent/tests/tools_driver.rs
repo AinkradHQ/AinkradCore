@@ -96,3 +96,39 @@ async fn a_new_driver_removes_a_socket_a_crashed_runner_left() {
     assert!(!sock.exists(), "a stale socket survived the restart");
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// A poll that reaches a running session before its socket (and so its tool state) is open is not
+/// taken: the Core is told to poll again, and the list it carried is not lost to an empty `Ok`.
+#[tokio::test]
+async fn a_poll_before_the_socket_is_open_is_not_ready_and_not_taken() {
+    let (root, mut config) = dirs("tools-early");
+    // A state dir too deep for a socket path: the socket cannot open, so the tool state never does,
+    // while the session itself runs (and says so in its transcript).
+    config.dir = root.join("d".repeat(90));
+    let gate = root.join("go");
+    let s = script(&format!(
+        "echo up; while [ ! -e '{}' ]; do sleep 0.05; done",
+        gate.display()
+    ));
+    let d = Arc::new(
+        AgentDriver::new(config, s)
+            .unwrap()
+            .with_sandbox(Arc::new(ToolsCapable)),
+    );
+    d.start(start("as_a", "fake")).unwrap();
+    until("the session runs", || {
+        d.sessions
+            .lock()
+            .unwrap()
+            .get("as_a")
+            .is_some_and(|l| l.meta.state == AgentState::Running)
+    })
+    .await;
+    let mut p = poll("as_a");
+    p.tools = Some(vec![]);
+    let why = d.tools(&p).await.unwrap_err();
+    assert_eq!(why.code, ErrorCode::Busy, "{why:?}");
+    assert!(!d.tools_port().holds("as_a"));
+    std::fs::write(&gate, "").unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}

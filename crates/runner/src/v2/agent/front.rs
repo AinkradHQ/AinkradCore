@@ -27,7 +27,14 @@ impl AgentDriver {
         if !running {
             return Err(no_session());
         }
-        Ok(self.tools.poll_live(req, MAX_WAIT).await)
+        // A session that is running but whose socket is not open yet (its start is still setting up)
+        // has no tool state to hold the list: not ready, and the Core sends the poll again.
+        self.tools.poll_live(req, MAX_WAIT).await.ok_or_else(|| {
+            refuse(
+                ErrorCode::Busy,
+                "the session's connection tools are not ready; poll again",
+            )
+        })
     }
 
     /// Shares `tools` with the harness executor, which checks a connection tool's name against what

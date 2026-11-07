@@ -305,3 +305,78 @@ async fn a_bound_path_that_holds_another_sessions_socket_refuses_the_sandbox() {
     assert!(out.status.success(), "{out:?}");
     let _ = std::fs::remove_dir_all(&away);
 }
+
+/// C4b delta review: the check compares real paths. The state dir given through a symlink, or with
+/// a `..`, or a harness folder that is a symlink to a folder holding the state, must all refuse (the
+/// raw `starts_with` passed the first two), and the plain layout with the harness elsewhere runs.
+#[tokio::test]
+async fn the_check_resolves_symlinks_and_dotdot_before_it_compares() {
+    require_sandbox();
+    let root = scratch("canon");
+    let tools = Arc::new(Tools::default());
+    let state = root.join("state");
+    let (_fa, sa) = session(&state, &tools, "as_aaaa", "github.alpha").await;
+    let (_fb, _sb) = session(&state, &tools, "as_bbbb", "github.beta").await;
+    let spec_for = |state_as_given: &Path| {
+        let mut env: Vec<(String, std::ffi::OsString)> = vec![
+            ("AINKRAD_SANDBOX".into(), "1".into()),
+            ("AINKRAD_SANDBOX_TMP".into(), root.join("tmp").into()),
+            ("AINKRAD_SANDBOX_NETWORK".into(), "deny".into()),
+            ("AINKRAD_SANDBOX_STATE".into(), state_as_given.into()),
+        ];
+        env.extend(
+            sandbox_env(&sa, &exe())
+                .into_iter()
+                .map(|(n, v)| (n, v.into())),
+        );
+        ainkrad_harness::Spec {
+            cwd: root.join("work"),
+            config_dir: root.join("config"),
+            env,
+            ..ainkrad_harness::Spec::default()
+        }
+    };
+    // The harness binary sits in `root`, which holds `state/` (every session's socket).
+    let bad = root.join("claude");
+    std::fs::copy("/bin/true", &bad).unwrap();
+    let pid = std::process::id();
+    let link = PathBuf::from(format!("/tmp/tn-state-link-{pid}"));
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(&state, &link).unwrap();
+    let dotdot = PathBuf::from(format!(
+        "/tmp/../{}",
+        state.display().to_string().trim_start_matches('/')
+    ));
+    let folder_link = PathBuf::from(format!("/tmp/tn-folder-link-{pid}"));
+    let _ = std::fs::remove_file(&folder_link);
+    std::os::unix::fs::symlink(&root, &folder_link).unwrap();
+    for (what, given, program) in [
+        ("a symlinked state path", link.clone(), bad.clone()),
+        ("a state path with ..", dotdot, bad.clone()),
+        (
+            "a harness folder that is a symlink",
+            state.clone(),
+            folder_link.join("claude"),
+        ),
+        ("the plain layout", state.clone(), bad.clone()),
+    ] {
+        let mut cmd = ainkrad_harness::sandbox_command(program.as_os_str(), &[], &spec_for(&given));
+        assert!(
+            cmd.output().await.is_err(),
+            "{what}: a sandbox that binds the state dir ran"
+        );
+    }
+    // Control: the harness binary away from the state dir runs, whichever way the state is spelled.
+    let away = std::env::temp_dir().join(format!("tn-canon-away-{pid}"));
+    std::fs::create_dir_all(&away).unwrap();
+    let good = away.join("claude");
+    std::fs::copy("/bin/true", &good).unwrap();
+    for given in [state.clone(), link.clone()] {
+        let mut cmd = ainkrad_harness::sandbox_command(good.as_os_str(), &[], &spec_for(&given));
+        let out = cmd.output().await.expect("the sandbox was refused");
+        assert!(out.status.success(), "{out:?}");
+    }
+    let _ = std::fs::remove_file(&link);
+    let _ = std::fs::remove_file(&folder_link);
+    let _ = std::fs::remove_dir_all(&away);
+}
