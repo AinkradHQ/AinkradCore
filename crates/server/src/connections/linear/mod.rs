@@ -30,7 +30,7 @@ use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 
 pub use cred::{Cred, issue_identifier, key_material, oauth_material, team_key, unpack};
-pub use http::CallError;
+pub use http::{CallError, Quota};
 pub use oauth::{Finished, FlowError, OAuthApp, SCOPES, Started};
 pub use ops::{Limit, Plan, resource_of};
 
@@ -42,6 +42,14 @@ use crate::ops::secretbox::SecretBox;
 use crate::scheduler::unix_secs;
 use crate::store::connections::verdict::{self, TestOutcome};
 use crate::store::connections::{Connection, Who};
+
+/// The most Linear requests one tool call makes: `list_teams` reads up to 5 pages; the dearest
+/// change is a pre-read, a state check and the write (3). A 401 adds a retry only once, after which
+/// the connection is out of use.
+pub const MAX_REQUESTS_PER_CALL: u32 = 5;
+/// Linear's budget for a personal API key, per user and hour, shared by all of that user's keys
+/// (an OAuth app gets 5,000). Calls times requests per call stays under 60% of it.
+pub const KEY_REQUESTS_PER_HOUR: u32 = 2500;
 
 pub const DESCRIPTOR: Descriptor = Descriptor {
     kind: "linear",
@@ -110,9 +118,9 @@ pub const DESCRIPTOR: Descriptor = Descriptor {
         "linear.list_teams",
         "linear.list_projects",
     ],
-    // Linear allows 2,500 requests an hour per user for API keys (shared by all of that user's keys)
-    // and 5,000 for an OAuth app; this stays under the smaller.
-    hourly_calls: 1500,
+    // Calls, not requests: one call is up to MAX_REQUESTS_PER_CALL requests, and the budget is Linear's
+    // smaller one (the key's), so this is 60% of it spread over the worst call.
+    hourly_calls: KEY_REQUESTS_PER_HOUR * 6 / 10 / MAX_REQUESTS_PER_CALL,
 };
 
 /// What a call needs from the store: the pool and sealer for the credential, and who and when.
@@ -127,8 +135,45 @@ pub struct Ctx<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Viewer {
     pub id: String,
-    /// The workspace's url key (`acme` in `linear.app/acme`).
+    /// The workspace's url key (`acme` in `linear.app/acme`): a label, it can be renamed.
     pub workspace: String,
+    /// The workspace's own id: what identifies it.
+    pub org: String,
+}
+
+/// The identity line of a credential: `<user id> at <url key> (<organization id>)`. The
+/// organization id is the stable part; it is what a re-sign-in or a replaced key is compared by.
+pub fn identity_of(me: &Viewer) -> String {
+    format!("{} at {} ({})", me.id, me.workspace, me.org)
+}
+
+/// The organization id of an identity line [`identity_of`] made.
+pub fn org_of(identity: &str) -> Option<&str> {
+    let (_, tail) = identity.rsplit_once(" (")?;
+    tail.strip_suffix(')').filter(|o| org_id(o))
+}
+
+fn org_id(s: &str) -> bool {
+    (1..=64).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// Whether a credential for organization `org` may stand in for the connection whose stored
+/// identity is `old`. Team keys (`ENG`) exist in every workspace, so a credential from another
+/// one would silently re-aim the team limit at someone else's teams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrgCheck {
+    Same,
+    Different,
+    /// The connection has no stored organization id (never tested, or tested before ids were kept).
+    Unknown,
+}
+
+pub fn check_org(old: Option<&str>, org: &str) -> OrgCheck {
+    match old.and_then(org_of) {
+        Some(o) if o == org => OrgCheck::Same,
+        Some(_) => OrgCheck::Different,
+        None => OrgCheck::Unknown,
+    }
 }
 
 pub struct Linear {
@@ -140,6 +185,8 @@ pub struct Linear {
     locks: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
     /// When each connection's token was last renewed (see `renew::Job::run`).
     recent: renew::Recent,
+    /// The budget Linear last reported per connection, taken by the broker after a call.
+    quotas: Mutex<HashMap<i64, Quota>>,
 }
 
 fn clean(s: &str, max: usize) -> String {
@@ -164,7 +211,26 @@ impl Linear {
             flows: Mutex::default(),
             locks: Mutex::default(),
             recent: Arc::default(),
+            quotas: Mutex::default(),
         }
+    }
+
+    pub(super) fn note_quota(&self, id: i64, q: Quota) {
+        if q == (None, None, None) {
+            return;
+        }
+        let mut map = self.quotas.lock().unwrap_or_else(|e| e.into_inner());
+        if map.len() >= 256 && !map.contains_key(&id) {
+            map.clear();
+        }
+        map.insert(id, q);
+    }
+
+    /// What Linear last said about connection `id`'s budget, once: the broker feeds it to its
+    /// local `connection_busy` refusal, as for GitHub.
+    pub fn quota(&self, id: i64) -> Option<Quota> {
+        let mut map = self.quotas.lock().unwrap_or_else(|e| e.into_inner());
+        map.remove(&id)
     }
 
     /// A copy of the OAuth app in force (it holds no token).
@@ -225,8 +291,9 @@ impl Linear {
                 .map(|s| clean(s, 128))
         };
         let org = v.get("organization").ok_or(CallError::Upstream(200))?;
-        match (text(v, "id"), text(org, "urlKey")) {
-            (Some(id), Some(workspace)) => Ok(Viewer { id, workspace }),
+        let org_id = text(org, "id").filter(|o| self::org_id(o));
+        match (text(v, "id"), text(org, "urlKey"), org_id) {
+            (Some(id), Some(workspace), Some(org)) => Ok(Viewer { id, workspace, org }),
             _ => Err(CallError::Upstream(200)),
         }
     }
@@ -280,8 +347,7 @@ impl KindAdapter for Linear {
         &DESCRIPTOR
     }
 
-    /// `viewer`; the identity is `<user id> at <workspace url key>`: the id is stable, the name is
-    /// only a label. Only a refusal of a token that is not past its expiry is a rejection (it
+    /// `viewer`; the identity is `<user id> at <url key> (<organization id>)` (see [`identity_of`]). Only a refusal of a token that is not past its expiry is a rejection (it
     /// disables the connection): an expired OAuth token, a rate limit, a 5xx or an unreadable
     /// answer say nothing about the credential, so they are inconclusive. Call [`Linear::fresh`]
     /// first so the token is not expired.
@@ -298,7 +364,7 @@ impl KindAdapter for Linear {
                 .is_some_and(|e| e <= now + oauth::SKEW_SECS);
             match self.viewer(&cred).await {
                 Ok(me) => Ok(Identity {
-                    subject: format!("{} at {}", me.id, me.workspace),
+                    subject: identity_of(&me),
                 }),
                 Err(CallError::AuthFailed) if !expired => Err(TestError::Rejected),
                 Err(_) => Err(TestError::Inconclusive),

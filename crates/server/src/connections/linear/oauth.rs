@@ -27,6 +27,11 @@ use super::renew::token_call;
 use crate::connections::material::Material;
 use crate::scheduler::unix_secs;
 
+/// The narrowest set that makes every operation work, per Linear's OAuth page
+/// (linear.app/developers/oauth-2-0-authentication): `read` "default, always included";
+/// `issues:create` "Allows creating and updating issues, and creating their attachments" (so
+/// `create_issue` and `update_issue`); `comments:create` "Allows creating new issue comments"
+/// (`add_comment`). `write` (broad write access) and `admin` are never asked for.
 pub const SCOPES: &str = "read,issues:create,comments:create";
 /// A started sign-in is good this long.
 const FLOW_TTL: Duration = Duration::from_secs(600);
@@ -151,8 +156,10 @@ pub struct Finished {
     access: Zeroizing<String>,
     refresh: Zeroizing<String>,
     expires_at: String,
-    /// The workspace's url key, as the identity line names it (`<user id> at <url key>`).
+    /// The workspace's url key, as the identity line names it.
     pub workspace: String,
+    /// The workspace's own id: what a re-sign-in is compared by.
+    pub org: String,
 }
 
 impl fmt::Debug for Finished {
@@ -342,6 +349,7 @@ impl Linear {
             refresh,
             expires_at,
             workspace: me.workspace,
+            org: me.org,
         })
     }
 }

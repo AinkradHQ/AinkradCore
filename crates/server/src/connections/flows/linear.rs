@@ -13,7 +13,7 @@ use zeroize::Zeroizing;
 
 use super::{Flow, Refused, St, Start, StartError, View, blank, finish, new_flow, same};
 use crate::api::App;
-use crate::connections::linear::{Finished, FlowError};
+use crate::connections::linear::{Finished, FlowError, OrgCheck, check_org};
 use crate::store::connections;
 
 const LIFE: Duration = Duration::from_secs(600);
@@ -86,35 +86,43 @@ fn code_of(e: &FlowError) -> &'static str {
     }
 }
 
-/// Whether the workspace that signed in is the one connection `id` was made in (its identity is
-/// `<user id> at <workspace>`). A connection with no identity yet has nothing to compare.
-async fn same_workspace(app: &App, flow: &Flow, id: i64, fin: &Finished) -> Result<bool, ()> {
+/// Whether the workspace that signed in is the one connection `id` was made in, by its
+/// organization id (the url key can be renamed). A connection with no recorded organization id is
+/// `identity_unknown`, which only a confirmed change passes.
+async fn check_workspace(
+    app: &App,
+    flow: &Flow,
+    id: i64,
+    fin: &Finished,
+) -> Result<(), (&'static str, &'static str)> {
     let old = connections::get(&app.pool, flow.user, id)
         .await
-        .map_err(|_| ())?
+        .map_err(|_| {
+            (
+                "identity_unavailable",
+                "Core could not check which workspace that is; try again",
+            )
+        })?
         .identity;
-    Ok(old
-        .and_then(|i| i.rsplit_once(" at ").map(|(_, w)| w.to_owned()))
-        .is_none_or(|w| w == fin.workspace))
+    match check_org(old.as_deref(), &fin.org) {
+        OrgCheck::Same => Ok(()),
+        OrgCheck::Different => Err((
+            "wrong_workspace",
+            "that sign-in is a different Linear workspace than this connection's",
+        )),
+        OrgCheck::Unknown if flow.confirm_identity_change => Ok(()),
+        OrgCheck::Unknown => Err((
+            "identity_unknown",
+            "this connection has no recorded workspace to compare with; confirm the change to replace it",
+        )),
+    }
 }
 
 async fn connect(app: &App, flow: &Flow, fin: &Finished) {
-    if let Some(id) = flow.reconnect {
-        match same_workspace(app, flow, id, fin).await {
-            Ok(true) => {}
-            Ok(false) => {
-                return flow.fail(
-                    "wrong_workspace",
-                    "that sign-in is a different Linear workspace than this connection's",
-                );
-            }
-            Err(()) => {
-                return flow.fail(
-                    "identity_unavailable",
-                    "Core could not check which workspace that is; try again",
-                );
-            }
-        }
+    if let Some(id) = flow.reconnect
+        && let Err((code, why)) = check_workspace(app, flow, id, fin).await
+    {
+        return flow.fail(code, why);
     }
     let Some(material) = fin.material() else {
         return flow.fail("bad_token", "Linear sent a token Core cannot use");

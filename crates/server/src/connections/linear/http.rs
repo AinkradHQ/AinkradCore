@@ -103,7 +103,8 @@ impl CallError {
                 Some((UpstreamStatus::ServerError, None))
             }
             Self::Network => Some((UpstreamStatus::Unreachable, None)),
-            Self::OAuthNotConfigured => Some((UpstreamStatus::AuthFailed, None)),
+            // No app configured says nothing about any connection's credential: removing or
+            // half-editing the app config must not suspend every sign-in connection.
             _ => None,
         }
     }
@@ -124,7 +125,7 @@ impl CallError {
             Self::Refused(_) => "refused",
             Self::Internal(_) => "internal",
             Self::AppConfig => "app_config",
-            Self::OAuthNotConfigured => "oauth_not_configured",
+            Self::OAuthNotConfigured => "not_configured",
         }
     }
 }
@@ -180,52 +181,76 @@ fn of_code(code: &str, retry_after: Option<u64>) -> Option<CallError> {
     }
 }
 
+/// What Linear said about its own budget: requests remaining, the unix second it resets, and a
+/// wait in seconds (set only when this very answer was a rate limit).
+pub type Quota = (Option<u64>, Option<i64>, Option<u64>);
+
 pub struct Resp {
     pub status: u16,
+    /// The `Retry-After` header, in seconds, and nothing else.
     pub retry_after: Option<u64>,
+    /// Seconds until the request budget resets (from the reset header), for a rate limit that
+    /// came with no `Retry-After`.
+    pub reset_in: Option<u64>,
+    pub remaining: Option<u64>,
+    pub reset_at: Option<i64>,
     pub body: Value,
+}
+
+/// The worst error an answer's `errors` array names, by code then type; `None` when it names
+/// none this adapter has a word for.
+fn coded(body: &Value, wait: Option<u64>) -> Option<CallError> {
+    let errors = body.get("errors").filter(|e| !e.is_null())?;
+    let list = errors.as_array().map(Vec::as_slice).unwrap_or_default();
+    list.iter()
+        .filter_map(|e| {
+            let ext = e.get("extensions")?;
+            // Linear names an error by `code` (`RATELIMITED`) and by `type` ("ratelimited").
+            let word = |k: &str| ext.get(k).and_then(Value::as_str);
+            let by = |k: &str| word(k).and_then(|c| of_code(c, wait));
+            by("code").or_else(|| by("type"))
+        })
+        .min_by_key(severity)
 }
 
 impl Resp {
     /// The `data` of a GraphQL answer, or the error it comes to. A body with `errors` is a failure
     /// even at 200 (partial `data` is dropped); a body with no `data` object is unreadable.
     pub fn into_data(self) -> Result<Value, CallError> {
-        let Self {
-            status,
-            retry_after,
-            body,
-        } = self;
+        let wait = self.retry_after.or(self.reset_in);
+        let (status, body) = (self.status, self.body);
         if status >= 500 || (300..400).contains(&status) {
             return Err(CallError::Upstream(status));
         }
-        let errors = body.get("errors").filter(|e| !e.is_null());
-        if let Some(errors) = errors {
-            let list = errors.as_array().map(Vec::as_slice).unwrap_or_default();
-            let worst = list
-                .iter()
-                .filter_map(|e| {
-                    let ext = e.get("extensions")?;
-                    // Linear names an error by `code` (`RATELIMITED`) and by `type` ("ratelimited").
-                    let word = |k: &str| ext.get(k).and_then(Value::as_str);
-                    let by = |k: &str| word(k).and_then(|c| of_code(c, retry_after));
-                    by("code").or_else(|| by("type"))
-                })
-                .min_by_key(severity);
-            return Err(worst.unwrap_or_else(|| {
+        if body.get("errors").is_some_and(|e| !e.is_null()) {
+            return Err(coded(&body, wait).unwrap_or_else(|| {
                 if (200..300).contains(&status) {
                     CallError::BadRequest(status)
                 } else {
-                    classify(status, retry_after)
+                    classify(status, wait)
                 }
             }));
         }
         if !(200..300).contains(&status) {
-            return Err(classify(status, retry_after));
+            return Err(classify(status, wait));
         }
         match body.get("data") {
             Some(d) if d.is_object() => Ok(d.clone()),
             _ => Err(CallError::Upstream(status)),
         }
+    }
+
+    /// The budget Linear reported, for the broker's local `connection_busy`. The wait is set only
+    /// when this answer was itself a rate limit, so an ordinary answer never blocks anyone.
+    pub fn quota(&self) -> Quota {
+        let wait = self.retry_after.or(self.reset_in);
+        let limited = self.status == 429
+            || matches!(coded(&self.body, wait), Some(CallError::RateLimited { .. }));
+        (
+            self.remaining,
+            self.reset_at,
+            limited.then_some(wait).flatten(),
+        )
     }
 }
 
@@ -335,12 +360,16 @@ impl Http {
         let status = res.status().as_u16();
         let header = |name: &str| res.headers().get(name).and_then(|v| v.to_str().ok());
         // `Retry-After` is seconds; the reset header is UTC epoch MILLISECONDS.
-        let reset_in = header("x-ratelimit-requests-reset")
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .map(|ms| (ms / 1000).saturating_sub(now_secs()));
+        let reset_ms =
+            header("x-ratelimit-requests-reset").and_then(|v| v.trim().parse::<u64>().ok());
+        let reset_at = reset_ms.and_then(|ms| i64::try_from(ms / 1000).ok());
+        let reset_in = reset_ms
+            .map(|ms| (ms / 1000).saturating_sub(now_secs()))
+            .map(|s| s.min(MAX_RETRY_SECS));
+        let remaining =
+            header("x-ratelimit-requests-remaining").and_then(|v| v.trim().parse::<u64>().ok());
         let retry_after = header(RETRY_AFTER.as_str())
             .and_then(|v| v.trim().parse::<u64>().ok())
-            .or(reset_in)
             .map(|s| s.min(MAX_RETRY_SECS));
         if res
             .content_length()
@@ -367,6 +396,9 @@ impl Http {
         Ok(Resp {
             status,
             retry_after,
+            reset_in,
+            remaining,
+            reset_at,
             body,
         })
     }

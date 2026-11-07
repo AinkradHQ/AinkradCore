@@ -73,11 +73,9 @@ impl Fail {
             retry_after,
             reset_at: None,
         });
-        let result = if matches!(e, LinearError::Refused(_)) {
-            "refused"
-        } else {
-            "error"
-        };
+        // No app configured is our own state, not the service's answer: a plain refusal.
+        let ours = matches!(e, LinearError::Refused(_) | LinearError::OAuthNotConfigured);
+        let result = if ours { "refused" } else { "error" };
         Self {
             result,
             ..Self::upstream(e.code(), &e.to_string(), feed)

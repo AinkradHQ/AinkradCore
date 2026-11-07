@@ -168,3 +168,46 @@ async fn a_rate_limit_cools_the_connection_and_the_session_sees_linear_tools() {
         ("cooling".to_owned(), Some("rate_limited".to_owned()))
     );
 }
+
+#[tokio::test]
+async fn linears_reported_budget_refuses_the_next_call_locally_before_it_cools_the_connection() {
+    let (f, l, c, s) = ready(&[]).await;
+    let reset_ms = (crate::scheduler::unix_secs(NOW).unwrap() + 100_000_000) * 1000;
+    let low = lt::Reply::data(json!({"issue": lt::issue("ENG-1", "ENG")}))
+        .header("x-ratelimit-requests-remaining", "3")
+        .header("x-ratelimit-requests-reset", &reset_ms.to_string());
+    l.fake.on("GQL Issue", move |_| low.clone());
+    let r = f.ask(&s, "linear.get_issue", get("ENG-1")).await;
+    assert!(r.ok, "{r:?}");
+    // Three left, at or under the reserve: the broker refuses, and Linear is not asked again.
+    let r = f.ask(&s, "linear.get_issue", get("ENG-1")).await;
+    assert_eq!((r.ok, code(&r)), (false, "connection_busy"), "{r:?}");
+    assert_eq!(l.fake.count("GQL Issue"), 1);
+    assert_eq!(
+        f.status(c.id).await,
+        ("active".to_owned(), None),
+        "refused, not cooled"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_app_is_a_plain_refusal_and_no_verdict_on_the_connection() {
+    let (f, _l, _c, s) = ready(&[]).await;
+    let new = NewConnection {
+        kind: "linear",
+        name: "signed",
+        label: "Signed in",
+        auth_method: "oauth",
+    };
+    let due = lt::oauth(lt::ACCESS, lt::REFRESH, 10);
+    let c = create(&f.j.pool, &f.j.sealer, &f.reg, &new, &due, who())
+        .await
+        .unwrap();
+    let caps = ["read_issues", "write_issues"];
+    f.member(c.id, &caps, &[]).await;
+    f.grant(c.id, ("agent", "bot"), &caps, &[]).await;
+    f.default(c.id).await;
+    let r = f.ask(&s, "linear.get_issue", get("ENG-1")).await;
+    assert_eq!((r.ok, code(&r)), (false, "not_configured"), "{r:?}");
+    assert_eq!(f.status(c.id).await, ("active".to_owned(), None));
+}

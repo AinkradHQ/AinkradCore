@@ -173,13 +173,18 @@ async fn add_comment_reads_the_issue_then_comments_by_uuid() {
     f.fake.data(
         "CommentCreate",
         json!({"commentCreate": {"success": true,
-            "comment": {"id": "c1", "url": "u", "createdAt": "2026-11-06T10:00:00.000Z"}}}),
+            "comment": {"id": "c1", "url": "u", "createdAt": "2026-11-06T10:00:00.000Z",
+                "issue": {"identifier": "ENG-5", "team": {"key": "ENG"}}}}}),
     );
     let args = json!({"id": "ENG-5", "body": "Looks good"});
     let v = run(&f, &c, &any(), "linear.add_comment", args)
         .await
         .unwrap();
     assert_eq!(v["id"], "c1");
+    assert!(
+        v.get("issue").is_none(),
+        "the issue is checked, not returned"
+    );
     let vars = f.fake.last("GQL CommentCreate").unwrap().body;
     assert_eq!(
         vars["input"],

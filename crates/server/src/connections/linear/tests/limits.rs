@@ -311,14 +311,15 @@ async fn the_lists_are_cut_to_the_limit_and_carry_no_totals() {
             {"id": TEAM_ENG, "key": "ENG", "name": "Eng"},
             {"id": ISSUE_ID, "key": "OPS", "name": "Secret ops"},
             {"id": ISSUE_ID, "name": "no key"}],
-            "pageInfo": {"hasNextPage": true}}}),
+            "pageInfo": {"hasNextPage": false}}}),
     );
     let v = run(&f, &c, &l, "linear.list_teams", json!({}))
         .await
         .unwrap();
     assert_eq!(
         v,
-        json!({"teams": [{"id": TEAM_ENG, "key": "ENG", "name": "Eng"}]})
+        json!({"count": 1, "teams": [{"id": TEAM_ENG, "key": "ENG", "name": "Eng"}],
+            "truncated": false})
     );
     assert_eq!(
         f.fake.last("GQL Teams").unwrap().body["filter"],
@@ -392,4 +393,43 @@ async fn an_unlimited_connection_reaches_every_team() {
     )
     .await;
     assert!(r.is_ok(), "{r:?}");
+}
+
+#[tokio::test]
+async fn a_comment_on_an_issue_that_moved_is_refused_and_shows_nothing_of_the_other_team() {
+    let f = fx(false).await;
+    let c = f.key().await;
+    let l = limited(&["ENG"]);
+    f.fake.data("IssueRef", issue_ref("ENG-3", "ENG"));
+    // Between the pre-read and the write the issue moved to OPS: the answer names it.
+    f.fake.data(
+        "CommentCreate",
+        json!({"commentCreate": {"success": true, "comment": {"id": "c9",
+            "url": "https://linear.app/acme/issue/OPS-9#comment-c9", "createdAt": "t",
+            "issue": {"identifier": "OPS-9", "team": {"key": "OPS"}}}}}),
+    );
+    let r = run(
+        &f,
+        &c,
+        &l,
+        "linear.add_comment",
+        json!({"id": "ENG-3", "body": "x"}),
+    )
+    .await;
+    assert!(refused(&r), "{r:?}");
+    says_nothing_of(&r, "OPS");
+    // An answer that does not say which issue it is on cannot be checked either.
+    f.fake.data(
+        "CommentCreate",
+        json!({"commentCreate": {"success": true, "comment": {"id": "c9", "url": "u"}}}),
+    );
+    let r = run(
+        &f,
+        &c,
+        &l,
+        "linear.add_comment",
+        json!({"id": "ENG-3", "body": "x"}),
+    )
+    .await;
+    assert!(refused(&r), "{r:?}");
 }

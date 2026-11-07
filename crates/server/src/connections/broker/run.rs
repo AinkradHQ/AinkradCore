@@ -84,10 +84,12 @@ pub async fn execute(j: Job) -> Ran {
             out: jira(&j).await,
             quota: None,
         },
-        "linear" => Ran {
-            out: linear(&j).await,
-            quota: None,
-        },
+        "linear" => {
+            let out = linear(&j).await;
+            // What Linear said about its budget, for the local `connection_busy` refusal.
+            let quota = j.linear.quota(j.resolved.connection.id);
+            Ran { out, quota }
+        }
         // Never another kind's adapter by default: a kind with no arm here is refused.
         _ => Ran {
             out: Err(refuse("unknown_kind", "no such kind")),

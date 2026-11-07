@@ -207,6 +207,45 @@ async fn free_name(app: &App, user: i64, kind: &str) -> Result<String, ApiError>
         .ok_or_else(|| ApiError::conflict("too many connections of this kind"))
 }
 
+/// A Linear key replaces another only inside the same workspace: team keys (`ENG`) exist in every
+/// workspace, so a key from another one would silently re-aim the connection's team limit at
+/// someone else's teams. The new key is asked who it is first. There is no override here (the
+/// request has no field for one): a person who means to change workspace makes a new connection.
+async fn same_workspace(app: &App, c: &store::Connection, m: &Material) -> Result<(), ApiError> {
+    let cred = linear::unpack(m)
+        .ok_or_else(|| ApiError::bad_request("that is not a usable API key".to_owned()))?;
+    let me = app
+        .connections
+        .linear()
+        .viewer(&cred)
+        .await
+        .map_err(|e| match e {
+            linear::CallError::AuthFailed => ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "credential_rejected",
+                "the service did not accept that credential; check it and try again",
+            ),
+            _ => ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_failed",
+                "the service could not be reached to check the key; try again",
+            ),
+        })?;
+    match linear::check_org(c.identity.as_deref(), &me.org) {
+        linear::OrgCheck::Same => Ok(()),
+        linear::OrgCheck::Different => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "different_account",
+            "that key belongs to another Linear workspace than this connection's; add a new connection instead",
+        )),
+        linear::OrgCheck::Unknown => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "identity_unknown",
+            "this connection has no recorded workspace to compare with; test it, or add a new connection",
+        )),
+    }
+}
+
 #[utoipa::path(put, path = "/api/v1/connections/{id}/credential",
     operation_id = "replaceConnectionCredential", tag = "connections",
     params(("id" = String, Path, description = "The connection's id")),
@@ -241,6 +280,9 @@ pub async fn replace_credential(
         Given::of(&b.token, &b.email, &b.site, b.installation_id),
     )
     .await?;
+    if c.kind == "linear" {
+        same_workspace(&app, &c, &m).await?;
+    }
     let now = app.clock.now();
     let who = who(&me, user, &now);
     // The credential and its installation are written in one transaction: a refused claim (an

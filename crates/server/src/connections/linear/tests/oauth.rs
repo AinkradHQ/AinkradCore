@@ -153,7 +153,7 @@ async fn a_finished_sign_in_exchanges_a_form_with_the_verifier_and_reads_who_sig
     let tested = verdict::run_test(&f.pool, &f.sealer, &f.reg, c.id, f.cx(NOW).who)
         .await
         .unwrap();
-    assert_eq!(tested.identity, Some(format!("{ME} at {ORG}")));
+    assert_eq!(tested.identity, Some(identity()));
 }
 
 #[tokio::test]
@@ -295,7 +295,7 @@ async fn pending_sign_ins_are_capped_and_end_when_the_app_changes() {
 async fn the_credential_test_is_the_viewer_and_a_refusal_is_only_conclusive_when_fresh() {
     let f = fx(true).await;
     let ok = f.linear.test(&key()).await.unwrap();
-    assert_eq!(ok.subject, format!("{ME} at {ORG}"));
+    assert_eq!(ok.subject, identity());
     // A token without the scope Linear needs is refused: a rejection for a live token ...
     f.fake.grant_scopes(&[]);
     assert_eq!(f.linear.test(&key()).await, Err(TestError::Rejected));
@@ -320,4 +320,53 @@ async fn the_credential_test_is_the_viewer_and_a_refusal_is_only_conclusive_when
     // A material that is not a usable credential is no verdict either.
     let junk = crate::connections::material::Material::new("short", None, None).unwrap();
     assert_eq!(f.linear.test(&junk).await, Err(TestError::Inconclusive));
+}
+
+#[tokio::test]
+async fn every_operation_works_with_the_scopes_asked_for_and_not_without_them() {
+    // Linear's docs: `issues:create` allows creating AND updating issues, `comments:create` allows
+    // creating comments, `write` is broad write access. The fake holds each operation to that.
+    let f = fx(false).await;
+    let c = f.key().await;
+    f.fake
+        .data("Issue", json!({"issue": issue("ENG-1", "ENG")}));
+    f.fake.data("IssueRef", issue_ref("ENG-1", "ENG"));
+    f.fake.data(
+        "IssueUpdate",
+        json!({"issueUpdate": {"success": true,
+            "issue": {"id": ISSUE_ID, "identifier": "ENG-1", "team": {"key": "ENG"}}}}),
+    );
+    f.fake.data(
+        "CommentCreate",
+        json!({"commentCreate": {"success": true, "comment": {"id": "c1", "url": "u",
+            "issue": {"identifier": "ENG-1", "team": {"key": "ENG"}}}}}),
+    );
+    let any = crate::connections::linear::Limit::any();
+    let lr = &any;
+    let call = |op: &'static str, args: serde_json::Value| {
+        let (lin, cx_c, f_) = (f.linear.clone(), c.clone(), &f);
+        async move { lin.call(&f_.cx(NOW), &cx_c, lr, op, &args).await.is_ok() }
+    };
+    let update = json!({"id": "ENG-1", "title": "t"});
+    let comment = json!({"id": "ENG-1", "body": "b"});
+    let asked: Vec<&str> = super::super::SCOPES.split(',').collect();
+    f.fake.grant_scopes(&asked);
+    assert!(call("linear.get_issue", json!({"id": "ENG-1"})).await);
+    assert!(call("linear.update_issue", update.clone()).await);
+    assert!(call("linear.add_comment", comment.clone()).await);
+    // Read alone reads; it neither updates nor comments.
+    f.fake.grant_scopes(&["read"]);
+    assert!(call("linear.get_issue", json!({"id": "ENG-1"})).await);
+    assert!(!call("linear.update_issue", update.clone()).await);
+    assert!(!call("linear.add_comment", comment.clone()).await);
+    // `issues:create` updates but does not comment; `comments:create` the other way round.
+    f.fake.grant_scopes(&["read", "issues:create"]);
+    assert!(call("linear.update_issue", update.clone()).await);
+    assert!(!call("linear.add_comment", comment.clone()).await);
+    f.fake.grant_scopes(&["read", "comments:create"]);
+    assert!(!call("linear.update_issue", update.clone()).await);
+    assert!(call("linear.add_comment", comment.clone()).await);
+    // `write` would do all of it, and is never asked for.
+    f.fake.grant_scopes(&["read", "write"]);
+    assert!(call("linear.update_issue", update).await && call("linear.add_comment", comment).await);
 }

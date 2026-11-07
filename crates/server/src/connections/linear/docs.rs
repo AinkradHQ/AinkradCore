@@ -68,14 +68,15 @@ pub const SEARCH: Doc = Doc {
 
 pub const TEAMS: Doc = Doc {
     name: "Teams",
-    query: "query Teams($filter: TeamFilter) { teams(first: 50, filter: $filter) { \
-            nodes { id key name } } }",
+    query: "query Teams($filter: TeamFilter, $after: String) { teams(first: 50, after: $after, \
+            filter: $filter) { nodes { id key name } pageInfo { hasNextPage endCursor } } }",
 };
 
 pub const STATES: Doc = Doc {
     name: "States",
     query: "query States($key: String!) { workflowStates(first: 50, filter: { team: { key: \
-            { eq: $key } } }) { nodes { id name type position team { key } } } }",
+            { eq: $key } } }) { nodes { id name type position team { key } } \
+            pageInfo { hasNextPage } } }",
 };
 
 /// Projects are read THROUGH their teams, so every project returned belongs to a team that was
@@ -84,7 +85,7 @@ pub const PROJECTS: Doc = Doc {
     name: "Projects",
     query: "query Projects($filter: TeamFilter, $first: Int!) { teams(first: 10, \
             filter: $filter) { nodes { key projects(first: $first) { nodes { id name state \
-            url } } } } }",
+            url } pageInfo { hasNextPage } } } pageInfo { hasNextPage } } }",
 };
 
 pub const ISSUE_UPDATE: Doc = Doc {
@@ -103,7 +104,7 @@ pub const ISSUE_CREATE: Doc = Doc {
 pub const COMMENT_CREATE: Doc = Doc {
     name: "CommentCreate",
     query: "mutation CommentCreate($input: CommentCreateInput!) { commentCreate(input: $input) { \
-            success comment { id url createdAt } } }",
+            success comment { id url createdAt issue { identifier team { key } } } } }",
 };
 
 /// Every document, for the tests that hold the fake to them.

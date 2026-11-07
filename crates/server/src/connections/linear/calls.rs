@@ -15,6 +15,21 @@ fn refused(why: String) -> CallError {
     CallError::Refused(why)
 }
 
+/// Pages `list_teams` reads at most.
+const MAX_PAGES: usize = 5;
+
+/// Whether a connection answer says there is more after it.
+fn has_next(page: &Value) -> bool {
+    let more = page.get("pageInfo").and_then(|p| p.get("hasNextPage"));
+    more.and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// The cursor to the next page, when there is one and it can be followed.
+fn next_cursor(page: &Value) -> Option<&str> {
+    let cursor = page.get("pageInfo")?.get("endCursor")?.as_str();
+    cursor.filter(|c| has_next(page) && !c.is_empty() && c.len() <= 200)
+}
+
 /// A field of the GraphQL `data`, or an unreadable answer.
 fn field<'a>(data: &'a Value, name: &str) -> Result<&'a Value, CallError> {
     data.get(name).ok_or(CallError::Upstream(200))
@@ -42,9 +57,9 @@ impl Linear {
             let http = self.http.clone();
             let vars = vars.clone();
             async move {
-                http.graphql(auth?, doc.query, doc.name, &vars)
-                    .await?
-                    .into_data()
+                let res = http.graphql(auth?, doc.query, doc.name, &vars).await?;
+                self.note_quota(id, res.quota());
+                res.into_data()
             }
         };
         match send(&cred).await {
@@ -125,7 +140,17 @@ impl Linear {
                     .await?;
                 let p = field(&data, "commentCreate")?;
                 succeeded(p)?;
-                Ok(p.get("comment").cloned().unwrap_or(Value::Null))
+                // The comment says which issue it landed on: an issue that moved between the
+                // pre-read and the write is refused, and nothing of it (its identifier, its url)
+                // is returned.
+                let comment = p.get("comment").ok_or(CallError::Upstream(200))?;
+                check_issue(comment.get("issue").unwrap_or(&Value::Null), limit)
+                    .map_err(refused)?;
+                let mut shown = comment.clone();
+                if let Some(o) = shown.as_object_mut() {
+                    o.remove("issue");
+                }
+                Ok(shown)
             }
             Plan::Update {
                 ident,
@@ -167,20 +192,29 @@ impl Linear {
                 }
             }
             Plan::Teams { filter } => {
-                let data = self
-                    .run(cx, id, docs::TEAMS, &json!({"filter": filter}))
-                    .await?;
-                let mut list = nodes(field(&data, "teams")?, "team")
-                    .map_err(refused)?
-                    .clone();
-                retain_teams(&mut list, limit);
-                Ok(json!({"teams": list}))
+                let (mut after, mut more, mut all) = (Value::Null, false, Vec::new());
+                for _ in 0..MAX_PAGES {
+                    let vars = json!({"filter": filter, "after": after});
+                    let data = self.run(cx, id, docs::TEAMS, &vars).await?;
+                    let teams = field(&data, "teams")?;
+                    all.extend(nodes(teams, "team").map_err(refused)?.iter().cloned());
+                    (more, after) = match next_cursor(teams) {
+                        Some(c) => (true, json!(c)),
+                        None => (has_next(teams), Value::Null),
+                    };
+                    if after.is_null() {
+                        break;
+                    }
+                }
+                retain_teams(&mut all, limit);
+                Ok(json!({"count": all.len(), "teams": all, "truncated": more}))
             }
             Plan::States { team } => {
                 let data = self
                     .run(cx, id, docs::STATES, &json!({"key": team}))
                     .await?;
-                let list = nodes(field(&data, "workflowStates")?, "state").map_err(refused)?;
+                let page = field(&data, "workflowStates")?;
+                let list = nodes(page, "state").map_err(refused)?;
                 // Every state must say it is in the team asked for (and so in the limit).
                 let in_team = |s: &Value| {
                     let key = s
@@ -192,16 +226,22 @@ impl Linear {
                 if !list.iter().all(in_team) {
                     return Err(refused(outside()));
                 }
-                Ok(json!({"states": list}))
+                Ok(json!({"states": list, "truncated": has_next(page)}))
             }
             Plan::Projects { filter, first, .. } => {
                 let vars = json!({"filter": filter, "first": first});
                 let data = self.run(cx, id, docs::PROJECTS, &vars).await?;
-                let mut teams = nodes(field(&data, "teams")?, "project")
-                    .map_err(refused)?
-                    .clone();
+                let page = field(&data, "teams")?;
+                let mut teams = nodes(page, "project").map_err(refused)?.clone();
                 retain_teams(&mut teams, limit);
-                Ok(json!({"projects": flatten(&teams)}))
+                // Cut when Linear has more teams, or one of the teams SHOWN has more projects
+                // (what is said of teams that were cut stays unsaid).
+                let more_projects = teams
+                    .iter()
+                    .any(|t| t.get("projects").is_some_and(has_next));
+                let projects = flatten(&teams);
+                let truncated = has_next(page) || more_projects;
+                Ok(json!({"count": projects.len(), "projects": projects, "truncated": truncated}))
             }
         }
     }

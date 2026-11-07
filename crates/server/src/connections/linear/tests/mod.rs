@@ -30,10 +30,12 @@ use crate::ops::secretbox::SecretBox;
 use crate::scheduler::{iso_of_unix, unix_secs};
 use crate::store::connections::{Connection, NewConnection, Who, create};
 
+mod descriptor;
 mod errors;
 mod limits;
 mod oauth;
 mod ops;
+mod pages;
 mod renew;
 mod safety;
 
@@ -44,6 +46,7 @@ pub const API_KEY: &str = "key1-5d2e8b0c7a41";
 pub const CLIENT_SECRET: &str = "clsec-3b9f6e2d1a70";
 pub const REDIRECT: &str = "http://127.0.0.1:53682/callback";
 pub const ORG: &str = "acme";
+pub const ORG_ID: &str = "0b1a2c3d-0000-4000-8000-000000000001";
 pub const ME: &str = "5f1c2a90-7b3d-4e8a-9c61-0d4b2e7a1f33";
 pub const TEAM_ENG: &str = "9cfb482a-81e3-4154-b5b9-2c805e70a02d";
 pub const ISSUE_ID: &str = "2a7c1e04-5b9d-4c3f-8e21-7d6f0a9b4c58";
@@ -116,13 +119,16 @@ struct Inner {
     bad: usize,
 }
 
-/// The scope an operation needs (`read` is always granted by Linear, but a token can still be
-/// refused: that is what the scope-enforcing `viewer` stands for).
-fn needs(op: &str) -> &'static str {
+/// The scopes that allow an operation, per Linear's OAuth docs (linear.app/developers/oauth-2-0-
+/// authentication): `issues:create` "allows creating and updating issues", `comments:create`
+/// "allows creating new issue comments", `write` is broad write access, `admin` is more. `read`
+/// is always included by Linear, but a token can still be refused: that is what the
+/// scope-enforcing `viewer` stands for.
+fn needs(op: &str) -> &'static [&'static str] {
     match op {
-        "IssueCreate" | "IssueUpdate" => "issues:create",
-        "CommentCreate" => "comments:create",
-        _ => "read",
+        "IssueCreate" | "IssueUpdate" => &["issues:create", "write", "admin"],
+        "CommentCreate" => &["comments:create", "write", "admin"],
+        _ => &["read", "write", "admin"],
     }
 }
 
@@ -191,7 +197,7 @@ async fn handle(State(f): State<Fake>, req: Request) -> Response {
             .scopes
             .clone()
             .unwrap_or_else(|| super::SCOPES.split(',').map(str::to_owned).collect());
-        let short = path == "/graphql" && !held.iter().any(|h| h == needs(&op));
+        let short = path == "/graphql" && !held.iter().any(|h| needs(&op).contains(&h.as_str()));
         (i.handlers.get(&key).cloned(), short)
     };
     let r = match handler {
@@ -408,11 +414,20 @@ impl Fx {
     }
 }
 
-/// The `data` of a `viewer` answer for workspace `org`.
+/// The `data` of a `viewer` answer for workspace `org` (another url key is another workspace,
+/// with another id).
 pub fn viewer(org: &str) -> Value {
+    let id = match org == ORG {
+        true => ORG_ID.to_owned(),
+        false => format!("0b1a2c3d-0000-4000-8000-{:012}", org.len()),
+    };
     json!({"viewer": {"id": ME, "name": "Ann", "email": "ann@example.com",
-        "organization": {"id": "0b1a2c3d-0000-4000-8000-000000000001", "urlKey": org,
-            "name": "Acme"}}})
+        "organization": {"id": id, "urlKey": org, "name": "Acme"}}})
+}
+
+/// The identity line the fake's `viewer` makes: the user, the workspace and its id.
+pub fn identity() -> String {
+    format!("{ME} at {ORG} ({ORG_ID})")
 }
 
 /// `secs` after [`NOW`].
@@ -443,56 +458,4 @@ pub fn issue(identifier: &str, team: &str) -> Value {
 /// The answer of an `IssueRef` pre-read.
 pub fn issue_ref(identifier: &str, team: &str) -> Value {
     json!({"issue": {"id": ISSUE_ID, "identifier": identifier, "team": {"key": team}}})
-}
-
-#[test]
-fn the_descriptor_is_valid_and_every_operation_has_one_capability() {
-    use super::DESCRIPTOR;
-    assert_eq!(DESCRIPTOR.problem(), None);
-    assert_eq!(DESCRIPTOR.read_only(), ["read_issues"]);
-    assert_eq!(DESCRIPTOR.auth_methods[0].id, "oauth");
-    assert!(!DESCRIPTOR.auth_methods[0].advanced);
-    assert_eq!(DESCRIPTOR.auth_methods[1].id, "token");
-    assert!(DESCRIPTOR.auth_methods[1].advanced);
-    let op = |o| DESCRIPTOR.capability_of(o).map(|c| c.name);
-    assert_eq!(op("linear.create_issue"), Some("write_issues"));
-    assert_eq!(op("linear.update_issue"), Some("write_issues"));
-    assert_eq!(op("linear.add_comment"), Some("write_issues"));
-    assert_eq!(op("linear.search_issues"), Some("read_issues"));
-    assert_eq!(DESCRIPTOR.limits.len(), 1);
-    assert_eq!(DESCRIPTOR.limits[0].key, "teams");
-    for o in [
-        "linear.search_issues",
-        "linear.list_teams",
-        "linear.list_projects",
-    ] {
-        assert!(DESCRIPTOR.is_self_limited(o), "{o}");
-    }
-    for o in [
-        "linear.get_issue",
-        "linear.create_issue",
-        "linear.update_issue",
-    ] {
-        assert!(!DESCRIPTOR.is_self_limited(o), "{o} needs a resource");
-    }
-    let bad = super::Descriptor {
-        self_limited: &["linear.nope"],
-        ..DESCRIPTOR
-    };
-    assert!(
-        bad.problem().is_some(),
-        "a self-limited name must be an operation"
-    );
-    assert!(DESCRIPTOR.allows_host("api.linear.app") && DESCRIPTOR.allows_host("linear.app"));
-    assert_eq!(DESCRIPTOR.hosts.len(), 2);
-    assert!(!DESCRIPTOR.allows_host("api.linear.app.evil.test"));
-    assert!(!DESCRIPTOR.allows_host("evil-linear.app"));
-    const { assert!(DESCRIPTOR.hourly_calls <= 2500) }; // under Linear's key budget
-    assert_eq!(Linear::new(None).descriptor().kind, "linear");
-    let reg = Registry::builtin();
-    assert!(reg.get("linear").is_some());
-    assert_eq!(
-        crate::connections::adapter::builtin_descriptor("linear").map(|d| d.kind),
-        Some("linear")
-    );
 }

@@ -16,6 +16,7 @@ const URI: &str = "/api/v1/connections";
 const APPS: &str = "/api/v1/connection-apps/linear";
 /// Shapeless on purpose.
 const LKEY: &str = "c8key-4a7d2e9b1c63f580";
+const LKEY2: &str = "c8key2-91d4e7a3b0c5f862";
 
 /// The C5 fixture with the broker's Linear pointed at a loopback fake (and no app yet).
 async fn lcx() -> (Cx, lt::Fx) {
@@ -163,7 +164,7 @@ async fn the_redirect_is_exchanged_with_core_own_verifier_and_one_workspace_is_c
     let done = callback(&c, id, state).await;
     assert_eq!(done.0, StatusCode::OK, "{}", done.1);
     assert_eq!(done.1["step"], "connected", "{}", done.1);
-    assert_eq!(done.1["identity"], format!("{} at {}", lt::ME, lt::ORG));
+    assert_eq!(done.1["identity"], lt::identity());
     let conn = done.1["connection"].as_i64().unwrap();
     let got = c
         .ok(Method::GET, &format!("{URI}/{conn}"), Value::Null)
@@ -240,7 +241,7 @@ async fn signing_in_again_stays_in_the_workspace_the_connection_was_made_in() {
     let now = c
         .ok(Method::GET, &format!("{URI}/{conn}"), Value::Null)
         .await;
-    assert_eq!(now["identity"], format!("{} at {}", lt::ME, lt::ORG));
+    assert_eq!(now["identity"], lt::identity());
     assert_eq!(connections(&c).await.len(), 1);
     // The same workspace signs in again: the credential is replaced, no second connection.
     l.fake.data("Viewer", lt::viewer(lt::ORG));
@@ -261,7 +262,7 @@ async fn a_personal_api_key_is_tested_at_once_and_a_refused_one_is_not_kept() {
         (&made["kind"], &made["auth_method"]),
         (&json!("linear"), &json!("token"))
     );
-    assert_eq!(made["identity"], format!("{} at {}", lt::ME, lt::ORG));
+    assert_eq!(made["identity"], lt::identity());
     // The key went to Linear as it is, with no Bearer.
     assert_eq!(
         l.fake.last("GQL Viewer").unwrap().auth.as_deref(),
@@ -287,4 +288,79 @@ async fn a_personal_api_key_is_tested_at_once_and_a_refused_one_is_not_kept() {
     assert_eq!(code(&r), (400, "credential_rejected".to_owned()), "{}", r.1);
     assert_eq!(connections(&c).await.len(), 1);
     c.assert_clean_also(&[LKEY]).await;
+}
+
+async fn forget_workspace(c: &Cx, id: i64) {
+    sqlx::query("UPDATE core_connections SET identity = NULL WHERE id = ?")
+        .bind(id)
+        .execute(&c.fx.app.pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_connection_with_no_recorded_workspace_is_signed_in_again_only_when_confirmed() {
+    let (c, _l) = lcx().await;
+    configure(&c).await;
+    let v = begin(&c, json!({})).await.1;
+    let first = callback(&c, v["id"].as_str().unwrap(), v["state"].as_str().unwrap()).await;
+    let conn = first.1["connection"].as_i64().unwrap();
+    forget_workspace(&c, conn).await;
+    // Nothing to compare with: any workspace would pass, so it is refused ...
+    let v = begin(&c, json!({"connection": conn})).await.1;
+    let r = callback(&c, v["id"].as_str().unwrap(), v["state"].as_str().unwrap()).await;
+    assert_eq!(
+        (&r.1["step"], &r.1["error_code"]),
+        (&json!("failed"), &json!("identity_unknown")),
+        "{}",
+        r.1
+    );
+    let now = c
+        .ok(Method::GET, &format!("{URI}/{conn}"), Value::Null)
+        .await;
+    assert_eq!(now["identity"], Value::Null);
+    // ... unless the person confirms the change.
+    let extra = json!({"connection": conn, "confirm_identity_change": true});
+    let v = begin(&c, extra).await.1;
+    let r = callback(&c, v["id"].as_str().unwrap(), v["state"].as_str().unwrap()).await;
+    assert_eq!(r.1["step"], "connected", "{}", r.1);
+    let now = c
+        .ok(Method::GET, &format!("{URI}/{conn}"), Value::Null)
+        .await;
+    assert_eq!(now["identity"], lt::identity());
+    c.assert_clean().await;
+}
+
+#[tokio::test]
+async fn replacing_a_key_stays_in_the_workspace_the_connection_was_made_in() {
+    let (c, l) = lcx().await;
+    let body = json!({"kind": "linear", "name": "mine", "auth_method": "token", "token": LKEY});
+    let id = c.ok(Method::POST, URI, body).await["id"].as_i64().unwrap();
+    let put = |token: &str| {
+        let uri = format!("{URI}/{id}/credential");
+        c.admin(Method::PUT, &uri, json!({"token": token}))
+    };
+    // A key from another workspace is refused, and the old key is still the one stored.
+    l.fake.data("Viewer", lt::viewer("other"));
+    let r = put(LKEY2).await;
+    assert_eq!(code(&r), (409, "different_account".to_owned()), "{}", r.1);
+    // The same workspace: replaced and tested.
+    l.fake.data("Viewer", lt::viewer(lt::ORG));
+    let r = put(LKEY2).await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    assert_eq!(
+        l.fake.last("GQL Viewer").unwrap().auth.as_deref(),
+        Some(LKEY2)
+    );
+    // A connection with no recorded workspace has nothing to compare with.
+    forget_workspace(&c, id).await;
+    let r = put(LKEY).await;
+    assert_eq!(code(&r), (409, "identity_unknown".to_owned()), "{}", r.1);
+    // A key Linear refuses is a plain rejection.
+    l.fake.on("GQL Viewer", |_| {
+        lt::Reply::error(401, "AUTHENTICATION_ERROR")
+    });
+    let r = put(LKEY).await;
+    assert_eq!(code(&r), (400, "credential_rejected".to_owned()), "{}", r.1);
+    c.assert_clean_also(&[LKEY, LKEY2]).await;
 }

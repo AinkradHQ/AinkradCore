@@ -324,7 +324,7 @@ async fn a_renewal_that_only_failed_is_inconclusive_and_one_that_works_then_test
     );
     f.fake.rotating();
     let t = f.linear.test_connection(&f.cx(NOW), c.id).await.unwrap();
-    assert_eq!(t.identity, Some(format!("{ME} at {ORG}")));
+    assert_eq!(t.identity, Some(identity()));
     let sent = f.fake.last("GQL Viewer").unwrap();
     assert_eq!(
         sent.auth.as_deref(),
@@ -451,4 +451,19 @@ async fn a_verdict_about_an_old_credential_cannot_settle_a_new_one() {
     );
     let now = get(&f.pool, 1, c.id).await.unwrap();
     assert_ne!(now.state_reason.as_deref(), Some("auth_failed"));
+}
+
+#[tokio::test]
+async fn a_missing_app_is_no_verdict_on_any_connection_and_a_plain_refusal() {
+    // Removing or half-editing the Linear app config must not suspend every sign-in connection.
+    let e = CallError::OAuthNotConfigured;
+    assert_eq!(e.health(), None);
+    assert_eq!(e.code(), "not_configured");
+    let f = fx(false).await;
+    let c = f
+        .connect("acme", "oauth", &oauth(ACCESS, REFRESH, 10))
+        .await;
+    let t = f.linear.test_connection(&f.cx(NOW), c.id).await.unwrap();
+    assert_eq!(t.status, "active", "{:?}", t.state_reason);
+    assert_eq!(f.fake.count("POST /oauth/token"), 0);
 }
