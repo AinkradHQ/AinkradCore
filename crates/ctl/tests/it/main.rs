@@ -3,6 +3,10 @@
 
 mod chains;
 mod common;
+mod connections;
+mod connections_fake;
+mod connections_login;
+mod connections_more;
 mod contract;
 mod e2x;
 mod fake;
