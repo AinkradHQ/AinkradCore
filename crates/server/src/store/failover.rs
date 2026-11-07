@@ -13,11 +13,11 @@
 //! - **A wait is bounded.** The successor row exists before its pick, so a wait is recorded on it
 //!   (`waiting.since`) like any other and ends `wait_max` after its first. Nothing waits for ever.
 //! - **Forward only (I3).** The pick starts at the old attempt's chain position and leaves out every
-//!   account the run has used; hops are capped ([`MAX_HOPS`]) and the Core-wide rate is bounded
-//!   ([`PER_WINDOW`] in [`WINDOW_SECS`]).
-//! - **No contract.** The successor is audited `agent.created` with a `failover` block (names and
-//!   ids, never a value) and a provider or harness change is an `agent.state` note. The dedicated
-//!   `agent.failover` / `account.failover` names come with the scheduler API (S7).
+//!   account the run has used; hops are capped ([`MAX_HOPS`]) and the failovers of ONE user are
+//!   bounded ([`PER_WINDOW`] in [`WINDOW_SECS`]): a user's storm never ends another user's runs.
+//! - **Events.** The successor is audited `agent.created` with a `failover` block (names and ids,
+//!   never a value), a provider or harness change is an `agent.state` note, and every move or end of
+//!   a run raises `account.failover` (`notice`); the storm guard raises `alarm.raised` once a window.
 
 use ainkrad_core::audit::AuditActor;
 use serde_json::{Value, json};
@@ -28,13 +28,14 @@ use super::{agents as sessions, budgets::guard, events};
 use crate::scheduler::{iso_of_unix, unix_secs};
 
 mod decide;
+mod notice;
 mod run;
 pub use decide::*;
 pub use run::*;
 
-/// New attempts a run may have (`scheduler.max_hops`, S7 makes it a setting).
+/// New attempts a run may have: the default of `scheduler.max_hops` (0 turns failover off).
 pub const MAX_HOPS: i64 = 4;
-/// Failovers one user's runs on one runner start in [`WINDOW_SECS`] (`scheduler.failovers_per_10min`, S7 makes it a setting).
+/// Failovers one user's runs start in [`WINDOW_SECS`]: the default of `scheduler.failovers_per_10min`.
 pub const PER_WINDOW: i64 = 10;
 pub const WINDOW_SECS: i64 = 600;
 /// The one line a restarted attempt's prompt starts with: its workspace may hold the old one's work.
@@ -180,21 +181,33 @@ pub async fn move_in(
     if claimed == 0 || has_successor_in(conn, old).await? {
         return Ok(Moved::Skipped);
     }
-    if v.attempt + 1 > MAX_HOPS {
-        return ended(conn, old, "hop cap: the run has used its attempts", vec![]).await;
+    let (max_hops, per_window) = notice::limits(conn).await?;
+    if max_hops == 0 {
+        return ended(
+            conn,
+            &v,
+            class,
+            "failover is off (scheduler.max_hops 0)",
+            vec![],
+        )
+        .await;
+    }
+    if v.attempt + 1 > max_hops {
+        let why = "hop cap: the run has used its attempts";
+        return ended(conn, &v, class, why, vec![]).await;
     }
     let since = iso_of_unix(now_u - WINDOW_SECS);
     let recent: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM core_agent_sessions WHERE failover_of IS NOT NULL \
-         AND user_id = ? AND runner = ? AND julianday(created_at) > julianday(?)",
+         AND user_id = ? AND julianday(created_at) > julianday(?)",
     )
     .bind(v.user)
-    .bind(&v.runner)
     .bind(&since)
     .fetch_one(&mut *conn)
     .await?;
-    if recent >= PER_WINDOW {
-        return ended(conn, old, "failover storm guard", vec![]).await;
+    if recent >= per_window {
+        notice::storm(conn, v.user, recent, per_window, now_u).await?;
+        return ended(conn, &v, class, "failover storm guard", vec![]).await;
     }
     let mut skip = v.skip_pools.clone();
     if let Some(BudgetStop::Pool(p)) = v.budget
@@ -232,7 +245,7 @@ pub async fn move_in(
                 .bind(&new)
                 .execute(&mut *conn)
                 .await?;
-            return ended(conn, old, "no account is available", reasons).await;
+            return ended(conn, &v, class, "no account is available", reasons).await;
         }
     };
     announce(conn, &v, &new, class, picked.as_ref(), &chain).await?;
@@ -245,10 +258,12 @@ pub async fn move_in(
 /// The run ends with `old`: the reasons go on its outcome, where the person reads why.
 async fn ended(
     conn: &mut SqliteConnection,
-    old: &str,
+    v: &View,
+    class: &str,
     why: &str,
     reasons: Vec<(usize, String)>,
 ) -> Result<Moved, sqlx::Error> {
+    let old = v.id.as_str();
     let said: Vec<String> = reasons
         .iter()
         .map(|(p, r)| format!("entry {}: {r}", p + 1))
@@ -260,8 +275,9 @@ async fn ended(
     )
     .bind(note)
     .bind(old)
-    .execute(conn)
+    .execute(&mut *conn)
     .await?;
+    notice::failover(conn, v, class, None, None).await?;
     Ok(Moved::Ended {
         why: why.to_owned(),
         reasons,
@@ -361,6 +377,7 @@ async fn announce(
     .await?;
     let about = json!({"session": new, "runner": v.runner, "harness": harness});
     events::append(conn, "agent.created", &about).await?;
+    notice::failover(conn, v, class, Some(new), picked).await?;
     if let (Some(p), Some(was)) = (picked, was)
         && (was.provider != p.provider || was.harness != p.harness)
     {

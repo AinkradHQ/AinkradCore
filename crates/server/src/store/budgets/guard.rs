@@ -161,6 +161,7 @@ pub async fn check_in(
                            "usd_spent": s.usd_spent, "token_cap": s.budget.token_cap,
                            "usd_cap_micros": s.budget.usd_cap_micros, "warn_at_percent": warn});
             audit_in(conn, AuditActor::System, "budget.warning", s.budget.id, d).await?;
+            announce(conn, &s, "warning").await?;
             out.warned.push(s.clone());
         }
         if s.exhausted() {
@@ -170,6 +171,7 @@ pub async fn check_in(
                                "spent": s.spent, "usd_spent": s.usd_spent,
                                "hard_stop": s.budget.hard_stop});
                 audit_in(conn, AuditActor::System, "budget.exhausted", s.budget.id, d).await?;
+                announce(conn, &s, "exhausted").await?;
                 out.newly_exhausted.push(s.clone());
             }
             if s.budget.hard_stop {
@@ -178,6 +180,23 @@ pub async fn check_in(
         }
     }
     Ok(out)
+}
+
+/// `account.budget {subject_kind, subject, state}` for an account's or a pool's budget (`state`
+/// `warning` or `exhausted`), beside the audit row; other subjects raise none.
+async fn announce(
+    conn: &mut SqliteConnection,
+    s: &Standing,
+    state: &str,
+) -> Result<(), sqlx::Error> {
+    if !matches!(s.budget.kind.as_str(), "account" | "pool") {
+        return Ok(());
+    }
+    let payload =
+        json!({"subject_kind": s.budget.kind, "subject": s.budget.subject, "state": state});
+    super::super::events::append(conn, "account.budget", &payload)
+        .await
+        .map(drop)
 }
 
 /// Stamps `column` (`warned_at` or `exhausted_at`) of the budget's counter for its period; true the

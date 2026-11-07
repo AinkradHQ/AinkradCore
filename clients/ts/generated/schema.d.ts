@@ -475,7 +475,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** @deprecated */
         get: operations["listBindings"];
+        /** @deprecated */
         put: operations["bindAgent"];
         post?: never;
         delete?: never;
@@ -494,6 +496,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
+        /** @deprecated */
         delete: operations["unbindAgent"];
         options?: never;
         head?: never;
@@ -542,6 +545,86 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["raiseBudget"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/chains": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listChains"];
+        put?: never;
+        post: operations["createChain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/chains/bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listChainBindings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/chains/bindings/{agent}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["bindAgentChain"];
+        post?: never;
+        delete: operations["unbindAgentChain"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/chains/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getChain"];
+        put: operations["replaceChain"];
+        post?: never;
+        delete: operations["deleteChain"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/chains/{id}/default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setDefaultChain"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1279,6 +1362,29 @@ export interface components {
             /** @description Runner device ids, explicit (never a wildcard). */
             runners: string[];
         };
+        /** @description An account's health counters, as the scheduler keeps them. */
+        AccountHealth: {
+            /**
+             * Format: int64
+             * @description A subscription's failed sessions in a row; the third keeps it out of new runs
+             *     (`state_reason` `auth_suspected`) until an admin answers.
+             */
+            auth_streak: number;
+            /**
+             * Format: int64
+             * @description Upstream errors counted in the current ten-minute window; three put it out for ten minutes.
+             */
+            fail_streak: number;
+            /** @description The last time a request or a session on it went well. */
+            last_success_at?: components["schemas"]["Timestamp"];
+            /**
+             * @description A subscription's latest plan-limit snapshot, as its harness last said it (harness output:
+             *     it can only cool the account, never disable it).
+             */
+            plan_limit?: components["schemas"]["AccountPlanLimit"];
+            /** @description The last status class its gateway reported on any of its sessions. */
+            upstream_class?: string | null;
+        };
         /** @description Where a sign-in has got to. Never a token or a code. */
         AccountLogin: {
             /**
@@ -1304,6 +1410,24 @@ export interface components {
             updated_at: components["schemas"]["Timestamp"];
             /** @description The sign-in URL, from `open_url` on. */
             url?: string | null;
+        };
+        /** @description A subscription's plan-limit snapshot. */
+        AccountPlanLimit: {
+            /** @description When the Core stored it. */
+            at: components["schemas"]["Timestamp"];
+            /** @description The harness's own word: `allowed`, `allowed_warning`, `rejected`. */
+            status: string;
+            windows: components["schemas"]["AccountPlanWindow"][];
+        };
+        AccountPlanWindow: {
+            /** @description e.g. `five_hour`, `seven_day`. */
+            name: string;
+            resets_at?: components["schemas"]["Timestamp"];
+            /**
+             * Format: double
+             * @description A fraction of the window's limit, past 1 at the limit.
+             */
+            utilization: number;
         };
         /** @description One account's usage. No key, secret name, delivery or runner: it is for a `read` device. */
         AccountSpend: {
@@ -1358,9 +1482,44 @@ export interface components {
         };
         /** @description An agent session: a harness on a runner. */
         AgentSession: {
+            /**
+             * Format: int64
+             * @description The account the session holds, whatever its delivery (an API key or a subscription).
+             */
+            account?: number | null;
+            /** @description The opaque agent id the create named (the key of its chain binding). */
+            agent?: string | null;
+            /**
+             * Format: int64
+             * @description Which attempt of its run it is, from 0.
+             */
+            attempt?: number | null;
+            /** @description The chain as it was when the session began (an edit never moves a running run). */
+            chain?: components["schemas"]["ChainEntry"][] | null;
+            /**
+             * Format: int64
+             * @description The chain the run draws its accounts from; absent for a session that names its account
+             *     itself or uses the runner's own login.
+             */
+            chain_id?: number | null;
+            /**
+             * Format: int64
+             * @description The entry of `chain` the run sits on, from 0.
+             */
+            chain_pos?: number | null;
             created_at: components["schemas"]["Timestamp"];
             created_by: string;
             ended_at?: components["schemas"]["Timestamp"];
+            /** @description The attempt that replaced this one. */
+            failed_over_to?: string | null;
+            /**
+             * @description Why the run was moved off this attempt (`rate_limited`, `quota`, `auth`, `budget_pool`, …).
+             *     An ended run's last attempt says in `outcome.failover` (`{result, why, reasons}`) why it
+             *     could not move on. Admin only.
+             */
+            failover_class?: string | null;
+            /** @description The attempt this one replaced. */
+            failover_of?: string | null;
             harness: string;
             /** @description The harness's own session id, what a resume continues. */
             harness_session?: string | null;
@@ -1384,20 +1543,42 @@ export interface components {
             outcome?: Record<string, never> | null;
             /**
              * Format: int64
+             * @description How many accounts a launch refused after the pick before the one it holds (at most 2).
+             */
+            repicked?: number | null;
+            /**
+             * Format: int64
              * @description How many times it was resumed.
              */
             resumes?: number | null;
+            /**
+             * @description The run it belongs to: its first attempt's id. A failover is a new session (an attempt) of
+             *     the same run; filter `listAgentSessions` with `run`.
+             */
+            run?: string | null;
             /** @description The runner's device id, `d_…`. */
             runner: string;
             /** @description The secrets it is leased at each start, by name. */
             secrets?: string[] | null;
+            /** @description The pools a budget stop took out of the run's chain. Admin only. */
+            skip_pools?: number[] | null;
             /**
              * @description `starting`, `running`, `interrupted` (its runner restarted; it is resumed), `ended`,
              *     `lost`.
              */
             state: string;
             updated_at: components["schemas"]["Timestamp"];
+            /**
+             * @description The last status class its own gateway reported: `ok`, `rate_limited`, `quota`,
+             *     `server_error`, `auth_failed`, …
+             */
+            upstream_class?: string | null;
             usage?: components["schemas"]["AgentUsage"];
+            /**
+             * @description Set while a chain session waits for an account: it stays `starting` until `until`, or
+             *     until `scheduler.wait_max_secs` ends the run.
+             */
+            waiting?: components["schemas"]["AgentWaiting"];
         };
         AgentTranscript: {
             entries: components["schemas"]["AgentTranscriptEntry"][];
@@ -1438,6 +1619,15 @@ export interface components {
             input: number;
             /** Format: int64 */
             output: number;
+        };
+        /** @description Why a chain session has not started: it waits for an account to come back. */
+        AgentWaiting: {
+            /** @description Its first wait; it waits `scheduler.wait_max_secs` in all. */
+            since?: components["schemas"]["Timestamp"];
+            /** @description When the earliest account may be back. */
+            until: components["schemas"]["Timestamp"];
+            /** @description A fixed phrase: every account the chain can use is cooling, limited or at its cap. */
+            why: string;
         };
         AgentWake: {
             /** @description The wake's key. */
@@ -1500,6 +1690,13 @@ export interface components {
             /** Format: int64 */
             next_before?: number | null;
         };
+        BindChain: {
+            /**
+             * Format: int64
+             * @description The chain's id.
+             */
+            chain: number;
+        };
         Binding: {
             agent: string;
             /** Format: int64 */
@@ -1508,6 +1705,47 @@ export interface components {
         };
         BudgetDeleted: {
             deleted: boolean;
+        };
+        /**
+         * @description An ordered fallback chain of 1 to 4 pools. A new session draws an account from the first
+         *     entry that has one to give.
+         */
+        Chain: {
+            created_at: components["schemas"]["Timestamp"];
+            /** @description In fallback order. */
+            entries: components["schemas"]["ChainEntry"][];
+            /** Format: int64 */
+            id: number;
+            /** @description The user's default chain serves an agent bound to none. */
+            is_default: boolean;
+            name: string;
+            updated_at: components["schemas"]["Timestamp"];
+        };
+        /** @description An agent's binding: its sessions get this chain. */
+        ChainBinding: {
+            /** @description The opaque agent id, 1 to 64 of `[A-Za-z0-9._:-]`. */
+            agent: string;
+            /**
+             * Format: int64
+             * @description The chain's id.
+             */
+            chain: number;
+        };
+        /**
+         * @description One step of a chain: the pool tried at this position, and the harness and model its accounts
+         *     run. The harness is the pool's provider's own.
+         */
+        ChainEntry: {
+            /** @description `claude`, `codex` or `agy`. */
+            harness: string;
+            /** @description The model for that harness; absent, the harness's default. */
+            model?: string | null;
+            /**
+             * Format: int64
+             * @description The pool's id.
+             */
+            pool: number;
+            provider: string;
         };
         Challenge: {
             /**
@@ -1674,7 +1912,24 @@ export interface components {
              * @description What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,
              *     `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;
              *     a device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a
-             *     module writes. The registered kinds are listed in `x-event-kinds`.
+             *     module writes. The registered kinds are listed in `x-event-kinds`. The payload of
+             *     `agent.state` is `{session, state, reason, …}`: a chain session that waits for an account
+             *     says `reason: "waiting"` and `waiting: {until, why, since}` (`until` an RFC 3339 time, `since`
+             *     the first wait in unix seconds), and one whose launch refused its account, so another was
+             *     picked across a provider or harness, says `reason: "repicked"`, and a run a failover moved across
+             *     them says `reason: "failover"`, both with `from` and `to` (each `{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account
+             *     cooled or limited until `until` (`class` `rate_limited`, `quota` or `plan_limit`; `source`
+             *     `gateway` or `harness`). `account.health` is `{account, user, state, reason}`: an account went
+             *     `unhealthy` (`reason` `upstream_errors` or `auth_suspected`). `account.failover` is `{run,
+             *     user, from_session, to_session, from_account, to_account, from_pool, to_pool, class, hop}`: a
+             *     run moved to `to_session`, or ended (`to_session` null: its chain has nothing left, the hop cap
+             *     or the storm guard; `to_account` is null while the successor waits for one). `account.budget` is
+             *     `{subject_kind, subject, state}` for an account's or a pool's budget (`state` `warning` or
+             *     `exhausted`). `account.expired` is `{account, user, reason}`: a key the provider refused was
+             *     confirmed and the account disabled. `alarm.raised` with `alarm` `failover_storm` and a
+             *     `user` says the bound on that user's failovers stopped a run of theirs from moving (once per
+             *     window and user). No payload holds a key, a token or an
+             *     upstream's own words.
              */
             kind: string;
             payload: Record<string, never>;
@@ -1864,8 +2119,23 @@ export interface components {
         };
         /** @description A session to start. No `Debug`: the prompt is the caller's. */
         NewAgentSession: {
-            /** @description `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). */
-            harness: string;
+            /**
+             * @description An opaque agent id (1 to 64 of `[A-Za-z0-9._:-]`): its bound chain, else the user's
+             *     default chain, serves the session. Needs `admin`. With no chain either way the session
+             *     runs as a plain one and names its harness.
+             */
+            agent?: string | null;
+            /**
+             * Format: int64
+             * @description A fallback chain's id: the session draws its account from it, one at a time. Needs
+             *     `admin`. It must not come with a harness, a model or an `acct.*` secret.
+             */
+            chain?: number | null;
+            /**
+             * @description `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it
+             *     (and `model`) when the session draws from a chain: the account the allocator picks sets them.
+             */
+            harness?: string;
             /**
              * @description The model id as the provider names it. For a session served by the auth gateway it must be
              *     one of the ids priced for its provider, exactly: the gateway resolves no alias.
@@ -1889,6 +2159,25 @@ export interface components {
             agent: string;
             /** Format: int64 */
             pool_id: number;
+        };
+        /**
+         * @description A chain to write: `[a-z][a-z0-9._-]{0,63}` and 1 to 4 entries, at most one of them a
+         *     subscription. For an edit this replaces the name and the whole list.
+         */
+        NewChain: {
+            entries: components["schemas"]["NewChainEntry"][];
+            name: string;
+        };
+        /** @description An entry to write: a pool and the model its accounts run. */
+        NewChainEntry: {
+            /** @description A valid model id; an API-key pool's must be priced. Absent, the harness's default. */
+            model?: string | null;
+            /**
+             * Format: int64
+             * @description The pool's id; it must be the caller's user's, of a `claude`, `codex` or `agy` provider,
+             *     and in the chain once.
+             */
+            pool: number;
         };
         /** @description A lease to grant. */
         NewLease: {
@@ -2133,12 +2422,23 @@ export interface components {
              */
             cap: number;
             created_at: components["schemas"]["Timestamp"];
+            /**
+             * @description What the scheduler keeps of its health. Only the reads say it; `state`, `state_reason`
+             *     and `state_until` (a cooldown's end) are above.
+             */
+            health?: components["schemas"]["AccountHealth"];
             /** Format: int64 */
             id: number;
             label: string;
             /** @description The last one-shot test of the key; absent when it was never tested. */
             last_test?: components["schemas"]["LastTest"];
             last_used_at?: components["schemas"]["Timestamp"];
+            /**
+             * Format: int64
+             * @description Sessions that hold a slot of its cap now (`starting`, `running`, `interrupted`). Only the
+             *     reads (`listAccounts`, `getAccount`) say it.
+             */
+            live?: number | null;
             /** @description The key's last four characters; empty for a key too short to show any. */
             masked_tail: string;
             /** @description `anthropic`, `openai`, `google` or a user definition's id. */
@@ -2697,7 +2997,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every account: its key's last four characters, never the key, its secret's name or its runner scope */
+            /** @description Every account: its key's last four characters, never the key, its secret's name or its runner scope; with its `live` session count and `health` (`admin` devices only) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3032,7 +3332,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One account */
+            /** @description One account, with its `live` session count and `health` (`admin` devices only) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3327,6 +3627,8 @@ export interface operations {
                 /** @description Sessions with an `index` below this; absent, from the newest. */
                 before?: number;
                 limit?: number;
+                /** @description Only the attempts of this run (its first attempt's id, `as_…`). */
+                run?: string;
             };
             header?: never;
             path?: never;
@@ -3365,7 +3667,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Started on the runner (`running`), or `starting` while the runner is away (audited as `agent.created`). 409 `runner_offline` or `unsupported_command` (no agent driver), 503 `runner_busy` (its capacity or the harness's slot is full), the secrets broker's refusals (`secrets_disabled`, `limit_reached`, 400 when the runner is not in a secret's scope) */
+            /** @description Started on the runner (`running`), or `starting` while the runner is away (audited as `agent.created`). 409 `runner_offline` or `unsupported_command` (no agent driver), 503 `runner_busy` (its capacity or the harness's slot is full), the secrets broker's refusals (`secrets_disabled`, `limit_reached`, 400 when the runner is not in a secret's scope). With `chain` or `agent` (admin only, else 403): the session starts with no account and the allocator picks one from the chain (`waiting` while every account cools); 404 for no such chain, 400 for a harness, a model or an `acct.*` secret beside a chain. A chain create passes a plain create's checks for the harness of every entry, and the runner must be online with room for at least one entry (else its refusal, 409 or 503), all before any row; an entry the runner cannot serve is skipped at the pick */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3622,7 +3924,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Queued on the scheduler (audited as `agent.wake_queued`): once the session is idle it is resumed on its runner, continuing the harness's own session with `text` as its next turn (`agent.woken`). A session that is still running is retried for a while, then the wake is dropped. 409 `not_wakeable` (failed, cancelled, a module's), 409 `limit_reached` (too many wakes waiting), 503 `scheduler_unavailable` */
+            /** @description Queued on the scheduler (audited as `agent.wake_queued`): once the session is idle it is resumed on its runner, continuing the harness's own session with `text` as its next turn (`agent.woken`). A session that is still running is retried for a while, then the wake is dropped (a wake queued for an attempt a failover replaced goes to its run's newest). 409 `failed_over` (the session was replaced: the message names the attempt to wake), 409 `not_wakeable` (failed, cancelled, a module's), 409 `limit_reached` (too many wakes waiting), 503 `scheduler_unavailable` */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4005,6 +4307,279 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubjectBudget"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listChains: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's user's chains, each with its entries in fallback order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Chain"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createChain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewChain"];
+            };
+        };
+        responses: {
+            /** @description Stored for the caller's user (audited as `chain.created`). 400 for a bad name, 1 to 4 entries, a pool twice, another user's pool, a pool that is not a `claude`, `codex` or `agy` one, an unpriced API-key model, or two subscriptions; 404 for no such pool; 409 `conflict` (the name is taken) or `limit_reached` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Chain"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listChainBindings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's user's agent bindings, by agent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChainBinding"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    bindAgentChain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent's id */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BindChain"];
+            };
+        };
+        responses: {
+            /** @description The agent's sessions get this chain, replacing an earlier binding (audited as `chain.bound`); 400 for a bad agent id, 404 for no such chain */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChainBinding"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    unbindAgentChain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent's id */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The agent's sessions fall back to the default chain (audited as `chain.unbound`); 404 when it had no binding */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountsDeleted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getChain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The chain's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One chain; 404 for another user's */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Chain"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    replaceChain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The chain's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewChain"];
+            };
+        };
+        responses: {
+            /** @description The name and the whole entry list replaced (audited as `chain.updated`); a run already walking the chain keeps its snapshot. The refusals of `createChain`; 404 for another user's chain */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Chain"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteChain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The chain's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted with its entries and bindings (audited as `chain.deleted`); 409 `conflict` while a live session walks it, 404 for another user's */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountsDeleted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setDefaultChain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The chain's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user's default chain from now on, the previous one no longer (audited as `chain.default_set`); it serves a session that names an agent bound to none */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Chain"];
                 };
             };
             400: components["responses"]["BadRequest"];

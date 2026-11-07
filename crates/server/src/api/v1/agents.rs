@@ -11,10 +11,10 @@ use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
+use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use utoipa::{IntoParams, ToSchema};
+use utoipa::ToSchema;
 
 use super::types::{Timestamp, ts};
 use super::{ApiError, ApiResult, BY, Caller};
@@ -24,18 +24,12 @@ use crate::auth::crypto::is_id;
 use crate::store::agents::{self as store, Session, SessionSecret};
 use ainkrad_proto::v2::{AgentDecide, AgentSend, AgentStop, Command};
 
-const MAX_MESSAGE: usize = 16 * 1024;
+mod sched;
+mod types;
+use sched::{AgentWaiting, create_named, listed, page, shown};
+use types::*;
 
-/// Tokens used, as the harness reported them.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct AgentUsage {
-    pub input: u64,
-    pub output: u64,
-    pub cache_read: u64,
-    pub cache_write: u64,
-    /// Millionths of a US dollar, when the harness says.
-    pub cost_usd_micros: Option<u64>,
-}
+const MAX_MESSAGE: usize = 16 * 1024;
 
 /// An agent session: a harness on a runner.
 #[derive(Debug, Serialize, ToSchema)]
@@ -68,6 +62,40 @@ pub struct AgentSession {
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     pub ended_at: Option<Timestamp>,
+    /// The opaque agent id the create named (the key of its chain binding).
+    pub agent: Option<String>,
+    /// The chain the run draws its accounts from; absent for a session that names its account
+    /// itself or uses the runner's own login.
+    pub chain_id: Option<i64>,
+    /// The chain as it was when the session began (an edit never moves a running run).
+    pub chain: Option<Vec<super::chains::ChainEntry>>,
+    /// The entry of `chain` the run sits on, from 0.
+    pub chain_pos: Option<i64>,
+    /// The account the session holds, whatever its delivery (an API key or a subscription).
+    pub account: Option<i64>,
+    /// Set while a chain session waits for an account: it stays `starting` until `until`, or
+    /// until `scheduler.wait_max_secs` ends the run.
+    pub waiting: Option<AgentWaiting>,
+    /// How many accounts a launch refused after the pick before the one it holds (at most 2).
+    pub repicked: Option<i64>,
+    /// The last status class its own gateway reported: `ok`, `rate_limited`, `quota`,
+    /// `server_error`, `auth_failed`, …
+    pub upstream_class: Option<String>,
+    /// The run it belongs to: its first attempt's id. A failover is a new session (an attempt) of
+    /// the same run; filter `listAgentSessions` with `run`.
+    pub run: Option<String>,
+    /// Which attempt of its run it is, from 0.
+    pub attempt: Option<i64>,
+    /// The attempt this one replaced.
+    pub failover_of: Option<String>,
+    /// The attempt that replaced this one.
+    pub failed_over_to: Option<String>,
+    /// Why the run was moved off this attempt (`rate_limited`, `quota`, `auth`, `budget_pool`, …).
+    /// An ended run's last attempt says in `outcome.failover` (`{result, why, reasons}`) why it
+    /// could not move on. Admin only.
+    pub failover_class: Option<String>,
+    /// The pools a budget stop took out of the run's chain. Admin only.
+    pub skip_pools: Option<Vec<i64>>,
 }
 
 impl From<Session> for AgentSession {
@@ -95,99 +123,22 @@ impl From<Session> for AgentSession {
             created_at: ts(&s.created_at),
             updated_at: ts(&s.updated_at),
             ended_at: s.ended_at.as_deref().map(ts),
+            agent: None,
+            chain_id: None,
+            chain: None,
+            chain_pos: None,
+            account: None,
+            waiting: None,
+            repicked: None,
+            upstream_class: None,
+            run: None,
+            attempt: None,
+            failover_of: None,
+            failed_over_to: None,
+            failover_class: None,
+            skip_pools: None,
         }
     }
-}
-
-/// A secret for the session: the broker's secret `name`, delivered under `var`.
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct AgentSecret {
-    pub name: String,
-    /// `[A-Z_][A-Z0-9_]*`, not `PATH`, `HOME` or a loader's: the value (`env` delivery), the
-    /// path of a 0600 file holding it (`file`), or of an askpass helper (`askpass`).
-    pub var: String,
-}
-
-/// A session to start. No `Debug`: the prompt is the caller's.
-#[derive(Deserialize, ToSchema)]
-pub struct NewAgentSession {
-    /// The runner's device id, `d_…`.
-    pub runner: String,
-    /// `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes).
-    pub harness: String,
-    /// The model id as the provider names it. For a session served by the auth gateway it must be
-    /// one of the ids priced for its provider, exactly: the gateway resolves no alias.
-    pub model: Option<String>,
-    pub prompt: Option<String>,
-    /// The repo and worktree to work in (`{"repo_url", "base_branch", "branch", …}`); absent, a
-    /// scratch dir.
-    #[schema(value_type = Option<Object>)]
-    pub workspace: Option<Value>,
-    /// `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`.
-    #[schema(value_type = Option<Object>)]
-    pub policy: Option<Value>,
-    /// At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).
-    pub secrets: Option<Vec<AgentSecret>>,
-}
-
-#[derive(Deserialize, ToSchema)]
-pub struct AgentMessage {
-    pub text: String,
-}
-
-#[derive(Deserialize, ToSchema)]
-pub struct AgentDecision {
-    pub approved: bool,
-    /// Told to the agent; a denial's reason.
-    pub reply: Option<String>,
-}
-
-/// A wake for an idle session.
-#[derive(Deserialize, ToSchema)]
-pub struct AgentWakeRequest {
-    /// Makes the wake idempotent: asking again with the same key queues nothing (it is kept for
-    /// 30 days). 1 to 128 of `A-Za-z0-9_.:-`; absent, the Core makes one up.
-    pub key: Option<String>,
-    /// The next turn, 1 byte to 16 KiB; absent, the session just continues.
-    pub text: Option<String>,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct AgentWake {
-    /// The session, `as_…`.
-    pub session: String,
-    /// The wake's key.
-    pub key: String,
-    /// `false` when this key was already used: nothing was queued.
-    pub queued: bool,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct AgentTranscriptEntry {
-    /// From 1, by one: replay from any `seq` with `after`.
-    pub seq: u64,
-    /// Unix milliseconds, on the runner.
-    pub at_ms: i64,
-    /// A harness event, or the session's own (`started`, `message`, `approval_request`,
-    /// `approval_decided`, `interrupted`, `gap`, `ended`), redacted.
-    #[schema(value_type = Object)]
-    pub body: Value,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct AgentTranscript {
-    pub session: String,
-    pub state: String,
-    pub last_seq: i64,
-    pub entries: Vec<AgentTranscriptEntry>,
-}
-
-#[derive(Debug, Default, Deserialize, IntoParams)]
-#[into_params(parameter_in = Query)]
-pub struct Before {
-    /// Sessions with an `index` below this; absent, from the newest.
-    pub before: Option<i64>,
-    pub limit: Option<u32>,
 }
 
 fn parse<T: DeserializeOwned>(body: &[u8]) -> Result<T, ApiError> {
@@ -205,12 +156,15 @@ impl From<Refusal> for ApiError {
     }
 }
 
-async fn one(app: &App, id: &str) -> Result<Session, ApiError> {
+async fn one(app: &App, me: &Caller, id: &str) -> Result<Session, ApiError> {
     let found = match is_id(id, "as_") {
         true => store::get(&app.pool, id).await?,
         false => None,
     };
-    found.ok_or_else(|| ApiError::not_found("no such agent session"))
+    let s = found.ok_or_else(|| ApiError::not_found("no such agent session"))?;
+    // Another user's session is no such session, on every route (a read, a write, a stop).
+    sched::of_user(app, me, &s).await?;
+    Ok(s)
 }
 
 /// A session a module drives answers to that module's own routes (its audit, its approvals, its
@@ -248,7 +202,13 @@ fn owns_secrets(s: &Session, me: &Caller) -> Result<(), ApiError> {
         while the runner is away (audited as `agent.created`). 409 `runner_offline` or \
         `unsupported_command` (no agent driver), 503 `runner_busy` (its capacity or the \
         harness's slot is full), the secrets broker's refusals (`secrets_disabled`, \
-        `limit_reached`, 400 when the runner is not in a secret's scope)", body = AgentSession)))]
+        `limit_reached`, 400 when the runner is not in a secret's scope). With `chain` or \
+        `agent` (admin only, else 403): the session starts with no account and the allocator \
+        picks one from the chain (`waiting` while every account cools); 404 for no such chain, \
+        400 for a harness, a model or an `acct.*` secret beside a chain. A chain create \
+        passes a plain create's checks for the harness of every entry, and the runner must be \
+        online with room for at least one entry (else its refusal, 409 or 503), all before \
+        any row; an entry the runner cannot serve is skipped at the pick", body = AgentSession)))]
 pub async fn create(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
@@ -278,6 +238,12 @@ pub async fn create(
         created_by: &me.device.id,
     };
     let admin = me.device.scopes.iter().any(|scope| scope == "admin");
+    if b.chain.is_some() || b.agent.is_some() {
+        let s = create_named(&app, &me, &new, admin, b.chain, b.agent.as_deref()).await?;
+        agents::authorize_create(&app, &me, &s.id);
+        agents::start(&app, &s).await?;
+        return shown(&app, &me, &s.id).await;
+    }
     agents::validate_new(&new, admin).map_err(|e| match e {
         agents::Invalid::Bad(why) => ApiError::bad_request(why),
         agents::Invalid::Forbidden(why) => {
@@ -288,25 +254,33 @@ pub async fn create(
     let s = store::create(&app.pool, &new, BY, &app.clock.now()).await?;
     agents::authorize_create(&app, &me, &s.id);
     agents::start(&app, &s).await?;
-    Ok(Json(one(&app, &s.id).await?.into()))
+    shown(&app, &me, &s.id).await
 }
 
 #[utoipa::path(get, path = "/api/v1/agent-sessions", operation_id = "listAgentSessions",
     tag = "agents", params(Before),
     responses((status = 200, description = "Sessions, newest first (at most `limit`, 50 by \
         default, 200 at most)", body = Vec<AgentSession>)))]
-pub async fn list(State(app): State<App>, Query(q): Query<Before>) -> ApiResult<Vec<AgentSession>> {
+pub async fn list(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Query(q): Query<Before>,
+) -> ApiResult<Vec<AgentSession>> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let all = store::list(&app.pool, q.before, limit).await?;
-    Ok(Json(all.into_iter().map(Into::into).collect()))
+    let all = page(&app, q.before, limit, q.run.as_deref()).await?;
+    Ok(Json(listed(&app, &me, all).await?))
 }
 
 #[utoipa::path(get, path = "/api/v1/agent-sessions/{id}", operation_id = "getAgentSession",
     tag = "agents",
     params(("id" = String, Path, description = "The session's id, `as_…`")),
     responses((status = 200, description = "One session", body = AgentSession)))]
-pub async fn get(State(app): State<App>, Path(id): Path<String>) -> ApiResult<AgentSession> {
-    Ok(Json(one(&app, &id).await?.into()))
+pub async fn get(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<AgentSession> {
+    shown(&app, &me, &id).await
 }
 
 #[utoipa::path(get, path = "/api/v1/agent-sessions/{id}/transcript",
@@ -321,7 +295,7 @@ pub async fn transcript(
     Path(id): Path<String>,
     Query(p): Query<super::Paging>,
 ) -> ApiResult<AgentTranscript> {
-    let s = one(&app, &id).await?;
+    let s = one(&app, &me, &id).await?;
     owns_secrets(&s, &me)?;
     // What a module's agent saw and did is the module's `admin` read, not an `agent` device's.
     if s.owner_module.is_some() && !me.device.scopes.iter().any(|scope| scope == "admin") {
@@ -389,7 +363,7 @@ pub async fn message(
     Path(id): Path<String>,
     body: Bytes,
 ) -> ApiResult<AgentSession> {
-    let s = one(&app, &id).await?;
+    let s = one(&app, &me, &id).await?;
     let b: AgentMessage = parse(&body)?;
     if b.text.is_empty() || b.text.len() > MAX_MESSAGE {
         return Err(ApiError::bad_request("a message is 1 byte to 16 KiB"));
@@ -416,7 +390,7 @@ pub async fn message(
         &me.device.id,
     )
     .await?;
-    Ok(Json(one(&app, &id).await?.into()))
+    shown(&app, &me, &id).await
 }
 
 /// A tool request id as harnesses make them.
@@ -440,7 +414,7 @@ pub async fn decide(
     Path((id, request)): Path<(String, String)>,
     body: Bytes,
 ) -> ApiResult<AgentSession> {
-    let s = one(&app, &id).await?;
+    let s = one(&app, &me, &id).await?;
     if !request_ok(&request) {
         return Err(ApiError::not_found("no such tool request"));
     }
@@ -464,11 +438,11 @@ pub async fn decide(
         &me.device.id,
     )
     .await?;
-    Ok(Json(one(&app, &id).await?.into()))
+    shown(&app, &me, &id).await
 }
 
 async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSession> {
-    let mut s = one(&app, &id).await?;
+    let mut s = one(&app, &me, &id).await?;
     let command = |s: &Session| {
         Command::AgentStop(AgentStop {
             session: s.id.clone(),
@@ -494,7 +468,7 @@ async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSe
         // whole run settled so no attempt of it moves on.
         let newest = crate::store::failover::newest(&app.pool, &s.id).await?;
         if newest != s.id {
-            s = one(&app, &newest).await?;
+            s = one(&app, &me, &newest).await?;
             owns_secrets(&s, &me)?;
         }
         // Settled before the stop so no move slips in; opened again if the stop never reaches the
@@ -502,7 +476,7 @@ async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSe
         let cancelled = crate::store::failover::cancel_run(&app.pool, &s.id).await?;
         let moved = cancelled.newest != s.id;
         if moved {
-            s = one(&app, &cancelled.newest).await?;
+            s = one(&app, &me, &cancelled.newest).await?;
         }
         let stopped = async {
             if moved {
@@ -523,7 +497,7 @@ async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSe
         if let Err(e) = stopped {
             // Opened again only when a stop to a harness that is still live did not get through; one
             // that ended meanwhile is as cancelled as it was.
-            let live = one(&app, &s.id).await.map_or(true, |x| x.live());
+            let live = one(&app, &me, &s.id).await.map_or(true, |x| x.live());
             if live {
                 let over =
                     crate::store::failover::restore_run(&app.pool, &cancelled.settled).await?;
@@ -538,7 +512,7 @@ async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSe
         "agent.cancelled"
     };
     store::action(&app.pool, &s, BY, action, None, json!({}), &me.device.id).await?;
-    Ok(Json(one(&app, &id).await?.into()))
+    shown(&app, &me, &id).await
 }
 
 #[utoipa::path(post, path = "/api/v1/agent-sessions/{id}/cancel",
@@ -579,7 +553,7 @@ pub async fn resume(
     Extension(me): Extension<Caller>,
     Path(id): Path<String>,
 ) -> ApiResult<AgentSession> {
-    let s = one(&app, &id).await?;
+    let s = one(&app, &me, &id).await?;
     not_a_modules(&s)?;
     owns_secrets(&s, &me)?;
     if !store::reopen(&app.pool, &s.id, &app.clock.now()).await? {
@@ -605,7 +579,7 @@ pub async fn resume(
     )
     .await?;
     agents::supervise(&app, &s.id);
-    Ok(Json(one(&app, &id).await?.into()))
+    shown(&app, &me, &id).await
 }
 
 #[utoipa::path(post, path = "/api/v1/agent-sessions/{id}/wake",
@@ -615,8 +589,10 @@ pub async fn resume(
     responses((status = 200, description = "Queued on the scheduler (audited as \
         `agent.wake_queued`): once the session is idle it is resumed on its runner, continuing \
         the harness's own session with `text` as its next turn (`agent.woken`). A session that \
-        is still running is retried for a while, then the wake is dropped. 409 `not_wakeable` \
-        (failed, cancelled, a module's), 409 `limit_reached` (too many wakes waiting), 503 \
+        is still running is retried for a while, then the wake is dropped (a wake queued for an \
+        attempt a failover replaced goes to its run's newest). 409 `failed_over` (the session was \
+        replaced: the message names the attempt to wake), 409 `not_wakeable` (failed, cancelled, \
+        a module's), 409 `limit_reached` (too many wakes waiting), 503 \
         `scheduler_unavailable`", body = AgentWake)))]
 pub async fn wake(
     State(app): State<App>,
@@ -624,7 +600,7 @@ pub async fn wake(
     Path(id): Path<String>,
     body: Bytes,
 ) -> ApiResult<AgentWake> {
-    let s = one(&app, &id).await?;
+    let s = one(&app, &me, &id).await?;
     let b: AgentWakeRequest = parse(&body)?;
     let key = match b.key {
         Some(k) if request_ok(&k) => k,
@@ -641,6 +617,15 @@ pub async fn wake(
     }
     not_a_modules(&s)?;
     owns_secrets(&s, &me)?;
+    // A wake queued earlier follows its run to the newest attempt; a new one names it instead.
+    let newest = crate::store::failover::newest(&app.pool, &s.id).await?;
+    if newest != s.id {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "failed_over",
+            format!("a failover replaced this session: wake {newest}"),
+        ));
+    }
     if !s.wakeable() {
         return Err(ApiError::new(
             StatusCode::CONFLICT,

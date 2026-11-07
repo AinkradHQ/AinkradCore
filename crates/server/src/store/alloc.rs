@@ -33,7 +33,7 @@ pub use assign::*;
 pub use candidates::room_in;
 pub use live::*;
 
-/// A pick waits at most this long for a cooling account (`scheduler.wait_max`, S7 makes it a setting).
+/// A pick waits at most this long for a cooling account: the default of `scheduler.wait_max_secs`.
 pub const WAIT_MAX_SECS: i64 = 15 * 60;
 
 /// One step of a chain: a pool, and the harness and model its accounts run. (Chains themselves, and

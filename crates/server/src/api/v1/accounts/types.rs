@@ -27,6 +27,92 @@ pub struct ProviderAccount {
     pub last_used_at: Option<Timestamp>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// Sessions that hold a slot of its cap now (`starting`, `running`, `interrupted`). Only the
+    /// reads (`listAccounts`, `getAccount`) say it.
+    pub live: Option<i64>,
+    /// What the scheduler keeps of its health. Only the reads say it; `state`, `state_reason`
+    /// and `state_until` (a cooldown's end) are above.
+    pub health: Option<AccountHealth>,
+}
+
+/// An account's health counters, as the scheduler keeps them.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AccountHealth {
+    /// Upstream errors counted in the current ten-minute window; three put it out for ten minutes.
+    pub fail_streak: i64,
+    /// A subscription's failed sessions in a row; the third keeps it out of new runs
+    /// (`state_reason` `auth_suspected`) until an admin answers.
+    pub auth_streak: i64,
+    /// The last time a request or a session on it went well.
+    pub last_success_at: Option<Timestamp>,
+    /// The last status class its gateway reported on any of its sessions.
+    pub upstream_class: Option<String>,
+    /// A subscription's latest plan-limit snapshot, as its harness last said it (harness output:
+    /// it can only cool the account, never disable it).
+    pub plan_limit: Option<AccountPlanLimit>,
+}
+
+/// A subscription's plan-limit snapshot.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AccountPlanLimit {
+    /// When the Core stored it.
+    pub at: Timestamp,
+    /// The harness's own word: `allowed`, `allowed_warning`, `rejected`.
+    pub status: String,
+    pub windows: Vec<AccountPlanWindow>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AccountPlanWindow {
+    /// e.g. `five_hour`, `seven_day`.
+    pub name: String,
+    /// A fraction of the window's limit, past 1 at the limit.
+    pub utilization: f64,
+    pub resets_at: Option<Timestamp>,
+}
+
+impl AccountPlanLimit {
+    fn of(snapshot: &serde_json::Value) -> Option<Self> {
+        let at = snapshot["at"].as_i64()?;
+        let plan = &snapshot["plan"];
+        let when = |s: i64| ts(&crate::scheduler::iso_of_unix(s));
+        Some(Self {
+            at: when(at),
+            status: plan["status"].as_str()?.to_owned(),
+            windows: plan["windows"]
+                .as_array()
+                .map(|w| {
+                    w.iter()
+                        .filter_map(|w| {
+                            Some(AccountPlanWindow {
+                                name: w["name"].as_str()?.to_owned(),
+                                utilization: w["utilization"].as_f64()?,
+                                resets_at: w["resets_at"].as_i64().map(when),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
+    }
+}
+
+impl ProviderAccount {
+    /// With its load and health, from [`crate::store::health::statuses`]; an account with no row
+    /// there (just made) has none.
+    pub(super) fn with_status(mut self, st: Option<&crate::store::health::Status>) -> Self {
+        if let Some(st) = st {
+            self.live = Some(st.live);
+            self.health = Some(AccountHealth {
+                fail_streak: st.fail_streak,
+                auth_streak: st.auth_streak,
+                last_success_at: opt_ts(st.last_success_at.as_deref()),
+                upstream_class: st.upstream_class.clone(),
+                plan_limit: st.plan_limit.as_ref().and_then(AccountPlanLimit::of),
+            });
+        }
+        self
+    }
 }
 
 impl From<acc::Account> for ProviderAccount {
@@ -54,6 +140,8 @@ impl From<acc::Account> for ProviderAccount {
             last_used_at: opt_ts(a.last_used_at.as_deref()),
             created_at: ts(&a.created_at),
             updated_at: ts(&a.updated_at),
+            live: None,
+            health: None,
         }
     }
 }

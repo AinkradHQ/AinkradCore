@@ -20,9 +20,10 @@
 //!   raw `<harness>:<code>` is no signal, and the Core never classifies text itself.
 //! - **Lazy recovery.** A timed state whose `state_until` has passed is `active` again the next
 //!   time anything looks ([`recover`], audited `account.state_set` by the system); no timer.
-//! - **No new contract.** A change of state is an `account.state_set` audit row by the system (the
-//!   `audit` event follows it); the dedicated `account.limited` and `account.health` event kinds
-//!   come with the scheduler API (S7).
+//! - **Events.** A change of state is an `account.state_set` audit row by the system (the `audit`
+//!   event follows it) and, for a cooldown, a limit or an unhealthy account, an `account.limited` or
+//!   `account.health` event in the same transaction (`notice`). A window that is only lengthened
+//!   raises neither.
 
 use ainkrad_proto::v2::{PlanLimit, UpstreamStatus};
 use serde_json::json;
@@ -34,7 +35,8 @@ use crate::scheduler::{iso_of_unix, unix_secs};
 pub const BACKOFF_START_SECS: i64 = 60;
 /// The most a rate-limit backoff grows to.
 pub const BACKOFF_MAX_SECS: i64 = 30 * 60;
-/// How long a quota-limited account waits when nothing says when its limit resets.
+/// How long a quota-limited account waits when nothing says when its limit resets: the default of
+/// `scheduler.quota_cooldown_secs`.
 pub const QUOTA_COOLDOWN_SECS: i64 = 6 * 3600;
 /// The most an upstream's `retry-after` or reset time cools an account for (rate limit).
 pub const RATE_MAX_SECS: i64 = 24 * 3600;
@@ -145,6 +147,8 @@ struct Ctx<'a> {
     trusted: bool,
     now: &'a str,
     now_u: i64,
+    /// `scheduler.quota_cooldown_secs`: how long a quota limit lasts when nothing says.
+    quota_secs: i64,
 }
 
 struct Entry<'a> {
@@ -209,6 +213,15 @@ async fn enter(
         let details = json!({"label": h.label, "from": h.state, "to": state, "reason": e.reason,
             "until": until_iso, "source": source, "class": e.class, "session": cx.session});
         audited(conn, account, details).await?;
+        let entered = notice::Entered {
+            account,
+            state,
+            reason: e.reason,
+            class: e.class,
+            until: until_iso.as_deref(),
+            source,
+        };
+        notice::entered(conn, entered).await?;
     }
     Ok(true)
 }
@@ -242,11 +255,19 @@ pub async fn on_signal(
     let Some(h) = load(conn, account).await? else {
         return Ok(());
     };
+    let quota_secs = super::settings::value_in(
+        conn,
+        ainkrad_core::settings::Key::SchedulerQuotaCooldownSecs,
+        ainkrad_core::settings::Scope::Server,
+    )
+    .await
+    .unwrap_or(QUOTA_COOLDOWN_SECS);
     let cx = Ctx {
         session,
         trusted: matches!(signal, Signal::Gateway { .. }),
         now,
         now_u,
+        quota_secs,
     };
     match signal {
         Signal::Success => success(conn, account, &cx).await,
@@ -324,8 +345,8 @@ async fn gateway(
             rate_limited(conn, account, h, after.max(reset), "rate_limited", cx).await
         }
         UpstreamStatus::Quota => {
-            let until = until_reset(reset_at, cx.now_u, QUOTA_MAX_SECS)
-                .unwrap_or(cx.now_u + QUOTA_COOLDOWN_SECS);
+            let until =
+                until_reset(reset_at, cx.now_u, QUOTA_MAX_SECS).unwrap_or(cx.now_u + cx.quota_secs);
             let e = Entry {
                 reason: "quota",
                 until: Some(until),
@@ -383,7 +404,7 @@ async fn harness_end(
         "quota" => {
             let e = Entry {
                 reason: "quota",
-                until: Some(cx.now_u + QUOTA_COOLDOWN_SECS),
+                until: Some(cx.now_u + cx.quota_secs),
                 backoff: None,
                 clear_fails: false,
                 class,
@@ -449,7 +470,10 @@ async fn harness_plan(
     rate_limited(conn, account, h, resets, "plan_limit", cx).await
 }
 
+mod notice;
 mod recover;
 mod session;
+mod view;
 pub use recover::*;
 pub use session::*;
+pub use view::*;

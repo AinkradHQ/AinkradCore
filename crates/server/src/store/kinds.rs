@@ -25,9 +25,15 @@ pub const PLATFORM: &str = "core";
 /// notifications service tried (E2-12); and a terminal's life (E2-01), who and when, never its
 /// content: `terminal.opened`, `.attached`, `.detached`, `.exited`, `.closed`, and `.reap_warning` (an idle
 /// or orphaned terminal is about to be closed, with the grace left); and agent
-/// sessions' (`agent.*`, E2-08); and the health alarms (`alarm.raised`, `alarm.cleared`, E1-19.3),
-/// visible to `admin`.
+/// sessions' (`agent.*`, E2-08); the health alarms (`alarm.raised`, `alarm.cleared`, E1-19.3),
+/// visible to `admin`; and an account's state and what moves its runs (`account.limited`, `account.health`,
+/// `account.failover`, `account.budget`, `account.expired`, S7), `admin`.
 pub const PLATFORM_EVENT_KINDS: &[&str] = &[
+    "account.budget",
+    "account.expired",
+    "account.failover",
+    "account.health",
+    "account.limited",
     "account.login.done",
     "account.login.failed",
     "account.login.started",

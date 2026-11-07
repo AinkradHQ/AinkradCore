@@ -149,7 +149,7 @@ async fn each_validation_rule_refuses() {
         .execute(p)
         .await
         .unwrap();
-    assert_eq!(code(new(p, "theirs", &[spec(g)]).await), "bad_request");
+    assert_eq!(code(new(p, "theirs", &[spec(g)]).await), "not_found");
     assert!(
         ch::create(p, 2, "theirs", &[spec(g)], "d_x", BY, NOW)
             .await
@@ -157,7 +157,7 @@ async fn each_validation_rule_refuses() {
     );
     assert_eq!(
         code(ch::create(p, 2, "mixed", &[spec(g), spec(a)], "d_x", BY, NOW).await),
-        "bad_request"
+        "not_found"
     );
 }
 

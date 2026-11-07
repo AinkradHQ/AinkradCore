@@ -93,6 +93,41 @@
         ],
         "type": "object"
       },
+      "AccountHealth": {
+        "description": "An account's health counters, as the scheduler keeps them.",
+        "properties": {
+          "auth_streak": {
+            "description": "A subscription's failed sessions in a row; the third keeps it out of new runs\n(`state_reason` `auth_suspected`) until an admin answers.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "fail_streak": {
+            "description": "Upstream errors counted in the current ten-minute window; three put it out for ten minutes.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "last_success_at": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "The last time a request or a session on it went well."
+          },
+          "plan_limit": {
+            "$ref": "#/components/schemas/AccountPlanLimit",
+            "description": "A subscription's latest plan-limit snapshot, as its harness last said it (harness output:\nit can only cool the account, never disable it)."
+          },
+          "upstream_class": {
+            "description": "The last status class its gateway reported on any of its sessions.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "fail_streak",
+          "auth_streak"
+        ],
+        "type": "object"
+      },
       "AccountLogin": {
         "description": "Where a sign-in has got to. Never a token or a code.",
         "properties": {
@@ -155,6 +190,52 @@
           "created_at",
           "updated_at",
           "expires_at"
+        ],
+        "type": "object"
+      },
+      "AccountPlanLimit": {
+        "description": "A subscription's plan-limit snapshot.",
+        "properties": {
+          "at": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When the Core stored it."
+          },
+          "status": {
+            "description": "The harness's own word: `allowed`, `allowed_warning`, `rejected`.",
+            "type": "string"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/AccountPlanWindow"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "at",
+          "status",
+          "windows"
+        ],
+        "type": "object"
+      },
+      "AccountPlanWindow": {
+        "properties": {
+          "name": {
+            "description": "e.g. `five_hour`, `seven_day`.",
+            "type": "string"
+          },
+          "resets_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "utilization": {
+            "description": "A fraction of the window's limit, past 1 at the limit.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "utilization"
         ],
         "type": "object"
       },
@@ -289,6 +370,55 @@
       "AgentSession": {
         "description": "An agent session: a harness on a runner.",
         "properties": {
+          "account": {
+            "description": "The account the session holds, whatever its delivery (an API key or a subscription).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "agent": {
+            "description": "The opaque agent id the create named (the key of its chain binding).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attempt": {
+            "description": "Which attempt of its run it is, from 0.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "chain": {
+            "description": "The chain as it was when the session began (an edit never moves a running run).",
+            "items": {
+              "$ref": "#/components/schemas/ChainEntry"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "chain_id": {
+            "description": "The chain the run draws its accounts from; absent for a session that names its account\nitself or uses the runner's own login.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "chain_pos": {
+            "description": "The entry of `chain` the run sits on, from 0.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "created_at": {
             "$ref": "#/components/schemas/Timestamp"
           },
@@ -297,6 +427,27 @@
           },
           "ended_at": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "failed_over_to": {
+            "description": "The attempt that replaced this one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failover_class": {
+            "description": "Why the run was moved off this attempt (`rate_limited`, `quota`, `auth`, `budget_pool`, …).\nAn ended run's last attempt says in `outcome.failover` (`{result, why, reasons}`) why it\ncould not move on. Admin only.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failover_of": {
+            "description": "The attempt this one replaced.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "harness": {
             "type": "string"
@@ -338,11 +489,26 @@
               "null"
             ]
           },
+          "repicked": {
+            "description": "How many accounts a launch refused after the pick before the one it holds (at most 2).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "resumes": {
             "description": "How many times it was resumed.",
             "format": "int64",
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "run": {
+            "description": "The run it belongs to: its first attempt's id. A failover is a new session (an attempt) of\nthe same run; filter `listAgentSessions` with `run`.",
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -360,6 +526,17 @@
               "null"
             ]
           },
+          "skip_pools": {
+            "description": "The pools a budget stop took out of the run's chain. Admin only.",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "state": {
             "description": "`starting`, `running`, `interrupted` (its runner restarted; it is resumed), `ended`,\n`lost`.",
             "type": "string"
@@ -367,8 +544,19 @@
           "updated_at": {
             "$ref": "#/components/schemas/Timestamp"
           },
+          "upstream_class": {
+            "description": "The last status class its own gateway reported: `ok`, `rate_limited`, `quota`,\n`server_error`, `auth_failed`, …",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "usage": {
             "$ref": "#/components/schemas/AgentUsage"
+          },
+          "waiting": {
+            "$ref": "#/components/schemas/AgentWaiting",
+            "description": "Set while a chain session waits for an account: it stays `starting` until `until`, or\nuntil `scheduler.wait_max_secs` ends the run."
           }
         },
         "required": [
@@ -473,6 +661,28 @@
           "output",
           "cache_read",
           "cache_write"
+        ],
+        "type": "object"
+      },
+      "AgentWaiting": {
+        "description": "Why a chain session has not started: it waits for an account to come back.",
+        "properties": {
+          "since": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "Its first wait; it waits `scheduler.wait_max_secs` in all."
+          },
+          "until": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When the earliest account may be back."
+          },
+          "why": {
+            "description": "A fixed phrase: every account the chain can use is cooling, limited or at its cap.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "until",
+          "why"
         ],
         "type": "object"
       },
@@ -727,6 +937,19 @@
         ],
         "type": "object"
       },
+      "BindChain": {
+        "properties": {
+          "chain": {
+            "description": "The chain's id.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "chain"
+        ],
+        "type": "object"
+      },
       "Binding": {
         "properties": {
           "agent": {
@@ -755,6 +978,93 @@
         },
         "required": [
           "deleted"
+        ],
+        "type": "object"
+      },
+      "Chain": {
+        "description": "An ordered fallback chain of 1 to 4 pools. A new session draws an account from the first\nentry that has one to give.",
+        "properties": {
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "entries": {
+            "description": "In fallback order.",
+            "items": {
+              "$ref": "#/components/schemas/ChainEntry"
+            },
+            "type": "array"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "is_default": {
+            "description": "The user's default chain serves an agent bound to none.",
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "is_default",
+          "entries",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "ChainBinding": {
+        "description": "An agent's binding: its sessions get this chain.",
+        "properties": {
+          "agent": {
+            "description": "The opaque agent id, 1 to 64 of `[A-Za-z0-9._:-]`.",
+            "type": "string"
+          },
+          "chain": {
+            "description": "The chain's id.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agent",
+          "chain"
+        ],
+        "type": "object"
+      },
+      "ChainEntry": {
+        "description": "One step of a chain: the pool tried at this position, and the harness and model its accounts\nrun. The harness is the pool's provider's own.",
+        "properties": {
+          "harness": {
+            "description": "`claude`, `codex` or `agy`.",
+            "type": "string"
+          },
+          "model": {
+            "description": "The model for that harness; absent, the harness's default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pool": {
+            "description": "The pool's id.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "provider": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pool",
+          "provider",
+          "harness"
         ],
         "type": "object"
       },
@@ -1129,7 +1439,7 @@
             "$ref": "#/components/schemas/Timestamp"
           },
           "kind": {
-            "description": "What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,\n`action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;\na device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a\nmodule writes. The registered kinds are listed in `x-event-kinds`.",
+            "description": "What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,\n`action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;\na device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a\nmodule writes. The registered kinds are listed in `x-event-kinds`. The payload of\n`agent.state` is `{session, state, reason, …}`: a chain session that waits for an account\nsays `reason: \"waiting\"` and `waiting: {until, why, since}` (`until` an RFC 3339 time, `since`\nthe first wait in unix seconds), and one whose launch refused its account, so another was\npicked across a provider or harness, says `reason: \"repicked\"`, and a run a failover moved across\nthem says `reason: \"failover\"`, both with `from` and `to` (each `{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account\ncooled or limited until `until` (`class` `rate_limited`, `quota` or `plan_limit`; `source`\n`gateway` or `harness`). `account.health` is `{account, user, state, reason}`: an account went\n`unhealthy` (`reason` `upstream_errors` or `auth_suspected`). `account.failover` is `{run,\nuser, from_session, to_session, from_account, to_account, from_pool, to_pool, class, hop}`: a\nrun moved to `to_session`, or ended (`to_session` null: its chain has nothing left, the hop cap\nor the storm guard; `to_account` is null while the successor waits for one). `account.budget` is\n`{subject_kind, subject, state}` for an account's or a pool's budget (`state` `warning` or\n`exhausted`). `account.expired` is `{account, user, reason}`: a key the provider refused was\nconfirmed and the account disabled. `alarm.raised` with `alarm` `failover_storm` and a\n`user` says the bound on that user's failovers stopped a run of theirs from moving (once per\nwindow and user). No payload holds a key, a token or an\nupstream's own words.",
             "type": "string"
           },
           "payload": {
@@ -1148,6 +1458,11 @@
         ],
         "type": "object",
         "x-event-kinds": [
+          "account.budget",
+          "account.expired",
+          "account.failover",
+          "account.health",
+          "account.limited",
           "account.login.done",
           "account.login.failed",
           "account.login.started",
@@ -1174,6 +1489,11 @@
           "terminal.reap_warning"
         ],
         "x-event-scopes": {
+          "account.budget": "admin",
+          "account.expired": "admin",
+          "account.failover": "admin",
+          "account.health": "admin",
+          "account.limited": "admin",
           "account.login.done": "admin",
           "account.login.failed": "admin",
           "account.login.started": "admin",
@@ -1644,8 +1964,23 @@
       "NewAgentSession": {
         "description": "A session to start. No `Debug`: the prompt is the caller's.",
         "properties": {
+          "agent": {
+            "description": "An opaque agent id (1 to 64 of `[A-Za-z0-9._:-]`): its bound chain, else the user's\ndefault chain, serves the session. Needs `admin`. With no chain either way the session\nruns as a plain one and names its harness.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "chain": {
+            "description": "A fallback chain's id: the session draws its account from it, one at a time. Needs\n`admin`. It must not come with a harness, a model or an `acct.*` secret.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "harness": {
-            "description": "`claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes).",
+            "description": "`claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it\n(and `model`) when the session draws from a chain: the account the allocator picks sets them.",
             "type": "string"
           },
           "model": {
@@ -1691,8 +2026,7 @@
           }
         },
         "required": [
-          "runner",
-          "harness"
+          "runner"
         ],
         "type": "object"
       },
@@ -1710,6 +2044,46 @@
         "required": [
           "agent",
           "pool_id"
+        ],
+        "type": "object"
+      },
+      "NewChain": {
+        "description": "A chain to write: `[a-z][a-z0-9._-]{0,63}` and 1 to 4 entries, at most one of them a\nsubscription. For an edit this replaces the name and the whole list.",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/NewChainEntry"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "entries"
+        ],
+        "type": "object"
+      },
+      "NewChainEntry": {
+        "description": "An entry to write: a pool and the model its accounts run.",
+        "properties": {
+          "model": {
+            "description": "A valid model id; an API-key pool's must be priced. Absent, the harness's default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pool": {
+            "description": "The pool's id; it must be the caller's user's, of a `claude`, `codex` or `agy` provider,\nand in the chain once.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pool"
         ],
         "type": "object"
       },
@@ -2376,6 +2750,10 @@
           "created_at": {
             "$ref": "#/components/schemas/Timestamp"
           },
+          "health": {
+            "$ref": "#/components/schemas/AccountHealth",
+            "description": "What the scheduler keeps of its health. Only the reads say it; `state`, `state_reason`\nand `state_until` (a cooldown's end) are above."
+          },
           "id": {
             "format": "int64",
             "type": "integer"
@@ -2389,6 +2767,14 @@
           },
           "last_used_at": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "live": {
+            "description": "Sessions that hold a slot of its cap now (`starting`, `running`, `interrupted`). Only the\nreads (`listAccounts`, `getAccount`) say it.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "masked_tail": {
             "description": "The key's last four characters; empty for a key too short to show any.",
@@ -3636,7 +4022,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.43.0"
+    "version": "1.44.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -3655,7 +4041,7 @@
                 }
               }
             },
-            "description": "Every account: its key's last four characters, never the key, its secret's name or its runner scope"
+            "description": "Every account: its key's last four characters, never the key, its secret's name or its runner scope; with its `live` session count and `health` (`admin` devices only)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -4288,7 +4674,7 @@
                 }
               }
             },
-            "description": "One account"
+            "description": "One account, with its `live` session count and `health` (`admin` devices only)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -4790,6 +5176,15 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "description": "Only the attempts of this run (its first attempt's id, `as_…`).",
+            "in": "query",
+            "name": "run",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4854,7 +5249,7 @@
                 }
               }
             },
-            "description": "Started on the runner (`running`), or `starting` while the runner is away (audited as `agent.created`). 409 `runner_offline` or `unsupported_command` (no agent driver), 503 `runner_busy` (its capacity or the harness's slot is full), the secrets broker's refusals (`secrets_disabled`, `limit_reached`, 400 when the runner is not in a secret's scope)"
+            "description": "Started on the runner (`running`), or `starting` while the runner is away (audited as `agent.created`). 409 `runner_offline` or `unsupported_command` (no agent driver), 503 `runner_busy` (its capacity or the harness's slot is full), the secrets broker's refusals (`secrets_disabled`, `limit_reached`, 400 when the runner is not in a secret's scope). With `chain` or `agent` (admin only, else 403): the session starts with no account and the allocator picks one from the chain (`waiting` while every account cools); 404 for no such chain, 400 for a harness, a model or an `acct.*` secret beside a chain. A chain create passes a plain create's checks for the harness of every entry, and the runner must be online with room for at least one entry (else its refusal, 409 or 503), all before any row; an entry the runner cannot serve is skipped at the pick"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -5342,7 +5737,7 @@
                 }
               }
             },
-            "description": "Queued on the scheduler (audited as `agent.wake_queued`): once the session is idle it is resumed on its runner, continuing the harness's own session with `text` as its next turn (`agent.woken`). A session that is still running is retried for a while, then the wake is dropped. 409 `not_wakeable` (failed, cancelled, a module's), 409 `limit_reached` (too many wakes waiting), 503 `scheduler_unavailable`"
+            "description": "Queued on the scheduler (audited as `agent.wake_queued`): once the session is idle it is resumed on its runner, continuing the harness's own session with `text` as its next turn (`agent.woken`). A session that is still running is retried for a while, then the wake is dropped (a wake queued for an attempt a failover replaced goes to its run's newest). 409 `failed_over` (the session was replaced: the message names the attempt to wake), 409 `not_wakeable` (failed, cancelled, a module's), 409 `limit_reached` (too many wakes waiting), 503 `scheduler_unavailable`"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -5659,6 +6054,7 @@
     },
     "/api/v1/bindings": {
       "get": {
+        "deprecated": true,
         "operationId": "listBindings",
         "responses": {
           "200": {
@@ -5699,9 +6095,11 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-scope": "read"
+        "x-ainkrad-scope": "read",
+        "x-ainkrad-sunset": "Thu, 06 May 2027 00:00:00 GMT"
       },
       "put": {
+        "deprecated": true,
         "operationId": "bindAgent",
         "requestBody": {
           "content": {
@@ -5750,11 +6148,13 @@
           "accounts"
         ],
         "x-ainkrad-destructive": true,
-        "x-ainkrad-scope": "admin"
+        "x-ainkrad-scope": "admin",
+        "x-ainkrad-sunset": "Thu, 06 May 2027 00:00:00 GMT"
       }
     },
     "/api/v1/bindings/{agent}/{provider}": {
       "delete": {
+        "deprecated": true,
         "operationId": "unbindAgent",
         "parameters": [
           {
@@ -5813,7 +6213,8 @@
           "accounts"
         ],
         "x-ainkrad-destructive": true,
-        "x-ainkrad-scope": "admin"
+        "x-ainkrad-scope": "admin",
+        "x-ainkrad-sunset": "Thu, 06 May 2027 00:00:00 GMT"
       }
     },
     "/api/v1/budgets": {
@@ -6054,6 +6455,484 @@
         },
         "tags": [
           "budgets"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/chains": {
+      "get": {
+        "operationId": "listChains",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Chain"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The caller's user's chains, each with its entries in fallback order"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "chains"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "post": {
+        "operationId": "createChain",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewChain"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Chain"
+                }
+              }
+            },
+            "description": "Stored for the caller's user (audited as `chain.created`). 400 for a bad name, 1 to 4 entries, a pool twice, another user's pool, a pool that is not a `claude`, `codex` or `agy` one, an unpriced API-key model, or two subscriptions; 404 for no such pool; 409 `conflict` (the name is taken) or `limit_reached`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "chains"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/chains/bindings": {
+      "get": {
+        "operationId": "listChainBindings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ChainBinding"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The caller's user's agent bindings, by agent"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "chains"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/chains/bindings/{agent}": {
+      "delete": {
+        "operationId": "unbindAgentChain",
+        "parameters": [
+          {
+            "description": "The agent's id",
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountsDeleted"
+                }
+              }
+            },
+            "description": "The agent's sessions fall back to the default chain (audited as `chain.unbound`); 404 when it had no binding"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "chains"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      },
+      "put": {
+        "operationId": "bindAgentChain",
+        "parameters": [
+          {
+            "description": "The agent's id",
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BindChain"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChainBinding"
+                }
+              }
+            },
+            "description": "The agent's sessions get this chain, replacing an earlier binding (audited as `chain.bound`); 400 for a bad agent id, 404 for no such chain"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "chains"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/chains/{id}": {
+      "delete": {
+        "operationId": "deleteChain",
+        "parameters": [
+          {
+            "description": "The chain's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountsDeleted"
+                }
+              }
+            },
+            "description": "Deleted with its entries and bindings (audited as `chain.deleted`); 409 `conflict` while a live session walks it, 404 for another user's"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "chains"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      },
+      "get": {
+        "operationId": "getChain",
+        "parameters": [
+          {
+            "description": "The chain's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Chain"
+                }
+              }
+            },
+            "description": "One chain; 404 for another user's"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "chains"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "put": {
+        "operationId": "replaceChain",
+        "parameters": [
+          {
+            "description": "The chain's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewChain"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Chain"
+                }
+              }
+            },
+            "description": "The name and the whole entry list replaced (audited as `chain.updated`); a run already walking the chain keeps its snapshot. The refusals of `createChain`; 404 for another user's chain"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "chains"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/chains/{id}/default": {
+      "put": {
+        "operationId": "setDefaultChain",
+        "parameters": [
+          {
+            "description": "The chain's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Chain"
+                }
+              }
+            },
+            "description": "The user's default chain from now on, the previous one no longer (audited as `chain.default_set`); it serves a session that names an agent bound to none"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "chains"
         ],
         "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"

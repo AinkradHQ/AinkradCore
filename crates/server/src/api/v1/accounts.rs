@@ -114,31 +114,56 @@ pub async fn delete_provider(
     Ok(Json(AccountsDeleted { deleted: true }))
 }
 
+/// The accounts' load and health, for an `admin` device only: how many sessions hold an account
+/// says what other users are running.
+async fn statuses_for(
+    app: &App,
+    me: &Caller,
+) -> Result<std::collections::HashMap<i64, crate::store::health::Status>, ApiError> {
+    match me.device.scopes.iter().any(|s| s == "admin") {
+        true => Ok(crate::store::health::statuses(&app.pool).await?),
+        false => Ok(Default::default()),
+    }
+}
+
 // ----- accounts ---------------------------------------------------------------------------
 
 #[utoipa::path(get, path = "/api/v1/accounts", operation_id = "listAccounts", tag = "accounts",
     responses((status = 200, description = "Every account: its key's last four characters, \
-        never the key, its secret's name or its runner scope", body = Vec<ProviderAccount>)))]
-pub async fn list(State(app): State<App>) -> ApiResult<Vec<ProviderAccount>> {
+        never the key, its secret's name or its runner scope; with its `live` session count and \
+        `health` (`admin` devices only)", body = Vec<ProviderAccount>)))]
+pub async fn list(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+) -> ApiResult<Vec<ProviderAccount>> {
+    let status = statuses_for(&app, &me).await?;
     Ok(Json(
         acc::list(&app.pool)
             .await?
             .into_iter()
-            .map(Into::into)
+            .map(|a| {
+                let st = status.get(&a.id);
+                ProviderAccount::from(a).with_status(st)
+            })
             .collect(),
     ))
 }
 
 #[utoipa::path(get, path = "/api/v1/accounts/{id}", operation_id = "getAccount", tag = "accounts",
     params(("id" = String, Path, description = "The account's id")),
-    responses((status = 200, description = "One account", body = ProviderAccount)))]
-pub async fn get(State(app): State<App>, Path(id): Path<String>) -> ApiResult<ProviderAccount> {
-    Ok(Json(
-        acc::get(&app.pool, num(&id, "account")?)
-            .await
-            .map_err(err)?
-            .into(),
-    ))
+    responses((status = 200, description = "One account, with its `live` session count and \
+        `health` (`admin` devices only)", body = ProviderAccount)))]
+pub async fn get(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<ProviderAccount> {
+    let a = acc::get(&app.pool, num(&id, "account")?)
+        .await
+        .map_err(err)?;
+    let status = statuses_for(&app, &me).await?;
+    let st = status.get(&a.id);
+    Ok(Json(ProviderAccount::from(a).with_status(st)))
 }
 
 #[utoipa::path(post, path = "/api/v1/accounts", operation_id = "createAccount", tag = "accounts",

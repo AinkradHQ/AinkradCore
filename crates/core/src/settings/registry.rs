@@ -97,4 +97,20 @@ registry! {
          token shapes like any other secret. It lifts nothing for provider accounts, user \
          providers or other secrets, and secrets.mode 2 is unchanged. Setting it needs admin and \
          a step-up and is audited.";
+    SchedulerWaitMaxSecs "scheduler.wait_max_secs" Seconds 900, 1, 86_400, SO,
+        "How long a chain session waits in all for an account that is cooling or at its cap \
+         (counted from its first wait) before the run ends with `no account is available`. \
+         Read at each pick, so a change applies to sessions already waiting.";
+    SchedulerQuotaCooldownSecs "scheduler.quota_cooldown_secs" Seconds 21_600, 60, 604_800, SO,
+        "How long an account stays `limited` after a quota failure when nothing says when its \
+         limit resets. A gateway report may name its own reset (kept to 7 days); a harness's \
+         own quota signal is cut to 6 hours whatever this says. Read at each signal.";
+    SchedulerMaxHops "scheduler.max_hops" Count 4, 0, 16, SO,
+        "The most failover hops (new attempts on the next account) one run may take; 0 turns \
+         failover off. Read at each move.";
+    SchedulerFailoversPer10Min "scheduler.failovers_per_10min" Count 10, 1, 1_000, SO,
+        "The failover storm guard: at most this many failover hops one user's runs start in any 10 \
+         minutes (1 at least: failover is turned off with scheduler.max_hops 0); beyond it a run of \
+         that user ends instead of moving, and `alarm.raised` says so once a window. Read at each \
+         move.";
 }

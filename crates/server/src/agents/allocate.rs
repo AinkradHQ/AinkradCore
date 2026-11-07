@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 
+use ainkrad_core::settings::{Key, Scope};
 use ainkrad_proto::v2::ModelPrice;
 
 use super::*;
@@ -149,6 +150,11 @@ async fn pick(app: &App, s: &Session, retreat: bool) -> Result<Next, Refusal> {
     let books = books(app, &chain_of(app, s).await?).await?;
     let price = |e: &Entry| min_turn(&books, e);
     let now = app.clock.now();
+    // `scheduler.wait_max_secs`, read at each pick; an unreadable setting falls back to its default.
+    let (key, at) = (Key::SchedulerWaitMaxSecs, Scope::Server);
+    let wait_max_secs = crate::store::settings::value(&app.pool, key, at)
+        .await
+        .unwrap_or(alloc::WAIT_MAX_SECS);
     let mut tx = crate::store::begin_write(&app.pool).await?;
     let before = alloc::view_in(&mut tx, &s.id).await?;
     if retreat && alloc::retreat_in(&mut tx, &s.id).await?.is_none() {
@@ -180,7 +186,7 @@ async fn pick(app: &App, s: &Session, retreat: bool) -> Result<Next, Refusal> {
         skip_pools: &skip,
         min_turn: &price,
         serves: &placed,
-        wait_max_secs: alloc::WAIT_MAX_SECS,
+        wait_max_secs,
     };
     let outcome = alloc::pick_in(&mut tx, &ask, &now).await?;
     // A re-pick, or the first pick of a failover's attempt, that crosses provider or harness is said

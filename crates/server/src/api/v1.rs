@@ -30,6 +30,7 @@ pub use agents::create as create_agent_for_tests;
 mod accounts;
 mod audit;
 mod budgets;
+mod chains;
 mod costs;
 mod deprecation;
 mod devices;
@@ -66,7 +67,7 @@ pub const BY: AuditActor = AuditActor::User(ADMIN);
 /// Query parameter names any `/api/v1` route may take; nothing else is let through.
 pub const QUERY: &[&str] = &[
     "after", "limit", "before", "kind", "target", "actor", "session", "account", "subject",
-    "company",
+    "company", "run",
 ];
 
 /// A page of a list: the cursor to continue after (its meaning is per route) and how many.
@@ -272,6 +273,17 @@ pub fn router(app: App) -> Router {
             "/api/v1/bindings/{agent}/{provider}",
             delete(accounts::unbind),
         )
+        .route("/api/v1/chains", get(chains::list).post(chains::create))
+        .route("/api/v1/chains/bindings", get(chains::list_bindings))
+        .route(
+            "/api/v1/chains/bindings/{agent}",
+            put(chains::bind).delete(chains::unbind),
+        )
+        .route(
+            "/api/v1/chains/{id}",
+            get(chains::get).put(chains::replace).delete(chains::delete),
+        )
+        .route("/api/v1/chains/{id}/default", put(chains::set_default))
         .route("/api/v1/secrets", get(secrets::list).post(secrets::create))
         .route(
             "/api/v1/secrets/{id}",

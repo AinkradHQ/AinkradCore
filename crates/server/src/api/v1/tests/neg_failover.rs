@@ -199,10 +199,9 @@ async fn neg_a_run_walks_exactly_the_hop_cap_and_ends_with_no_hold() {
     );
 }
 
-/// The design (§10) says the failover budget is per user. The code counts a user's moves per runner,
-/// so a user with two runners gets the bucket twice.
+/// The failover budget is per user (design §10): a user with two runners does not get the bucket
+/// twice.
 #[tokio::test]
-#[ignore = "BUG: the storm guard counts per (user, runner); design §10 says per user"]
 async fn neg_one_users_storm_is_counted_across_all_their_runners() {
     let w = w().await;
     let pool = &w.fx.app.pool;

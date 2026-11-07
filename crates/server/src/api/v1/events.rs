@@ -57,7 +57,24 @@ pub struct Event {
     /// What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,
     /// `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;
     /// a device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a
-    /// module writes. The registered kinds are listed in `x-event-kinds`.
+    /// module writes. The registered kinds are listed in `x-event-kinds`. The payload of
+    /// `agent.state` is `{session, state, reason, …}`: a chain session that waits for an account
+    /// says `reason: "waiting"` and `waiting: {until, why, since}` (`until` an RFC 3339 time, `since`
+    /// the first wait in unix seconds), and one whose launch refused its account, so another was
+    /// picked across a provider or harness, says `reason: "repicked"`, and a run a failover moved across
+    /// them says `reason: "failover"`, both with `from` and `to` (each `{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account
+    /// cooled or limited until `until` (`class` `rate_limited`, `quota` or `plan_limit`; `source`
+    /// `gateway` or `harness`). `account.health` is `{account, user, state, reason}`: an account went
+    /// `unhealthy` (`reason` `upstream_errors` or `auth_suspected`). `account.failover` is `{run,
+    /// user, from_session, to_session, from_account, to_account, from_pool, to_pool, class, hop}`: a
+    /// run moved to `to_session`, or ended (`to_session` null: its chain has nothing left, the hop cap
+    /// or the storm guard; `to_account` is null while the successor waits for one). `account.budget` is
+    /// `{subject_kind, subject, state}` for an account's or a pool's budget (`state` `warning` or
+    /// `exhausted`). `account.expired` is `{account, user, reason}`: a key the provider refused was
+    /// confirmed and the account disabled. `alarm.raised` with `alarm` `failover_storm` and a
+    /// `user` says the bound on that user's failovers stopped a run of theirs from moving (once per
+    /// window and user). No payload holds a key, a token or an
+    /// upstream's own words.
     pub kind: String,
     #[schema(value_type = Object)]
     pub payload: Value,

@@ -1,7 +1,8 @@
 //! Deprecation policy mechanism (E1-05.5, handshake spec "Versioning and deprecation"): a route
 //! listed in [`DEPRECATED`] answers with `Deprecation: @<unix>` (RFC 9745) and `Sunset: <date>`
 //! (RFC 8594), and the contract marks its operation `deprecated: true` and `x-ainkrad-sunset`.
-//! Nothing is deprecated yet: the table is empty and the contract is unchanged.
+//! The one deprecation so far is the per-provider pool bindings (design `2026-11-06-core-account-
+//! scheduler` §4.4), replaced by the chains' `/api/v1/chains/bindings`.
 
 use axum::extract::{MatchedPath, Request};
 use axum::http::{HeaderValue, Method};
@@ -19,7 +20,29 @@ pub struct Deprecation {
 }
 
 /// The deprecated operations of the Core. Add a row (and bump `API_MINOR`: the contract changes).
-pub const DEPRECATED: &[Deprecation] = &[];
+pub const DEPRECATED: &[Deprecation] = &[
+    // 2026-11-06 (this change's day) and 2027-05-06: pool bindings (`agent, provider -> pool`) are
+    // read by nothing since the allocator; an agent's chain binding replaces them. They keep
+    // answering until the sunset, which the next breaking window (a new `/api/v2`) may remove.
+    Deprecation {
+        method: "GET",
+        path: "/api/v1/bindings",
+        deprecated_at: 1_793_923_200,
+        sunset: 1_809_561_600,
+    },
+    Deprecation {
+        method: "PUT",
+        path: "/api/v1/bindings",
+        deprecated_at: 1_793_923_200,
+        sunset: 1_809_561_600,
+    },
+    Deprecation {
+        method: "DELETE",
+        path: "/api/v1/bindings/{agent}/{provider}",
+        deprecated_at: 1_793_923_200,
+        sunset: 1_809_561_600,
+    },
+];
 
 /// `Sun, 06 Nov 1994 08:49:37 GMT`.
 fn http_date(unix: u64) -> String {
@@ -137,15 +160,22 @@ mod tests {
     }
 
     #[test]
-    fn the_contract_marks_it_and_the_real_table_is_empty() {
+    fn the_contract_marks_it_and_the_real_table_is_the_pool_bindings() {
         let mut spec = json!({"paths": {"/old/{id}": {"get": {"operationId": "x"}}}});
         mark(&mut spec, TABLE);
         let op = &spec["paths"]["/old/{id}"]["get"];
         assert_eq!(op["deprecated"], true);
         assert_eq!(op["x-ainkrad-sunset"], "Sun, 06 Nov 1994 08:49:37 GMT");
-        assert!(
-            DEPRECATED.is_empty(),
-            "deprecating a route bumps API_MINOR and regenerates the contract"
+        // Deprecating a route bumps API_MINOR and regenerates the contract.
+        let routes: Vec<_> = DEPRECATED.iter().map(|d| (d.method, d.path)).collect();
+        assert_eq!(
+            routes,
+            [
+                ("GET", "/api/v1/bindings"),
+                ("PUT", "/api/v1/bindings"),
+                ("DELETE", "/api/v1/bindings/{agent}/{provider}"),
+            ]
         );
+        assert!(DEPRECATED.iter().all(|d| d.sunset > d.deprecated_at));
     }
 }
