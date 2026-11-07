@@ -72,14 +72,24 @@ pub fn add(harness: &str, config: Option<Value>, exe: &str, sock: &str) -> Optio
     Some(config)
 }
 
-/// Whether `tool`, as a harness names it in an approval request, is one of the connection tools
-/// (Claude `mcp__ainkrad-connections__<tool>`, OpenCode `<server>_<tool>` with the dashes as
-/// underscores or kept). The Core decides each call (user, agent, allowlist); the runner's policy
-/// has nothing to add, as for the Citadel server's tools.
-pub fn is_tool(tool: &str) -> bool {
-    tool.starts_with("mcp__ainkrad-connections__")
-        || tool.starts_with("ainkrad-connections_")
-        || tool.starts_with("ainkrad_connections_")
+/// The tool part of `tool` as a harness names it in an approval request when it is one of this
+/// server's (Claude `mcp__ainkrad-connections__<tool>`, OpenCode `<server>_<tool>` with the dashes
+/// as underscores or kept), the operation with `.` as `_` (`github_get_issue`); `None` for any
+/// other name. A name alone proves nothing: the runner accepts it only for a session that has the
+/// tools slot and only when the Core listed that tool for the session (`Tools::knows`).
+pub fn tool_suffix(tool: &str) -> Option<&str> {
+    [
+        "mcp__ainkrad-connections__",
+        "ainkrad-connections_",
+        "ainkrad_connections_",
+    ]
+    .iter()
+    .find_map(|p| tool.strip_prefix(p))
+    .filter(|t| {
+        !t.is_empty()
+            && t.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    })
 }
 
 #[cfg(test)]
@@ -172,11 +182,52 @@ mod tests {
 
     #[test]
     fn only_this_servers_tools_are_recognised() {
-        assert!(is_tool("mcp__ainkrad-connections__github_get_issue"));
-        assert!(is_tool("ainkrad-connections_github_get_issue"));
-        assert!(!is_tool("mcp__citadel__x"));
-        assert!(!is_tool("mcp__ainkrad-connectionsX__x"));
-        assert!(!is_tool("Bash"));
+        assert_eq!(
+            tool_suffix("mcp__ainkrad-connections__github_get_issue"),
+            Some("github_get_issue")
+        );
+        assert_eq!(
+            tool_suffix("ainkrad-connections_github_get_issue"),
+            Some("github_get_issue")
+        );
+        for no in [
+            "mcp__citadel__x",
+            "mcp__ainkrad-connectionsX__x",
+            "mcp__ainkrad-connections__",
+            "mcp__ainkrad-connections__../x",
+            "mcp__ainkrad-connections__A b",
+            "Bash",
+        ] {
+            assert_eq!(tool_suffix(no), None, "{no}");
+        }
+    }
+
+    /// A project's own MCP config cannot take the server's place: Claude loads only the runner's
+    /// file (`--strict-mcp-config`), Codex's servers ride the thread's own `config`, and OpenCode's
+    /// entry is also given as its inline config, which outranks every file.
+    #[test]
+    fn the_runners_entry_is_the_one_a_harness_loads() {
+        let mut spec = crate::Spec::default();
+        spec.env = vec![
+            (SLOT_SOCK.into(), "/s".into()),
+            (SLOT_FWD.into(), "/f".into()),
+        ];
+        let args = crate::claude::args(&spec, None);
+        assert!(args.iter().any(|a| a == "--strict-mcp-config"));
+        let env = crate::opencode::env(&spec, "pw");
+        let inline = env
+            .iter()
+            .find(|(k, _)| *k == "OPENCODE_CONFIG_CONTENT")
+            .map(|(_, v)| v.to_string_lossy().into_owned())
+            .expect("an inline config");
+        let inline: Value = serde_json::from_str(&inline).unwrap();
+        assert_eq!(
+            inline["mcp"][SERVER],
+            json!({"type": "local", "command": ["/f", "mcp-stdio", "/s"], "enabled": true})
+        );
+        // And with no slot there is none of it.
+        let plain = crate::opencode::env(&crate::Spec::default(), "pw");
+        assert!(!plain.iter().any(|(k, _)| *k == "OPENCODE_CONFIG_CONTENT"));
     }
 
     #[test]

@@ -49,3 +49,60 @@ pub(super) fn bind<'a>(
     }
     Ok(())
 }
+
+/// The slot's binds and the check that follows them, in one call for the sandbox builder.
+pub(super) fn apply<'a>(
+    c: &mut Command,
+    spec: &'a Spec,
+    bound: &mut Vec<&'a OsStr>,
+) -> io::Result<()> {
+    bind(c, spec, bound)?;
+    only_own_sockets(c, spec)
+}
+
+/// Refuses the sandbox when a bind could hand it another session's sockets (tools or gateway) in the
+/// runner's `agents/` dir: a bound path that is, or contains, the agents dir (a harness binary kept
+/// in a folder that holds the state dir: `program_dirs` binds that folder whole, and a read-only bind
+/// does not stop `connect()` on a unix socket), or one inside it but outside this session's own
+/// directory. `c` holds every bind by now; the session's own socket files and the shim are exempt.
+/// The agents dir is `<AINKRAD_SANDBOX_STATE>/agents`, else the one above the tools socket's
+/// directory. It is the same builder the start-up self-test uses, so a layout that fails here also
+/// leaves the capability off.
+fn only_own_sockets(c: &Command, spec: &Spec) -> io::Result<()> {
+    let socks: Vec<&Path> = ["AINKRAD_SANDBOX_TOOLS_SOCK", "AINKRAD_SANDBOX_GW_SOCK"]
+        .iter()
+        .map(|k| Path::new(super::env(spec, k)))
+        .filter(|p| !p.as_os_str().is_empty())
+        .collect();
+    let state = super::env(spec, "AINKRAD_SANDBOX_STATE");
+    let agents = if !state.is_empty() {
+        Path::new(state).join("agents")
+    } else if let Some(own) = socks
+        .first()
+        .and_then(|s| s.parent().and_then(Path::parent))
+    {
+        own.to_owned()
+    } else {
+        return Ok(());
+    };
+    let owns: Vec<&Path> = socks.iter().filter_map(|s| s.parent()).collect();
+    let fwd = Path::new(super::env(spec, SLOT_FWD));
+    let args: Vec<&OsStr> = c.as_std().get_args().collect();
+    for pair in args.windows(2) {
+        if pair[0] != "--bind" && pair[0] != "--ro-bind" {
+            continue;
+        }
+        let src = Path::new(pair[1]);
+        if socks.contains(&src) || src == fwd {
+            continue;
+        }
+        let holds = agents.starts_with(src);
+        let inside_other = src.starts_with(&agents) && !owns.iter().any(|o| src.starts_with(o));
+        if holds || inside_other {
+            return Err(io::Error::other(
+                "a sandbox path would expose the sockets of other sessions",
+            ));
+        }
+    }
+    Ok(())
+}

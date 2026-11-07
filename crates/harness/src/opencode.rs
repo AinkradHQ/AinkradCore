@@ -47,9 +47,22 @@ pub fn env(spec: &Spec, password: &str) -> Vec<(&'static str, OsString)> {
         ("OPENCODE_DISABLE_AUTOUPDATE", "1".into()),
         ("OPENCODE_SERVER_PASSWORD", password.into()),
     ];
+    // The inline config outranks every file (a project's `opencode.json` included), so it also
+    // carries the connection tools server: a project cannot take that name over.
+    let mut inline = serde_json::Map::new();
     if let Some(file) = &spec.instructions {
-        let config = json!({"instructions": [file]});
-        env.push(("OPENCODE_CONFIG_CONTENT", config.to_string().into()));
+        inline.insert("instructions".to_owned(), json!([file]));
+    }
+    if let Some((sock, exe)) = crate::connections::slot(&spec.env)
+        && let Some(Value::Object(own)) = crate::connections::add("opencode", None, &exe, &sock)
+    {
+        inline.extend(own);
+    }
+    if !inline.is_empty() {
+        env.push((
+            "OPENCODE_CONFIG_CONTENT",
+            Value::Object(inline).to_string().into(),
+        ));
     }
     if let Some(file) = &spec.mcp_config {
         env.push(("OPENCODE_CONFIG", file.into()));

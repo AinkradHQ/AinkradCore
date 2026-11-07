@@ -386,7 +386,7 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
             }
         }
         // The session's connection tools socket (C4b), whatever the network mode.
-        tools::bind(&mut c, spec, &mut bound)?;
+        tools::apply(&mut c, spec, &mut bound)?;
         c.args(["--remount-ro", "/dev", "--remount-ro", "/"])
             .arg("--chdir")
             .arg(&spec.cwd)
