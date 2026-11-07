@@ -74,7 +74,8 @@ pub const USAGE: &str =
   agent ls --run <id>  |  agent wake <id> [text...]*
       --run lists only the attempts of one run (its first attempt's id): a failover is a new
       session of the same run. show adds run, attempt, failover_of, failed_over_to and, for an
-      admin, failover_class and skip_pools. wake queues a turn for an idle session; a session a
+      admin, failover_class and skip_pools; a run that could not move on adds
+      `failover ended: <why>` and one line per reason. wake queues a turn for an idle session; a session a
       failover replaced is a 409 whose message names the attempt to wake.
   agent run <runner-id> [prompt...] --chain <id> [--agent <name>]*
   agent run <runner-id> [prompt...] --agent <name>*

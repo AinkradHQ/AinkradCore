@@ -69,6 +69,14 @@ pub fn detail(v: &Value) -> Vec<String> {
         let pools: Vec<String> = p.iter().map(|x| x.to_string()).collect();
         lines.push(format!("skip_pools {}", pools.join(",")));
     }
+    // An ended run's last attempt says why it could not move on.
+    let f = &v["outcome"]["failover"];
+    if f.is_object() {
+        lines.push(format!("failover {}: {}", s(&f["result"]), s(&f["why"])));
+        for r in f["reasons"].as_array().into_iter().flatten() {
+            lines.push(format!("  {}", s(r)));
+        }
+    }
     lines
 }
 
@@ -94,7 +102,10 @@ mod tests {
             "waiting": {"until": "U", "since": "S", "why": "every account is cooling"},
             "repicked": 1, "upstream_class": "rate_limited",
             "run": "as_r", "attempt": 1, "failover_of": "as_p", "failed_over_to": "as_n",
-            "failover_class": "quota", "skip_pools": [2, 5]});
+            "failover_class": "quota", "skip_pools": [2, 5],
+            "outcome": {"kind": "failed", "failover": {"result": "ended",
+              "why": "no account is available",
+              "reasons": ["entry 1: cooling until T", "entry 2: at its cap"]}}});
         assert_eq!(
             detail(&v),
             [
@@ -111,6 +122,9 @@ mod tests {
                 "failed_over_to as_n",
                 "failover_class quota",
                 "skip_pools 2,5",
+                "failover ended: no account is available",
+                "  entry 1: cooling until T",
+                "  entry 2: at its cap",
             ]
         );
     }

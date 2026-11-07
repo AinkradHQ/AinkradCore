@@ -310,6 +310,8 @@ run as_00000000000000000000000000 attempt 1\n\
 failover_of as_000000000000000000000000p0\n\
 failover_class quota\n\
 skip_pools 2\n\
+failover ended: no account is available\n\
+\x20 entry 1: cooling until T\n\
 1\t\"hello\"\n"
         )
     );
