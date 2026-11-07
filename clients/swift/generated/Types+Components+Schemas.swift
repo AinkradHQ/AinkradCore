@@ -2496,7 +2496,8 @@ extension Components {
             /// window and user). `connection.health` is `{connection, user, kind, state, reason}`: a connection's
             /// health changed (`state` `active`, `cooling`, `limited`, `unhealthy` or `disabled`; `reason` a fixed
             /// code: `rate_limited`, `quota`, `upstream_errors`, `auth_suspected`, `auth_failed`, `recovered`,
-            /// `auth_cleared`). No payload holds a key, a token or an
+            /// `auth_cleared`). It is visible to `admin` devices only (`x-event-scopes`), never to a `read` device;
+            /// the push for it goes to the owning user's admin devices only. No payload holds a key, a token or an
             /// upstream's own words.
             ///
             /// - Remark: Generated from `#/components/schemas/Event/kind`.
@@ -3315,9 +3316,10 @@ extension Components {
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/chain`.
             public var chain: Swift.Int64?
             /// Capability names the session may call through its connections (`read_repo`,
-            /// `issues_write`, `read_issues`, ...; see `listConnectionKinds`). Needs `admin`. Absent or
-            /// empty: the default, read-class capabilities only (write is an explicit grant); an agent's
-            /// session with none has no connection tools. Operation names and `*` are refused (400).
+            /// `issues_write`, `read_issues`, ...; see `listConnectionKinds`). Needs `admin`. Absent: the
+            /// default, read-class capabilities only (write is an explicit grant); an agent's session
+            /// with none has no connection tools. An empty list is refused (400 `empty_allowlist`), and
+            /// so are operation names and `*` (400).
             ///
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/connection_access`.
             public var connectionAccess: [Swift.String]?
@@ -5896,6 +5898,11 @@ extension Components {
         ///
         /// - Remark: Generated from `#/components/schemas/StartConnectionFlow`.
         public struct StartConnectionFlow: Codable, Hashable, Sendable {
+            /// With `connection` on GitHub: replace the credential even when the sign-in is a different
+            /// GitHub account than the connection's. Without it that is refused (`different_account`).
+            ///
+            /// - Remark: Generated from `#/components/schemas/StartConnectionFlow/confirm_identity_change`.
+            public var confirmIdentityChange: Swift.Bool?
             /// Sign in again for this connection: its credential is replaced, nothing else changes.
             ///
             /// - Remark: Generated from `#/components/schemas/StartConnectionFlow/connection`.
@@ -5913,22 +5920,26 @@ extension Components {
             /// Creates a new `StartConnectionFlow`.
             ///
             /// - Parameters:
+            ///   - confirmIdentityChange: With `connection` on GitHub: replace the credential even when the sign-in is a different
             ///   - connection: Sign in again for this connection: its credential is replaced, nothing else changes.
             ///   - kind: `github` or `jira`.
             ///   - label:
             ///   - name: Names the connection it makes; absent, `<kind>-<n>`.
             public init(
+                confirmIdentityChange: Swift.Bool? = nil,
                 connection: Swift.Int64? = nil,
                 kind: Swift.String,
                 label: Swift.String? = nil,
                 name: Swift.String? = nil
             ) {
+                self.confirmIdentityChange = confirmIdentityChange
                 self.connection = connection
                 self.kind = kind
                 self.label = label
                 self.name = name
             }
             public enum CodingKeys: String, CodingKey {
+                case confirmIdentityChange = "confirm_identity_change"
                 case connection
                 case kind
                 case label

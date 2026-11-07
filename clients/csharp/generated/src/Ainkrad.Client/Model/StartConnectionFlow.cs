@@ -40,11 +40,12 @@ namespace Ainkrad.Client.Model
         /// <summary>
         /// Initializes a new instance of the <see cref="StartConnectionFlow" /> class.
         /// </summary>
+        /// <param name="confirmIdentityChange">With &#x60;connection&#x60; on GitHub: replace the credential even when the sign-in is a different GitHub account than the connection&#39;s. Without it that is refused (&#x60;different_account&#x60;)..</param>
         /// <param name="connection">Sign in again for this connection: its credential is replaced, nothing else changes..</param>
         /// <param name="kind">&#x60;github&#x60; or &#x60;jira&#x60;. (required).</param>
         /// <param name="label">label.</param>
         /// <param name="name">Names the connection it makes; absent, &#x60;&lt;kind&gt;-&lt;n&gt;&#x60;..</param>
-        public StartConnectionFlow(long? connection = default, string kind = default, string label = default, string name = default)
+        public StartConnectionFlow(bool? confirmIdentityChange = default, long? connection = default, string kind = default, string label = default, string name = default)
         {
             // to ensure "kind" is required (not null)
             if (kind == null)
@@ -52,10 +53,18 @@ namespace Ainkrad.Client.Model
                 throw new ArgumentNullException("kind is a required property for StartConnectionFlow and cannot be null");
             }
             this.Kind = kind;
+            this.ConfirmIdentityChange = confirmIdentityChange;
             this.Connection = connection;
             this.Label = label;
             this.Name = name;
         }
+
+        /// <summary>
+        /// With &#x60;connection&#x60; on GitHub: replace the credential even when the sign-in is a different GitHub account than the connection&#39;s. Without it that is refused (&#x60;different_account&#x60;).
+        /// </summary>
+        /// <value>With &#x60;connection&#x60; on GitHub: replace the credential even when the sign-in is a different GitHub account than the connection&#39;s. Without it that is refused (&#x60;different_account&#x60;).</value>
+        [DataMember(Name = "confirm_identity_change", EmitDefaultValue = true)]
+        public bool? ConfirmIdentityChange { get; set; }
 
         /// <summary>
         /// Sign in again for this connection: its credential is replaced, nothing else changes.
@@ -92,6 +101,7 @@ namespace Ainkrad.Client.Model
         {
             StringBuilder sb = new StringBuilder();
             sb.Append("class StartConnectionFlow {\n");
+            sb.Append("  ConfirmIdentityChange: ").Append(ConfirmIdentityChange).Append("\n");
             sb.Append("  Connection: ").Append(Connection).Append("\n");
             sb.Append("  Kind: ").Append(Kind).Append("\n");
             sb.Append("  Label: ").Append(Label).Append("\n");

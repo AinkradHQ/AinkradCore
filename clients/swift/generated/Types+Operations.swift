@@ -14847,7 +14847,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Whether Ainkrad's OAuth app for the kind is set up on this Core, and which fields are set. A field that is no secret shows its value (the client id); a secret (`client_secret`, `app_key`) only whether it is `set`, never the value. For Atlassian, `redirect_uri` is the address to register with Atlassian. 404 for an unknown kind
+            /// Whether Ainkrad's OAuth app for the kind is set up on this Core, and which fields are set. A field that is no secret shows its value (the client id); a secret (`client_secret`, `app_key`) only whether it is `set`, never the value. For Atlassian, `redirect_uri` is the address to register with Atlassian. Only the Core's owner sees the fields and the address; any other admin sees `configured` alone. 404 for an unknown kind
             ///
             /// - Remark: Generated from `#/paths//api/v1/connection-apps/{kind}/get(getConnectionApp)/responses/200`.
             ///
@@ -15145,7 +15145,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The named fields stored sealed (a string) or cleared (null), audited `connection.app_set` with the field names only; the kind's adapters use the new app at once, and sign-ins started under the old one end. Changing Atlassian's client id or secret makes existing Jira sign-ins fail to renew: those connections sign in again. 400 for an unknown field or a bad value (the private key must parse and goes with an `app_id`); 409 `secrets_disabled` while the broker is off; 503 without a master key
+            /// The named fields stored sealed (a string) or cleared (null), audited `connection.app_set` with the field names only; the kind's adapters use the new app at once, and pending sign-ins of a kind whose app changed end (`failed`, `app_changed`); those of another kind go on. 403 for an admin who is not the Core's owner. Changing Atlassian's client id or secret makes existing Jira sign-ins fail to renew: those connections sign in again. 400 for an unknown field or a bad value (the private key must parse and goes with an `app_id`); 409 `secrets_disabled` while the broker is off; 503 without a master key
             ///
             /// - Remark: Generated from `#/paths//api/v1/connection-apps/{kind}/put(setConnectionApp)/responses/200`.
             ///
@@ -16839,7 +16839,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Stored for the caller's workspace, its credential sealed and tested once (audited `connection.created`, `connection.tested`). `auth_method` `token` pastes a token (GitHub), or an email, a site and an API token (Jira); `app_install` takes a GitHub App `installation_id`. The credential is never returned. 400 for a bad name, label or credential, or one the service refuses (`credential_rejected`); 409 `conflict` (the name is taken), `limit_reached` or the secrets gates (`secrets_disabled`, `real_secret_refused`); 502 when the service could not be reached (`upstream_failed`)
+            /// Stored for the caller's workspace, its credential sealed and tested once (audited `connection.created`, `connection.tested`). `auth_method` `token` pastes a token (GitHub), or an email, a site and an API token (Jira); `app_install` takes a GitHub App `installation_id`, which must exist and belong to no other workspace (409). The credential is never returned. 400 for a bad name, label or credential, or one the service refuses (`credential_rejected`); 409 `conflict` (the name is taken), `limit_reached` or the secrets gates (`secrets_disabled`, `real_secret_refused`); 502 when the service could not be reached (`upstream_failed`)
             ///
             /// - Remark: Generated from `#/paths//api/v1/connections/post(createConnection)/responses/200`.
             ///
@@ -18293,7 +18293,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// A sign-in begun, held in Core: GitHub's device flow returns `user_code`, `verification_uri` and `interval` (Core polls GitHub itself, so the person can close the window); Atlassian returns `authorize_url` (the Mac app opens it, catches the redirect on 127.0.0.1 and posts `code` and `state` to `connectionFlowCallback`) and `state`. With `connection`, the credential of that connection is replaced (CN5, sign in again). A flow ends in ONE connection. 409 `not_configured` while Ainkrad's app for the kind is not set up (see `listConnectionKinds`), 409 `limit_reached` (4 waiting per user), 502 when GitHub could not give a code, 400 for a bad name, label or kind, 404 for another workspace's connection
+            /// A sign-in begun, held in Core: GitHub's device flow returns `user_code`, `verification_uri` and `interval` (Core polls GitHub itself, so the person can close the window); Atlassian returns `authorize_url` (the Mac app opens it, catches the redirect on 127.0.0.1 and posts `code` and `state` to `connectionFlowCallback`) and `state`. With `connection`, the credential of that connection is replaced (CN5, sign in again); a GitHub sign-in as another account ends `failed` with `different_account` unless `confirm_identity_change` is true. A flow ends in ONE connection. 409 `not_configured` while Ainkrad's app for the kind is not set up (see `listConnectionKinds`), 429 `too_many_flows` (4 waiting per user), 502 when GitHub could not give a code, 400 for a bad name, label or kind, 404 for another workspace's connection
             ///
             /// - Remark: Generated from `#/paths//api/v1/connections/start/post(startConnectionFlow)/responses/200`.
             ///
@@ -20962,7 +20962,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Tested now (audited `connection.tested`, with the result class only): Jira renews its token first, a GitHub App connection mints a new one when the old is near its end. A pending auth failure (`state_reason` `auth_suspected`) is decided by this: a service that refuses the credential disables the connection (`auth_failed`: sign in again), one that accepts clears it. The connection as the test left it; 404 for another workspace's
+            /// Tested now (audited `connection.tested`, with the result class only): Jira renews its token first, a GitHub App connection mints a new one when the old is near its end. A pending auth failure (`state_reason` `auth_suspected`) is decided by this: a service that refuses the credential disables the connection (`auth_failed`: sign in again), one that accepts clears it. The connection as the test left it. A connection is tested at most once every 10 seconds and a user 30 times in 10 minutes: past that, 429 `rate_limited` with `Retry-After`. 404 for another workspace's
             ///
             /// - Remark: Generated from `#/paths//api/v1/connections/{id}/test/post(testConnection)/responses/200`.
             ///
@@ -21100,17 +21100,29 @@ public enum Operations {
                     }
                 }
             }
-            /// Rate limited; see Retry-After
+            public struct TooManyRequests: Sendable, Hashable {
+                /// Creates a new `TooManyRequests`.
+                public init() {}
+            }
+            /// Tested too soon: wait `Retry-After` seconds
             ///
             /// - Remark: Generated from `#/paths//api/v1/connections/{id}/test/post(testConnection)/responses/429`.
             ///
             /// HTTP response code: `429 tooManyRequests`.
-            case tooManyRequests(Components.Responses.TooManyRequests)
+            case tooManyRequests(Operations.TestConnection.Output.TooManyRequests)
+            /// Tested too soon: wait `Retry-After` seconds
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/connections/{id}/test/post(testConnection)/responses/429`.
+            ///
+            /// HTTP response code: `429 tooManyRequests`.
+            public static var tooManyRequests: Self {
+                .tooManyRequests(.init())
+            }
             /// The associated value of the enum case if `self` is `.tooManyRequests`.
             ///
             /// - Throws: An error if `self` is not `.tooManyRequests`.
             /// - SeeAlso: `.tooManyRequests`.
-            public var tooManyRequests: Components.Responses.TooManyRequests {
+            public var tooManyRequests: Operations.TestConnection.Output.TooManyRequests {
                 get throws {
                     switch self {
                     case let .tooManyRequests(response):

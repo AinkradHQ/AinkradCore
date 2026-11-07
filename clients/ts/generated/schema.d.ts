@@ -2336,7 +2336,8 @@ export interface components {
              *     window and user). `connection.health` is `{connection, user, kind, state, reason}`: a connection's
              *     health changed (`state` `active`, `cooling`, `limited`, `unhealthy` or `disabled`; `reason` a fixed
              *     code: `rate_limited`, `quota`, `upstream_errors`, `auth_suspected`, `auth_failed`, `recovered`,
-             *     `auth_cleared`). No payload holds a key, a token or an
+             *     `auth_cleared`). It is visible to `admin` devices only (`x-event-scopes`), never to a `read` device;
+             *     the push for it goes to the owning user's admin devices only. No payload holds a key, a token or an
              *     upstream's own words.
              */
             kind: string;
@@ -2574,9 +2575,10 @@ export interface components {
             chain?: number | null;
             /**
              * @description Capability names the session may call through its connections (`read_repo`,
-             *     `issues_write`, `read_issues`, ...; see `listConnectionKinds`). Needs `admin`. Absent or
-             *     empty: the default, read-class capabilities only (write is an explicit grant); an agent's
-             *     session with none has no connection tools. Operation names and `*` are refused (400).
+             *     `issues_write`, `read_issues`, ...; see `listConnectionKinds`). Needs `admin`. Absent: the
+             *     default, read-class capabilities only (write is an explicit grant); an agent's session
+             *     with none has no connection tools. An empty list is refused (400 `empty_allowlist`), and
+             *     so are operation names and `*` (400).
              */
             connection_access?: string[] | null;
             /**
@@ -3252,6 +3254,11 @@ export interface components {
         SettingUnit: ("seconds" | "milliseconds" | "percent" | "count" | "bytes" | "per_minute") | string;
         /** @description A sign-in to start. */
         StartConnectionFlow: {
+            /**
+             * @description With `connection` on GitHub: replace the credential even when the sign-in is a different
+             *     GitHub account than the connection's. Without it that is refused (`different_account`).
+             */
+            confirm_identity_change?: boolean | null;
             /**
              * Format: int64
              * @description Sign in again for this connection: its credential is replaced, nothing else changes.
@@ -5131,7 +5138,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Whether Ainkrad's OAuth app for the kind is set up on this Core, and which fields are set. A field that is no secret shows its value (the client id); a secret (`client_secret`, `app_key`) only whether it is `set`, never the value. For Atlassian, `redirect_uri` is the address to register with Atlassian. 404 for an unknown kind */
+            /** @description Whether Ainkrad's OAuth app for the kind is set up on this Core, and which fields are set. A field that is no secret shows its value (the client id); a secret (`client_secret`, `app_key`) only whether it is `set`, never the value. For Atlassian, `redirect_uri` is the address to register with Atlassian. Only the Core's owner sees the fields and the address; any other admin sees `configured` alone. 404 for an unknown kind */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5165,7 +5172,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The named fields stored sealed (a string) or cleared (null), audited `connection.app_set` with the field names only; the kind's adapters use the new app at once, and sign-ins started under the old one end. Changing Atlassian's client id or secret makes existing Jira sign-ins fail to renew: those connections sign in again. 400 for an unknown field or a bad value (the private key must parse and goes with an `app_id`); 409 `secrets_disabled` while the broker is off; 503 without a master key */
+            /** @description The named fields stored sealed (a string) or cleared (null), audited `connection.app_set` with the field names only; the kind's adapters use the new app at once, and pending sign-ins of a kind whose app changed end (`failed`, `app_changed`); those of another kind go on. 403 for an admin who is not the Core's owner. Changing Atlassian's client id or secret makes existing Jira sign-ins fail to renew: those connections sign in again. 400 for an unknown field or a bad value (the private key must parse and goes with an `app_id`); 409 `secrets_disabled` while the broker is off; 503 without a master key */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5344,7 +5351,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Stored for the caller's workspace, its credential sealed and tested once (audited `connection.created`, `connection.tested`). `auth_method` `token` pastes a token (GitHub), or an email, a site and an API token (Jira); `app_install` takes a GitHub App `installation_id`. The credential is never returned. 400 for a bad name, label or credential, or one the service refuses (`credential_rejected`); 409 `conflict` (the name is taken), `limit_reached` or the secrets gates (`secrets_disabled`, `real_secret_refused`); 502 when the service could not be reached (`upstream_failed`) */
+            /** @description Stored for the caller's workspace, its credential sealed and tested once (audited `connection.created`, `connection.tested`). `auth_method` `token` pastes a token (GitHub), or an email, a site and an API token (Jira); `app_install` takes a GitHub App `installation_id`, which must exist and belong to no other workspace (409). The credential is never returned. 400 for a bad name, label or credential, or one the service refuses (`credential_rejected`); 409 `conflict` (the name is taken), `limit_reached` or the secrets gates (`secrets_disabled`, `real_secret_refused`); 502 when the service could not be reached (`upstream_failed`) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5503,7 +5510,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description A sign-in begun, held in Core: GitHub's device flow returns `user_code`, `verification_uri` and `interval` (Core polls GitHub itself, so the person can close the window); Atlassian returns `authorize_url` (the Mac app opens it, catches the redirect on 127.0.0.1 and posts `code` and `state` to `connectionFlowCallback`) and `state`. With `connection`, the credential of that connection is replaced (CN5, sign in again). A flow ends in ONE connection. 409 `not_configured` while Ainkrad's app for the kind is not set up (see `listConnectionKinds`), 409 `limit_reached` (4 waiting per user), 502 when GitHub could not give a code, 400 for a bad name, label or kind, 404 for another workspace's connection */
+            /** @description A sign-in begun, held in Core: GitHub's device flow returns `user_code`, `verification_uri` and `interval` (Core polls GitHub itself, so the person can close the window); Atlassian returns `authorize_url` (the Mac app opens it, catches the redirect on 127.0.0.1 and posts `code` and `state` to `connectionFlowCallback`) and `state`. With `connection`, the credential of that connection is replaced (CN5, sign in again); a GitHub sign-in as another account ends `failed` with `different_account` unless `confirm_identity_change` is true. A flow ends in ONE connection. 409 `not_configured` while Ainkrad's app for the kind is not set up (see `listConnectionKinds`), 429 `too_many_flows` (4 waiting per user), 502 when GitHub could not give a code, 400 for a bad name, label or kind, 404 for another workspace's connection */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5793,7 +5800,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Tested now (audited `connection.tested`, with the result class only): Jira renews its token first, a GitHub App connection mints a new one when the old is near its end. A pending auth failure (`state_reason` `auth_suspected`) is decided by this: a service that refuses the credential disables the connection (`auth_failed`: sign in again), one that accepts clears it. The connection as the test left it; 404 for another workspace's */
+            /** @description Tested now (audited `connection.tested`, with the result class only): Jira renews its token first, a GitHub App connection mints a new one when the old is near its end. A pending auth failure (`state_reason` `auth_suspected`) is decided by this: a service that refuses the credential disables the connection (`auth_failed`: sign in again), one that accepts clears it. The connection as the test left it. A connection is tested at most once every 10 seconds and a user 30 times in 10 minutes: past that, 429 `rate_limited` with `Retry-After`. 404 for another workspace's */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5807,7 +5814,13 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
-            429: components["responses"]["TooManyRequests"];
+            /** @description Tested too soon: wait `Retry-After` seconds */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             500: components["responses"]["InternalError"];
         };
     };
