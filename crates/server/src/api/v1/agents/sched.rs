@@ -64,6 +64,14 @@ async fn present(app: &App, v: &Viewer, s: Session) -> Result<Option<AgentSessio
         out.chain = sched.chain.map(|c| c.into_iter().map(Into::into).collect());
         out.account = sched.account;
     }
+    if v.admin {
+        out.failover_class = sched.failover_class;
+        out.skip_pools = Some(sched.skip_pools);
+    }
+    out.run = Some(sched.run);
+    out.attempt = Some(sched.attempt);
+    out.failover_of = sched.failover_of;
+    out.failed_over_to = sched.failed_over_to;
     out.chain_pos = sched.chain_pos;
     out.waiting = sched.waiting.map(|w| AgentWaiting {
         since: w.since.map(|s| ts(&iso_of_unix(s))),
@@ -82,6 +90,23 @@ pub(super) async fn shown(app: &App, me: &Caller, id: &str) -> ApiResult<AgentSe
         Some(s) => Ok(Json(s)),
         None => Err(ApiError::not_found("no such agent session")),
     }
+}
+
+/// A page of sessions, newest first: all of them, or only the attempts of `run`.
+pub(super) async fn page(
+    app: &App,
+    before: Option<i64>,
+    limit: u32,
+    run: Option<&str>,
+) -> Result<Vec<Session>, ApiError> {
+    let Some(run) = run else {
+        return Ok(crate::store::agents::list(&app.pool, before, limit).await?);
+    };
+    let mut out = Vec::new();
+    for id in ch::ids_of_run(&app.pool, run, before, limit).await? {
+        out.extend(crate::store::agents::get(&app.pool, &id).await?);
+    }
+    Ok(out)
 }
 
 /// The caller's own sessions among `all`, as shown.

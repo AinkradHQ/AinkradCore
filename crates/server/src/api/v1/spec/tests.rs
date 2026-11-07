@@ -23,6 +23,9 @@ fn the_contract_lists_registered_kinds_and_actions() {
     assert_eq!(
         s["Event"]["x-event-kinds"],
         json!([
+            "account.budget",
+            "account.expired",
+            "account.failover",
             "account.health",
             "account.limited",
             "account.login.done",
@@ -55,7 +58,8 @@ fn the_contract_lists_registered_kinds_and_actions() {
     // A module's kinds default to its route scope (`admin`); runner presence is `read`.
     assert_eq!(
         s["Event"]["x-event-scopes"],
-        json!({"account.health": "admin", "account.limited": "admin",
+        json!({"account.budget": "admin", "account.expired": "admin", "account.failover": "admin",
+            "account.health": "admin", "account.limited": "admin",
             "account.login.done": "admin", "account.login.failed": "admin",
             "account.login.started": "admin", "account.login.url": "admin",
             "agent.approval_decided": "approve", "agent.approval_requested": "approve",
@@ -74,6 +78,9 @@ fn the_contract_lists_registered_kinds_and_actions() {
     assert_eq!(
         plain["components"]["schemas"]["Event"]["x-event-kinds"],
         json!([
+            "account.budget",
+            "account.expired",
+            "account.failover",
             "account.health",
             "account.limited",
             "account.login.done",

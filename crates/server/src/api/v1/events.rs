@@ -61,12 +61,19 @@ pub struct Event {
     /// `agent.state` is `{session, state, reason, …}`: a chain session that waits for an account
     /// says `reason: "waiting"` and `waiting: {until, why, since}` (`until` an RFC 3339 time, `since`
     /// the first wait in unix seconds), and one whose launch refused its account, so another was
-    /// picked across a provider or harness, says `reason: "repicked"` with `from` and `to` (each
-    /// `{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account
+    /// picked across a provider or harness, says `reason: "repicked"`, and a run a failover moved across
+    /// them says `reason: "failover"`, both with `from` and `to` (each `{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account
     /// cooled or limited until `until` (`class` `rate_limited`, `quota` or `plan_limit`; `source`
     /// `gateway` or `harness`). `account.health` is `{account, user, state, reason}`: an account went
-    /// `unhealthy` (`reason` `upstream_errors` or `auth_suspected`). No payload holds a key, a token
-    /// or an upstream's own words.
+    /// `unhealthy` (`reason` `upstream_errors` or `auth_suspected`). `account.failover` is `{run,
+    /// user, from_session, to_session, from_account, to_account, from_pool, to_pool, class, hop}`: a
+    /// run moved to `to_session`, or ended (`to_session` null: its chain has nothing left, the hop cap
+    /// or the storm guard; `to_account` is null while the successor waits for one). `account.budget` is
+    /// `{subject_kind, subject, state}` for an account's or a pool's budget (`state` `warning` or
+    /// `exhausted`). `account.expired` is `{account, user, reason}`: a key the provider refused was
+    /// confirmed and the account disabled. `alarm.raised` with `alarm` `failover_storm` says the
+    /// Core-wide failover rate bound stopped a run from moving. No payload holds a key, a token or an
+    /// upstream's own words.
     pub kind: String,
     #[schema(value_type = Object)]
     pub payload: Value,

@@ -1377,6 +1377,11 @@ export interface components {
             fail_streak: number;
             /** @description The last time a request or a session on it went well. */
             last_success_at?: components["schemas"]["Timestamp"];
+            /**
+             * @description A subscription's latest plan-limit snapshot, as its harness last said it (harness output:
+             *     it can only cool the account, never disable it).
+             */
+            plan_limit?: components["schemas"]["AccountPlanLimit"];
             /** @description The last status class its gateway reported on any of its sessions. */
             upstream_class?: string | null;
         };
@@ -1405,6 +1410,24 @@ export interface components {
             updated_at: components["schemas"]["Timestamp"];
             /** @description The sign-in URL, from `open_url` on. */
             url?: string | null;
+        };
+        /** @description A subscription's plan-limit snapshot. */
+        AccountPlanLimit: {
+            /** @description When the Core stored it. */
+            at: components["schemas"]["Timestamp"];
+            /** @description The harness's own word: `allowed`, `allowed_warning`, `rejected`. */
+            status: string;
+            windows: components["schemas"]["AccountPlanWindow"][];
+        };
+        AccountPlanWindow: {
+            /** @description e.g. `five_hour`, `seven_day`. */
+            name: string;
+            resets_at?: components["schemas"]["Timestamp"];
+            /**
+             * Format: double
+             * @description A fraction of the window's limit, past 1 at the limit.
+             */
+            utilization: number;
         };
         /** @description One account's usage. No key, secret name, delivery or runner: it is for a `read` device. */
         AccountSpend: {
@@ -1466,6 +1489,11 @@ export interface components {
             account?: number | null;
             /** @description The opaque agent id the create named (the key of its chain binding). */
             agent?: string | null;
+            /**
+             * Format: int64
+             * @description Which attempt of its run it is, from 0.
+             */
+            attempt?: number | null;
             /** @description The chain as it was when the session began (an edit never moves a running run). */
             chain?: components["schemas"]["ChainEntry"][] | null;
             /**
@@ -1482,6 +1510,16 @@ export interface components {
             created_at: components["schemas"]["Timestamp"];
             created_by: string;
             ended_at?: components["schemas"]["Timestamp"];
+            /** @description The attempt that replaced this one. */
+            failed_over_to?: string | null;
+            /**
+             * @description Why the run was moved off this attempt (`rate_limited`, `quota`, `auth`, `budget_pool`, …).
+             *     An ended run's last attempt says in `outcome.failover` (`{result, why, reasons}`) why it
+             *     could not move on. Admin only.
+             */
+            failover_class?: string | null;
+            /** @description The attempt this one replaced. */
+            failover_of?: string | null;
             harness: string;
             /** @description The harness's own session id, what a resume continues. */
             harness_session?: string | null;
@@ -1513,10 +1551,17 @@ export interface components {
              * @description How many times it was resumed.
              */
             resumes?: number | null;
+            /**
+             * @description The run it belongs to: its first attempt's id. A failover is a new session (an attempt) of
+             *     the same run; filter `listAgentSessions` with `run`.
+             */
+            run?: string | null;
             /** @description The runner's device id, `d_…`. */
             runner: string;
             /** @description The secrets it is leased at each start, by name. */
             secrets?: string[] | null;
+            /** @description The pools a budget stop took out of the run's chain. Admin only. */
+            skip_pools?: number[] | null;
             /**
              * @description `starting`, `running`, `interrupted` (its runner restarted; it is resumed), `ended`,
              *     `lost`.
@@ -1871,12 +1916,19 @@ export interface components {
              *     `agent.state` is `{session, state, reason, …}`: a chain session that waits for an account
              *     says `reason: "waiting"` and `waiting: {until, why, since}` (`until` an RFC 3339 time, `since`
              *     the first wait in unix seconds), and one whose launch refused its account, so another was
-             *     picked across a provider or harness, says `reason: "repicked"` with `from` and `to` (each
-             *     `{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account
+             *     picked across a provider or harness, says `reason: "repicked"`, and a run a failover moved across
+             *     them says `reason: "failover"`, both with `from` and `to` (each `{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account
              *     cooled or limited until `until` (`class` `rate_limited`, `quota` or `plan_limit`; `source`
              *     `gateway` or `harness`). `account.health` is `{account, user, state, reason}`: an account went
-             *     `unhealthy` (`reason` `upstream_errors` or `auth_suspected`). No payload holds a key, a token
-             *     or an upstream's own words.
+             *     `unhealthy` (`reason` `upstream_errors` or `auth_suspected`). `account.failover` is `{run,
+             *     user, from_session, to_session, from_account, to_account, from_pool, to_pool, class, hop}`: a
+             *     run moved to `to_session`, or ended (`to_session` null: its chain has nothing left, the hop cap
+             *     or the storm guard; `to_account` is null while the successor waits for one). `account.budget` is
+             *     `{subject_kind, subject, state}` for an account's or a pool's budget (`state` `warning` or
+             *     `exhausted`). `account.expired` is `{account, user, reason}`: a key the provider refused was
+             *     confirmed and the account disabled. `alarm.raised` with `alarm` `failover_storm` says the
+             *     Core-wide failover rate bound stopped a run from moving. No payload holds a key, a token or an
+             *     upstream's own words.
              */
             kind: string;
             payload: Record<string, never>;
@@ -3574,6 +3626,8 @@ export interface operations {
                 /** @description Sessions with an `index` below this; absent, from the newest. */
                 before?: number;
                 limit?: number;
+                /** @description Only the attempts of this run (its first attempt's id, `as_…`). */
+                run?: string;
             };
             header?: never;
             path?: never;
@@ -3869,7 +3923,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Queued on the scheduler (audited as `agent.wake_queued`): once the session is idle it is resumed on its runner, continuing the harness's own session with `text` as its next turn (`agent.woken`). A session that is still running is retried for a while, then the wake is dropped. 409 `not_wakeable` (failed, cancelled, a module's), 409 `limit_reached` (too many wakes waiting), 503 `scheduler_unavailable` */
+            /** @description Queued on the scheduler (audited as `agent.wake_queued`): once the session is idle it is resumed on its runner, continuing the harness's own session with `text` as its next turn (`agent.woken`). A session that is still running is retried for a while, then the wake is dropped (a wake queued for an attempt a failover replaced goes to its run's newest). 409 `failed_over` (the session was replaced: the message names the attempt to wake), 409 `not_wakeable` (failed, cancelled, a module's), 409 `limit_reached` (too many wakes waiting), 503 `scheduler_unavailable` */
             200: {
                 headers: {
                     [name: string]: unknown;

@@ -1,9 +1,12 @@
 //! The pushes an account's state calls for (design `2026-11-06-core-account-scheduler` §13, S7).
 //!
-//! - `account.health` with reason `auth_suspected` (a subscription whose sign-in looks gone, which
-//!   only an admin can answer) is pushed as `account_health`, to the `admin` devices of the
-//!   account's own user (the event names it). Any other `account.health`, and every
-//!   `account.limited` (a cooldown the Core waits out by itself), is in-app only: no notification.
+//! - Pushed, to the `admin` devices of the user the event names (and to no one when it names none):
+//!   `account.health` with reason `auth_suspected` (a subscription whose sign-in looks gone, which
+//!   only an admin can answer) as `account_health`; `account.expired` (a key the provider refused,
+//!   confirmed, so the account is disabled) as `account_expired`; `account.failover` (a run moved
+//!   to another account, or ended with none left) as `account_failover`.
+//! - In-app only, no notification: any other `account.health`, `account.limited` (a cooldown the
+//!   Core waits out by itself) and `account.budget`.
 //! - The notification is a fixed title and the account's id, nothing else: never the label, a key,
 //!   a token or a word an upstream said. `policy::clean` still runs over it before it leaves.
 //! - A device opts in or out per kind (`setPushKinds`) as for every kind; a burst of one account's
@@ -21,20 +24,45 @@ use crate::store::events::StoredEvent;
 /// no one.
 pub(super) fn notification(e: &StoredEvent) -> Option<Notification> {
     let p = &e.payload.0;
-    if e.kind != "account.health" || p["reason"].as_str() != Some("auth_suspected") {
-        return None;
-    }
-    let (account, user) = (p["account"].as_i64()?, p["user"].as_i64()?);
+    let user = p["user"].as_i64()?;
+    let (kind, title, data, collapse) = match e.kind.as_str() {
+        "account.health" if p["reason"].as_str() == Some("auth_suspected") => {
+            let account = p["account"].as_i64()?;
+            (
+                "account_health",
+                "An account needs your answer",
+                json!({"account": account}),
+                format!("account_health:{account}"),
+            )
+        }
+        "account.expired" => {
+            let account = p["account"].as_i64()?;
+            (
+                "account_expired",
+                "An account was disabled",
+                json!({"account": account}),
+                format!("account_expired:{account}"),
+            )
+        }
+        "account.failover" => {
+            let run = p["run"].as_str()?;
+            let title = match p["to_session"].is_null() {
+                true => "A run ended: no account is left",
+                false => "A run moved to another account",
+            };
+            (
+                "account_failover",
+                title,
+                json!({"run": run, "hop": p["hop"].as_i64()?}),
+                format!("account_failover:{run}"),
+            )
+        }
+        _ => return None,
+    };
     Some(Notification {
-        collapse: Some(format!("account_health:{account}")),
+        collapse: Some(collapse),
         user: Some(user),
-        ..Notification::new(
-            "account_health",
-            "admin",
-            "An account needs your answer",
-            "",
-            json!({"account": account}),
-        )
+        ..Notification::new(kind, "admin", title, "", data)
     })
 }
 

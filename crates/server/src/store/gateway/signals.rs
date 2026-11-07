@@ -119,6 +119,17 @@ pub async fn decide(
     .execute(&mut *tx)
     .await?
     .rows_affected();
+    if n > 0 && state == "confirmed" {
+        // The provider refused the key and a one-shot test said so: the account is expired (the
+        // caller disables it). `user` is who is told.
+        let user: i64 = sqlx::query_scalar("SELECT user_id FROM core_accounts WHERE id = ?")
+            .bind(account)
+            .fetch_optional(&mut *tx)
+            .await?
+            .unwrap_or(1);
+        let payload = json!({"account": account, "user": user, "reason": "auth_confirmed"});
+        super::super::events::append(&mut tx, "account.expired", &payload).await?;
+    }
     if n > 0 && state == "inconclusive" {
         let details = json!({"state": "inconclusive", "why": why});
         audited(&mut tx, "account.auth_inconclusive", account, details).await?;

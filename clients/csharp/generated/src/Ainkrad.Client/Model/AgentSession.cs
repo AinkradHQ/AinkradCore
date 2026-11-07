@@ -42,12 +42,16 @@ namespace Ainkrad.Client.Model
         /// </summary>
         /// <param name="account">The account the session holds, whatever its delivery (an API key or a subscription)..</param>
         /// <param name="agent">The opaque agent id the create named (the key of its chain binding)..</param>
+        /// <param name="attempt">Which attempt of its run it is, from 0..</param>
         /// <param name="chain">The chain as it was when the session began (an edit never moves a running run)..</param>
         /// <param name="chainId">The chain the run draws its accounts from; absent for a session that names its account itself or uses the runner&#39;s own login..</param>
         /// <param name="chainPos">The entry of &#x60;chain&#x60; the run sits on, from 0..</param>
         /// <param name="createdAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4). (required).</param>
         /// <param name="createdBy">createdBy (required).</param>
         /// <param name="endedAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4)..</param>
+        /// <param name="failedOverTo">The attempt that replaced this one..</param>
+        /// <param name="failoverClass">Why the run was moved off this attempt (&#x60;rate_limited&#x60;, &#x60;quota&#x60;, &#x60;auth&#x60;, &#x60;budget_pool&#x60;, …). An ended run&#39;s last attempt says in &#x60;outcome.failover&#x60; (&#x60;{result, why, reasons}&#x60;) why it could not move on. Admin only..</param>
+        /// <param name="failoverOf">The attempt this one replaced..</param>
         /// <param name="harness">harness (required).</param>
         /// <param name="harnessSession">The harness&#39;s own session id, what a resume continues..</param>
         /// <param name="id">&#x60;as_…&#x60;. (required).</param>
@@ -57,14 +61,16 @@ namespace Ainkrad.Client.Model
         /// <param name="outcome">Once over: &#x60;{\&quot;kind\&quot;: \&quot;succeeded\&quot; | \&quot;failed\&quot; | \&quot;cancelled\&quot; | \&quot;token_cap\&quot; | \&quot;stalled\&quot; | \&quot;lost\&quot;, \&quot;reason\&quot;: …}&#x60;..</param>
         /// <param name="repicked">How many accounts a launch refused after the pick before the one it holds (at most 2)..</param>
         /// <param name="resumes">How many times it was resumed..</param>
+        /// <param name="run">The run it belongs to: its first attempt&#39;s id. A failover is a new session (an attempt) of the same run; filter &#x60;listAgentSessions&#x60; with &#x60;run&#x60;..</param>
         /// <param name="runner">The runner&#39;s device id, &#x60;d_…&#x60;. (required).</param>
         /// <param name="secrets">The secrets it is leased at each start, by name..</param>
+        /// <param name="skipPools">The pools a budget stop took out of the run&#39;s chain. Admin only..</param>
         /// <param name="state">&#x60;starting&#x60;, &#x60;running&#x60;, &#x60;interrupted&#x60; (its runner restarted; it is resumed), &#x60;ended&#x60;, &#x60;lost&#x60;. (required).</param>
         /// <param name="updatedAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4). (required).</param>
         /// <param name="upstreamClass">The last status class its own gateway reported: &#x60;ok&#x60;, &#x60;rate_limited&#x60;, &#x60;quota&#x60;, &#x60;server_error&#x60;, &#x60;auth_failed&#x60;, ….</param>
         /// <param name="usage">usage.</param>
         /// <param name="waiting">Set while a chain session waits for an account: it stays &#x60;starting&#x60; until &#x60;until&#x60;, or until &#x60;scheduler.wait_max_secs&#x60; ends the run..</param>
-        public AgentSession(long? account = default, string agent = default, List<ChainEntry> chain = default, long? chainId = default, long? chainPos = default, DateTime createdAt = default, string createdBy = default, DateTime endedAt = default, string harness = default, string harnessSession = default, string id = default, long? index = default, long lastSeq = default, string model = default, Object outcome = default, long? repicked = default, long? resumes = default, string runner = default, List<string> secrets = default, string state = default, DateTime updatedAt = default, string upstreamClass = default, AgentUsage usage = default, AgentWaiting waiting = default)
+        public AgentSession(long? account = default, string agent = default, long? attempt = default, List<ChainEntry> chain = default, long? chainId = default, long? chainPos = default, DateTime createdAt = default, string createdBy = default, DateTime endedAt = default, string failedOverTo = default, string failoverClass = default, string failoverOf = default, string harness = default, string harnessSession = default, string id = default, long? index = default, long lastSeq = default, string model = default, Object outcome = default, long? repicked = default, long? resumes = default, string run = default, string runner = default, List<string> secrets = default, List<long> skipPools = default, string state = default, DateTime updatedAt = default, string upstreamClass = default, AgentUsage usage = default, AgentWaiting waiting = default)
         {
             this.CreatedAt = createdAt;
             // to ensure "createdBy" is required (not null)
@@ -101,17 +107,23 @@ namespace Ainkrad.Client.Model
             this.UpdatedAt = updatedAt;
             this.Account = account;
             this.Agent = agent;
+            this.Attempt = attempt;
             this.Chain = chain;
             this.ChainId = chainId;
             this.ChainPos = chainPos;
             this.EndedAt = endedAt;
+            this.FailedOverTo = failedOverTo;
+            this.FailoverClass = failoverClass;
+            this.FailoverOf = failoverOf;
             this.HarnessSession = harnessSession;
             this.Index = index;
             this.Model = model;
             this.Outcome = outcome;
             this.Repicked = repicked;
             this.Resumes = resumes;
+            this.Run = run;
             this.Secrets = secrets;
+            this.SkipPools = skipPools;
             this.UpstreamClass = upstreamClass;
             this.Usage = usage;
             this.Waiting = waiting;
@@ -130,6 +142,13 @@ namespace Ainkrad.Client.Model
         /// <value>The opaque agent id the create named (the key of its chain binding).</value>
         [DataMember(Name = "agent", EmitDefaultValue = true)]
         public string Agent { get; set; }
+
+        /// <summary>
+        /// Which attempt of its run it is, from 0.
+        /// </summary>
+        /// <value>Which attempt of its run it is, from 0.</value>
+        [DataMember(Name = "attempt", EmitDefaultValue = true)]
+        public long? Attempt { get; set; }
 
         /// <summary>
         /// The chain as it was when the session began (an edit never moves a running run).
@@ -171,6 +190,27 @@ namespace Ainkrad.Client.Model
         /// <value>RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4).</value>
         [DataMember(Name = "ended_at", EmitDefaultValue = false)]
         public DateTime EndedAt { get; set; }
+
+        /// <summary>
+        /// The attempt that replaced this one.
+        /// </summary>
+        /// <value>The attempt that replaced this one.</value>
+        [DataMember(Name = "failed_over_to", EmitDefaultValue = true)]
+        public string FailedOverTo { get; set; }
+
+        /// <summary>
+        /// Why the run was moved off this attempt (&#x60;rate_limited&#x60;, &#x60;quota&#x60;, &#x60;auth&#x60;, &#x60;budget_pool&#x60;, …). An ended run&#39;s last attempt says in &#x60;outcome.failover&#x60; (&#x60;{result, why, reasons}&#x60;) why it could not move on. Admin only.
+        /// </summary>
+        /// <value>Why the run was moved off this attempt (&#x60;rate_limited&#x60;, &#x60;quota&#x60;, &#x60;auth&#x60;, &#x60;budget_pool&#x60;, …). An ended run&#39;s last attempt says in &#x60;outcome.failover&#x60; (&#x60;{result, why, reasons}&#x60;) why it could not move on. Admin only.</value>
+        [DataMember(Name = "failover_class", EmitDefaultValue = true)]
+        public string FailoverClass { get; set; }
+
+        /// <summary>
+        /// The attempt this one replaced.
+        /// </summary>
+        /// <value>The attempt this one replaced.</value>
+        [DataMember(Name = "failover_of", EmitDefaultValue = true)]
+        public string FailoverOf { get; set; }
 
         /// <summary>
         /// Gets or Sets Harness
@@ -234,6 +274,13 @@ namespace Ainkrad.Client.Model
         public long? Resumes { get; set; }
 
         /// <summary>
+        /// The run it belongs to: its first attempt&#39;s id. A failover is a new session (an attempt) of the same run; filter &#x60;listAgentSessions&#x60; with &#x60;run&#x60;.
+        /// </summary>
+        /// <value>The run it belongs to: its first attempt&#39;s id. A failover is a new session (an attempt) of the same run; filter &#x60;listAgentSessions&#x60; with &#x60;run&#x60;.</value>
+        [DataMember(Name = "run", EmitDefaultValue = true)]
+        public string Run { get; set; }
+
+        /// <summary>
         /// The runner&#39;s device id, &#x60;d_…&#x60;.
         /// </summary>
         /// <value>The runner&#39;s device id, &#x60;d_…&#x60;.</value>
@@ -246,6 +293,13 @@ namespace Ainkrad.Client.Model
         /// <value>The secrets it is leased at each start, by name.</value>
         [DataMember(Name = "secrets", EmitDefaultValue = true)]
         public List<string> Secrets { get; set; }
+
+        /// <summary>
+        /// The pools a budget stop took out of the run&#39;s chain. Admin only.
+        /// </summary>
+        /// <value>The pools a budget stop took out of the run&#39;s chain. Admin only.</value>
+        [DataMember(Name = "skip_pools", EmitDefaultValue = true)]
+        public List<long> SkipPools { get; set; }
 
         /// <summary>
         /// &#x60;starting&#x60;, &#x60;running&#x60;, &#x60;interrupted&#x60; (its runner restarted; it is resumed), &#x60;ended&#x60;, &#x60;lost&#x60;.
@@ -291,12 +345,16 @@ namespace Ainkrad.Client.Model
             sb.Append("class AgentSession {\n");
             sb.Append("  Account: ").Append(Account).Append("\n");
             sb.Append("  Agent: ").Append(Agent).Append("\n");
+            sb.Append("  Attempt: ").Append(Attempt).Append("\n");
             sb.Append("  Chain: ").Append(Chain).Append("\n");
             sb.Append("  ChainId: ").Append(ChainId).Append("\n");
             sb.Append("  ChainPos: ").Append(ChainPos).Append("\n");
             sb.Append("  CreatedAt: ").Append(CreatedAt).Append("\n");
             sb.Append("  CreatedBy: ").Append(CreatedBy).Append("\n");
             sb.Append("  EndedAt: ").Append(EndedAt).Append("\n");
+            sb.Append("  FailedOverTo: ").Append(FailedOverTo).Append("\n");
+            sb.Append("  FailoverClass: ").Append(FailoverClass).Append("\n");
+            sb.Append("  FailoverOf: ").Append(FailoverOf).Append("\n");
             sb.Append("  Harness: ").Append(Harness).Append("\n");
             sb.Append("  HarnessSession: ").Append(HarnessSession).Append("\n");
             sb.Append("  Id: ").Append(Id).Append("\n");
@@ -306,8 +364,10 @@ namespace Ainkrad.Client.Model
             sb.Append("  Outcome: ").Append(Outcome).Append("\n");
             sb.Append("  Repicked: ").Append(Repicked).Append("\n");
             sb.Append("  Resumes: ").Append(Resumes).Append("\n");
+            sb.Append("  Run: ").Append(Run).Append("\n");
             sb.Append("  Runner: ").Append(Runner).Append("\n");
             sb.Append("  Secrets: ").Append(Secrets).Append("\n");
+            sb.Append("  SkipPools: ").Append(SkipPools).Append("\n");
             sb.Append("  State: ").Append(State).Append("\n");
             sb.Append("  UpdatedAt: ").Append(UpdatedAt).Append("\n");
             sb.Append("  UpstreamClass: ").Append(UpstreamClass).Append("\n");

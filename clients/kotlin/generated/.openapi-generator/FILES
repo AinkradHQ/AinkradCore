@@ -33,6 +33,8 @@ src/main/kotlin/ainkrad/client/infrastructure/RequestMethod.kt
 src/main/kotlin/ainkrad/client/models/AccountDetail.kt
 src/main/kotlin/ainkrad/client/models/AccountHealth.kt
 src/main/kotlin/ainkrad/client/models/AccountLogin.kt
+src/main/kotlin/ainkrad/client/models/AccountPlanLimit.kt
+src/main/kotlin/ainkrad/client/models/AccountPlanWindow.kt
 src/main/kotlin/ainkrad/client/models/AccountSpend.kt
 src/main/kotlin/ainkrad/client/models/AccountTested.kt
 src/main/kotlin/ainkrad/client/models/AccountsDeleted.kt

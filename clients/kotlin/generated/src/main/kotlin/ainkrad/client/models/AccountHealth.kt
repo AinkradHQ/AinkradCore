@@ -15,6 +15,7 @@
 
 package ainkrad.client.models
 
+import ainkrad.client.models.AccountPlanLimit
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
@@ -26,6 +27,7 @@ import kotlinx.serialization.Contextual
  * @param authStreak A subscription's failed sessions in a row; the third keeps it out of new runs (`state_reason` `auth_suspected`) until an admin answers.
  * @param failStreak Upstream errors counted in the current ten-minute window; three put it out for ten minutes.
  * @param lastSuccessAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param planLimit A subscription's latest plan-limit snapshot, as its harness last said it (harness output: it can only cool the account, never disable it).
  * @param upstreamClass The last status class its gateway reported on any of its sessions.
  */
 @Serializable
@@ -43,6 +45,10 @@ data class AccountHealth (
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "last_success_at")
     val lastSuccessAt: java.time.OffsetDateTime? = null,
+
+    /* A subscription's latest plan-limit snapshot, as its harness last said it (harness output: it can only cool the account, never disable it). */
+    @SerialName(value = "plan_limit")
+    val planLimit: AccountPlanLimit? = null,
 
     /* The last status class its gateway reported on any of its sessions. */
     @SerialName(value = "upstream_class")

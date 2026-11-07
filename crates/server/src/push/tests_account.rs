@@ -115,3 +115,54 @@ fn a_malformed_health_event_is_no_push() {
         assert!(Platform.notification(&e).is_none(), "{payload}");
     }
 }
+
+#[test]
+fn a_failover_and_an_expiry_are_pushed_to_their_user_with_ids_only_and_a_budget_is_not() {
+    use crate::push::Classifier;
+    let ev = |kind: &str, payload: Value| StoredEvent {
+        seq: 1,
+        at: String::new(),
+        kind: kind.to_owned(),
+        payload: sqlx::types::Json(payload),
+    };
+    let moved = json!({"run": "as_r", "user": 3, "from_session": "as_r", "to_session": "as_n",
+        "from_account": 1, "to_account": 2, "from_pool": 1, "to_pool": 1, "class": "quota",
+        "hop": 1, "label": "claude-main", "note": TOKEN});
+    let n = Platform
+        .notification(&ev("account.failover", moved.clone()))
+        .unwrap();
+    assert_eq!(
+        (n.kind, n.scope, n.user),
+        ("account_failover", "admin", Some(3))
+    );
+    assert_eq!(n.data, json!({"run": "as_r", "hop": 1}));
+    assert!(!format!("{n:?}").contains(TOKEN));
+    // A run that ended says so, in the title.
+    let mut ended = moved;
+    ended["to_session"] = Value::Null;
+    let e = Platform
+        .notification(&ev("account.failover", ended))
+        .unwrap();
+    assert_ne!(e.title, n.title);
+    let expired = ev(
+        "account.expired",
+        json!({"account": 9, "user": 3, "reason": "auth_confirmed"}),
+    );
+    let x = Platform.notification(&expired).unwrap();
+    assert_eq!(
+        (x.kind, x.user, x.data),
+        ("account_expired", Some(3), json!({"account": 9}))
+    );
+    // No user, no push; a budget or a cooldown is in-app only.
+    assert!(
+        Platform
+            .notification(&ev("account.expired", json!({"account": 9})))
+            .is_none()
+    );
+    let budget = json!({"subject_kind": "pool", "subject": "3", "state": "exhausted", "user": 3});
+    assert!(
+        Platform
+            .notification(&ev("account.budget", budget))
+            .is_none()
+    );
+}

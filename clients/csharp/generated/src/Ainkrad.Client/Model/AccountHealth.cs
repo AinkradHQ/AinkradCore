@@ -43,12 +43,14 @@ namespace Ainkrad.Client.Model
         /// <param name="authStreak">A subscription&#39;s failed sessions in a row; the third keeps it out of new runs (&#x60;state_reason&#x60; &#x60;auth_suspected&#x60;) until an admin answers. (required).</param>
         /// <param name="failStreak">Upstream errors counted in the current ten-minute window; three put it out for ten minutes. (required).</param>
         /// <param name="lastSuccessAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4)..</param>
+        /// <param name="planLimit">A subscription&#39;s latest plan-limit snapshot, as its harness last said it (harness output: it can only cool the account, never disable it)..</param>
         /// <param name="upstreamClass">The last status class its gateway reported on any of its sessions..</param>
-        public AccountHealth(long authStreak = default, long failStreak = default, DateTime lastSuccessAt = default, string upstreamClass = default)
+        public AccountHealth(long authStreak = default, long failStreak = default, DateTime lastSuccessAt = default, AccountPlanLimit planLimit = default, string upstreamClass = default)
         {
             this.AuthStreak = authStreak;
             this.FailStreak = failStreak;
             this.LastSuccessAt = lastSuccessAt;
+            this.PlanLimit = planLimit;
             this.UpstreamClass = upstreamClass;
         }
 
@@ -74,6 +76,13 @@ namespace Ainkrad.Client.Model
         public DateTime LastSuccessAt { get; set; }
 
         /// <summary>
+        /// A subscription&#39;s latest plan-limit snapshot, as its harness last said it (harness output: it can only cool the account, never disable it).
+        /// </summary>
+        /// <value>A subscription&#39;s latest plan-limit snapshot, as its harness last said it (harness output: it can only cool the account, never disable it).</value>
+        [DataMember(Name = "plan_limit", EmitDefaultValue = false)]
+        public AccountPlanLimit PlanLimit { get; set; }
+
+        /// <summary>
         /// The last status class its gateway reported on any of its sessions.
         /// </summary>
         /// <value>The last status class its gateway reported on any of its sessions.</value>
@@ -91,6 +100,7 @@ namespace Ainkrad.Client.Model
             sb.Append("  AuthStreak: ").Append(AuthStreak).Append("\n");
             sb.Append("  FailStreak: ").Append(FailStreak).Append("\n");
             sb.Append("  LastSuccessAt: ").Append(LastSuccessAt).Append("\n");
+            sb.Append("  PlanLimit: ").Append(PlanLimit).Append("\n");
             sb.Append("  UpstreamClass: ").Append(UpstreamClass).Append("\n");
             sb.Append("}\n");
             return sb.ToString();

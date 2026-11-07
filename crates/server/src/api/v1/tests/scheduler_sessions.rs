@@ -272,13 +272,9 @@ async fn cancel_and_kill_end_a_waiting_chain_session_in_the_core() {
         );
         assert!(b["waiting"].is_null(), "no longer waiting: {b}");
         assert_eq!(audited(&fx, action).await, 1, "{action}");
-        // Once over, the same call says so.
+        // Once over, the cancel stands (nothing is left to stop).
         let (st, b) = call(&fx, &fx.dev, Method::POST, &uri, Value::Null).await;
-        assert_eq!(
-            (st, b["code"].as_str()),
-            (StatusCode::CONFLICT, Some("session_over")),
-            "{b}"
-        );
+        assert_eq!(st, StatusCode::OK, "{b}");
         // It never starts: the supervisor finds it over.
         let ended: String =
             sqlx::query_scalar("SELECT state FROM core_agent_sessions WHERE id = ?")
@@ -305,7 +301,11 @@ async fn cancel_and_kill_end_a_waiting_chain_session_in_the_core() {
         (StatusCode::CONFLICT, Some("runner_offline")),
         "{b}"
     );
-    assert_eq!(audited(&fx, "agent.cancelled").await, 1);
+    assert_eq!(
+        audited(&fx, "agent.cancelled").await,
+        2,
+        "the refused one is not audited"
+    );
     let state: String = sqlx::query_scalar("SELECT state FROM core_agent_sessions WHERE id = ?")
         .bind(&sent.id)
         .fetch_one(&fx.app.pool)

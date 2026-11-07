@@ -41,6 +41,8 @@ src/Ainkrad.Client/Model/AbstractOpenAPISchema.cs
 src/Ainkrad.Client/Model/AccountDetail.cs
 src/Ainkrad.Client/Model/AccountHealth.cs
 src/Ainkrad.Client/Model/AccountLogin.cs
+src/Ainkrad.Client/Model/AccountPlanLimit.cs
+src/Ainkrad.Client/Model/AccountPlanWindow.cs
 src/Ainkrad.Client/Model/AccountSpend.cs
 src/Ainkrad.Client/Model/AccountTested.cs
 src/Ainkrad.Client/Model/AccountsDeleted.cs

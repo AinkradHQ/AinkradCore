@@ -19,13 +19,15 @@ pub struct Status {
     pub last_success_at: Option<String>,
     /// The newest status class a gateway report gave on a session of this account.
     pub upstream_class: Option<String>,
+    /// The latest plan-limit snapshot of a subscription (`{"at": unix, "plan": {...}}`).
+    pub plan_limit: Option<serde_json::Value>,
 }
 
 /// Every account's [`Status`], by account id.
 pub async fn statuses(pool: &SqlitePool) -> Result<HashMap<i64, Status>, sqlx::Error> {
     // The holding states are `alloc::live`'s own.
     let rows = sqlx::query(
-        "SELECT a.id, a.fail_streak, a.auth_streak, a.last_success_at, \
+        "SELECT a.id, a.fail_streak, a.auth_streak, a.last_success_at, a.plan_limit, \
          (SELECT count(*) FROM core_agent_sessions s WHERE s.account_id = a.id \
             AND s.state IN ('starting', 'running', 'interrupted')) AS live, \
          (SELECT s.upstream_class FROM core_agent_sessions s WHERE s.account_id = a.id \
@@ -45,6 +47,9 @@ pub async fn statuses(pool: &SqlitePool) -> Result<HashMap<i64, Status>, sqlx::E
                 auth_streak: r.try_get("auth_streak")?,
                 last_success_at: r.try_get("last_success_at")?,
                 upstream_class: r.try_get("upstream_class")?,
+                plan_limit: r
+                    .try_get::<Option<String>, _>("plan_limit")?
+                    .and_then(|p| serde_json::from_str(&p).ok()),
             },
         );
     }

@@ -11,8 +11,8 @@ use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
+use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use utoipa::ToSchema;
 
@@ -26,7 +26,7 @@ use ainkrad_proto::v2::{AgentDecide, AgentSend, AgentStop, Command};
 
 mod sched;
 mod types;
-use sched::{AgentWaiting, create_named, listed, shown};
+use sched::{AgentWaiting, create_named, listed, page, shown};
 use types::*;
 
 const MAX_MESSAGE: usize = 16 * 1024;
@@ -81,6 +81,21 @@ pub struct AgentSession {
     /// The last status class its own gateway reported: `ok`, `rate_limited`, `quota`,
     /// `server_error`, `auth_failed`, …
     pub upstream_class: Option<String>,
+    /// The run it belongs to: its first attempt's id. A failover is a new session (an attempt) of
+    /// the same run; filter `listAgentSessions` with `run`.
+    pub run: Option<String>,
+    /// Which attempt of its run it is, from 0.
+    pub attempt: Option<i64>,
+    /// The attempt this one replaced.
+    pub failover_of: Option<String>,
+    /// The attempt that replaced this one.
+    pub failed_over_to: Option<String>,
+    /// Why the run was moved off this attempt (`rate_limited`, `quota`, `auth`, `budget_pool`, …).
+    /// An ended run's last attempt says in `outcome.failover` (`{result, why, reasons}`) why it
+    /// could not move on. Admin only.
+    pub failover_class: Option<String>,
+    /// The pools a budget stop took out of the run's chain. Admin only.
+    pub skip_pools: Option<Vec<i64>>,
 }
 
 impl From<Session> for AgentSession {
@@ -116,49 +131,14 @@ impl From<Session> for AgentSession {
             waiting: None,
             repicked: None,
             upstream_class: None,
+            run: None,
+            attempt: None,
+            failover_of: None,
+            failed_over_to: None,
+            failover_class: None,
+            skip_pools: None,
         }
     }
-}
-
-/// A secret for the session: the broker's secret `name`, delivered under `var`.
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct AgentSecret {
-    pub name: String,
-    /// `[A-Z_][A-Z0-9_]*`, not `PATH`, `HOME` or a loader's: the value (`env` delivery), the
-    /// path of a 0600 file holding it (`file`), or of an askpass helper (`askpass`).
-    pub var: String,
-}
-
-/// A session to start. No `Debug`: the prompt is the caller's.
-#[derive(Deserialize, ToSchema)]
-pub struct NewAgentSession {
-    /// The runner's device id, `d_…`.
-    pub runner: String,
-    /// `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it
-    /// (and `model`) when the session draws from a chain: the account the allocator picks sets them.
-    #[serde(default)]
-    #[schema(required = false)]
-    pub harness: String,
-    /// The model id as the provider names it. For a session served by the auth gateway it must be
-    /// one of the ids priced for its provider, exactly: the gateway resolves no alias.
-    pub model: Option<String>,
-    pub prompt: Option<String>,
-    /// The repo and worktree to work in (`{"repo_url", "base_branch", "branch", …}`); absent, a
-    /// scratch dir.
-    #[schema(value_type = Option<Object>)]
-    pub workspace: Option<Value>,
-    /// `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`.
-    #[schema(value_type = Option<Object>)]
-    pub policy: Option<Value>,
-    /// At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).
-    pub secrets: Option<Vec<AgentSecret>>,
-    /// A fallback chain's id: the session draws its account from it, one at a time. Needs
-    /// `admin`. It must not come with a harness, a model or an `acct.*` secret.
-    pub chain: Option<i64>,
-    /// An opaque agent id (1 to 64 of `[A-Za-z0-9._:-]`): its bound chain, else the user's
-    /// default chain, serves the session. Needs `admin`. With no chain either way the session
-    /// runs as a plain one and names its harness.
-    pub agent: Option<String>,
 }
 
 fn parse<T: DeserializeOwned>(body: &[u8]) -> Result<T, ApiError> {
@@ -284,7 +264,7 @@ pub async fn list(
     Query(q): Query<Before>,
 ) -> ApiResult<Vec<AgentSession>> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let all = store::list(&app.pool, q.before, limit).await?;
+    let all = page(&app, q.before, limit, q.run.as_deref()).await?;
     Ok(Json(listed(&app, &me, all).await?))
 }
 
@@ -606,8 +586,10 @@ pub async fn resume(
     responses((status = 200, description = "Queued on the scheduler (audited as \
         `agent.wake_queued`): once the session is idle it is resumed on its runner, continuing \
         the harness's own session with `text` as its next turn (`agent.woken`). A session that \
-        is still running is retried for a while, then the wake is dropped. 409 `not_wakeable` \
-        (failed, cancelled, a module's), 409 `limit_reached` (too many wakes waiting), 503 \
+        is still running is retried for a while, then the wake is dropped (a wake queued for an \
+        attempt a failover replaced goes to its run's newest). 409 `failed_over` (the session was \
+        replaced: the message names the attempt to wake), 409 `not_wakeable` (failed, cancelled, \
+        a module's), 409 `limit_reached` (too many wakes waiting), 503 \
         `scheduler_unavailable`", body = AgentWake)))]
 pub async fn wake(
     State(app): State<App>,
@@ -632,6 +614,15 @@ pub async fn wake(
     }
     not_a_modules(&s)?;
     owns_secrets(&s, &me)?;
+    // A wake queued earlier follows its run to the newest attempt; a new one names it instead.
+    let newest = crate::store::failover::newest(&app.pool, &s.id).await?;
+    if newest != s.id {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "failed_over",
+            format!("a failover replaced this session: wake {newest}"),
+        ));
+    }
     if !s.wakeable() {
         return Err(ApiError::new(
             StatusCode::CONFLICT,

@@ -400,3 +400,59 @@ async fn an_approved_raise_lifts_the_stop_and_the_next_exhaustion_alerts_again()
 
 mod holds;
 mod pool_budgets;
+
+#[tokio::test]
+async fn an_account_or_pool_budget_raises_account_budget_once_per_state_and_an_agent_budget_none() {
+    let (fx, vm, s) = setup().await;
+    let acct = make(&fx, &s, "main", V1, std::slice::from_ref(&vm.id)).await;
+    let pool = pools::create(&fx.app.pool, "main-pool", "anthropic", &fx.dev.id, BY, NOW)
+        .await
+        .unwrap();
+    pools::add_member(&fx.app.pool, pool.id, acct.id, &fx.dev.id, BY, NOW)
+        .await
+        .unwrap();
+    let pool_id = pool.id.to_string();
+    let mut pool_budget = bud("pool", &pool_id, "total", 1000);
+    pool_budget.warn_at_percent = Some(50);
+    set(&fx, &pool_budget).await;
+    // The agent's budget runs out at once: no event, only an account's or a pool's raise one.
+    set(&fx, &bud("agent", "a1", "total", 100)).await;
+    let at = "2026-10-22T10:00:00.000Z";
+    for (key, tokens) in [("e1", 600), ("e2", 100), ("e3", 400), ("e4", 1)] {
+        let subjects = [("agent", "a1")];
+        let c = NewCost {
+            session: "s1",
+            epoch: 0,
+            account_id: Some(acct.id),
+            legacy_account_id: None,
+            provider: "anthropic",
+            harness: "claude",
+            model: "m",
+            input_tokens: tokens,
+            output_tokens: 0,
+            cache_tokens: 0,
+            reported_usd_micros: None,
+            approximate: false,
+            subjects: &subjects,
+            idempotency_key: key,
+            occurred_at: at,
+        };
+        costs::record(&fx.app.pool, &c, at).await.unwrap();
+    }
+    let seen: Vec<String> =
+        sqlx::query_scalar("SELECT payload FROM events WHERE kind = 'account.budget' ORDER BY seq")
+            .fetch_all(&fx.app.pool)
+            .await
+            .unwrap();
+    let seen: Vec<Value> = seen
+        .iter()
+        .map(|p| serde_json::from_str(p).unwrap())
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            json!({"subject_kind": "pool", "subject": pool_id, "state": "warning"}),
+            json!({"subject_kind": "pool", "subject": pool_id, "state": "exhausted"}),
+        ]
+    );
+}

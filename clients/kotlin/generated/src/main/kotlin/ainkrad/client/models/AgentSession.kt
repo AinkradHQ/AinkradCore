@@ -36,17 +36,23 @@ import kotlinx.serialization.Contextual
  * @param updatedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param account The account the session holds, whatever its delivery (an API key or a subscription).
  * @param agent The opaque agent id the create named (the key of its chain binding).
+ * @param attempt Which attempt of its run it is, from 0.
  * @param chain The chain as it was when the session began (an edit never moves a running run).
  * @param chainId The chain the run draws its accounts from; absent for a session that names its account itself or uses the runner's own login.
  * @param chainPos The entry of `chain` the run sits on, from 0.
  * @param endedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param failedOverTo The attempt that replaced this one.
+ * @param failoverClass Why the run was moved off this attempt (`rate_limited`, `quota`, `auth`, `budget_pool`, …). An ended run's last attempt says in `outcome.failover` (`{result, why, reasons}`) why it could not move on. Admin only.
+ * @param failoverOf The attempt this one replaced.
  * @param harnessSession The harness's own session id, what a resume continues.
  * @param index Its row: page `listAgentSessions` with `before`.
  * @param model 
  * @param outcome Once over: `{\"kind\": \"succeeded\" | \"failed\" | \"cancelled\" | \"token_cap\" | \"stalled\" | \"lost\", \"reason\": …}`.
  * @param repicked How many accounts a launch refused after the pick before the one it holds (at most 2).
  * @param resumes How many times it was resumed.
+ * @param run The run it belongs to: its first attempt's id. A failover is a new session (an attempt) of the same run; filter `listAgentSessions` with `run`.
  * @param secrets The secrets it is leased at each start, by name.
+ * @param skipPools The pools a budget stop took out of the run's chain. Admin only.
  * @param upstreamClass The last status class its own gateway reported: `ok`, `rate_limited`, `quota`, `server_error`, `auth_failed`, …
  * @param usage 
  * @param waiting Set while a chain session waits for an account: it stays `starting` until `until`, or until `scheduler.wait_max_secs` ends the run.
@@ -93,6 +99,10 @@ data class AgentSession (
     @SerialName(value = "agent")
     val agent: kotlin.String? = null,
 
+    /* Which attempt of its run it is, from 0. */
+    @SerialName(value = "attempt")
+    val attempt: kotlin.Long? = null,
+
     /* The chain as it was when the session began (an edit never moves a running run). */
     @SerialName(value = "chain")
     val chain: kotlin.collections.List<ChainEntry>? = null,
@@ -108,6 +118,18 @@ data class AgentSession (
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "ended_at")
     val endedAt: java.time.OffsetDateTime? = null,
+
+    /* The attempt that replaced this one. */
+    @SerialName(value = "failed_over_to")
+    val failedOverTo: kotlin.String? = null,
+
+    /* Why the run was moved off this attempt (`rate_limited`, `quota`, `auth`, `budget_pool`, …). An ended run's last attempt says in `outcome.failover` (`{result, why, reasons}`) why it could not move on. Admin only. */
+    @SerialName(value = "failover_class")
+    val failoverClass: kotlin.String? = null,
+
+    /* The attempt this one replaced. */
+    @SerialName(value = "failover_of")
+    val failoverOf: kotlin.String? = null,
 
     /* The harness's own session id, what a resume continues. */
     @SerialName(value = "harness_session")
@@ -132,9 +154,17 @@ data class AgentSession (
     @SerialName(value = "resumes")
     val resumes: kotlin.Long? = null,
 
+    /* The run it belongs to: its first attempt's id. A failover is a new session (an attempt) of the same run; filter `listAgentSessions` with `run`. */
+    @SerialName(value = "run")
+    val run: kotlin.String? = null,
+
     /* The secrets it is leased at each start, by name. */
     @SerialName(value = "secrets")
     val secrets: kotlin.collections.List<kotlin.String>? = null,
+
+    /* The pools a budget stop took out of the run's chain. Admin only. */
+    @SerialName(value = "skip_pools")
+    val skipPools: kotlin.collections.List<kotlin.Long>? = null,
 
     /* The last status class its own gateway reported: `ok`, `rate_limited`, `quota`, `server_error`, `auth_failed`, … */
     @SerialName(value = "upstream_class")

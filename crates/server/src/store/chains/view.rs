@@ -36,13 +36,25 @@ pub struct Sched {
     pub repicked: i64,
     /// The last status class its own gateway reported.
     pub upstream_class: Option<String>,
+    /// The run it belongs to (its first attempt's id), and which attempt it is, from 0.
+    pub run: String,
+    pub attempt: i64,
+    /// The attempt a failover replaced with this one, and the one that replaced this.
+    pub failover_of: Option<String>,
+    pub failed_over_to: Option<String>,
+    /// Why the run moved (or was told to move) off this attempt.
+    pub failover_class: Option<String>,
+    /// Pools a budget stop took out of the run's chain.
+    pub skip_pools: Vec<i64>,
 }
 
 /// `session`'s scheduling, `None` for no such session.
 pub async fn sched_of(pool: &SqlitePool, session: &str) -> Result<Option<Sched>, sqlx::Error> {
     let Some(r) = sqlx::query(
         "SELECT user_id, agent, chain_id, chain, chain_pos, account_id, waiting, tried_accounts, \
-         upstream_class FROM core_agent_sessions WHERE id = ?",
+         upstream_class, coalesce(run_id, id) AS run, attempt, failover_of, failover_class, \
+         skip_pools, (SELECT x.id FROM core_agent_sessions x WHERE x.failover_of = \
+         core_agent_sessions.id) AS failed_over_to FROM core_agent_sessions WHERE id = ?",
     )
     .bind(session)
     .fetch_optional(pool)
@@ -72,6 +84,14 @@ pub async fn sched_of(pool: &SqlitePool, session: &str) -> Result<Option<Sched>,
         waiting,
         repicked: i64::try_from(tried).unwrap_or(i64::MAX),
         upstream_class: r.try_get("upstream_class")?,
+        run: r.try_get("run")?,
+        attempt: r.try_get("attempt")?,
+        failover_of: r.try_get("failover_of")?,
+        failed_over_to: r.try_get("failed_over_to")?,
+        failover_class: r.try_get("failover_class")?,
+        skip_pools: json("skip_pools")?
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default(),
     }))
 }
 
@@ -84,4 +104,23 @@ pub async fn user_of(pool: &SqlitePool, device: &str) -> Result<i64, sqlx::Error
         .fetch_optional(pool)
         .await?;
     Ok(user.unwrap_or(1))
+}
+
+/// The sessions of `run` (its attempts), newest first, with row number below `before` (at most
+/// `limit`).
+pub async fn ids_of_run(
+    pool: &SqlitePool,
+    run: &str,
+    before: Option<i64>,
+    limit: u32,
+) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT id FROM core_agent_sessions WHERE coalesce(run_id, id) = ? AND n < ? \
+         ORDER BY n DESC LIMIT ?",
+    )
+    .bind(run)
+    .bind(before.unwrap_or(i64::MAX))
+    .bind(i64::from(limit))
+    .fetch_all(pool)
+    .await
 }

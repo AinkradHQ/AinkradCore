@@ -5825,17 +5825,24 @@ public enum Operations {
                 public var before: Swift.Int64?
                 /// - Remark: Generated from `#/paths/api/v1/agent-sessions/GET/query/limit`.
                 public var limit: Swift.Int32?
+                /// Only the attempts of this run (its first attempt's id, `as_…`).
+                ///
+                /// - Remark: Generated from `#/paths/api/v1/agent-sessions/GET/query/run`.
+                public var run: Swift.String?
                 /// Creates a new `Query`.
                 ///
                 /// - Parameters:
                 ///   - before: Sessions with an `index` below this; absent, from the newest.
                 ///   - limit:
+                ///   - run: Only the attempts of this run (its first attempt's id, `as_…`).
                 public init(
                     before: Swift.Int64? = nil,
-                    limit: Swift.Int32? = nil
+                    limit: Swift.Int32? = nil,
+                    run: Swift.String? = nil
                 ) {
                     self.before = before
                     self.limit = limit
+                    self.run = run
                 }
             }
             public var query: Operations.ListAgentSessions.Input.Query
@@ -8544,7 +8551,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Queued on the scheduler (audited as `agent.wake_queued`): once the session is idle it is resumed on its runner, continuing the harness's own session with `text` as its next turn (`agent.woken`). A session that is still running is retried for a while, then the wake is dropped. 409 `not_wakeable` (failed, cancelled, a module's), 409 `limit_reached` (too many wakes waiting), 503 `scheduler_unavailable`
+            /// Queued on the scheduler (audited as `agent.wake_queued`): once the session is idle it is resumed on its runner, continuing the harness's own session with `text` as its next turn (`agent.woken`). A session that is still running is retried for a while, then the wake is dropped (a wake queued for an attempt a failover replaced goes to its run's newest). 409 `failed_over` (the session was replaced: the message names the attempt to wake), 409 `not_wakeable` (failed, cancelled, a module's), 409 `limit_reached` (too many wakes waiting), 503 `scheduler_unavailable`
             ///
             /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/wake/post(wakeAgentSession)/responses/200`.
             ///

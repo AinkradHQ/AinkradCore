@@ -50,6 +50,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AccountHealth/last_success_at`.
             public var lastSuccessAt: Components.Schemas.Timestamp?
+            /// A subscription's latest plan-limit snapshot, as its harness last said it (harness output:
+            /// it can only cool the account, never disable it).
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountHealth/plan_limit`.
+            public var planLimit: Components.Schemas.AccountPlanLimit?
             /// The last status class its gateway reported on any of its sessions.
             ///
             /// - Remark: Generated from `#/components/schemas/AccountHealth/upstream_class`.
@@ -60,22 +65,26 @@ extension Components {
             ///   - authStreak: A subscription's failed sessions in a row; the third keeps it out of new runs
             ///   - failStreak: Upstream errors counted in the current ten-minute window; three put it out for ten minutes.
             ///   - lastSuccessAt: The last time a request or a session on it went well.
+            ///   - planLimit: A subscription's latest plan-limit snapshot, as its harness last said it (harness output:
             ///   - upstreamClass: The last status class its gateway reported on any of its sessions.
             public init(
                 authStreak: Swift.Int64,
                 failStreak: Swift.Int64,
                 lastSuccessAt: Components.Schemas.Timestamp? = nil,
+                planLimit: Components.Schemas.AccountPlanLimit? = nil,
                 upstreamClass: Swift.String? = nil
             ) {
                 self.authStreak = authStreak
                 self.failStreak = failStreak
                 self.lastSuccessAt = lastSuccessAt
+                self.planLimit = planLimit
                 self.upstreamClass = upstreamClass
             }
             public enum CodingKeys: String, CodingKey {
                 case authStreak = "auth_streak"
                 case failStreak = "fail_streak"
                 case lastSuccessAt = "last_success_at"
+                case planLimit = "plan_limit"
                 case upstreamClass = "upstream_class"
             }
         }
@@ -169,6 +178,74 @@ extension Components {
                 case state
                 case updatedAt = "updated_at"
                 case url
+            }
+        }
+        /// A subscription's plan-limit snapshot.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AccountPlanLimit`.
+        public struct AccountPlanLimit: Codable, Hashable, Sendable {
+            /// When the Core stored it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountPlanLimit/at`.
+            public var at: Components.Schemas.Timestamp
+            /// The harness's own word: `allowed`, `allowed_warning`, `rejected`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountPlanLimit/status`.
+            public var status: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AccountPlanLimit/windows`.
+            public var windows: [Components.Schemas.AccountPlanWindow]
+            /// Creates a new `AccountPlanLimit`.
+            ///
+            /// - Parameters:
+            ///   - at: When the Core stored it.
+            ///   - status: The harness's own word: `allowed`, `allowed_warning`, `rejected`.
+            ///   - windows:
+            public init(
+                at: Components.Schemas.Timestamp,
+                status: Swift.String,
+                windows: [Components.Schemas.AccountPlanWindow]
+            ) {
+                self.at = at
+                self.status = status
+                self.windows = windows
+            }
+            public enum CodingKeys: String, CodingKey {
+                case at
+                case status
+                case windows
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/AccountPlanWindow`.
+        public struct AccountPlanWindow: Codable, Hashable, Sendable {
+            /// e.g. `five_hour`, `seven_day`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountPlanWindow/name`.
+            public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AccountPlanWindow/resets_at`.
+            public var resetsAt: Components.Schemas.Timestamp?
+            /// A fraction of the window's limit, past 1 at the limit.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountPlanWindow/utilization`.
+            public var utilization: Swift.Double
+            /// Creates a new `AccountPlanWindow`.
+            ///
+            /// - Parameters:
+            ///   - name: e.g. `five_hour`, `seven_day`.
+            ///   - resetsAt:
+            ///   - utilization: A fraction of the window's limit, past 1 at the limit.
+            public init(
+                name: Swift.String,
+                resetsAt: Components.Schemas.Timestamp? = nil,
+                utilization: Swift.Double
+            ) {
+                self.name = name
+                self.resetsAt = resetsAt
+                self.utilization = utilization
+            }
+            public enum CodingKeys: String, CodingKey {
+                case name
+                case resetsAt = "resets_at"
+                case utilization
             }
         }
         /// One account's usage. No key, secret name, delivery or runner: it is for a `read` device.
@@ -361,6 +438,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/agent`.
             public var agent: Swift.String?
+            /// Which attempt of its run it is, from 0.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/attempt`.
+            public var attempt: Swift.Int64?
             /// The chain as it was when the session began (an edit never moves a running run).
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/chain`.
@@ -380,6 +461,20 @@ extension Components {
             public var createdBy: Swift.String
             /// - Remark: Generated from `#/components/schemas/AgentSession/ended_at`.
             public var endedAt: Components.Schemas.Timestamp?
+            /// The attempt that replaced this one.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/failed_over_to`.
+            public var failedOverTo: Swift.String?
+            /// Why the run was moved off this attempt (`rate_limited`, `quota`, `auth`, `budget_pool`, …).
+            /// An ended run's last attempt says in `outcome.failover` (`{result, why, reasons}`) why it
+            /// could not move on. Admin only.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/failover_class`.
+            public var failoverClass: Swift.String?
+            /// The attempt this one replaced.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/failover_of`.
+            public var failoverOf: Swift.String?
             /// - Remark: Generated from `#/components/schemas/AgentSession/harness`.
             public var harness: Swift.String
             /// The harness's own session id, what a resume continues.
@@ -413,6 +508,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/resumes`.
             public var resumes: Swift.Int64?
+            /// The run it belongs to: its first attempt's id. A failover is a new session (an attempt) of
+            /// the same run; filter `listAgentSessions` with `run`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/run`.
+            public var run: Swift.String?
             /// The runner's device id, `d_…`.
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/runner`.
@@ -421,6 +521,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/secrets`.
             public var secrets: [Swift.String]?
+            /// The pools a budget stop took out of the run's chain. Admin only.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/skip_pools`.
+            public var skipPools: [Swift.Int64]?
             /// `starting`, `running`, `interrupted` (its runner restarted; it is resumed), `ended`,
             /// `lost`.
             ///
@@ -445,12 +549,16 @@ extension Components {
             /// - Parameters:
             ///   - account: The account the session holds, whatever its delivery (an API key or a subscription).
             ///   - agent: The opaque agent id the create named (the key of its chain binding).
+            ///   - attempt: Which attempt of its run it is, from 0.
             ///   - chain: The chain as it was when the session began (an edit never moves a running run).
             ///   - chainId: The chain the run draws its accounts from; absent for a session that names its account
             ///   - chainPos: The entry of `chain` the run sits on, from 0.
             ///   - createdAt:
             ///   - createdBy:
             ///   - endedAt:
+            ///   - failedOverTo: The attempt that replaced this one.
+            ///   - failoverClass: Why the run was moved off this attempt (`rate_limited`, `quota`, `auth`, `budget_pool`, …).
+            ///   - failoverOf: The attempt this one replaced.
             ///   - harness:
             ///   - harnessSession: The harness's own session id, what a resume continues.
             ///   - id: `as_…`.
@@ -460,8 +568,10 @@ extension Components {
             ///   - outcome: Once over: `{"kind": "succeeded" | "failed" | "cancelled" | "token_cap" | "stalled" |
             ///   - repicked: How many accounts a launch refused after the pick before the one it holds (at most 2).
             ///   - resumes: How many times it was resumed.
+            ///   - run: The run it belongs to: its first attempt's id. A failover is a new session (an attempt) of
             ///   - runner: The runner's device id, `d_…`.
             ///   - secrets: The secrets it is leased at each start, by name.
+            ///   - skipPools: The pools a budget stop took out of the run's chain. Admin only.
             ///   - state: `starting`, `running`, `interrupted` (its runner restarted; it is resumed), `ended`,
             ///   - updatedAt:
             ///   - upstreamClass: The last status class its own gateway reported: `ok`, `rate_limited`, `quota`,
@@ -470,12 +580,16 @@ extension Components {
             public init(
                 account: Swift.Int64? = nil,
                 agent: Swift.String? = nil,
+                attempt: Swift.Int64? = nil,
                 chain: [Components.Schemas.ChainEntry]? = nil,
                 chainId: Swift.Int64? = nil,
                 chainPos: Swift.Int64? = nil,
                 createdAt: Components.Schemas.Timestamp,
                 createdBy: Swift.String,
                 endedAt: Components.Schemas.Timestamp? = nil,
+                failedOverTo: Swift.String? = nil,
+                failoverClass: Swift.String? = nil,
+                failoverOf: Swift.String? = nil,
                 harness: Swift.String,
                 harnessSession: Swift.String? = nil,
                 id: Swift.String,
@@ -485,8 +599,10 @@ extension Components {
                 outcome: OpenAPIRuntime.OpenAPIObjectContainer? = nil,
                 repicked: Swift.Int64? = nil,
                 resumes: Swift.Int64? = nil,
+                run: Swift.String? = nil,
                 runner: Swift.String,
                 secrets: [Swift.String]? = nil,
+                skipPools: [Swift.Int64]? = nil,
                 state: Swift.String,
                 updatedAt: Components.Schemas.Timestamp,
                 upstreamClass: Swift.String? = nil,
@@ -495,12 +611,16 @@ extension Components {
             ) {
                 self.account = account
                 self.agent = agent
+                self.attempt = attempt
                 self.chain = chain
                 self.chainId = chainId
                 self.chainPos = chainPos
                 self.createdAt = createdAt
                 self.createdBy = createdBy
                 self.endedAt = endedAt
+                self.failedOverTo = failedOverTo
+                self.failoverClass = failoverClass
+                self.failoverOf = failoverOf
                 self.harness = harness
                 self.harnessSession = harnessSession
                 self.id = id
@@ -510,8 +630,10 @@ extension Components {
                 self.outcome = outcome
                 self.repicked = repicked
                 self.resumes = resumes
+                self.run = run
                 self.runner = runner
                 self.secrets = secrets
+                self.skipPools = skipPools
                 self.state = state
                 self.updatedAt = updatedAt
                 self.upstreamClass = upstreamClass
@@ -521,12 +643,16 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case account
                 case agent
+                case attempt
                 case chain
                 case chainId = "chain_id"
                 case chainPos = "chain_pos"
                 case createdAt = "created_at"
                 case createdBy = "created_by"
                 case endedAt = "ended_at"
+                case failedOverTo = "failed_over_to"
+                case failoverClass = "failover_class"
+                case failoverOf = "failover_of"
                 case harness
                 case harnessSession = "harness_session"
                 case id
@@ -536,8 +662,10 @@ extension Components {
                 case outcome
                 case repicked
                 case resumes
+                case run
                 case runner
                 case secrets
+                case skipPools = "skip_pools"
                 case state
                 case updatedAt = "updated_at"
                 case upstreamClass = "upstream_class"
@@ -1688,12 +1816,19 @@ extension Components {
             /// `agent.state` is `{session, state, reason, …}`: a chain session that waits for an account
             /// says `reason: "waiting"` and `waiting: {until, why, since}` (`until` an RFC 3339 time, `since`
             /// the first wait in unix seconds), and one whose launch refused its account, so another was
-            /// picked across a provider or harness, says `reason: "repicked"` with `from` and `to` (each
-            /// `{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account
+            /// picked across a provider or harness, says `reason: "repicked"`, and a run a failover moved across
+            /// them says `reason: "failover"`, both with `from` and `to` (each `{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account
             /// cooled or limited until `until` (`class` `rate_limited`, `quota` or `plan_limit`; `source`
             /// `gateway` or `harness`). `account.health` is `{account, user, state, reason}`: an account went
-            /// `unhealthy` (`reason` `upstream_errors` or `auth_suspected`). No payload holds a key, a token
-            /// or an upstream's own words.
+            /// `unhealthy` (`reason` `upstream_errors` or `auth_suspected`). `account.failover` is `{run,
+            /// user, from_session, to_session, from_account, to_account, from_pool, to_pool, class, hop}`: a
+            /// run moved to `to_session`, or ended (`to_session` null: its chain has nothing left, the hop cap
+            /// or the storm guard; `to_account` is null while the successor waits for one). `account.budget` is
+            /// `{subject_kind, subject, state}` for an account's or a pool's budget (`state` `warning` or
+            /// `exhausted`). `account.expired` is `{account, user, reason}`: a key the provider refused was
+            /// confirmed and the account disabled. `alarm.raised` with `alarm` `failover_storm` says the
+            /// Core-wide failover rate bound stopped a run from moving. No payload holds a key, a token or an
+            /// upstream's own words.
             ///
             /// - Remark: Generated from `#/components/schemas/Event/kind`.
             public var kind: Swift.String

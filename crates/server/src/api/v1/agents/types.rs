@@ -73,4 +73,47 @@ pub struct Before {
     /// Sessions with an `index` below this; absent, from the newest.
     pub before: Option<i64>,
     pub limit: Option<u32>,
+    /// Only the attempts of this run (its first attempt's id, `as_…`).
+    pub run: Option<String>,
+}
+
+/// A secret for the session: the broker's secret `name`, delivered under `var`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct AgentSecret {
+    pub name: String,
+    /// `[A-Z_][A-Z0-9_]*`, not `PATH`, `HOME` or a loader's: the value (`env` delivery), the
+    /// path of a 0600 file holding it (`file`), or of an askpass helper (`askpass`).
+    pub var: String,
+}
+
+/// A session to start. No `Debug`: the prompt is the caller's.
+#[derive(Deserialize, ToSchema)]
+pub struct NewAgentSession {
+    /// The runner's device id, `d_…`.
+    pub runner: String,
+    /// `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it
+    /// (and `model`) when the session draws from a chain: the account the allocator picks sets them.
+    #[serde(default)]
+    #[schema(required = false)]
+    pub harness: String,
+    /// The model id as the provider names it. For a session served by the auth gateway it must be
+    /// one of the ids priced for its provider, exactly: the gateway resolves no alias.
+    pub model: Option<String>,
+    pub prompt: Option<String>,
+    /// The repo and worktree to work in (`{"repo_url", "base_branch", "branch", …}`); absent, a
+    /// scratch dir.
+    #[schema(value_type = Option<Object>)]
+    pub workspace: Option<Value>,
+    /// `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`.
+    #[schema(value_type = Option<Object>)]
+    pub policy: Option<Value>,
+    /// At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).
+    pub secrets: Option<Vec<AgentSecret>>,
+    /// A fallback chain's id: the session draws its account from it, one at a time. Needs
+    /// `admin`. It must not come with a harness, a model or an `acct.*` secret.
+    pub chain: Option<i64>,
+    /// An opaque agent id (1 to 64 of `[A-Za-z0-9._:-]`): its bound chain, else the user's
+    /// default chain, serves the session. Needs `admin`. With no chain either way the session
+    /// runs as a plain one and names its harness.
+    pub agent: Option<String>,
 }

@@ -72,6 +72,7 @@ mod push;
 mod revocation;
 mod runners;
 mod scheduler_events;
+mod scheduler_failover;
 mod scheduler_sessions;
 mod scoped;
 mod scopes;
