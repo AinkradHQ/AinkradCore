@@ -12,6 +12,7 @@ fn tool(name: &str) -> ConnTool {
         name: name.to_owned(),
         description: "d".to_owned(),
         write: false,
+        input_schema: None,
     }
 }
 
@@ -194,6 +195,7 @@ async fn a_write_that_the_core_never_answers_is_outcome_unknown_and_a_read_is_ti
             name: "github.create_issue".to_owned(),
             description: "d".to_owned(),
             write: true,
+            input_schema: None,
         },
     ];
     t.poll(&poll(0, vec![], Some(list)), SHORT).await;
@@ -207,4 +209,67 @@ async fn a_write_that_the_core_never_answers_is_outcome_unknown_and_a_read_is_ti
         .call_within("as_a", "github.get_issue", json!({}), short)
         .await;
     assert_eq!(r.code.as_deref(), Some("timed_out"));
+}
+
+#[tokio::test]
+async fn a_changed_list_ticks_subscribers_and_an_unchanged_one_does_not() {
+    let t = Tools::default();
+    let mut rx = t.subscribe();
+    t.poll(
+        &poll(0, vec![], Some(vec![tool("github.get_issue")])),
+        SHORT,
+    )
+    .await;
+    assert!(rx.has_changed().unwrap());
+    rx.mark_unchanged();
+    t.poll(
+        &poll(0, vec![], Some(vec![tool("github.get_issue")])),
+        SHORT,
+    )
+    .await;
+    assert!(!rx.has_changed().unwrap(), "the same list is not a change");
+    // A schema over the cap is dropped (the tool is listed with an open object); a name that is
+    // not an operation's shape is not listed at all.
+    let big = ConnTool {
+        input_schema: Some(json!({"description": "x".repeat(ainkrad_proto::v2::MAX_SCHEMA_BYTES)})),
+        ..tool("github.get_repo")
+    };
+    t.poll(&poll(0, vec![], Some(vec![big, tool("Bad Name")])), SHORT)
+        .await;
+    let listed = t.list("as_a");
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].input_schema.is_none());
+}
+
+#[tokio::test]
+async fn a_call_whose_future_is_dropped_stops_waiting() {
+    let t = Arc::new(Tools::default());
+    t.poll(
+        &poll(0, vec![], Some(vec![tool("github.get_issue")])),
+        SHORT,
+    )
+    .await;
+    for _ in 0..MAX_PENDING + 5 {
+        let call = t.call_within(
+            "as_a",
+            "github.get_issue",
+            json!({}),
+            Duration::from_secs(60),
+        );
+        // The caller gives up (a connection closed): dropped while waiting.
+        let _ = tokio::time::timeout(Duration::from_millis(5), call).await;
+    }
+    let r = t
+        .call_within(
+            "as_a",
+            "github.get_issue",
+            json!({}),
+            Duration::from_millis(30),
+        )
+        .await;
+    assert_ne!(
+        r.code.as_deref(),
+        Some("rate_limited"),
+        "dropped calls leaked slots"
+    );
 }

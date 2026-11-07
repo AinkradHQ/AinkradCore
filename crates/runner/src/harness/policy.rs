@@ -26,7 +26,8 @@ impl HarnessExecutor {
         }
         // The Citadel MCP tools (E4.2) and CLI (E15.18) are scoped by the run token, not by
         // the policy.
-        if citadel_call(tool, input) {
+        // The connection tools (C4b) are decided by the Core, call by call (user, agent, allowlist).
+        if citadel_call(tool, input) || ainkrad_harness::connections::is_tool(tool) {
             return Ok(());
         }
         // The usable rules for this tool: an entry that `rule_problem` finds fault with (a shell,

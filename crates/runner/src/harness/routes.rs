@@ -180,11 +180,32 @@ impl HarnessExecutor {
         // A harness that may be kept warm reads its files from its agent's stable dir (E15.6).
         // A session with no network is never kept warm (`turn.rs`: isolated runs are not), and
         // its MCP bridge lives and dies with this run, so its files are always the run's own.
-        let name = match self.limits(job).warm_max > 0 && long_lived(&job.harness) && !denied {
+        // A session with the connection tools socket (C4b) is its own and never shares a harness
+        // server with another: its config names its socket.
+        let tools = self
+            .run_env
+            .lock()
+            .expect("run env lock")
+            .get(&job.run)
+            .and_then(|e| ainkrad_harness::connections::slot(e));
+        let name = match self.limits(job).warm_max > 0
+            && long_lived(&job.harness)
+            && !denied
+            && tools.is_none()
+        {
             true => format!("warm-{}-{}", job.agent, job.harness),
             false => format!("run-{}", job.run),
         };
-        let files = match RunFiles::write(&private, &name, &job.harness, mcp, instructions) {
+        let files = match RunFiles::write(
+            &private,
+            &name,
+            &job.harness,
+            mcp,
+            tools
+                .as_ref()
+                .map(|(sock, exe)| (exe.as_str(), sock.as_str())),
+            instructions,
+        ) {
             Ok(files) => files,
             Err(e) => return failed(format!("writing the run's files: {e}"), "run_files"),
         };
