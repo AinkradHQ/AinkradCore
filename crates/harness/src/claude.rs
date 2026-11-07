@@ -94,6 +94,12 @@ pub fn args(spec: &Spec, resume: Option<&str>) -> Vec<String> {
     if let Some(at) = args.iter().position(|a| a == "--settings") {
         args[at + 1] = settings::flag(spec);
     }
+    // The connection tools (C4b): the whole server, whose tools the Core lists and decides.
+    if crate::connections::slot(&spec.env).is_some()
+        && let Some(at) = args.iter().position(|a| a == "--allowedTools")
+    {
+        args[at + 1] = format!("mcp__citadel,mcp__{}", crate::connections::SERVER);
+    }
     args.push(spec.model.clone());
     let mut flag = |name: &str, value: String| args.extend([name.to_owned(), value]);
     if let Some(file) = &spec.instructions {
