@@ -31,6 +31,7 @@ mod accounts;
 mod audit;
 mod budgets;
 mod chains;
+mod connections;
 mod costs;
 mod deprecation;
 mod devices;
@@ -284,6 +285,63 @@ pub fn router(app: App) -> Router {
             get(chains::get).put(chains::replace).delete(chains::delete),
         )
         .route("/api/v1/chains/{id}/default", put(chains::set_default))
+        .route("/api/v1/connection-kinds", get(connections::list_kinds))
+        .route(
+            "/api/v1/connections",
+            get(connections::list).post(connections::manage::create),
+        )
+        .route("/api/v1/connections/start", post(connections::flows::start))
+        .route(
+            "/api/v1/connections/flows/{id}",
+            get(connections::flows::get).delete(connections::flows::cancel),
+        )
+        .route(
+            "/api/v1/connections/flows/{id}/callback",
+            post(connections::flows::callback),
+        )
+        .route(
+            "/api/v1/connections/flows/{id}/choose",
+            post(connections::flows::choose),
+        )
+        .route(
+            "/api/v1/connections/{id}",
+            get(connections::get)
+                .patch(connections::update)
+                .delete(connections::delete),
+        )
+        .route(
+            "/api/v1/connections/{id}/credential",
+            put(connections::manage::replace_credential),
+        )
+        .route(
+            "/api/v1/connections/{id}/test",
+            post(connections::manage::test),
+        )
+        .route(
+            "/api/v1/connections/{id}/activity",
+            get(connections::activity),
+        )
+        .route(
+            "/api/v1/connections/{id}/grants",
+            get(connections::grants_api::list_grants).put(connections::grants_api::set_grant),
+        )
+        .route(
+            "/api/v1/connections/{id}/grants/{grantee_kind}/{grantee}",
+            delete(connections::grants_api::revoke_grant),
+        )
+        .route(
+            "/api/v1/connection-defaults",
+            get(connections::grants_api::list_defaults),
+        )
+        .route(
+            "/api/v1/connection-defaults/{kind}",
+            put(connections::grants_api::set_default)
+                .delete(connections::grants_api::clear_default),
+        )
+        .route(
+            "/api/v1/connection-apps/{kind}",
+            get(connections::apps::get).put(connections::apps::set),
+        )
         .route("/api/v1/secrets", get(secrets::list).post(secrets::create))
         .route(
             "/api/v1/secrets/{id}",

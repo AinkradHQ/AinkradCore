@@ -24,6 +24,7 @@ use crate::auth::crypto::is_id;
 use crate::store::agents::{self as store, Session, SessionSecret};
 use ainkrad_proto::v2::{AgentDecide, AgentSend, AgentStop, Command};
 
+pub(super) mod access;
 mod sched;
 mod types;
 use sched::{AgentWaiting, create_named, listed, page, shown};
@@ -238,8 +239,10 @@ pub async fn create(
         created_by: &me.device.id,
     };
     let admin = me.device.scopes.iter().any(|scope| scope == "admin");
+    let access = access::checked(&app, admin, b.connection_access.as_deref())?;
     if b.chain.is_some() || b.agent.is_some() {
         let s = create_named(&app, &me, &new, admin, b.chain, b.agent.as_deref()).await?;
+        access::apply(&app, &s.id, &access).await?;
         agents::authorize_create(&app, &me, &s.id);
         agents::start(&app, &s).await?;
         return shown(&app, &me, &s.id).await;
@@ -252,6 +255,7 @@ pub async fn create(
     })?;
     agents::admit_holding(&app, &b.runner, &b.harness, &policy, &secrets).await?;
     let s = store::create(&app.pool, &new, BY, &app.clock.now()).await?;
+    access::apply(&app, &s.id, &access).await?;
     agents::authorize_create(&app, &me, &s.id);
     agents::start(&app, &s).await?;
     shown(&app, &me, &s.id).await
