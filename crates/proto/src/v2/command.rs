@@ -40,14 +40,15 @@ pub enum Command {
     AgentLimit(super::AgentLimit),
     #[serde(rename = "gateway.test")]
     GatewayTest(super::GatewayTest),
-    #[serde(rename = "agent.tools")]
-    AgentTools(super::ToolsPoll),
     #[serde(rename = "login.start")]
     LoginStart(super::LoginStart),
     #[serde(rename = "login.code")]
     LoginCode(super::LoginCode),
     #[serde(rename = "login.cancel")]
     LoginCancel(super::LoginCancel),
+    // After every older op: the schema-compat gate tells variants by position.
+    #[serde(rename = "agent.tools")]
+    AgentTools(super::ToolsPoll),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -142,15 +143,15 @@ pub enum Reply {
     AgentLimit(super::AgentEvents),
     #[serde(rename = "gateway.test")]
     GatewayTest(super::GatewayTested),
-    /// The answer to `agent.tools`: the calls the harness made.
-    #[serde(rename = "agent.tools")]
-    AgentTools(super::ToolBatch),
     /// The answer to `login.start`.
     #[serde(rename = "login.url")]
     LoginUrl(super::LoginUrl),
     /// The answer to `login.code` and `login.cancel`.
     #[serde(rename = "login.result")]
     LoginResult(super::LoginResult),
+    /// (After every older op, as `Command`'s.) The answer to `agent.tools`: the calls the harness made.
+    #[serde(rename = "agent.tools")]
+    AgentTools(super::ToolBatch),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,
