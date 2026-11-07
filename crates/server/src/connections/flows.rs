@@ -199,6 +199,15 @@ impl Flows {
         Ok(f)
     }
 
+    /// Whether `user` may start another flow now (the caps of [`Flows::admit`]), so a refused
+    /// start asks GitHub for nothing.
+    fn room(&self, user: i64) -> bool {
+        let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
+        Self::purge(&mut map);
+        let live = |p: &dyn Fn(&Flow) -> bool| map.values().filter(|x| x.waiting() && p(x)).count();
+        live(&|x| x.user == user) < MAX_PER_USER && live(&|_| true) < MAX_ALL
+    }
+
     /// The flow `id`, only for the user and device that started it.
     pub fn get(&self, user: i64, device: &str, id: &str) -> Option<Arc<Flow>> {
         let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());

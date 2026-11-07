@@ -222,6 +222,11 @@ async fn signing_in_again_replaces_the_credential_of_the_same_connection() {
         3,
         "no new connection was made"
     );
+    // A name that is taken is refused at the start, before anyone signs in.
+    let before = cx.gh.seen().len();
+    let r = start(&cx, "github", json!({"name": "github-1"})).await;
+    assert_eq!(code(&r), (409, "conflict".to_owned()), "{}", r.1);
+    assert_eq!(cx.gh.seen().len(), before);
     cx.assert_clean().await;
 }
 

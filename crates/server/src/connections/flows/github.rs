@@ -17,6 +17,9 @@ pub(super) async fn start(app: &App, s: Start<'_>) -> Result<View, StartError> {
              client id first",
         ));
     };
+    if !app.conn_flows.room(s.user) {
+        return Err(StartError::TooMany);
+    }
     let transport = app.connections.github().transport();
     let (prompt, pending) = device::start(transport, &client_id, Instant::now())
         .await

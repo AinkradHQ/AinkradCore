@@ -122,6 +122,15 @@ pub async fn start(
     {
         return Err(ApiError::bad_request("that name or label is not valid"));
     }
+    // A name that is taken is said now, not after the person has signed in.
+    if let (Some(n), None) = (&b.name, b.connection) {
+        let have = crate::store::connections::list(&app.pool, user, Some(d.kind)).await?;
+        if have.iter().any(|c| &c.name == n) {
+            return Err(ApiError::conflict(
+                "a connection of that name exists for this kind",
+            ));
+        }
+    }
     if let Some(id) = b.connection {
         let c = crate::store::connections::get(&app.pool, user, id).await?;
         if c.kind != d.kind || c.auth_method != "oauth" {
