@@ -111,6 +111,8 @@ pub const DESCRIPTOR: Descriptor = Descriptor {
     token_shapes: &[],
     refresh_prefixes: &[],
     self_limited: &["jira.search_issues", "jira.list_projects"],
+    // Jira Cloud limits by cost and says so with 429 and Retry-After; this is a conservative ceiling.
+    hourly_calls: 2000,
 };
 
 /// What a call needs from the store: the pool and sealer for the credential, and who and when.

@@ -148,17 +148,20 @@ impl Fx {
             .unwrap();
     }
 
-    /// A session on [`RUNNER`], with access as agent `bot` allowed `allow`.
+    /// A session on [`RUNNER`] of agent `bot`, allowed `allow`.
     pub async fn session(&self, allow: &[&str]) -> String {
         let s = self.bare_session(RUNNER).await;
-        let list: Vec<String> = allow.iter().map(|c| (*c).to_owned()).collect();
-        access::set(&self.j.pool, &s, Some("bot"), &list)
+        sqlx::query("UPDATE core_agent_sessions SET agent = 'bot' WHERE id = ?")
+            .bind(&s)
+            .execute(&self.j.pool)
             .await
             .unwrap();
+        let list: Vec<String> = allow.iter().map(|c| (*c).to_owned()).collect();
+        access::set(&self.j.pool, &s, &list).await.unwrap();
         s
     }
 
-    /// A session with no connection access row.
+    /// A plain session: no agent, no access row (the default).
     pub async fn bare_session(&self, runner: &str) -> String {
         let policy = json!({});
         let new = NewSession {

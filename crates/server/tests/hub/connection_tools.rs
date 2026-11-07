@@ -69,14 +69,14 @@ async fn world(name: &str, tools: bool) -> W {
     let s = sessions::create(&core.app.pool, &new, AuditActor::System, &now)
         .await
         .unwrap();
-    access::set(
-        &core.app.pool,
-        &s.id,
-        Some("bot"),
-        &["read_repo".to_owned()],
-    )
-    .await
-    .unwrap();
+    sqlx::query("UPDATE core_agent_sessions SET agent = 'bot' WHERE id = ?")
+        .bind(&s.id)
+        .execute(&core.app.pool)
+        .await
+        .unwrap();
+    access::set(&core.app.pool, &s.id, &["read_repo".to_owned()])
+        .await
+        .unwrap();
     service::authorize_for_tests(&core.app, &s.id);
     let (app, row) = (core.app.clone(), s.clone());
     tokio::spawn(async move {
@@ -205,7 +205,7 @@ async fn a_call_is_taken_once_answered_in_its_own_poll_and_names_no_connection()
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(cursor.grant.unwrap().tc_seq, 2);
+    assert_eq!(cursor.grant.tc_seq, 2);
 }
 
 #[tokio::test]
@@ -226,7 +226,7 @@ async fn a_batch_for_another_session_is_ignored() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(cursor.grant.unwrap().tc_seq, 0);
+    assert_eq!(cursor.grant.tc_seq, 0);
 }
 
 #[tokio::test]
@@ -237,4 +237,113 @@ async fn a_runner_that_does_not_list_the_capability_is_never_sent_the_op() {
         next(&mut w).await.is_none(),
         "no tools poll reaches an older runner"
     );
+}
+
+/// Answers the first poll with `calls`, then collects every later `agent.tools` command for `secs`
+/// WITHOUT answering them (so each open delivery stream stays open, as a slow runner's would).
+async fn burst(w: &mut W, calls: Vec<ToolCall>, secs: u64, answer: bool) -> Vec<ToolsPoll> {
+    let (stream, cmd) = next(w).await.expect("a tools poll");
+    assert!(matches!(cmd, Command::AgentTools(_)));
+    let batch = ToolBatch {
+        session: w.session.clone(),
+        calls,
+    };
+    w.fake
+        .send(stream, Body::Result(Reply::AgentTools(batch)))
+        .await;
+    let mut seen = Vec::new();
+    let end = tokio::time::Instant::now() + Duration::from_secs(secs);
+    while let Some(left) = end.checked_duration_since(tokio::time::Instant::now()) {
+        let Ok(Some((stream, cmd))) = tokio::time::timeout(left, next(w)).await else {
+            break;
+        };
+        if let Command::AgentTools(p) = cmd {
+            // A delivery (it carries results) is answered when asked to; a long poll never is.
+            if answer && !p.results.is_empty() {
+                let empty = ToolBatch {
+                    session: w.session.clone(),
+                    calls: vec![],
+                };
+                w.fake
+                    .send(stream, Body::Result(Reply::AgentTools(empty)))
+                    .await;
+            }
+            seen.push(p);
+        }
+    }
+    seen
+}
+
+#[tokio::test]
+async fn a_burst_of_finished_calls_costs_one_delivery_stream_not_one_each() {
+    let mut w = world("tools-burst", true).await;
+    let calls: Vec<ToolCall> = (1..=32)
+        .map(|n| call(n, &format!("c{n}"), "github.get_issue"))
+        .collect();
+    let polls = burst(&mut w, calls, 2, false).await;
+    // The runner answers none of them: the Core still has at most ONE delivery stream open for
+    // the session (the long poll that follows is the other), however many calls finished.
+    let deliveries: Vec<&ToolsPoll> = polls.iter().filter(|p| !p.results.is_empty()).collect();
+    assert_eq!(deliveries.len(), 1, "one delivery stream: {}", polls.len());
+    assert!(!deliveries[0].results.is_empty());
+    assert_eq!(uses(&w).await, 32, "all 32 were taken and audited");
+}
+
+#[tokio::test]
+async fn a_call_past_the_next_number_is_answered_out_of_order_and_not_run() {
+    let mut w = world("tools-gap", true).await;
+    let calls = vec![
+        call(1, "c1", "github.get_issue"),
+        call(3, "c3", "github.get_issue"),
+    ];
+    let polls = burst(&mut w, calls, 2, true).await;
+    let results: Vec<&ToolResult> = polls.iter().flat_map(|p| p.results.iter()).collect();
+    let by = |id: &str| results.iter().find(|r| r.id == id).copied();
+    assert_eq!(
+        by("c3").and_then(|r| r.code.as_deref()),
+        Some("out_of_order")
+    );
+    assert_eq!(
+        by("c1").and_then(|r| r.code.as_deref()),
+        Some("no_connection")
+    );
+    assert_eq!(
+        uses(&w).await,
+        1,
+        "only the in-order call ran and was audited"
+    );
+    let cursor = access::load(&w.core.app.pool, &w.session)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cursor.grant.tc_seq, 3, "the cursor moved past the gap");
+}
+
+#[tokio::test]
+async fn setting_a_sessions_allowlist_starts_its_supervisor() {
+    let w = world("tools-hook", false).await;
+    let id = "as_hookonlysession".to_owned();
+    sqlx::query("INSERT INTO core_agent_sessions (id, runner, harness, policy, state, created_by, created_at, updated_at, user_id) \
+         SELECT ?, runner, harness, policy, 'starting', created_by, created_at, updated_at, user_id FROM core_agent_sessions WHERE id = ?")
+        .bind(&id)
+        .bind(&w.session)
+        .execute(&w.core.app.pool)
+        .await
+        .unwrap();
+    assert!(!w.core.app.connections.is_supervised(&id));
+    service_set_access(&w, &id).await;
+    assert!(
+        w.core.app.connections.is_supervised(&id),
+        "the hook started it"
+    );
+}
+
+async fn service_set_access(w: &W, id: &str) {
+    ainkrad_core_server::connections::broker::set_access(
+        &w.core.app,
+        id,
+        &["read_repo".to_owned()],
+    )
+    .await
+    .unwrap();
 }

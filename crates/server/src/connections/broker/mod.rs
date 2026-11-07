@@ -7,8 +7,9 @@
 //! **One call, in order** ([`Broker::handle`]):
 //! 1. The tool is a known operation of a registered kind (else `unknown_tool`).
 //! 2. The session is read from the Core's own rows (`store::connections::access`): it exists, is
-//!    live, is placed on the runner that called, and has connection access. The user, the agent
-//!    and the allowlist come from there and nowhere else; the call carries a tool and arguments.
+//!    live and is placed on the runner that called. The user, the agent and the allowlist come
+//!    from there and nowhere else; the call carries a tool and arguments. An agent's session with
+//!    no allowlist is refused by `resolve` (`allowlist_required`).
 //! 3. `secrets.mode` is on, the arguments are bounded, the session's rate and concurrency
 //!    allow it (`rate_limited`).
 //! 4. The adapter names the resource (`github::ops::build`, `jira::resource_of`): a bad argument
@@ -26,7 +27,8 @@
 //!
 //! **The tool list** ([`Broker::tools`]) is the dry run: the operations of the capabilities the
 //! session could use on some connection of a kind (user grant, narrowed by the agent's, inside the
-//! allowlist). None when `secrets.mode` is off, the session has no access row, or it is over.
+//! allowlist). None when `secrets.mode` is off, the session is over, or it is an agent's with no
+//! allowlist.
 //! The supervisor sends it with the first poll and again whenever it changes.
 
 mod fail;
@@ -50,7 +52,8 @@ use sqlx::sqlite::SqlitePool;
 
 use self::fail::{Fail, of_store, refuse};
 pub use self::gate::Limits;
-pub use self::supervise::supervise;
+use self::gate::{Busy, Rate};
+pub use self::supervise::{set_access, supervise};
 use super::adapter::Registry;
 use super::github::{self, Built, Github};
 use super::jira::{self, Jira};
@@ -75,6 +78,10 @@ pub struct Broker {
     supervised: std::sync::Mutex<std::collections::HashSet<String>>,
     /// Serialises the taking of calls off a poll answer (cursor advance), never their execution.
     intake: tokio::sync::Mutex<()>,
+    /// Finished calls' results waiting to go to their runner, by session, and the sessions with a
+    /// drainer open (one delivery stream each at most).
+    outbox: std::sync::Mutex<std::collections::HashMap<String, Vec<ToolResult>>>,
+    delivering: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl Broker {
@@ -94,7 +101,15 @@ impl Broker {
             redactor: Redactor::new(),
             supervised: std::sync::Mutex::default(),
             intake: tokio::sync::Mutex::new(()),
+            outbox: std::sync::Mutex::default(),
+            delivering: std::sync::Mutex::default(),
         }
+    }
+
+    /// Whether a supervisor of session `id`'s tool channel runs in this process.
+    pub fn is_supervised(&self, id: &str) -> bool {
+        let held = self.supervised.lock().unwrap_or_else(|e| e.into_inner());
+        held.contains(id)
     }
 
     pub fn registry(&self) -> &Registry {
@@ -174,6 +189,19 @@ impl Broker {
         session: &str,
         call: &ToolCall,
     ) -> Result<Value, Fail> {
+        // Every call of a session, known or not, refused or not, counts against its minute FIRST;
+        // past it a call costs nothing but at most one aggregated audit row per window.
+        let key: String = session.chars().take(64).collect();
+        if let Rate::Over(report) = self.gate.rate(&key) {
+            if let Some(n) = report {
+                let user = access::load(env.pool, &key).await.ok().flatten();
+                let aggregated = access::audit_flood(env.pool, user.as_ref(), &key, n).await;
+                if let Err(e) = aggregated {
+                    tracing::error!(error = ?e, "auditing a flood of tool calls failed");
+                }
+            }
+            return Err(refuse("rate_limited", "too many calls from this session"));
+        }
         let known = call
             .tool
             .split_once('.')
@@ -188,17 +216,9 @@ impl Broker {
         let Some((kind, cap)) = known else {
             let user = acc.as_ref().map_or(0, |a| a.user);
             let session = acc.as_ref().map(|a| a.session.as_str());
-            // Counted against the session's rate like any call, so a flood of unknown names
-            // cannot flood the audit log.
-            if self
-                .gate
-                .enter(&acc.as_ref().map_or_else(String::new, |a| a.session.clone()))
-                .is_some()
-            {
-                let audited = access::audit_unknown(env.pool, user, session, "unknown_tool").await;
-                if let Err(e) = audited {
-                    tracing::error!(error = ?e, "auditing an unknown tool call failed");
-                }
+            let audited = access::audit_unknown(env.pool, user, session, "unknown_tool").await;
+            if let Err(e) = audited {
+                tracing::error!(error = ?e, "auditing an unknown tool call failed");
             }
             return Err(refuse("unknown_tool", "no such tool"));
         };
@@ -211,8 +231,7 @@ impl Broker {
             Ok(_) => ("ok", None),
             Err(f) => (f.result, Some(f.code.as_str())),
         };
-        let empty: [String; 0] = [];
-        let granted = acc.as_ref().and_then(|a| a.grant.as_ref());
+        let granted = acc.as_ref().map(|a| &a.grant);
         let cx = Context {
             workspace: acc.as_ref().map_or(0, |a| a.user),
             user: acc.as_ref().map_or(0, |a| a.user),
@@ -222,7 +241,7 @@ impl Broker {
             capability: cap,
             operation: Some(&call.tool),
             resource: None,
-            allowlist: Some(granted.map_or(&empty[..], |g| &g.allowlist[..])),
+            allowlist: granted.and_then(|g| g.allowlist.as_deref()),
         };
         let rec = resolve::record_use(
             env.pool,
@@ -239,7 +258,6 @@ impl Broker {
         out
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn decide(
         &self,
         env: &Env<'_>,
@@ -256,10 +274,7 @@ impl Broker {
         if !acc.live {
             return Err(refuse("session_over", "the session is over"));
         }
-        let g = acc
-            .grant
-            .as_ref()
-            .ok_or_else(|| refuse("no_access", "this session has no connection tools"))?;
+        let g = &acc.grant;
         let sealer = env
             .sealer
             .ok_or_else(|| refuse("secrets_unavailable", "connections are not available"))?;
@@ -270,10 +285,6 @@ impl Broker {
         if size > MAX_ARGS_BYTES {
             return Err(refuse("bad_args", "the arguments are too large"));
         }
-        let _permit = self
-            .gate
-            .enter(&acc.session)
-            .ok_or_else(|| refuse("rate_limited", "too many calls from this session"))?;
         let prep = prepare(kind, &call.tool, &call.args)?;
         let cx = Context {
             workspace: acc.user,
@@ -284,51 +295,192 @@ impl Broker {
             capability: cap,
             operation: Some(&call.tool),
             resource: prep.resource.as_ref().map(|(k, v)| (*k, v.as_str())),
-            allowlist: Some(&g.allowlist[..]),
+            allowlist: g.allowlist.as_deref(),
         };
         let r = resolve::resolve(env.pool, &self.reg, kind, &cx, env.now)
             .await
             .map_err(of_store)?;
         *used = Some(r.connection.id);
-        if !self.gate.connection(r.connection.id) {
-            return Err(refuse("rate_limited", "too many calls on this connection"));
+        let d = self.reg.get(kind).map(|a| a.descriptor());
+        let hourly = d.map_or(1, |d| d.hourly_calls);
+        let write = d.and_then(|d| d.capability(cap)).is_some_and(|c| c.write);
+        if let Err(busy) = self.gate.connection(r.connection.id, &acc.session, hourly) {
+            return Err(match busy {
+                Busy::Rate => refuse("rate_limited", "too many calls on this connection"),
+                Busy::Until(at) => refuse(
+                    "connection_busy",
+                    &match at {
+                        Some(t) => format!(
+                            "the connection is busy and can be used again at {}",
+                            crate::scheduler::iso_of_unix(t)
+                        ),
+                        None => "the connection has used its budget for this hour".to_owned(),
+                    },
+                ),
+            });
         }
-        let c = run::Call {
-            pool: env.pool,
-            sealer,
-            now: env.now,
-            device: runner,
+        // A place among the session's, the user's and everyone's calls: waits when they are taken.
+        let _permit = self
+            .gate
+            .acquire(&acc.session, acc.user)
+            .await
+            .ok_or_else(|| refuse("rate_limited", "too many calls are waiting"))?;
+        let job = run::Job {
+            github: self.github.clone(),
+            jira: Arc::clone(&self.jira),
+            redactor: self.redactor.clone(),
+            pool: env.pool.clone(),
+            sealer: Arc::clone(sealer),
+            now: env.now.to_owned(),
+            device: runner.to_owned(),
             user: acc.user,
-            op: &call.tool,
-            args: &call.args,
-            built: prep.built.as_ref(),
+            op: call.tool.clone(),
+            args: call.args.clone(),
+            built: prep.built,
+            resolved: r.clone(),
         };
-        let ran = tokio::time::timeout(self.gate.limits().timeout, async {
-            match kind {
-                "github" => run::github(self, &c, &r).await,
-                _ => run::jira(self, &c, &r).await,
+        let mut task = tokio::spawn(run::execute(job));
+        let limit = self.gate.limits().timeout;
+        let ran = match tokio::time::timeout(limit, &mut task).await {
+            Ok(Ok(ran)) => ran,
+            Ok(Err(_)) => run::Ran {
+                out: Err(refuse("internal", "the call did not finish")),
+                quota: None,
+            },
+            Err(_) if write => {
+                // The upstream write may still land: it finishes in its own task and is audited
+                // there. The agent is told the truth, not "timed out" (a retry would repeat it).
+                let late = Late {
+                    pool: env.pool.clone(),
+                    reg: self.reg.clone(),
+                    gate: Arc::clone(&self.gate),
+                    now: env.now.to_owned(),
+                    user: acc.user,
+                    agent: g.agent.clone(),
+                    session: acc.session.clone(),
+                    allowlist: g.allowlist.clone(),
+                    connection: r.connection.id,
+                    kind,
+                    cap,
+                    op: call.tool.clone(),
+                };
+                tokio::spawn(late.finish(task));
+                return Err(Fail {
+                    code: "outcome_unknown".to_owned(),
+                    message: "the call may have been applied; check before retrying".to_owned(),
+                    result: "error",
+                    feed: None,
+                });
             }
-        })
-        .await
-        .unwrap_or_else(|_| {
-            Err(Fail {
-                code: "timed_out".to_owned(),
-                message: "the service did not answer in time".to_owned(),
-                result: "error",
-                feed: None,
-            })
-        });
-        // Only a call that reached the service says anything about it: a refusal of ours, and an
-        // end the adapter says is not about the credential or the service (a 404, a refused
-        // input, a huge answer), tell health nothing at all.
-        let feed = ran.as_ref().err().and_then(|f| f.feed.as_ref());
-        if ran.is_ok() || feed.is_some() {
-            let agent = g.agent.as_deref();
-            let sent = health::forward(env.pool, acc.user, r.connection.id, agent, feed, env.now);
-            if let Err(e) = sent.await {
-                tracing::warn!(error = %e, "telling a connection's health failed");
+            Err(_) => {
+                task.abort();
+                run::Ran {
+                    out: Err(Fail {
+                        code: "timed_out".to_owned(),
+                        message: "the service did not answer in time".to_owned(),
+                        result: "error",
+                        feed: None,
+                    }),
+                    quota: None,
+                }
             }
+        };
+        self.after(
+            env.pool,
+            env.now,
+            (acc.user, g.agent.as_deref(), r.connection.id),
+            &ran,
+        )
+        .await;
+        ran.out
+    }
+
+    /// What a finished call tells the gate (the service's own budget) and health.
+    async fn after(
+        &self,
+        pool: &SqlitePool,
+        now: &str,
+        (user, agent, id): (i64, Option<&str>, i64),
+        ran: &run::Ran,
+    ) {
+        after(&self.gate, pool, now, (user, agent, id), ran).await;
+    }
+}
+
+async fn after(
+    gate: &gate::Gate,
+    pool: &SqlitePool,
+    now: &str,
+    (user, agent, id): (i64, Option<&str>, i64),
+    ran: &run::Ran,
+) {
+    if let Some((remaining, reset, retry)) = ran.quota {
+        gate.note_upstream(id, remaining, reset, retry);
+    }
+    // Only a call that reached the service says anything about it: a refusal of ours, and an
+    // end the adapter says is not about the credential or the service (a 404, a refused
+    // input, a huge answer), tell health nothing at all.
+    let feed = ran.out.as_ref().err().and_then(|f| f.feed.as_ref());
+    if (ran.out.is_ok() || feed.is_some())
+        && let Err(e) = health::forward(pool, user, id, agent, feed, now).await
+    {
+        tracing::warn!(error = %e, "telling a connection's health failed");
+    }
+}
+
+/// A write whose caller stopped waiting: it finishes here, tells health, and is audited.
+struct Late {
+    pool: SqlitePool,
+    reg: Registry,
+    gate: Arc<gate::Gate>,
+    now: String,
+    user: i64,
+    agent: Option<String>,
+    session: String,
+    allowlist: Option<Vec<String>>,
+    connection: i64,
+    kind: &'static str,
+    cap: &'static str,
+    op: String,
+}
+
+impl Late {
+    async fn finish(self, task: tokio::task::JoinHandle<run::Ran>) {
+        let Ok(ran) = task.await else { return };
+        after(
+            &self.gate,
+            &self.pool,
+            &self.now,
+            (self.user, self.agent.as_deref(), self.connection),
+            &ran,
+        )
+        .await;
+        let (result, code) = match &ran.out {
+            Ok(_) => ("ok", "late_ok".to_owned()),
+            Err(f) => (f.result, format!("late_{}", f.code)),
+        };
+        let cx = Context {
+            workspace: self.user,
+            user: self.user,
+            role: "member",
+            agent: self.agent.as_deref(),
+            session: Some(&self.session),
+            capability: self.cap,
+            operation: Some(&self.op),
+            resource: None,
+            allowlist: self.allowlist.as_deref(),
+        };
+        let rec = resolve::record_use(
+            &self.pool,
+            &self.reg,
+            Some(self.connection),
+            self.kind,
+            (&self.op, result, Some(&code)),
+            &cx,
+        )
+        .await;
+        if let Err(e) = rec {
+            tracing::error!(error = ?e, "recording a late connection use failed");
         }
-        ran
     }
 }

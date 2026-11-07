@@ -171,9 +171,10 @@ async fn a_connection_over_its_rate_refuses_every_session() {
 }
 
 #[tokio::test]
-async fn only_so_many_calls_run_at_once_for_one_session() {
+async fn parallel_calls_past_the_cap_wait_and_only_a_full_queue_refuses() {
     let f = fx_with(Limits {
         concurrent_per_session: 1,
+        queue_per_session: 1,
         ..Limits::default()
     })
     .await;
@@ -190,21 +191,162 @@ async fn only_so_many_calls_run_at_once_for_one_session() {
         .delayed(300)
     });
     let args = || json!({"key": "ABC-1"});
-    let (a, b) = tokio::join!(
+    // One runs, one waits for its place (and still succeeds), the third finds the queue full.
+    let (a, b, c3) = tokio::join!(
+        f.ask(&s, "jira.get_issue", args()),
         f.ask(&s, "jira.get_issue", args()),
         f.ask(&s, "jira.get_issue", args())
     );
-    let mut codes = [a.ok, b.ok];
-    codes.sort_unstable();
-    assert_eq!(
-        codes,
-        [false, true],
-        "one runs, one is refused: {a:?} {b:?}"
-    );
-    let refused = if a.ok { &b } else { &a };
+    let mut ok = [a.ok, b.ok, c3.ok];
+    ok.sort_unstable();
+    assert_eq!(ok, [false, true, true], "{a:?} {b:?} {c3:?}");
+    let refused = [&a, &b, &c3].into_iter().find(|r| !r.ok).unwrap();
     assert_eq!(code(refused), "rate_limited");
-    // The place is free again afterwards.
-    assert!(f.ask(&s, "jira.get_issue", args()).await.ok);
+    assert!(
+        f.ask(&s, "jira.get_issue", args()).await.ok,
+        "the place is free again"
+    );
+}
+
+#[tokio::test]
+async fn ten_thousand_refused_calls_write_a_handful_of_audit_rows() {
+    for mode in ["1", "0"] {
+        let f = fx_with(Limits {
+            per_session_per_min: 5,
+            ..Limits::default()
+        })
+        .await;
+        let c = f.github("main", GH_TOKEN).await;
+        f.member(c.id, &["read_repo"], &[]).await;
+        let s = f.session(&["read_repo"]).await;
+        f.mode(mode).await;
+        let before = f.uses().await.len();
+        let mut refused = 0;
+        for i in 0..10_000u64 {
+            let r = f
+                .ask(
+                    &s,
+                    "github.get_issue",
+                    json!({"repo": "acme/app", "number": i + 1}),
+                )
+                .await;
+            refused += usize::from(!r.ok);
+        }
+        assert_eq!(
+            refused, 10_000,
+            "mode {mode}: none can run (off, or over the rate)"
+        );
+        let rows = f.uses().await;
+        assert!(
+            rows.len() - before <= 7,
+            "mode {mode}: {} rows",
+            rows.len() - before
+        );
+        let aggregate = rows.iter().filter(|r| r.get("count").is_some()).count();
+        assert_eq!(
+            aggregate, 1,
+            "one aggregated refusal row for the whole window"
+        );
+        assert!(f.gh.seen().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn a_write_that_outlives_the_wait_is_not_called_timed_out_and_still_finishes() {
+    let f = fx_with(Limits {
+        timeout: Duration::from_millis(100),
+        ..Limits::default()
+    })
+    .await;
+    let c = f.jira("acme").await;
+    f.member(c.id, &["write_issues"], &[]).await;
+    f.grant(c.id, ("agent", "bot"), &["write_issues"], &[])
+        .await;
+    let s = f.session(&["write_issues"]).await;
+    let issue = format!("GET {}", jt::site_path("/issue/ABC-1"));
+    f.j.fake.reply(
+        &issue,
+        200,
+        json!({"key": "ABC-1", "fields": {"project": {"key": "ABC"}}}),
+    );
+    let post = format!("POST {}", jt::site_path("/issue/ABC-1/comment"));
+    f.j.fake.on(&post, |_| {
+        jt::Reply::json(201, json!({"id": "10"})).delayed(600)
+    });
+    let r = f
+        .ask(
+            &s,
+            "jira.add_comment",
+            json!({"key": "ABC-1", "body": "hello"}),
+        )
+        .await;
+    assert_eq!((r.ok, code(&r)), (false, "outcome_unknown"));
+    assert!(r.message.unwrap().contains("check before retrying"));
+    // The write is not dropped: it lands, and is audited when it does.
+    let mut late = None;
+    for _ in 0..40 {
+        late = f.uses().await.into_iter().find(|u| u["code"] == "late_ok");
+        if late.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(late.is_some(), "the late completion is audited");
+    assert_eq!(f.j.fake.count(&post), 1);
+    // A read keeps `timed_out`.
+    let one = format!("GET {}", jt::site_path("/issue/ABC-2"));
+    f.j.fake
+        .on(&one, |_| jt::Reply::json(200, json!({})).delayed(1500));
+    f.member(c.id, &["read_issues", "write_issues"], &[]).await;
+    f.grant(
+        c.id,
+        ("agent", "bot"),
+        &["read_issues", "write_issues"],
+        &[],
+    )
+    .await;
+    let s2 = f.session(&["read_issues"]).await;
+    let r = f.ask(&s2, "jira.get_issue", json!({"key": "ABC-2"})).await;
+    assert_eq!(code(&r), "timed_out");
+}
+
+#[tokio::test]
+async fn a_connection_the_service_says_is_nearly_out_is_refused_locally_until_it_resets() {
+    let (f, _c, s) = limited().await;
+    let reset = (crate::scheduler::unix_secs(NOW).unwrap() + 3600).to_string();
+    f.gh.push(
+        200,
+        &[
+            ("x-ratelimit-remaining", "3"),
+            ("x-ratelimit-reset", &reset),
+            ("x-ratelimit-limit", "5000"),
+        ],
+        ISSUE,
+    );
+    assert!(f.ask(&s, "github.get_issue", get("tools/x")).await.ok);
+    // The reset is in the real clock's past or future; the gate uses the real clock, so use a
+    // reset far enough ahead.
+    let far = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 1800)
+        .to_string();
+    f.gh.push(
+        200,
+        &[("x-ratelimit-remaining", "3"), ("x-ratelimit-reset", &far)],
+        ISSUE,
+    );
+    let other = f.session(&["read_repo"]).await;
+    assert!(f.ask(&other, "github.get_issue", get("tools/x")).await.ok);
+    let r = f.ask(&s, "github.get_issue", get("tools/x")).await;
+    assert_eq!((r.ok, code(&r)), (false, "connection_busy"));
+    assert!(r.message.unwrap().contains("can be used again at"));
+    assert_eq!(
+        f.gh.seen().len(),
+        2,
+        "nothing went upstream for the refused call"
+    );
 }
 
 #[tokio::test]

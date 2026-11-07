@@ -91,13 +91,8 @@ async fn the_session_row_decides_user_and_agent_not_the_call() {
 }
 
 #[tokio::test]
-async fn no_grant_no_access_row_and_the_agents_own_grant_all_gate_the_tools() {
+async fn the_agents_own_grant_gates_the_tools() {
     let (f, c) = ready().await;
-    // No access row: no tools, and a refused call.
-    let bare = f.bare_session(RUNNER).await;
-    assert!(f.b.tools(&f.env(), &bare).await.unwrap().is_empty());
-    let r = f.ask(&bare, "github.get_issue", get(1)).await;
-    assert_eq!((r.ok, code(&r)), (false, "no_access"));
     // An agent without a grant of its own: the user's grant alone is not enough.
     let s = f.session(&READ).await;
     grants::revoke(&f.j.pool, c.id, ("agent", "bot"), who())
@@ -216,4 +211,68 @@ async fn a_disabled_or_exported_connection_is_refused() {
     let r = f.ask(&s, "github.get_issue", get(1)).await;
     assert_eq!((r.ok, code(&r)), (false, "no_credential"));
     assert!(f.gh.seen().is_empty());
+}
+
+/// The default: every session has access with no row written (decision of C4's review).
+#[tokio::test]
+async fn a_plain_session_of_a_user_with_a_grant_has_the_tools_and_can_call() {
+    let f = fx().await;
+    let c = f.github("main", GH_TOKEN).await;
+    f.member(c.id, &["read_repo"], &[]).await;
+    let s = f.bare_session(RUNNER).await;
+    let names: Vec<String> =
+        f.b.tools(&f.env(), &s)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+    assert!(names.contains(&"github.get_issue".to_owned()), "{names:?}");
+    assert!(
+        !names.contains(&"github.create_issue".to_owned()),
+        "write is not granted"
+    );
+    f.gh.push(200, &[], ISSUE);
+    let r = f.ask(&s, "github.get_issue", get(7)).await;
+    assert!(r.ok, "{r:?}");
+    let u = f.uses().await;
+    assert_eq!(
+        (u[0]["result"].as_str(), u[0]["agent"].is_null()),
+        (Some("ok"), true)
+    );
+}
+
+#[tokio::test]
+async fn a_session_of_a_user_without_grants_has_none() {
+    let f = fx().await;
+    f.github("main", GH_TOKEN).await; // exists, granted to nobody
+    let s = f.bare_session(RUNNER).await;
+    assert!(f.b.tools(&f.env(), &s).await.unwrap().is_empty());
+    let r = f.ask(&s, "github.get_issue", get(7)).await;
+    assert_eq!((r.ok, code(&r)), (false, "not_granted"));
+    assert!(f.gh.seen().is_empty());
+}
+
+#[tokio::test]
+async fn an_agent_session_without_an_allowlist_has_none_until_one_is_set() {
+    let (f, _c) = ready().await;
+    let s = f.bare_session(RUNNER).await;
+    sqlx::query("UPDATE core_agent_sessions SET agent = 'bot' WHERE id = ?")
+        .bind(&s)
+        .execute(&f.j.pool)
+        .await
+        .unwrap();
+    assert!(
+        f.b.tools(&f.env(), &s).await.unwrap().is_empty(),
+        "C1's rule"
+    );
+    let r = f.ask(&s, "github.get_issue", get(7)).await;
+    assert_eq!((r.ok, code(&r)), (false, "allowlist_required"));
+    assert!(f.gh.seen().is_empty());
+    access::set(&f.j.pool, &s, &["read_repo".to_owned()])
+        .await
+        .unwrap();
+    assert!(!f.b.tools(&f.env(), &s).await.unwrap().is_empty());
+    f.gh.push(200, &[], ISSUE);
+    assert!(f.ask(&s, "github.get_issue", get(7)).await.ok);
 }

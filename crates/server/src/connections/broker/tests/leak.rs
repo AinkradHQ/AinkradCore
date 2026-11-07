@@ -63,10 +63,15 @@ async fn run_all(f: &Fx, s: &str) -> (String, String) {
     results.push(f.call(OTHER_RUNNER, s, "github.get_issue", get(7)).await);
     // Jira: the answer echoes the API token and the account's email.
     let one = format!("GET {}", jt::site_path("/issue/ABC-1"));
+    let b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        format!("{}:{}", jt::EMAIL, jt::API_TOKEN),
+    );
     f.j.fake.reply(
         &one,
         200,
-        json!({"key": "ABC-1", "fields": {"project": {"key": "ABC"}, "summary": format!("tok {}", jt::API_TOKEN)}}),
+        json!({"key": "ABC-1", "fields": {"project": {"key": "ABC"},
+            "summary": format!("tok {} hdr Basic {b64} raw {b64} bearer Bearer {}", jt::API_TOKEN, jt::API_TOKEN)}}),
     );
     results.push(f.ask(s, "jira.get_issue", json!({"key": "ABC-1"})).await);
     let tools: Vec<ConnTool> = f.b.tools(&f.env(), s).await.unwrap();
@@ -115,7 +120,17 @@ async fn no_credential_is_in_any_message_audit_row_log_or_debug_text() {
         .session(&["read_repo", "issues_write", "read_issues"])
         .await;
     let (stream, debug) = run_all(&f, &s).await;
-    let secrets = [GH_TOKEN, jt::API_TOKEN, "7f3a9d41e0b2", "5d2e8b0c7a41"];
+    let b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        format!("{}:{}", jt::EMAIL, jt::API_TOKEN),
+    );
+    let secrets = [
+        GH_TOKEN,
+        jt::API_TOKEN,
+        "7f3a9d41e0b2",
+        "5d2e8b0c7a41",
+        b64.as_str(),
+    ];
     let audit = f.audit_text().await;
     let state: String = sqlx::query_scalar("SELECT group_concat(details, ' ') FROM audit_events")
         .fetch_one(&f.j.pool)

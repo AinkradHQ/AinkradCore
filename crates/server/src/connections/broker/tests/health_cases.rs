@@ -265,3 +265,34 @@ async fn an_expired_github_token_is_refused_and_never_sent() {
         "an expiry is not an agent's doing"
     );
 }
+
+#[tokio::test]
+async fn jira_redirects_and_unreadable_answers_give_no_health_signal() {
+    let f = fx().await;
+    let c = f.jira("acme").await;
+    f.member(c.id, &["read_issues"], &[]).await;
+    f.grant(c.id, ("agent", "bot"), &["read_issues"], &[]).await;
+    let s = f.session(&["read_issues"]).await;
+    let one = format!("GET {}", jt::site_path("/issue/ABC-1"));
+    for status in [301, 302, 307] {
+        f.j.fake.on(&one, move |_| {
+            jt::Reply::json(status, json!({})).header("location", "https://evil.example/x")
+        });
+        let r = f.ask(&s, "jira.get_issue", json!({"key": "ABC-1"})).await;
+        assert!(!r.ok, "{status}");
+    }
+    // A 200 whose body is not JSON.
+    f.j.fake.on(&one, |_| {
+        let mut r = jt::Reply::json(200, json!({}));
+        r.raw = Some(b"<html>not json</html>".to_vec());
+        r
+    });
+    let r = f.ask(&s, "jira.get_issue", json!({"key": "ABC-1"})).await;
+    assert!(!r.ok);
+    assert_eq!(streak(&f, c.id).await, 0, "nothing counted");
+    assert_eq!(f.status(c.id).await, ("active".to_owned(), None));
+    // A real 5xx still counts.
+    f.j.fake.reply(&one, 502, json!({}));
+    f.ask(&s, "jira.get_issue", json!({"key": "ABC-1"})).await;
+    assert_eq!(streak(&f, c.id).await, 1);
+}

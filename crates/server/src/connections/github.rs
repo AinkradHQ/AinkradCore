@@ -127,6 +127,8 @@ pub const GITHUB: Descriptor = Descriptor {
     refresh_prefixes: &["ghr_"],
     // Every GitHub operation carries a repository, so none judges its own limits.
     self_limited: &[],
+    // GitHub allows 5000 an hour per token; leave room for a person using the same token.
+    hourly_calls: 3000,
 };
 
 /// Who a token is, as GitHub says.

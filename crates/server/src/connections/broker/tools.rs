@@ -43,8 +43,7 @@ impl Broker {
         let Some(acc) = access::load(env.pool, session).await? else {
             return Ok(Vec::new());
         };
-        if !acc.live || acc.grant.is_none() || env.sealer.is_none() || !secrets_on(env.pool).await?
-        {
+        if !acc.live || env.sealer.is_none() || !secrets_on(env.pool).await? {
             return Ok(Vec::new());
         }
         let mut out = Vec::new();
