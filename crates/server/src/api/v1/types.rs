@@ -121,7 +121,7 @@
 ///    operation changes.
 /// 43: chain audit actions (`chain.created`, `chain.updated`, `chain.deleted`, `chain.default_set`,
 ///    `chain.bound`, `chain.unbound`) in `x-audit-actions` (S5); no operation changes.
-pub const API_MINOR: u32 = 43;
+pub const API_MINOR: u32 = 44;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
