@@ -113,7 +113,7 @@ async fn no_spelling_of_another_sessions_socket_path_reaches_it_from_inside_the_
         format!("{b_dir}/../../agents/as_aaaa/tools.sock"),
         format!("/proc/self/root{a}"),
         format!("/proc/1/root{a}"),
-        format!("/proc/self/cwd/../agents/as_aaaa/tools.sock"),
+        "/proc/self/cwd/../agents/as_aaaa/tools.sock".to_owned(),
         format!("{}/work/link", root.display()),
         format!("{b_dir}//..//as_aaaa//tools.sock"),
     ];
