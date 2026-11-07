@@ -88,16 +88,15 @@ impl Outcome {
             // blocked repo, a huge issue), and the connection is shared: it must not count.
             Self::ServerError => Some(UpstreamStatus::ServerError),
             Self::Net(NetError::Refused) => Some(UpstreamStatus::RefusedAddress),
-            Self::Net(NetError::Unreachable | NetError::Timeout) => {
-                Some(UpstreamStatus::Unreachable)
-            }
+            // A timeout says nothing about the service (a slow query is not an outage).
+            Self::Net(NetError::Unreachable) => Some(UpstreamStatus::Unreachable),
             Self::Forbidden
             | Self::NotFound
             | Self::Invalid
             | Self::IsPullRequest
             | Self::NotPullRequest
             | Self::Unexpected
-            | Self::Net(NetError::TooLarge | NetError::BadRequest) => None,
+            | Self::Net(NetError::TooLarge | NetError::BadRequest | NetError::Timeout) => None,
         }
     }
 }

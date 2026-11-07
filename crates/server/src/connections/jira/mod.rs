@@ -20,7 +20,7 @@ mod oauth;
 mod ops;
 mod renew;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -31,7 +31,7 @@ use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 
 pub use cred::{
-    Cred, issue_key, oauth_material, project_key, site_host, site_host_of, token_material,
+    Cred, issue_key, oauth_material, project_key, site_host, site_host_of, token_material, unpack,
 };
 pub use http::CallError;
 pub use oauth::{Finished, FlowError, OAuthApp, SCOPES, Site, Started};
@@ -111,6 +111,8 @@ pub const DESCRIPTOR: Descriptor = Descriptor {
     token_shapes: &[],
     refresh_prefixes: &[],
     self_limited: &["jira.search_issues", "jira.list_projects"],
+    // Jira Cloud limits by cost and says so with 429 and Retry-After; this is a conservative ceiling.
+    hourly_calls: 2000,
 };
 
 /// What a call needs from the store: the pool and sealer for the credential, and who and when.
@@ -149,7 +151,7 @@ impl Jira {
     }
 
     #[cfg(test)]
-    fn loopback(app: Option<OAuthApp>, addr: std::net::SocketAddr) -> Self {
+    pub(crate) fn loopback(app: Option<OAuthApp>, addr: std::net::SocketAddr) -> Self {
         Self::with(http::Http::loopback(addr), app)
     }
 

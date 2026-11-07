@@ -69,7 +69,7 @@ async fn migrates_up_down_up_over_a_database_with_data() {
 }
 
 #[tokio::test]
-async fn the_actions_are_registered_but_not_in_the_contract_list() {
+async fn the_actions_are_registered_and_in_the_contract_list() {
     let fx = fx().await;
     let registered: Vec<String> = sqlx::query_scalar(
         "SELECT action FROM audit_actions WHERE action LIKE 'connection.%' ORDER BY action",
@@ -84,10 +84,19 @@ async fn the_actions_are_registered_but_not_in_the_contract_list() {
     );
     for a in AUDIT_ACTIONS {
         assert!(
-            !crate::store::kinds::PLATFORM_AUDIT_ACTIONS.contains(a),
-            "{a}: moving it is C5's API_MINOR bump"
+            crate::store::kinds::PLATFORM_AUDIT_ACTIONS.contains(a),
+            "{a}: written in production since C4, so part of the contract list"
         );
     }
+    let in_contract = crate::store::kinds::PLATFORM_AUDIT_ACTIONS
+        .iter()
+        .filter(|a| a.starts_with("connection."))
+        .count();
+    assert_eq!(
+        in_contract,
+        AUDIT_ACTIONS.len(),
+        "no connection action only on one list"
+    );
     assert!(
         crate::store::kinds::refusal("connection", "connection.x", true).is_some(),
         "a module may not take the connection namespace"

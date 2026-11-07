@@ -346,7 +346,7 @@ async fn two_sessions_run_at_once_and_a_secret_never_reaches_the_cores_records()
         .iter()
         .find(|d| d.name == "agent")
         .unwrap();
-    assert_eq!((agent.capacity, agent.streams), (2, Some(12)));
+    assert_eq!((agent.capacity, agent.streams), (2, Some(14)));
     until("both transcripts flowing", || true).await;
     for _ in 0..200 {
         let t = sessions::transcript(&core.app.pool, &a, 0, 100)

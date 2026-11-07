@@ -46,6 +46,11 @@ fn replies_an_agent_can_provoke_never_signal_health() {
         assert_eq!(classify(&resp(s)).unwrap_err().health(), None, "{s}");
     }
     assert_eq!(Outcome::Net(NetError::TooLarge).health(), None);
+    assert_eq!(
+        Outcome::Net(NetError::Timeout).health(),
+        None,
+        "a slow answer is not an outage"
+    );
     assert_eq!(Outcome::Unexpected.health(), None);
     assert_eq!(
         Outcome::ServerError.health(),

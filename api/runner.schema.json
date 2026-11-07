@@ -581,6 +581,19 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/ToolsPoll",
+          "properties": {
+            "op": {
+              "const": "agent.tools",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An op from a newer Core: answered `unsupported_command`. Never sent.",
           "properties": {
             "op": {
@@ -594,6 +607,29 @@
           "type": "object"
         }
       ]
+    },
+    "ConnTool": {
+      "description": "One tool the harness may see.",
+      "properties": {
+        "description": {
+          "description": "What it does and the arguments it takes, for the model.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The operation, `github.get_issue`.",
+          "type": "string"
+        },
+        "write": {
+          "default": false,
+          "description": "It changes something upstream.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ],
+      "type": "object"
     },
     "Control": {
       "description": "`control` payloads, tagged by `type`.",
@@ -2260,6 +2296,20 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/ToolBatch",
+          "description": "(After every older op, as `Command`'s.) The answer to `agent.tools`: the calls the harness made.",
+          "properties": {
+            "op": {
+              "const": "agent.tools",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An op from a newer runner. Never sent.",
           "properties": {
             "op": {
@@ -2916,6 +2966,126 @@
         "output",
         "cache_read",
         "cache_write"
+      ],
+      "type": "object"
+    },
+    "ToolBatch": {
+      "description": "Runner to Core: the calls after `ToolsPoll::after`.",
+      "properties": {
+        "calls": {
+          "items": {
+            "$ref": "#/$defs/ToolCall"
+          },
+          "type": "array"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "type": "object"
+    },
+    "ToolCall": {
+      "description": "Runner to Core: the harness called `tool`.",
+      "properties": {
+        "args": {
+          "description": "The harness's arguments, as given."
+        },
+        "id": {
+          "description": "Made by the runner; the result names it.",
+          "type": "string"
+        },
+        "tc_seq": {
+          "description": "Per session, from 1, by one: the Core's cursor over it.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tc_seq",
+        "id",
+        "tool",
+        "args"
+      ],
+      "type": "object"
+    },
+    "ToolResult": {
+      "description": "Core to runner: how call `id` ended. Either `result`, or a plain `code` and a fixed `message`.",
+      "properties": {
+        "code": {
+          "description": "A refusal or upstream class (`not_granted`, `rate_limited`, `not_found`, ...).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "result": true
+      },
+      "required": [
+        "id",
+        "ok"
+      ],
+      "type": "object"
+    },
+    "ToolsPoll": {
+      "description": "Core to runner: the poll.",
+      "properties": {
+        "after": {
+          "description": "The last `tc_seq` the Core holds (0 for none).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "results": {
+          "items": {
+            "$ref": "#/$defs/ToolResult"
+          },
+          "type": "array"
+        },
+        "session": {
+          "type": "string"
+        },
+        "tools": {
+          "description": "The whole tool list now; absent: unchanged. An empty list takes every tool away.",
+          "items": {
+            "$ref": "#/$defs/ConnTool"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "wait_ms": {
+          "description": "How long to wait for a first call; absent or 0 answers at once.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session",
+        "after"
       ],
       "type": "object"
     },

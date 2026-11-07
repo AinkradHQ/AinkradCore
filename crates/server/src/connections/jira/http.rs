@@ -97,7 +97,11 @@ impl CallError {
         match self {
             Self::AuthFailed => Some((UpstreamStatus::AuthFailed, None)),
             Self::RateLimited { retry_after } => Some((UpstreamStatus::RateLimited, *retry_after)),
-            Self::Upstream(_) => Some((UpstreamStatus::ServerError, None)),
+            // Only Jira's own 5xx. A redirect, an unmapped status or an unreadable body can be
+            // provoked through what an agent names, and the connection is shared.
+            Self::Upstream(s) if (500..600).contains(s) => {
+                Some((UpstreamStatus::ServerError, None))
+            }
             Self::Network => Some((UpstreamStatus::Unreachable, None)),
             Self::OAuthNotConfigured => Some((UpstreamStatus::AuthFailed, None)),
             _ => None,

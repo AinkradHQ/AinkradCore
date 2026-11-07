@@ -430,6 +430,7 @@ impl Session {
             // The gateway ops (KAN-435): the driver answers `unsupported_command` unless its
             // runner has proven the gateway and lists it.
             | Command::AgentLimit(_)
+            | Command::AgentTools(_)
             | Command::GatewayTest(_) => self.start_agent(stream, command),
             // The sign-in driver's, or (an op of a newer Core) `unsupported_command`.
             Command::LoginStart(_)
@@ -516,6 +517,7 @@ impl Session {
                 Command::AgentDecide(req) => agent.decide(req).map(Reply::AgentDecide),
                 Command::AgentStop(req) => agent.stop(req).map(Reply::AgentStop),
                 Command::AgentLimit(req) => agent.limit(req).map(Reply::AgentLimit),
+                Command::AgentTools(req) => agent.tools(&req).await.map(Reply::AgentTools),
                 Command::GatewayTest(req) => agent.gateway_test(req).await.map(Reply::GatewayTest),
                 _ => return,
             };

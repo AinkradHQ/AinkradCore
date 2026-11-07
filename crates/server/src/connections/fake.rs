@@ -52,6 +52,7 @@ pub const FAKE: Descriptor = Descriptor {
     token_shapes: &["fake_token"],
     refresh_prefixes: &[],
     self_limited: &["fake.list_items"],
+    hourly_calls: 1000,
 };
 
 pub const OTHER: Descriptor = Descriptor {
@@ -76,6 +77,7 @@ pub const OTHER: Descriptor = Descriptor {
     token_shapes: &[],
     refresh_prefixes: &[],
     self_limited: &[],
+    hourly_calls: 1000,
 };
 
 pub struct Fake(pub &'static Descriptor);

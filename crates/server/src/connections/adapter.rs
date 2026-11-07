@@ -68,6 +68,10 @@ pub struct Descriptor {
     /// effective limits (`Resolved::limits`). Every other operation under a limited grant needs
     /// a resource. Each must be one of the capabilities' operations.
     pub self_limited: &'static [&'static str],
+    /// The most calls the broker makes through ONE connection in an hour: kept below the service's
+    /// own budget (GitHub's is 5000 an hour per token), so the broker refuses locally with
+    /// `connection_busy` before the service cools the connection for everyone.
+    pub hourly_calls: u32,
 }
 
 fn ident(s: &str, max: usize) -> bool {
@@ -175,6 +179,9 @@ impl Descriptor {
             return Some(format!(
                 "{kind}: self-limited operation {o:?} is not an operation"
             ));
+        }
+        if self.hourly_calls == 0 {
+            return Some(format!("{kind}: an hourly call budget is at least 1"));
         }
         if let Some(t) = self.token_shapes.iter().find(|t| !ident(t, 40)) {
             return Some(format!("{kind}: token shape {t:?} is malformed"));

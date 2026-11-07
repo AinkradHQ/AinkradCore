@@ -128,7 +128,10 @@
 ///    and `upstream_class`; `ProviderAccount` gains `live` and `health`; the `account.limited` and
 ///    `account.health` events; the payloads of `agent.state` (`waiting`, `repicked`) documented in the events
 ///    schema; the `scheduler.*` settings; the pool-binding routes (`/api/v1/bindings`) deprecated.
-pub const API_MINOR: u32 = 44;
+/// 45: the connection broker (C4): the `agent.tools` op in the runner schema (`ToolsPoll`, `ToolBatch`,
+///    `ToolCall`, `ToolResult`, `ConnTool`); the `connection.*` audit actions in `x-audit-actions`
+///    (`connection.used` is written by the broker); no operation changes.
+pub const API_MINOR: u32 = 45;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

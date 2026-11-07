@@ -147,6 +147,7 @@ static KIND: Descriptor = Descriptor {
     token_shapes: &[],
     refresh_prefixes: &[],
     self_limited: &[],
+    hourly_calls: 1000,
 };
 
 struct Probe;

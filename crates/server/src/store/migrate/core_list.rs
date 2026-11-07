@@ -173,4 +173,10 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0028_connections.up.sql"),
         down: include_str!("../../../migrations/0028_connections.down.sql"),
     },
+    Migration {
+        version: 29,
+        name: "session_connections",
+        up: include_str!("../../../migrations/0029_session_connections.up.sql"),
+        down: include_str!("../../../migrations/0029_session_connections.down.sql"),
+    },
 ];

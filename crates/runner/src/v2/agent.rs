@@ -47,6 +47,7 @@ use secrets::{Delivered, Redeem};
 mod gw;
 mod signals;
 mod sub;
+pub mod tools;
 
 /// The variable the Core delivers a run's token under (`Module::credentials` of Citadel).
 pub const RUN_TOKEN_VAR: &str = ainkrad_proto::v2::RUN_TOKEN_VAR;
@@ -278,6 +279,8 @@ pub struct AgentDriver {
     redeem: Option<Redeem>,
     sandbox: Arc<dyn Sandbox>,
     sessions: Mutex<HashMap<String, Live>>,
+    /// Connection tools of the sessions (C4): calls waiting on the Core, and its results.
+    tools: tools::Tools,
     /// Woken on every new entry or state change, for reads.
     changed: Notify,
     next_run: Mutex<i64>,
@@ -310,6 +313,7 @@ impl AgentDriver {
             redeem: None,
             sandbox: Arc::new(Unconfined),
             sessions: Mutex::new(sessions),
+            tools: tools::Tools::default(),
             changed: Notify::new(),
             // Unique across runner processes: a harness names its scratch dirs `run-<id>`, and a
             // run after a restart must never land in a dead session's.
@@ -334,6 +338,7 @@ impl AgentDriver {
             commands: AGENT_OPS
                 .iter()
                 .chain(self.sandbox.capabilities())
+                .chain([&ainkrad_proto::v2::CAP_TOOLS])
                 .chain(
                     self.config
                         .plan_limit
@@ -344,7 +349,8 @@ impl AgentDriver {
             capacity: self.config.capacity,
             slots: self.config.slots.clone(),
             // A read per session, and room for starts, messages, decisions and stops.
-            streams: Some(self.config.capacity.saturating_mul(2).saturating_add(8)),
+            // Also a tools poll per session (C4).
+            streams: Some(self.config.capacity.saturating_mul(3).saturating_add(8)),
         }
     }
 
@@ -373,6 +379,23 @@ impl AgentDriver {
             }
             let _ = tokio::time::timeout_at(deadline, notified).await;
         }
+    }
+
+    /// The Core's `agent.tools` poll (C4): see [`tools::Tools::poll`]. A session this runner does
+    /// not hold is refused, as every `agent.*` op is.
+    pub async fn tools(
+        &self,
+        req: &ainkrad_proto::v2::ToolsPoll,
+    ) -> Result<ainkrad_proto::v2::ToolBatch, StreamError> {
+        if !self.sessions.lock().unwrap().contains_key(&req.session) {
+            return Err(no_session());
+        }
+        Ok(self.tools.poll(req, MAX_WAIT).await)
+    }
+
+    /// The harness-facing end of the connection tools (the MCP front calls through this).
+    pub fn tools_port(&self) -> &tools::Tools {
+        &self.tools
     }
 
     /// Starts `req`'s session, or answers with the one it already holds (a resent start).
@@ -782,6 +805,8 @@ impl AgentDriver {
             }
             live.task = None;
             live.gateway = None;
+            // Calls waiting on the Core for this session end (C4).
+            self.tools.forget(s);
             live.drain_until = live
                 .gw_forwarding
                 .then(|| std::time::Instant::now() + GW_DRAIN);
