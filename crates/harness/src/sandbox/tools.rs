@@ -96,7 +96,8 @@ fn refused() -> io::Error {
 /// The agents dir is `<AINKRAD_SANDBOX_STATE>/agents`, else the one above the tools socket's
 /// directory (the gateway socket's layout is not assumed). Every path is compared with its symlinks
 /// resolved (a state path given through a symlink or with `..`, a harness folder that is a symlink),
-/// and a path that cannot be resolved refuses the sandbox. It is the same builder the start-up
+/// (a path that does not exist yet keeps its tail, as `resolve` says), and a path that cannot be
+/// resolved at all refuses the sandbox. It is the same builder the start-up
 /// self-test uses, so a layout that fails here also leaves the capability off.
 fn only_own_sockets(c: &Command, spec: &Spec) -> io::Result<()> {
     let socks: Vec<&Path> = ["AINKRAD_SANDBOX_TOOLS_SOCK", "AINKRAD_SANDBOX_GW_SOCK"]
@@ -116,7 +117,7 @@ fn only_own_sockets(c: &Command, spec: &Spec) -> io::Result<()> {
     } else {
         return Ok(());
     };
-    let real = |p: &Path| p.canonicalize().map_err(|_| refused());
+    let real = |p: &Path| resolve(p).map_err(|_| refused());
     let sockets = socks
         .iter()
         .map(|s| real(s))
