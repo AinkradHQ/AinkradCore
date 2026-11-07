@@ -40,8 +40,15 @@ pub enum CallError {
     Upstream(u16),
     /// Another 4xx: the request was not acceptable (a bad field, a missing transition).
     BadRequest(u16),
-    /// No answer: refused address, connection, TLS, timeout or an over-size answer.
+    /// No connection: the address was refused, the connect or the TLS handshake failed. The only
+    /// failure that says the service is unreachable.
     Network,
+    /// The answer was longer than we read. Says nothing about the service's health.
+    TooLarge,
+    /// No answer in time. Says nothing about the service's health (a slow query is not an outage).
+    TimedOut,
+    /// The exchange broke off some other way (a reset, a malformed frame). No health signal.
+    Broken,
     /// Refused here, before or after the call, by the adapter's own rules (bad arguments, the
     /// project limit). Never carries an argument value.
     Refused(String),
@@ -58,6 +65,9 @@ impl fmt::Display for CallError {
             Self::Upstream(s) => write!(f, "Jira answered with an error ({s})"),
             Self::BadRequest(s) => write!(f, "Jira did not accept the request ({s})"),
             Self::Network => f.write_str("Jira could not be reached"),
+            Self::TooLarge => f.write_str("Jira's answer was too large to read"),
+            Self::TimedOut => f.write_str("Jira did not answer in time"),
+            Self::Broken => f.write_str("the exchange with Jira broke off"),
             Self::Refused(why) => write!(f, "refused: {why}"),
             Self::Internal(why) => f.write_str(why),
         }
@@ -90,9 +100,23 @@ impl CallError {
             Self::Upstream(_) => "upstream",
             Self::BadRequest(_) => "bad_request",
             Self::Network => "network",
+            Self::TooLarge => "too_large",
+            Self::TimedOut => "timed_out",
+            Self::Broken => "broken",
             Self::Refused(_) => "refused",
             Self::Internal(_) => "internal",
         }
+    }
+}
+
+/// What a failed `send` or a failed read of the body means.
+fn net(e: &reqwest::Error) -> CallError {
+    if e.is_timeout() {
+        CallError::TimedOut
+    } else if e.is_connect() {
+        CallError::Network
+    } else {
+        CallError::Broken
     }
 }
 
@@ -125,6 +149,7 @@ impl Resp {
 }
 
 /// The client and the places it may go.
+#[derive(Clone)]
 pub struct Http {
     fixed: (Policy, Client),
     /// Production: a token-auth site gets a client of its own, allowing that one host.
@@ -132,6 +157,7 @@ pub struct Http {
     pub api: String,
     pub auth: String,
     site: Option<String>,
+    timeout: Duration,
 }
 
 impl Http {
@@ -144,6 +170,7 @@ impl Http {
             api: format!("https://{API_HOST}"),
             auth: format!("https://{AUTH_HOST}"),
             site: None,
+            timeout: Duration::from_secs(20),
         }
     }
 
@@ -159,7 +186,14 @@ impl Http {
             api: origin.clone(),
             auth: origin.clone(),
             site: Some(origin),
+            timeout: Duration::from_secs(20),
         }
+    }
+
+    #[cfg(test)]
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     /// `https://<host>` for a token-auth site.
@@ -193,14 +227,14 @@ impl Http {
         let mut req = client
             .request(method, url)
             .header(ACCEPT, "application/json")
-            .timeout(Duration::from_secs(20));
+            .timeout(self.timeout);
         if let Some(a) = auth {
             req = req.header(AUTHORIZATION, a);
         }
         if let Some(j) = json {
             req = req.json(j);
         }
-        let mut res = req.send().await.map_err(|_| CallError::Network)?;
+        let mut res = req.send().await.map_err(|e| net(&e))?;
         let status = res.status().as_u16();
         let retry_after = res
             .headers()
@@ -212,12 +246,12 @@ impl Http {
             .content_length()
             .is_some_and(|n| n > MAX_ANSWER_BYTES as u64)
         {
-            return Err(CallError::Network);
+            return Err(CallError::TooLarge);
         }
         let mut raw = Vec::new();
-        while let Some(chunk) = res.chunk().await.map_err(|_| CallError::Network)? {
+        while let Some(chunk) = res.chunk().await.map_err(|e| net(&e))? {
             if raw.len() + chunk.len() > MAX_ANSWER_BYTES {
-                return Err(CallError::Network);
+                return Err(CallError::TooLarge);
             }
             raw.extend_from_slice(&chunk);
         }

@@ -33,13 +33,14 @@ impl Limit {
         ))
     }
 
-    /// The limit of a grant: its `projects` values; no `projects` key (or a `*` in it) is any.
+    /// The limit of the EFFECTIVE limits `connections::resolve` returns (the user's grant
+    /// narrowed by the agent's): its `projects` values; no `projects` key is any. There is no
+    /// wildcard: `*` is a literal there (C1's `value_matches`), so it is not a project key and is
+    /// dropped like any other malformed entry.
     pub fn from_grant(limits: &BTreeMap<String, Vec<String>>) -> Self {
-        match limits.get("projects") {
-            None => Self::any(),
-            Some(v) if v.iter().any(|k| k == "*") => Self::any(),
-            Some(v) => Self::only(v),
-        }
+        limits
+            .get("projects")
+            .map_or_else(Self::any, |v| Self::only(v))
     }
 
     fn permits(&self, project: &str) -> bool {
@@ -141,7 +142,7 @@ fn issue(m: &Map<String, Value>) -> Result<(&str, &str), String> {
 }
 
 /// The `fields` to read: the caller's, or the default, and always `project`.
-fn fields(m: &Map<String, Value>) -> Result<Vec<String>, String> {
+fn fields(m: &Map<String, Value>, limited: bool) -> Result<Vec<String>, String> {
     let mut out: Vec<String> = match m.get("fields") {
         None | Some(Value::Null) => [
             "summary",
@@ -166,6 +167,12 @@ fn fields(m: &Map<String, Value>) -> Result<Vec<String>, String> {
             .collect::<Result<_, _>>()?,
         Some(_) => return Err("fields is a list of at most 30 names".to_owned()),
     };
+    if limited && out.iter().any(|f| !SAFE_FIELDS.contains(&f.as_str())) {
+        return Err(format!(
+            "on a limited connection fields are some of: {}",
+            SAFE_FIELDS.join(", ")
+        ));
+    }
     if !out.iter().any(|f| f == "project") {
         out.push("project".to_owned());
     }
@@ -201,8 +208,72 @@ fn labels(m: &Map<String, Value>) -> Result<Option<Vec<String>>, String> {
     }
 }
 
-fn outside(project: &str) -> String {
-    format!("the project {project} is outside what this connection may reach")
+/// The one refusal for anything outside the limit. It must not say WHICH project: that would let a
+/// limited caller learn the names of projects it may not see.
+const OUTSIDE: &str =
+    "outside_limit: the request or the answer reaches beyond what this connection may reach";
+
+fn outside() -> String {
+    OUTSIDE.to_owned()
+}
+
+/// The fields a limited connection may read. Everything else can embed other projects' issues
+/// (links, parent, subtasks, issue-picker custom fields, worklogs, comments with mentions).
+const SAFE_FIELDS: [&str; 11] = [
+    "summary",
+    "status",
+    "priority",
+    "assignee",
+    "reporter",
+    "labels",
+    "created",
+    "updated",
+    "description",
+    "issuetype",
+    "project",
+];
+
+/// Whether a string holds an issue key (`ABC-12`, at a word boundary) of a project the limit does
+/// not permit. Deliberately blunt: `UTF-8` reads as a key of project `UTF`, so a limited
+/// connection refuses an answer that merely mentions it.
+fn names_outside(s: &str, limit: &Limit) -> bool {
+    let b = s.as_bytes();
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0;
+    while i < b.len() {
+        if b[i].is_ascii_uppercase() && (i == 0 || !word(b[i - 1])) {
+            let mut j = i;
+            while j < b.len()
+                && (b[j].is_ascii_uppercase() || b[j].is_ascii_digit() || b[j] == b'_')
+            {
+                j += 1;
+            }
+            let mut k = j + 1;
+            while j < b.len() && b[j] == b'-' && k < b.len() && b[k].is_ascii_digit() {
+                k += 1;
+            }
+            let digits = k > j + 1;
+            if j < b.len() && b[j] == b'-' && digits && (k == b.len() || !word(b[k])) {
+                let project = &s[i..j];
+                if project_key(project) && !limit.permits(project) {
+                    return true;
+                }
+            }
+            i = j.max(i + 1);
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
+fn embeds_outside(v: &Value, limit: &Limit) -> bool {
+    match v {
+        Value::String(s) => names_outside(s, limit),
+        Value::Array(a) => a.iter().any(|x| embeds_outside(x, limit)),
+        Value::Object(o) => o.values().any(|x| embeds_outside(x, limit)),
+        _ => false,
+    }
 }
 
 /// Builds the call for `op`, or says why not. `limit` is the project limit of the grant that
@@ -221,7 +292,7 @@ pub fn plan(op: &str, args: &Value, limit: &Limit) -> Result<Plan, String> {
     let on_issue = |m: &Map<String, Value>| -> Result<(String, String), String> {
         let (key, project) = issue(m)?;
         if !limit.permits(project) {
-            return Err(outside(project));
+            return Err(outside());
         }
         Ok((key.to_owned(), project.to_owned()))
     };
@@ -243,7 +314,7 @@ pub fn plan(op: &str, args: &Value, limit: &Limit) -> Result<Plan, String> {
         "jira.get_issue" => {
             let m = obj(op, args, &["key", "fields"])?;
             let (key, project) = on_issue(m)?;
-            let q = fields(m)?.join(",");
+            let q = fields(m, limit.limited())?.join(",");
             Ok(get(
                 format!("/issue/{key}?fields={q}"),
                 Guard::Read,
@@ -326,7 +397,7 @@ pub fn plan(op: &str, args: &Value, limit: &Limit) -> Result<Plan, String> {
                 return Err("project is a project key like ABC".into());
             }
             if !limit.permits(project) {
-                return Err(outside(project));
+                return Err(outside());
             }
             let mut f = Map::new();
             f.insert("project".into(), json!({"key": project}));
@@ -383,7 +454,7 @@ pub fn plan(op: &str, args: &Value, limit: &Limit) -> Result<Plan, String> {
                         return Err("project is a project key like ABC".into());
                     }
                     if !limit.permits(p) {
-                        return Err(outside(p));
+                        return Err(outside());
                     }
                     Some(format!("project = \"{p}\""))
                 }
@@ -407,7 +478,7 @@ pub fn plan(op: &str, args: &Value, limit: &Limit) -> Result<Plan, String> {
                 q.push_str(&format!(" ORDER BY {}", order.join(", ")));
             }
             let mut body = json!({"jql": q, "maxResults": uint(m, "max_results", 25, 100)?,
-                "fields": fields(m)?});
+                "fields": fields(m, limit.limited())?});
             if let Some(t) = text(m, "next_page_token", 4000)? {
                 body["nextPageToken"] = json!(t);
             }
@@ -440,21 +511,37 @@ fn project_of(issue: &Value) -> Option<&str> {
 pub fn check_preread(v: &Value, limit: &Limit) -> Result<(), String> {
     match project_of(v) {
         Some(p) if limit.permits(p) => Ok(()),
-        Some(p) => Err(outside(p)),
+        Some(_) => Err(outside()),
         None => Err("the issue's project could not be read".into()),
     }
 }
 
 /// The answer of `plan`, checked and cut to the limit.
+///
+/// Known limits, accepted: (1) a change is a pre-read of the issue's project and then the write,
+/// two requests, so an issue moved between them is written in its new project (TOCTOU; Jira has
+/// no conditional write on the project). (2) A limited search is an existence oracle for other
+/// projects through JQL functions and clauses that count or compare across projects
+/// (`issuekey in ...` only narrows our own `project in (...)`, but a function such as
+/// `issuesWithin...` can make an in-limit row appear or vanish depending on a row outside): the
+/// ROWS never leave the limit, one bit about the outside can.
 pub fn check_result(guard: Guard, mut v: Value, limit: &Limit) -> Result<Value, String> {
     match guard {
-        Guard::Read => check_preread(&v, limit).map(|()| v),
+        Guard::Read => {
+            check_preread(&v, limit)?;
+            (!embeds_outside(&v, limit))
+                .then_some(v)
+                .ok_or_else(outside)
+        }
         Guard::Search => {
             let issues = v["issues"]
                 .as_array()
                 .ok_or("the search answer is unreadable")?;
             for i in issues {
                 check_preread(i, limit)?;
+                if embeds_outside(i, limit) {
+                    return Err(outside());
+                }
             }
             Ok(v)
         }

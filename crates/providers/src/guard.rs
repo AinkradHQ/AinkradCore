@@ -41,7 +41,12 @@ pub fn ip_allowed(ip: IpAddr) -> bool {
                 || (s[0] == 0x2001 && s[1] == 0) // Teredo
                 || (s[0] == 0x0064 && s[1] == 0xff9b && s[2] == 1) // local-use NAT64
                 || (s[0] == 0x0100 && s[1..4] == [0, 0, 0]) // discard-only 100::/64
-                || s[..6] == [0; 6]; // v4-compatible
+                || s[..6] == [0; 6] // v4-compatible
+                || (s[..4] == [0; 4] && s[4] == 0xffff && s[5] == 0) // SIIT ::ffff:0:0/96
+                || (s[0] == 0x2001 && s[1] == 2 && s[2] == 0) // benchmarking 2001:2::/48
+                || (s[0] == 0x2001 && s[1] & 0xfff0 == 0x10) // ORCHID 2001:10::/28
+                || (s[0] == 0x3fff && s[1] & 0xf000 == 0) // documentation 3fff::/20
+                || s[0] == 0x5f00; // SRv6 SIDs 5f00::/16
             !internal
         }
     }
@@ -269,6 +274,18 @@ mod tests {
             "100-127-255-254",
             "192-0-0-9",
             "198-19-255-255",
+            "::ffff:0:8-8-8-8",
+            "::ffff:0:7f00:1",
+            "2001:2::1",
+            "2001:2:0:ffff::1",
+            "2001:10::1",
+            "2001:1f:ffff::1",
+            "3fff::1",
+            "3fff:fff:ffff::1",
+            "5f00::1",
+            "5f00:ffff::1",
+            "64:ff9b:1:ffff::1",
+            "fec0:ffff::1",
         ] {
             assert!(!ip_allowed(ip(bad)), "{bad}");
         }
@@ -277,6 +294,8 @@ mod tests {
             "8-8-8-8",
             "2606:4700::1111",
             "::ffff:8-8-8-8",
+            "2001:4860:4860::8888",
+            "2a00:1450::1",
         ] {
             assert!(ip_allowed(ip(good)), "{good}");
         }

@@ -58,6 +58,9 @@ pub(super) fn scan_jql(s: &str) -> Result<(), String> {
                     }
                     outside.push(' ');
                 }
+                // A backslash outside a quoted string has no meaning to this scan but may to
+                // Jira's lexer (it lets `a\"` swallow a quote): refuse it rather than guess.
+                '\\' => return bad("has a backslash outside a quoted string"),
                 c => outside.push(c),
             },
         }

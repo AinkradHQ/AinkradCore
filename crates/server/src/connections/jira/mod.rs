@@ -41,6 +41,7 @@ use super::adapter::{
 use super::material::Material;
 use crate::ops::secretbox::SecretBox;
 use crate::scheduler::unix_secs;
+use crate::store::connections::verdict::{self, TestOutcome};
 use crate::store::connections::{Connection, Who};
 
 pub const DESCRIPTOR: Descriptor = Descriptor {
@@ -106,12 +107,14 @@ pub const DESCRIPTOR: Descriptor = Descriptor {
     }],
     // Atlassian's own tokens are not a shape the redactor names (C2 reads this for GitHub).
     token_shapes: &[],
+    self_limited: &["jira.search_issues", "jira.list_projects"],
 };
 
 /// What a call needs from the store: the pool and sealer for the credential, and who and when.
 pub struct Ctx<'a> {
     pub pool: &'a SqlitePool,
-    pub sealer: &'a SecretBox,
+    /// An `Arc`: a renewal runs in a task of its own and keeps its own handle.
+    pub sealer: &'a Arc<SecretBox>,
     pub who: Who<'a>,
 }
 
@@ -128,6 +131,8 @@ pub struct Jira {
     app: Option<OAuthApp>,
     flows: Mutex<oauth::Flows>,
     locks: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
+    /// When each connection's token was last renewed (see `oauth::Job::run`).
+    recent: Arc<Mutex<HashMap<i64, std::time::Instant>>>,
 }
 
 fn clean(s: &str, max: usize) -> String {
@@ -151,6 +156,7 @@ impl Jira {
             app,
             flows: Mutex::default(),
             locks: Mutex::default(),
+            recent: Arc::default(),
         }
     }
 
@@ -166,6 +172,18 @@ impl Jira {
     }
 
     async fn send(&self, cred: &Cred, req: &ops::Req) -> Result<Value, CallError> {
+        let url = self.url(cred, &req.path);
+        self.send_url(cred, req.method.clone(), &url, req.body.as_ref())
+            .await
+    }
+
+    async fn send_url(
+        &self,
+        cred: &Cred,
+        method: Method,
+        url: &str,
+        body: Option<&Value>,
+    ) -> Result<Value, CallError> {
         let site = match cred {
             Cred::Basic { host, .. } => Some(host.as_str()),
             Cred::Oauth { .. } => None,
@@ -173,17 +191,7 @@ impl Jira {
         let auth = cred
             .authorization()
             .ok_or(CallError::Internal("the stored credential is unusable"))?;
-        let url = self.url(cred, &req.path);
-        let res = self
-            .http
-            .send(
-                site,
-                req.method.clone(),
-                &url,
-                Some(auth),
-                req.body.as_ref(),
-            )
-            .await?;
+        let res = self.http.send(site, method, url, Some(auth), body).await?;
         res.into_ok()
     }
 
@@ -233,20 +241,46 @@ impl Jira {
         ops::check_result(plan.guard, v, limit).map_err(CallError::Refused)
     }
 
-    /// `GET /myself` with `cred`.
+    /// Who the credential is. OAuth asks `https://api.atlassian.com/me` (covered by `read:me`);
+    /// `/rest/api/3/myself` would need `read:jira-user`, which is not requested. A token
+    /// connection asks the site's `/myself`.
     pub async fn myself(&self, cred: &Cred) -> Result<Myself, CallError> {
-        let req = ops::Req {
-            method: Method::GET,
-            path: "/myself".into(),
-            body: None,
+        let (url, id_key, name_key) = match cred {
+            Cred::Oauth { .. } => (format!("{}/me", self.http.api), "account_id", "name"),
+            Cred::Basic { .. } => (self.url(cred, "/myself"), "accountId", "displayName"),
         };
-        let v = self.send(cred, &req).await?;
-        let id = v["accountId"].as_str().filter(|s| !s.is_empty());
+        let v = self.send_url(cred, Method::GET, &url, None).await?;
+        let id = v[id_key].as_str().filter(|s| !s.is_empty());
         Ok(Myself {
             account_id: clean(id.ok_or(CallError::Upstream(200))?, 128),
-            display_name: clean(v["displayName"].as_str().unwrap_or("Jira user"), 80),
+            display_name: clean(v[name_key].as_str().unwrap_or("Jira user"), 80),
             site: cred.site(),
         })
+    }
+
+    /// Tests connection `id` and records the outcome, the way `verdict::run_test` does but with the
+    /// token renewed first. A renewal the service REFUSES (the refresh token is revoked or spent)
+    /// is a conclusive verdict: the credential is dead, so the connection becomes "sign in again".
+    /// A renewal that merely failed (network, 5xx, rate limit) is inconclusive.
+    pub async fn test_connection(
+        &self,
+        cx: &Ctx<'_>,
+        id: i64,
+    ) -> Result<Connection, crate::store::secrets::Error> {
+        let renewed = self.fresh(cx, id).await;
+        let (m, version) =
+            crate::store::connections::secret::open(cx.pool, cx.sealer, cx.who.workspace, id)
+                .await?;
+        let outcome = match renewed {
+            Err(CallError::AuthFailed) => TestOutcome::Rejected,
+            Err(_) => TestOutcome::Inconclusive,
+            Ok(_) => match self.test(&m).await {
+                Ok(identity) => TestOutcome::Passed(identity),
+                Err(TestError::Rejected) => TestOutcome::Rejected,
+                Err(TestError::Inconclusive) => TestOutcome::Inconclusive,
+            },
+        };
+        verdict::record_test(cx.pool, id, version, outcome, cx.who).await
     }
 }
 
@@ -255,7 +289,8 @@ impl KindAdapter for Jira {
         &DESCRIPTOR
     }
 
-    /// `GET /myself`; the identity is `<display name> at <site>`. Only a 401 on a token that is
+    /// `GET /me` (OAuth) or `/myself` (token); the identity is `<account id> at <site>`: the
+    /// account id is stable, the display name is only a label (see [`Myself`]). Only a 401 on a token that is
     /// not past its expiry is a rejection (it disables the connection): an expired OAuth token,
     /// a 403, a rate limit, a 5xx or an unreadable envelope say nothing about the credential,
     /// so they are inconclusive. Call [`Jira::fresh`] first so the token is not expired.
@@ -269,10 +304,10 @@ impl KindAdapter for Jira {
                 .expires_at
                 .as_deref()
                 .and_then(unix_secs)
-                .is_some_and(|e| e <= now);
+                .is_some_and(|e| e <= now + oauth::SKEW_SECS);
             match self.myself(&cred).await {
                 Ok(me) => Ok(Identity {
-                    subject: format!("{} at {}", me.display_name, me.site),
+                    subject: format!("{} at {}", me.account_id, me.site),
                 }),
                 Err(CallError::AuthFailed) if !expired => Err(TestError::Rejected),
                 Err(_) => Err(TestError::Inconclusive),

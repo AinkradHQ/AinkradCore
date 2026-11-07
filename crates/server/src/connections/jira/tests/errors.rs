@@ -4,7 +4,10 @@ use reqwest::Method;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::connections::adapter::TestError;
+use std::time::Duration;
+
+use crate::connections::adapter::{Registry, TestError};
+use crate::connections::jira::http::Http;
 use crate::connections::jira::{CallError, Limit};
 use crate::store::connections::verdict;
 
@@ -132,6 +135,9 @@ async fn statuses_map_to_the_right_errors_and_health_signals() {
         (CallError::AuthFailed, true),
         (CallError::Upstream(502), true),
         (CallError::Network, true),
+        (CallError::TooLarge, false),
+        (CallError::TimedOut, false),
+        (CallError::Broken, false),
     ] {
         assert_eq!(e.health().is_some(), signal, "{e}");
     }
@@ -150,7 +156,12 @@ async fn a_redirect_is_the_answer_never_followed_and_a_huge_answer_is_refused() 
     let mut big = Reply::json(200, Value::Null);
     big.raw = Some(vec![b' '; 5 * 1024 * 1024]);
     f.fake.on(&key, move |_| big.clone());
-    assert_eq!(get(&f, &c).await.unwrap_err(), CallError::Network);
+    let e = get(&f, &c).await.unwrap_err();
+    assert_eq!(e, CallError::TooLarge);
+    assert!(
+        e.health().is_none(),
+        "a long answer says nothing about the service's health"
+    );
     let mut junk = Reply::json(200, Value::Null);
     junk.raw = Some(b"<html>".to_vec());
     f.fake.on(&key, move |_| junk.clone());
@@ -173,7 +184,7 @@ async fn a_credential_test_reads_the_identity_and_only_a_sure_401_rejects() {
         .unwrap();
     assert_eq!(
         done.identity.as_deref(),
-        Some("AnnLee at https://acme.atlassian.net")
+        Some("5b10ac8d at https://acme.atlassian.net")
     );
     let me = f
         .jira
@@ -191,7 +202,7 @@ async fn a_credential_test_reads_the_identity_and_only_a_sure_401_rejects() {
     f.fake.reply(&key, 401, json!({}));
     assert_eq!(test(basic()).await, Err(TestError::Rejected));
     // An OAuth token that has already expired being refused says nothing about the credential.
-    let oauth_key = format!("GET {}", oauth_path("/myself"));
+    let oauth_key = "GET /me".to_owned();
     f.fake.reply(&oauth_key, 401, json!({}));
     assert_eq!(
         test(oauth(ACCESS, REFRESH, -3600 * 24 * 365 * 10)).await,
@@ -256,7 +267,7 @@ async fn no_secret_appears_in_an_error_a_debug_print_or_an_audit_row() {
         .await
         .unwrap_err();
     let m = oauth(ACCESS, REFRESH, 10);
-    let flows = f.jira.start(1, "http://127.0.0.1:5/cb", None).unwrap();
+    let flows = f.jira.start(1, REDIRECT, None).unwrap();
     let texts = [
         format!("{err} {err:?} {err2} {err2:?}"),
         format!("{m:?} {m} {:?} {:?}", cred::unpack(&m).unwrap(), f.jira.app),
@@ -277,4 +288,66 @@ async fn no_secret_appears_in_an_error_a_debug_print_or_an_audit_row() {
             assert!(!t.contains(secret), "{secret} leaked in {t}");
         }
     }
+}
+
+#[tokio::test]
+async fn a_slow_answer_is_a_timeout_with_no_health_signal() {
+    let f = fx(false).await;
+    let c = f.basic().await;
+    let http = Http::loopback(f.addr).with_timeout(Duration::from_millis(300));
+    let jira = Jira::with(http, None);
+    f.fake
+        .on(&issue_path(), |_| Reply::json(200, json!({})).delayed(1500));
+    let args = json!({"key": "ABC-1"});
+    let e = jira
+        .call(&f.cx(NOW), &c, &Limit::any(), "jira.get_issue", &args)
+        .await
+        .unwrap_err();
+    assert_eq!(e, CallError::TimedOut);
+    assert!(e.health().is_none());
+}
+
+#[tokio::test]
+async fn only_a_refused_connection_is_unreachable() {
+    let f = fx(false).await;
+    let c = f.basic().await;
+    // Nothing listens on this port: the connect fails.
+    let dead = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let jira = Jira::with(Http::loopback(dead), None);
+    let args = json!({"key": "ABC-1"});
+    let e = jira
+        .call(&f.cx(NOW), &c, &Limit::any(), "jira.get_issue", &args)
+        .await
+        .unwrap_err();
+    assert_eq!(e, CallError::Network);
+    assert!(e.health().is_some());
+}
+
+#[tokio::test]
+async fn the_registry_holds_the_one_instance_the_server_built() {
+    let f = fx(true).await;
+    let c = f.basic().await;
+    f.fake.reply(
+        &format!("GET {}", site_path("/myself")),
+        200,
+        json!({"accountId": "5b10ac8d", "displayName": "Ann"}),
+    );
+    // A registry built for this instance runs its test through it (the fake is only reachable
+    // there); a default `builtin()` has its own, with no app and the real hosts.
+    let reg = Registry::builtin_with(f.jira.clone());
+    let who = f.cx(NOW).who;
+    verdict::run_test(&f.pool, &f.sealer, &reg, c.id, who)
+        .await
+        .unwrap();
+    assert_eq!(f.fake.count(&format!("GET {}", site_path("/myself"))), 1);
+    let d = reg.get("jira").unwrap().descriptor();
+    assert!(d.is_self_limited("jira.search_issues") && d.is_self_limited("jira.list_projects"));
+    assert!(!d.is_self_limited("jira.get_issue") && !d.is_self_limited("jira.create_issue"));
+    // The same instance starts a sign-in that the same instance finishes: it holds the state.
+    let s = f.jira.start(1, REDIRECT, None).unwrap();
+    assert!(f.jira.flows.lock().unwrap().contains_key(&s.state));
+    assert!(Registry::builtin().get("jira").is_some());
 }

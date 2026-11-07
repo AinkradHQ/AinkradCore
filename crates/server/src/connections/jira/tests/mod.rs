@@ -36,6 +36,7 @@ pub const ACCESS: &str = "acc1-7f3a9d41e0b2";
 pub const REFRESH: &str = "ref1-91c4d2b7a6e1";
 pub const API_TOKEN: &str = "apitok-5d2e8b0c7a41";
 pub const CLIENT_SECRET: &str = "clsec-3b9f6e2d1a70";
+pub const REDIRECT: &str = "http://127.0.0.1:53682/callback";
 pub const EMAIL: &str = "ann@example.com";
 
 #[derive(Clone)]
@@ -84,6 +85,25 @@ type Handler = Arc<dyn Fn(&Seen) -> Reply + Send + Sync>;
 struct Inner {
     handlers: HashMap<String, Handler>,
     seen: Vec<Seen>,
+    /// The scopes the (fake) grant holds; `None` is what `SCOPES` asks for.
+    scopes: Option<Vec<String>>,
+}
+
+/// The classic scope an OAuth-routed endpoint needs (token-auth paths are not scoped).
+fn needs(method: &str, path: &str) -> Option<&'static str> {
+    if path == "/me" {
+        return Some("read:me");
+    }
+    if !path.starts_with("/ex/jira/") {
+        return None;
+    }
+    Some(if path.ends_with("/rest/api/3/myself") {
+        "read:jira-user"
+    } else if method == "GET" || path.ends_with("/search/jql") {
+        "read:jira-work"
+    } else {
+        "write:jira-work"
+    })
 }
 
 /// The fake service: handlers by `"METHOD /path"`, and a log of everything it was asked.
@@ -107,12 +127,22 @@ async fn handle(State(f): State<Fake>, req: Request) -> Response {
         body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
     };
     let key = format!("{} {}", seen.method, seen.path);
-    let handler = {
+    let (handler, scoped) = {
         let mut i = f.inner.lock().unwrap();
         i.seen.push(seen.clone());
-        i.handlers.get(&key).cloned()
+        let held = i
+            .scopes
+            .clone()
+            .unwrap_or_else(|| super::SCOPES.split(' ').map(str::to_owned).collect());
+        let missing = needs(&seen.method, &seen.path).is_some_and(|n| !held.iter().any(|h| h == n));
+        (i.handlers.get(&key).cloned(), missing)
     };
+    // The real service answers 401 when the token's scopes do not cover the endpoint.
     let r = match handler {
+        _ if scoped => Reply::json(
+            401,
+            json!({"message": "Unauthorized; scope does not match"}),
+        ),
         Some(h) => h(&seen),
         None => Reply::json(404, json!({})),
     };
@@ -139,6 +169,12 @@ impl Fake {
 
     pub fn reply(&self, key: &str, status: u16, body: Value) {
         self.on(key, move |_| Reply::json(status, body.clone()));
+    }
+
+    /// Grants only these scopes from now on.
+    pub fn grant_scopes(&self, scopes: &[&str]) {
+        let list = scopes.iter().map(|s| (*s).to_owned()).collect();
+        self.inner.lock().unwrap().scopes = Some(list);
     }
 
     pub fn seen(&self) -> Vec<Seen> {
@@ -192,7 +228,8 @@ pub struct Fx {
     pub jira: Arc<Jira>,
     pub reg: Registry,
     pub pool: SqlitePool,
-    pub sealer: SecretBox,
+    pub sealer: Arc<SecretBox>,
+    pub addr: SocketAddr,
     dir: PathBuf,
 }
 
@@ -223,7 +260,7 @@ pub async fn fx(app: bool) -> Fx {
     .unwrap();
     let fake = Fake::default();
     let addr = fake.serve().await;
-    let app = app.then(|| OAuthApp::new("client-id-8c41", CLIENT_SECRET).unwrap());
+    let app = app.then(|| OAuthApp::new("client-id-8c41", CLIENT_SECRET, &[REDIRECT]).unwrap());
     let jira = Arc::new(Jira::loopback(app, addr));
     let mut reg = Registry::new();
     reg.register(jira.clone()).unwrap();
@@ -232,7 +269,8 @@ pub async fn fx(app: bool) -> Fx {
         jira,
         reg,
         pool,
-        sealer: SecretBox::new(&[7; 32]),
+        sealer: Arc::new(SecretBox::new(&[7; 32])),
+        addr,
         dir,
     }
 }
@@ -323,6 +361,15 @@ fn the_descriptor_is_valid_and_every_operation_has_one_capability() {
     assert_eq!(op("jira.transition_issue"), Some("transition"));
     assert_eq!(op("jira.create_issue"), Some("write_issues"));
     assert_eq!(op("jira.search_issues"), Some("read_issues"));
+    assert!(DESCRIPTOR.is_self_limited("jira.search_issues"));
+    let bad = super::Descriptor {
+        self_limited: &["jira.nope"],
+        ..DESCRIPTOR
+    };
+    assert!(
+        bad.problem().is_some(),
+        "a self-limited name must be an operation"
+    );
     assert!(DESCRIPTOR.allows_host("api.atlassian.com"));
     assert!(!DESCRIPTOR.allows_host("api.atlassian.com.evil.test"));
     assert!(!DESCRIPTOR.allows_host("acme.atlassian.net"));

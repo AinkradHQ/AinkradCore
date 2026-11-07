@@ -253,13 +253,19 @@ impl Registry {
     }
 
     /// The shipped kinds: `github` (C2) and `jira` (C3). Sign in with Atlassian is off in this
-    /// one (no app id); the server builds its own `jira::Jira::new(Some(app))` and registers that.
+    /// one (no app id): for tests and descriptors only. The server uses [`Registry::builtin_with`].
     pub fn builtin() -> Self {
+        Self::builtin_with(Arc::new(super::jira::Jira::new(None)))
+    }
+
+    /// The shipped kinds with THE Jira instance the server built (with its OAuth app): the same
+    /// `Arc` the API and the broker call through, so a sign-in started on it is finished on it and
+    /// its refresh locks are shared.
+    pub fn builtin_with(jira: Arc<super::jira::Jira>) -> Self {
         let mut r = Self::new();
         r.register(Arc::new(super::github::Github::strict()))
             .expect("the github descriptor is well formed");
-        r.register(Arc::new(super::jira::Jira::new(None)))
-            .expect("the shipped descriptors are valid");
+        r.register(jira).expect("the shipped descriptors are valid");
         r
     }
 

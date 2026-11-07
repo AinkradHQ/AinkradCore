@@ -169,6 +169,31 @@ pub async fn replace(
     m: &Material,
     who: Who<'_>,
 ) -> Result<Connection, Error> {
+    replace_with(pool, sealer, id, m, who, true).await
+}
+
+/// [`replace`] for an adapter's own token renewal: the credential is a new one for the SAME grant,
+/// so a pending or confirmed auth failure is NOT cleared (only a test or a person's replacement
+/// decides that), or a service that keeps refusing a fresh token would be re-admitted by every
+/// renewal.
+pub async fn renew(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    id: i64,
+    m: &Material,
+    who: Who<'_>,
+) -> Result<Connection, Error> {
+    replace_with(pool, sealer, id, m, who, false).await
+}
+
+async fn replace_with(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    id: i64,
+    m: &Material,
+    who: Who<'_>,
+    clear_auth: bool,
+) -> Result<Connection, Error> {
     let mut tx = crate::store::begin_write(pool).await?;
     // The kind's declared shapes, by the connection's own kind (a built-in kind only: this
     // gate has no registry in hand). ponytail: `create` reads the registry's descriptor, this
@@ -207,7 +232,9 @@ pub async fn replace(
     };
     store_in(&mut tx, sealer, &at, m, who.now).await?;
     secure_off(&mut tx).await?;
-    super::verdict::clear_auth_in(&mut tx, id, who.now, "replaced").await?;
+    if clear_auth {
+        super::verdict::clear_auth_in(&mut tx, id, who.now, "replaced").await?;
+    }
     // An export left it without a credential; this one is the new one.
     sqlx::query(
         "UPDATE core_connections SET status = 'active', state_reason = NULL, state_until = NULL \
