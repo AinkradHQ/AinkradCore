@@ -37,7 +37,15 @@ pub async fn handle(tools: &Tools, session: &str, body: &[u8]) -> Option<Vec<u8>
     let Ok(req) = serde_json::from_slice::<Value>(body) else {
         return Some(error(Value::Null, -32700, "parse error"));
     };
+    // One request per line: a batch is not served (the 2025-06-18 protocol dropped it).
+    if req.is_array() {
+        return Some(error(Value::Null, -32600, "batches are not supported"));
+    }
     let Some(method) = req.get("method").and_then(Value::as_str) else {
+        // A reply to a request this side never made is not answered either.
+        if req.get("result").is_some() || req.get("error").is_some() {
+            return None;
+        }
         return Some(error(Value::Null, -32600, "invalid request"));
     };
     let Some(id) = req.get("id").cloned() else {
@@ -50,7 +58,7 @@ pub async fn handle(tools: &Tools, session: &str, body: &[u8]) -> Option<Vec<u8>
                 .unwrap_or(PROTOCOL);
             Some(result(
                 id,
-                json!({"protocolVersion": asked, "capabilities": {"tools": {}},
+                json!({"protocolVersion": asked, "capabilities": {"tools": {"listChanged": true}},
                     "serverInfo": {"name": "ainkrad-connections", "version": "1"}}),
             ))
         }
@@ -60,8 +68,12 @@ pub async fn handle(tools: &Tools, session: &str, body: &[u8]) -> Option<Vec<u8>
                 .list(session)
                 .iter()
                 .map(|t| {
+                    let schema = t
+                        .input_schema
+                        .clone()
+                        .unwrap_or_else(|| json!({"type": "object", "additionalProperties": true}));
                     json!({"name": mcp_name(&t.name), "description": t.description,
-                        "inputSchema": {"type": "object", "additionalProperties": true}})
+                        "inputSchema": schema})
                 })
                 .collect();
             Some(result(id, json!({"tools": list})))
@@ -126,6 +138,10 @@ mod tests {
             name: "github.get_issue".to_owned(),
             description: "Read an issue".to_owned(),
             write: false,
+            input_schema: Some(
+                json!({"type": "object", "properties": {"repo": {"type": "string"}},
+                "required": ["repo"], "additionalProperties": false}),
+            ),
         }];
         t.poll(&poll(0, vec![], Some(list)), Duration::from_millis(200))
             .await;
@@ -150,6 +166,10 @@ mod tests {
         )
         .await;
         assert_eq!(l["result"]["tools"][0]["name"], "github_get_issue");
+        assert_eq!(
+            l["result"]["tools"][0]["inputSchema"]["required"][0], "repo",
+            "the Core's schema is what the harness sees"
+        );
         // An unknown tool is a refusal the model reads, not a protocol error.
         let u = ask(
             &t,

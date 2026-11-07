@@ -20,6 +20,7 @@ use super::*;
 use crate::{Executor, Job, Report};
 
 mod sub;
+mod tools_driver;
 
 /// Throwaway values: at least 8 bytes (the redactor's floor), shaped like no real key.
 const ENV_VALUE: &str = "throwaway-env-value-41c7";

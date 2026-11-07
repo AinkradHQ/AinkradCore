@@ -15,13 +15,15 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    ConnTool, MAX_ARGS_BYTES, MAX_BATCH, MAX_PENDING, MAX_RESULT_BYTES, ToolBatch, ToolCall,
-    ToolResult, ToolsPoll,
+    ConnTool, MAX_ARGS_BYTES, MAX_BATCH, MAX_PENDING, MAX_RESULT_BYTES, MAX_SCHEMA_BYTES,
+    ToolBatch, ToolCall, ToolResult, ToolsPoll, valid_tool_name,
 };
 use serde_json::Value;
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::{Notify, oneshot, watch};
 
 pub mod mcp;
+pub mod selftest;
+pub mod sock;
 
 /// A call the Core never answers ends here.
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -58,10 +60,42 @@ impl One {
     }
 }
 
-#[derive(Default)]
 pub struct Tools {
     sessions: Mutex<HashMap<String, One>>,
     changed: Notify,
+    /// Counts the polls that changed some session's tool list: an open connection looks again at
+    /// its own session's list when it ticks (`sock`'s list-changed notification).
+    listed: watch::Sender<u64>,
+}
+
+impl Default for Tools {
+    fn default() -> Self {
+        Self {
+            sessions: Mutex::default(),
+            changed: Notify::new(),
+            listed: watch::channel(0).0,
+        }
+    }
+}
+
+/// Ends a waiting call however its future ends, a dropped one (the connection closed) included.
+struct Waiting<'a> {
+    tools: &'a Tools,
+    session: &'a str,
+    id: String,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        let mut all = self
+            .tools
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(one) = all.get_mut(self.session) {
+            one.pending.remove(&self.id);
+        }
+    }
 }
 
 fn refusal(id: &str, code: &str, message: &str) -> ToolResult {
@@ -74,6 +108,17 @@ fn refusal(id: &str, code: &str, message: &str) -> ToolResult {
     }
 }
 
+/// A tool whose schema is too large to list is listed with an open object instead.
+fn bounded(mut t: ConnTool) -> ConnTool {
+    if t.input_schema
+        .as_ref()
+        .is_some_and(|s| s.to_string().len() > MAX_SCHEMA_BYTES)
+    {
+        t.input_schema = None;
+    }
+    t
+}
+
 impl Tools {
     /// The tools the Core last listed for `session`.
     pub fn list(&self, session: &str) -> Vec<ConnTool> {
@@ -81,6 +126,18 @@ impl Tools {
         all.get(session)
             .map(|o| o.tools.clone())
             .unwrap_or_default()
+    }
+
+    /// Ticks whenever a poll changes some session's tool list.
+    pub fn subscribe(&self) -> watch::Receiver<u64> {
+        self.listed.subscribe()
+    }
+
+    /// Whether any state is held for `session` (a test's way to see that none was made).
+    #[cfg(test)]
+    pub(crate) fn holds(&self, session: &str) -> bool {
+        let all = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        all.contains_key(session)
     }
 
     /// Calls `tool` for `session` and waits for the Core's answer (at most `wait`).
@@ -115,12 +172,13 @@ impl Tools {
             (id, rx, write)
         };
         self.changed.notify_waiters();
-        let answer = tokio::time::timeout(wait, rx).await;
         // Whatever the end, the call is no longer waiting.
-        let mut all = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(one) = all.get_mut(session) {
-            one.pending.remove(&id);
-        }
+        let _waiting = Waiting {
+            tools: self,
+            session,
+            id: id.clone(),
+        };
+        let answer = tokio::time::timeout(wait, rx).await;
         match answer {
             Ok(Ok(r)) => r,
             Ok(Err(_)) => refusal(&id, "session_over", "the session ended"),
@@ -149,7 +207,17 @@ impl Tools {
                 let mut all = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
                 let one = all.entry(req.session.clone()).or_insert_with(One::new);
                 if let Some(list) = &req.tools {
-                    one.tools = list.iter().take(MAX_BATCH.max(64)).cloned().collect();
+                    let list: Vec<ConnTool> = list
+                        .iter()
+                        .filter(|t| valid_tool_name(&t.name))
+                        .take(MAX_BATCH.max(64))
+                        .cloned()
+                        .map(bounded)
+                        .collect();
+                    if list != one.tools {
+                        one.tools = list;
+                        self.listed.send_modify(|n| *n += 1);
+                    }
                 }
                 for r in &req.results {
                     // A result for a call that is not waiting is dropped.

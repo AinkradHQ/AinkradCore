@@ -461,6 +461,14 @@ async fn gateway_selftest(agents: &std::path::Path) -> Result<(), String> {
     crate::gateway::selftest(agents, &exe).await
 }
 
+/// The connection tools socket's start-up check (Linux): a real sandbox must reach its own
+/// session's socket, see no other session's, and nothing of the session directories.
+async fn tools_selftest(agents: &std::path::Path) -> Result<(), String> {
+    let exe =
+        std::env::current_exe().map_err(|_| "cannot find the runner executable".to_owned())?;
+    super::agent::tools::selftest::selftest(agents, &exe).await
+}
+
 /// The egress proxy of `--terminal-network=filtered` (KAN-416): the policy of the agent sessions
 /// (`AINKRAD_AGENT_EGRESS_*`), proven by the same start-up check, on a socket in `dir` (0700) that
 /// the shells get bound in. A socket left by an earlier runner is replaced.
@@ -510,6 +518,17 @@ async fn agents(
             false
         }
     };
+    // The connection tools socket is offered only once a real sandbox has been seen to reach its
+    // own session's socket and no other's.
+    let tools_ready = match tools_selftest(&state.join("agents")).await {
+        Ok(()) => true,
+        Err(why) => {
+            tracing::warn!(
+                "the connection tools are not offered: their start-up check failed: {why}"
+            );
+            false
+        }
+    };
     // The Citadel MCP server at the Core this runner is enrolled with: without it a run's harness
     // is given no MCP config, whatever token the Core minted.
     executor.mcp_url = core_url.and_then(|u| crate::core_mcp_url(&u));
@@ -537,8 +556,13 @@ async fn agents(
             } else {
                 sandbox
             };
-            d.with_sandbox(Arc::new(if gateway_ready {
+            let sandbox = if gateway_ready {
                 sandbox.with_gateway_ready()
+            } else {
+                sandbox
+            };
+            d.with_sandbox(Arc::new(if tools_ready {
+                sandbox.with_tools_ready()
             } else {
                 sandbox
             }))

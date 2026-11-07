@@ -262,6 +262,9 @@ struct Live {
     required: Option<Isolation>,
     /// The session's auth gateway (KAN-435), while it runs: closed first on a stop, and on the end.
     gateway: Option<crate::gateway::Gateway>,
+    /// The socket that serves the session's connection tools to its sandbox (C4b): closed on a stop
+    /// and on the end, which removes the socket file.
+    front: Option<tools::sock::Front>,
     /// A stop arrived: nothing of this run may start after it (a gateway still being opened, a
     /// harness not yet started). Cleared by the next start.
     stopped: bool,
@@ -280,7 +283,7 @@ pub struct AgentDriver {
     sandbox: Arc<dyn Sandbox>,
     sessions: Mutex<HashMap<String, Live>>,
     /// Connection tools of the sessions (C4): calls waiting on the Core, and its results.
-    tools: tools::Tools,
+    tools: Arc<tools::Tools>,
     /// Woken on every new entry or state change, for reads.
     changed: Notify,
     next_run: Mutex<i64>,
@@ -313,7 +316,7 @@ impl AgentDriver {
             redeem: None,
             sandbox: Arc::new(Unconfined),
             sessions: Mutex::new(sessions),
-            tools: tools::Tools::default(),
+            tools: Arc::new(tools::Tools::default()),
             changed: Notify::new(),
             // Unique across runner processes: a harness names its scratch dirs `run-<id>`, and a
             // run after a restart must never land in a dead session's.
@@ -338,7 +341,6 @@ impl AgentDriver {
             commands: AGENT_OPS
                 .iter()
                 .chain(self.sandbox.capabilities())
-                .chain([&ainkrad_proto::v2::CAP_TOOLS])
                 .chain(
                     self.config
                         .plan_limit
@@ -387,10 +389,41 @@ impl AgentDriver {
         &self,
         req: &ainkrad_proto::v2::ToolsPoll,
     ) -> Result<ainkrad_proto::v2::ToolBatch, StreamError> {
-        if !self.sessions.lock().unwrap().contains_key(&req.session) {
+        if !self
+            .sandbox
+            .capabilities()
+            .contains(&ainkrad_proto::v2::CAP_TOOLS)
+        {
+            return Err(refuse(
+                ErrorCode::UnsupportedCommand,
+                "this runner does not offer the connection tools",
+            ));
+        }
+        // An ended session is as good as unknown: a late poll must not make its state again.
+        let running = self
+            .sessions
+            .lock()
+            .unwrap()
+            .get(&req.session)
+            .is_some_and(|l| l.meta.state == AgentState::Running);
+        if !running {
             return Err(no_session());
         }
         Ok(self.tools.poll(req, MAX_WAIT).await)
+    }
+
+    /// Opens the session's tools socket in its private dir and gives the sandbox's slot variables.
+    fn open_tools(
+        &self,
+        session: &str,
+    ) -> Result<(tools::sock::Front, Vec<(String, String)>), String> {
+        let dir = self.config.dir.join(session);
+        secrets::private_dir(&dir).map_err(|e| format!("the session directory: {e}"))?;
+        let sock = tools::sock::socket_in(&dir);
+        let exe = std::env::current_exe().map_err(|e| format!("the shim: {e}"))?;
+        let front = tools::sock::start(&sock, Arc::clone(&self.tools), session)
+            .map_err(|e| format!("the tools socket: {e}"))?;
+        Ok((front, tools::sock::sandbox_env(&sock, &exe)))
     }
 
     /// The harness-facing end of the connection tools (the MCP front calls through this).
@@ -498,6 +531,7 @@ impl AgentDriver {
             task: None,
             required: None,
             gateway: None,
+            front: None,
             stopped: false,
             granted: false,
             pending_limit: None,
@@ -607,6 +641,31 @@ impl AgentDriver {
                 }
             }
         }
+        // The connection tools socket (C4b), before the sandbox is built: it is bound into it. A
+        // runner that does not offer the capability opens none.
+        let mut tools_env = Vec::new();
+        if self
+            .sandbox
+            .capabilities()
+            .contains(&ainkrad_proto::v2::CAP_TOOLS)
+        {
+            match self.open_tools(&session) {
+                Ok((front, env)) => {
+                    tools_env = env;
+                    self.with(&session, |live, _, _| {
+                        if !live.stopped {
+                            live.front = Some(front);
+                        }
+                    });
+                }
+                Err(why) => {
+                    // The session still runs, without connection tools: said in its transcript.
+                    tracing::warn!(session = %session, "connection tools unavailable: {why}");
+                    let entry = json!({"type": "connection_tools_unavailable", "reason": why});
+                    self.with(&session, |live, cfg, s| push(cfg, s, live, entry));
+                }
+            }
+        }
         let hosts = std::env::var("CITADEL_GIT_HOSTS")
             .unwrap_or_default()
             .split(',')
@@ -632,6 +691,7 @@ impl AgentDriver {
         }
         let mut env = delivered.env.clone();
         env.extend(gateway_env);
+        env.extend(tools_env);
         // A session that holds an account (a leased key, or a gateway grant) is marked, so the
         // egress proxy drops forge hosts for it.
         if delivered.account || req.gateway.is_some() {
@@ -805,6 +865,7 @@ impl AgentDriver {
             }
             live.task = None;
             live.gateway = None;
+            live.front = None;
             // Calls waiting on the Core for this session end (C4).
             self.tools.forget(s);
             live.drain_until = live
@@ -859,6 +920,7 @@ impl AgentDriver {
             // The marker keeps a start that is still redeeming its lease from going on after it.
             live.stopped = true;
             live.gateway = None;
+            live.front = None;
             live.run
         };
         if req.kill {
@@ -894,6 +956,7 @@ impl AgentDriver {
                     // The gateway goes before the harness is killed, as on a stop.
                     l.stopped = true;
                     l.gateway = None;
+                    l.front = None;
                     l.task.take()
                 }
                 _ => return,
@@ -1148,6 +1211,8 @@ fn reload(cfg: &AgentConfig) -> HashMap<String, Live> {
         if !cfg.plan_limit {
             meta.plan_limit = None;
         }
+        // A tools socket a crashed runner left is of no session now.
+        let _ = std::fs::remove_file(tools::sock::socket_in(&d.path()));
         let text = std::fs::read_to_string(d.path().join("transcript.jsonl")).unwrap_or_default();
         let mut entries: VecDeque<TranscriptEntry> = text
             .lines()
@@ -1169,6 +1234,7 @@ fn reload(cfg: &AgentConfig) -> HashMap<String, Live> {
             task: None,
             required: None,
             gateway: None,
+            front: None,
             stopped: false,
             granted: false,
             pending_limit: None,

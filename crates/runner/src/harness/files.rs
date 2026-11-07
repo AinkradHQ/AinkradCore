@@ -74,6 +74,7 @@ impl RunFiles {
         name: &str,
         harness: &str,
         mcp: Option<(&str, &RunToken)>,
+        tools: Option<(&str, &str)>,
         instructions: Option<&str>,
     ) -> io::Result<Self> {
         let dir = root.join(name);
@@ -90,9 +91,10 @@ impl RunFiles {
             bin: None,
             token: None,
         };
+        let mut config = None;
         if let Some((url, token)) = mcp {
             let token = token.expose();
-            let config = match harness {
+            let made = match harness {
                 "claude" => claude::mcp_config(url, token),
                 "codex" => codex::mcp_config(url, token),
                 "opencode" => opencode::mcp_config(url, token),
@@ -102,9 +104,7 @@ impl RunFiles {
                     return Err(io::Error::new(io::ErrorKind::Unsupported, why));
                 }
             };
-            let path = files.dir.join("mcp.json");
-            private_file(&path, config.to_string().as_bytes())?;
-            files.mcp_config = Some(path);
+            config = Some(made);
             // The `citadel` CLI (E15.18) and the token it reads, only for the monolith's
             // `/mcp/v1`. The Core's token route has no CLI route, so its runs get neither the
             // CLI, the advice to use it, nor a second copy of the token: MCP only (S10).
@@ -114,6 +114,21 @@ impl RunFiles {
                 files.token = Some(token_file);
                 files.bin = Some(super::cli::install(root, url)?);
             }
+        }
+        // The connection tools (C4b) are a second, stdio server in the same file: the runner's
+        // executable as the shim and the session's socket, both paths. A session with them has a
+        // config even when it has no Citadel server.
+        if let Some((exe, sock)) = tools {
+            let merged = ainkrad_harness::connections::add(harness, config.take(), exe, sock);
+            config = Some(merged.ok_or_else(|| {
+                let why = format!("no MCP config format for harness {harness:?}");
+                io::Error::new(io::ErrorKind::Unsupported, why)
+            })?);
+        }
+        if let Some(config) = config {
+            let path = files.dir.join("mcp.json");
+            private_file(&path, config.to_string().as_bytes())?;
+            files.mcp_config = Some(path);
         }
         // A run with the CLI is told when to use it, after its own instructions.
         let told = match (instructions, &files.bin) {
@@ -163,7 +178,7 @@ mod tests {
         // A stale dir from a crashed run is replaced, not reused.
         std::fs::create_dir_all(root.join("run-9")).unwrap();
         std::fs::write(root.join("run-9/stale"), "x").unwrap();
-        let files = RunFiles::write(&root, "run-9", "claude", mcp, Some("# Skill")).unwrap();
+        let files = RunFiles::write(&root, "run-9", "claude", mcp, None, Some("# Skill")).unwrap();
         assert!(!files.dir.join("stale").exists());
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&files.dir), 0o700);
@@ -205,7 +220,7 @@ mod tests {
         assert!(root.join("bin/citadel").exists());
         // The Core's token route: MCP only, no CLI, no token file, no CLI advice.
         let core = Some(("http://127.0.0.1:1/token/citadel/v1/mcp", &token));
-        let files = RunFiles::write(&root, "run-8", "claude", core, Some("# Skill")).unwrap();
+        let files = RunFiles::write(&root, "run-8", "claude", core, None, Some("# Skill")).unwrap();
         assert!(files.bin.is_none() && files.token.is_none());
         assert!(!files.dir.join("token").exists());
         assert_eq!(
@@ -213,7 +228,18 @@ mod tests {
             "# Skill"
         );
         drop(files);
-        assert!(RunFiles::write(&root, "run-1", "pi", mcp, None).is_err());
+        // The connection tools alone: a config with no Citadel server and no token anywhere.
+        let only = Some(("/opt/runner", "/state/agents/as_x/tools.sock"));
+        let files = RunFiles::write(&root, "run-7", "claude", None, only, None).unwrap();
+        let text = std::fs::read_to_string(files.mcp_config.as_ref().unwrap()).unwrap();
+        assert!(
+            text.contains("ainkrad-connections") && !text.contains("citadel"),
+            "{text}"
+        );
+        assert_eq!(mode(files.mcp_config.as_ref().unwrap()), 0o600);
+        drop(files);
+        assert!(RunFiles::write(&root, "run-6", "pi", None, only, None).is_err());
+        assert!(RunFiles::write(&root, "run-1", "pi", mcp, None, None).is_err());
         assert!(!root.join("run-1").join("mcp.json").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
