@@ -14,8 +14,8 @@ use crate::net::{Endpoint, Net};
 use crate::pair::{Credential, Pairing};
 use crate::stepup::{self, Passphrase};
 use crate::{
-    EXIT_CODES, Error, accounts, agents, chains, devices, events, pair, runners, secrets, settings,
-    terminals,
+    EXIT_CODES, Error, accounts, agents, chains, connections, devices, events, pair, runners,
+    secrets, settings, terminals,
 };
 
 pub const USAGE: &str =
@@ -98,6 +98,41 @@ pub const USAGE: &str =
       The Core's server-wide settings (scope admin), e.g. `setting ls scheduler.`: the value,
       its unit, default and bounds as the Core reports them. The Core validates a set (400 on
       an unknown key or a value out of bounds); ctl keeps no list of either.
+  agent run <runner-id> ... --connection-access cap1,cap2*
+      Names the capabilities the session may call through its connections (scope admin; see
+      `connection kinds`). Left out: read-class capabilities only. An empty list is refused here
+      with the Core's own `empty_allowlist` text, before anything is sent.
+  connection kinds  |  ls [--kind k]  |  show <id>  |  test <id>
+      The connections to outside services (`connections` too): kinds lists what each kind can
+      do (capabilities with their read/write class, limit keys, whether sign-in is set up);
+      show prints identity, status (reason, until), last test, default and grants count. A test
+      the Core paces (429) prints how long to wait.
+  connection add <kind>* [--token-file <f>] [--email e] [--site s] [--name n] [--label l]
+  connection credential <id>* [--token-file <f>] [--email e] [--site s]
+      A pasted token (Jira: email, site and API token). The token is read from --token-file,
+      else $AINKRAD_CONNECTION_TOKEN, else stdin (never a terminal); --token works but is
+      warned about (process list, shell history). It is sent in the request body only and never
+      printed.
+  connection login <kind>* [--name n] [--label l] [--connection <id>] [--site s]
+                          [--callback-url <redirect url>] [--confirm-identity-change]
+      Signs in: GitHub shows an address and a code, Jira an authorize address. Then it follows
+      the flow, printing each step (waiting, approved, choose a site, connected as ...). Jira's
+      browser ends on a loopback address that may not load: give it as --callback-url or paste
+      it at the prompt (its code and state are posted to the flow, never printed). A site is
+      --site <number|id|name> or asked. Ctrl-C drops the flow (exit 130); expired, denied or
+      failed is exit 4 with the reason.
+  connection rename <id> <name>*  |  enable <id>*  |  disable <id>*  |  rm <id>*
+      Removing the default connection of its kind is refused (409); the message says the fix.
+  connection grants <id>  |  grant <id> <user|role|agent> <who>* --caps a,b [--limit key=v1,v2]...
+  connection revoke <id> <grantee-kind> <who>*
+  connection default [kind]  |  default <kind> <id>*  |  default <kind> --clear*
+  connection activity <id> [--limit n]
+      Who may use a connection and for what (capabilities and limits), a kind's default, and the
+      connection's last uses.
+  connection app <kind>  |  app <kind> set* --field name=value ...
+      Ainkrad's sign-in app of a kind (only the Core's owner admin sets it; others get a 403).
+      `--field name=-` reads a value from stdin or --file (a secret field is refused on the
+      command line); `--field name=` clears one.
   events tail [--after <seq>] [--no-follow]
       Events after <seq> (default: from now), one JSON object per line (every kind this
       device may see, runner.connected/.disconnected/.degraded included); follows the live
@@ -113,7 +148,7 @@ signed or sent before the Core signs a fresh nonce with that key (POST /handshak
 admin socket answers to the Core's own host name).
 ";
 
-const VALUED: [&str; 21] = [
+const VALUED: [&str; 34] = [
     "--socket",
     "--url",
     "--host",
@@ -135,8 +170,28 @@ const VALUED: [&str; 21] = [
     "--chain",
     "--agent",
     "--run",
+    "--token",
+    "--token-file",
+    "--email",
+    "--site",
+    "--name",
+    "--label",
+    "--connection",
+    "--caps",
+    "--limit",
+    "--callback-url",
+    "--field",
+    "--file",
+    "--connection-access",
 ];
-const SWITCHES: [&str; 4] = ["--json", "--no-follow", "--help", "--no-stepup"];
+const SWITCHES: [&str; 6] = [
+    "--json",
+    "--no-follow",
+    "--help",
+    "--no-stepup",
+    "--clear",
+    "--confirm-identity-change",
+];
 
 /// The arguments: flags (anywhere) and the words.
 struct Args {
@@ -171,6 +226,33 @@ impl Args {
             .rev()
             .find(|(f, _)| f == name)
             .and_then(|(_, v)| v.as_deref())
+    }
+
+    /// Every value of a flag given more than once, in order.
+    fn values(&self, name: &str) -> Vec<&str> {
+        let all = self.flags.iter().filter(|(f, _)| f == name);
+        all.filter_map(|(_, v)| v.as_deref()).collect()
+    }
+
+    fn connection_opts(&self) -> connections::Opts<'_> {
+        connections::Opts {
+            token: self.value("--token"),
+            token_file: self.value("--token-file"),
+            email: self.value("--email"),
+            site: self.value("--site"),
+            name: self.value("--name"),
+            label: self.value("--label"),
+            kind: self.value("--kind"),
+            connection: self.value("--connection"),
+            caps: self.value("--caps"),
+            limits: self.values("--limit"),
+            callback_url: self.value("--callback-url"),
+            fields: self.values("--field"),
+            file: self.value("--file"),
+            limit: self.value("--limit"),
+            clear: self.on("--clear"),
+            confirm_identity_change: self.on("--confirm-identity-change"),
+        }
     }
 
     fn on(&self, name: &str) -> bool {
@@ -299,11 +381,16 @@ pub async fn run(args: &[String], out: &mut impl Write) -> Result<(), Error> {
                 chain: a.number("--chain")?,
                 agent: a.value("--agent"),
                 run: a.value("--run"),
+                connection_access: a.value("--connection-access"),
             };
             agents::agent(&mut a.client()?, rest, &opts, json, out).await
         }
         ["chains", rest @ ..] | ["chain", rest @ ..] => {
             chains::chains(&mut a.client()?, rest, json, out).await
+        }
+        ["connection", rest @ ..] | ["connections", rest @ ..] => {
+            let opts = a.connection_opts();
+            connections::connection(&mut a.client()?, rest, &opts, json, out).await
         }
         ["account", rest @ ..] | ["accounts", rest @ ..] => {
             accounts::account(&mut a.client()?, rest, json, out).await
