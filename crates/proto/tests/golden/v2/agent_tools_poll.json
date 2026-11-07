@@ -1,0 +1,1 @@
+{"stream_id":7,"kind":"command","seq":0,"payload":{"after":2,"op":"agent.tools","results":[{"id":"c-1","ok":true,"result":{"number":7}},{"code":"not_granted","id":"c-2","message":"no connection of the kind is granted","ok":false}],"session":"as_a","tools":[{"description":"Read an issue","name":"github.get_issue","write":false}],"wait_ms":20000}}

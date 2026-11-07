@@ -1,0 +1,1 @@
+{"stream_id":7,"kind":"result","seq":0,"payload":{"calls":[{"args":{"number":7,"repo":"o/r"},"id":"c-3","tc_seq":3,"tool":"github.get_issue"}],"op":"agent.tools","session":"as_a"}}

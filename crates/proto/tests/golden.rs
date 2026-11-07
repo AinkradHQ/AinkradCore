@@ -651,6 +651,52 @@ fn v2_agent_frames_are_pinned() {
             wait_ms: None,
         })),
     );
+    // C4: connection tools, one op both ways (`agent.tools`).
+    v2(
+        "agent_tools_poll",
+        7,
+        0,
+        Body::Command(Command::AgentTools(ToolsPoll {
+            session: "as_a".to_owned(),
+            after: 2,
+            wait_ms: Some(20000),
+            results: vec![
+                ToolResult {
+                    id: "c-1".to_owned(),
+                    ok: true,
+                    result: Some(json!({"number": 7})),
+                    code: None,
+                    message: None,
+                },
+                ToolResult {
+                    id: "c-2".to_owned(),
+                    ok: false,
+                    result: None,
+                    code: Some("not_granted".to_owned()),
+                    message: Some("no connection of the kind is granted".to_owned()),
+                },
+            ],
+            tools: Some(vec![ConnTool {
+                name: "github.get_issue".to_owned(),
+                description: "Read an issue".to_owned(),
+                write: false,
+            }]),
+        })),
+    );
+    v2(
+        "agent_tools_batch",
+        7,
+        0,
+        Body::Result(Reply::AgentTools(ToolBatch {
+            session: "as_a".to_owned(),
+            calls: vec![ToolCall {
+                tc_seq: 3,
+                id: "c-3".to_owned(),
+                tool: "github.get_issue".to_owned(),
+                args: json!({"repo": "o/r", "number": 7}),
+            }],
+        })),
+    );
     let report = |gw_seq, kind, status| GatewayReport {
         gw_seq,
         epoch: 0,
