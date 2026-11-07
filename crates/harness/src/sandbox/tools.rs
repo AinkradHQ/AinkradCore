@@ -77,10 +77,12 @@ fn only_own_sockets(c: &Command, spec: &Spec) -> io::Result<()> {
     let state = super::env(spec, "AINKRAD_SANDBOX_STATE");
     let agents = if !state.is_empty() {
         Path::new(state).join("agents")
-    } else if let Some(own) = socks
-        .first()
+    } else if let Some(own) = Some(Path::new(super::env(spec, SLOT_SOCK)))
+        .filter(|s| !s.as_os_str().is_empty())
         .and_then(|s| s.parent().and_then(Path::parent))
     {
+        // Without the state dir the layout is the tools socket's: `<agents>/<session>/tools.sock`.
+        // (The gateway socket's layout is not assumed.)
         own.to_owned()
     } else {
         return Ok(());
