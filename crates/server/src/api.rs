@@ -84,6 +84,8 @@ pub struct App {
     pub conn_apps: Arc<crate::connections::apps::Apps>,
     /// Sign-ins in progress (C5), in memory.
     pub conn_flows: Arc<crate::connections::flows::Flows>,
+    /// How often connections may be tested through the API (C5).
+    pub conn_pace: Arc<crate::connections::pace::Pace>,
 }
 
 /// Resolves once serve is stopping (`App::closing`).
@@ -123,6 +125,7 @@ impl App {
             ))),
             conn_apps: Arc::default(),
             conn_flows: Arc::default(),
+            conn_pace: Arc::default(),
         }
     }
 }

@@ -155,7 +155,7 @@ async fn an_installation_is_stored_with_the_connection_and_goes_with_it() {
         &fx.reg,
         &new,
         &material(SECRET),
-        Some(77),
+        Some((77, "octo-org")),
         w(NOW),
     )
     .await
@@ -174,7 +174,7 @@ async fn an_installation_is_stored_with_the_connection_and_goes_with_it() {
         apps::installation_of(&fx.pool, 1, plain.id).await.unwrap(),
         None
     );
-    apps::set_installation(&fx.pool, plain.id, 78, w(NOW))
+    apps::set_installation(&fx.pool, plain.id, (78, "octo-org"), w(NOW))
         .await
         .unwrap();
     assert_eq!(
@@ -185,5 +185,179 @@ async fn an_installation_is_stored_with_the_connection_and_goes_with_it() {
     assert_eq!(
         apps::installation_of(&fx.pool, 1, c.id).await.unwrap(),
         None
+    );
+}
+
+#[tokio::test]
+async fn an_installation_belongs_to_the_first_workspace_that_uses_it() {
+    let fx = fx().await;
+    second_user(&fx).await;
+    let new = |name| NewConnection {
+        kind: "fake",
+        name,
+        label: "An app connection",
+        auth_method: "token",
+    };
+    let first = create_with(
+        &fx.pool,
+        &fx.sealer,
+        &fx.reg,
+        &new("a"),
+        &material(SECRET),
+        Some((77, "octo-org")),
+        w(NOW),
+    )
+    .await
+    .unwrap();
+    assert_eq!(apps::claimed_by(&fx.pool, 77).await.unwrap(), Some(1));
+    // Another workspace is refused, and nothing is created for it.
+    let r = create_with(
+        &fx.pool,
+        &fx.sealer,
+        &fx.reg,
+        &new("b"),
+        &material(SECRET),
+        Some((77, "octo-org")),
+        ww(2, NOW),
+    )
+    .await;
+    assert_eq!(code(r), "conflict");
+    assert!(list(&fx.pool, 2, None).await.unwrap().is_empty());
+    let other = create_with(
+        &fx.pool,
+        &fx.sealer,
+        &fx.reg,
+        &new("b"),
+        &material(SECRET),
+        None,
+        ww(2, NOW),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        code(apps::set_installation(&fx.pool, other.id, (77, "octo-org"), ww(2, NOW)).await),
+        "conflict"
+    );
+    // The claim outlives the connection: a deleted one does not free the installation.
+    delete(&fx.pool, first.id, w(NOW)).await.unwrap();
+    assert_eq!(apps::claimed_by(&fx.pool, 77).await.unwrap(), Some(1));
+    // The same workspace may use it again.
+    create_with(
+        &fx.pool,
+        &fx.sealer,
+        &fx.reg,
+        &new("c"),
+        &material(SECRET),
+        Some((77, "octo-org")),
+        w(NOW),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_credential_and_its_installation_change_together_or_not_at_all() {
+    let fx = fx().await;
+    second_user(&fx).await;
+    let new = |name| NewConnection {
+        kind: "fake",
+        name,
+        label: "An app connection",
+        auth_method: "token",
+    };
+    let mine = create_with(
+        &fx.pool,
+        &fx.sealer,
+        &fx.reg,
+        &new("a"),
+        &material(SECRET),
+        Some((77, "octo-org")),
+        w(NOW),
+    )
+    .await
+    .unwrap();
+    create_with(
+        &fx.pool,
+        &fx.sealer,
+        &fx.reg,
+        &new("b"),
+        &material(SECRET),
+        Some((78, "other-org")),
+        ww(2, NOW),
+    )
+    .await
+    .unwrap();
+    // 78 is another workspace's: nothing changes, neither the token nor the installation.
+    let r = secret::replace_installed(
+        &fx.pool,
+        &fx.sealer,
+        mine.id,
+        &material("c5new-token-1a2b3c4d5e"),
+        (78, "other-org"),
+        w(NOW),
+    )
+    .await;
+    assert_eq!(code(r), "conflict");
+    assert_eq!(version(&fx, mine.id).await, 1);
+    assert_eq!(
+        apps::installation_of(&fx.pool, 1, mine.id).await.unwrap(),
+        Some(77)
+    );
+    let (m, _) = secret::open(&fx.pool, &fx.sealer, 1, mine.id)
+        .await
+        .unwrap();
+    assert_eq!(m.access(), SECRET);
+    // A free installation moves with the new token, in one write.
+    secret::replace_installed(
+        &fx.pool,
+        &fx.sealer,
+        mine.id,
+        &material("c5new-token-1a2b3c4d5e"),
+        (79, "octo-org"),
+        w(NOW),
+    )
+    .await
+    .unwrap();
+    assert_eq!(version(&fx, mine.id).await, 2);
+    assert_eq!(
+        apps::installation_of(&fx.pool, 1, mine.id).await.unwrap(),
+        Some(79)
+    );
+}
+
+#[tokio::test]
+async fn an_edit_is_one_transaction_a_refused_name_leaves_the_label_and_switch() {
+    let fx = fx().await;
+    let a = make(&fx, "fake", "a").await;
+    make(&fx, "fake", "b").await;
+    let change = Edit {
+        name: Some("b"),
+        label: Some("A new label"),
+        disabled: Some(true),
+    };
+    assert_eq!(
+        code(edit(&fx.pool, a.id, &change, w(NOW)).await),
+        "conflict"
+    );
+    let now = get(&fx.pool, 1, a.id).await.unwrap();
+    assert_eq!(
+        (now.label.as_str(), now.disabled, now.name.as_str()),
+        (a.label.as_str(), false, "a")
+    );
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE action IN ('connection.updated', 'connection.disabled')",
+    )
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    assert_eq!(audited, 0, "a rolled back edit leaves no audit row");
+    let done = Edit {
+        name: Some("c"),
+        ..change
+    };
+    let c = edit(&fx.pool, a.id, &done, w(NOW)).await.unwrap();
+    assert_eq!(
+        (c.name.as_str(), c.label.as_str(), c.disabled),
+        ("c", "A new label", true)
     );
 }

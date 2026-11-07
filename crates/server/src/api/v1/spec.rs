@@ -209,9 +209,7 @@ pub fn event_scopes(
 
 /// [`json`] with `modules`' event kinds and audit actions listed too.
 pub fn json_for(modules: &[Arc<dyn Module>]) -> String {
-    let mut doc = ApiDoc::openapi();
-    doc.merge(<connections::Doc as OpenApi>::openapi());
-    let mut spec = serde_json::to_value(doc).expect("spec serialises");
+    let mut spec = connections::contract(ApiDoc::openapi());
     merge_modules(&mut spec, modules);
     normalise(&mut spec);
     module_extensions(&mut spec, modules);

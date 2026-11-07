@@ -47,7 +47,9 @@ pub mod resolve;
 pub mod secret;
 pub mod verdict;
 mod write;
-pub use write::{NewConnection, create, create_with, delete, rename, set_disabled, update_label};
+pub use write::{
+    Edit, NewConnection, create, create_with, delete, edit, rename, set_disabled, update_label,
+};
 
 #[cfg(test)]
 mod tests;

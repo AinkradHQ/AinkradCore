@@ -21,15 +21,19 @@ pub(super) fn start(app: &App, s: Start<'_>) -> Result<View, StartError> {
              Atlassian app id and secret first",
         ));
     };
+    // The cap is asked BEFORE the pending sign-in is made, so a refused start leaves none.
+    if !app.conn_flows.room(s.user) {
+        return Err(StartError::TooMany);
+    }
     let started = jira
         .start(s.user, &redirect, None)
         .map_err(StartError::Jira)?;
     let mut view = blank("jira");
     view.authorize_url = Some(started.authorize_url);
     view.state = Some(started.state.clone());
-    let flow = app
-        .conn_flows
-        .admit(new_flow(&s, "jira", LIFE, view, Some(started.state)))?;
+    let flow = new_flow(&s, "jira", LIFE, view, Some((jira.clone(), started.state)));
+    // Refused here (a race past `room`): the flow is dropped and takes its pending sign-in along.
+    let flow = app.conn_flows.admit(flow)?;
     Ok(flow.view())
 }
 

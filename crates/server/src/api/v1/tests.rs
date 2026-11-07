@@ -50,6 +50,7 @@ mod connections_grants;
 mod connections_health;
 mod connections_jira;
 mod connections_leak;
+mod connections_review;
 mod connections_routes;
 mod costs_api;
 mod costs_store;

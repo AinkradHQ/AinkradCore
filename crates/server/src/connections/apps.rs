@@ -148,19 +148,35 @@ impl Apps {
         sealer: &SecretBox,
         jira: &Jira,
         github: &Github,
-    ) -> Result<(), Error> {
+    ) -> Result<Changed, Error> {
         let g = apps::open_all(pool, sealer, OWNER, "github").await?;
         let j = apps::open_all(pool, sealer, OWNER, "jira").await?;
-        *self
-            .github_client_id
-            .write()
-            .unwrap_or_else(|e| e.into_inner()) = g.get("client_id").cloned();
+        let client = g.get("client_id").cloned();
+        let github_changed = {
+            let mut held = self
+                .github_client_id
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            let same = held.as_ref().map(|c| c.as_str()) == client.as_ref().map(|c| c.as_str());
+            *held = client;
+            !same
+        };
         *self.github_slug.write().unwrap_or_else(|e| e.into_inner()) =
             g.get("app_slug").map(|s| s.to_string());
         github.installer().set_key(app_key(&g));
-        jira.set_app(jira_app(&j));
-        Ok(())
+        let jira_changed = jira.set_app(jira_app(&j));
+        Ok(Changed {
+            github: github_changed,
+            jira: jira_changed,
+        })
     }
+}
+
+/// Which kinds' sign-in apps a reload actually changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Changed {
+    pub github: bool,
+    pub jira: bool,
 }
 
 fn app_key(g: &BTreeMap<String, Zeroizing<String>>) -> Option<AppKey> {
@@ -182,12 +198,22 @@ pub async fn reload(app: &crate::api::App) -> Result<(), Error> {
     let Some(sealer) = app.secrets.as_ref() else {
         return Ok(());
     };
-    app.conn_apps
+    let changed = app
+        .conn_apps
         .reload(
             &app.pool,
             sealer,
             app.connections.jira(),
             app.connections.github(),
         )
-        .await
+        .await?;
+    // A sign-in begun under an app that changed cannot finish; one of a kind that did not change
+    // goes on.
+    let why = "Ainkrad's sign-in app for this service changed; start the sign-in again";
+    for (kind, hit) in [("github", changed.github), ("jira", changed.jira)] {
+        if hit {
+            app.conn_flows.end(kind, "app_changed", why).await;
+        }
+    }
+    Ok(())
 }

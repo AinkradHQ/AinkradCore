@@ -11,7 +11,8 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use super::Github;
 use super::app::{self, AppKey};
-use super::outcome::Outcome;
+use super::http::{Host, Req};
+use super::outcome::{Outcome, classify};
 use crate::connections::material::Material;
 use crate::ops::secretbox::SecretBox;
 use crate::scheduler::unix_secs;
@@ -85,6 +86,33 @@ impl Github {
     /// The App key holder (the API sets it).
     pub fn installer(&self) -> &Installer {
         &self.installer
+    }
+
+    /// The GitHub account App installation `installation` is on, as the App API says (a signed
+    /// App JWT; the installation must exist). The account names the installation in the claim
+    /// the first workspace to use it records.
+    pub async fn installation_account(&self, installation: i64) -> Result<String, InstallError> {
+        let key = self.installer.key().ok_or(InstallError::NotConfigured)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let jwt = key
+            .jwt(i64::try_from(now.as_secs()).unwrap_or(0))
+            .ok_or(InstallError::Mint(Outcome::Unexpected))?;
+        let req = Req::get(Host::Api, format!("/app/installations/{installation}"));
+        let resp = self
+            .transport
+            .send(&req, Some(jwt.as_str()))
+            .await
+            .map_err(|e| InstallError::Mint(e.into()))?;
+        classify(&resp).map_err(InstallError::Mint)?;
+        let v: serde_json::Value = serde_json::from_slice(&resp.body)
+            .map_err(|_| InstallError::Mint(Outcome::Unexpected))?;
+        let login = v["account"]["login"]
+            .as_str()
+            .filter(|l| !l.is_empty())
+            .ok_or(InstallError::Mint(Outcome::Unexpected))?;
+        Ok(login.chars().take(100).collect())
     }
 
     /// Mints an installation token for `installation`.

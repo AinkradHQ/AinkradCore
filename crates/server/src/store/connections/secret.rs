@@ -169,7 +169,21 @@ pub async fn replace(
     m: &Material,
     who: Who<'_>,
 ) -> Result<Connection, Error> {
-    replace_with(pool, sealer, id, m, who, (true, None)).await
+    replace_with(pool, sealer, id, m, who, (true, None), None).await
+}
+
+/// [`replace`] for a GitHub App connection whose installation changes with its credential: the
+/// installation is claimed for the workspace (`conflict` when another holds it) and stored in the
+/// SAME transaction as the new sealed token, so a refusal leaves the old pair as it was.
+pub async fn replace_installed(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    id: i64,
+    m: &Material,
+    installation: (i64, &str),
+    who: Who<'_>,
+) -> Result<Connection, Error> {
+    replace_with(pool, sealer, id, m, who, (true, None), Some(installation)).await
 }
 
 /// [`replace`] for an adapter's own token renewal: the credential is a new one for the SAME grant,
@@ -188,7 +202,7 @@ pub async fn renew(
     who: Who<'_>,
     expected: i64,
 ) -> Result<Connection, Error> {
-    replace_with(pool, sealer, id, m, who, (false, Some(expected))).await
+    replace_with(pool, sealer, id, m, who, (false, Some(expected)), None).await
 }
 
 async fn replace_with(
@@ -198,6 +212,7 @@ async fn replace_with(
     m: &Material,
     who: Who<'_>,
     (clear_auth, expected): (bool, Option<i64>),
+    installation: Option<(i64, &str)>,
 ) -> Result<Connection, Error> {
     let mut tx = crate::store::begin_write(pool).await?;
     // The kind's declared shapes, by the connection's own kind (a built-in kind only: this
@@ -212,6 +227,14 @@ async fn replace_with(
     let descriptor = kind.and_then(|k| crate::connections::adapter::builtin_descriptor(&k));
     gate(&mut tx, m, descriptor).await?;
     let c = find(&mut tx, who.workspace, id).await?;
+    if let Some((installation, account)) = installation {
+        super::apps::claim_in(&mut tx, installation, account, who.workspace, who.now).await?;
+        sqlx::query("UPDATE core_connections SET installation_id = ? WHERE id = ?")
+            .bind(installation)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
     let nonce: String = sqlx::query_scalar("SELECT nonce FROM core_connections WHERE id = ?")
         .bind(id)
         .fetch_one(&mut *tx)

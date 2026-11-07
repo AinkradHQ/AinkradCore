@@ -203,6 +203,9 @@ pub struct StartConnectionFlow {
     pub label: Option<String>,
     /// Sign in again for this connection: its credential is replaced, nothing else changes.
     pub connection: Option<i64>,
+    /// With `connection` on GitHub: replace the credential even when the sign-in is a different
+    /// GitHub account than the connection's. Without it that is refused (`different_account`).
+    pub confirm_identity_change: Option<bool>,
 }
 
 /// One Jira site to choose.

@@ -2,15 +2,52 @@
 //! full session of use, with upstream answers that echo the very secrets Core holds, error
 //! bodies and flow polls included.
 
+use std::io::Write;
+use std::sync::{Arc, Mutex};
+
 use axum::http::Method;
 use serde_json::{Value, json};
 
+use super::connections_apps::{mark, pem};
 use super::connections_fx::*;
 
 const URI: &str = "/api/v1/connections";
+const APPS: &str = "/api/v1/connection-apps";
+
+/// What the Core logged, at TRACE.
+#[derive(Clone, Default)]
+struct Logs(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Logs {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(b);
+        Ok(b.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Logs {
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+    }
+}
+
+fn logging(logs: &Logs) -> tracing::subscriber::DefaultGuard {
+    let writer = logs.clone();
+    let sub = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_max_level(tracing::Level::TRACE)
+        .finish();
+    tracing::subscriber::set_default(sub)
+}
 
 #[tokio::test]
 async fn no_secret_is_in_any_body_event_audit_row_or_the_database_file() {
+    let logs = Logs::default();
+    let _log = logging(&logs);
     let cx = cx().await;
     // The upstream echoes what Core sent it, in the places a careless Core would repeat.
     cx.jf.reply(
@@ -121,6 +158,11 @@ async fn no_secret_is_in_any_body_event_audit_row_or_the_database_file() {
     cx.admin(Method::GET, &format!("{URI}/999999"), Value::Null)
         .await;
     cx.assert_clean().await;
+    let logged = logs.text();
+    assert!(logged.len() > 1000, "the capture saw the Core's own logs");
+    for secret in SECRETS {
+        assert!(!logged.contains(secret), "{secret} is in the logs");
+    }
     // The database file, after its log is folded in, holds only sealed bytes.
     sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
         .execute(&cx.fx.app.pool)
@@ -143,4 +185,123 @@ async fn no_secret_is_in_any_body_event_audit_row_or_the_database_file() {
             "{s} is in the database file"
         );
     }
+}
+
+#[tokio::test]
+async fn the_installation_renewal_and_site_choice_paths_leak_nothing_against_an_echoing_upstream() {
+    let logs = Logs::default();
+    let _log = logging(&logs);
+    let cx = cx().await;
+    cx.configure().await;
+    let key = pem();
+    let line = mark(&key);
+    cx.ok(
+        Method::PUT,
+        &format!("{APPS}/github"),
+        json!({"fields": {"app_id": "123456", "app_key": key, "app_slug": "ainkrad-test"}}),
+    )
+    .await;
+    let (t1, t2) = ("c5inst-leak-1111aaaa2222", "c5inst-leak-3333bbbb4444");
+    // Every upstream answer carries the secrets Core holds or has just been given.
+    let echo = format!(r#""echo":"{GH_TOKEN} {GH_TOKEN2} {line} {DEVICE_CODE} {t1} {t2}""#);
+    cx.gh.push(
+        200,
+        &[],
+        &format!(r#"{{"id":77,"account":{{"login":"octo-org"}},{echo}}}"#),
+    );
+    cx.gh.push(
+        201,
+        &[],
+        &format!(r#"{{"token":"{t1}","expires_at":"2026-10-22T11:00:00Z",{echo}}}"#),
+    );
+    cx.gh
+        .push(403, &[], &format!(r#"{{"message":"no {t1}",{echo}}}"#));
+    cx.gh.push(
+        200,
+        &[],
+        &format!(r#"{{"repositories":[{{"owner":{{"login":"octo-org","id":9}}}}],{echo}}}"#),
+    );
+    let body = json!({"kind": "github", "name": "app", "auth_method": "app_install", "installation_id": 77});
+    let id = cx.ok(Method::POST, URI, body).await["id"].as_i64().unwrap();
+    // A renewal whose mint is refused with a body that echoes them: the answer is a plain test.
+    sqlx::query("UPDATE core_connection_secrets SET expires_at = '2026-10-22T10:02:00.000Z' WHERE connection_id = ?")
+        .bind(id)
+        .execute(&cx.fx.app.pool)
+        .await
+        .unwrap();
+    cx.fx.clock.advance(11);
+    cx.gh
+        .push(500, &[], &format!(r#"{{"message":"{t2}",{echo}}}"#));
+    cx.gh
+        .push(403, &[], &format!(r#"{{"message":"{t1}",{echo}}}"#));
+    cx.gh.push(
+        200,
+        &[],
+        &format!(r#"{{"repositories":[{{"owner":{{"login":"octo-org","id":9}}}}],{echo}}}"#),
+    );
+    cx.ok(Method::POST, &format!("{URI}/{id}/test"), Value::Null)
+        .await;
+    // A sign-in with several sites, one named with control characters and past the label limit,
+    // one at an address Core cannot use: the sign-in is not failed by them.
+    let long = format!("{}\u{7}{}", "A".repeat(100), "B".repeat(100));
+    let sites = json!([
+        {"id": jt_cloud(), "url": jt_site(), "name": long, "scopes": ["read:jira-work"]},
+        {"id": "7d0c4b1e-0000-4000-8000-000000000001", "url": "https://beta.atlassian.net",
+         "name": "Beta", "scopes": ["read:jira-work"]},
+        {"id": "7d0c4b1e-0000-4000-8000-000000000002", "url": "http://insecure.example",
+         "name": "Bad", "scopes": ["read:jira-work"]},
+    ]);
+    cx.jf
+        .reply("GET /oauth/token/accessible-resources", 200, sites);
+    let v = start(&cx, "jira", json!({})).await.1;
+    let f = v["id"].as_str().unwrap();
+    let cb = cx
+        .admin(
+            Method::POST,
+            &format!("{URI}/flows/{f}/callback"),
+            json!({"code": CODE, "state": v["state"]}),
+        )
+        .await;
+    assert_eq!(cb.1["step"], "choose_site", "{}", cb.1);
+    let listed: Vec<&str> = cb.1["sites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(listed.len(), 2, "the unusable site is left out: {listed:?}");
+    assert!(
+        listed
+            .iter()
+            .all(|n| n.chars().count() <= 80 && !n.chars().any(char::is_control))
+    );
+    let done = cx
+        .admin(
+            Method::POST,
+            &format!("{URI}/flows/{f}/choose"),
+            json!({"site": jt_cloud()}),
+        )
+        .await;
+    assert_eq!(done.1["step"], "connected", "{}", done.1);
+    let label = cx
+        .ok(
+            Method::GET,
+            &format!("{URI}/{}", done.1["connection"]),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(label["label"].as_str().unwrap(), "A".repeat(80));
+    cx.assert_clean_also(&[t1, t2, line.as_str()]).await;
+    let logged = logs.text();
+    for s in SECRETS.iter().chain(&[t1, t2, line.as_str()]) {
+        assert!(!logged.contains(s), "{s} is in the logs");
+    }
+}
+
+fn jt_cloud() -> &'static str {
+    crate::connections::jira::tests::CLOUD
+}
+
+fn jt_site() -> &'static str {
+    crate::connections::jira::tests::SITE
 }

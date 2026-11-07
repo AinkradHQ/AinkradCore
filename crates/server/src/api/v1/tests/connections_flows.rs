@@ -204,7 +204,8 @@ async fn signing_in_again_replaces_the_credential_of_the_same_connection() {
     // Sign in again: the credential is replaced, the connection and its name stay.
     cx.gh.push(200, &[], START);
     cx.gh.push(200, &[], &granted(GH_TOKEN2));
-    cx.gh.push(200, &[], whoami());
+    cx.gh.push(200, &[], whoami()); // the same account? (asked before the credential is replaced)
+    cx.gh.push(200, &[], whoami()); // the test of the new credential
     let again = start(&cx, "github", json!({"connection": conn})).await.1;
     let done = until(&cx, again["id"].as_str().unwrap(), "connected").await;
     assert_eq!(done["connection"], conn);
@@ -294,7 +295,7 @@ async fn a_user_has_at_most_four_sign_ins_waiting() {
         ids.push(r.1["id"].as_str().unwrap().to_owned());
     }
     let r = start(&cx, "jira", json!({})).await;
-    assert_eq!(code(&r), (409, "limit_reached".to_owned()), "{}", r.1);
+    assert_eq!(code(&r), (429, "too_many_flows".to_owned()), "{}", r.1);
     // Another user is not held back by it; cancelling one makes room.
     let other = other_admin(&cx).await;
     let r = cx

@@ -52,6 +52,9 @@ async fn poll(app: &App, flow: &Arc<Flow>, mut pending: Pending, client_id: &str
         match pending.poll(transport, client_id, Instant::now()).await {
             Step::Wait { secs } => tokio::time::sleep(Duration::from_secs(secs.clamp(1, 60))).await,
             Step::Granted(g) => {
+                if flow.cancelled() {
+                    return;
+                }
                 flow.set(|v| v.step = "approved");
                 let done = finish::store(app, flow, &g.material, "GitHub").await;
                 finish::conclude(flow, done);

@@ -17,3 +17,13 @@ CREATE TABLE core_connection_apps (
 -- The GitHub App installation a connection's token is minted for (`app_install` connections), so a token that is
 -- near its end can be minted again. NULL for every other connection. An id is no secret.
 ALTER TABLE core_connections ADD COLUMN installation_id INTEGER CHECK (installation_id IS NULL OR installation_id > 0);
+
+-- A GitHub App installation belongs to the first workspace that uses it (`account` is the GitHub account it is
+-- installed on, as the App API says): another workspace cannot connect through it. The claim outlives the
+-- connection that made it.
+CREATE TABLE core_installation_claims (
+    installation_id INTEGER PRIMARY KEY CHECK (installation_id > 0),
+    user_id         INTEGER NOT NULL REFERENCES users(id),
+    account         TEXT    NOT NULL CHECK (length(account) BETWEEN 1 AND 100),
+    created_at      TEXT    NOT NULL
+);

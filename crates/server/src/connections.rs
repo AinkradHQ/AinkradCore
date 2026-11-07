@@ -10,6 +10,7 @@ pub mod flows;
 pub mod github;
 pub mod jira;
 pub mod material;
+pub mod pace;
 
 #[cfg(test)]
 pub(crate) mod fake;

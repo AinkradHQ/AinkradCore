@@ -24,7 +24,11 @@ async fn a_test_decides_a_pending_auth_failure_and_raises_one_health_event_each_
         .await
         .unwrap();
     };
-    let test = || cx.admin(Method::POST, &format!("{URI}/{id}/test"), Value::Null);
+    // A test is paced (10 s a connection): the fixed clock moves past it each time.
+    let test = || {
+        cx.fx.clock.advance(11);
+        cx.admin(Method::POST, &format!("{URI}/{id}/test"), Value::Null)
+    };
     suspect().await;
     cx.gh.push(401, &[], r#"{"message":"Bad credentials"}"#);
     let v = test().await;

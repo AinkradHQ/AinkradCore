@@ -14,7 +14,7 @@ const URI: &str = "/api/v1/connections";
 const APPS: &str = "/api/v1/connection-apps";
 
 /// A throwaway RSA key made with the `openssl` tool for each run; it signs nothing real.
-fn pem() -> String {
+pub(super) fn pem() -> String {
     let out = std::process::Command::new("openssl")
         .args(["genrsa", "2048"])
         .output()
@@ -24,7 +24,7 @@ fn pem() -> String {
 }
 
 /// A line of the key's body: it must be in no response, event or audit row.
-fn mark(pem: &str) -> String {
+pub(super) fn mark(pem: &str) -> String {
     pem.lines().nth(2).unwrap().to_owned()
 }
 
@@ -131,14 +131,23 @@ async fn a_config_change_reaches_the_one_shared_jira_and_ends_the_old_sign_ins()
         Arc::ptr_eq(&jira, cx.fx.app.connections.jira()),
         "still one instance"
     );
+    let old_id = old["id"].as_str().unwrap();
     let r = cx
+        .ok(Method::GET, &format!("{URI}/flows/{old_id}"), Value::Null)
+        .await;
+    assert_eq!(
+        (&r["step"], &r["error_code"]),
+        (&json!("failed"), &json!("app_changed")),
+        "{r}"
+    );
+    let late = cx
         .admin(
             Method::POST,
-            &format!("{URI}/flows/{}/callback", old["id"].as_str().unwrap()),
+            &format!("{URI}/flows/{old_id}/callback"),
             json!({"code": CODE, "state": old["state"]}),
         )
         .await;
-    assert_eq!(r.1["error_code"], "unknown_state", "{}", r.1);
+    assert_eq!(code(&late), (409, "conflict".to_owned()), "{}", late.1);
     // A sign-in started after the change uses the new client and redirect, and connects.
     let v = start(&cx, "jira", json!({})).await.1;
     let url = v["authorize_url"].as_str().unwrap();
@@ -323,6 +332,9 @@ async fn the_github_app_mints_and_renews_installation_tokens_before_they_end() {
             r#"{"total_count":1,"repositories":[{"owner":{"login":"octo-org","id":9}}]}"#,
         );
     };
+    // The App API says whose installation it is (a signed App JWT), then the token is minted.
+    cx.gh
+        .push(200, &[], r#"{"id":77,"account":{"login":"octo-org"}}"#);
     inst("c5inst-4d8a2f6e1b9c0a37");
     let body = json!({"kind": "github", "name": "app", "auth_method": "app_install", "installation_id": 77});
     let made = cx.ok(Method::POST, URI, body).await;
@@ -332,9 +344,10 @@ async fn the_github_app_mints_and_renews_installation_tokens_before_they_end() {
         (&json!("octo-org"), &json!("app_install"))
     );
     assert_eq!(made["expires_at"], "2026-10-22T11:00:00.000Z");
-    assert_eq!(cx.gh.seen()[0].path, "/app/installations/77/access_tokens");
+    assert_eq!(cx.gh.seen()[0].path, "/app/installations/77");
+    assert_eq!(cx.gh.seen()[1].path, "/app/installations/77/access_tokens");
     assert!(
-        cx.gh.seen()[0]
+        cx.gh.seen()[1]
             .header("authorization")
             .unwrap()
             .starts_with("Bearer ey"),
@@ -353,6 +366,7 @@ async fn the_github_app_mints_and_renews_installation_tokens_before_they_end() {
         &[],
         r#"{"repositories":[{"owner":{"login":"octo-org","id":9}}]}"#,
     );
+    cx.fx.clock.advance(11);
     cx.ok(Method::POST, &format!("{URI}/{id}/test"), Value::Null)
         .await;
     let mints = |cx: &Cx| {
@@ -370,6 +384,7 @@ async fn the_github_app_mints_and_renews_installation_tokens_before_they_end() {
         .await
         .unwrap();
     inst("c5inst-9e1f3a5c7b2d4f60");
+    cx.fx.clock.advance(11);
     let v = cx
         .ok(Method::POST, &format!("{URI}/{id}/test"), Value::Null)
         .await;

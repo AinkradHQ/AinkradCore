@@ -76,7 +76,8 @@ pub struct Event {
     /// window and user). `connection.health` is `{connection, user, kind, state, reason}`: a connection's
     /// health changed (`state` `active`, `cooling`, `limited`, `unhealthy` or `disabled`; `reason` a fixed
     /// code: `rate_limited`, `quota`, `upstream_errors`, `auth_suspected`, `auth_failed`, `recovered`,
-    /// `auth_cleared`). No payload holds a key, a token or an
+    /// `auth_cleared`). It is visible to `admin` devices only (`x-event-scopes`), never to a `read` device;
+    /// the push for it goes to the owning user's admin devices only. No payload holds a key, a token or an
     /// upstream's own words.
     pub kind: String,
     #[schema(value_type = Object)]

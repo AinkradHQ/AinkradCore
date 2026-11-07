@@ -261,9 +261,15 @@ async fn connection_access_is_admin_only_and_validated_before_anything_is_writte
         let r = create(&cx, &cx.fx.dev, &vm.id, json!({"connection_access": list})).await;
         assert_eq!(r.0, StatusCode::BAD_REQUEST, "{why}: {}", r.1);
     }
-    // A good list, and an empty one (the default), pass the checks and meet the offline runner.
-    for list in [json!(["read_repo", "issues_write"]), json!([])] {
-        let r = create(&cx, &cx.fx.dev, &vm.id, json!({"connection_access": list})).await;
+    // An empty list is not the default (an absent field is): refused plainly.
+    let r = create(&cx, &cx.fx.dev, &vm.id, json!({"connection_access": []})).await;
+    assert_eq!(code(&r), (400, "empty_allowlist".to_owned()), "{}", r.1);
+    // A good list passes the checks and meets the offline runner; so does no field at all.
+    for extra in [
+        json!({"connection_access": ["read_repo", "issues_write"]}),
+        json!({}),
+    ] {
+        let r = create(&cx, &cx.fx.dev, &vm.id, extra).await;
         assert_eq!(code(&r), (409, "runner_offline".to_owned()), "{}", r.1);
     }
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_agent_sessions")
@@ -306,9 +312,12 @@ async fn the_allowlist_is_written_before_the_session_starts_and_a_failed_write_e
     let cx = cx().await;
     let vm = super::secrets::runner(&cx.fx, "vm").await;
     let app = &cx.fx.app;
-    // Absent or empty: no row; the default (read class) applies at read time.
+    // Absent: no row; the default (read class) applies at read time. Empty is refused.
     assert_eq!(access::checked(app, true, None).unwrap(), None);
-    assert_eq!(access::checked(app, true, Some(&[])).unwrap(), None);
+    assert_eq!(
+        access::checked(app, true, Some(&[])).unwrap_err().code,
+        "empty_allowlist"
+    );
     let want = [
         "issues_write".to_owned(),
         "read_repo".to_owned(),

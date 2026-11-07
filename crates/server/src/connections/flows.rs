@@ -34,11 +34,13 @@ use zeroize::Zeroizing;
 
 pub use self::jira::{Refused, callback, choose};
 use super::github::device::{DeviceError, Prompt};
-use super::jira::{Finished, FlowError};
+use super::jira::{Finished, FlowError, Jira};
 use crate::api::App;
 
 pub const MAX_PER_USER: usize = 4;
 pub const MAX_ALL: usize = 32;
+/// Finished flows kept per user for the screen to read; the oldest is dropped past this.
+pub const MAX_DONE: usize = 16;
 pub const KEEP_DONE: Duration = Duration::from_secs(300);
 const MAX_LIFE: Duration = Duration::from_secs(900);
 
@@ -89,13 +91,31 @@ pub struct Flow {
     pub reconnect: Option<i64>,
     pub name: Option<String>,
     pub label: Option<String>,
+    /// A GitHub re-sign-in may be a different account than the connection was.
+    pub confirm_identity_change: bool,
+    created: Instant,
     expires: Instant,
     cancelled: AtomicBool,
+    /// Held while a credential is written and by a cancel, so a cancel that has returned is
+    /// never followed by a connection made or a credential replaced.
+    gate: tokio::sync::Mutex<()>,
+    /// The Atlassian adapter holding this flow's pending sign-in (an Atlassian flow only).
+    jira: Option<Arc<Jira>>,
     view: Mutex<View>,
     done_at: Mutex<Option<Instant>>,
     /// The Jira `state` this flow started with.
     jira_state: Option<Zeroizing<String>>,
     st: tokio::sync::Mutex<St>,
+}
+
+impl Drop for Flow {
+    /// A flow that is removed (cancelled, expired, evicted, refused at admission) takes its
+    /// pending Atlassian sign-in with it; a spent or foreign one is left alone.
+    fn drop(&mut self) {
+        if let (Some(jira), Some(state)) = (&self.jira, &self.jira_state) {
+            jira.cancel(self.user, state);
+        }
+    }
 }
 
 impl Flow {
@@ -136,6 +156,13 @@ impl Flow {
         v
     }
 
+    /// Over: finished and kept long enough, or well past its end.
+    fn stale(&self) -> bool {
+        let now = Instant::now();
+        let done = *self.done_at.lock().unwrap_or_else(|e| e.into_inner());
+        done.is_some_and(|d| now >= d + KEEP_DONE) || now >= self.expires + KEEP_DONE
+    }
+
     fn waiting(&self) -> bool {
         Instant::now() < self.expires
             && matches!(self.step(), "waiting" | "approved" | "choose_site")
@@ -168,6 +195,7 @@ pub struct Start<'a> {
     pub reconnect: Option<i64>,
     pub name: Option<&'a str>,
     pub label: Option<&'a str>,
+    pub confirm_identity_change: bool,
 }
 
 /// The flows in progress.
@@ -177,22 +205,33 @@ pub struct Flows {
 }
 
 impl Flows {
+    /// Forgets what is over: a finished flow after [`KEEP_DONE`], any flow well past its end.
     fn purge(map: &mut HashMap<String, Arc<Flow>>) {
-        let now = Instant::now();
-        map.retain(|_, f| {
-            let done = *f.done_at.lock().unwrap_or_else(|e| e.into_inner());
-            let over = done.is_some_and(|d| now >= d + KEEP_DONE) || now >= f.expires + KEEP_DONE;
-            !over
-        });
+        map.retain(|_, f| !f.stale());
     }
 
-    /// Holds `f` unless a cap is reached. Counts the user's flows still in progress.
+    fn live(map: &HashMap<String, Arc<Flow>>, user: Option<i64>) -> usize {
+        let mine = |x: &&Arc<Flow>| user.is_none_or(|u| x.user == u);
+        map.values().filter(mine).filter(|x| x.waiting()).count()
+    }
+
+    /// Holds `f` unless a cap is reached (a refused flow is dropped, and with it its pending
+    /// sign-in). Finished flows of the user beyond [`MAX_DONE`] are dropped, oldest first. The
+    /// purge runs here and nowhere else, so a read costs one lookup.
     fn admit(&self, f: Flow) -> Result<Arc<Flow>, StartError> {
         let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
         Self::purge(&mut map);
-        let live = |p: &dyn Fn(&Flow) -> bool| map.values().filter(|x| x.waiting() && p(x)).count();
-        if live(&|x| x.user == f.user) >= MAX_PER_USER || live(&|_| true) >= MAX_ALL {
+        if Self::live(&map, Some(f.user)) >= MAX_PER_USER || Self::live(&map, None) >= MAX_ALL {
             return Err(StartError::TooMany);
+        }
+        let mut done: Vec<(Instant, String)> = map
+            .values()
+            .filter(|x| x.user == f.user && !x.waiting())
+            .map(|x| (x.created, x.id.clone()))
+            .collect();
+        done.sort();
+        while done.len() >= MAX_DONE {
+            map.remove(&done.remove(0).1);
         }
         let f = Arc::new(f);
         map.insert(f.id.clone(), f.clone());
@@ -200,33 +239,51 @@ impl Flows {
     }
 
     /// Whether `user` may start another flow now (the caps of [`Flows::admit`]), so a refused
-    /// start asks GitHub for nothing.
+    /// start creates nothing upstream.
     fn room(&self, user: i64) -> bool {
-        let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
-        Self::purge(&mut map);
-        let live = |p: &dyn Fn(&Flow) -> bool| map.values().filter(|x| x.waiting() && p(x)).count();
-        live(&|x| x.user == user) < MAX_PER_USER && live(&|_| true) < MAX_ALL
+        let map = self.map.lock().unwrap_or_else(|e| e.into_inner());
+        Self::live(&map, Some(user)) < MAX_PER_USER && Self::live(&map, None) < MAX_ALL
     }
 
     /// The flow `id`, only for the user and device that started it.
     pub fn get(&self, user: i64, device: &str, id: &str) -> Option<Arc<Flow>> {
-        let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
-        Self::purge(&mut map);
+        let map = self.map.lock().unwrap_or_else(|e| e.into_inner());
         map.get(id)
-            .filter(|f| f.user == user && f.device == device)
+            .filter(|f| f.user == user && f.device == device && !f.stale())
             .cloned()
     }
 
-    /// Cancels and forgets flow `id` (the owner's); whether there was one. A Jira flow's `state`
-    /// stays in `Jira` until it expires, but no callback can reach it any more.
-    pub fn cancel(&self, user: i64, device: &str, id: &str) -> bool {
+    /// Cancels and forgets flow `id` (the owner's); whether there was one. When this returns no
+    /// connection will be made and no credential replaced by that flow: the flag is set under
+    /// the gate a credential write holds.
+    pub async fn cancel(&self, user: i64, device: &str, id: &str) -> bool {
         let Some(f) = self.get(user, device, id) else {
             return false;
         };
-        f.cancelled
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        {
+            let _gate = f.gate.lock().await;
+            f.cancelled
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
         map.remove(id).is_some()
+    }
+
+    /// Ends every waiting flow of `kind` (Ainkrad's app for it changed, so a code issued under
+    /// the old one cannot finish): each reads `failed` with `code` and a plain sentence, and
+    /// nothing it was doing is stored.
+    pub async fn end(&self, kind: &str, code: &str, message: &str) {
+        let flows: Vec<Arc<Flow>> = {
+            let map = self.map.lock().unwrap_or_else(|e| e.into_inner());
+            let hit = |f: &&Arc<Flow>| f.kind == kind && f.waiting();
+            map.values().filter(hit).cloned().collect()
+        };
+        for f in flows {
+            let _gate = f.gate.lock().await;
+            f.cancelled
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            f.fail(code, message);
+        }
     }
 }
 
@@ -235,8 +292,9 @@ fn new_flow(
     kind: &'static str,
     life: Duration,
     view: View,
-    state: Option<String>,
+    jira: Option<(Arc<Jira>, String)>,
 ) -> Flow {
+    let (jira, state) = jira.unzip();
     Flow {
         id: view.id.clone(),
         user: s.user,
@@ -246,6 +304,10 @@ fn new_flow(
         reconnect: s.reconnect,
         name: s.name.map(str::to_owned),
         label: s.label.map(str::to_owned),
+        confirm_identity_change: s.confirm_identity_change,
+        created: Instant::now(),
+        gate: tokio::sync::Mutex::new(()),
+        jira,
         expires: Instant::now() + life.min(MAX_LIFE),
         cancelled: AtomicBool::new(false),
         view: Mutex::new(view),

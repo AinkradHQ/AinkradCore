@@ -60,19 +60,29 @@ fn refused(r: Refused) -> ApiError {
 }
 
 fn start_error(e: StartError) -> ApiError {
+    use crate::connections::jira::FlowError;
     match e {
         StartError::NotConfigured(why) => {
             ApiError::new(StatusCode::CONFLICT, "not_configured", why)
         }
-        StartError::TooMany => ApiError::new(
-            StatusCode::CONFLICT,
-            "limit_reached",
+        StartError::TooMany | StartError::Jira(FlowError::TooManyFlows) => ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too_many_flows",
             "too many sign-ins are waiting; finish or cancel one",
+        ),
+        StartError::Jira(FlowError::NotConfigured) => ApiError::new(
+            StatusCode::CONFLICT,
+            "not_configured",
+            "Sign in with Atlassian is not set up on this Core yet",
+        ),
+        StartError::Jira(_) => ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "the sign-in could not be started",
         ),
         StartError::Device(e) => {
             ApiError::new(StatusCode::BAD_GATEWAY, "upstream_failed", e.to_string())
         }
-        StartError::Jira(e) => ApiError::new(StatusCode::CONFLICT, "not_configured", e.to_string()),
         StartError::Store(e) => e.into(),
     }
 }
@@ -93,9 +103,10 @@ fn mine(app: &App, me: &Caller, user: i64, id: &str) -> Result<std::sync::Arc<Fl
         person can close the window); Atlassian returns `authorize_url` (the Mac app opens it, \
         catches the redirect on 127.0.0.1 and posts `code` and `state` to \
         `connectionFlowCallback`) and `state`. With `connection`, the credential of that \
-        connection is replaced (CN5, sign in again). A flow ends in ONE connection. 409 \
+        connection is replaced (CN5, sign in again); a GitHub sign-in as another account ends \
+        `failed` with `different_account` unless `confirm_identity_change` is true. A flow ends in ONE connection. 409 \
         `not_configured` while Ainkrad's app for the kind is not set up (see \
-        `listConnectionKinds`), 409 `limit_reached` (4 waiting per user), 502 when GitHub could \
+        `listConnectionKinds`), 429 `too_many_flows` (4 waiting per user), 502 when GitHub could \
         not give a code, 400 for a bad name, label or kind, 404 for another workspace's \
         connection", body = ConnectionFlow)))]
 pub async fn start(
@@ -149,6 +160,7 @@ pub async fn start(
             reconnect: b.connection,
             name: b.name.as_deref(),
             label: b.label.as_deref(),
+            confirm_identity_change: b.confirm_identity_change == Some(true),
         },
     )
     .await
@@ -184,7 +196,7 @@ pub async fn cancel(
 ) -> ApiResult<AccountsDeleted> {
     let user = workspace(&app, &me).await?;
     mine(&app, &me, user, &id)?;
-    app.conn_flows.cancel(user, &me.device.id, &id);
+    app.conn_flows.cancel(user, &me.device.id, &id).await;
     Ok(Json(AccountsDeleted { deleted: true }))
 }
 

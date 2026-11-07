@@ -46,26 +46,50 @@ pub(super) async fn store(
         now: &now,
     };
     let reg = app.connections.registry();
-    let id = match flow.reconnect {
-        Some(id) => {
-            secret::replace(&app.pool, sealer, id, material, who).await?;
-            id
+    // A GitHub sign-in again must be the same account unless the admin confirmed the change.
+    // (Atlassian's check is the site's cloud id, in the flow.) A test that says nothing is no
+    // reason to refuse: the test after the write judges the new credential.
+    if let (Some(id), "github", false) = (flow.reconnect, flow.kind, flow.confirm_identity_change)
+        && let Some(adapter) = reg.get(flow.kind)
+    {
+        let old = connections::get(&app.pool, flow.user, id).await?.identity;
+        if let (Some(old), Ok(now)) = (old, adapter.test(material).await)
+            && old != now.subject
+        {
+            return Err(refused(
+                "different_account",
+                "that sign-in is a different GitHub account than this connection's; confirm the \
+                 change to replace it",
+            ));
         }
-        None => {
-            let name = match &flow.name {
-                Some(n) => n.clone(),
-                None => free_name(app, flow.user, flow.kind).await?,
-            };
-            let label = flow.label.as_deref().unwrap_or(fallback_label);
-            let new = NewConnection {
-                kind: flow.kind,
-                name: &name,
-                label,
-                auth_method: "oauth",
-            };
-            connections::create(&app.pool, sealer, reg, &new, material, who)
-                .await?
-                .id
+    }
+    let id = {
+        // The gate a cancel takes: after it, nothing is made or replaced.
+        let _gate = flow.gate.lock().await;
+        if flow.cancelled() {
+            return Err(refused("cancelled", "the sign-in was cancelled"));
+        }
+        match flow.reconnect {
+            Some(id) => {
+                secret::replace(&app.pool, sealer, id, material, who).await?;
+                id
+            }
+            None => {
+                let name = match &flow.name {
+                    Some(n) => n.clone(),
+                    None => free_name(app, flow.user, flow.kind).await?,
+                };
+                let label = flow.label.as_deref().unwrap_or(fallback_label);
+                let new = NewConnection {
+                    kind: flow.kind,
+                    name: &name,
+                    label,
+                    auth_method: "oauth",
+                };
+                connections::create(&app.pool, sealer, reg, &new, material, who)
+                    .await?
+                    .id
+            }
         }
     };
     match flow.kind {

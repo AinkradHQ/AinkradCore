@@ -253,15 +253,59 @@ pub async fn installation_of(
         .map(Option::flatten)
 }
 
-/// Sets the installation of connection `id` (a reconnect through a new installation).
+/// The workspace that holds installation `installation`, when one does.
+pub async fn claimed_by(pool: &SqlitePool, installation: i64) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar("SELECT user_id FROM core_installation_claims WHERE installation_id = ?")
+        .bind(installation)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Records that workspace `ws` holds `installation` (on GitHub account `account`) the first time
+/// it is used; refuses (`conflict`) one another workspace holds. In the caller's transaction.
+pub(super) async fn claim_in(
+    conn: &mut SqliteConnection,
+    installation: i64,
+    account: &str,
+    ws: i64,
+    now: &str,
+) -> Result<(), Error> {
+    let holder: Option<i64> = sqlx::query_scalar(
+        "SELECT user_id FROM core_installation_claims WHERE installation_id = ?",
+    )
+    .bind(installation)
+    .fetch_optional(&mut *conn)
+    .await?;
+    match holder {
+        Some(h) if h != ws => refused("conflict", "that installation belongs to another workspace"),
+        Some(_) => Ok(()),
+        None => {
+            sqlx::query(
+                "INSERT INTO core_installation_claims (installation_id, user_id, account, \
+                 created_at) VALUES (?, ?, ?, ?)",
+            )
+            .bind(installation)
+            .bind(ws)
+            .bind(account)
+            .bind(now)
+            .execute(&mut *conn)
+            .await?;
+            Ok(())
+        }
+    }
+}
+
+/// Sets the installation of connection `id` (a reconnect through a new installation), claiming it
+/// for the workspace.
 pub async fn set_installation(
     pool: &SqlitePool,
     id: i64,
-    installation: i64,
+    (installation, account): (i64, &str),
     who: Who<'_>,
 ) -> Result<(), Error> {
     let mut tx = crate::store::begin_write(pool).await?;
     find(&mut tx, who.workspace, id).await?;
+    claim_in(&mut tx, installation, account, who.workspace, who.now).await?;
     sqlx::query("UPDATE core_connections SET installation_id = ?, updated_at = ? WHERE id = ?")
         .bind(installation)
         .bind(who.now)

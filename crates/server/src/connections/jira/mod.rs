@@ -184,15 +184,25 @@ impl Jira {
             .unwrap_or_default()
     }
 
-    /// Replaces Ainkrad's Atlassian app in place (a config change), keeping this one instance:
-    /// its locks and the registry's and broker's handles to it stay valid. Sign-ins started
-    /// under the old app are dropped: a code issued for one client id cannot be exchanged by
+    /// Replaces Ainkrad's Atlassian app in place (a config change; whether it changed), keeping this one instance:
+    /// its locks and the registry's and broker's handles to it stay valid. When the app really
+    /// changed, sign-ins started under the old one are dropped: a code issued for one client id cannot be exchanged by
     /// another. Tokens already stored are renewed with the NEW app; a changed client id makes
     /// them fail to renew, and those connections need signing in again.
-    pub fn set_app(&self, app: Option<OAuthApp>) {
+    pub fn set_app(&self, app: Option<OAuthApp>) -> bool {
         let mut cur = self.app.write().unwrap_or_else(|e| e.into_inner());
+        let unchanged = match (&*cur, &app) {
+            (None, None) => true,
+            (Some(a), Some(b)) => a.same(b),
+            _ => false,
+        };
+        // A write that left the Atlassian app as it was ends nobody's sign-in.
+        if unchanged {
+            return false;
+        }
         self.flows.lock().unwrap_or_else(|e| e.into_inner()).clear();
         *cur = app;
+        true
     }
 
     fn url(&self, cred: &Cred, path: &str) -> String {

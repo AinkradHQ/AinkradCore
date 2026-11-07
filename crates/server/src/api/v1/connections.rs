@@ -72,6 +72,13 @@ use types::*;
 ))]
 pub struct Doc;
 
+/// The contract with this module's routes merged in (`spec` takes it from here to keep its own
+/// size), as a JSON value.
+pub(super) fn contract(mut doc: utoipa::openapi::OpenApi) -> serde_json::Value {
+    doc.merge(<Doc as OpenApi>::openapi());
+    serde_json::to_value(doc).expect("spec serialises")
+}
+
 pub(super) fn parse<T: DeserializeOwned>(body: &[u8]) -> Result<T, ApiError> {
     serde_json::from_slice(body)
         .map_err(|_| ApiError::bad_request("the body is not a valid request for this route"))
@@ -373,16 +380,13 @@ pub async fn update(
         return Err(ApiError::bad_request("that name or label is not valid"));
     }
     let now = app.clock.now();
-    let who = who(&me, user, &now);
-    if let Some(n) = &b.name {
-        store::rename(&app.pool, id, n, who).await?;
-    }
-    if let Some(l) = &b.label {
-        store::update_label(&app.pool, id, l, who).await?;
-    }
-    if let Some(d) = b.disabled {
-        store::set_disabled(&app.pool, id, d, who).await?;
-    }
+    // One transaction: a name that is taken leaves the label and the switch as they were.
+    let change = store::Edit {
+        name: b.name.as_deref(),
+        label: b.label.as_deref(),
+        disabled: b.disabled,
+    };
+    store::edit(&app.pool, id, &change, who(&me, user, &now)).await?;
     Ok(Json(one(&app, &me, user, id).await?))
 }
 
