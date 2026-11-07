@@ -109,9 +109,10 @@ pub const DESCRIPTOR: Descriptor = Descriptor {
         title: "Teams",
         help: "Only these Linear teams, by key (ENG). No limit means every team.",
     }],
-    // The redactor names no Linear shape, so naming one here would be dead data that only looks
-    // like a gate (see the C8 report); an OAuth refresh token is not told apart by a prefix.
-    token_shapes: &[],
+    // Linear's own changelog (linear.app/changelog/2021-08-19-github-secret-scanning) documents the
+    // prefixes `lin_api_` (API keys) and `lin_oauth_` (OAuth access tokens): both are the redactor's
+    // `linear_token`. No refresh token prefix is documented, so none is declared.
+    token_shapes: &["linear_token"],
     refresh_prefixes: &[],
     self_limited: &[
         "linear.search_issues",

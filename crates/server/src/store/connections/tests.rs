@@ -20,6 +20,7 @@ mod apps_cases;
 mod crud;
 mod effective_limits;
 mod gate_cases;
+mod gate_linear;
 mod grant_cases;
 mod health_cases;
 mod leak;
