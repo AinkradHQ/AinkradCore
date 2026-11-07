@@ -1,0 +1,234 @@
+//! The JSON Schema of each operation's arguments, for the tool list a harness shows its model.
+//!
+//! The adapters refuse any argument name they do not know, so each schema is closed
+//! (`additionalProperties: false`) and its `properties` are exactly the names the adapter reads;
+//! the tests hold the two together. GitHub's follow from the operation's path template and method
+//! (`github::ops::OPS`), Jira's are listed per operation.
+
+use serde_json::{Value, json};
+
+use crate::connections::github::{http::Method, ops};
+
+fn object(properties: Value, required: &[&str]) -> Value {
+    json!({"type": "object", "properties": properties, "required": required,
+        "additionalProperties": false})
+}
+
+fn github(op: &ops::Op) -> Value {
+    let mut p = serde_json::Map::new();
+    let mut required = vec!["repo"];
+    p.insert(
+        "repo".into(),
+        json!({"type": "string", "description": "The repository as owner/name"}),
+    );
+    if op.path.contains("{number}") {
+        required.push("number");
+        p.insert(
+            "number".into(),
+            json!({"type": "integer", "minimum": 1,
+                "description": "The issue or pull request number"}),
+        );
+    }
+    if op.path.contains("{path}") {
+        required.push("path");
+        p.insert(
+            "path".into(),
+            json!({"type": "string", "description": "A file path inside the repository"}),
+        );
+    }
+    p.insert(
+        "query".into(),
+        json!({"type": "object", "description": "Query parameters: plain values (text, number, \
+            boolean), at most 16",
+            "additionalProperties": {"type": ["string", "number", "boolean"]}}),
+    );
+    if op.method != Method::Get {
+        required.push("body");
+        p.insert(
+            "body".into(),
+            json!({"type": "object", "description": "The JSON body GitHub's API takes for this operation"}),
+        );
+    }
+    object(Value::Object(p), &required)
+}
+
+fn text(max: usize, what: &str) -> Value {
+    json!({"type": "string", "minLength": 1, "maxLength": max, "description": what})
+}
+
+fn fields() -> Value {
+    json!({"type": "array", "items": {"type": "string"}, "maxItems": 30,
+        "description": "Field names to return, like summary or customfield_10010"})
+}
+
+fn labels() -> Value {
+    json!({"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 255,
+        "pattern": "^\\S+$"}, "maxItems": 20, "description": "Labels (no spaces)"})
+}
+
+fn key() -> Value {
+    text(32, "The issue key, like ABC-12")
+}
+
+fn jira(op: &str) -> Option<Value> {
+    Some(match op {
+        "jira.get_issue" => object(json!({"key": key(), "fields": fields()}), &["key"]),
+        "jira.list_transitions" => object(json!({"key": key()}), &["key"]),
+        "jira.transition_issue" => object(
+            json!({"key": key(), "transition_id": {"type": "string", "pattern": "^[0-9]{1,10}$",
+                "description": "The id list_transitions gave"}}),
+            &["key", "transition_id"],
+        ),
+        "jira.add_comment" => object(
+            json!({"key": key(), "body": text(30_000, "The comment, as plain text")}),
+            &["key", "body"],
+        ),
+        "jira.update_issue" => object(
+            json!({"key": key(), "summary": text(255, "The new summary"),
+                "description": text(30_000, "The new description, as plain text"),
+                "labels": labels()}),
+            &["key"],
+        ),
+        "jira.create_issue" => object(
+            json!({"project": text(10, "The project key, like ABC"),
+                "summary": text(255, "The summary"),
+                "issue_type": text(60, "The issue type's name, like Task"),
+                "description": text(30_000, "The description, as plain text"),
+                "labels": labels()}),
+            &["project", "summary", "issue_type"],
+        ),
+        "jira.list_projects" => object(
+            json!({"start_at": {"type": "integer", "minimum": 0, "maximum": 1_000_000},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 50}}),
+            &[],
+        ),
+        "jira.search_issues" => object(
+            json!({"jql": text(4000, "A JQL query"),
+                "project": text(10, "Limit the search to this project key"),
+                "fields": fields(),
+                "order_by": {"type": "array", "items": {"type": "string"}, "maxItems": 5,
+                    "description": "Terms like \"created desc\""},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 100},
+                "next_page_token": text(4000, "The token a previous page gave")}),
+            &[],
+        ),
+        _ => return None,
+    })
+}
+
+/// The argument schema of `operation`, when one is known.
+pub fn input_schema(operation: &str) -> Option<Value> {
+    ops::find(operation).map(github).or_else(|| jira(operation))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connections::adapter::builtin_descriptor;
+    use crate::connections::github::build;
+    use crate::connections::jira::resource_of;
+
+    fn all_ops() -> Vec<String> {
+        ["github", "jira"]
+            .iter()
+            .flat_map(|k| builtin_descriptor(k).expect("a built-in kind").capabilities)
+            .flat_map(|c| c.operations.iter().map(|o| (*o).to_owned()))
+            .collect()
+    }
+
+    fn names(schema: &Value) -> Vec<String> {
+        schema["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn every_operation_has_a_closed_object_schema_that_fits_a_tool_list() {
+        for op in all_ops() {
+            let s = input_schema(&op).unwrap_or_else(|| panic!("{op} has no schema"));
+            assert_eq!(s["type"], "object", "{op}");
+            assert_eq!(s["additionalProperties"], false, "{op}");
+            let required = s["required"].as_array().unwrap();
+            assert!(
+                required
+                    .iter()
+                    .all(|r| s["properties"].get(r.as_str().unwrap()).is_some()),
+                "{op}: a required name is not a property"
+            );
+            assert!(
+                s.to_string().len() <= ainkrad_proto::v2::MAX_SCHEMA_BYTES,
+                "{op}"
+            );
+        }
+        assert!(input_schema("github.drop_repo").is_none());
+    }
+
+    /// The schema's names are the names the adapter accepts, no more and no fewer: a name the
+    /// adapter refuses as unknown is not in a schema, and every schema name is one it reads.
+    #[test]
+    fn the_schemas_name_exactly_what_the_adapters_read() {
+        for op in all_ops() {
+            let s = input_schema(&op).unwrap();
+            let known = names(&s);
+            for name in &known {
+                let args = Value::Object(serde_json::Map::from_iter([(name.clone(), Value::Null)]));
+                let refused = if op.starts_with("github.") {
+                    // `null` is a wrong value for every GitHub field: only an unknown name is
+                    // refused as one.
+                    build(&op, &args).err().map(|e| format!("{e:?}"))
+                } else {
+                    resource_of(&op, &args).err()
+                };
+                let unknown = refused
+                    .as_deref()
+                    .is_some_and(|e| e.contains("UnknownField") || e.contains("no argument named"));
+                assert!(!unknown, "{op}: the adapter does not read {name}");
+            }
+            let bogus = json!({"zz_not_an_argument": 1, "repo": "o/r"});
+            let refused = if op.starts_with("github.") {
+                format!("{:?}", build(&op, &bogus).unwrap_err())
+            } else {
+                resource_of(&op, &bogus).unwrap_err()
+            };
+            assert!(
+                refused.contains("UnknownField") || refused.contains("no argument named"),
+                "{op}: {refused}"
+            );
+        }
+    }
+
+    /// A GitHub schema's required names are the ones `build` insists on.
+    #[test]
+    fn github_required_names_are_the_ones_build_insists_on() {
+        for op in ops::OPS {
+            let s = github(op);
+            let required: Vec<&str> = s["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r.as_str().unwrap())
+                .collect();
+            let mut args = serde_json::Map::new();
+            args.insert("repo".into(), json!("o/r"));
+            args.insert("number".into(), json!(1));
+            args.insert("path".into(), json!("a.md"));
+            args.insert("body".into(), json!({}));
+            for want in ["number", "path", "body"] {
+                let mut less = args.clone();
+                less.remove(want);
+                if !required.contains(&want) {
+                    // Not required: left out, `build` does not call it missing.
+                    let err = build(op.name, &Value::Object(less)).err();
+                    assert!(
+                        !matches!(err, Some(crate::connections::github::BuildError::Missing(m)) if m == want),
+                        "{}: {want} is optional in the schema but required by build",
+                        op.name
+                    );
+                }
+            }
+        }
+    }
+}
