@@ -223,6 +223,14 @@ pub trait KindAdapter: Send + Sync {
     fn test<'a>(&'a self, material: &'a Material) -> BoxFuture<'a, Result<Identity, TestError>>;
 }
 
+/// The built-in kinds' descriptors by kind name, without making an adapter (no HTTP client): for
+/// a check that has only a kind name in hand.
+pub fn builtin_descriptor(kind: &str) -> Option<&'static Descriptor> {
+    [&super::github::GITHUB]
+        .into_iter()
+        .find(|d| d.kind == kind)
+}
+
 /// The adapters this Core knows, by kind.
 #[derive(Default, Clone)]
 pub struct Registry {

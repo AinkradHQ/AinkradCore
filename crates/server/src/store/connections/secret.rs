@@ -11,6 +11,7 @@ use super::{Connection, Who, audit, find, refused};
 use crate::connections::material::Material;
 use crate::ops::secretbox::SecretBox;
 use crate::store::secrets::Error;
+use crate::store::secrets_user::single_own_key;
 use crate::store::settings::value_in;
 
 /// The associated data of a sealed credential: its connection, the row's random nonce and the
@@ -88,22 +89,38 @@ fn unavailable<T>() -> Result<T, Error> {
 }
 
 /// The broker's gates for a credential about to be sealed: off at `secrets.mode` 0, and below
-/// mode 2 a token with a recognised real-credential shape is refused. (`secrets.connections` and
-/// per-kind token shapes, which will admit a kind's own token, are read by C2, not here.)
-pub(super) async fn gate(conn: &mut SqliteConnection, m: &Material) -> Result<(), Error> {
+/// mode 2 a token with a recognised real-credential shape is refused.
+///
+/// One narrow lift, for connection credentials only: with `secrets.connections` on, the access
+/// token may be ONE token of a shape the kind declares (`Descriptor::token_shapes`), as a whole
+/// (`single_own_key`: no second key spaced, glued or split in, no other shape inside it). A real
+/// refresh token, another service's shape, or a kind that declares none stays refused. The
+/// provider-account gate and `secrets.mode` 2 are untouched.
+pub(super) async fn gate(
+    conn: &mut SqliteConnection,
+    m: &Material,
+    shapes: &[&str],
+) -> Result<(), Error> {
     let mode = enabled(conn).await?;
     if mode < 2 {
         let redactor = Redactor::new();
-        let real = [Some(m.access()), m.refresh()]
-            .into_iter()
-            .flatten()
-            .any(|t| Zeroizing::new(redactor.text(t)).as_str() != t);
-        if real {
-            return refused(
-                "real_secret_refused",
-                "the credential has a recognised real-credential shape; real secrets wait for \
-                 gate G-SEC (secrets.mode 2)",
-            );
+        let real = |t: &str| Zeroizing::new(redactor.text(t)).as_str() != t;
+        let refresh_real = m.refresh().is_some_and(real);
+        if real(m.access()) || refresh_real {
+            let admitted = !refresh_real
+                && !shapes.is_empty()
+                && value_in(conn, Key::SecretsConnections, Scope::Server).await? == 1
+                && shapes
+                    .iter()
+                    .any(|s| single_own_key(&redactor, m.access(), s));
+            if !admitted {
+                return refused(
+                    "real_secret_refused",
+                    "the credential has a recognised real-credential shape; only one token of the \
+                     kind's own shape is admitted, and only with secrets.connections on; every \
+                     other real secret waits for gate G-SEC (secrets.mode 2)",
+                );
+            }
         }
     }
     Ok(())
@@ -149,7 +166,19 @@ pub async fn replace(
     who: Who<'_>,
 ) -> Result<Connection, Error> {
     let mut tx = crate::store::begin_write(pool).await?;
-    gate(&mut tx, m).await?;
+    // The kind's declared shapes, by the connection's own kind (a built-in kind only: this
+    // gate has no registry in hand). ponytail: `create` reads the registry's descriptor, this
+    // reads the built-in table; one more kind, one more line in `builtin_descriptor`.
+    let kind: Option<String> =
+        sqlx::query_scalar("SELECT kind FROM core_connections WHERE id = ? AND user_id = ?")
+            .bind(id)
+            .bind(who.workspace)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let shapes = kind
+        .and_then(|k| crate::connections::adapter::builtin_descriptor(&k))
+        .map_or(&[][..], |d| d.token_shapes);
+    gate(&mut tx, m, shapes).await?;
     let c = find(&mut tx, who.workspace, id).await?;
     let nonce: String = sqlx::query_scalar("SELECT nonce FROM core_connections WHERE id = ?")
         .bind(id)

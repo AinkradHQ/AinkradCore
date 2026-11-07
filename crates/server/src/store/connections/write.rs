@@ -43,7 +43,7 @@ pub async fn create(
     }
     let nonce = secret::new_nonce()?;
     let mut tx = crate::store::begin_write(pool).await?;
-    secret::gate(&mut tx, material).await?;
+    secret::gate(&mut tx, material, adapter.descriptor().token_shapes).await?;
     let owner: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE id = ?")
         .bind(who.workspace)
         .fetch_one(&mut *tx)
