@@ -26,7 +26,7 @@
 //! - **Health** is S3's states, cooldowns and lazy recovery; an upstream auth failure is pending
 //!   until a test confirms it, and only a test that the service rejects disables ([`verdict`]).
 //! - **Audit.** Every write appends a `connection.*` row naming ids, kinds and results, never a
-//!   payload. The names are registered ([`AUDIT_ACTIONS`]) but, until C4, not in the contract.
+//!   payload. The names are in the contract list ([`AUDIT_ACTIONS`] is the same set).
 //! - **Limits.** Per user (the workspace owner): [`MAX_PER_USER`] connections,
 //!   [`MAX_BINDINGS`] bindings; per connection [`MAX_GRANTS`] grants.
 
@@ -53,10 +53,9 @@ pub const MAX_PER_USER: i64 = 32;
 pub const MAX_GRANTS: i64 = 32;
 pub const MAX_BINDINGS: i64 = 128;
 
-/// The audit actions this module writes. Registered with the platform's by `kinds::register_platform`
-/// but kept out of the contract list (`PLATFORM_AUDIT_ACTIONS`) while nothing writes them in
-/// production. C4, the first story that does (it writes `connection.used`), must move them into
-/// `PLATFORM_AUDIT_ACTIONS`, drop the second `register` call and bump API_MINOR.
+/// The audit actions this module writes: all in the contract list (`PLATFORM_AUDIT_ACTIONS`) since
+/// C4, the first story to write `connection.used` in production. Kept here, sorted, so a test can
+/// prove the two lists agree.
 pub const AUDIT_ACTIONS: &[&str] = &[
     "connection.auth_failed",
     "connection.auth_inconclusive",
