@@ -734,6 +734,8 @@ pub fn supervise(app: &App, id: &str) -> bool {
     if !app.agents.supervised.lock().unwrap().insert(id.to_owned()) {
         return false;
     }
+    // The session's connection tools (C4), when it has access to any.
+    crate::connections::broker::supervise(app, id);
     let (app, id) = (app.clone(), id.to_owned());
     tokio::spawn(async move {
         let mut closing = app.closing.subscribe();

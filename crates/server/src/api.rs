@@ -76,6 +76,9 @@ pub struct App {
     pub terminals: Arc<v1::Rooms>,
     /// Alarms and the counters behind `/api/v1/metrics` (`crate::health`).
     pub health: Arc<crate::health::Health>,
+    /// The connection broker (C4): THE adapter registry and the one shared Jira adapter, behind
+    /// the tools of agent sessions. C5's routes use `connections.jira()` and `.registry()`.
+    pub connections: Arc<crate::connections::broker::Broker>,
 }
 
 /// Resolves once serve is stopping (`App::closing`).
@@ -110,6 +113,9 @@ impl App {
             agents: Arc::default(),
             terminals: Arc::default(),
             health: Arc::default(),
+            connections: Arc::new(crate::connections::broker::Broker::new(Arc::new(
+                crate::connections::jira::Jira::new(None),
+            ))),
         }
     }
 }

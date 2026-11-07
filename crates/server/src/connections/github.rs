@@ -286,4 +286,4 @@ impl KindAdapter for Github {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

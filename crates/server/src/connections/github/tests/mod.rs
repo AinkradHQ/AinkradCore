@@ -3,5 +3,5 @@
 mod app_cases;
 mod call_cases;
 mod device_cases;
-pub(super) mod fake;
+pub(crate) mod fake;
 mod review_cases;
