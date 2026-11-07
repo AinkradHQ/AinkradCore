@@ -10,6 +10,10 @@ pub mod agents;
 pub mod chains;
 pub mod client;
 pub mod cmd;
+pub mod conn_access;
+pub mod conn_input;
+pub mod conn_login;
+pub mod connections;
 pub mod devices;
 pub mod events;
 pub mod keystore;
@@ -50,6 +54,9 @@ pub enum Error {
     NotApproved(String),
     /// This device cannot elevate: no step-up key, or a wrong passphrase (9).
     StepUp(String),
+    /// A sign-in flow ended without a connection (4: expired, denied, failed), or was cancelled
+    /// by Ctrl-C (130). `text` is the plain sentence.
+    Flow { text: String, code: u8 },
 }
 
 impl Error {
@@ -64,6 +71,7 @@ impl Error {
             Self::Revoked => 6,
             Self::NotApproved(_) => 7,
             Self::StepUp(_) => 9,
+            Self::Flow { code, .. } => *code,
         }
     }
 }
@@ -104,6 +112,7 @@ impl std::fmt::Display for Error {
             Self::Revoked => f.write_str("revoked: the Core closed the stream (4001)"),
             Self::NotApproved(status) => write!(f, "the pairing ended {status}: not approved"),
             Self::StepUp(m) => write!(f, "step-up: {m}"),
+            Self::Flow { text, .. } => f.write_str(text),
         }
     }
 }
@@ -119,10 +128,12 @@ pub const EXIT_CODES: &str = "Exit codes:
   4  refused by the Core (auth_failed, forbidden_scope, step_up_failed, not_found,
      conflict: the last admin device, ...); step_up_required only if it persists after
      the one automatic elevation; for `run noop`: runner_offline, unsupported_command
-     (409), runner_busy (503), runner_lost, runner_timeout (504), runner_failed (502)
+     (409), runner_busy (503), runner_lost, runner_timeout (504), runner_failed (502); for
+     `connection login`: the sign-in expired, was denied or failed (the plain reason is printed)
   5  past_retention: the resume point was trimmed (the floor is printed)
   6  revoked: the Core closed this device's stream with 4001
   7  the pairing was rejected or expired
   8  clock_skew: this machine's clock is over 60 s off (server_time is printed)
   9  cannot elevate: this device has no step-up key, the passphrase is wrong, or there is
-     no passphrase source (no terminal and no passphrase file); no proof was sent";
+     no passphrase source (no terminal and no passphrase file); no proof was sent
+  130  `connection login` was cancelled with Ctrl-C (the Core was told to drop the flow)";

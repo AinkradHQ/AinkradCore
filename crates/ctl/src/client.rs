@@ -53,6 +53,8 @@ pub struct Client {
     /// The step-up key's file (beside the keystore) and where its passphrase comes from.
     pub stepup_file: Option<std::path::PathBuf>,
     pub passphrase: Passphrase,
+    /// The `Retry-After` seconds of the last refused request that carried one (a 429's pacing).
+    pub retry_after: Option<u64>,
 }
 
 pub fn unix_now() -> i64 {
@@ -177,6 +179,7 @@ impl Client {
             clock_offset: 0,
             stepup_file: None,
             passphrase: Passphrase::default(),
+            retry_after: None,
         }
     }
 
@@ -300,6 +303,10 @@ impl Client {
                 return Ok(res);
             }
             let err = refusal(&res, self.now());
+            self.retry_after = res
+                .headers
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok()?.parse().ok());
             match &err {
                 Error::Refused { code, .. } if code == "session_expired" && !renewed => {
                     renewed = true;
