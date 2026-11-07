@@ -680,6 +680,28 @@ fn v2_agent_frames_are_pinned() {
                 name: "github.get_issue".to_owned(),
                 description: "Read an issue".to_owned(),
                 write: false,
+                input_schema: None,
+            }]),
+        })),
+    );
+    // A list that carries the tools' argument schemas (additive: an older Core sends none).
+    v2(
+        "agent_tools_poll_schema",
+        7,
+        0,
+        Body::Command(Command::AgentTools(ToolsPoll {
+            session: "as_a".to_owned(),
+            after: 0,
+            wait_ms: None,
+            results: vec![],
+            tools: Some(vec![ConnTool {
+                name: "github.get_issue".to_owned(),
+                description: "Read an issue".to_owned(),
+                write: false,
+                input_schema: Some(
+                    json!({"type": "object", "properties": {"repo": {"type": "string"}},
+                    "required": ["repo"], "additionalProperties": false}),
+                ),
             }]),
         })),
     );
