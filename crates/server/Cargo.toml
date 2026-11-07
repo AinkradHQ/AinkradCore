@@ -13,6 +13,8 @@ sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio
 ainkrad-core = { path = "../core" }
 # Secret shapes for redaction at append (E1-10.2).
 ainkrad-proto = { path = "../proto" }
+# The hardened HTTP client (vetted, pinned addresses; no redirect) for the connection adapters.
+ainkrad-providers = { path = "../providers" }
 getrandom = "0.4.3"
 # APNs (E10.4): the .p8 key's PEM, and HTTP/2 to Apple; ES256 signing with ring, which
 # rustls already brings in.
@@ -60,6 +62,7 @@ default = ["iroh"]
 test-support = []
 
 [dev-dependencies]
+ainkrad-providers = { path = "../providers", features = ["fake"] }
 ainkrad-core-server = { path = ".", features = ["test-support"] }
 # The gateway tests (`tests/gateway`): HTTP/1.1 by hand, HTTP/2 through hyper's client, test
 # certificates with real validity dates.

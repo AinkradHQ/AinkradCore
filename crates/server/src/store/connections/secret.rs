@@ -169,6 +169,36 @@ pub async fn replace(
     m: &Material,
     who: Who<'_>,
 ) -> Result<Connection, Error> {
+    replace_with(pool, sealer, id, m, who, (true, None)).await
+}
+
+/// [`replace`] for an adapter's own token renewal: the credential is a new one for the SAME grant,
+/// so a pending or confirmed auth failure is NOT cleared (only a test or a person's replacement
+/// decides that), or a service that keeps refusing a fresh token would be re-admitted by every
+/// renewal.
+///
+/// It is CONDITIONAL on `expected`, the version the renewal started from: if the credential
+/// changed meanwhile (a person stored a new one) nothing is written and the refusal is `conflict`,
+/// so a rotated token of the old grant can never overwrite the newer credential.
+pub async fn renew(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    id: i64,
+    m: &Material,
+    who: Who<'_>,
+    expected: i64,
+) -> Result<Connection, Error> {
+    replace_with(pool, sealer, id, m, who, (false, Some(expected))).await
+}
+
+async fn replace_with(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    id: i64,
+    m: &Material,
+    who: Who<'_>,
+    (clear_auth, expected): (bool, Option<i64>),
+) -> Result<Connection, Error> {
     let mut tx = crate::store::begin_write(pool).await?;
     // The kind's declared shapes, by the connection's own kind (a built-in kind only: this
     // gate has no registry in hand). ponytail: `create` reads the registry's descriptor, this
@@ -192,6 +222,12 @@ pub async fn replace(
             .fetch_optional(&mut *tx)
             .await?
             .unwrap_or(0);
+    if expected.is_some_and(|e| e != old) {
+        return refused(
+            "conflict",
+            "the credential changed while it was being renewed",
+        );
+    }
     secure(&mut tx).await?;
     sqlx::query(
         "UPDATE core_connection_secrets SET sealed = zeroblob(length(sealed)) WHERE connection_id = ?",
@@ -207,7 +243,9 @@ pub async fn replace(
     };
     store_in(&mut tx, sealer, &at, m, who.now).await?;
     secure_off(&mut tx).await?;
-    super::verdict::clear_auth_in(&mut tx, id, who.now, "replaced").await?;
+    if clear_auth {
+        super::verdict::clear_auth_in(&mut tx, id, who.now, "replaced").await?;
+    }
     // An export left it without a credential; this one is the new one.
     sqlx::query(
         "UPDATE core_connections SET status = 'active', state_reason = NULL, state_until = NULL \
