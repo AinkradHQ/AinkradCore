@@ -13,8 +13,8 @@
 //! - **A wait is bounded.** The successor row exists before its pick, so a wait is recorded on it
 //!   (`waiting.since`) like any other and ends `wait_max` after its first. Nothing waits for ever.
 //! - **Forward only (I3).** The pick starts at the old attempt's chain position and leaves out every
-//!   account the run has used; hops are capped ([`MAX_HOPS`]) and the Core-wide rate is bounded
-//!   ([`PER_WINDOW`] in [`WINDOW_SECS`]).
+//!   account the run has used; hops are capped ([`MAX_HOPS`]) and the failovers of ONE user are
+//!   bounded ([`PER_WINDOW`] in [`WINDOW_SECS`]): a user's storm never ends another user's runs.
 //! - **Events.** The successor is audited `agent.created` with a `failover` block (names and ids,
 //!   never a value), a provider or harness change is an `agent.state` note, and every move or end of
 //!   a run raises `account.failover` (`notice`); the storm guard raises `alarm.raised` once a window.

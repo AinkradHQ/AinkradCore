@@ -125,6 +125,41 @@ async fn a_run_shows_its_attempts_and_a_non_admin_and_another_user_see_less() {
     )
     .await;
     assert_eq!(l.1, json!([]));
+    // Nor can it act on it: every write route and the transcript answer as for a missing session,
+    // and the newest attempt's id never reaches it.
+    for dev in [&other, &fx.enroll("second-agent", &["read", "agent"]).await] {
+        sqlx::query("UPDATE core_devices SET user_id = 2 WHERE id = ?")
+            .bind(&dev.id)
+            .execute(&fx.app.pool)
+            .await
+            .unwrap();
+        for (m, tail, body) in [
+            (Method::POST, "wake", Some(json!({}))),
+            (Method::POST, "cancel", None),
+            (Method::POST, "kill", None),
+            (Method::POST, "resume", None),
+            (Method::POST, "messages", Some(json!({"text": "hi"}))),
+            (Method::GET, "transcript", None),
+        ] {
+            for id in [&old.id, &new] {
+                let uri = format!("{}/{tail}", one(id));
+                let (st, b) = send(&fx.app, req(m.clone(), &uri, Some(dev), body.clone())).await;
+                assert_eq!(
+                    (st, b["code"].as_str()),
+                    (StatusCode::NOT_FOUND, Some("not_found")),
+                    "{m} {uri}: {b}"
+                );
+                assert!(!b.to_string().contains(&new) || id == &new, "{b}");
+            }
+        }
+    }
+    let untouched: String =
+        sqlx::query_scalar("SELECT state FROM core_agent_sessions WHERE id = ?")
+            .bind(&new)
+            .fetch_one(&fx.app.pool)
+            .await
+            .unwrap();
+    assert_eq!(untouched, "starting", "user B's writes changed nothing");
     // A wake of the replaced attempt names the one to wake.
     let wake = format!("{}/wake", one(&old.id));
     let (st, b) = send(
@@ -279,4 +314,86 @@ async fn a_confirmed_auth_failure_raises_account_expired_and_a_cleared_one_does_
         payloads(&g.fx, "account.expired").await,
         [json!({"account": id, "user": 1, "reason": "auth_confirmed"})]
     );
+}
+
+#[tokio::test]
+async fn the_storm_guard_and_its_alarm_are_per_user() {
+    let w = w().await;
+    let pool = &w.fx.app.pool;
+    sqlx::query("INSERT INTO users (id, name) VALUES (2, 'second')")
+        .execute(pool)
+        .await
+        .unwrap();
+    let other = super::secrets::runner(&w.fx, "second").await.id;
+    sqlx::query("UPDATE core_devices SET user_id = 2 WHERE id = ?")
+        .bind(&other)
+        .execute(pool)
+        .await
+        .unwrap();
+    let (a, b, c) = (w.acct("a").await, w.acct("b").await, w.acct("c").await);
+    for id in [b.id, c.id] {
+        sqlx::query("UPDATE core_accounts SET user_id = 2 WHERE id = ?")
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    let mine = [w.keys("mine", &[a.id]).await];
+    let theirs = [w.keys("theirs", &[b.id, c.id]).await];
+    set(&w.fx, Key::SchedulerFailoversPer10Min, "1").await;
+    // Each user has one failover in the window already (the bucket), so each one's next run ends.
+    for (user, chain) in [(1, &mine), (2, &theirs)] {
+        let s = match user {
+            1 => w.session(chain, &[]).await,
+            _ => w.session_by(chain, &[], &other).await,
+        };
+        sqlx::query(
+            "UPDATE core_agent_sessions SET failover_of = 'as_fake' || n, created_at = ? WHERE id = ?",
+        )
+        .bind(at(100))
+        .bind(&s.id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    let (r1, _) = over(&w, &mine, limited(), 200).await;
+    assert!(matches!(
+        mv(&w, &r1.id, "rate_limited", &at(300), true).await,
+        Moved::Ended { .. }
+    ));
+    let r2 = w.session_by(&theirs, &[], &other).await;
+    let got = super::allocator::took(
+        w.pick_p(
+            &r2.id,
+            &theirs,
+            &at(200),
+            super::allocator::P {
+                user: 2,
+                ..super::allocator::p()
+            },
+        )
+        .await,
+    );
+    assert!(got.account == b.id || got.account == c.id);
+    alloc::mark_start_sent(pool, &r2.id).await.unwrap();
+    store::end(pool, &r2.id, "ended", &limited(), &at(201))
+        .await
+        .unwrap();
+    assert!(matches!(
+        mv(&w, &r2.id, "rate_limited", &at(300), true).await,
+        Moved::Ended { .. }
+    ));
+    // A second storm of the first user in the window raises no second alarm for them.
+    let (r3, _) = over(&w, &mine, limited(), 400).await;
+    assert!(matches!(
+        mv(&w, &r3.id, "rate_limited", &at(405), true).await,
+        Moved::Ended { .. }
+    ));
+    let mut users: Vec<i64> = payloads(&w.fx, "alarm.raised")
+        .await
+        .iter()
+        .map(|p| p["user"].as_i64().unwrap())
+        .collect();
+    users.sort_unstable();
+    assert_eq!(users, [1, 2], "one alarm per user and window");
 }

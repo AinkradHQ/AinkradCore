@@ -1826,8 +1826,9 @@ extension Components {
             /// or the storm guard; `to_account` is null while the successor waits for one). `account.budget` is
             /// `{subject_kind, subject, state}` for an account's or a pool's budget (`state` `warning` or
             /// `exhausted`). `account.expired` is `{account, user, reason}`: a key the provider refused was
-            /// confirmed and the account disabled. `alarm.raised` with `alarm` `failover_storm` says the
-            /// Core-wide failover rate bound stopped a run from moving. No payload holds a key, a token or an
+            /// confirmed and the account disabled. `alarm.raised` with `alarm` `failover_storm` and a
+            /// `user` says the bound on that user's failovers stopped a run of theirs from moving (once per
+            /// window and user). No payload holds a key, a token or an
             /// upstream's own words.
             ///
             /// - Remark: Generated from `#/components/schemas/Event/kind`.

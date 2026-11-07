@@ -195,7 +195,7 @@ async fn the_scheduler_settings_are_validated_listed_and_read() {
         ("scheduler.wait_max_secs", 900, 1, 86_400),
         ("scheduler.quota_cooldown_secs", 21_600, 60, 604_800),
         ("scheduler.max_hops", 4, 0, 16),
-        ("scheduler.failovers_per_10min", 10, 0, 1_000),
+        ("scheduler.failovers_per_10min", 10, 1, 1_000),
     ] {
         let s = find(key);
         assert_eq!(

@@ -156,12 +156,15 @@ impl From<Refusal> for ApiError {
     }
 }
 
-async fn one(app: &App, id: &str) -> Result<Session, ApiError> {
+async fn one(app: &App, me: &Caller, id: &str) -> Result<Session, ApiError> {
     let found = match is_id(id, "as_") {
         true => store::get(&app.pool, id).await?,
         false => None,
     };
-    found.ok_or_else(|| ApiError::not_found("no such agent session"))
+    let s = found.ok_or_else(|| ApiError::not_found("no such agent session"))?;
+    // Another user's session is no such session, on every route (a read, a write, a stop).
+    sched::of_user(app, me, &s).await?;
+    Ok(s)
 }
 
 /// A session a module drives answers to that module's own routes (its audit, its approvals, its
@@ -292,7 +295,7 @@ pub async fn transcript(
     Path(id): Path<String>,
     Query(p): Query<super::Paging>,
 ) -> ApiResult<AgentTranscript> {
-    let s = one(&app, &id).await?;
+    let s = one(&app, &me, &id).await?;
     owns_secrets(&s, &me)?;
     // What a module's agent saw and did is the module's `admin` read, not an `agent` device's.
     if s.owner_module.is_some() && !me.device.scopes.iter().any(|scope| scope == "admin") {
@@ -360,7 +363,7 @@ pub async fn message(
     Path(id): Path<String>,
     body: Bytes,
 ) -> ApiResult<AgentSession> {
-    let s = one(&app, &id).await?;
+    let s = one(&app, &me, &id).await?;
     let b: AgentMessage = parse(&body)?;
     if b.text.is_empty() || b.text.len() > MAX_MESSAGE {
         return Err(ApiError::bad_request("a message is 1 byte to 16 KiB"));
@@ -411,7 +414,7 @@ pub async fn decide(
     Path((id, request)): Path<(String, String)>,
     body: Bytes,
 ) -> ApiResult<AgentSession> {
-    let s = one(&app, &id).await?;
+    let s = one(&app, &me, &id).await?;
     if !request_ok(&request) {
         return Err(ApiError::not_found("no such tool request"));
     }
@@ -439,7 +442,7 @@ pub async fn decide(
 }
 
 async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSession> {
-    let mut s = one(&app, &id).await?;
+    let mut s = one(&app, &me, &id).await?;
     let command = |s: &Session| {
         Command::AgentStop(AgentStop {
             session: s.id.clone(),
@@ -465,7 +468,7 @@ async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSe
         // whole run settled so no attempt of it moves on.
         let newest = crate::store::failover::newest(&app.pool, &s.id).await?;
         if newest != s.id {
-            s = one(&app, &newest).await?;
+            s = one(&app, &me, &newest).await?;
             owns_secrets(&s, &me)?;
         }
         // Settled before the stop so no move slips in; opened again if the stop never reaches the
@@ -473,7 +476,7 @@ async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSe
         let cancelled = crate::store::failover::cancel_run(&app.pool, &s.id).await?;
         let moved = cancelled.newest != s.id;
         if moved {
-            s = one(&app, &cancelled.newest).await?;
+            s = one(&app, &me, &cancelled.newest).await?;
         }
         let stopped = async {
             if moved {
@@ -494,7 +497,7 @@ async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSe
         if let Err(e) = stopped {
             // Opened again only when a stop to a harness that is still live did not get through; one
             // that ended meanwhile is as cancelled as it was.
-            let live = one(&app, &s.id).await.map_or(true, |x| x.live());
+            let live = one(&app, &me, &s.id).await.map_or(true, |x| x.live());
             if live {
                 let over =
                     crate::store::failover::restore_run(&app.pool, &cancelled.settled).await?;
@@ -550,7 +553,7 @@ pub async fn resume(
     Extension(me): Extension<Caller>,
     Path(id): Path<String>,
 ) -> ApiResult<AgentSession> {
-    let s = one(&app, &id).await?;
+    let s = one(&app, &me, &id).await?;
     not_a_modules(&s)?;
     owns_secrets(&s, &me)?;
     if !store::reopen(&app.pool, &s.id, &app.clock.now()).await? {
@@ -597,7 +600,7 @@ pub async fn wake(
     Path(id): Path<String>,
     body: Bytes,
 ) -> ApiResult<AgentWake> {
-    let s = one(&app, &id).await?;
+    let s = one(&app, &me, &id).await?;
     let b: AgentWakeRequest = parse(&body)?;
     let key = match b.key {
         Some(k) if request_ok(&k) => k,

@@ -166,3 +166,50 @@ fn a_failover_and_an_expiry_are_pushed_to_their_user_with_ids_only_and_a_budget_
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn a_storm_alarm_is_pushed_to_its_users_admins_and_a_core_alarm_to_all() {
+    let fx = fx("storm-push").await;
+    let fake = Arc::new(Fake::new("apns"));
+    sqlx::query("INSERT INTO users (id, name) VALUES (2, 'second')")
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    let (first, _) = fx.device("first", &["admin"], 1).await;
+    let (second, _) = fx.device("second", &["admin"], 2).await;
+    sqlx::query("UPDATE core_devices SET user_id = 2 WHERE id = ?")
+        .bind(&second)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    let pusher = Pusher::new(
+        fx.pool.clone(),
+        vec![fake.clone()],
+        Arc::new(Platform),
+        Duration::from_secs(1),
+        Arc::new(crate::scheduler::SystemClock),
+    );
+    assert_eq!(pusher.tick().await.unwrap(), 0);
+    let storm =
+        |user: i64| json!({"alarm": "failover_storm", "value": 1, "threshold": 1, "user": user});
+    emit(&fx.pool, "alarm.raised", storm(1)).await;
+    emit(&fx.pool, "alarm.raised", storm(2)).await;
+    assert_eq!(pusher.tick().await.unwrap(), 2, "one each, not merged");
+    let mut got: Vec<(String, &str)> = fake.take().into_iter().map(|(d, n)| (d, n.kind)).collect();
+    got.sort();
+    let mut want = vec![
+        (first.clone(), "alarm_raised"),
+        (second.clone(), "alarm_raised"),
+    ];
+    want.sort();
+    assert_eq!(got, want, "each admin got exactly its own user's alarm");
+    // An alarm of the Core's own (no user) reaches every admin.
+    emit(
+        &fx.pool,
+        "alarm.raised",
+        json!({"alarm": "disk_free", "value": 4, "threshold": 10}),
+    )
+    .await;
+    assert_eq!(pusher.tick().await.unwrap(), 1);
+    assert_eq!(fake.take().len(), 2);
+}

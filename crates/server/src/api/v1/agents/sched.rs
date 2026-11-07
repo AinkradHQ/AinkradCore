@@ -83,10 +83,22 @@ async fn present(app: &App, v: &Viewer, s: Session) -> Result<Option<AgentSessio
     Ok(Some(out))
 }
 
+/// `s` is the caller's user's, else no such session (the same answer as a missing one).
+pub(super) async fn of_user(app: &App, me: &Caller, s: &Session) -> Result<(), ApiError> {
+    let user = ch::user_of(&app.pool, &me.device.id).await?;
+    match ch::sched_of(&app.pool, &s.id)
+        .await?
+        .is_some_and(|c| c.user == user)
+    {
+        true => Ok(()),
+        false => Err(ApiError::not_found("no such agent session")),
+    }
+}
+
 /// The session `id` as the API shows it to the caller.
 pub(super) async fn shown(app: &App, me: &Caller, id: &str) -> ApiResult<AgentSession> {
     let v = viewer(app, me).await?;
-    match present(app, &v, one(app, id).await?).await? {
+    match present(app, &v, one(app, me, id).await?).await? {
         Some(s) => Ok(Json(s)),
         None => Err(ApiError::not_found("no such agent session")),
     }

@@ -191,8 +191,15 @@ impl Classifier for Platform {
                 ("alarm_cleared", "Alarm cleared")
             };
             let data = json!({"alarm": alarm, "value": p["value"], "threshold": p["threshold"]});
+            // An alarm that names a user (the failover storm) goes to that user's admins only.
+            let user = p["user"].as_i64();
+            let collapse = match user {
+                Some(u) => format!("alarm:{alarm}:{u}"),
+                None => format!("alarm:{alarm}"),
+            };
             return Some(Notification {
-                collapse: Some(format!("alarm:{alarm}")),
+                collapse: Some(collapse),
+                user,
                 ..Notification::new(kind, "admin", title, "", data)
             });
         }

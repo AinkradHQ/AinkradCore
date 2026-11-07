@@ -6,8 +6,9 @@
 //!   to_pool, class, hop}`: the run moved to `to_session`, or ended (`to_session` and `to_account`
 //!   null: the chain has nothing left, the hop cap or the storm guard). `to_account` is also null
 //!   while the successor waits for an account.
-//! - `alarm.raised {alarm: "failover_storm", value, threshold}`: the Core-wide rate bound stopped a
-//!   run from moving, once per window.
+//! - `alarm.raised {alarm: "failover_storm", value, threshold, user}`: the rate bound on ONE user's
+//!   failovers stopped a run of that user from moving, once per window and user (the alarm is
+//!   pushed to that user's admin devices only).
 
 use ainkrad_core::audit::{AuditActor, NewAuditEvent};
 use ainkrad_core::settings::{Key, Scope};
@@ -44,7 +45,7 @@ pub(super) async fn failover(
         .map(drop)
 }
 
-/// The storm guard refused a move: `alarm.raised`, once per window.
+/// The storm guard refused a move of `user`'s run: `alarm.raised`, once per window and user.
 pub(super) async fn storm(
     conn: &mut SqliteConnection,
     user: i64,
@@ -55,8 +56,10 @@ pub(super) async fn storm(
     let since = iso_of_unix(now_u - WINDOW_SECS);
     let raised: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM audit_events WHERE action = 'alarm.raised' \
-         AND json_extract(details, '$.alarm') = 'failover_storm' AND julianday(at) > julianday(?)",
+         AND json_extract(details, '$.alarm') = 'failover_storm' \
+         AND json_extract(details, '$.user') = ? AND julianday(at) > julianday(?)",
     )
+    .bind(user)
     .bind(since)
     .fetch_one(&mut *conn)
     .await?;

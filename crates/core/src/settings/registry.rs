@@ -106,8 +106,9 @@ registry! {
     SchedulerMaxHops "scheduler.max_hops" Count 4, 0, 16, SO,
         "The most failover hops (new attempts on the next account) one run may take; 0 turns \
          failover off. Read at each move.";
-    SchedulerFailoversPer10Min "scheduler.failovers_per_10min" Count 10, 0, 1_000, SO,
+    SchedulerFailoversPer10Min "scheduler.failovers_per_10min" Count 10, 1, 1_000, SO,
         "The failover storm guard: at most this many failover hops one user's runs start in any 10 \
-         minutes; beyond it a run ends instead of moving (and `alarm.raised` says so once a \
-         window). Read at each move.";
+         minutes (1 at least: failover is turned off with scheduler.max_hops 0); beyond it a run of \
+         that user ends instead of moving, and `alarm.raised` says so once a window. Read at each \
+         move.";
 }
