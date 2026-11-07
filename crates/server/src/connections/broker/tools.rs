@@ -17,6 +17,10 @@ fn arguments(kind: &str) -> &'static str {
             "Arguments (an object): the issue key, project key, text and ids this operation \
              takes. Any other name is refused."
         }
+        "linear" => {
+            "Arguments (an object): the issue identifier (ENG-12), team key, text and ids this \
+             operation takes. Any other name is refused."
+        }
         _ => "Arguments: an object.",
     }
 }
