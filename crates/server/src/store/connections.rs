@@ -36,6 +36,7 @@ use sqlx::{Row, SqliteConnection};
 
 use super::secrets::Error;
 
+pub mod access;
 pub mod bindings;
 pub mod grants;
 pub mod health;
