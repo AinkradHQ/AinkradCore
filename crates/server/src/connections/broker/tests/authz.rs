@@ -38,9 +38,17 @@ async fn a_session_that_is_over_the_wrong_runner_and_a_stranger_are_refused() {
         f.b.tools(&f.env(), &s).await.unwrap().is_empty(),
         "no tools once over"
     );
+    // A refusal for a session that exists (the wrong runner, or over) is a row each; a call about
+    // a session that does not exist has none to attribute it to and is counted in its runner's
+    // flood row instead (see `c6_adversarial`).
     let uses = f.uses().await;
-    assert_eq!(uses.len(), 3, "every refusal is a row: {uses:?}");
+    assert_eq!(
+        uses.len(),
+        2,
+        "one row per refusal about a known session: {uses:?}"
+    );
     assert!(uses.iter().all(|u| u["result"] == "refused"));
+    assert!(uses.iter().all(|u| u["session"] == s.as_str()), "{uses:?}");
 }
 
 #[tokio::test]
