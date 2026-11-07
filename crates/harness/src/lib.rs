@@ -19,6 +19,7 @@ mod classify;
 pub mod claude;
 pub mod codex;
 pub mod compat;
+pub mod connections;
 pub mod exec;
 mod meter;
 pub mod opencode;
