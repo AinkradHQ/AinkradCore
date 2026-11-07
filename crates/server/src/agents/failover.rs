@@ -71,11 +71,19 @@ async fn try_move(app: &App, id: &str, class: &str) -> Result<(), Refusal> {
     let price = |e: &Entry| allocate::min_turn(&books, e);
     let placed = |e: &Entry| allocate::serves(runner, &old, e);
     let now = app.clock.now();
+    // `scheduler.wait_max_secs`, as the first pick reads it.
+    let (key, at) = (
+        ainkrad_core::settings::Key::SchedulerWaitMaxSecs,
+        ainkrad_core::settings::Scope::Server,
+    );
+    let wait_max_secs = crate::store::settings::value(&app.pool, key, at)
+        .await
+        .unwrap_or(WAIT_MAX_SECS);
     let cx = Ctx {
         now: &now,
         min_turn: &price,
         serves: &placed,
-        wait_max_secs: WAIT_MAX_SECS,
+        wait_max_secs,
     };
     let mut tx = crate::store::begin_write(&app.pool).await?;
     let moved = rows::move_in(&mut tx, id, class, &cx).await?;
