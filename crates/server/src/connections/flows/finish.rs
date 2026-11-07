@@ -46,21 +46,28 @@ pub(super) async fn store(
         now: &now,
     };
     let reg = app.connections.registry();
-    // A GitHub sign-in again must be the same account unless the admin confirmed the change.
-    // (Atlassian's check is the site's cloud id, in the flow.) A test that says nothing is no
-    // reason to refuse: the test after the write judges the new credential.
+    // A GitHub sign-in again must be the same account unless the admin confirmed the change
+    // (Atlassian's check is the site's cloud id, in the flow). It fails closed: a lookup that
+    // cannot say whose the new sign-in is does not let it through; the person retries.
     if let (Some(id), "github", false) = (flow.reconnect, flow.kind, flow.confirm_identity_change)
         && let Some(adapter) = reg.get(flow.kind)
+        && let Some(old) = connections::get(&app.pool, flow.user, id).await?.identity
     {
-        let old = connections::get(&app.pool, flow.user, id).await?.identity;
-        if let (Some(old), Ok(now)) = (old, adapter.test(material).await)
-            && old != now.subject
-        {
-            return Err(refused(
-                "different_account",
-                "that sign-in is a different GitHub account than this connection's; confirm the \
-                 change to replace it",
-            ));
+        match adapter.test(material).await {
+            Ok(now) if now.subject == old => {}
+            Ok(_) => {
+                return Err(refused(
+                    "different_account",
+                    "that sign-in is a different GitHub account than this connection's; confirm \
+                     the change to replace it",
+                ));
+            }
+            Err(_) => {
+                return Err(refused(
+                    "identity_unavailable",
+                    "Core could not check which GitHub account that sign-in is; try again",
+                ));
+            }
         }
     }
     let id = {
@@ -69,7 +76,7 @@ pub(super) async fn store(
         if flow.cancelled() {
             return Err(refused("cancelled", "the sign-in was cancelled"));
         }
-        match flow.reconnect {
+        let id = match flow.reconnect {
             Some(id) => {
                 secret::replace(&app.pool, sealer, id, material, who).await?;
                 id
@@ -90,7 +97,11 @@ pub(super) async fn store(
                     .await?
                     .id
             }
-        }
+        };
+        // Under the gate: a config change that ends flows now leaves this one alone.
+        flow.committed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        id
     };
     match flow.kind {
         "jira" => {

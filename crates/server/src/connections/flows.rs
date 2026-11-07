@@ -96,6 +96,8 @@ pub struct Flow {
     created: Instant,
     expires: Instant,
     cancelled: AtomicBool,
+    /// Set under the gate once the connection is made or its credential replaced.
+    committed: AtomicBool,
     /// Held while a credential is written and by a cancel, so a cancel that has returned is
     /// never followed by a connection made or a credential replaced.
     gate: tokio::sync::Mutex<()>,
@@ -137,6 +139,11 @@ impl Flow {
             v.step = "failed";
             v.error = Some((code.to_owned(), message.to_owned()));
         });
+    }
+
+    /// Whether this flow already made its connection (or replaced its credential).
+    pub fn committed(&self) -> bool {
+        self.committed.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn cancelled(&self) -> bool {
@@ -280,6 +287,11 @@ impl Flows {
         };
         for f in flows {
             let _gate = f.gate.lock().await;
+            // Looked at again under the gate: a flow whose connection was written meanwhile
+            // (it is only being tested) is never failed, or the person would sign in twice.
+            if f.committed() || !f.waiting() {
+                continue;
+            }
             f.cancelled
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             f.fail(code, message);
@@ -310,6 +322,7 @@ fn new_flow(
         jira,
         expires: Instant::now() + life.min(MAX_LIFE),
         cancelled: AtomicBool::new(false),
+        committed: AtomicBool::new(false),
         view: Mutex::new(view),
         done_at: Mutex::new(None),
         jira_state: state.map(Zeroizing::new),

@@ -42,6 +42,7 @@ mod chains;
 mod chains_api;
 mod chains_guard;
 mod chains_session;
+mod connections_account;
 mod connections_apps;
 mod connections_auth;
 mod connections_flows;
