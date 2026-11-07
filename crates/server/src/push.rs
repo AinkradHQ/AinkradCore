@@ -470,6 +470,8 @@ mod tests_account;
 #[cfg(test)]
 mod tests_apns;
 #[cfg(test)]
+mod tests_connection;
+#[cfg(test)]
 mod tests_modules;
 #[cfg(test)]
 mod tests_optin;

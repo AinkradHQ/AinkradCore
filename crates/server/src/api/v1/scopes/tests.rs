@@ -45,6 +45,14 @@ fn every_state_changing_privileged_route_is_destructive_or_excepted() {
         // The caller's own sign-in: a cancel grants nothing, a code acts once on one a step-up began.
         ("DELETE", "/api/v1/accounts/logins/{id}"),
         ("POST", "/api/v1/accounts/logins/{id}/code"),
+        // One fixed request with the connection's own credential; its only effect is the test
+        // record and the health it decides (like an account's test).
+        ("POST", "/api/v1/connections/{id}/test"),
+        // The caller's own sign-in, which a step-up began: a cancel grants nothing, the redirect
+        // and the site choice finish that one flow (state-checked, once), as a login code does.
+        ("DELETE", "/api/v1/connections/flows/{id}"),
+        ("POST", "/api/v1/connections/flows/{id}/callback"),
+        ("POST", "/api/v1/connections/flows/{id}/choose"),
     ];
     for (m, t, scope) in ROUTES {
         let privileged = !matches!(*scope, "read" | "runner");
