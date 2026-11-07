@@ -2,7 +2,7 @@
 //! proves a credential works (design §3). Capabilities and the operations each one allows are
 //! data, so a new kind needs no new screen and no new store code.
 //!
-//! `Registry::builtin()` is empty until C2 (GitHub) and C3 (Jira) register theirs.
+//! `Registry::builtin()` holds GitHub (C2); C3 (Jira) registers its own.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -60,6 +60,9 @@ pub struct Descriptor {
     /// credentials look like. Data only in C1; C2 reads it (with `secrets.connections`) to admit
     /// exactly one such token as a connection credential.
     pub token_shapes: &'static [&'static str],
+    /// Prefixes of tokens that look like this kind's shape but are never an access token (a
+    /// refresh token): refused in the access slot even when the shape matches.
+    pub refresh_prefixes: &'static [&'static str],
     /// Operations that enforce the resource limit themselves (a Jira search, a project list):
     /// they may be asked with no resource under a limited grant, and the adapter is handed the
     /// effective limits (`Resolved::limits`). Every other operation under a limited grant needs
@@ -176,6 +179,13 @@ impl Descriptor {
         if let Some(t) = self.token_shapes.iter().find(|t| !ident(t, 40)) {
             return Some(format!("{kind}: token shape {t:?} is malformed"));
         }
+        if let Some(p) = self
+            .refresh_prefixes
+            .iter()
+            .find(|p| p.is_empty() || p.len() > 16 || !p.is_ascii())
+        {
+            return Some(format!("{kind}: refresh prefix {p:?} is malformed"));
+        }
         for (i, l) in self.limits.iter().enumerate() {
             if !ident(l.key, 32) || self.limits[..i].iter().any(|o| o.key == l.key) {
                 return Some(format!(
@@ -223,6 +233,14 @@ pub trait KindAdapter: Send + Sync {
     fn test<'a>(&'a self, material: &'a Material) -> BoxFuture<'a, Result<Identity, TestError>>;
 }
 
+/// The built-in kinds' descriptors by kind name, without making an adapter (no HTTP client): for
+/// a check that has only a kind name in hand.
+pub fn builtin_descriptor(kind: &str) -> Option<&'static Descriptor> {
+    [&super::github::GITHUB]
+        .into_iter()
+        .find(|d| d.kind == kind)
+}
+
 /// The adapters this Core knows, by kind.
 #[derive(Default, Clone)]
 pub struct Registry {
@@ -234,9 +252,12 @@ impl Registry {
         Self::default()
     }
 
-    /// The shipped kinds: none yet (C2 adds `github`, C3 `jira`).
+    /// The shipped kinds: `github` (C2); C3 adds `jira`.
     pub fn builtin() -> Self {
-        Self::new()
+        let mut r = Self::new();
+        r.register(Arc::new(super::github::Github::strict()))
+            .expect("the github descriptor is well formed");
+        r
     }
 
     /// Adds an adapter; refuses a malformed descriptor or a kind already registered.
