@@ -18,6 +18,7 @@ use crate::store::connect;
 
 mod crud;
 mod effective_limits;
+mod gate_cases;
 mod grant_cases;
 mod health_cases;
 mod leak;

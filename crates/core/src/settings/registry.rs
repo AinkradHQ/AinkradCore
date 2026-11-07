@@ -92,9 +92,11 @@ registry! {
     SecretsConnections "secrets.connections" Count 0, 0, 1, SO,
         "The narrow gate for connection credentials (GitHub, Jira, ...): 1 lets C2 admit ONE token \
          of the kind's own declared shape (the adapter descriptor's token_shapes) as a connection \
-         credential while secrets.mode is 1. 0 (the default) refuses real token shapes like any \
-         other secret. C1 only registers it; it admits nothing yet. Setting it needs admin and a \
-         step-up and is audited.";
+         credential while secrets.mode is 1: the access token only, as a whole, never a refresh \
+         token, another service's shape or several keys in one value. 0 (the default) refuses real \
+         token shapes like any other secret. It lifts nothing for provider accounts, user \
+         providers or other secrets, and secrets.mode 2 is unchanged. Setting it needs admin and \
+         a step-up and is audited.";
     SchedulerWaitMaxSecs "scheduler.wait_max_secs" Seconds 900, 1, 86_400, SO,
         "How long a chain session waits in all for an account that is cooling or at its cap \
          (counted from its first wait) before the run ends with `no account is available`. \

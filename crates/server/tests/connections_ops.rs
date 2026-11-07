@@ -145,6 +145,7 @@ static KIND: Descriptor = Descriptor {
     hosts: &["api.probe.test"],
     limits: &[],
     token_shapes: &[],
+    refresh_prefixes: &[],
     self_limited: &[],
 };
 
