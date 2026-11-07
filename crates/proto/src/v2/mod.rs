@@ -46,6 +46,7 @@ mod login;
 mod plan_limit;
 mod subscription;
 mod terminal;
+mod tools;
 pub use agent::*;
 pub use auth::*;
 pub use command::*;
@@ -54,6 +55,7 @@ pub use login::*;
 pub use plan_limit::*;
 pub use subscription::*;
 pub use terminal::*;
+pub use tools::*;
 
 /// The v2 protocol version, `major.minor`; minors only add optional fields and kinds.
 pub const PROTOCOL_VERSION: &str = "2.0";

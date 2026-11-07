@@ -176,6 +176,7 @@ struct Runner {
 fn offers(listed: &str, op: &str) -> bool {
     listed == op
         || (listed == CAP_GATEWAY && matches!(op, OP_AGENT_LIMIT | OP_GATEWAY_TEST))
+        || (listed == ainkrad_proto::v2::CAP_TOOLS && op == ainkrad_proto::v2::OP_AGENT_TOOLS)
         || (listed == CAP_LOGIN && matches!(op, OP_LOGIN_START | OP_LOGIN_CODE | OP_LOGIN_CANCEL))
 }
 
@@ -418,10 +419,13 @@ impl Hub {
         runner: &str,
         command: Command,
     ) -> Result<Dispatched, StreamError> {
-        if command.op() != OP_AGENT_READ {
+        if !matches!(
+            command.op(),
+            OP_AGENT_READ | ainkrad_proto::v2::OP_AGENT_TOOLS
+        ) {
             return Err(err(
                 ErrorCode::InvalidArgs,
-                "only agent.read uses the read path",
+                "only agent.read and agent.tools use the read path",
             ));
         }
         self.send_command(runner, command)

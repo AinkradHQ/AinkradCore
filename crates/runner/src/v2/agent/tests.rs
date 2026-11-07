@@ -279,7 +279,7 @@ async fn two_sessions_run_at_once_and_capacity_and_slots_hold() {
     ));
     let d = Arc::new(AgentDriver::new(config, s).unwrap());
     let info = d.info();
-    assert_eq!((info.capacity, info.streams), (2, Some(12)));
+    assert_eq!((info.capacity, info.streams), (2, Some(14)));
     d.start(start("as_a", "fake")).unwrap();
     d.start(start("as_b", "fake")).unwrap();
     // Both are running at the same time: each has said `up` and neither has ended.

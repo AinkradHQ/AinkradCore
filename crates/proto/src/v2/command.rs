@@ -40,6 +40,8 @@ pub enum Command {
     AgentLimit(super::AgentLimit),
     #[serde(rename = "gateway.test")]
     GatewayTest(super::GatewayTest),
+    #[serde(rename = "agent.tools")]
+    AgentTools(super::ToolsPoll),
     #[serde(rename = "login.start")]
     LoginStart(super::LoginStart),
     #[serde(rename = "login.code")]
@@ -67,6 +69,7 @@ impl Command {
             Self::AgentStop(_) => super::OP_AGENT_STOP,
             Self::AgentLimit(_) => super::OP_AGENT_LIMIT,
             Self::GatewayTest(_) => super::OP_GATEWAY_TEST,
+            Self::AgentTools(_) => super::OP_AGENT_TOOLS,
             Self::LoginStart(_) => super::OP_LOGIN_START,
             Self::LoginCode(_) => super::OP_LOGIN_CODE,
             Self::LoginCancel(_) => super::OP_LOGIN_CANCEL,
@@ -139,6 +142,9 @@ pub enum Reply {
     AgentLimit(super::AgentEvents),
     #[serde(rename = "gateway.test")]
     GatewayTest(super::GatewayTested),
+    /// The answer to `agent.tools`: the calls the harness made.
+    #[serde(rename = "agent.tools")]
+    AgentTools(super::ToolBatch),
     /// The answer to `login.start`.
     #[serde(rename = "login.url")]
     LoginUrl(super::LoginUrl),
