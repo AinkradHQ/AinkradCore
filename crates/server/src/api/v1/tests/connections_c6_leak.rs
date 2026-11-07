@@ -425,7 +425,10 @@ async fn no_credential_of_any_kind_is_in_any_output_of_the_whole_system() {
     let logged = String::from_utf8_lossy(&logs.0.lock().unwrap()).into_owned();
     // Whether the Core's own events reach a thread-local subscriber depends on the callsite
     // interest other tests left behind, so liveness is proven by an event of this test's own.
-    assert!(logged.contains("c6 log capture is live"), "the capture is dead");
+    assert!(
+        logged.contains("c6 log capture is live"),
+        "the capture is dead"
+    );
     absent("the TRACE log", &logged, &n);
     assert!(
         cx.health_events().await.len() >= 2,
