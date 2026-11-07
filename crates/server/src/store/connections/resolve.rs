@@ -59,9 +59,11 @@ pub struct Resolved {
     /// `only` (the one candidate) or `default` (the kind's default won among several).
     pub via: &'static str,
     pub grant: i64,
-    /// The EFFECTIVE resource limits: the user or role grant's, intersected per key with the
-    /// agent grant's in an agent's session (an agent grant narrows an unlimited one). Empty:
-    /// unlimited. A key with an empty list allows nothing. C4 hands exactly these to the adapter.
+    /// The EFFECTIVE resource limits: every covering user or role grant combined (an unlimited
+    /// one wins, else the union per key), intersected per key with the agent grant's in an
+    /// agent's session (an agent grant narrows an unlimited one). Empty: unlimited. A candidate
+    /// whose limits would leave a key empty is dropped, so a returned list is never empty. C4
+    /// hands exactly these to the adapter.
     pub limits: Limits,
 }
 
@@ -176,16 +178,27 @@ pub async fn resolve(
     for c in all {
         let grants = super::grants::list_in(&mut conn, c.id).await?;
         let base: Vec<&Grant> = grants.iter().filter(|g| mine(g, cx)).collect();
-        let judged = judge(&base, cx, sl).and_then(|g| match cx.agent {
-            // An agent only narrows: its own grant must cover the use too.
-            Some(a) => {
-                let own: Vec<&Grant> = grants
-                    .iter()
-                    .filter(|g| g.grantee_kind == "agent" && g.grantee == a)
-                    .collect();
-                judge(&own, cx, sl).map(|ag| (g.id, effective(g, Some(ag))))
+        // Every covering user or role grant counts, not the first: an unlimited one wins, else
+        // their limits are united. An agent's grant then only narrows that.
+        let judged = covering(&base, cx, sl).and_then(|gs| {
+            let first = gs[0].id;
+            let user_side = combined(&gs);
+            let eff = match cx.agent {
+                Some(a) => {
+                    let own: Vec<&Grant> = grants
+                        .iter()
+                        .filter(|g| g.grantee_kind == "agent" && g.grantee == a)
+                        .collect();
+                    narrow(&user_side, &combined(&covering(&own, cx, sl)?))
+                }
+                None => user_side,
+            };
+            // A key that allows nothing makes this connection no candidate: routing looks at the
+            // limits the use really gets.
+            match eff.values().any(Vec::is_empty) {
+                true => Err(Some(Miss::ResourceDenied)),
+                false => Ok((first, eff)),
             }
-            None => Ok((g.id, effective(g, None))),
         });
         match (judged, verdict::usable(&c)) {
             (Ok((grant, limits)), Ok(())) => usable.push((c, grant, limits)),
@@ -261,31 +274,47 @@ impl Why {
     }
 }
 
-/// The first grant of `list` covering the use, or the weakest-to-strongest miss (`None`: no grant).
-fn judge<'g>(
+/// Every grant of `list` that covers the use, or the strongest miss (`None`: no grant).
+fn covering<'g>(
     list: &[&'g Grant],
     cx: &Context<'_>,
     self_limited: bool,
-) -> Result<&'g Grant, Option<Miss>> {
-    let mut worst = None;
+) -> Result<Vec<&'g Grant>, Option<Miss>> {
+    let (mut ok, mut worst) = (Vec::new(), None);
     for g in list {
         match covers(g, cx, self_limited) {
-            Ok(()) => return Ok(g),
+            Ok(()) => ok.push(*g),
             Err(miss) => worst = worst.max(Some(miss)),
         }
     }
-    Err(worst)
+    match ok.is_empty() {
+        true => Err(worst),
+        false => Ok(ok),
+    }
 }
 
-/// `base`'s limits, intersected per key with the agent grant's: a value stays if the other side
-/// covers it (exactly, or under its `prefix/*`). A key only one side limits is kept as it is.
-fn effective(base: &Grant, agent: Option<&Grant>) -> Limits {
-    let Some(a) = agent else {
-        return base.limits.clone();
-    };
+/// What several grants allow together: a key stays limited only if every grant limits it (a
+/// grant that does not is unlimited there), and then to the union of their values.
+fn combined(gs: &[&Grant]) -> Limits {
     let mut out = Limits::new();
-    for key in base.limits.keys().chain(a.limits.keys()) {
-        let values = match (base.limits.get(key), a.limits.get(key)) {
+    for key in gs.iter().flat_map(|g| g.limits.keys()) {
+        if out.contains_key(key) || !gs.iter().all(|g| g.limits.contains_key(key)) {
+            continue;
+        }
+        let mut v: Vec<String> = gs.iter().flat_map(|g| g.limits[key].clone()).collect();
+        v.sort();
+        v.dedup();
+        out.insert(key.clone(), v);
+    }
+    out
+}
+
+/// `base` intersected per key with the agent's: a value stays if the other side covers it
+/// (exactly, or under its `prefix/*`). A key only one side limits is kept as it is.
+fn narrow(base: &Limits, agent: &Limits) -> Limits {
+    let mut out = Limits::new();
+    for key in base.keys().chain(agent.keys()) {
+        let values = match (base.get(key), agent.get(key)) {
             (Some(b), Some(x)) => {
                 let mut v: Vec<String> = b
                     .iter()
