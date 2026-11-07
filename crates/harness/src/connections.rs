@@ -207,11 +207,13 @@ mod tests {
     /// entry is also given as its inline config, which outranks every file.
     #[test]
     fn the_runners_entry_is_the_one_a_harness_loads() {
-        let mut spec = crate::Spec::default();
-        spec.env = vec![
-            (SLOT_SOCK.into(), "/s".into()),
-            (SLOT_FWD.into(), "/f".into()),
-        ];
+        let spec = crate::Spec {
+            env: vec![
+                (SLOT_SOCK.into(), "/s".into()),
+                (SLOT_FWD.into(), "/f".into()),
+            ],
+            ..crate::Spec::default()
+        };
         let args = crate::claude::args(&spec, None);
         assert!(args.iter().any(|a| a == "--strict-mcp-config"));
         let env = crate::opencode::env(&spec, "pw");

@@ -124,8 +124,8 @@ trait Accept: Send + 'static {
 }
 
 impl Accept for UnixListener {
-    fn accept(&mut self) -> impl std::future::Future<Output = io::Result<UnixStream>> + Send {
-        async move { UnixListener::accept(self).await.map(|(stream, _)| stream) }
+    async fn accept(&mut self) -> io::Result<UnixStream> {
+        UnixListener::accept(self).await.map(|(stream, _)| stream)
     }
 }
 

@@ -458,14 +458,12 @@ struct Flaky {
 }
 
 impl Accept for Flaky {
-    fn accept(&mut self) -> impl std::future::Future<Output = io::Result<UnixStream>> + Send {
-        async move {
-            if self.always || self.fail > 0 {
-                self.fail = self.fail.saturating_sub(1);
-                return Err(io::Error::other("too many open files"));
-            }
-            UnixListener::accept(&self.inner).await.map(|(s, _)| s)
+    async fn accept(&mut self) -> io::Result<UnixStream> {
+        if self.always || self.fail > 0 {
+            self.fail = self.fail.saturating_sub(1);
+            return Err(io::Error::other("too many open files"));
         }
+        UnixListener::accept(&self.inner).await.map(|(s, _)| s)
     }
 }
 
