@@ -20,6 +20,7 @@ mod health;
 mod isolation;
 mod login;
 mod login_pool;
+mod neg_failover;
 mod proof;
 mod resume;
 mod routing;
