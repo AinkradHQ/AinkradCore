@@ -30,6 +30,7 @@ mod limits;
 mod oauth;
 mod ops;
 mod renew;
+mod safety;
 
 pub const NOW: &str = "2026-11-06T10:00:00.000Z";
 pub const CLOUD: &str = "1324a887-451d-4b3e-b3a5-0bfbb4c7d8f1";
@@ -262,6 +263,12 @@ pub async fn fx(app: bool) -> Fx {
     .unwrap();
     let fake = Fake::default();
     let addr = fake.serve().await;
+    // The sites the account can reach: the one these tests connect to.
+    fake.reply(
+        "GET /oauth/token/accessible-resources",
+        200,
+        json!([{"id": CLOUD, "url": SITE, "name": "Acme", "scopes": ["read:jira-work"]}]),
+    );
     let app = app.then(|| OAuthApp::new("client-id-8c41", CLIENT_SECRET, &[REDIRECT]).unwrap());
     let jira = Arc::new(Jira::loopback(app, addr));
     let mut reg = Registry::new();

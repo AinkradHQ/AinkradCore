@@ -88,47 +88,6 @@ async fn a_limited_connection_reads_only_fields_that_cannot_name_other_projects(
 }
 
 #[tokio::test]
-async fn an_answer_that_names_an_issue_of_another_project_is_refused_without_naming_it() {
-    let f = fx(false).await;
-    let c = f.basic().await;
-    let l = limited(&["ABC"]);
-    let one = format!("GET {}", site_path("/issue/ABC-1"));
-    let leaks = [
-        json!({"fields": {"project": {"key": "ABC"}, "summary": "blocked by SECRET-12 today"}}),
-        json!({"fields": {"project": {"key": "ABC"}, "labels": ["SECRET-9"]}}),
-        json!({"fields": {"project": {"key": "ABC"}, "description": {"x": [{"text": "(see:SECRET-3)"}]}}}),
-        json!({"fields": {"project": {"key": "ABC"}, "summary": "https://x/browse/SECRET-77"}}),
-    ];
-    for body in leaks {
-        f.fake.reply(&one, 200, body.clone());
-        let r = run(&f, &c, &l, "jira.get_issue", json!({"key": "ABC-1"})).await;
-        let Err(CallError::Refused(why)) = r else {
-            panic!("{body}")
-        };
-        assert!(!why.contains("SECRET"), "{why}");
-        assert!(why.contains("outside_limit"), "{why}");
-    }
-    // Keys of the permitted project, and words that only look alike, are fine.
-    let ok = json!({"fields": {"project": {"key": "ABC"}, "summary": "ABC-2 and ABCD-x and sECRET-1 and ABC-"}});
-    f.fake.reply(&one, 200, ok);
-    run(&f, &c, &l, "jira.get_issue", json!({"key": "ABC-1"}))
-        .await
-        .unwrap();
-    let hit = json!({"issues": [{"key": "ABC-1", "fields": {"project": {"key": "ABC"}, "summary": "dup of SECRET-4"}}]});
-    f.fake.reply(&search_key(), 200, hit);
-    let r = run(&f, &c, &l, "jira.search_issues", json!({})).await;
-    assert!(
-        matches!(r, Err(CallError::Refused(ref w)) if !w.contains("SECRET")),
-        "{r:?}"
-    );
-    let r = run(&f, &c, &l, "jira.get_issue", json!({"key": "SECRET-1"})).await;
-    assert!(
-        matches!(r, Err(CallError::Refused(ref w)) if !w.contains("SECRET")),
-        "{r:?}"
-    );
-}
-
-#[tokio::test]
 async fn a_backslash_outside_quotes_is_refused_and_the_star_is_not_a_wildcard() {
     let f = fx(false).await;
     let c = f.basic().await;

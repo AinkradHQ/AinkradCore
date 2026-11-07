@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use super::cred::project_key;
+use super::cred::issue_key;
 use super::ops::{Guard, Limit};
 
 /// The one refusal for anything outside the limit. It must not say WHICH project: that would let a
@@ -31,51 +31,40 @@ pub(super) const SAFE_FIELDS: [&str; 11] = [
     "project",
 ];
 
-/// Whether a string holds an issue key (`ABC-12`, at a word boundary) of a project the limit does
-/// not permit. Deliberately blunt: `UTF-8` reads as a key of project `UTF`, so a limited
-/// connection refuses an answer that merely mentions it.
-fn names_outside(s: &str, limit: &Limit) -> bool {
-    let b = s.as_bytes();
-    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-    let mut i = 0;
-    while i < b.len() {
-        if b[i].is_ascii_uppercase() && (i == 0 || !word(b[i - 1])) {
-            let mut j = i;
-            while j < b.len()
-                && (b[j].is_ascii_uppercase() || b[j].is_ascii_digit() || b[j] == b'_')
-            {
-                j += 1;
-            }
-            let mut k = j + 1;
-            while j < b.len() && b[j] == b'-' && k < b.len() && b[k].is_ascii_digit() {
-                k += 1;
-            }
-            let digits = k > j + 1;
-            if j < b.len() && b[j] == b'-' && digits && (k == b.len() || !word(b[k])) {
-                let project = &s[i..j];
-                if project_key(project) && !limit.permits(project) {
-                    return true;
-                }
-            }
-            i = j.max(i + 1);
-        } else {
-            i += 1;
-        }
-    }
-    false
-}
-
-fn embeds_outside(v: &Value, limit: &Limit) -> bool {
-    match v {
-        Value::String(s) => names_outside(s, limit),
-        Value::Array(a) => a.iter().any(|x| embeds_outside(x, limit)),
-        Value::Object(o) => o.values().any(|x| embeds_outside(x, limit)),
-        _ => false,
-    }
-}
-
 fn project_of(issue: &Value) -> Option<&str> {
-    issue["fields"]["project"]["key"].as_str()
+    issue.get("fields")?.get("project")?.get("key")?.as_str()
+}
+
+/// A field that should hold an issue key: absent is fine, present must be a key of a permitted
+/// project.
+fn key_ok(v: Option<&Value>, limit: &Limit) -> bool {
+    v.is_none_or(|k| {
+        k.as_str()
+            .and_then(issue_key)
+            .is_some_and(|p| limit.permits(p))
+    })
+}
+
+/// The structured fields of an issue that carry other issues' keys: its own `key`, the parent,
+/// the subtasks and the links. Free text (summary, description, labels, comments) is not scanned:
+/// a mention there ("UTF-8", "see XYZ-5") is a string, not a reach into another project, and the
+/// field allowlist already keeps a limited read from asking for the structured ones.
+fn structured_ok(issue: &Value, limit: &Limit) -> bool {
+    let fields = issue.get("fields");
+    let sub = |name: &str| fields.and_then(|f| f.get(name));
+    let list_ok = |name: &str, each: &dyn Fn(&Value) -> bool| {
+        sub(name)
+            .and_then(Value::as_array)
+            .is_none_or(|a| a.iter().all(each))
+    };
+    key_ok(issue.get("key"), limit)
+        && key_ok(sub("parent").and_then(|p| p.get("key")), limit)
+        && list_ok("subtasks", &|s| key_ok(s.get("key"), limit))
+        && list_ok("issuelinks", &|l| {
+            ["inwardIssue", "outwardIssue"]
+                .iter()
+                .all(|side| key_ok(l.get(side).and_then(|i| i.get("key")), limit))
+        })
 }
 
 /// The pre-read of a change: its issue must be in a permitted project.
@@ -100,25 +89,31 @@ pub fn check_result(guard: Guard, mut v: Value, limit: &Limit) -> Result<Value, 
     match guard {
         Guard::Read => {
             check_preread(&v, limit)?;
-            (!embeds_outside(&v, limit))
-                .then_some(v)
-                .ok_or_else(outside)
+            structured_ok(&v, limit).then_some(v).ok_or_else(outside)
         }
         Guard::Search => {
-            let issues = v["issues"]
-                .as_array()
+            let issues = v
+                .get("issues")
+                .and_then(Value::as_array)
                 .ok_or("the search answer is unreadable")?;
             for i in issues {
                 check_preread(i, limit)?;
-                if embeds_outside(i, limit) {
+                if !structured_ok(i, limit) {
                     return Err(outside());
                 }
             }
             Ok(v)
         }
         Guard::Projects => {
-            if let Some(list) = v["values"].as_array_mut() {
-                list.retain(|p| p["key"].as_str().is_some_and(|k| limit.permits(k)));
+            match v.get_mut("values").and_then(Value::as_array_mut) {
+                Some(list) => list.retain(|p| {
+                    p.get("key")
+                        .and_then(Value::as_str)
+                        .is_some_and(|k| limit.permits(k))
+                }),
+                // A limited list that cannot be read cannot be cut: refuse it.
+                None if limit.limited() => return Err("the project list is unreadable".into()),
+                None => {}
             }
             if limit.limited() {
                 // The upstream totals count projects the caller may not see.

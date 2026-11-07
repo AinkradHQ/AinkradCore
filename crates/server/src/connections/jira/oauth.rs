@@ -201,10 +201,15 @@ fn redirect_ok(uri: &str) -> bool {
 
 /// Whether the access token is due for renewal at `now`: an OAuth credential with a known expiry
 /// that is closer than the skew.
-pub(super) fn due(m: &Material, now: &str) -> bool {
+///
+/// "Closer than the skew" is relative for a short-lived token: with `lifetime` known (what the
+/// service said at the last renewal) a token is due when less than a quarter of its life is left
+/// (at most the skew), so a 90 s token is not renewed on every use.
+pub(super) fn due(m: &Material, now: &str, lifetime: Option<i64>) -> bool {
+    let threshold = lifetime.map_or(SKEW_SECS, |l| SKEW_SECS.min(l / 4));
     let exp = m.expires_at.as_deref().and_then(unix_secs);
     match (unpack(m), exp, unix_secs(now)) {
-        (Some(Cred::Oauth { .. }), Some(exp), Some(now)) => exp - now < SKEW_SECS,
+        (Some(Cred::Oauth { .. }), Some(exp), Some(now)) => exp - now < threshold,
         _ => false,
     }
 }
@@ -307,7 +312,7 @@ impl Jira {
         let tokens = token_call(&self.http, &body, now)
             .await
             .map_err(FlowError::Exchange)?;
-        let (access, Some(refresh), expires_at) = tokens else {
+        let (access, Some(refresh), expires_at, _) = tokens else {
             return Err(FlowError::NoRefreshToken);
         };
         let sites = self.sites(&access).await.map_err(FlowError::Exchange)?;

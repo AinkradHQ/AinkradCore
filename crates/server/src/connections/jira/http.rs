@@ -53,6 +53,13 @@ pub enum CallError {
     /// project limit). Never carries an argument value.
     Refused(String),
     Internal(&'static str),
+    /// The token endpoint refused Core's own app (`invalid_client`, `unauthorized_client`): the
+    /// Atlassian app registration or its secret is wrong. No connection's credential is at fault,
+    /// so there is no per-connection health signal.
+    AppConfig,
+    /// An OAuth token is expired or refused and this Core has no Atlassian app configured, so it
+    /// cannot be renewed: the connection needs the token the app would have renewed.
+    OAuthNotConfigured,
 }
 
 impl fmt::Display for CallError {
@@ -70,6 +77,12 @@ impl fmt::Display for CallError {
             Self::Broken => f.write_str("the exchange with Jira broke off"),
             Self::Refused(why) => write!(f, "refused: {why}"),
             Self::Internal(why) => f.write_str(why),
+            Self::AppConfig => f.write_str(
+                "Atlassian refused this Core's app registration: check the client id and secret",
+            ),
+            Self::OAuthNotConfigured => f.write_str(
+                "Sign in with Atlassian is not set up on this Core, so an expired token cannot be renewed",
+            ),
         }
     }
 }
@@ -86,6 +99,7 @@ impl CallError {
             Self::RateLimited { retry_after } => Some((UpstreamStatus::RateLimited, *retry_after)),
             Self::Upstream(_) => Some((UpstreamStatus::ServerError, None)),
             Self::Network => Some((UpstreamStatus::Unreachable, None)),
+            Self::OAuthNotConfigured => Some((UpstreamStatus::AuthFailed, None)),
             _ => None,
         }
     }
@@ -105,6 +119,8 @@ impl CallError {
             Self::Broken => "broken",
             Self::Refused(_) => "refused",
             Self::Internal(_) => "internal",
+            Self::AppConfig => "app_config",
+            Self::OAuthNotConfigured => "oauth_not_configured",
         }
     }
 }

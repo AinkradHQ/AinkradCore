@@ -19,6 +19,16 @@ use crate::connections::material::Material;
 use crate::ops::secretbox::SecretBox;
 use crate::scheduler::{iso_of_unix, unix_secs};
 use crate::store::connections::{Who, secret};
+use crate::store::secrets::Error;
+
+/// What a renewal knows about a token's life, per connection: when it was renewed and how long the
+/// service said it would last.
+pub(super) type Recent = Arc<Mutex<HashMap<i64, (Instant, i64)>>>;
+
+fn lifetime_of(recent: &Recent, id: i64) -> Option<i64> {
+    let map = recent.lock().unwrap_or_else(|e| e.into_inner());
+    map.get(&id).map(|(_, life)| *life)
+}
 
 impl Jira {
     fn lock_of(&self, id: i64) -> Arc<tokio::sync::Mutex<()>> {
@@ -29,41 +39,52 @@ impl Jira {
         locks.entry(id).or_default().clone()
     }
 
-    async fn open(cx: &Ctx<'_>, id: i64) -> Result<Material, CallError> {
-        let gone = |_| CallError::Internal("the connection's credential did not open");
-        secret::open(cx.pool, cx.sealer, cx.who.workspace, id)
-            .await
-            .map(|(m, _)| m)
-            .map_err(gone)
-    }
-
-    /// The credential of connection `id`, its access token renewed first if it is within two
-    /// minutes of expiry. [`Jira::test_connection`] does this before it tests.
+    /// The credential of connection `id`, its access token renewed first if it is nearly
+    /// expired. [`Jira::test_connection`] does this before it tests.
     pub async fn fresh(&self, cx: &Ctx<'_>, id: i64) -> Result<Material, CallError> {
         self.renew(cx, id, None).await
     }
 
-    /// Single-flight renewal. `rejected` is the packed access the service just refused (a 401):
-    /// then the material is renewed unless it already differs (someone else renewed it), and not
-    /// at all when it was renewed less than the skew ago (a fresh token that is refused is a real
-    /// refusal, not a reason to spend another refresh token).
-    ///
-    /// The renewal (the exchange and the sealing of the rotated refresh token) runs in a task of
-    /// its own, holding the lock: a caller that is dropped mid-way (a timeout, a cancelled
-    /// request) cannot lose a refresh token the service has already rotated.
     pub(super) async fn renew(
         &self,
         cx: &Ctx<'_>,
         id: i64,
         rejected: Option<&str>,
     ) -> Result<Material, CallError> {
-        let m = Self::open(cx, id).await?;
-        if rejected.is_none() && !due(&m, cx.who.now) {
-            return Ok(m);
+        self.renew_versioned(cx, id, rejected).await.1
+    }
+
+    /// Single-flight renewal, and the credential VERSION it judged (0 when none could be read):
+    /// a verdict on a credential must be recorded against that version, so one about an old
+    /// credential cannot settle a newer one a person stored meanwhile.
+    ///
+    /// `rejected` is the packed access the service just refused (a 401): then the material is
+    /// renewed unless it already differs (someone else renewed it), and not at all when it was
+    /// renewed less than the skew ago (a fresh token that is refused is a real refusal, not a
+    /// reason to spend another refresh token).
+    ///
+    /// The renewal (the exchange and the sealing of the rotated refresh token) runs in a task of
+    /// its own, holding the lock: a caller that is dropped mid-way (a timeout, a cancelled
+    /// request) cannot lose a refresh token the service has already rotated. Its write is
+    /// conditional on the version it started from, so a credential a person stored meanwhile wins.
+    pub(super) async fn renew_versioned(
+        &self,
+        cx: &Ctx<'_>,
+        id: i64,
+        rejected: Option<&str>,
+    ) -> (i64, Result<Material, CallError>) {
+        let opened = secret::open(cx.pool, cx.sealer, cx.who.workspace, id).await;
+        let Ok((m, version)) = opened else {
+            let gone = CallError::Internal("the connection's credential did not open");
+            return (0, Err(gone));
+        };
+        let lifetime = lifetime_of(&self.recent, id);
+        if rejected.is_none() && !due(&m, cx.who.now, lifetime) {
+            return (version, Ok(m));
         }
-        let app = self.app.clone().ok_or(CallError::Internal(
-            "Sign in with Atlassian is not set up on this Core",
-        ))?;
+        let Some(app) = self.app.clone() else {
+            return (version, Err(CallError::OAuthNotConfigured));
+        };
         let lock = self.lock_of(id);
         let job = Job {
             http: self.http.clone(),
@@ -82,8 +103,13 @@ impl Jira {
             let _held = lock.lock_owned().await;
             job.run().await
         });
-        task.await
-            .map_err(|_| CallError::Internal("the renewal was interrupted"))?
+        match task.await {
+            Ok(done) => done,
+            Err(_) => (
+                version,
+                Err(CallError::Internal("the renewal was interrupted")),
+            ),
+        }
     }
 }
 
@@ -99,7 +125,7 @@ struct Job {
     now: String,
     id: i64,
     rejected: Option<Zeroizing<String>>,
-    recent: Arc<Mutex<HashMap<i64, Instant>>>,
+    recent: Recent,
 }
 
 impl Job {
@@ -112,33 +138,45 @@ impl Job {
         }
     }
 
-    async fn run(self) -> Result<Material, CallError> {
+    async fn open(&self) -> Result<(Material, i64), CallError> {
         let gone = |_| CallError::Internal("the connection's credential did not open");
-        let (m, _) = secret::open(&self.pool, &self.sealer, self.workspace, self.id)
+        secret::open(&self.pool, &self.sealer, self.workspace, self.id)
             .await
-            .map_err(gone)?;
+            .map_err(gone)
+    }
+
+    async fn run(self) -> (i64, Result<Material, CallError>) {
+        let (m, version) = match self.open().await {
+            Ok(v) => v,
+            Err(e) => return (0, Err(e)),
+        };
+        let lifetime = lifetime_of(&self.recent, self.id);
         let stale = match &self.rejected {
             Some(r) => m.access() == r.as_str(),
-            None => due(&m, &self.now),
+            None => due(&m, &self.now, lifetime),
         };
         let Some(Cred::Oauth { cloud_id, site, .. }) = unpack(&m).filter(|_| stale) else {
-            return Ok(m);
+            return (version, Ok(m));
         };
         let renewed_lately = self
             .recent
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(&self.id)
-            .is_some_and(|t| t.elapsed() < Duration::from_secs(SKEW_SECS as u64));
+            .is_some_and(|(t, _)| t.elapsed() < Duration::from_secs(SKEW_SECS as u64));
         if self.rejected.is_some() && renewed_lately {
-            return Err(CallError::AuthFailed);
+            return (version, Err(CallError::AuthFailed));
         }
         let Some(old) = m.refresh() else {
-            return Err(CallError::AuthFailed);
+            return (version, Err(CallError::AuthFailed));
         };
         let body = json!({"grant_type": "refresh_token", "client_id": self.app.client_id,
             "client_secret": self.app.client_secret.as_str(), "refresh_token": old});
-        let (access, refresh, expires_at) = token_call(&self.http, &body, &self.now).await?;
+        let issued = match token_call(&self.http, &body, &self.now).await {
+            Ok(t) => t,
+            Err(e) => return (version, Err(e)),
+        };
+        let (access, refresh, expires_at, lifetime) = issued;
         let refresh = refresh.as_ref().map_or(old, |r| r.as_str());
         let sealed = oauth_material(
             &cloud_id,
@@ -146,57 +184,80 @@ impl Job {
             &access,
             Some(refresh),
             Some(expires_at.as_str()),
-        )
-        .ok_or(CallError::Internal("the service sent an unusable token"))?;
+        );
+        let Some(sealed) = sealed else {
+            let unusable = CallError::Internal("the service sent an unusable token");
+            return (version, Err(unusable));
+        };
         // The old refresh token is spent: losing the new one now would strand the connection, so
-        // a failed write is tried again, with a short wait.
+        // a failed write is tried again, with a short wait. A `conflict` is not retried: a person
+        // stored a credential meanwhile, it is the newer one, and this result is dropped.
         for wait_ms in [0u64, 100, 300] {
             tokio::time::sleep(Duration::from_millis(wait_ms)).await;
-            if secret::renew(&self.pool, &self.sealer, self.id, &sealed, self.who())
-                .await
-                .is_ok()
-            {
-                self.recent
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .insert(self.id, Instant::now());
-                return Ok(sealed);
+            let wrote = secret::renew(
+                &self.pool,
+                &self.sealer,
+                self.id,
+                &sealed,
+                self.who(),
+                version,
+            );
+            match wrote.await {
+                Ok(_) => {
+                    let mut recent = self.recent.lock().unwrap_or_else(|e| e.into_inner());
+                    recent.insert(self.id, (Instant::now(), lifetime));
+                    return (version + 1, Ok(sealed));
+                }
+                Err(Error::Refused {
+                    code: "conflict", ..
+                }) => {
+                    return match self.open().await {
+                        Ok((current, v)) => (v, Ok(current)),
+                        Err(e) => (0, Err(e)),
+                    };
+                }
+                Err(_) => {}
             }
         }
-        Err(CallError::Internal(
-            "the renewed credential could not be stored",
-        ))
+        let unstored = CallError::Internal("the renewed credential could not be stored");
+        (version, Err(unstored))
     }
 }
 
-/// POSTs the token endpoint: (access, refresh if issued, expiry). Every status but 2xx is an
-/// error; a refusal of a refresh or a code (400, 401, 403) is [`CallError::AuthFailed`].
-pub(super) async fn token_call(
-    http: &Http,
-    body: &Value,
-    now: &str,
-) -> Result<(Zeroizing<String>, Option<Zeroizing<String>>, String), CallError> {
+/// What the token endpoint said: (access, refresh if issued, expiry, lifetime in seconds).
+type Issued = (Zeroizing<String>, Option<Zeroizing<String>>, String, i64);
+
+/// POSTs the token endpoint. Only a JSON body `error` of `invalid_grant` says THIS credential
+/// (a refresh token or a code) is dead ([`CallError::AuthFailed`], whatever the status: Atlassian
+/// answers 400 or 403). `invalid_client` and `unauthorized_client` are Core's own app registration
+/// ([`CallError::AppConfig`]). Any other 401 or 403 (an edge, a proxy) is [`CallError::Forbidden`]
+/// and any other status is classified as for an API call: none of them condemns a credential.
+pub(super) async fn token_call(http: &Http, body: &Value, now: &str) -> Result<Issued, CallError> {
     let url = format!("{}/oauth/token", http.auth);
     let res = http
         .send(None, Method::POST, &url, None, Some(body))
         .await?;
     let status = res.status;
     if !(200..300).contains(&status) {
-        return Err(match status {
-            400 | 401 | 403 => CallError::AuthFailed,
-            s => classify(s, res.retry_after),
+        let said = res.body.get("error").and_then(Value::as_str);
+        return Err(match (status, said) {
+            (400 | 401 | 403, Some("invalid_grant")) => CallError::AuthFailed,
+            (_, Some("invalid_client" | "unauthorized_client")) => CallError::AppConfig,
+            (401 | 403, _) => CallError::Forbidden,
+            (s, _) => classify(s, res.retry_after),
         });
     }
     let v = res.body;
-    let text = |k: &str| v[k].as_str().map(|s| Zeroizing::new(s.to_owned()));
+    let text = |k: &str| {
+        v.get(k)
+            .and_then(Value::as_str)
+            .map(|s| Zeroizing::new(s.to_owned()))
+    };
     let access = text("access_token").ok_or(CallError::Upstream(status))?;
-    let secs = v["expires_in"]
-        .as_i64()
-        .filter(|n| (60..=86_400).contains(n));
+    let secs = v
+        .get("expires_in")
+        .and_then(Value::as_i64)
+        .map_or(3600, |n| n.clamp(60, 86_400));
     let now = unix_secs(now).ok_or(CallError::Internal("the clock is unreadable"))?;
-    Ok((
-        access,
-        text("refresh_token"),
-        iso_of_unix(now + secs.unwrap_or(3600)),
-    ))
+    Ok((access, text("refresh_token"), iso_of_unix(now + secs), secs))
 }

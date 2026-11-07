@@ -134,7 +134,7 @@ pub struct Jira {
     flows: Mutex<oauth::Flows>,
     locks: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
     /// When each connection's token was last renewed (see `oauth::Job::run`).
-    recent: Arc<Mutex<HashMap<i64, std::time::Instant>>>,
+    recent: renew::Recent,
 }
 
 fn clean(s: &str, max: usize) -> String {
@@ -252,12 +252,33 @@ impl Jira {
             Cred::Basic { .. } => (self.url(cred, "/myself"), "accountId", "displayName"),
         };
         let v = self.send_url(cred, Method::GET, &url, None).await?;
-        let id = v[id_key].as_str().filter(|s| !s.is_empty());
+        let id = v
+            .get(id_key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty());
         Ok(Myself {
             account_id: clean(id.ok_or(CallError::Upstream(200))?, 128),
-            display_name: clean(v[name_key].as_str().unwrap_or("Jira user"), 80),
+            display_name: clean(
+                v.get(name_key)
+                    .and_then(Value::as_str)
+                    .unwrap_or("Jira user"),
+                80,
+            ),
             site: cred.site(),
         })
+    }
+
+    /// Whether the account still reaches an OAuth connection's site (`accessible-resources`, no
+    /// scope needed); `None` when that could not be read. A token connection has no cloud id.
+    async fn site_listed(&self, cred: &Cred) -> Option<bool> {
+        let Cred::Oauth { cloud_id, .. } = cred else {
+            return Some(true);
+        };
+        let url = format!("{}/oauth/token/accessible-resources", self.http.api);
+        let v = self.send_url(cred, Method::GET, &url, None).await.ok()?;
+        let sites = v.as_array()?;
+        let listed = |s: &Value| s.get("id").and_then(Value::as_str) == Some(cloud_id.as_str());
+        Some(sites.iter().any(listed))
     }
 
     /// Tests connection `id` and records the outcome, the way `verdict::run_test` does but with the
@@ -269,20 +290,37 @@ impl Jira {
         cx: &Ctx<'_>,
         id: i64,
     ) -> Result<Connection, crate::store::secrets::Error> {
-        let renewed = self.fresh(cx, id).await;
-        let (m, version) =
-            crate::store::connections::secret::open(cx.pool, cx.sealer, cx.who.workspace, id)
-                .await?;
+        let c = crate::store::connections::get(cx.pool, cx.who.workspace, id).await?;
+        if c.kind != "jira" {
+            return crate::store::connections::refused("bad_request", "not a Jira connection");
+        }
+        // The verdict is recorded against the version the renewal judged (and the credential it
+        // tested is that version's): a refusal of an old refresh token cannot condemn a credential
+        // a person stored while the renewal ran.
+        let (version, renewed) = self.renew_versioned(cx, id, None).await;
+        if version == 0 {
+            return crate::store::connections::refused(
+                "secrets_unavailable",
+                "the connection's credential did not open",
+            );
+        }
         let outcome = match renewed {
             Err(CallError::AuthFailed) => TestOutcome::Rejected,
             Err(_) => TestOutcome::Inconclusive,
-            Ok(_) => match self.test(&m).await {
+            Ok(m) => match self.test(&m).await {
                 Ok(identity) => TestOutcome::Passed(identity),
                 Err(TestError::Rejected) => TestOutcome::Rejected,
                 Err(TestError::Inconclusive) => TestOutcome::Inconclusive,
             },
         };
-        verdict::record_test(cx.pool, id, version, outcome, cx.who).await
+        match verdict::record_test(cx.pool, id, version, outcome, cx.who).await {
+            // The credential changed while this was judged: the verdict was dropped, and the
+            // connection as it now stands is the answer.
+            Err(crate::store::secrets::Error::Refused {
+                code: "conflict", ..
+            }) => crate::store::connections::get(cx.pool, cx.who.workspace, id).await,
+            other => other,
+        }
     }
 }
 
@@ -308,9 +346,17 @@ impl KindAdapter for Jira {
                 .and_then(unix_secs)
                 .is_some_and(|e| e <= now + oauth::SKEW_SECS);
             match self.myself(&cred).await {
-                Ok(me) => Ok(Identity {
-                    subject: format!("{} at {}", me.account_id, me.site),
-                }),
+                // A working token for an account that no longer reaches the site is a connection
+                // to nothing: conclusive when the site list was read and lacks it (C1 has one
+                // conclusive verdict, a rejection: the connection needs signing in again),
+                // no verdict when the list could not be read.
+                Ok(me) => match self.site_listed(&cred).await {
+                    Some(true) => Ok(Identity {
+                        subject: format!("{} at {}", me.account_id, me.site),
+                    }),
+                    Some(false) => Err(TestError::Rejected),
+                    None => Err(TestError::Inconclusive),
+                },
                 Err(CallError::AuthFailed) if !expired => Err(TestError::Rejected),
                 Err(_) => Err(TestError::Inconclusive),
             }

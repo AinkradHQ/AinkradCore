@@ -257,8 +257,13 @@ async fn a_refused_code_or_a_missing_refresh_token_fails_plainly() {
         .await
         .map(|_| ())
         .unwrap_err();
-    assert_eq!(e, FlowError::Exchange(CallError::AuthFailed));
+    assert_eq!(e, FlowError::Exchange(CallError::Forbidden));
     assert!(!e.to_string().contains("access_denied"));
+    f.fake
+        .reply("POST /oauth/token", 400, json!({"error": "invalid_grant"}));
+    let s = f.jira.start(1, REDIRECT, None).unwrap();
+    let e = f.jira.finish(1, &s.state, "c", None, NOW).await.map(|_| ());
+    assert_eq!(e, Err(FlowError::Exchange(CallError::AuthFailed)));
     f.fake.reply(
         "POST /oauth/token",
         200,
