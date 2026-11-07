@@ -203,6 +203,10 @@ async fn main() -> ExitCode {
         ["mcp-forward", port, sock] => {
             return ainkrad_runner::mcp_bridge::forward_main(port, sock).await;
         }
+        // The harness's MCP server for the connection tools (C4b): stdio to the session's socket.
+        ["mcp-stdio", sock] => {
+            return ainkrad_runner::v2::agent::tools::sock::stdio_main(sock).await;
+        }
         ["install-launchd", rest @ ..] => return install_launchd(rest),
         ["uninstall-launchd"] => return uninstall_launchd(false),
         ["uninstall-launchd", "--unload"] => return uninstall_launchd(true),

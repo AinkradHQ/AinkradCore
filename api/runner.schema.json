@@ -615,6 +615,9 @@
           "description": "What it does and the arguments it takes, for the model.",
           "type": "string"
         },
+        "input_schema": {
+          "description": "The JSON Schema (an object schema) of its arguments, for the harness's tool list. Absent\nfrom an older Core: the runner then lists an open object."
+        },
         "name": {
           "description": "The operation, `github.get_issue`.",
           "type": "string"

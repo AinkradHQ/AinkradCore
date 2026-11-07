@@ -303,19 +303,24 @@ impl HarnessExecutor {
             match event {
                 HarnessEvent::SessionStarted { id } => *session = Some(id),
                 HarnessEvent::ApprovalRequested { id, tool, input } => {
-                    let decision =
-                        match self.decide(&inbox.policy(&job.policy), &tool, &input, &spec.cwd) {
-                            Ok(()) => Decision::Allow,
-                            Err(why) => {
-                                emit(Report::Event(
-                                    json!({"type": "approval_escalated", "id": id,
+                    let own = self.connection_call(job, &spec.env, &tool);
+                    let decided = if own {
+                        Ok(())
+                    } else {
+                        self.decide(&inbox.policy(&job.policy), &tool, &input, &spec.cwd)
+                    };
+                    let decision = match decided {
+                        Ok(()) => Decision::Allow,
+                        Err(why) => {
+                            emit(Report::Event(
+                                json!({"type": "approval_escalated", "id": id,
                                         "tool": tool, "reason": why}),
-                                ))
-                                .await;
-                                self.escalate(&id, &tool, &input, reports, approval_timeout)
-                                    .await
-                            }
-                        };
+                            ))
+                            .await;
+                            self.escalate(&id, &tool, &input, reports, approval_timeout)
+                                .await
+                        }
+                    };
                     let (approved, reason) = match &decision {
                         Decision::Allow => (true, None),
                         Decision::Deny { reason } => (false, Some(reason)),

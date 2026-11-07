@@ -500,6 +500,10 @@ async fn agents(
 ) -> Result<super::agent::AgentDriver, String> {
     let [secrets, work] = runtime_paths(state);
     let mut executor = crate::HarnessExecutor::new(work, state.join("agents-config"));
+    // The connection tools the Core lists, shared by the driver (its socket) and the executor (its
+    // approvals): one `Tools`.
+    let tools = Arc::new(super::agent::tools::Tools::default());
+    executor.tools = Some(tools.clone());
     let egress_ready = egress_filter(&mut executor).await?;
     // The auth gateway is offered only once its socket has been seen to answer; a failure
     // withholds the capability, it does not stop the driver.
@@ -510,6 +514,7 @@ async fn agents(
             false
         }
     };
+    let tools_ready = super::agent::tools::selftest::offered(&state.join("agents")).await;
     // The Citadel MCP server at the Core this runner is enrolled with: without it a run's harness
     // is given no MCP config, whatever token the Core minted.
     executor.mcp_url = core_url.and_then(|u| crate::core_mcp_url(&u));
@@ -530,6 +535,7 @@ async fn agents(
     }
     super::agent::AgentDriver::new(config, executor)
         .map(|d| {
+            let d = d.with_tools(tools);
             let sandbox = super::sandbox::ProcessSandbox::new(state.to_path_buf(), secrets)
                 .with_network(std::env::var("AINKRAD_AGENT_NETWORK").ok());
             let sandbox = if egress_ready {
@@ -537,8 +543,13 @@ async fn agents(
             } else {
                 sandbox
             };
-            d.with_sandbox(Arc::new(if gateway_ready {
+            let sandbox = if gateway_ready {
                 sandbox.with_gateway_ready()
+            } else {
+                sandbox
+            };
+            d.with_sandbox(Arc::new(if tools_ready {
+                sandbox.with_tools_ready()
             } else {
                 sandbox
             }))

@@ -139,7 +139,9 @@
 ///    `clearConnectionDefault`, `getConnectionApp`, `setConnectionApp` (`admin`, every write destructive);
 ///    `createAgentSession` takes `connection_access` (`admin`); the `connection.health` event; the
 ///    `connection.app_set` audit action.
-pub const API_MINOR: u32 = 46;
+/// 47: connection tools in a sandbox (C4b): `ConnTool.input_schema` (optional, the JSON Schema of a tool's
+///    arguments) in the runner schema; no operation changes.
+pub const API_MINOR: u32 = 47;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

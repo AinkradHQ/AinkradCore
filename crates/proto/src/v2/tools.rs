@@ -29,6 +29,8 @@ pub const MAX_ARGS_BYTES: usize = 384 * 1024;
 pub const MAX_RESULT_BYTES: usize = 256 * 1024;
 /// The most calls one poll answer carries, and the most tools one list holds.
 pub const MAX_BATCH: usize = 32;
+/// The most bytes of one tool's input schema (as JSON text) a runner lists to a harness.
+pub const MAX_SCHEMA_BYTES: usize = 16 * 1024;
 /// The most calls a runner keeps waiting on the Core for one session.
 pub const MAX_PENDING: usize = 64;
 
@@ -57,6 +59,11 @@ pub struct ConnTool {
     /// It changes something upstream.
     #[serde(default)]
     pub write: bool,
+    /// The JSON Schema (an object schema) of its arguments, for the harness's tool list. Absent
+    /// from an older Core: the runner then lists an open object.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<Value>")]
+    pub input_schema: Option<Value>,
 }
 
 /// Runner to Core: the harness called `tool`.

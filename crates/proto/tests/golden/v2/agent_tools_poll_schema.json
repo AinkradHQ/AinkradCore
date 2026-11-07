@@ -1,0 +1,1 @@
+{"stream_id":7,"kind":"command","seq":0,"payload":{"after":0,"op":"agent.tools","session":"as_a","tools":[{"description":"Read an issue","input_schema":{"additionalProperties":false,"properties":{"repo":{"type":"string"}},"required":["repo"],"type":"object"},"name":"github.get_issue","write":false}]}}

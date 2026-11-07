@@ -56,6 +56,11 @@ pub struct ProcessSandbox {
     /// The auth gateway passed its start-up self-test (`gateway::selftest`): the `gateway`
     /// capability is advertised, so the Core may place a session with a grant here.
     gateway_ready: bool,
+    /// The connection tools socket passed its start-up self-test (`agent::tools::selftest`): a
+    /// real sandbox reached its own session's socket and could see no other. The
+    /// `connection-tools` capability is advertised only then (Linux only: the slot is bubblewrap's,
+    /// and Seatbelt denies unix sockets wholesale, so macOS offers nothing).
+    tools_ready: bool,
     /// `AINKRAD_AGENT_NETWORK`, read once when the driver started: a later change of the
     /// process environment does not change what a session gets.
     requested: Option<String>,
@@ -164,6 +169,7 @@ impl ProcessSandbox {
             secrets,
             egress_ready: false,
             gateway_ready: false,
+            tools_ready: false,
             requested: None,
             probe,
         }
@@ -185,6 +191,12 @@ impl ProcessSandbox {
     /// Marks the auth gateway as proven on this host (Linux only: the slot is a bubblewrap one).
     pub fn with_gateway_ready(mut self) -> Self {
         self.gateway_ready = cfg!(target_os = "linux");
+        self
+    }
+
+    /// Marks the connection tools socket as proven on this host (Linux only).
+    pub fn with_tools_ready(mut self) -> Self {
+        self.tools_ready = cfg!(target_os = "linux");
         self
     }
 
@@ -274,11 +286,16 @@ impl Sandbox for ProcessSandbox {
     }
 
     fn capabilities(&self) -> &'static [&'static str] {
-        match (self.egress_ready, self.gateway_ready) {
-            (false, false) => &[],
-            (true, false) => &["egress-filter"],
-            (false, true) => &[ainkrad_proto::v2::CAP_GATEWAY],
-            (true, true) => &["egress-filter", ainkrad_proto::v2::CAP_GATEWAY],
+        use ainkrad_proto::v2::{CAP_GATEWAY as G, CAP_TOOLS as T};
+        match (self.egress_ready, self.gateway_ready, self.tools_ready) {
+            (false, false, false) => &[],
+            (true, false, false) => &["egress-filter"],
+            (false, true, false) => &[G],
+            (true, true, false) => &["egress-filter", G],
+            (false, false, true) => &[T],
+            (true, false, true) => &["egress-filter", T],
+            (false, true, true) => &[G, T],
+            (true, true, true) => &["egress-filter", G, T],
         }
     }
 
@@ -575,3 +592,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod tools_tests;

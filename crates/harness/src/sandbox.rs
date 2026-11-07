@@ -7,6 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 mod budget;
+mod tools;
 pub(crate) mod tree;
 pub(crate) use budget::configure as configure_budget;
 pub(crate) use budget::{Budget, Watch};
@@ -384,6 +385,8 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
                 c.args(["--setenv", "NODE_USE_ENV_PROXY", "1"]);
             }
         }
+        // The session's connection tools socket (C4b), whatever the network mode.
+        tools::apply(&mut c, spec, &mut bound)?;
         c.args(["--remount-ro", "/dev", "--remount-ro", "/"])
             .arg("--chdir")
             .arg(&spec.cwd)
