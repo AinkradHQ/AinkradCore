@@ -32,9 +32,9 @@ use crate::module::Module;
 use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{
-    accounts, agents, audit, budgets, chains, costs, devices, events, handshake, lockouts, me,
-    pair, pairing, passkey, runners, secrets, session, settings, stepup, terminals, ticket, types,
-    websession,
+    accounts, agents, audit, budgets, chains, connections, costs, devices, events, handshake,
+    lockouts, me, pair, pairing, passkey, runners, secrets, session, settings, stepup, terminals,
+    ticket, types, websession,
 };
 
 #[derive(OpenApi)]
@@ -209,7 +209,7 @@ pub fn event_scopes(
 
 /// [`json`] with `modules`' event kinds and audit actions listed too.
 pub fn json_for(modules: &[Arc<dyn Module>]) -> String {
-    let mut spec = serde_json::to_value(ApiDoc::openapi()).expect("spec serialises");
+    let mut spec = connections::contract(ApiDoc::openapi());
     merge_modules(&mut spec, modules);
     normalise(&mut spec);
     module_extensions(&mut spec, modules);

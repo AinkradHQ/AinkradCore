@@ -116,4 +116,10 @@ pub struct NewAgentSession {
     /// default chain, serves the session. Needs `admin`. With no chain either way the session
     /// runs as a plain one and names its harness.
     pub agent: Option<String>,
+    /// Capability names the session may call through its connections (`read_repo`,
+    /// `issues_write`, `read_issues`, ...; see `listConnectionKinds`). Needs `admin`. Absent: the
+    /// default, read-class capabilities only (write is an explicit grant); an agent's session
+    /// with none has no connection tools. An empty list is refused (400 `empty_allowlist`), and
+    /// so are operation names and `*` (400).
+    pub connection_access: Option<Vec<String>>,
 }

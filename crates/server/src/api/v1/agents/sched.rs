@@ -243,3 +243,13 @@ pub(super) async fn create_named(
     };
     Ok(ch::create_session(&app.pool, new, None, None, req, BY, &app.clock.now()).await?)
 }
+
+impl From<Refusal> for ApiError {
+    fn from(r: Refusal) -> Self {
+        match r {
+            Refusal::Runner(e) => super::super::runners::failed(&e),
+            Refusal::Secrets(e) => e.into(),
+            Refusal::Db(e) => e.into(),
+        }
+    }
+}

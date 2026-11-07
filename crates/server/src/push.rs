@@ -34,6 +34,7 @@ use crate::store::{audit, begin_write};
 
 mod account;
 pub mod apns;
+mod connection;
 pub mod modules;
 pub mod policy;
 pub mod stub;
@@ -205,6 +206,9 @@ impl Classifier for Platform {
         }
         if e.kind.starts_with("account.") {
             return account::notification(e);
+        }
+        if e.kind.starts_with("connection.") {
+            return connection::notification(e);
         }
         let session = p["session"].as_str()?;
         match e.kind.as_str() {
@@ -465,6 +469,8 @@ mod tests;
 mod tests_account;
 #[cfg(test)]
 mod tests_apns;
+#[cfg(test)]
+mod tests_connection;
 #[cfg(test)]
 mod tests_modules;
 #[cfg(test)]

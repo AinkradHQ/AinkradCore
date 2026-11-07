@@ -73,7 +73,11 @@ pub struct Event {
     /// `exhausted`). `account.expired` is `{account, user, reason}`: a key the provider refused was
     /// confirmed and the account disabled. `alarm.raised` with `alarm` `failover_storm` and a
     /// `user` says the bound on that user's failovers stopped a run of theirs from moving (once per
-    /// window and user). No payload holds a key, a token or an
+    /// window and user). `connection.health` is `{connection, user, kind, state, reason}`: a connection's
+    /// health changed (`state` `active`, `cooling`, `limited`, `unhealthy` or `disabled`; `reason` a fixed
+    /// code: `rate_limited`, `quota`, `upstream_errors`, `auth_suspected`, `auth_failed`, `recovered`,
+    /// `auth_cleared`). It is visible to `admin` devices only (`x-event-scopes`), never to a `read` device;
+    /// the push for it goes to the owning user's admin devices only. No payload holds a key, a token or an
     /// upstream's own words.
     pub kind: String,
     #[schema(value_type = Object)]

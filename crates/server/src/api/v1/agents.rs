@@ -18,12 +18,13 @@ use utoipa::ToSchema;
 
 use super::types::{Timestamp, ts};
 use super::{ApiError, ApiResult, BY, Caller};
-use crate::agents::{self, Refusal};
+use crate::agents;
 use crate::api::App;
 use crate::auth::crypto::is_id;
 use crate::store::agents::{self as store, Session, SessionSecret};
 use ainkrad_proto::v2::{AgentDecide, AgentSend, AgentStop, Command};
 
+pub(super) mod access;
 mod sched;
 mod types;
 use sched::{AgentWaiting, create_named, listed, page, shown};
@@ -146,16 +147,6 @@ fn parse<T: DeserializeOwned>(body: &[u8]) -> Result<T, ApiError> {
         .map_err(|_| ApiError::bad_request("the body is not a valid request for this route"))
 }
 
-impl From<Refusal> for ApiError {
-    fn from(r: Refusal) -> Self {
-        match r {
-            Refusal::Runner(e) => super::runners::failed(&e),
-            Refusal::Secrets(e) => e.into(),
-            Refusal::Db(e) => e.into(),
-        }
-    }
-}
-
 async fn one(app: &App, me: &Caller, id: &str) -> Result<Session, ApiError> {
     let found = match is_id(id, "as_") {
         true => store::get(&app.pool, id).await?,
@@ -238,20 +229,20 @@ pub async fn create(
         created_by: &me.device.id,
     };
     let admin = me.device.scopes.iter().any(|scope| scope == "admin");
-    if b.chain.is_some() || b.agent.is_some() {
-        let s = create_named(&app, &me, &new, admin, b.chain, b.agent.as_deref()).await?;
-        agents::authorize_create(&app, &me, &s.id);
-        agents::start(&app, &s).await?;
-        return shown(&app, &me, &s.id).await;
-    }
-    agents::validate_new(&new, admin).map_err(|e| match e {
-        agents::Invalid::Bad(why) => ApiError::bad_request(why),
-        agents::Invalid::Forbidden(why) => {
-            ApiError::new(StatusCode::FORBIDDEN, "forbidden_scope", why)
-        }
-    })?;
-    agents::admit_holding(&app, &b.runner, &b.harness, &policy, &secrets).await?;
-    let s = store::create(&app.pool, &new, BY, &app.clock.now()).await?;
+    let access = access::checked(&app, admin, b.connection_access.as_deref())?;
+    let s = if b.chain.is_some() || b.agent.is_some() {
+        create_named(&app, &me, &new, admin, b.chain, b.agent.as_deref()).await?
+    } else {
+        agents::validate_new(&new, admin).map_err(|e| match e {
+            agents::Invalid::Bad(why) => ApiError::bad_request(why),
+            agents::Invalid::Forbidden(why) => {
+                ApiError::new(StatusCode::FORBIDDEN, "forbidden_scope", why)
+            }
+        })?;
+        agents::admit_holding(&app, &b.runner, &b.harness, &policy, &secrets).await?;
+        store::create(&app.pool, &new, BY, &app.clock.now()).await?
+    };
+    access::apply(&app, &s.id, &access).await?;
     agents::authorize_create(&app, &me, &s.id);
     agents::start(&app, &s).await?;
     shown(&app, &me, &s.id).await

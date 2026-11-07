@@ -79,6 +79,13 @@ pub struct App {
     /// The connection broker (C4): THE adapter registry and the one shared Jira adapter, behind
     /// the tools of agent sessions. C5's routes use `connections.jira()` and `.registry()`.
     pub connections: Arc<crate::connections::broker::Broker>,
+    /// Ainkrad's OAuth apps as configured (C5): GitHub's client id; Jira's app and the GitHub
+    /// App's key live in the shared adapters.
+    pub conn_apps: Arc<crate::connections::apps::Apps>,
+    /// Sign-ins in progress (C5), in memory.
+    pub conn_flows: Arc<crate::connections::flows::Flows>,
+    /// How often connections may be tested through the API (C5).
+    pub conn_pace: Arc<crate::connections::pace::Pace>,
 }
 
 /// Resolves once serve is stopping (`App::closing`).
@@ -116,6 +123,9 @@ impl App {
             connections: Arc::new(crate::connections::broker::Broker::new(Arc::new(
                 crate::connections::jira::Jira::new(None),
             ))),
+            conn_apps: Arc::default(),
+            conn_flows: Arc::default(),
+            conn_pace: Arc::default(),
         }
     }
 }

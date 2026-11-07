@@ -117,10 +117,15 @@ pub(super) async fn sys_audit(
     id: i64,
     details: Value,
 ) -> Result<(), sqlx::Error> {
+    let raised = (action == "connection.state_set").then(|| details.clone());
     match audit(conn, AuditActor::System, action, id, details).await {
-        Ok(()) => Ok(()),
-        Err(Error::Db(e)) => Err(e),
-        Err(Error::Refused { message, .. }) => Err(sqlx::Error::Protocol(message)),
+        Ok(()) => {}
+        Err(Error::Db(e)) => return Err(e),
+        Err(Error::Refused { message, .. }) => return Err(sqlx::Error::Protocol(message)),
+    }
+    match raised {
+        Some(d) => super::notice::raised(conn, id, &d).await,
+        None => Ok(()),
     }
 }
 

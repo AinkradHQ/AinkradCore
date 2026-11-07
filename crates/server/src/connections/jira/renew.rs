@@ -82,7 +82,7 @@ impl Jira {
         if rejected.is_none() && !due(&m, cx.who.now, lifetime) {
             return (version, Ok(m));
         }
-        let Some(app) = self.app.clone() else {
+        let Some(app) = self.app() else {
             return (version, Err(CallError::OAuthNotConfigured));
         };
         let lock = self.lock_of(id);

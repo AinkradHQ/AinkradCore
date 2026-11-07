@@ -68,6 +68,20 @@ impl OAuthApp {
     }
 }
 
+impl OAuthApp {
+    /// Whether `other` is the same registration (client id, secret and redirects).
+    pub(super) fn same(&self, other: &Self) -> bool {
+        self.client_id == other.client_id
+            && self.client_secret.as_str() == other.client_secret.as_str()
+            && self.redirects == other.redirects
+    }
+
+    /// The redirect addresses registered with Atlassian, exactly.
+    pub fn redirects(&self) -> &[String] {
+        &self.redirects
+    }
+}
+
 impl fmt::Debug for OAuthApp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("OAuthApp(<redacted>)")
@@ -215,6 +229,21 @@ pub(super) fn due(m: &Material, now: &str, lifetime: Option<i64>) -> bool {
 }
 
 impl Jira {
+    /// Drops the pending sign-in `state` of `user` (a cancelled or ended flow); nothing when it
+    /// is spent, expired or another user's.
+    pub fn cancel(&self, user: i64, state: &str) {
+        let mut flows = self.flows.lock().unwrap_or_else(|e| e.into_inner());
+        if flows.get(state).is_some_and(|p| p.user == user) {
+            flows.remove(state);
+        }
+    }
+
+    /// How many sign-ins are waiting.
+    #[cfg(test)]
+    pub(crate) fn pending(&self) -> usize {
+        self.flows.lock().unwrap_or_else(|e| e.into_inner()).len()
+    }
+
     /// Starts a sign-in for `user`. `challenge` is the app's own PKCE challenge when it made the
     /// verifier itself (then [`Jira::finish`] needs the verifier); otherwise Core makes both and
     /// keeps the verifier.
@@ -224,7 +253,9 @@ impl Jira {
         redirect_uri: &str,
         challenge: Option<&str>,
     ) -> Result<Started, FlowError> {
-        let app = self.app.as_ref().ok_or(FlowError::NotConfigured)?;
+        // Held to the end: `set_app` cannot swap the app between the check and the flow's insert.
+        let guard = self.app.read().unwrap_or_else(|e| e.into_inner());
+        let app = guard.as_ref().ok_or(FlowError::NotConfigured)?;
         if !app.redirects.iter().any(|r| r == redirect_uri) {
             return Err(FlowError::BadRedirect);
         }
@@ -288,7 +319,7 @@ impl Jira {
         verifier: Option<&str>,
         now: &str,
     ) -> Result<Finished, FlowError> {
-        let app = self.app.as_ref().ok_or(FlowError::NotConfigured)?;
+        let app = self.app().ok_or(FlowError::NotConfigured)?;
         let flow = {
             let mut flows = self.flows.lock().unwrap_or_else(|e| e.into_inner());
             match flows.get(state) {

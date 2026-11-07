@@ -161,6 +161,72 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `PUT /api/v1/chains/{id}/default`.
     /// - Remark: Generated from `#/paths//api/v1/chains/{id}/default/put(setDefaultChain)`.
     func setDefaultChain(_ input: Operations.SetDefaultChain.Input) async throws -> Operations.SetDefaultChain.Output
+    /// - Remark: HTTP `GET /api/v1/connection-apps/{kind}`.
+    /// - Remark: Generated from `#/paths//api/v1/connection-apps/{kind}/get(getConnectionApp)`.
+    func getConnectionApp(_ input: Operations.GetConnectionApp.Input) async throws -> Operations.GetConnectionApp.Output
+    /// - Remark: HTTP `PUT /api/v1/connection-apps/{kind}`.
+    /// - Remark: Generated from `#/paths//api/v1/connection-apps/{kind}/put(setConnectionApp)`.
+    func setConnectionApp(_ input: Operations.SetConnectionApp.Input) async throws -> Operations.SetConnectionApp.Output
+    /// - Remark: HTTP `GET /api/v1/connection-defaults`.
+    /// - Remark: Generated from `#/paths//api/v1/connection-defaults/get(listConnectionDefaults)`.
+    func listConnectionDefaults(_ input: Operations.ListConnectionDefaults.Input) async throws -> Operations.ListConnectionDefaults.Output
+    /// - Remark: HTTP `PUT /api/v1/connection-defaults/{kind}`.
+    /// - Remark: Generated from `#/paths//api/v1/connection-defaults/{kind}/put(setConnectionDefault)`.
+    func setConnectionDefault(_ input: Operations.SetConnectionDefault.Input) async throws -> Operations.SetConnectionDefault.Output
+    /// - Remark: HTTP `DELETE /api/v1/connection-defaults/{kind}`.
+    /// - Remark: Generated from `#/paths//api/v1/connection-defaults/{kind}/delete(clearConnectionDefault)`.
+    func clearConnectionDefault(_ input: Operations.ClearConnectionDefault.Input) async throws -> Operations.ClearConnectionDefault.Output
+    /// - Remark: HTTP `GET /api/v1/connection-kinds`.
+    /// - Remark: Generated from `#/paths//api/v1/connection-kinds/get(listConnectionKinds)`.
+    func listConnectionKinds(_ input: Operations.ListConnectionKinds.Input) async throws -> Operations.ListConnectionKinds.Output
+    /// - Remark: HTTP `GET /api/v1/connections`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/get(listConnections)`.
+    func listConnections(_ input: Operations.ListConnections.Input) async throws -> Operations.ListConnections.Output
+    /// - Remark: HTTP `POST /api/v1/connections`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/post(createConnection)`.
+    func createConnection(_ input: Operations.CreateConnection.Input) async throws -> Operations.CreateConnection.Output
+    /// - Remark: HTTP `GET /api/v1/connections/flows/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/flows/{id}/get(getConnectionFlow)`.
+    func getConnectionFlow(_ input: Operations.GetConnectionFlow.Input) async throws -> Operations.GetConnectionFlow.Output
+    /// - Remark: HTTP `DELETE /api/v1/connections/flows/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/flows/{id}/delete(cancelConnectionFlow)`.
+    func cancelConnectionFlow(_ input: Operations.CancelConnectionFlow.Input) async throws -> Operations.CancelConnectionFlow.Output
+    /// - Remark: HTTP `POST /api/v1/connections/flows/{id}/callback`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/flows/{id}/callback/post(connectionFlowCallback)`.
+    func connectionFlowCallback(_ input: Operations.ConnectionFlowCallback.Input) async throws -> Operations.ConnectionFlowCallback.Output
+    /// - Remark: HTTP `POST /api/v1/connections/flows/{id}/choose`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/flows/{id}/choose/post(chooseConnectionSite)`.
+    func chooseConnectionSite(_ input: Operations.ChooseConnectionSite.Input) async throws -> Operations.ChooseConnectionSite.Output
+    /// - Remark: HTTP `POST /api/v1/connections/start`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/start/post(startConnectionFlow)`.
+    func startConnectionFlow(_ input: Operations.StartConnectionFlow.Input) async throws -> Operations.StartConnectionFlow.Output
+    /// - Remark: HTTP `GET /api/v1/connections/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/get(getConnection)`.
+    func getConnection(_ input: Operations.GetConnection.Input) async throws -> Operations.GetConnection.Output
+    /// - Remark: HTTP `PATCH /api/v1/connections/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/patch(updateConnection)`.
+    func updateConnection(_ input: Operations.UpdateConnection.Input) async throws -> Operations.UpdateConnection.Output
+    /// - Remark: HTTP `DELETE /api/v1/connections/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/delete(deleteConnection)`.
+    func deleteConnection(_ input: Operations.DeleteConnection.Input) async throws -> Operations.DeleteConnection.Output
+    /// - Remark: HTTP `GET /api/v1/connections/{id}/activity`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/activity/get(listConnectionActivity)`.
+    func listConnectionActivity(_ input: Operations.ListConnectionActivity.Input) async throws -> Operations.ListConnectionActivity.Output
+    /// - Remark: HTTP `PUT /api/v1/connections/{id}/credential`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/credential/put(replaceConnectionCredential)`.
+    func replaceConnectionCredential(_ input: Operations.ReplaceConnectionCredential.Input) async throws -> Operations.ReplaceConnectionCredential.Output
+    /// - Remark: HTTP `GET /api/v1/connections/{id}/grants`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/grants/get(listConnectionGrants)`.
+    func listConnectionGrants(_ input: Operations.ListConnectionGrants.Input) async throws -> Operations.ListConnectionGrants.Output
+    /// - Remark: HTTP `PUT /api/v1/connections/{id}/grants`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/grants/put(setConnectionGrant)`.
+    func setConnectionGrant(_ input: Operations.SetConnectionGrant.Input) async throws -> Operations.SetConnectionGrant.Output
+    /// - Remark: HTTP `DELETE /api/v1/connections/{id}/grants/{grantee_kind}/{grantee}`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/grants/{grantee_kind}/{grantee}/delete(revokeConnectionGrant)`.
+    func revokeConnectionGrant(_ input: Operations.RevokeConnectionGrant.Input) async throws -> Operations.RevokeConnectionGrant.Output
+    /// - Remark: HTTP `POST /api/v1/connections/{id}/test`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/test/post(testConnection)`.
+    func testConnection(_ input: Operations.TestConnection.Input) async throws -> Operations.TestConnection.Output
     /// - Remark: HTTP `GET /api/v1/costs`.
     /// - Remark: Generated from `#/paths//api/v1/costs/get(listCosts)`.
     func listCosts(_ input: Operations.ListCosts.Input) async throws -> Operations.ListCosts.Output
@@ -884,6 +950,252 @@ extension APIProtocol {
         headers: Operations.SetDefaultChain.Input.Headers = .init()
     ) async throws -> Operations.SetDefaultChain.Output {
         try await setDefaultChain(Operations.SetDefaultChain.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/connection-apps/{kind}`.
+    /// - Remark: Generated from `#/paths//api/v1/connection-apps/{kind}/get(getConnectionApp)`.
+    public func getConnectionApp(
+        path: Operations.GetConnectionApp.Input.Path,
+        headers: Operations.GetConnectionApp.Input.Headers = .init()
+    ) async throws -> Operations.GetConnectionApp.Output {
+        try await getConnectionApp(Operations.GetConnectionApp.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `PUT /api/v1/connection-apps/{kind}`.
+    /// - Remark: Generated from `#/paths//api/v1/connection-apps/{kind}/put(setConnectionApp)`.
+    public func setConnectionApp(
+        path: Operations.SetConnectionApp.Input.Path,
+        headers: Operations.SetConnectionApp.Input.Headers = .init(),
+        body: Operations.SetConnectionApp.Input.Body
+    ) async throws -> Operations.SetConnectionApp.Output {
+        try await setConnectionApp(Operations.SetConnectionApp.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/connection-defaults`.
+    /// - Remark: Generated from `#/paths//api/v1/connection-defaults/get(listConnectionDefaults)`.
+    public func listConnectionDefaults(headers: Operations.ListConnectionDefaults.Input.Headers = .init()) async throws -> Operations.ListConnectionDefaults.Output {
+        try await listConnectionDefaults(Operations.ListConnectionDefaults.Input(headers: headers))
+    }
+    /// - Remark: HTTP `PUT /api/v1/connection-defaults/{kind}`.
+    /// - Remark: Generated from `#/paths//api/v1/connection-defaults/{kind}/put(setConnectionDefault)`.
+    public func setConnectionDefault(
+        path: Operations.SetConnectionDefault.Input.Path,
+        headers: Operations.SetConnectionDefault.Input.Headers = .init(),
+        body: Operations.SetConnectionDefault.Input.Body
+    ) async throws -> Operations.SetConnectionDefault.Output {
+        try await setConnectionDefault(Operations.SetConnectionDefault.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `DELETE /api/v1/connection-defaults/{kind}`.
+    /// - Remark: Generated from `#/paths//api/v1/connection-defaults/{kind}/delete(clearConnectionDefault)`.
+    public func clearConnectionDefault(
+        path: Operations.ClearConnectionDefault.Input.Path,
+        headers: Operations.ClearConnectionDefault.Input.Headers = .init()
+    ) async throws -> Operations.ClearConnectionDefault.Output {
+        try await clearConnectionDefault(Operations.ClearConnectionDefault.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/connection-kinds`.
+    /// - Remark: Generated from `#/paths//api/v1/connection-kinds/get(listConnectionKinds)`.
+    public func listConnectionKinds(headers: Operations.ListConnectionKinds.Input.Headers = .init()) async throws -> Operations.ListConnectionKinds.Output {
+        try await listConnectionKinds(Operations.ListConnectionKinds.Input(headers: headers))
+    }
+    /// - Remark: HTTP `GET /api/v1/connections`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/get(listConnections)`.
+    public func listConnections(
+        query: Operations.ListConnections.Input.Query = .init(),
+        headers: Operations.ListConnections.Input.Headers = .init()
+    ) async throws -> Operations.ListConnections.Output {
+        try await listConnections(Operations.ListConnections.Input(
+            query: query,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/connections`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/post(createConnection)`.
+    public func createConnection(
+        headers: Operations.CreateConnection.Input.Headers = .init(),
+        body: Operations.CreateConnection.Input.Body
+    ) async throws -> Operations.CreateConnection.Output {
+        try await createConnection(Operations.CreateConnection.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/connections/flows/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/flows/{id}/get(getConnectionFlow)`.
+    public func getConnectionFlow(
+        path: Operations.GetConnectionFlow.Input.Path,
+        headers: Operations.GetConnectionFlow.Input.Headers = .init()
+    ) async throws -> Operations.GetConnectionFlow.Output {
+        try await getConnectionFlow(Operations.GetConnectionFlow.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `DELETE /api/v1/connections/flows/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/flows/{id}/delete(cancelConnectionFlow)`.
+    public func cancelConnectionFlow(
+        path: Operations.CancelConnectionFlow.Input.Path,
+        headers: Operations.CancelConnectionFlow.Input.Headers = .init()
+    ) async throws -> Operations.CancelConnectionFlow.Output {
+        try await cancelConnectionFlow(Operations.CancelConnectionFlow.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/connections/flows/{id}/callback`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/flows/{id}/callback/post(connectionFlowCallback)`.
+    public func connectionFlowCallback(
+        path: Operations.ConnectionFlowCallback.Input.Path,
+        headers: Operations.ConnectionFlowCallback.Input.Headers = .init(),
+        body: Operations.ConnectionFlowCallback.Input.Body
+    ) async throws -> Operations.ConnectionFlowCallback.Output {
+        try await connectionFlowCallback(Operations.ConnectionFlowCallback.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/connections/flows/{id}/choose`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/flows/{id}/choose/post(chooseConnectionSite)`.
+    public func chooseConnectionSite(
+        path: Operations.ChooseConnectionSite.Input.Path,
+        headers: Operations.ChooseConnectionSite.Input.Headers = .init(),
+        body: Operations.ChooseConnectionSite.Input.Body
+    ) async throws -> Operations.ChooseConnectionSite.Output {
+        try await chooseConnectionSite(Operations.ChooseConnectionSite.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/connections/start`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/start/post(startConnectionFlow)`.
+    public func startConnectionFlow(
+        headers: Operations.StartConnectionFlow.Input.Headers = .init(),
+        body: Operations.StartConnectionFlow.Input.Body
+    ) async throws -> Operations.StartConnectionFlow.Output {
+        try await startConnectionFlow(Operations.StartConnectionFlow.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/connections/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/get(getConnection)`.
+    public func getConnection(
+        path: Operations.GetConnection.Input.Path,
+        headers: Operations.GetConnection.Input.Headers = .init()
+    ) async throws -> Operations.GetConnection.Output {
+        try await getConnection(Operations.GetConnection.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `PATCH /api/v1/connections/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/patch(updateConnection)`.
+    public func updateConnection(
+        path: Operations.UpdateConnection.Input.Path,
+        headers: Operations.UpdateConnection.Input.Headers = .init(),
+        body: Operations.UpdateConnection.Input.Body
+    ) async throws -> Operations.UpdateConnection.Output {
+        try await updateConnection(Operations.UpdateConnection.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `DELETE /api/v1/connections/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/delete(deleteConnection)`.
+    public func deleteConnection(
+        path: Operations.DeleteConnection.Input.Path,
+        headers: Operations.DeleteConnection.Input.Headers = .init()
+    ) async throws -> Operations.DeleteConnection.Output {
+        try await deleteConnection(Operations.DeleteConnection.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/connections/{id}/activity`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/activity/get(listConnectionActivity)`.
+    public func listConnectionActivity(
+        path: Operations.ListConnectionActivity.Input.Path,
+        query: Operations.ListConnectionActivity.Input.Query = .init(),
+        headers: Operations.ListConnectionActivity.Input.Headers = .init()
+    ) async throws -> Operations.ListConnectionActivity.Output {
+        try await listConnectionActivity(Operations.ListConnectionActivity.Input(
+            path: path,
+            query: query,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `PUT /api/v1/connections/{id}/credential`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/credential/put(replaceConnectionCredential)`.
+    public func replaceConnectionCredential(
+        path: Operations.ReplaceConnectionCredential.Input.Path,
+        headers: Operations.ReplaceConnectionCredential.Input.Headers = .init(),
+        body: Operations.ReplaceConnectionCredential.Input.Body
+    ) async throws -> Operations.ReplaceConnectionCredential.Output {
+        try await replaceConnectionCredential(Operations.ReplaceConnectionCredential.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/connections/{id}/grants`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/grants/get(listConnectionGrants)`.
+    public func listConnectionGrants(
+        path: Operations.ListConnectionGrants.Input.Path,
+        headers: Operations.ListConnectionGrants.Input.Headers = .init()
+    ) async throws -> Operations.ListConnectionGrants.Output {
+        try await listConnectionGrants(Operations.ListConnectionGrants.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `PUT /api/v1/connections/{id}/grants`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/grants/put(setConnectionGrant)`.
+    public func setConnectionGrant(
+        path: Operations.SetConnectionGrant.Input.Path,
+        headers: Operations.SetConnectionGrant.Input.Headers = .init(),
+        body: Operations.SetConnectionGrant.Input.Body
+    ) async throws -> Operations.SetConnectionGrant.Output {
+        try await setConnectionGrant(Operations.SetConnectionGrant.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `DELETE /api/v1/connections/{id}/grants/{grantee_kind}/{grantee}`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/grants/{grantee_kind}/{grantee}/delete(revokeConnectionGrant)`.
+    public func revokeConnectionGrant(
+        path: Operations.RevokeConnectionGrant.Input.Path,
+        headers: Operations.RevokeConnectionGrant.Input.Headers = .init()
+    ) async throws -> Operations.RevokeConnectionGrant.Output {
+        try await revokeConnectionGrant(Operations.RevokeConnectionGrant.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/connections/{id}/test`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/test/post(testConnection)`.
+    public func testConnection(
+        path: Operations.TestConnection.Input.Path,
+        headers: Operations.TestConnection.Input.Headers = .init()
+    ) async throws -> Operations.TestConnection.Output {
+        try await testConnection(Operations.TestConnection.Input(
             path: path,
             headers: headers
         ))

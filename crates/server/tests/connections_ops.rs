@@ -396,3 +396,63 @@ async fn an_export_never_carries_a_connection_credential_and_a_backup_does() {
     assert_eq!(n, 1, "a backup keeps it");
     pool.close().await;
 }
+
+#[tokio::test]
+async fn an_export_never_carries_the_oauth_apps_config() {
+    use ainkrad_core_server::store::connections::apps;
+    const SECRET: &str = "app-export-planted-secret-8e41";
+    const PEM: &str = "app-export-planted-pem-line-3c9f";
+    let d = dir("app-export");
+    let home = d.0.join("home");
+    let fp = ok(&["init", s(&home)], &[]);
+    let pool = store::connect(&home.join("core.db")).await.unwrap();
+    store::settings::set(
+        &pool,
+        Key::SecretsMode,
+        Scope::Server,
+        "1",
+        AuditActor::System,
+        NOW,
+    )
+    .await
+    .unwrap();
+    let sealer = SecretBox::from_file(&home.join("keys/master.key")).unwrap();
+    let who = Who {
+        workspace: 1,
+        by_device: "d_test",
+        actor: AuditActor::System,
+        now: NOW,
+    };
+    let fields: [(&str, Option<&str>); 3] = [
+        ("client_id", Some("client-1")),
+        ("client_secret", Some(SECRET)),
+        ("loopback_port", Some("47613")),
+    ];
+    apps::set(&pool, &sealer, "jira", &fields, who)
+        .await
+        .unwrap();
+    apps::set(&pool, &sealer, "github", &[("app_key", Some(PEM))], who)
+        .await
+        .unwrap();
+    let sealed: Vec<u8> =
+        sqlx::query_scalar("SELECT sealed FROM core_connection_apps WHERE field = 'client_secret'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    pool.close().await;
+    let config = home.join("config.toml");
+    let file = d.0.join("core.export");
+    ok(&["export", "--config", s(&config), s(&file)], &[]);
+    let plain = std::fs::read(&file).unwrap();
+    let has = |needle: &[u8]| plain.windows(needle.len()).any(|w| w == needle);
+    assert!(!has(SECRET.as_bytes()) && !has(PEM.as_bytes()));
+    assert!(!has(&sealed[13..45]), "a sealed app field in the export");
+    let imported = d.0.join("imported");
+    ok(&["import", s(&file), "--signer", &fp, s(&imported)], &[]);
+    let pool = store::connect(&imported.join("core.db")).await.unwrap();
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_connection_apps")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 0, "the apps' config is entered again after an import");
+}

@@ -17,6 +17,8 @@
 //!   account usage report (who spent what, in which company) are `admin` without a step-up; a price or an
 //!   account's limit is `admin` and destructive. No route writes the ledger.
 //! - Budgets (KAN-448): reading is `read`; setting, deleting or raising one is `admin` and destructive.
+//! - Connections (C5): reading the kinds and the connections is `read` (a non-admin device sees only the
+//!   connections granted to it); every other route is `admin`, every write destructive.
 //! - `terminal`: opening, attaching, signalling and closing a terminal (listing is `read`).
 //! - A module's routes need the module's own `Module::scope` (`admin` unless it says otherwise),
 //!   or the scope its `Module::route_scopes` declares for that route (`module_scope`).
@@ -109,6 +111,33 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("PUT", "/api/v1/chains/{id}", "admin"),
     ("DELETE", "/api/v1/chains/{id}", "admin"),
     ("PUT", "/api/v1/chains/{id}/default", "admin"),
+    // Connections (C5). The flow templates come before `/connections/{id}/...`: the first that fits wins.
+    ("GET", "/api/v1/connection-kinds", "read"),
+    ("GET", "/api/v1/connections", "read"),
+    ("POST", "/api/v1/connections", "admin"),
+    ("POST", "/api/v1/connections/start", "admin"),
+    ("GET", "/api/v1/connections/flows/{id}", "admin"),
+    ("DELETE", "/api/v1/connections/flows/{id}", "admin"),
+    ("POST", "/api/v1/connections/flows/{id}/callback", "admin"),
+    ("POST", "/api/v1/connections/flows/{id}/choose", "admin"),
+    ("GET", "/api/v1/connections/{id}", "read"),
+    ("PATCH", "/api/v1/connections/{id}", "admin"),
+    ("DELETE", "/api/v1/connections/{id}", "admin"),
+    ("PUT", "/api/v1/connections/{id}/credential", "admin"),
+    ("POST", "/api/v1/connections/{id}/test", "admin"),
+    ("GET", "/api/v1/connections/{id}/activity", "admin"),
+    ("GET", "/api/v1/connections/{id}/grants", "admin"),
+    ("PUT", "/api/v1/connections/{id}/grants", "admin"),
+    (
+        "DELETE",
+        "/api/v1/connections/{id}/grants/{grantee_kind}/{grantee}",
+        "admin",
+    ),
+    ("GET", "/api/v1/connection-defaults", "admin"),
+    ("PUT", "/api/v1/connection-defaults/{kind}", "admin"),
+    ("DELETE", "/api/v1/connection-defaults/{kind}", "admin"),
+    ("GET", "/api/v1/connection-apps/{kind}", "admin"),
+    ("PUT", "/api/v1/connection-apps/{kind}", "admin"),
     ("PUT", "/api/v1/accounts/{id}/limits", "admin"),
     (
         "DELETE",
@@ -201,6 +230,22 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("PUT", "/api/v1/chains/{id}"),
     ("DELETE", "/api/v1/chains/{id}"),
     ("PUT", "/api/v1/chains/{id}/default"),
+    // Connections (C5): every write; starting a sign-in ends in a stored credential (as an account
+    // login does); its poll, callback, site choice and cancel act on the caller's own flow, and a
+    // test is one fixed request, so none of them is here.
+    ("POST", "/api/v1/connections"),
+    ("POST", "/api/v1/connections/start"),
+    ("PATCH", "/api/v1/connections/{id}"),
+    ("DELETE", "/api/v1/connections/{id}"),
+    ("PUT", "/api/v1/connections/{id}/credential"),
+    ("PUT", "/api/v1/connections/{id}/grants"),
+    (
+        "DELETE",
+        "/api/v1/connections/{id}/grants/{grantee_kind}/{grantee}",
+    ),
+    ("PUT", "/api/v1/connection-defaults/{kind}"),
+    ("DELETE", "/api/v1/connection-defaults/{kind}"),
+    ("PUT", "/api/v1/connection-apps/{kind}"),
     // The cost ledger (KAN-449): a price decides what every later turn costs, a limit what an account may spend.
     ("PUT", "/api/v1/prices"),
     ("PUT", "/api/v1/accounts/{id}/limits"),

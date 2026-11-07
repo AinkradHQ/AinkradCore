@@ -269,8 +269,17 @@ impl Registry {
     /// `Arc` the API and the broker call through, so a sign-in started on it is finished on it and
     /// its refresh locks are shared.
     pub fn builtin_with(jira: Arc<super::jira::Jira>) -> Self {
+        Self::builtin_with_github(super::github::Github::strict(), jira)
+    }
+
+    /// [`Registry::builtin_with`] over THE `Github` the server built (it holds the GitHub App's
+    /// key), shared with the broker.
+    pub fn builtin_with_github(
+        github: super::github::Github,
+        jira: Arc<super::jira::Jira>,
+    ) -> Self {
         let mut r = Self::new();
-        r.register(Arc::new(super::github::Github::strict()))
+        r.register(Arc::new(github))
             .expect("the github descriptor is well formed");
         r.register(jira).expect("the shipped descriptors are valid");
         r

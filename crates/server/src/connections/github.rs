@@ -24,6 +24,7 @@ pub mod app;
 pub mod device;
 mod guard;
 pub mod http;
+pub mod install;
 pub mod ops;
 pub mod outcome;
 
@@ -153,6 +154,8 @@ pub struct Done {
 #[derive(Clone)]
 pub struct Github {
     transport: Arc<Transport>,
+    /// The GitHub App's key and the renewal locks (C5): shared by every clone.
+    installer: Arc<install::Installer>,
 }
 
 fn scrub(mut body: Vec<u8>, secrets: &[&str]) -> Vec<u8> {
@@ -173,7 +176,10 @@ fn scrub(mut body: Vec<u8>, secrets: &[&str]) -> Vec<u8> {
 
 impl Github {
     pub fn new(transport: Arc<Transport>) -> Self {
-        Self { transport }
+        Self {
+            transport,
+            installer: Arc::default(),
+        }
     }
 
     pub fn strict() -> Self {

@@ -1,6 +1,7 @@
 //! Creating, editing and deleting a connection; each is one transaction with its audit row.
 
 use serde_json::json;
+use sqlx::SqliteConnection;
 use sqlx::sqlite::SqlitePool;
 
 use super::{Connection, MAX_PER_USER, Who, audit, find, refused, secret, valid_name, valid_text};
@@ -24,6 +25,20 @@ pub async fn create(
     reg: &Registry,
     new: &NewConnection<'_>,
     material: &Material,
+    who: Who<'_>,
+) -> Result<Connection, Error> {
+    create_with(pool, sealer, reg, new, material, None, who).await
+}
+
+/// [`create`] for a GitHub App connection: the installation its token is minted for is stored in
+/// the same transaction, so a connection never exists without it.
+pub async fn create_with(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    reg: &Registry,
+    new: &NewConnection<'_>,
+    material: &Material,
+    installation: Option<(i64, &str)>,
     who: Who<'_>,
 ) -> Result<Connection, Error> {
     let Some(adapter) = reg.get(new.kind) else {
@@ -51,6 +66,9 @@ pub async fn create(
     if owner == 0 {
         return refused("bad_request", "no such user");
     }
+    if let Some((installation, account)) = installation {
+        super::apps::claim_in(&mut tx, installation, account, who.workspace, who.now).await?;
+    }
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_connections WHERE user_id = ?")
         .bind(who.workspace)
         .fetch_one(&mut *tx)
@@ -71,7 +89,8 @@ pub async fn create(
     }
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO core_connections (user_id, kind, name, label, auth_method, created_by, \
-         created_at, updated_at, nonce) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+         created_at, updated_at, nonce, installation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         RETURNING id",
     )
     .bind(who.workspace)
     .bind(new.kind)
@@ -82,6 +101,7 @@ pub async fn create(
     .bind(who.now)
     .bind(who.now)
     .bind(&nonce)
+    .bind(installation.map(|i| i.0))
     .fetch_one(&mut *tx)
     .await?;
     let seal = secret::Seal {
@@ -105,21 +125,19 @@ pub async fn create(
     Ok(c)
 }
 
-/// Changes the label people see.
-pub async fn update_label(
-    pool: &SqlitePool,
+const LABEL_RULE: &str = "a label is 1 to 80 characters, no control characters";
+const NAME_RULE: &str = "a name is [a-z][a-z0-9._-]{0,63}";
+
+async fn label_in(
+    tx: &mut SqliteConnection,
     id: i64,
     label: &str,
     who: Who<'_>,
-) -> Result<Connection, Error> {
+) -> Result<(), Error> {
     if !valid_text(label, 80) {
-        return refused(
-            "bad_request",
-            "a label is 1 to 80 characters, no control characters",
-        );
+        return refused("bad_request", LABEL_RULE);
     }
-    let mut tx = crate::store::begin_write(pool).await?;
-    let old = find(&mut tx, who.workspace, id).await?;
+    let old = find(tx, who.workspace, id).await?;
     sqlx::query("UPDATE core_connections SET label = ?, updated_at = ? WHERE id = ?")
         .bind(label)
         .bind(who.now)
@@ -127,24 +145,19 @@ pub async fn update_label(
         .execute(&mut *tx)
         .await?;
     let details = json!({"from": old.label, "to": label, "by_device": who.by_device});
-    audit(&mut tx, who.actor, "connection.updated", id, details).await?;
-    let c = find(&mut tx, who.workspace, id).await?;
-    tx.commit().await?;
-    Ok(c)
+    audit(tx, who.actor, "connection.updated", id, details).await
 }
 
-/// Renames a connection (bindings and grants name its id, so they follow). Unique per kind.
-pub async fn rename(
-    pool: &SqlitePool,
+async fn rename_in(
+    tx: &mut SqliteConnection,
     id: i64,
     name: &str,
     who: Who<'_>,
-) -> Result<Connection, Error> {
+) -> Result<(), Error> {
     if !valid_name(name) {
-        return refused("bad_request", "a name is [a-z][a-z0-9._-]{0,63}");
+        return refused("bad_request", NAME_RULE);
     }
-    let mut tx = crate::store::begin_write(pool).await?;
-    let old = find(&mut tx, who.workspace, id).await?;
+    let old = find(tx, who.workspace, id).await?;
     let taken: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM core_connections WHERE user_id = ? AND kind = ? AND name = ? \
          AND id != ?",
@@ -165,22 +178,16 @@ pub async fn rename(
         .execute(&mut *tx)
         .await?;
     let details = json!({"from": old.name, "to": name, "by_device": who.by_device});
-    audit(&mut tx, who.actor, "connection.renamed", id, details).await?;
-    let c = find(&mut tx, who.workspace, id).await?;
-    tx.commit().await?;
-    Ok(c)
+    audit(tx, who.actor, "connection.renamed", id, details).await
 }
 
-/// The admin's switch. Turning it off also clears a health `disabled` (a confirmed auth failure):
-/// an admin who re-enables has decided to try it again, and the next test or use re-confirms.
-pub async fn set_disabled(
-    pool: &SqlitePool,
+async fn disabled_in(
+    tx: &mut SqliteConnection,
     id: i64,
     disabled: bool,
     who: Who<'_>,
-) -> Result<Connection, Error> {
-    let mut tx = crate::store::begin_write(pool).await?;
-    let old = find(&mut tx, who.workspace, id).await?;
+) -> Result<(), Error> {
+    let old = find(tx, who.workspace, id).await?;
     if old.disabled != disabled {
         sqlx::query("UPDATE core_connections SET disabled = ?, updated_at = ? WHERE id = ?")
             .bind(disabled)
@@ -194,7 +201,7 @@ pub async fn set_disabled(
             "connection.enabled"
         };
         audit(
-            &mut tx,
+            tx,
             who.actor,
             action,
             id,
@@ -203,7 +210,96 @@ pub async fn set_disabled(
         .await?;
     }
     if !disabled {
-        super::verdict::clear_auth_in(&mut tx, id, who.now, "admin").await?;
+        super::verdict::clear_auth_in(tx, id, who.now, "admin").await?;
+    }
+    Ok(())
+}
+
+/// Changes the label people see.
+pub async fn update_label(
+    pool: &SqlitePool,
+    id: i64,
+    label: &str,
+    who: Who<'_>,
+) -> Result<Connection, Error> {
+    edit(
+        pool,
+        id,
+        &Edit {
+            label: Some(label),
+            ..Edit::default()
+        },
+        who,
+    )
+    .await
+}
+
+/// Renames a connection (bindings and grants name its id, so they follow). Unique per kind.
+pub async fn rename(
+    pool: &SqlitePool,
+    id: i64,
+    name: &str,
+    who: Who<'_>,
+) -> Result<Connection, Error> {
+    edit(
+        pool,
+        id,
+        &Edit {
+            name: Some(name),
+            ..Edit::default()
+        },
+        who,
+    )
+    .await
+}
+
+/// The admin's switch. Turning it off also clears a health `disabled` (a confirmed auth failure):
+/// an admin who re-enables has decided to try it again, and the next test or use re-confirms.
+pub async fn set_disabled(
+    pool: &SqlitePool,
+    id: i64,
+    disabled: bool,
+    who: Who<'_>,
+) -> Result<Connection, Error> {
+    edit(
+        pool,
+        id,
+        &Edit {
+            disabled: Some(disabled),
+            ..Edit::default()
+        },
+        who,
+    )
+    .await
+}
+
+/// What to change about a connection; each field optional.
+#[derive(Default)]
+pub struct Edit<'a> {
+    pub name: Option<&'a str>,
+    pub label: Option<&'a str>,
+    pub disabled: Option<bool>,
+}
+
+/// Applies every field of `e` in ONE transaction: all of it or none (a name that is taken
+/// leaves the label and the switch as they were). Each change keeps its own audit row.
+pub async fn edit(
+    pool: &SqlitePool,
+    id: i64,
+    e: &Edit<'_>,
+    who: Who<'_>,
+) -> Result<Connection, Error> {
+    let mut tx = crate::store::begin_write(pool).await?;
+    find(&mut tx, who.workspace, id).await?;
+    if let Some(l) = e.label {
+        label_in(&mut tx, id, l, who).await?;
+    }
+    if let Some(d) = e.disabled {
+        disabled_in(&mut tx, id, d, who).await?;
+    }
+    // The name last: the change most likely to be refused.
+    if let Some(n) = e.name {
+        rename_in(&mut tx, id, n, who).await?;
     }
     let c = find(&mut tx, who.workspace, id).await?;
     tx.commit().await?;

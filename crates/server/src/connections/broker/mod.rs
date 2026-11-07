@@ -96,8 +96,9 @@ pub struct Broker {
 impl Broker {
     /// The server's broker: THE registry (`Registry::builtin_with` over the one shared `Jira`).
     pub fn new(jira: Arc<Jira>) -> Self {
-        let reg = Registry::builtin_with(Arc::clone(&jira));
-        Self::with(reg, Github::strict(), jira, Limits::default())
+        let github = Github::strict();
+        let reg = Registry::builtin_with_github(github.clone(), Arc::clone(&jira));
+        Self::with(reg, github, jira, Limits::default())
     }
 
     /// A broker over the given adapters (the tests' loopback ones).
@@ -160,6 +161,11 @@ impl Broker {
 
     pub fn registry(&self) -> &Registry {
         &self.reg
+    }
+
+    /// The one shared GitHub adapter (its App key holder): the API (C5) uses this one.
+    pub fn github(&self) -> &Github {
+        &self.github
     }
 
     /// The one shared Jira (its OAuth app, flows and refresh locks): the API (C5) uses this one.

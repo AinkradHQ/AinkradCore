@@ -37,14 +37,19 @@ use sqlx::{Row, SqliteConnection};
 use super::secrets::Error;
 
 pub mod access;
+pub mod activity;
+pub mod apps;
 pub mod bindings;
 pub mod grants;
 pub mod health;
+pub(crate) mod notice;
 pub mod resolve;
 pub mod secret;
 pub mod verdict;
 mod write;
-pub use write::{NewConnection, create, delete, rename, set_disabled, update_label};
+pub use write::{
+    Edit, NewConnection, create, create_with, delete, edit, rename, set_disabled, update_label,
+};
 
 #[cfg(test)]
 mod tests;
@@ -57,6 +62,7 @@ pub const MAX_BINDINGS: i64 = 128;
 /// C4, the first story to write `connection.used` in production. Kept here, sorted, so a test can
 /// prove the two lists agree.
 pub const AUDIT_ACTIONS: &[&str] = &[
+    "connection.app_set",
     "connection.auth_failed",
     "connection.auth_inconclusive",
     "connection.bound",

@@ -631,6 +631,246 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/connection-apps/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getConnectionApp"];
+        put: operations["setConnectionApp"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connection-defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listConnectionDefaults"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connection-defaults/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setConnectionDefault"];
+        post?: never;
+        delete: operations["clearConnectionDefault"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connection-kinds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listConnectionKinds"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listConnections"];
+        put?: never;
+        post: operations["createConnection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connections/flows/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getConnectionFlow"];
+        put?: never;
+        post?: never;
+        delete: operations["cancelConnectionFlow"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connections/flows/{id}/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["connectionFlowCallback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connections/flows/{id}/choose": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["chooseConnectionSite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connections/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["startConnectionFlow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connections/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getConnection"];
+        put?: never;
+        post?: never;
+        delete: operations["deleteConnection"];
+        options?: never;
+        head?: never;
+        patch: operations["updateConnection"];
+        trace?: never;
+    };
+    "/api/v1/connections/{id}/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listConnectionActivity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connections/{id}/credential": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["replaceConnectionCredential"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connections/{id}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listConnectionGrants"];
+        put: operations["setConnectionGrant"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connections/{id}/grants/{grantee_kind}/{grantee}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["revokeConnectionGrant"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connections/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testConnection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/costs": {
         parameters: {
             query?: never;
@@ -1817,6 +2057,163 @@ export interface components {
         Cleared: {
             key: string;
         };
+        /** @description A connection: never its credential. */
+        Connection: {
+            auth_method: string;
+            created_at: components["schemas"]["Timestamp"];
+            /** @description `admin` devices: the device that made it. */
+            created_by?: string | null;
+            /** @description The admin's own off switch. */
+            disabled: boolean;
+            /** @description When the access token ends, when known. */
+            expires_at?: components["schemas"]["Timestamp"];
+            /**
+             * Format: int64
+             * @description `admin` devices: how many grants say who may use it.
+             */
+            grant_count?: number | null;
+            /** Format: int64 */
+            id: number;
+            /** @description The account or site the last test read (a GitHub login, an Atlassian account at a site). */
+            identity?: string | null;
+            /** @description The kind's default connection: used when several cover a call. */
+            is_default: boolean;
+            /** @description `github` or `jira`. */
+            kind: string;
+            label: string;
+            last_tested_at?: components["schemas"]["Timestamp"];
+            /**
+             * @description Other devices: what the caller may do with it (the capabilities of the grants that name
+             *     the caller); never anyone else's grants or limits.
+             */
+            my_capabilities?: string[] | null;
+            name: string;
+            /**
+             * @description A fixed code: `rate_limited`, `quota`, `upstream_errors`, `auth_suspected`, `auth_failed`,
+             *     `exported`.
+             */
+            state_reason?: string | null;
+            state_until?: components["schemas"]["Timestamp"];
+            /** @description `active`, `cooling`, `limited`, `unhealthy` or `disabled`. */
+            status: string;
+            updated_at: components["schemas"]["Timestamp"];
+        };
+        /** @description Ainkrad's OAuth app for a kind, as configured: never a secret. */
+        ConnectionApp: {
+            /** @description GitHub: the GitHub App (repositories) is set up. */
+            app_install_configured: boolean;
+            /** @description Sign in works for the kind. */
+            configured: boolean;
+            fields: components["schemas"]["ConnectionAppField"][];
+            kind: string;
+            /** @description Atlassian: the redirect address to register with Atlassian, exactly. */
+            redirect_uri?: string | null;
+        };
+        /** @description One field of an app's config. */
+        ConnectionAppField: {
+            name: string;
+            /** @description A secret is write-only: only `set` is ever said. */
+            secret: boolean;
+            set: boolean;
+            title: string;
+            /** @description The value of a field that is no secret. */
+            value?: string | null;
+        };
+        /** @description A sign-in as it stands: poll it. */
+        ConnectionFlow: {
+            /** @description Atlassian: what the Mac app opens in the browser. */
+            authorize_url?: string | null;
+            /**
+             * Format: int64
+             * @description Once `connected`: the connection.
+             */
+            connection?: number | null;
+            /** @description When `failed`: a fixed code and a plain sentence with the fix. */
+            error_code?: string | null;
+            error_message?: string | null;
+            /** Format: int64 */
+            expires_in_secs: number;
+            /** @description `cf_…`, the flow's own id. */
+            id: string;
+            /** @description Once `connected`: who it is connected as. */
+            identity?: string | null;
+            /**
+             * Format: int64
+             * @description GitHub: seconds between polls.
+             */
+            interval?: number | null;
+            kind: string;
+            /** @description Atlassian, `choose_site`: the sites to pick from. */
+            sites: components["schemas"]["ConnectionFlowSite"][];
+            /** @description Atlassian: the `state` the redirect must carry; hand it back with the `code`. */
+            state?: string | null;
+            /** @description `waiting`, `approved`, `choose_site`, `connected`, `expired`, `denied` or `failed`. */
+            step: string;
+            /** @description GitHub: the code to type, large. */
+            user_code?: string | null;
+            /** @description GitHub: the address to open. */
+            verification_uri?: string | null;
+        };
+        /** @description What the Mac app's loopback listener received. No `Debug`. */
+        ConnectionFlowCallback: {
+            code: string;
+            state: string;
+        };
+        ConnectionFlowChoice: {
+            /** @description A site's `id` from the flow. */
+            site: string;
+        };
+        /** @description One Jira site to choose. */
+        ConnectionFlowSite: {
+            /** @description The Atlassian cloud id: what `chooseConnectionSite` takes. */
+            id: string;
+            name: string;
+            url: string;
+        };
+        /** @description What someone may do with a connection. */
+        ConnectionGrant: {
+            capabilities: string[];
+            created_at: components["schemas"]["Timestamp"];
+            grantee: string;
+            /** @description `user` (a user id), `role` (`admin`, `member`) or `agent` (an agent id). */
+            grantee_kind: string;
+            /** @description The resources it reaches, by the kind's limit key; none: any. */
+            limits: {
+                [key: string]: string[];
+            };
+            updated_at: components["schemas"]["Timestamp"];
+        };
+        /** @description What a screen draws a kind's setup from. */
+        ConnectionKind: {
+            auth_methods: components["schemas"]["KindAuthMethod"][];
+            capabilities: components["schemas"]["KindCapability"][];
+            /** @description Whether Sign in works: Ainkrad's app for the kind is set up on this Core. */
+            configured: boolean;
+            /** @description GitHub: where the person installs the GitHub App to choose repositories, when it is set up. */
+            install_url?: string | null;
+            kind: string;
+            limits: components["schemas"]["KindLimit"][];
+            summary: string;
+            title: string;
+        };
+        /** @description A use of a connection, from its audit rows: no payload. */
+        ConnectionUse: {
+            /** @description The operation, `github.get_issue`. */
+            action?: string | null;
+            agent?: string | null;
+            at: components["schemas"]["Timestamp"];
+            /** @description The refusal code or the upstream class. */
+            code?: string | null;
+            kind?: string | null;
+            /** @description `ok`, `refused` or `error`. */
+            result?: string | null;
+            /**
+             * Format: int64
+             * @description The audit row's number: page with `before`.
+             */
+            seq: number;
+            session?: string | null;
+        };
         CostEvent: {
             /**
              * Format: int64
@@ -1857,6 +2254,14 @@ export interface components {
             priced_at?: components["schemas"]["Timestamp"];
             provider: string;
             session: string;
+        };
+        DefaultConnection: {
+            /**
+             * Format: int64
+             * @description The connection used when several of the kind cover a call.
+             */
+            connection: number;
+            kind: string;
         };
         /** @description A device: who it is and what it may do. Never a key's private half: the Core has none. */
         Device: {
@@ -1928,7 +2333,11 @@ export interface components {
              *     `exhausted`). `account.expired` is `{account, user, reason}`: a key the provider refused was
              *     confirmed and the account disabled. `alarm.raised` with `alarm` `failover_storm` and a
              *     `user` says the bound on that user's failovers stopped a run of theirs from moving (once per
-             *     window and user). No payload holds a key, a token or an
+             *     window and user). `connection.health` is `{connection, user, kind, state, reason}`: a connection's
+             *     health changed (`state` `active`, `cooling`, `limited`, `unhealthy` or `disabled`; `reason` a fixed
+             *     code: `rate_limited`, `quota`, `upstream_errors`, `auth_suspected`, `auth_failed`, `recovered`,
+             *     `auth_cleared`). It is visible to `admin` devices only (`x-event-scopes`), never to a `read` device;
+             *     the push for it goes to the owning user's admin devices only. No payload holds a key, a token or an
              *     upstream's own words.
              */
             kind: string;
@@ -2008,6 +2417,39 @@ export interface components {
             identity_fingerprint?: string | null;
             server_version?: string | null;
             supported_minors?: number[] | null;
+        };
+        /** @description One way to sign in to a kind, easiest first. */
+        KindAuthMethod: {
+            /** @description Shown under "Advanced", not as the first choice. */
+            advanced: boolean;
+            /**
+             * @description `false` while the Core lacks what the method needs (Ainkrad's app is not set up yet, an
+             *     admin enters it with `setConnectionApp`): the screen says "not set up yet".
+             */
+            available: boolean;
+            /** @description A plain sentence for the screen. */
+            help: string;
+            /** @description `oauth` (the kind's own sign-in), `app_install` (a GitHub App installation) or `token`. */
+            id: string;
+            /** @description The steps the screen shows, in order. */
+            steps: string[];
+            title: string;
+        };
+        /** @description A named permission of a kind. */
+        KindCapability: {
+            /** @description `read` or `write`: a write capability is only ever granted by naming it. */
+            class: string;
+            name: string;
+            /** @description A plain label. */
+            title: string;
+            write: boolean;
+        };
+        /** @description A key of the resource limit a grant may carry. */
+        KindLimit: {
+            help: string;
+            /** @description `repos` (GitHub), `projects` (Jira). */
+            key: string;
+            title: string;
         };
         /** @description The last one-shot test of an account's key. */
         LastTest: {
@@ -2132,6 +2574,14 @@ export interface components {
              */
             chain?: number | null;
             /**
+             * @description Capability names the session may call through its connections (`read_repo`,
+             *     `issues_write`, `read_issues`, ...; see `listConnectionKinds`). Needs `admin`. Absent: the
+             *     default, read-class capabilities only (write is an explicit grant); an agent's session
+             *     with none has no connection tools. An empty list is refused (400 `empty_allowlist`), and
+             *     so are operation names and `*` (400).
+             */
+            connection_access?: string[] | null;
+            /**
              * @description `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it
              *     (and `model`) when the session draws from a chain: the account the allocator picks sets them.
              */
@@ -2178,6 +2628,38 @@ export interface components {
              *     and in the chain once.
              */
             pool: number;
+        };
+        /**
+         * @description A connection to make with a pasted credential (the Advanced way) or a GitHub App
+         *     installation. No `Debug`.
+         */
+        NewConnection: {
+            /** @description `token` or `app_install`. */
+            auth_method: string;
+            /** @description Jira token: the Atlassian account email. */
+            email?: string | null;
+            /**
+             * Format: int64
+             * @description `app_install`: the GitHub App installation id the setup page returned.
+             */
+            installation_id?: number | null;
+            kind: string;
+            /** @description What people see, 1 to 80 characters; absent, the kind's title. */
+            label?: string | null;
+            /** @description `[a-z][a-z0-9._-]{0,63}`, unique per kind; absent, `<kind>-<n>`. */
+            name?: string | null;
+            /** @description Jira token: the site, `acme.atlassian.net`. */
+            site?: string | null;
+            /** @description The token or API token; written, never read back. */
+            token?: string | null;
+        };
+        /** @description A replacement credential; the same fields as [`NewConnection`]'s. No `Debug`. */
+        NewConnectionCredential: {
+            email?: string | null;
+            /** Format: int64 */
+            installation_id?: number | null;
+            site?: string | null;
+            token?: string | null;
         };
         /** @description A lease to grant. */
         NewLease: {
@@ -2633,6 +3115,34 @@ export interface components {
             /** Format: int64 */
             cap: number;
         };
+        /** @description Fields to set (`"name": "value"`) or clear (`"name": null`). No `Debug`. */
+        SetConnectionApp: {
+            fields: {
+                [key: string]: string | null;
+            };
+        };
+        /** @description Who may use a connection and how far; replaces that grantee's grant. */
+        SetConnectionGrant: {
+            /**
+             * @description Capability names of the kind; absent, its read-only ones. Never `*`: a write capability
+             *     is named.
+             */
+            capabilities?: string[] | null;
+            grantee: string;
+            /** @description `user`, `role` or `agent`. */
+            grantee_kind: string;
+            /**
+             * @description Resource limits by the kind's limit key (`repos`: `owner/name` or `owner/*`; `projects`:
+             *     keys); absent or empty, any resource.
+             */
+            limits?: {
+                [key: string]: string[];
+            } | null;
+        };
+        SetDefaultConnection: {
+            /** Format: int64 */
+            connection: number;
+        };
         SetLimit: {
             /** Format: int64 */
             cap: number;
@@ -2742,6 +3252,24 @@ export interface components {
         };
         SettingScope: "server" | string;
         SettingUnit: ("seconds" | "milliseconds" | "percent" | "count" | "bytes" | "per_minute") | string;
+        /** @description A sign-in to start. */
+        StartConnectionFlow: {
+            /**
+             * @description With `connection` on GitHub: replace the credential even when the sign-in is a different
+             *     GitHub account than the connection's. Without it that is refused (`different_account`).
+             */
+            confirm_identity_change?: boolean | null;
+            /**
+             * Format: int64
+             * @description Sign in again for this connection: its credential is replaced, nothing else changes.
+             */
+            connection?: number | null;
+            /** @description `github` or `jira`. */
+            kind: string;
+            label?: string | null;
+            /** @description Names the connection it makes; absent, `<kind>-<n>`. */
+            name?: string | null;
+        };
         StepUpRequest: {
             /**
              * @description A passkey device's proof: the WebAuthn `PublicKeyCredential` answering the challenge's
@@ -2842,6 +3370,13 @@ export interface components {
          *     client's date parser never meets a second one (E0.4).
          */
         Timestamp: string;
+        /** @description What to change about a connection; at least one field. */
+        UpdateConnection: {
+            /** @description The admin's off switch. */
+            disabled?: boolean | null;
+            label?: string | null;
+            name?: string | null;
+        };
         UsageByCompany: {
             company: string;
             five_hours: components["schemas"]["UsageWindow"];
@@ -4588,6 +5123,704 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getConnectionApp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `github` or `jira` */
+                kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether Ainkrad's OAuth app for the kind is set up on this Core, and which fields are set. A field that is no secret shows its value (the client id); a secret (`client_secret`, `app_key`) only whether it is `set`, never the value. For Atlassian, `redirect_uri` is the address to register with Atlassian. Only the Core's owner sees the fields and the address; any other admin sees `configured` alone. 404 for an unknown kind */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionApp"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setConnectionApp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `github` or `jira` */
+                kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetConnectionApp"];
+            };
+        };
+        responses: {
+            /** @description The named fields stored sealed (a string) or cleared (null), audited `connection.app_set` with the field names only; the kind's adapters use the new app at once, and pending sign-ins of a kind whose app changed end (`failed`, `app_changed`); those of another kind go on. 403 for an admin who is not the Core's owner. Changing Atlassian's client id or secret makes existing Jira sign-ins fail to renew: those connections sign in again. 400 for an unknown field or a bad value (the private key must parse and goes with an `app_id`); 409 `secrets_disabled` while the broker is off; 503 without a master key */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionApp"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listConnectionDefaults: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The default connection of each kind that has one: the one used when several of the kind cover a call */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DefaultConnection"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setConnectionDefault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `github` or `jira` */
+                kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetDefaultConnection"];
+            };
+        };
+        responses: {
+            /** @description That connection is the kind's default from now on, replacing the previous one (audited `connection.bound`). 400 when the connection is not of this kind or the kind is unknown; 404 for another workspace's connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DefaultConnection"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    clearConnectionDefault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `github` or `jira` */
+                kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The kind has no default any more (audited `connection.unbound`): a call several connections cover is then refused as ambiguous. 404 when it had none */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountsDeleted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listConnectionKinds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The kinds of connection a Core knows, as data a screen draws its setup from: the sign-in methods in order of preference, the capabilities with their read or write class and plain titles, the resource limit shape, help text, and whether Ainkrad's app for the kind is set up on this Core (`configured`, and each method's `available`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionKind"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listConnections: {
+        parameters: {
+            query?: {
+                /** @description Only this kind's connections. */
+                kind?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's workspace's connections, oldest first (of `kind` when given). An `admin` device sees all of them with their `grant_count`; another device only the ones granted to it, with `my_capabilities`. Never a credential */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Connection"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewConnection"];
+            };
+        };
+        responses: {
+            /** @description Stored for the caller's workspace, its credential sealed and tested once (audited `connection.created`, `connection.tested`). `auth_method` `token` pastes a token (GitHub), or an email, a site and an API token (Jira); `app_install` takes a GitHub App `installation_id`, which must exist and belong to no other workspace (409). The credential is never returned. 400 for a bad name, label or credential, or one the service refuses (`credential_rejected`); 409 `conflict` (the name is taken), `limit_reached` or the secrets gates (`secrets_disabled`, `real_secret_refused`); 502 when the service could not be reached (`upstream_failed`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Connection"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getConnectionFlow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The flow's id, `cf_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sign-in's live step: `waiting` (the person acts in the browser), `approved` (a credential came; being stored and tested), `choose_site` (Jira, several sites: `sites`), `connected` (`connection`, `identity`), `expired`, `denied`, `failed` (`error_code`, `error_message`: a plain sentence with the fix). A finished flow is kept for five minutes. 404 for another user's or device's flow and one that is gone */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionFlow"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    cancelConnectionFlow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The flow's id, `cf_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sign-in cancelled and forgotten; Core stops polling. 404 for anyone else's or one that is gone */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountsDeleted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    connectionFlowCallback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The flow's id, `cf_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectionFlowCallback"];
+            };
+        };
+        responses: {
+            /** @description What the Mac app's loopback listener received for an Atlassian sign-in: Core exchanges the `code` (its own PKCE verifier, never sent out), reads the sites and, with one, connects it; with several the flow waits at `choose_site`. The result is the flow's new step (a failure is `failed`). 400 when `state` is not the one this flow started with (the flow stays as it was); 409 when the flow is not waiting for a redirect (already handled, over, or a GitHub flow); 404 for anyone else's flow */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionFlow"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    chooseConnectionSite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The flow's id, `cf_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectionFlowChoice"];
+            };
+        };
+        responses: {
+            /** @description The Jira site picked at `choose_site`: exactly one connection is made and the tokens are dropped. 400 for a site that is not a choice, 409 when the flow is not at `choose_site`, 404 for anyone else's flow */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionFlow"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    startConnectionFlow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartConnectionFlow"];
+            };
+        };
+        responses: {
+            /** @description A sign-in begun, held in Core: GitHub's device flow returns `user_code`, `verification_uri` and `interval` (Core polls GitHub itself, so the person can close the window); Atlassian returns `authorize_url` (the Mac app opens it, catches the redirect on 127.0.0.1 and posts `code` and `state` to `connectionFlowCallback`) and `state`. With `connection`, the credential of that connection is replaced (CN5, sign in again); a GitHub sign-in as another account ends `failed` with `different_account` unless `confirm_identity_change` is true. A flow ends in ONE connection. 409 `not_configured` while Ainkrad's app for the kind is not set up (see `listConnectionKinds`), 429 `too_many_flows` (4 waiting per user), 502 when GitHub could not give a code, 400 for a bad name, label or kind, 404 for another workspace's connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionFlow"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connection's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One connection; 404 for another workspace's, and for one a non-admin device is not granted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Connection"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connection's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted with its grants and its credential, which is wiped (audited `connection.deleted`). 409 `conflict` while it is its kind's default: set another default first (`setConnectionDefault`) or clear it; 404 for another workspace's */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountsDeleted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connection's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateConnection"];
+            };
+        };
+        responses: {
+            /** @description Renamed, relabelled, switched off or on (audited `connection.renamed`, `.updated`, `.disabled`, `.enabled`). Switching on also clears a confirmed auth failure: the next test decides again. 400 for no field or a bad one, 409 when the name is taken, 404 for another workspace's */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Connection"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listConnectionActivity: {
+        parameters: {
+            query?: {
+                /** @description Uses with a `seq` below this; absent, from the newest. */
+                before?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The connection's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What agents and features did with the connection, newest first (at most `limit`, 50 by default, 200 at most): the operation, the result class, a refusal code, the session and agent. No payload, no secret, ever. 404 for another workspace's */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionUse"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    replaceConnectionCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connection's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewConnectionCredential"];
+            };
+        };
+        responses: {
+            /** @description The credential replaced (audited `connection.secret_replaced`) and tested; a pending or confirmed auth failure is cleared first, the test then decides. For a `token` connection a token (and for Jira an email and site); for an `app_install` one an `installation_id`. A connection made by signing in is refreshed by signing in again (`startConnectionFlow` with `connection`), not here (400). Never returned. 404 for another workspace's */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Connection"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listConnectionGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connection's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Who may use the connection, with their capabilities and resource limits; 404 for another workspace's */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionGrant"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setConnectionGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connection's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetConnectionGrant"];
+            };
+        };
+        responses: {
+            /** @description That grantee's grant, replaced (one per grantee; audited `connection.granted`, naming any write capabilities). 400 for a grantee that is not a user of the workspace, a role (`admin`, `member`) or an agent id, a capability or limit key the kind does not have, a bad limit value (`owner/name`, `owner/*`, a project key; never `*` alone or `..`), or an empty capability list; 409 `limit_reached` (32 per connection); 404 for another workspace's connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionGrant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    revokeConnectionGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connection's id */
+                id: string;
+                /** @description `user`, `role` or `agent` */
+                grantee_kind: string;
+                /** @description A user id, a role or an agent id */
+                grantee: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The grantee's grant taken away (audited `connection.grant_revoked`); a call in flight is refused at once. 404 when there was none, or for another workspace's connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountsDeleted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    testConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connection's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tested now (audited `connection.tested`, with the result class only): Jira renews its token first, a GitHub App connection mints a new one when the old is near its end. A pending auth failure (`state_reason` `auth_suspected`) is decided by this: a service that refuses the credential disables the connection (`auth_failed`: sign in again), one that accepts clears it. The connection as the test left it. A connection is tested at most once every 10 seconds and a user 30 times in 10 minutes: past that, 429 `rate_limited` with `Retry-After`. 404 for another workspace's */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Connection"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            /** @description Tested too soon: wait `Retry-After` seconds */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             500: components["responses"]["InternalError"];
         };
     };
