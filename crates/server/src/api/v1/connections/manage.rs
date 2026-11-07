@@ -13,6 +13,7 @@ use super::{ApiError, ApiResult, Caller, kind_of, num, one, parse, sealer, who, 
 use crate::api::App;
 use crate::connections::github::install::InstallError;
 use crate::connections::jira;
+use crate::connections::linear;
 use crate::connections::material::Material;
 use crate::store::connections::verdict;
 use crate::store::connections::{self as store, Who};
@@ -88,6 +89,11 @@ async fn material_of(
                 .ok_or_else(|| bad("the site is like acme.atlassian.net"))?;
             let m = jira::token_material(&host, email.trim(), t)
                 .ok_or_else(|| bad("check the email, the site and the API token"))?;
+            Ok((m, None))
+        }
+        ("linear", "token") => {
+            let t = g.token.ok_or_else(|| bad("an API key is required"))?;
+            let m = linear::key_material(t).ok_or_else(|| bad("that is not a usable API key"))?;
             Ok((m, None))
         }
         ("github", "app_install") => {
@@ -269,6 +275,14 @@ async fn run_test(app: &App, id: i64, user: i64, who: Who<'_>) -> Result<(), Sto
                 who,
             };
             app.connections.jira().test_connection(&cx, id).await?;
+        }
+        "linear" => {
+            let cx = linear::Ctx {
+                pool: &app.pool,
+                sealer,
+                who,
+            };
+            app.connections.linear().test_connection(&cx, id).await?;
         }
         _ => {
             // A failed renewal leaves the old token, which the test then judges.

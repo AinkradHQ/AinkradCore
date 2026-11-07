@@ -4,6 +4,7 @@
 use super::health::Feed;
 use crate::connections::github::Outcome;
 use crate::connections::jira::CallError;
+use crate::connections::linear::CallError as LinearError;
 use crate::store::secrets::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +65,23 @@ impl Fail {
             other => other.health().map(Feed::of),
         };
         Self::upstream(o.code(), o.message(), feed)
+    }
+
+    pub fn of_linear(e: &LinearError) -> Self {
+        let feed = e.health().map(|(status, retry_after)| Feed {
+            status,
+            retry_after,
+            reset_at: None,
+        });
+        let result = if matches!(e, LinearError::Refused(_)) {
+            "refused"
+        } else {
+            "error"
+        };
+        Self {
+            result,
+            ..Self::upstream(e.code(), &e.to_string(), feed)
+        }
     }
 
     pub fn of_jira(e: &CallError) -> Self {
