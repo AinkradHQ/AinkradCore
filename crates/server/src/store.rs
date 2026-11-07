@@ -21,6 +21,7 @@ pub mod audit;
 mod backup;
 pub mod budgets;
 pub mod chains;
+pub mod connections;
 pub mod costs;
 pub mod events;
 pub mod failover;

@@ -110,7 +110,7 @@ async fn drop_logins(db: &Path) -> Result_ {
     Ok(())
 }
 
-/// Wipes the secrets broker's rows from a snapshot, free pages included (`secure_delete`, then
+/// Wipes the secrets broker's rows (and the connections' credentials) from a snapshot, free pages included (`secure_delete`, then
 /// `VACUUM`), so neither a sealed value nor a lease survives in the file.
 async fn strip_secrets(db: &Path) -> Result_ {
     use sqlx::Connection;
@@ -142,6 +142,23 @@ async fn strip_secrets(db: &Path) -> Result_ {
              state = 'disabled', state_reason = 'exported without its key: store a new key', \
              state_until = NULL, last_used_at = NULL, last_test_at = NULL, last_test_result = NULL; \
              VACUUM;",
+        )
+        .execute(&mut conn)
+        .await?;
+    }
+    // A connection's credential is sealed under the master key an export carries in clear, so it
+    // goes too (E2-07): the row stays, disabled with the reason `exported`, until a new
+    // credential is stored (`secret::replace`). Grants, bindings and names hold no credential.
+    let conns: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_master WHERE name = 'core_connection_secrets'",
+    )
+    .fetch_one(&mut conn)
+    .await?;
+    if conns > 0 {
+        sqlx::raw_sql(
+            "PRAGMA secure_delete = ON; DELETE FROM core_connection_secrets; \
+             UPDATE core_connections SET status = 'disabled', state_reason = 'exported', \
+             state_until = NULL, auth_pending = 0, auth_tries = 0, last_tested_at = NULL; VACUUM;",
         )
         .execute(&mut conn)
         .await?;

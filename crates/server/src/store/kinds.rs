@@ -194,7 +194,10 @@ pub fn refusal(owner: &str, name: &str, action: bool) -> Option<String> {
     if first != owner || !name.contains('.') {
         return Some(format!("{name:?} does not start with `{owner}.`"));
     }
-    let platform = PLATFORM_EVENT_KINDS.iter().chain(PLATFORM_AUDIT_ACTIONS);
+    let platform = PLATFORM_EVENT_KINDS
+        .iter()
+        .chain(PLATFORM_AUDIT_ACTIONS)
+        .chain(super::connections::AUDIT_ACTIONS);
     if platform
         .map(|n| n.split('.').next())
         .any(|p| p == Some(first))
@@ -270,6 +273,8 @@ pub async fn register_platform(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .map(|k| (*k, platform_scope(k)))
         .collect();
     register(&mut tx, PLATFORM, &kinds, PLATFORM_AUDIT_ACTIONS).await?;
+    // The connections' actions are registered but not yet in the contract list: C4 moves them there (see AUDIT_ACTIONS).
+    register(&mut tx, PLATFORM, &[], super::connections::AUDIT_ACTIONS).await?;
     tx.commit().await
 }
 

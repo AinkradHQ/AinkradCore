@@ -6,6 +6,7 @@ pub mod agents;
 pub mod api;
 pub mod auth;
 pub mod cli;
+pub mod connections;
 pub mod gateway;
 pub mod health;
 pub mod hub;
