@@ -12,11 +12,13 @@
 //! The sealed `Material` holds a Jira envelope ([`cred`]), because the generic adapter test sees
 //! only the material: the site and cloud id ride inside it.
 
+mod answer;
 mod cred;
 mod http;
 mod jql;
 mod oauth;
 mod ops;
+mod renew;
 #[cfg(test)]
 mod tests;
 
@@ -235,10 +237,10 @@ impl Jira {
                 body: None,
             };
             let v = self.authed(cx, c.id, &pre).await?;
-            ops::check_preread(&v, limit).map_err(CallError::Refused)?;
+            answer::check_preread(&v, limit).map_err(CallError::Refused)?;
         }
         let v = self.authed(cx, c.id, &plan.req).await?;
-        ops::check_result(plan.guard, v, limit).map_err(CallError::Refused)
+        answer::check_result(plan.guard, v, limit).map_err(CallError::Refused)
     }
 
     /// Who the credential is. OAuth asks `https://api.atlassian.com/me` (covered by `read:me`);
