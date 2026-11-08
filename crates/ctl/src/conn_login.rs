@@ -89,7 +89,7 @@ pub fn callback_parts(url: &str) -> Result<(String, String), Error> {
 
 /// Lines from stdin on a thread of their own, so a read nobody answers never holds the process
 /// back when it is cancelled.
-fn stdin_lines() -> UnboundedReceiver<String> {
+pub(crate) fn stdin_lines() -> UnboundedReceiver<String> {
     let (tx, rx) = unbounded_channel();
     std::thread::spawn(move || {
         let mut line = String::new();
@@ -103,10 +103,13 @@ fn stdin_lines() -> UnboundedReceiver<String> {
     rx
 }
 
-struct Cancelled;
+pub(crate) struct Cancelled;
 
 /// `fut`, unless Ctrl-C comes first.
-async fn or_cancel<T>(sig: &mut Signal, fut: impl Future<Output = T>) -> Result<T, Cancelled> {
+pub(crate) async fn or_cancel<T>(
+    sig: &mut Signal,
+    fut: impl Future<Output = T>,
+) -> Result<T, Cancelled> {
     tokio::select! {
         r = fut => Ok(r),
         _ = sig.recv() => Err(Cancelled),
