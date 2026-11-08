@@ -12,7 +12,7 @@
 //!    no allowlist is refused by `resolve` (`allowlist_required`).
 //! 3. `secrets.mode` is on, the arguments are bounded, the session's rate and concurrency
 //!    allow it (`rate_limited`).
-//! 4. The adapter names the resource (`github::ops::build`, `jira::resource_of`, `linear::resource_of`): a bad argument
+//! 4. The adapter names the resource (`github::ops::build`, `jira::resource_of`, `linear::resource_of`, `teams::resource_of`): a bad argument
 //!    is `bad_args`, before any decision.
 //! 5. `store::connections::resolve::resolve` decides: effective limits, the default wins, an
 //!    ambiguous use refuses, and a refusal never names a connection the caller is not granted.
@@ -59,6 +59,7 @@ use super::adapter::Registry;
 use super::github::{self, Built, Github};
 use super::jira::{self, Jira};
 use super::linear::{self, Linear};
+use super::teams::{self, Teams};
 use crate::ops::secretbox::SecretBox;
 use crate::store::connections::access::{self, Access, Granted};
 use crate::store::connections::resolve::{self, Context};
@@ -76,6 +77,7 @@ pub struct Broker {
     github: Github,
     jira: Arc<Jira>,
     linear: Arc<Linear>,
+    teams: Arc<Teams>,
     gate: Arc<gate::Gate>,
     redactor: Redactor,
     supervised: std::sync::Mutex<std::collections::HashSet<String>>,
@@ -101,9 +103,16 @@ impl Broker {
     pub fn new(jira: Arc<Jira>) -> Self {
         let github = Github::strict();
         let linear = Arc::new(Linear::new(None));
-        let reg =
-            Registry::builtin_with_all(github.clone(), Arc::clone(&jira), Arc::clone(&linear));
-        Self::with(reg, github, jira, Limits::default()).with_linear(linear)
+        let teams = Arc::new(Teams::new(None));
+        let reg = Registry::builtin_with_all(
+            github.clone(),
+            Arc::clone(&jira),
+            Arc::clone(&linear),
+            Arc::clone(&teams),
+        );
+        Self::with(reg, github, jira, Limits::default())
+            .with_linear(linear)
+            .with_teams(teams)
     }
 
     /// A broker over the given adapters (the tests' loopback ones).
@@ -113,6 +122,7 @@ impl Broker {
             github,
             jira,
             linear: Arc::new(Linear::new(None)),
+            teams: Arc::new(Teams::new(None)),
             gate: gate::Gate::new(limits),
             redactor: Redactor::new(),
             supervised: std::sync::Mutex::default(),
@@ -128,6 +138,14 @@ impl Broker {
     #[must_use]
     pub fn with_linear(mut self, linear: Arc<Linear>) -> Self {
         self.linear = linear;
+        self
+    }
+
+    /// This broker over THE `Teams` the registry holds (the server's one shared instance; a
+    /// test's loopback one).
+    #[must_use]
+    pub fn with_teams(mut self, teams: Arc<Teams>) -> Self {
+        self.teams = teams;
         self
     }
 
@@ -191,6 +209,11 @@ impl Broker {
     pub fn linear(&self) -> &Arc<Linear> {
         &self.linear
     }
+
+    /// The one shared Teams (its Microsoft app and refresh locks): the API uses this one.
+    pub fn teams(&self) -> &Arc<Teams> {
+        &self.teams
+    }
 }
 
 /// What a kind's operation touches, found by the adapter before any decision.
@@ -221,6 +244,13 @@ fn prepare(kind: &str, op: &str, args: &Value) -> Result<Prepared, Fail> {
             Ok(Prepared {
                 built: None,
                 resource: p.map(|p| ("teams", p)),
+            })
+        }
+        "teams" => {
+            let c = teams::resource_of(op, args).map_err(|e| refuse("bad_args", &e))?;
+            Ok(Prepared {
+                built: None,
+                resource: c.map(|c| ("channels", c)),
             })
         }
         _ => Err(refuse("unknown_kind", "no such kind")),
@@ -486,6 +516,7 @@ impl Broker {
             github: self.github.clone(),
             jira: Arc::clone(&self.jira),
             linear: Arc::clone(&self.linear),
+            teams: Arc::clone(&self.teams),
             redactor: self.redactor.clone(),
             pool: env.pool.clone(),
             sealer: Arc::clone(sealer),

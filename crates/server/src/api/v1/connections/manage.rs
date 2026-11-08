@@ -15,6 +15,7 @@ use crate::connections::github::install::InstallError;
 use crate::connections::jira;
 use crate::connections::linear;
 use crate::connections::material::Material;
+use crate::connections::teams;
 use crate::store::connections::verdict;
 use crate::store::connections::{self as store, Who};
 use crate::store::secrets::Error as StoreError;
@@ -325,6 +326,14 @@ async fn run_test(app: &App, id: i64, user: i64, who: Who<'_>) -> Result<(), Sto
                 who,
             };
             app.connections.linear().test_connection(&cx, id).await?;
+        }
+        "teams" => {
+            let cx = teams::Ctx {
+                pool: &app.pool,
+                sealer,
+                who,
+            };
+            app.connections.teams().test_connection(&cx, id).await?;
         }
         _ => {
             // A failed renewal leaves the old token, which the test then judges.

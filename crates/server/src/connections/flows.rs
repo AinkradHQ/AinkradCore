@@ -1,4 +1,5 @@
-//! Sign-in flows (C5; design §6): "Sign in with GitHub" (the device flow) and "Sign in with
+//! Sign-in flows (C5; design §6): "Sign in with GitHub" and "Sign in with Microsoft" (device
+//! flows) and "Sign in with
 //! Atlassian" (OAuth 3LO with PKCE), as live steps the UI polls. A flow is held in memory only:
 //! a restart ends it and the person starts again.
 //!
@@ -24,6 +25,7 @@ mod finish;
 mod github;
 mod jira;
 mod linear;
+mod teams;
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -37,6 +39,7 @@ pub use self::jira::{Refused, choose};
 use super::github::device::{DeviceError, Prompt};
 use super::jira::{Finished, FlowError, Jira};
 use super::linear::{FlowError as LinearFlowError, Linear};
+use super::teams::DeviceError as TeamsError;
 use crate::api::App;
 
 pub const MAX_PER_USER: usize = 4;
@@ -193,6 +196,7 @@ pub enum StartError {
     Device(DeviceError),
     Jira(FlowError),
     Linear(LinearFlowError),
+    Teams(TeamsError),
     Store(crate::store::secrets::Error),
 }
 
@@ -363,6 +367,7 @@ pub async fn start(app: &App, s: Start<'_>) -> Result<View, StartError> {
         "github" => github::start(app, s).await,
         "jira" => jira::start(app, s),
         "linear" => linear::start(app, s),
+        "teams" => teams::start(app, s).await,
         _ => Err(StartError::NotConfigured("no sign-in for this kind")),
     }
 }
