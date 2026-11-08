@@ -39,15 +39,20 @@ async fn tcx() -> (Cx, tt::Fx) {
     (c, t)
 }
 
-fn grant(tid: &str) -> Value {
+fn grant(tid: &str, oid: &str) -> Value {
     json!({"token_type": "Bearer", "scope": "x", "expires_in": 3599, "access_token": tt::ACCESS,
-        "refresh_token": tt::REFRESH, "id_token": tt::id_token(tt::CLIENT, tid)})
+        "refresh_token": tt::REFRESH, "id_token": tt::id_token_as(tt::CLIENT, tid, oid)})
 }
 
-/// The token endpoint says "pending" once, then grants a sign-in of `tid`.
+/// The token endpoint says "pending" once, then grants a sign-in of `tid` by the usual user.
 fn approves(t: &tt::Fx, tid: &str) {
+    approves_as(t, tid, tt::USER);
+}
+
+/// The same, signed in by the user `oid`.
+fn approves_as(t: &tt::Fx, tid: &str, oid: &str) {
     let n = Arc::new(AtomicUsize::new(0));
-    let body = grant(tid);
+    let body = grant(tid, oid);
     t.fake.on("token", move |_| {
         if n.fetch_add(1, Ordering::SeqCst) == 0 {
             tt::Reply::entra(400, "authorization_pending")
@@ -345,4 +350,49 @@ async fn changing_the_app_ends_a_waiting_sign_in() {
         "{end}"
     );
     assert!(connections(&c).await.is_empty());
+}
+
+#[tokio::test]
+async fn another_user_of_the_same_tenant_replaces_the_credential_only_when_confirmed() {
+    let (c, t) = tcx().await;
+    configure(&c).await;
+    approves(&t, tt::TENANT);
+    let v = begin(&c, json!({})).await.1;
+    let conn = until(&c, v["id"].as_str().unwrap(), "connected").await["connection"]
+        .as_i64()
+        .unwrap();
+    let colleague = "11111111-2222-4333-8444-555555555555";
+    approves_as(&t, tt::TENANT, colleague);
+    let v = begin(&c, json!({"connection": conn})).await.1;
+    let end = ended(&c, v["id"].as_str().unwrap()).await;
+    assert_eq!(
+        (&end["step"], &end["error_code"]),
+        (&json!("failed"), &json!("different_account")),
+        "{end}"
+    );
+    // Nothing was replaced: no new credential was tested.
+    let before = t.fake.count("me");
+    let now = c
+        .ok(Method::GET, &format!("{URI}/{conn}"), Value::Null)
+        .await;
+    assert_eq!(now["identity"], format!("{} in {}", tt::USER, tt::TENANT));
+    assert_eq!(t.fake.count("me"), before);
+    // Confirmed, it is the same connection with the new credential.
+    approves_as(&t, tt::TENANT, colleague);
+    let extra = json!({"connection": conn, "confirm_identity_change": true});
+    let v = begin(&c, extra).await.1;
+    let end = until(&c, v["id"].as_str().unwrap(), "connected").await;
+    assert_eq!(end["connection"], conn);
+    assert_eq!(connections(&c).await.len(), 1);
+    // A confirmation never carries a sign-in into another tenant.
+    approves(&t, tt::OTHER_TENANT);
+    let extra = json!({"connection": conn, "confirm_identity_change": true});
+    let v = begin(&c, extra).await.1;
+    let end = ended(&c, v["id"].as_str().unwrap()).await;
+    assert_eq!(
+        (&end["step"], &end["error_code"]),
+        (&json!("failed"), &json!("wrong_tenant")),
+        "{end}"
+    );
+    c.assert_clean_also(&secrets()).await;
 }

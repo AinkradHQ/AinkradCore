@@ -92,19 +92,12 @@ pub async fn execute(j: Job) -> Ran {
             let quota = j.linear.quota(j.resolved.connection.id);
             Ran { out, quota }
         }
-        // Microsoft says nothing about a budget beyond a 429's Retry-After: it rides in the
-        // failure's health feed, and becomes the broker's local `connection_busy` wait.
-        "teams" => {
-            let out = teams(&j).await;
-            let retry = out
-                .as_ref()
-                .err()
-                .and_then(|f| f.feed.as_ref()?.retry_after);
-            Ran {
-                out,
-                quota: retry.map(|r| (None, None, Some(r))),
-            }
-        }
+        // A 429 to a call an agent drives cools that channel inside the adapter (`teams::pace`):
+        // it must never become a wait for the whole shared connection, so no quota rides out.
+        "teams" => Ran {
+            out: teams(&j).await,
+            quota: None,
+        },
         // Never another kind's adapter by default: a kind with no arm here is refused.
         _ => Ran {
             out: Err(refuse("unknown_kind", "no such kind")),

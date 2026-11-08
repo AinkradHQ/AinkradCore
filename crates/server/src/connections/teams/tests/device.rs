@@ -348,3 +348,61 @@ async fn the_app_takes_a_client_id_and_a_tenant_and_nothing_else() {
     assert!(f.teams.set_app(None));
     assert!(!format!("{:?}", TeamsApp::new(CLIENT, "organizations")).contains(CLIENT));
 }
+
+#[tokio::test]
+async fn a_re_sign_in_lands_in_the_pinned_tenant_and_a_pinned_app_starts_none_elsewhere() {
+    // The app is limited to TENANT: a connection of another tenant cannot start a sign-in.
+    let f = fx(false).await;
+    f.teams
+        .set_app(Some(TeamsApp::new(CLIENT, TENANT).unwrap()));
+    f.fake.reply("devicecode", Reply::ok(code_body()));
+    let r = f
+        .teams
+        .device_start(Some(OTHER_TENANT), Instant::now())
+        .await;
+    assert_eq!(r.map(|_| ()).unwrap_err(), DeviceError::WrongTenant);
+    assert_eq!(f.fake.count("devicecode"), 0, "no request");
+    let (_, mut p) = f
+        .teams
+        .device_start(Some(TENANT), Instant::now())
+        .await
+        .unwrap();
+    // A grant of another tenant is refused even for a pinned re-sign-in.
+    f.fake.reply("token", Reply::ok(tokens(OTHER_TENANT)));
+    let s = poll(&f, &mut p, Instant::now() + Duration::from_secs(6)).await;
+    assert!(matches!(s, Step::Failed(DeviceError::WrongTenant)));
+    // `organizations` takes a re-sign-in at the connection's own tenant, and only a grant of it.
+    let g = fx(true).await;
+    g.fake.reply("devicecode", Reply::ok(code_body()));
+    let (_, mut p) = g
+        .teams
+        .device_start(Some(TENANT), Instant::now())
+        .await
+        .unwrap();
+    g.fake.reply("token", Reply::ok(tokens(OTHER_TENANT)));
+    let s = poll(&g, &mut p, Instant::now() + Duration::from_secs(6)).await;
+    assert!(matches!(s, Step::Failed(DeviceError::WrongTenant)));
+}
+
+#[tokio::test]
+async fn the_grant_names_who_signed_in_and_a_grant_without_a_user_id_is_refused() {
+    let f = fx(true).await;
+    let (_, mut p) = started(&f).await;
+    let mut body = tokens(TENANT);
+    body["id_token"] = json!(id_token_as(
+        CLIENT,
+        TENANT,
+        "11111111-2222-4333-8444-555555555555"
+    ));
+    f.fake.reply("token", Reply::ok(body));
+    let Step::Granted(g) = poll(&f, &mut p, Instant::now() + Duration::from_secs(6)).await else {
+        panic!("not granted");
+    };
+    assert_eq!(g.user, "11111111-2222-4333-8444-555555555555");
+    let (_, mut q) = started(&f).await;
+    let mut body = tokens(TENANT);
+    body["id_token"] = json!(id_token_as(CLIENT, TENANT, "not-a-guid"));
+    f.fake.reply("token", Reply::ok(body));
+    let s = poll(&f, &mut q, Instant::now() + Duration::from_secs(6)).await;
+    assert!(matches!(s, Step::Failed(DeviceError::BadReply)));
+}

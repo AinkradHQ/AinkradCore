@@ -225,8 +225,34 @@ pub fn subject(user: &str, tenant: &str) -> String {
 
 /// The tenant id inside an identity line.
 pub fn tenant_of(identity: &str) -> Option<&str> {
+    identity_parts(identity).map(|(_, t)| t)
+}
+
+/// The user object id and the tenant id of an identity line (`<oid> in <tenant id>`).
+pub fn identity_parts(identity: &str) -> Option<(&str, &str)> {
     let (user, tenant) = identity.split_once(" in ")?;
-    (guid(user) && tenant_id(tenant)).then_some(tenant)
+    (guid(user) && tenant_id(tenant)).then_some((user, tenant))
+}
+
+/// Who signed in again, compared with the identity a connection records, by ids only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignerCheck {
+    Same,
+    /// Another tenant: never overridable.
+    OtherTenant,
+    /// The same tenant, another user: only a confirmed change passes.
+    OtherUser,
+    /// The connection records no identity to compare with: only a confirmed change passes.
+    Unknown,
+}
+
+pub fn check_signer(old: Option<&str>, user: &str, tenant: &str) -> SignerCheck {
+    match old.and_then(identity_parts) {
+        Some((_, t)) if t != tenant => SignerCheck::OtherTenant,
+        Some((u, _)) if u != user => SignerCheck::OtherUser,
+        Some(_) => SignerCheck::Same,
+        None => SignerCheck::Unknown,
+    }
 }
 
 /// What an identity line says about the tenant a credential belongs to.
@@ -247,10 +273,16 @@ pub fn check_tenant(old: Option<&str>, tid: &str) -> TenantCheck {
     }
 }
 
-/// The `tid` of the id token Microsoft's token endpoint issued to `client_id`. It is read from the
-/// payload WITHOUT checking the signature: it came straight from the endpoint over TLS (the
-/// documented exception), and it only ever names which tenant to pin, never grants anything.
+/// The `tid` of the id token Microsoft's token endpoint issued to `client_id`.
 pub fn id_token_tenant(jwt: &str, client_id: &str) -> Option<String> {
+    id_token_claims(jwt, client_id).map(|(t, _)| t)
+}
+
+/// The `tid` and `oid` (the user's object id) of the id token Microsoft's token endpoint issued to
+/// `client_id`. They are read from the payload WITHOUT checking the signature: it came straight
+/// from the endpoint over TLS (the documented exception), and they only ever name which tenant to
+/// pin and who signed in, never grant anything. Both must be well-formed.
+pub fn id_token_claims(jwt: &str, client_id: &str) -> Option<(String, String)> {
     if jwt.len() > 16_384 {
         return None;
     }
@@ -266,7 +298,8 @@ pub fn id_token_tenant(jwt: &str, client_id: &str) -> Option<String> {
         return None;
     }
     let tid = v.get("tid")?.as_str()?;
-    tenant_id(tid).then(|| tid.to_owned())
+    let oid = v.get("oid")?.as_str()?;
+    (tenant_id(tid) && guid(oid)).then(|| (tid.to_owned(), oid.to_owned()))
 }
 
 #[cfg(test)]
@@ -274,6 +307,7 @@ mod tests {
     use super::*;
 
     pub const TEAM: &str = "fbe2bf47-16c8-47cf-b4a5-4b9b187c508b";
+    pub const OID: &str = "8ea0e38b-efb3-4757-924a-5f94061cf8c2";
     pub const CH: &str = "19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2";
 
     #[test]
@@ -425,6 +459,22 @@ mod tests {
         assert_eq!(check_tenant(Some(&line), TEAM), TenantCheck::Same);
         assert_eq!(check_tenant(Some(&line), other), TenantCheck::Different);
         assert_eq!(check_tenant(None, TEAM), TenantCheck::Unknown);
+        let u2 = "11111111-2222-4333-8444-555555555555";
+        assert_eq!(check_signer(Some(&line), oid, TEAM), SignerCheck::Same);
+        assert_eq!(check_signer(Some(&line), u2, TEAM), SignerCheck::OtherUser);
+        assert_eq!(
+            check_signer(Some(&line), oid, other),
+            SignerCheck::OtherTenant
+        );
+        assert_eq!(
+            check_signer(Some(&line), u2, other),
+            SignerCheck::OtherTenant
+        );
+        assert_eq!(check_signer(None, oid, TEAM), SignerCheck::Unknown);
+        assert_eq!(
+            check_signer(Some("Robin in Contoso"), oid, TEAM),
+            SignerCheck::Unknown
+        );
         assert_eq!(check_tenant(Some("Robin"), TEAM), TenantCheck::Unknown);
     }
 
@@ -434,9 +484,21 @@ mod tests {
 
     #[test]
     fn the_tenant_comes_from_an_id_token_issued_to_this_client() {
-        let ok = jwt(&format!(r#"{{"aud":"cli-1","tid":"{TEAM}"}}"#));
+        let ok = jwt(&format!(
+            r#"{{"aud":"cli-1","tid":"{TEAM}","oid":"{OID}"}}"#
+        ));
         assert_eq!(id_token_tenant(&ok, "cli-1").as_deref(), Some(TEAM));
         assert_eq!(id_token_tenant(&ok, "cli-2"), None, "another audience");
+        assert_eq!(
+            id_token_claims(&ok, "cli-1"),
+            Some((TEAM.to_owned(), OID.to_owned()))
+        );
+        let no_oid = jwt(&format!(r#"{{"aud":"cli-1","tid":"{TEAM}"}}"#));
+        assert_eq!(
+            id_token_claims(&no_oid, "cli-1"),
+            None,
+            "no user id, no sign-in"
+        );
         for bad in [
             jwt(&format!(r#"{{"aud":"cli-1","tid":"{CONSUMER_TENANT}"}}"#)),
             jwt(r#"{"aud":"cli-1","tid":"contoso.onmicrosoft.com"}"#),

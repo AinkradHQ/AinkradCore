@@ -204,9 +204,25 @@ async fn what_an_agent_can_provoke_gives_no_health_signal_and_a_401_is_pending_o
         "messages",
         tt::Reply::graph(401, "InvalidAuthenticationToken"),
     );
-    let r = f
-        .ask(&s, "teams.list_messages", read(tt::TEAM_A, tt::CH_A1))
-        .await;
+    let ask = || f.ask(&s, "teams.list_messages", read(tt::TEAM_A, tt::CH_A1));
+    // A 401 to one resource while /me works says nothing about the credential ...
+    let r = ask().await;
+    assert!(!r.ok);
+    assert_eq!(f.status(c.id).await, ("active".to_owned(), None));
+    // ... and a 5xx on a resource an agent named is not Microsoft's outage.
+    t.fake
+        .reply("messages", tt::Reply::graph(503, "serviceNotAvailable"));
+    let r = ask().await;
+    assert!(!r.ok);
+    assert_eq!(f.status(c.id).await, ("active".to_owned(), None));
+    // Only when /me is refused too is the credential suspect.
+    t.fake.reply(
+        "messages",
+        tt::Reply::graph(401, "InvalidAuthenticationToken"),
+    );
+    t.fake
+        .reply("me", tt::Reply::graph(401, "InvalidAuthenticationToken"));
+    let r = ask().await;
     assert_eq!((r.ok, code(&r)), (false, "auth_failed"));
     assert_eq!(
         f.status(c.id).await,
@@ -219,7 +235,7 @@ async fn what_an_agent_can_provoke_gives_no_health_signal_and_a_401_is_pending_o
 }
 
 #[tokio::test]
-async fn a_rate_limit_cools_the_connection_and_its_wait_refuses_the_next_call_locally() {
+async fn a_rate_limit_on_one_channel_cools_that_channel_only_and_never_the_connection() {
     let (f, t, c, s) = ready(&[]).await;
     let tools = f.b.tools(&f.env(), &s).await.unwrap();
     let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -240,26 +256,59 @@ async fn a_rate_limit_cools_the_connection_and_its_wait_refuses_the_next_call_lo
         );
     }
     t.fake.reply(
-        "messages",
+        "post",
         tt::Reply::graph(429, "TooManyRequests").header("Retry-After", "30"),
     );
     let r = f
-        .ask(&s, "teams.list_messages", read(tt::TEAM_A, tt::CH_A1))
+        .ask(&s, "teams.post_message", post(tt::TEAM_A, tt::CH_A1))
         .await;
     assert_eq!((r.ok, code(&r)), (false, "rate_limited"));
+    // The connection is not cooling, not busy, not unhealthy: one channel is.
+    assert_eq!(f.status(c.id).await, ("active".to_owned(), None));
+    for _ in 0..4 {
+        let again = f
+            .ask(&s, "teams.post_message", post(tt::TEAM_A, tt::CH_A1))
+            .await;
+        assert_eq!((again.ok, code(&again)), (false, "rate_limited"));
+    }
     assert_eq!(
-        f.status(c.id).await,
-        ("cooling".to_owned(), Some("rate_limited".to_owned()))
-    );
-    let again = f
-        .ask(&s, "teams.list_messages", read(tt::TEAM_A, tt::CH_A1))
-        .await;
-    assert!(!again.ok);
-    assert_eq!(
-        t.fake.count("messages"),
+        t.fake.count("post"),
         1,
         "refused locally, Microsoft was not asked again"
     );
+    // Everything else on the shared connection goes on: another channel, reads, lists.
+    t.fake.reply(
+        "post",
+        tt::Reply::http(
+            201,
+            tt::message(tt::TEAM_A, tt::CH_A2, "1616990099999", "hello"),
+        ),
+    );
+    let ok = f
+        .ask(&s, "teams.post_message", post(tt::TEAM_A, tt::CH_A2))
+        .await;
+    assert!(ok.ok, "{ok:?}");
+    let ok = f.ask(&s, "teams.list_teams", json!({})).await;
+    assert!(ok.ok, "{ok:?}");
+    assert_eq!(f.status(c.id).await, ("active".to_owned(), None));
+}
+
+#[tokio::test]
+async fn a_post_whose_answer_cannot_be_checked_is_a_success_audited_as_unverified() {
+    let (f, t, _c, s) = ready(&[]).await;
+    t.fake.reply(
+        "post",
+        tt::Reply::http(
+            201,
+            tt::message(tt::TEAM_B, tt::CH_B1, "1616990099999", "hello"),
+        ),
+    );
+    let r = f
+        .ask(&s, "teams.post_message", post(tt::TEAM_A, tt::CH_A1))
+        .await;
+    assert!(r.ok, "{r:?}");
+    assert_eq!(r.result.as_ref().unwrap()["unverified"], true);
+    assert!(f.audit_text().await.contains("ok_unverified"));
 }
 
 #[tokio::test]

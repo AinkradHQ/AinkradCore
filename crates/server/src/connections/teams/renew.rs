@@ -156,6 +156,11 @@ impl Job {
         let Some(cred) = unpack(&m).filter(|_| stale) else {
             return (version, Ok(m));
         };
+        // An app limited to one tenant renews nothing of another (the app may have been
+        // narrowed after the connection was made). No health signal: it is Core's setting.
+        if self.app.tenant != "organizations" && cred.tenant() != self.app.tenant {
+            return (version, Err(CallError::TenantNotAllowed));
+        }
         let renewed_lately = self
             .recent
             .lock()

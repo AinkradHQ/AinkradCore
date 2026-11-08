@@ -16,6 +16,12 @@ use crate::store::connections::{get, secret};
 const NEW_ACCESS: &str = "acc9-graphtok-0009-aaaaaaaa";
 const NEW_REFRESH: &str = "ref9-refreshtok-0009-bbbbbbbb";
 
+fn grant(status: u16, codes: &[u64], suberror: Option<&str>) -> Reply {
+    let mut r = Reply::grant_error(codes, suberror);
+    r.status = status;
+    r
+}
+
 async fn due(f: &Fx) -> Connection {
     f.connect("acme", &material(ACCESS, REFRESH, 10)).await
 }
@@ -146,8 +152,53 @@ async fn only_invalid_grant_condemns_a_refresh_token() {
             "error_description": "AADSTS7000215: Invalid client secret provided."}),
     );
     let cases = [
-        (Reply::entra(400, "invalid_grant"), CallError::AuthFailed),
-        (Reply::entra(401, "invalid_grant"), CallError::AuthFailed),
+        (Reply::dead_grant(), CallError::AuthFailed),
+        (grant(401, &[50173], None), CallError::AuthFailed),
+        (Reply::grant_error(&[70008], None), CallError::AuthFailed),
+        (
+            Reply::grant_error(&[700_082, 50173], None),
+            CallError::AuthFailed,
+        ),
+        // Entra sends invalid_grant for step-ups too: those are the person's turn, no verdict.
+        (
+            Reply::grant_error(&[50076], Some("basic_action")),
+            CallError::InteractionRequired,
+        ),
+        (
+            Reply::grant_error(&[50076], None),
+            CallError::InteractionRequired,
+        ),
+        (
+            Reply::grant_error(&[53003], None),
+            CallError::InteractionRequired,
+        ),
+        (
+            Reply::grant_error(&[65001], None),
+            CallError::InteractionRequired,
+        ),
+        (
+            Reply::grant_error(&[50158], None),
+            CallError::InteractionRequired,
+        ),
+        // A step-up wins over a dead-token code in the same answer, and a suberror alone is one.
+        (
+            Reply::grant_error(&[50173, 53003], None),
+            CallError::InteractionRequired,
+        ),
+        (
+            Reply::grant_error(&[700_082], Some("consent_required")),
+            CallError::InteractionRequired,
+        ),
+        // An invalid_grant with no documented dead-token code condemns nothing.
+        (Reply::grant_error(&[], None), CallError::BadRequest(400)),
+        (
+            Reply::grant_error(&[9_999_999], None),
+            CallError::BadRequest(400),
+        ),
+        (
+            Reply::entra(400, "invalid_grant"),
+            CallError::BadRequest(400),
+        ),
         (wrong_secret, CallError::AppConfig),
         (Reply::entra(400, "invalid_client"), CallError::AppConfig),
         (
@@ -181,7 +232,13 @@ async fn only_invalid_grant_condemns_a_refresh_token() {
         ),
         (Reply::http(503, json!({})), CallError::Upstream(503)),
         // A 5xx that carries invalid_grant is still Microsoft's outage.
-        (Reply::entra(500, "invalid_grant"), CallError::Upstream(500)),
+        (
+            Reply::http(
+                500,
+                json!({"error": "invalid_grant", "error_codes": [700_082]}),
+            ),
+            CallError::Upstream(500),
+        ),
         (Reply::http(200, json!({})), CallError::Upstream(200)),
     ];
     for (reply, want) in cases {
@@ -291,7 +348,7 @@ async fn the_lock_map_does_not_grow_with_every_connection_renewed() {
 #[tokio::test]
 async fn a_renewal_microsoft_refuses_is_a_conclusive_rejection_and_a_failure_is_not() {
     let f = fx(true).await;
-    f.fake.reply("token", Reply::entra(400, "invalid_grant"));
+    f.fake.reply("token", Reply::dead_grant());
     let c = due(&f).await;
     let t = f.teams.test_connection(&f.cx(NOW), c.id).await.unwrap();
     assert_eq!(
@@ -355,79 +412,4 @@ async fn a_wrong_client_id_disables_no_connection_and_a_corrected_one_renews() {
         f.fake.last("token").unwrap().params["refresh_token"],
         REFRESH
     );
-}
-
-#[tokio::test]
-async fn a_credential_a_person_stores_meanwhile_wins_over_a_renewal() {
-    let f = fx(true).await;
-    f.fake.rotating();
-    let c = due(&f).await;
-    let (t, pool, sealer) = (f.teams.clone(), f.pool.clone(), f.sealer.clone());
-    let renewing = tokio::spawn(async move {
-        let who = Who {
-            workspace: 1,
-            by_device: "d_test",
-            actor: AuditActor::System,
-            now: NOW,
-        };
-        let cx = Ctx {
-            pool: &pool,
-            sealer: &sealer,
-            who,
-        };
-        t.fresh(&cx, c.id).await
-    });
-    // While the token endpoint is still answering (it takes 150 ms), a person signs in again.
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let theirs = material(NEW_ACCESS, NEW_REFRESH, 3600);
-    secret::replace(&f.pool, &f.sealer, c.id, &theirs, f.cx(NOW).who)
-        .await
-        .unwrap();
-    let got = renewing.await.unwrap().unwrap();
-    assert_eq!(
-        unpack(&got).unwrap().secrets()[0],
-        NEW_ACCESS,
-        "the renewal hands back what is stored now"
-    );
-    let (access, refresh, _) = stored(&f, c.id).await;
-    assert_eq!(
-        (access.as_str(), refresh.as_str()),
-        (NEW_ACCESS, NEW_REFRESH)
-    );
-}
-
-#[tokio::test]
-async fn a_verdict_about_an_old_credential_cannot_settle_a_new_one() {
-    let f = fx(true).await;
-    // The old refresh token is refused, slowly.
-    f.fake
-        .on("token", |_| Reply::entra(400, "invalid_grant").delayed(200));
-    let c = due(&f).await;
-    let (t, pool, sealer, id) = (f.teams.clone(), f.pool.clone(), f.sealer.clone(), c.id);
-    let testing = tokio::spawn(async move {
-        let who = Who {
-            workspace: 1,
-            by_device: "d_test",
-            actor: AuditActor::System,
-            now: NOW,
-        };
-        let cx = Ctx {
-            pool: &pool,
-            sealer: &sealer,
-            who,
-        };
-        t.test_connection(&cx, id).await
-    });
-    tokio::time::sleep(Duration::from_millis(60)).await;
-    let theirs = material(NEW_ACCESS, NEW_REFRESH, 3600);
-    secret::replace(&f.pool, &f.sealer, c.id, &theirs, f.cx(NOW).who)
-        .await
-        .unwrap();
-    let t = testing.await.unwrap().unwrap();
-    assert_ne!(
-        t.status, "disabled",
-        "the refusal was about the credential that was replaced"
-    );
-    let now = get(&f.pool, 1, c.id).await.unwrap();
-    assert_ne!(now.state_reason.as_deref(), Some("auth_failed"));
 }

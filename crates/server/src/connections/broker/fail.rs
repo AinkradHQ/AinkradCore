@@ -75,7 +75,13 @@ impl Fail {
             reset_at: None,
         });
         // No app configured is our own state, not the service's answer: a plain refusal.
-        let ours = matches!(e, TeamsError::Refused(_) | TeamsError::OAuthNotConfigured);
+        let ours = matches!(
+            e,
+            TeamsError::Refused(_)
+                | TeamsError::OAuthNotConfigured
+                | TeamsError::Cooling { .. }
+                | TeamsError::TenantNotAllowed
+        );
         let result = if ours { "refused" } else { "error" };
         Self {
             result,

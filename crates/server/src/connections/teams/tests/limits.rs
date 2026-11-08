@@ -49,7 +49,9 @@ async fn only_the_named_channel_is_reachable_on_every_operation() {
             .unwrap_or_else(|e| panic!("{op}: {e:?}"));
     }
     let reached = f.fake.graph_count();
-    assert_eq!(reached, 5);
+    // Five operations, and the channel confirmed once for all of them.
+    assert_eq!(reached, 6);
+    assert_eq!(f.fake.count("channel"), 1);
     let upper_team = TEAM_A.to_uppercase();
     let upper_channel = CH_A1.to_uppercase();
     let skype = "19:4a95f7d8db4c4e7fae857bcebe0623e6\u{40}thread.skype";

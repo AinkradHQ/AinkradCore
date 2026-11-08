@@ -191,12 +191,54 @@ pub fn one_message(
     Ok(m)
 }
 
-/// A post's answer: Graph answers the created message, which must be in the channel asked for.
-/// The message is posted by now, so a channel that is not the one asked for is refused loudly.
-pub fn posted(body: &Value, team: &str, channel: &str) -> Result<Value, CallError> {
-    let m = message(body, team, channel)?;
-    Ok(json!({"id": m["id"], "created": m.get("created")}))
+/// A post's answer. The message is live by now, so this never fails: when Graph's answer names
+/// the channel and a well-formed id they are returned as they are; anything else (another
+/// channel, an odd id, an odd body) is returned as `unverified` with no id the agent could trust.
+/// The broker audits that as `ok_unverified`.
+pub fn posted(body: &Value, team: &str, channel: &str) -> Value {
+    match message(body, team, channel) {
+        Ok(m) => json!({"id": m["id"], "created": m.get("created")}),
+        Err(_) => unverified(),
+    }
 }
+
+/// The answer to a write whose message is live but whose answer could not be checked.
+pub fn unverified() -> Value {
+    json!({"unverified": true,
+        "warning": "the message was sent but Microsoft's answer could not be checked; do not send it again"})
+}
+
+/// `GET /teams/{t}/channels/{c}`: the channel must be the one asked for, in `tenant`, of a plain
+/// kind (`standard` or `private`), and in the team asked for (its `webUrl` names the team in
+/// `groupId`, which must be `team`). A shared channel belongs to another team and tenant and is
+/// refused with a plain reason. Anything the answer does not say is a no.
+pub fn channel_ok(body: &Value, team: &str, channel: &str, tenant: &str) -> Result<(), String> {
+    if str_of(body, "id") != Some(channel) {
+        return Err(outside());
+    }
+    match str_of(body, "membershipType") {
+        Some("standard" | "private") => {}
+        Some("shared") => return Err(SHARED.to_owned()),
+        _ => return Err(outside()),
+    }
+    if str_of(body, "tenantId") != Some(tenant) {
+        return Err(SHARED.to_owned());
+    }
+    let group = str_of(body, "webUrl")
+        .and_then(|u| reqwest::Url::parse(u).ok())
+        .and_then(|u| {
+            let g = u.query_pairs().find(|(k, _)| k == "groupId");
+            g.map(|(_, v)| v.into_owned())
+        });
+    if group.as_deref() == Some(team) {
+        Ok(())
+    } else {
+        Err(outside())
+    }
+}
+
+/// Why a shared channel is refused.
+pub(super) const SHARED: &str = "shared_channel_unsupported: shared channels, and channels of another tenant, are not supported";
 
 /// The teams of `/me/joinedTeams` the limit permits, typed, with `truncated`.
 pub fn teams(body: &Value, limit: &Limit) -> Result<Value, CallError> {

@@ -168,25 +168,39 @@ async fn post_and_reply_send_exactly_a_plain_text_body() {
 }
 
 #[tokio::test]
-async fn a_write_is_checked_against_the_limit_on_the_answer() {
+async fn a_write_whose_answer_cannot_be_checked_is_a_success_with_a_warning() {
     let f = fx(true).await;
     let c = f.signed_in().await;
-    // Microsoft answers a message of ANOTHER channel (or none): refused loudly.
+    // The message is live once Microsoft answered 2xx: whatever the answer looks like, the agent
+    // is told it was sent (and not to send it again), never that it failed.
     for body in [
         message(TEAM_B, CH_B1, "1616990099999", "x"),
         message(TEAM_A, CH_A2, "1616990099999", "x"),
         json!({"id": "1616990099999"}),
         json!({"id": "1616990099999", "channelIdentity": {"teamId": TEAM_A}}),
+        json!({"id": "not-an-id", "channelIdentity": {"teamId": TEAM_A, "channelId": CH_A1}}),
+        json!(null),
+        json!("text"),
     ] {
         f.fake.reply("post", Reply::http(201, body));
         let args = with(json!({"text": "x"}));
-        let e = go(&f, &c, "teams.post_message", args).await.unwrap_err();
-        assert!(
-            matches!(&e, CallError::Refused(w) if w.starts_with("outside_limit")),
-            "{e:?}"
-        );
-        assert!(!e.to_string().contains(CH_B1));
+        let v = go(&f, &c, "teams.post_message", args).await.unwrap();
+        assert_eq!(v["unverified"], true, "{v}");
+        assert!(v.get("id").is_none() && !v.to_string().contains(CH_B1));
     }
+    // A 2xx whose body is not JSON at all, and an empty one.
+    for raw in [b"<html>ok</html>".to_vec(), Vec::new()] {
+        f.fake
+            .reply("reply", Reply::http(201, json!(null)).raw(raw));
+        let args = with(json!({"message": MSG, "text": "x"}));
+        let v = go(&f, &c, "teams.reply_message", args).await.unwrap();
+        assert_eq!(v["unverified"], true);
+    }
+    // A failure BEFORE the message exists is still an error.
+    f.fake.reply("post", Reply::graph(403, "Forbidden"));
+    let args = with(json!({"text": "x"}));
+    let e = go(&f, &c, "teams.post_message", args).await.unwrap_err();
+    assert_eq!(e, CallError::Forbidden);
 }
 
 #[tokio::test]
@@ -241,7 +255,13 @@ async fn an_odd_answer_is_an_error_and_never_a_panic() {
             // A body that is an empty list is a valid empty answer; anything else that is not
             // what the route says is an error.
             // (A team or channel list skips an entry it cannot read, by design.)
+            let write = matches!(route, "post" | "reply");
             if let (Ok(v), false) = (&r, matches!(route, "teams" | "channels")) {
+                // A write that Microsoft answered is live: odd answers are a warning, not an error.
+                if write {
+                    assert_eq!(v["unverified"], true, "{route} {body} -> {v}");
+                    continue;
+                }
                 let empty = body
                     .get("value")
                     .and_then(Value::as_array)

@@ -43,10 +43,19 @@ pub enum CallError {
     Forbidden,
     /// 404, `ResourceNotFound`, `ChannelNotFound`: no such thing, or not visible.
     NotFound,
-    /// 429 or `TooManyRequests`; `retry_after` seconds when Microsoft said.
+    /// 429 or `TooManyRequests` to a call NO agent drives (`/me`, the token endpoint);
+    /// `retry_after` seconds when Microsoft said. Connection-wide health.
     RateLimited {
         retry_after: Option<u64>,
     },
+    /// Microsoft said 429 to a call an agent drives (a channel, a team list): that channel (or
+    /// list) is cooling on this connection for `wait_secs`, refused here with no request and no
+    /// health signal, while every other channel goes on.
+    Cooling {
+        wait_secs: u64,
+    },
+    /// The connection's tenant is not the one this Core's app is limited to. No health signal.
+    TenantNotAllowed,
     /// 5xx, a redirect, an unreadable answer.
     Upstream(u16),
     /// Another 4xx: the request was not acceptable.
@@ -81,6 +90,13 @@ impl fmt::Display for CallError {
             Self::Forbidden => f.write_str("Microsoft says the account may not do that"),
             Self::NotFound => f.write_str("Microsoft has no such thing, or the account cannot see it"),
             Self::RateLimited { .. } => f.write_str("Microsoft is rate limiting this connection"),
+            Self::Cooling { wait_secs } => write!(
+                f,
+                "Microsoft is rate limiting this channel; it can be asked again in {wait_secs} seconds"
+            ),
+            Self::TenantNotAllowed => f.write_str(
+                "this connection's tenant is not the one this Core's Microsoft app is limited to",
+            ),
             Self::Upstream(s) => write!(f, "Microsoft answered with an error ({s})"),
             Self::BadRequest(s) => write!(f, "Microsoft did not accept the request ({s})"),
             Self::Network => f.write_str("Microsoft could not be reached"),
@@ -129,7 +145,8 @@ impl CallError {
             Self::AuthFailed => "auth_failed",
             Self::Forbidden => "forbidden",
             Self::NotFound => "not_found",
-            Self::RateLimited { .. } => "rate_limited",
+            Self::RateLimited { .. } | Self::Cooling { .. } => "rate_limited",
+            Self::TenantNotAllowed => "tenant_not_allowed",
             Self::Upstream(_) => "upstream",
             Self::BadRequest(_) => "bad_request",
             Self::Network => "network",
@@ -168,13 +185,12 @@ pub fn classify(status: u16, retry_after: Option<u64>) -> CallError {
     }
 }
 
-/// The meaning of one Graph `error.code`; `None` for a code this adapter has no word for (the
-/// status decides). Never the message.
+/// The meaning of one Graph `error.code` on a non-401 status; `None` for a code this adapter has
+/// no word for (the status decides). Never the message. No code makes an `AuthFailed`: only HTTP
+/// 401 does, because a 400, 403 or 404 can carry any code and what an agent names must not
+/// suspend the shared connection.
 fn of_code(code: &str, retry_after: Option<u64>) -> Option<CallError> {
     Some(match code {
-        "InvalidAuthenticationToken" | "Unauthorized" | "AuthenticationError" => {
-            CallError::AuthFailed
-        }
         "TooManyRequests"
         | "ApplicationThrottled"
         | "activityLimitReached"
@@ -217,6 +233,9 @@ impl Resp {
         }
         if status == 429 {
             return Err(CallError::RateLimited { retry_after });
+        }
+        if status == 401 {
+            return Err(CallError::AuthFailed);
         }
         let code = body
             .get("error")

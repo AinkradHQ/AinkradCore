@@ -65,8 +65,8 @@ fn the_hourly_budget_is_at_most_sixty_percent_of_microsofts_channel_limit() {
     // 1 request a second on one channel: 3,600 an hour.
     let limit = 3_600u32;
     assert_eq!(
-        MAX_REQUESTS_PER_CALL, 2,
-        "the operation and a renewal's retry"
+        MAX_REQUESTS_PER_CALL, 5,
+        "the channel confirmation, the operation, a renewal's retry and /me after a refusal"
     );
     let worst = DESCRIPTOR.hourly_calls * MAX_REQUESTS_PER_CALL;
     assert!(worst <= limit * 6 / 10, "{worst}");

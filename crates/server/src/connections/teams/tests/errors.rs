@@ -1,6 +1,7 @@
 //! What each failure means for the caller and for health. Nothing an agent can provoke (a missing
-//! or forbidden channel, a bad argument, a redirect, a huge answer, a cursor that makes Graph
-//! fail) is a signal about the connection; a 401, a 429 and a 5xx without caller input are.
+//! or forbidden channel, a bad argument, a redirect, a huge answer, a cursor or a resource that
+//! makes Graph fail, a 429 on one channel, an error that merely NAMES an auth code) is a signal
+//! about the connection; a 401 that `/me` confirms is.
 
 use std::time::Duration;
 
@@ -15,10 +16,17 @@ async fn read(f: &Fx, c: &Connection) -> Result<Value, CallError> {
     run(f, c, &Limit::any(), "teams.list_messages", a).await
 }
 
-#[tokio::test]
-async fn graph_error_codes_and_statuses_map_to_the_right_error() {
+/// What reading the channel comes to when `messages` answers `reply` (a fresh service each time:
+/// a cooling channel is remembered).
+async fn answer_of(reply: &Reply) -> (Result<Value, CallError>, Fx) {
     let f = fx(true).await;
     let c = f.signed_in().await;
+    f.fake.reply("messages", reply.clone());
+    (read(&f, &c).await, f)
+}
+
+#[tokio::test]
+async fn graph_error_codes_and_statuses_map_to_the_right_error() {
     let cases = [
         (Reply::graph(403, "Forbidden"), CallError::Forbidden),
         (Reply::graph(403, "accessDenied"), CallError::Forbidden),
@@ -39,29 +47,14 @@ async fn graph_error_codes_and_statuses_map_to_the_right_error() {
             CallError::BadRequest(400),
         ),
         (Reply::http(409, json!({})), CallError::BadRequest(409)),
-        (
-            Reply::graph(429, "TooManyRequests"),
-            CallError::RateLimited { retry_after: None },
-        ),
-        (
-            Reply::graph(429, "TooManyRequests").header("Retry-After", "17"),
-            CallError::RateLimited {
-                retry_after: Some(17),
-            },
-        ),
-        (
-            Reply::graph(429, "TooManyRequests").header("Retry-After", "99999"),
-            CallError::RateLimited {
-                retry_after: Some(3600),
-            },
-        ),
+        // A 5xx on a resource an agent named is not Microsoft's outage.
         (
             Reply::graph(503, "serviceNotAvailable"),
-            CallError::Upstream(503),
+            CallError::BadRequest(503),
         ),
         (
             Reply::graph(500, "generalException"),
-            CallError::Upstream(500),
+            CallError::BadRequest(500),
         ),
         (
             Reply::http(302, json!({})).header("location", "https://evil.test/x"),
@@ -73,11 +66,130 @@ async fn graph_error_codes_and_statuses_map_to_the_right_error() {
         ),
     ];
     for (reply, want) in cases {
-        f.fake.reply("messages", reply.clone());
-        let got = read(&f, &c).await.map(|_| ());
-        assert_eq!(got, Err(want.clone()), "{} {}", reply.status, reply.body);
+        let (got, f) = answer_of(&reply).await;
+        assert_eq!(
+            got.map(|_| ()),
+            Err(want.clone()),
+            "{} {}",
+            reply.status,
+            reply.body
+        );
+        assert_eq!(want.health(), None, "{want:?}");
+        assert_eq!(f.fake.bad(), 0);
     }
+}
+
+#[tokio::test]
+async fn an_error_that_merely_names_an_auth_code_is_not_an_auth_failure() {
+    // Only HTTP 401 is a refused token. A 400, 403 or 404 can carry any code an agent provoked.
+    for code in [
+        "InvalidAuthenticationToken",
+        "Unauthorized",
+        "AuthenticationError",
+    ] {
+        for (status, want) in [
+            (403, CallError::Forbidden),
+            (404, CallError::NotFound),
+            (400, CallError::BadRequest(400)),
+        ] {
+            let (got, f) = answer_of(&Reply::graph(status, code)).await;
+            assert_eq!(got.map(|_| ()), Err(want), "{status} {code}");
+            assert_eq!(
+                f.fake.count("token"),
+                0,
+                "no refresh was spent: {status} {code}"
+            );
+            assert_eq!(f.fake.count("me"), 0, "{status} {code}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_429_cools_that_channel_for_a_bounded_time_and_is_no_health_signal() {
+    for (retry, want) in [
+        (Some("17"), 17),
+        (Some("0"), 1),
+        (Some("99999"), 600),
+        (None, 60),
+    ] {
+        let mut reply = Reply::graph(429, "TooManyRequests");
+        if let Some(r) = retry {
+            reply = reply.header("Retry-After", r);
+        }
+        let (got, f) = answer_of(&reply).await;
+        let e = got.unwrap_err();
+        assert!(
+            matches!(e, CallError::Cooling { wait_secs } if wait_secs <= want && wait_secs + 2 >= want),
+            "{retry:?}: {e:?}"
+        );
+        assert_eq!(e.health(), None);
+        assert_eq!(e.code(), "rate_limited");
+        assert_eq!(f.fake.count("me"), 0);
+    }
+}
+
+#[tokio::test]
+async fn a_burst_to_one_channel_never_touches_another_channel_or_health() {
+    let f = fx(true).await;
+    let c = f.signed_in().await;
+    f.fake.reply(
+        "post",
+        Reply::graph(429, "TooManyRequests").header("Retry-After", "30"),
+    );
+    let any = Limit::any();
+    let post = |ch: &'static str| {
+        let a = json!({"team": TEAM_A, "channel": ch, "text": "x"});
+        run(&f, &c, &any, "teams.post_message", a)
+    };
+    let first = post(CH_A1).await.unwrap_err();
+    assert!(matches!(first, CallError::Cooling { wait_secs } if (29..=30).contains(&wait_secs)));
+    // The next ones to that channel are refused here: Graph is not asked, nothing is signalled.
+    for _ in 0..5 {
+        let e = post(CH_A1).await.unwrap_err();
+        assert!(matches!(e, CallError::Cooling { .. }), "{e:?}");
+        assert_eq!(e.health(), None);
+    }
+    assert_eq!(f.fake.count("post"), 1);
+    // Reading the same channel is cooling too (Microsoft limits the channel), another is not.
+    assert!(matches!(
+        read(&f, &c).await.unwrap_err(),
+        CallError::Cooling { .. }
+    ));
+    f.fake.reply(
+        "post",
+        Reply::http(201, message(TEAM_A, CH_A2, "1616990099999", "x")),
+    );
+    assert!(post(CH_A2).await.is_ok(), "another channel goes on");
+    let teams = run(&f, &c, &Limit::any(), "teams.list_teams", json!({})).await;
+    assert!(teams.is_ok(), "lists go on");
     assert_eq!(f.fake.bad(), 0);
+}
+
+#[tokio::test]
+async fn list_calls_cool_per_list_and_the_cooling_is_per_connection() {
+    let f = fx(true).await;
+    let c = f.signed_in().await;
+    let d = f.connect("other", &material(ACCESS, REFRESH, 3600)).await;
+    f.fake.reply(
+        "teams",
+        Reply::graph(429, "TooManyRequests").header("Retry-After", "20"),
+    );
+    let l = Limit::any();
+    let e = run(&f, &c, &l, "teams.list_teams", json!({}))
+        .await
+        .unwrap_err();
+    assert!(matches!(e, CallError::Cooling { .. }));
+    let again = run(&f, &c, &l, "teams.list_teams", json!({}))
+        .await
+        .unwrap_err();
+    assert!(matches!(again, CallError::Cooling { .. }));
+    assert_eq!(f.fake.count("teams"), 1);
+    // Another list, a channel read, and the same list on ANOTHER connection are not held.
+    let ch = run(&f, &c, &l, "teams.list_channels", json!({"team": TEAM_A})).await;
+    assert!(ch.is_ok());
+    assert!(read(&f, &c).await.is_ok());
+    f.fake.reply("teams", Reply::ok(json!({"value": []})));
+    assert!(run(&f, &d, &l, "teams.list_teams", json!({})).await.is_ok());
 }
 
 #[tokio::test]
@@ -98,6 +210,8 @@ async fn what_an_agent_can_provoke_is_no_health_signal() {
         CallError::AppConfig,
         CallError::InteractionRequired,
         CallError::OAuthNotConfigured,
+        CallError::TenantNotAllowed,
+        CallError::Cooling { wait_secs: 5 },
     ] {
         assert_eq!(e.health(), None, "{e:?}");
     }
@@ -123,27 +237,6 @@ async fn what_an_agent_can_provoke_is_no_health_signal() {
 }
 
 #[tokio::test]
-async fn a_5xx_after_a_caller_cursor_is_not_microsofts_outage() {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    let f = fx(true).await;
-    let c = f.signed_in().await;
-    f.fake
-        .reply("messages", Reply::graph(500, "generalException"));
-    let a = json!({"team": TEAM_A, "channel": CH_A1, "cursor": URL_SAFE_NO_PAD.encode("garbage")});
-    let e = run(&f, &c, &Limit::any(), "teams.list_messages", a)
-        .await
-        .unwrap_err();
-    assert_eq!(e, CallError::BadRequest(500));
-    assert_eq!(e.health(), None);
-    // The same 5xx with no cursor from the caller IS a signal.
-    assert_eq!(
-        read(&f, &c).await.unwrap_err().health(),
-        Some((UpstreamStatus::ServerError, None))
-    );
-}
-
-#[tokio::test]
 async fn too_large_and_late_answers_are_no_signal() {
     let f = fx(true).await;
     let c = f.signed_in().await;
@@ -164,7 +257,7 @@ async fn too_large_and_late_answers_are_no_signal() {
     ));
     let gc = g.signed_in().await;
     g.fake
-        .reply("messages", Reply::ok(json!({"value": []})).delayed(1500));
+        .reply("channel", Reply::ok(channel_info("", CH_A1)).delayed(1500));
     let a = json!({"team": TEAM_A, "channel": CH_A1});
     let e = t
         .call(&g.cx(NOW), &gc, &Limit::any(), "teams.list_messages", &a)
@@ -175,7 +268,7 @@ async fn too_large_and_late_answers_are_no_signal() {
 }
 
 #[tokio::test]
-async fn a_refused_token_renews_once_and_retries_once_then_is_auth_failed() {
+async fn a_refused_token_renews_once_and_retries_once_then_is_auth_failed_when_me_agrees() {
     let f = fx(true).await;
     let served = f.fake.rotating();
     f.fake.on("messages", |s| {
@@ -189,11 +282,14 @@ async fn a_refused_token_renews_once_and_retries_once_then_is_auth_failed() {
     assert!(read(&f, &c).await.is_ok());
     assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(f.fake.count("messages"), 2);
-    // A service that keeps refusing: one refresh, one retry, then the failure, and no loop.
+    // A service that keeps refusing, `/me` included: one refresh, one retry, then the failure,
+    // and no loop.
     let g = fx(true).await;
     let served = g.fake.rotating();
     g.fake
         .reply("messages", Reply::graph(401, "InvalidAuthenticationToken"));
+    g.fake
+        .reply("me", Reply::graph(401, "InvalidAuthenticationToken"));
     let c = g.signed_in().await;
     assert_eq!(read(&g, &c).await.unwrap_err(), CallError::AuthFailed);
     assert_eq!(read(&g, &c).await.unwrap_err(), CallError::AuthFailed);
@@ -206,6 +302,28 @@ async fn a_refused_token_renews_once_and_retries_once_then_is_auth_failed() {
 }
 
 #[tokio::test]
+async fn a_401_to_one_resource_while_me_works_is_no_verdict_on_the_credential() {
+    let f = fx(true).await;
+    f.fake.rotating();
+    f.fake
+        .reply("messages", Reply::graph(401, "InvalidAuthenticationToken"));
+    let c = f.signed_in().await;
+    let e = read(&f, &c).await.unwrap_err();
+    assert_eq!(e, CallError::Forbidden);
+    assert_eq!(e.health(), None);
+    assert!(f.fake.count("me") >= 1, "confirmed against /me");
+    // /me that cannot answer is not a verdict either.
+    let g = fx(true).await;
+    g.fake.rotating();
+    g.fake
+        .reply("messages", Reply::graph(401, "InvalidAuthenticationToken"));
+    g.fake.reply("me", Reply::graph(503, "serviceNotAvailable"));
+    let c = g.signed_in().await;
+    let e = read(&g, &c).await.unwrap_err();
+    assert_eq!(e.health(), None, "{e:?}");
+}
+
+#[tokio::test]
 async fn a_missing_scope_is_forbidden_not_a_verdict() {
     let f = fx(true).await;
     let c = f.signed_in().await;
@@ -213,6 +331,7 @@ async fn a_missing_scope_is_forbidden_not_a_verdict() {
         "openid",
         "offline_access",
         "User.Read",
+        "Channel.ReadBasic.All",
         "ChannelMessage.Send",
     ]);
     let e = read(&f, &c).await.unwrap_err();

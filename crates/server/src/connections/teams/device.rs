@@ -19,7 +19,7 @@ use serde_json::Value;
 use zeroize::Zeroizing;
 
 use super::Teams;
-use super::cred::{id_token_tenant, oauth_material, tenant_id};
+use super::cred::{id_token_claims, oauth_material, tenant_id};
 use super::http::{CallError, Endpoint};
 use super::oauth::{SCOPES, issued};
 use crate::connections::github::device::Prompt;
@@ -109,6 +109,8 @@ pub struct Granted {
     pub material: Material,
     /// The tenant (`tid`) the tokens were issued in.
     pub tenant: String,
+    /// The user's object id (`oid`) who signed in.
+    pub user: String,
 }
 
 pub enum Step {
@@ -132,7 +134,10 @@ pub enum Step {
 pub struct Pending {
     device_code: Zeroizing<String>,
     client_id: String,
+    /// The tenant the code was asked at (a re-sign-in's own).
     tenant: String,
+    /// The tenant the app is limited to (`organizations` when it is not).
+    app_tenant: String,
     interval: Duration,
     next_at: Instant,
     expires_at: Instant,
@@ -163,6 +168,11 @@ impl Teams {
             .filter(|t| tenant_id(t))
             .unwrap_or(app.tenant.as_str())
             .to_owned();
+        // An app limited to one tenant starts no sign-in at another (a connection made before the
+        // app was narrowed cannot be signed in again).
+        if app.tenant != "organizations" && tenant != app.tenant {
+            return Err(DeviceError::WrongTenant);
+        }
         let form = [("client_id", app.client_id.as_str()), ("scope", SCOPES)];
         let res = self
             .http
@@ -207,6 +217,7 @@ impl Teams {
             device_code: code,
             client_id: app.client_id.clone(),
             tenant,
+            app_tenant: app.tenant.clone(),
             interval: Duration::from_secs(interval),
             next_at: now + Duration::from_secs(interval),
             expires_at: now + Duration::from_secs(expires_in),
@@ -305,17 +316,20 @@ impl Pending {
         let (Some(refresh), Some(id)) = (iss.refresh.as_ref(), iss.id_token.as_ref()) else {
             return bad;
         };
-        let Some(tid) = id_token_tenant(id, &self.client_id) else {
+        let Some((tid, oid)) = id_token_claims(id, &self.client_id) else {
             return bad;
         };
-        // An app limited to one tenant takes no grant from another.
-        if self.tenant != "organizations" && tid != self.tenant {
+        // An app limited to one tenant takes no grant from another, and a re-sign-in lands in the
+        // tenant its code was asked at.
+        let pinned = self.app_tenant != "organizations" && tid != self.app_tenant;
+        if pinned || (self.tenant != "organizations" && tid != self.tenant) {
             return Step::Failed(DeviceError::WrongTenant);
         }
         match oauth_material(&tid, &iss.access, refresh, &iss.expires_at) {
             Some(material) => Step::Granted(Box::new(Granted {
                 material,
                 tenant: tid,
+                user: oid,
             })),
             None => bad,
         }

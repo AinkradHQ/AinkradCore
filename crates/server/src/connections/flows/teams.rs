@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 
 use super::{Flow, Start, StartError, View, blank, finish, new_flow};
 use crate::api::App;
-use crate::connections::teams::{DeviceError, Granted, Pending, Step, TenantCheck};
-use crate::connections::teams::{check_tenant, tenant_of};
+use crate::connections::teams::{DeviceError, Granted, Pending, SignerCheck, Step};
+use crate::connections::teams::{check_signer, tenant_of};
 use crate::store::connections;
 
 pub(super) async fn start(app: &App, s: Start<'_>) -> Result<View, StartError> {
@@ -92,9 +92,11 @@ fn message(e: &DeviceError) -> String {
     e.to_string()
 }
 
-/// Whether the tenant that signed in is the one connection `id` was made in, by its stable id. A
-/// different tenant never passes. A connection with no recorded tenant is `identity_unknown`,
-/// which only a confirmed change passes.
+/// Whether who signed in is who connection `id` was made by, by stable ids only: the tenant (`tid`)
+/// and the user (`oid`). A different tenant never passes. Another user of the same tenant, or a
+/// connection that records no identity, passes only as a confirmed change (`different_account`,
+/// `identity_unknown`): messages are sent AS the person, so a colleague's sign-in must not replace
+/// the credential silently.
 async fn check_same_tenant(
     app: &App,
     flow: &Flow,
@@ -110,16 +112,21 @@ async fn check_same_tenant(
             )
         })?
         .identity;
-    match check_tenant(old.as_deref(), &g.tenant) {
-        TenantCheck::Same => Ok(()),
-        TenantCheck::Different => Err((
+    match check_signer(old.as_deref(), &g.user, &g.tenant) {
+        SignerCheck::Same => Ok(()),
+        SignerCheck::OtherTenant => Err((
             "wrong_tenant",
             "that sign-in is a different Microsoft tenant than this connection's",
         )),
-        TenantCheck::Unknown if flow.confirm_identity_change => Ok(()),
-        TenantCheck::Unknown => Err((
+        SignerCheck::OtherUser if flow.confirm_identity_change => Ok(()),
+        SignerCheck::OtherUser => Err((
+            "different_account",
+            "that sign-in is a different Microsoft user than this connection's; confirm the change to replace it",
+        )),
+        SignerCheck::Unknown if flow.confirm_identity_change => Ok(()),
+        SignerCheck::Unknown => Err((
             "identity_unknown",
-            "this connection has no recorded tenant to compare with; confirm the change to replace it",
+            "this connection has no recorded identity to compare with; confirm the change to replace it",
         )),
     }
 }

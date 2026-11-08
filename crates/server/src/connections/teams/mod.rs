@@ -24,6 +24,7 @@ mod device;
 mod http;
 mod oauth;
 mod ops;
+mod pace;
 mod renew;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -35,7 +36,10 @@ use futures_util::future::{BoxFuture, FutureExt};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 
-pub use cred::{Cred, TenantCheck, check_tenant, secrets_of, tenant_id, tenant_of, unpack};
+pub use cred::{
+    Cred, SignerCheck, TenantCheck, check_signer, check_tenant, secrets_of, tenant_id, tenant_of,
+    unpack,
+};
 pub use device::{DeviceError, Granted, Pending, Step};
 pub use http::CallError;
 pub use oauth::{SCOPES, TeamsApp};
@@ -50,8 +54,9 @@ use crate::scheduler::unix_secs;
 use crate::store::connections::verdict::{self, TestOutcome};
 use crate::store::connections::{Connection, Who};
 
-/// The most Graph requests ONE call makes (the operation and a renewal's retry): the budget below
-/// is in calls, Microsoft counts requests.
+/// The most Graph requests ONE call makes (the channel confirmation, the operation, a renewal's
+/// retry and `/me` after a surviving refusal): the budget below is in calls, Microsoft counts
+/// requests.
 pub const MAX_REQUESTS_PER_CALL: u32 = calls::MAX_REQUESTS;
 /// Microsoft's limit on one channel: 1 request a second per app per tenant (Graph throttling
 /// limits, "channel messages"), the lowest figure this adapter can hit hard from one connection.
@@ -145,6 +150,8 @@ pub struct Teams {
     locks: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
     /// When each connection's token was last renewed (see `renew::Job::run`).
     recent: renew::Recent,
+    /// Local cooling by channel and the channels confirmed ([`pace`]).
+    pace: pace::Pace,
 }
 
 impl Teams {
@@ -164,6 +171,7 @@ impl Teams {
             app: std::sync::RwLock::new(app),
             locks: Mutex::default(),
             recent: Arc::default(),
+            pace: pace::Pace::default(),
         }
     }
 
@@ -180,8 +188,11 @@ impl Teams {
     /// Replaces Ainkrad's Microsoft app in place (a config change; whether it changed), keeping
     /// this one instance: its locks and the registry's and broker's handles to it stay valid.
     /// Sign-ins waiting under the old app are ended by the caller (`apps::reload`). Tokens already
-    /// stored are renewed with the NEW app; a changed client id makes them fail to renew
-    /// ([`CallError::AppConfig`], which is no verdict on the connection).
+    /// stored are renewed with the NEW app. A refresh token belongs to the client id it was issued
+    /// to: under another client id Entra answers `invalid_grant` (without a dead-token code, so no
+    /// verdict, see [`oauth`]) or a dead-token code, and those connections need signing in again.
+    /// A tenant pin that excludes a connection's tenant refuses its renewal
+    /// ([`CallError::TenantNotAllowed`], no health signal).
     pub fn set_app(&self, app: Option<TeamsApp>) -> bool {
         let mut cur = self.app.write().unwrap_or_else(|e| e.into_inner());
         let unchanged = match (&*cur, &app) {

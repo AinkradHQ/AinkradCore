@@ -95,6 +95,7 @@ fn start_error(e: StartError) -> ApiError {
         StartError::Teams(e) => {
             let (status, code) = match e {
                 TeamsError::NotConfigured => (StatusCode::CONFLICT, "not_configured"),
+                TeamsError::WrongTenant => (StatusCode::CONFLICT, "wrong_tenant"),
                 _ => (StatusCode::BAD_GATEWAY, "upstream_failed"),
             };
             ApiError::new(status, code, e.to_string())

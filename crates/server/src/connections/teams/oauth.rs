@@ -75,13 +75,42 @@ pub(super) struct Issued {
     pub lifetime: i64,
 }
 
-/// POSTs the token endpoint of `tenant`. Only an `error` of `invalid_grant` says THIS credential
-/// (a refresh token) is dead ([`CallError::AuthFailed`]); `invalid_client`, `unauthorized_client`
-/// (including AADSTS7000215, a wrong client secret) and `invalid_scope` are Core's own app
-/// ([`CallError::AppConfig`]); `interaction_required`, `consent_required` and `login_required` want
-/// the person ([`CallError::InteractionRequired`]); none of those three is a health signal beyond
-/// the first. Any other 401 or 403 (an edge, a proxy) is [`CallError::Forbidden`] and any other
-/// status is classified as for an API call. Returns the whole 2xx body.
+/// `AADSTS` codes (the body's `error_codes`) with which Entra says a grant is permanently dead and
+/// the person must sign in again: 70000 (the refresh token is not valid), 70008 and 700082
+/// (expired, inactive), 700084 (a fixed lifetime ran out), 50173 (revoked, a password changed or
+/// reset), 50132 and 50133 (session invalid after a password change), 70043 (sign-in frequency).
+const DEAD: [u64; 8] = [70000, 70008, 700_082, 700_084, 50173, 50132, 50133, 70043];
+/// Codes with which Entra wants the person (multi-factor, a Conditional Access block or step-up,
+/// an external challenge, consent): the grant is not dead, a later renewal may pass.
+const INTERACTION: [u64; 5] = [50076, 50079, 53003, 50158, 65001];
+
+/// What an `invalid_grant` comes to. Entra sends it for dead tokens AND for step-ups, so only the
+/// documented dead-token codes condemn; a step-up code or any `suberror` is the person's turn;
+/// anything else is no verdict at all.
+fn invalid_grant(body: &Value, status: u16) -> CallError {
+    let codes: Vec<u64> = body
+        .get("error_codes")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_u64).collect())
+        .unwrap_or_default();
+    let has = |set: &[u64]| codes.iter().any(|c| set.contains(c));
+    if has(&INTERACTION) || body.get("suberror").is_some_and(|s| !s.is_null()) {
+        CallError::InteractionRequired
+    } else if has(&DEAD) {
+        CallError::AuthFailed
+    } else {
+        CallError::BadRequest(status)
+    }
+}
+
+/// POSTs the token endpoint of `tenant`. An `invalid_grant` is judged by [`invalid_grant`]: only
+/// the documented dead-token codes say THIS credential (a refresh token) is dead
+/// ([`CallError::AuthFailed`]); `invalid_client`, `unauthorized_client` (including AADSTS7000215,
+/// a wrong client secret) and `invalid_scope` are Core's own app ([`CallError::AppConfig`]);
+/// `interaction_required`, `consent_required` and `login_required` want the person
+/// ([`CallError::InteractionRequired`]). Any other 401 or 403 (an edge, a proxy) is
+/// [`CallError::Forbidden`] and any other status is classified as for an API call. Returns the
+/// whole 2xx body.
 pub(super) async fn token_call(
     http: &Http,
     tenant: &str,
@@ -94,7 +123,7 @@ pub(super) async fn token_call(
     }
     let said = res.body.get("error").and_then(Value::as_str);
     Err(match (status, said) {
-        (_, Some("invalid_grant")) if status < 500 => CallError::AuthFailed,
+        (_, Some("invalid_grant")) if status < 500 => invalid_grant(&res.body, status),
         (_, Some("invalid_client" | "unauthorized_client" | "invalid_scope")) if status < 500 => {
             CallError::AppConfig
         }

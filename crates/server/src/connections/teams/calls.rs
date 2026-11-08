@@ -7,15 +7,17 @@ use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
 use super::answer;
-use super::cred::{Cred, unpack};
+use super::cred::{Cred, channel_key, unpack};
 use super::http::{CallError, Req};
 use super::ops::{self, Limit, Plan};
+use super::pace::Scope;
 use super::{Ctx, Teams};
 use crate::store::connections::Connection;
 
-/// The most Graph requests ONE call makes, a renewal's retry included. The descriptor's hourly
-/// budget is counted in these units.
-pub const MAX_REQUESTS: u32 = 2;
+/// The most Graph requests ONE call makes: the channel confirmation, the operation, a renewal's
+/// retry and `/me` after a refusal that survives it. The descriptor's hourly budget is counted in
+/// these units (most calls make one or two: a confirmed channel is remembered).
+pub const MAX_REQUESTS: u32 = 5;
 
 fn refused(why: String) -> CallError {
     CallError::Refused(why)
@@ -64,6 +66,12 @@ fn text_body(text: &str) -> Value {
     json!({"body": {"contentType": "text", "content": text}})
 }
 
+fn chan(team: &str, channel: &str) -> Result<Scope, CallError> {
+    let key = channel_key(team, channel);
+    key.map(Scope::Channel)
+        .ok_or_else(|| refused("channel is not a channel id".into()))
+}
+
 impl Teams {
     async fn send(&self, cred: &Cred, req: &Req) -> Result<Value, CallError> {
         let auth = cred
@@ -73,20 +81,97 @@ impl Teams {
     }
 
     /// One request with a stored credential: a refusal renews the token once (single-flight) and
-    /// retries once. A second refusal is [`CallError::AuthFailed`]. Returns the 2xx body.
-    async fn run(&self, cx: &Ctx<'_>, id: i64, req: &Req) -> Result<Value, CallError> {
+    /// retries once. A refusal that survives that is raised as [`CallError::AuthFailed`] only when
+    /// `/me` is refused too: a 401 to one resource while the account itself is fine says nothing
+    /// about the credential.
+    async fn authed(&self, cx: &Ctx<'_>, id: i64, req: &Req) -> Result<Value, CallError> {
         let not_teams = CallError::Internal("the credential is not a usable Microsoft one");
         let m = self.fresh(cx, id).await?;
         let cred = unpack(&m).ok_or(not_teams.clone())?;
-        match self.send(&cred, req).await {
-            Err(CallError::AuthFailed) => {
-                let rejected = Zeroizing::new(m.access().to_owned());
-                let m = self.renew(cx, id, Some(rejected.as_str())).await?;
-                let cred = unpack(&m).ok_or(not_teams)?;
-                self.send(&cred, req).await
-            }
+        let first = self.send(&cred, req).await;
+        let (cred, out) = if matches!(first, Err(CallError::AuthFailed)) {
+            let rejected = Zeroizing::new(m.access().to_owned());
+            let m = match self.renew(cx, id, Some(rejected.as_str())).await {
+                Ok(m) => m,
+                Err(CallError::AuthFailed) => return self.still_refused(&cred).await,
+                Err(e) => return Err(e),
+            };
+            let cred = unpack(&m).ok_or(not_teams)?;
+            let again = self.send(&cred, req).await;
+            (cred, again)
+        } else {
+            (cred, first)
+        };
+        if matches!(out, Err(CallError::AuthFailed)) {
+            return self.still_refused(&cred).await;
+        }
+        out
+    }
+
+    /// A token was refused for one resource and could not be renewed (or the renewal did not
+    /// help): `/me` decides. Refused there too, the credential is suspect; answered, the account is
+    /// fine and the resource is not for it; unanswered, nothing is known.
+    async fn still_refused(&self, cred: &Cred) -> Result<Value, CallError> {
+        match self.viewer(cred).await {
+            Ok(_) => Err(CallError::Forbidden),
+            Err(CallError::AuthFailed) => Err(CallError::AuthFailed),
+            Err(_) => Err(CallError::Broken),
+        }
+    }
+
+    /// A request an agent drives, in `scope`: refused here while the scope is cooling, and what
+    /// Microsoft says about the scope stays in it. A 429 cools the scope (no health, no
+    /// connection-wide wait); a 5xx on a resource an agent chose is not Microsoft's outage.
+    async fn run(
+        &self,
+        cx: &Ctx<'_>,
+        id: i64,
+        scope: &Scope,
+        req: &Req,
+    ) -> Result<Value, CallError> {
+        if let Some(wait_secs) = self.pace.wait(id, scope) {
+            return Err(CallError::Cooling { wait_secs });
+        }
+        match self.authed(cx, id, req).await {
+            Err(CallError::RateLimited { retry_after }) => Err(CallError::Cooling {
+                wait_secs: self.pace.cool(id, scope, retry_after),
+            }),
+            Err(CallError::Upstream(s)) if (500..600).contains(&s) => Err(CallError::BadRequest(s)),
             other => other,
         }
+    }
+
+    /// EVERY channel is confirmed before it is read or posted to: `GET /teams/{t}/channels/{c}`
+    /// must say it is that channel, in this connection's tenant, of the plain kind. Graph does not
+    /// refuse a channel id asked under another team of the same tenant (`<team>/*` would then reach
+    /// any channel by its id), and a shared-in channel belongs to another team and tenant. Fails
+    /// closed on any error or cooling. A positive answer is remembered a few minutes.
+    async fn confirm(
+        &self,
+        cx: &Ctx<'_>,
+        id: i64,
+        team: &str,
+        channel: &str,
+    ) -> Result<(), CallError> {
+        let scope = chan(team, channel)?;
+        let Scope::Channel(key) = &scope else {
+            return Err(refused("channel is not a channel id".into()));
+        };
+        if self.pace.is_confirmed(id, key) {
+            return Ok(());
+        }
+        let m = self.fresh(cx, id).await?;
+        let tenant = unpack(&m)
+            .ok_or(CallError::Internal(
+                "the credential is not a usable Microsoft one",
+            ))?
+            .tenant()
+            .to_owned();
+        let req = get(segs(&["teams", team, "channels", channel]), None);
+        let body = self.run(cx, id, &scope, &req).await?;
+        answer::channel_ok(&body, team, channel, &tenant).map_err(refused)?;
+        self.pace.confirm(id, key);
+        Ok(())
     }
 
     /// Runs operation `op` (`teams.list_messages`) of connection `c` for `limit` (from the grant
@@ -105,13 +190,7 @@ impl Teams {
             return Err(CallError::Internal("not a Teams connection"));
         }
         let plan = ops::plan(op, args, limit).map_err(refused)?;
-        match self.exec(cx, c.id, limit, &plan).await {
-            // A cursor is the caller's text: a 5xx that follows one says nothing about Microsoft.
-            Err(CallError::Upstream(s)) if plan.has_cursor() && (500..600).contains(&s) => {
-                Err(CallError::BadRequest(s))
-            }
-            other => other,
-        }
+        self.exec(cx, c.id, limit, &plan).await
     }
 
     async fn exec(
@@ -123,14 +202,14 @@ impl Teams {
     ) -> Result<Value, CallError> {
         match plan {
             Plan::ListTeams => {
-                let v = self
-                    .run(cx, id, &get(segs(&["me", "joinedTeams"]), None))
-                    .await?;
+                let req = get(segs(&["me", "joinedTeams"]), None);
+                let v = self.run(cx, id, &Scope::Teams, &req).await?;
                 answer::teams(&v, limit)
             }
             Plan::ListChannels { team } => {
+                let req = get(segs(&["teams", team, "channels"]), None);
                 let v = self
-                    .run(cx, id, &get(segs(&["teams", team, "channels"]), None))
+                    .run(cx, id, &Scope::Channels(team.clone()), &req)
                     .await?;
                 answer::channels(&v, team, limit)
             }
@@ -140,20 +219,25 @@ impl Teams {
                 top,
                 cursor,
             } => {
+                self.confirm(cx, id, team, channel).await?;
                 let req = get(
                     messages_path(team, channel),
                     Some(page(*top, cursor.as_deref())?),
                 );
-                answer::messages(&self.run(cx, id, &req).await?, team, channel)
+                let v = self.run(cx, id, &chan(team, channel)?, &req).await?;
+                answer::messages(&v, team, channel)
             }
             Plan::GetMessage {
                 team,
                 channel,
                 message,
             } => {
+                self.confirm(cx, id, team, channel).await?;
                 let mut path = messages_path(team, channel);
                 path.push(message.clone());
-                let v = self.run(cx, id, &get(path, None)).await?;
+                let v = self
+                    .run(cx, id, &chan(team, channel)?, &get(path, None))
+                    .await?;
                 answer::one_message(&v, team, channel, message)
             }
             Plan::ListReplies {
@@ -163,24 +247,26 @@ impl Teams {
                 top,
                 cursor,
             } => {
+                self.confirm(cx, id, team, channel).await?;
                 let mut path = messages_path(team, channel);
                 path.extend([message.clone(), "replies".to_owned()]);
                 let req = get(path, Some(page(*top, cursor.as_deref())?));
-                answer::messages(&self.run(cx, id, &req).await?, team, channel)
+                let v = self.run(cx, id, &chan(team, channel)?, &req).await?;
+                answer::messages(&v, team, channel)
             }
             Plan::Post {
                 team,
                 channel,
                 text,
             } => {
+                self.confirm(cx, id, team, channel).await?;
                 let req = Req {
                     method: Method::POST,
                     path: messages_path(team, channel),
                     query: None,
                     body: Some(text_body(text)),
                 };
-                // Checked on the ANSWER: the message is posted by now.
-                answer::posted(&self.run(cx, id, &req).await?, team, channel)
+                self.write(cx, id, (team, channel), &req).await
             }
             Plan::Reply {
                 team,
@@ -188,6 +274,7 @@ impl Teams {
                 message,
                 text,
             } => {
+                self.confirm(cx, id, team, channel).await?;
                 let mut path = messages_path(team, channel);
                 path.extend([message.clone(), "replies".to_owned()]);
                 let req = Req {
@@ -196,8 +283,26 @@ impl Teams {
                     query: None,
                     body: Some(text_body(text)),
                 };
-                answer::posted(&self.run(cx, id, &req).await?, team, channel)
+                self.write(cx, id, (team, channel), &req).await
             }
+        }
+    }
+
+    /// A POST. Once Microsoft answered 2xx the message is LIVE: whatever its answer then looks
+    /// like (a channel that is not the one asked for, an id that is odd, a body that is not JSON)
+    /// is reported as a success with `unverified: true`, never as a failure, so the agent does
+    /// not post it twice. Only a refusal BEFORE the message exists is an error.
+    async fn write(
+        &self,
+        cx: &Ctx<'_>,
+        id: i64,
+        (team, channel): (&str, &str),
+        req: &Req,
+    ) -> Result<Value, CallError> {
+        match self.run(cx, id, &chan(team, channel)?, req).await {
+            Ok(body) => Ok(answer::posted(&body, team, channel)),
+            Err(CallError::Upstream(s)) if (200..300).contains(&s) => Ok(answer::unverified()),
+            Err(e) => Err(e),
         }
     }
 }

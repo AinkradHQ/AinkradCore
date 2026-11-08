@@ -34,6 +34,7 @@
 mod fail;
 mod gate;
 mod health;
+mod late;
 mod run;
 mod schemas;
 mod scrub;
@@ -54,6 +55,7 @@ use sqlx::sqlite::SqlitePool;
 use self::fail::{Fail, of_store, refuse};
 pub use self::gate::Limits;
 use self::gate::{Busy, Rate};
+use self::late::{Late, after};
 pub use self::supervise::{set_access, supervise};
 use super::adapter::Registry;
 use super::github::{self, Built, Github};
@@ -363,6 +365,10 @@ impl Broker {
             .await;
         // Every call that names a known tool is recorded, whatever the end.
         let (result, code) = match &out {
+            // A write whose answer could not be checked is audited as such, not as a failure.
+            Ok(v) if v.get("unverified") == Some(&Value::Bool(true)) => {
+                ("ok", Some("ok_unverified"))
+            }
             Ok(_) => ("ok", None),
             Err(f) => (f.result, Some(f.code.as_str())),
         };
@@ -593,83 +599,5 @@ impl Broker {
         ran: &run::Ran,
     ) {
         after(&self.gate, pool, now, (user, agent, id), ran).await;
-    }
-}
-
-async fn after(
-    gate: &gate::Gate,
-    pool: &SqlitePool,
-    now: &str,
-    (user, agent, id): (i64, Option<&str>, i64),
-    ran: &run::Ran,
-) {
-    if let Some((remaining, reset, retry)) = ran.quota {
-        gate.note_upstream(id, remaining, reset, retry);
-    }
-    // Only a call that reached the service says anything about it: a refusal of ours, and an
-    // end the adapter says is not about the credential or the service (a 404, a refused
-    // input, a huge answer), tell health nothing at all.
-    let feed = ran.out.as_ref().err().and_then(|f| f.feed.as_ref());
-    if (ran.out.is_ok() || feed.is_some())
-        && let Err(e) = health::forward(pool, user, id, agent, feed, now).await
-    {
-        tracing::warn!(error = %e, "telling a connection's health failed");
-    }
-}
-
-/// A write whose caller stopped waiting: it finishes here, tells health, and is audited.
-struct Late {
-    pool: SqlitePool,
-    reg: Registry,
-    gate: Arc<gate::Gate>,
-    now: String,
-    user: i64,
-    agent: Option<String>,
-    session: String,
-    allowlist: Option<Vec<String>>,
-    connection: i64,
-    kind: &'static str,
-    cap: &'static str,
-    op: String,
-}
-
-impl Late {
-    async fn finish(self, task: tokio::task::JoinHandle<run::Ran>) {
-        let Ok(ran) = task.await else { return };
-        after(
-            &self.gate,
-            &self.pool,
-            &self.now,
-            (self.user, self.agent.as_deref(), self.connection),
-            &ran,
-        )
-        .await;
-        let (result, code) = match &ran.out {
-            Ok(_) => ("ok", "late_ok".to_owned()),
-            Err(f) => (f.result, format!("late_{}", f.code)),
-        };
-        let cx = Context {
-            workspace: self.user,
-            user: self.user,
-            role: "member",
-            agent: self.agent.as_deref(),
-            session: Some(&self.session),
-            capability: self.cap,
-            operation: Some(&self.op),
-            resource: None,
-            allowlist: self.allowlist.as_deref(),
-        };
-        let rec = resolve::record_use(
-            &self.pool,
-            &self.reg,
-            Some(self.connection),
-            self.kind,
-            (&self.op, result, Some(&code)),
-            &cx,
-        )
-        .await;
-        if let Err(e) = rec {
-            tracing::error!(error = ?e, "recording a late connection use failed");
-        }
     }
 }
