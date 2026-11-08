@@ -58,7 +58,7 @@ pub enum CallError {
     /// so there is no per-connection health signal.
     AppConfig,
     /// An OAuth token is expired or refused and this Core has no Atlassian app configured, so it
-    /// cannot be renewed: the connection needs the token the app would have renewed.
+    /// cannot be renewed. Our own state, no verdict on the connection: a plain refusal.
     OAuthNotConfigured,
 }
 
@@ -103,7 +103,8 @@ impl CallError {
                 Some((UpstreamStatus::ServerError, None))
             }
             Self::Network => Some((UpstreamStatus::Unreachable, None)),
-            Self::OAuthNotConfigured => Some((UpstreamStatus::AuthFailed, None)),
+            // No app configured says nothing about any connection's credential: removing or
+            // half-editing the app config must not suspend every sign-in connection.
             _ => None,
         }
     }
@@ -124,7 +125,7 @@ impl CallError {
             Self::Refused(_) => "refused",
             Self::Internal(_) => "internal",
             Self::AppConfig => "app_config",
-            Self::OAuthNotConfigured => "oauth_not_configured",
+            Self::OAuthNotConfigured => "not_configured",
         }
     }
 }

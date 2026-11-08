@@ -104,8 +104,9 @@ impl Fail {
             retry_after,
             reset_at: None,
         });
-        // A refusal by the adapter's own rules is a refusal, not an upstream error.
-        let result = if matches!(e, CallError::Refused(_)) {
+        // A refusal by the adapter's own rules, or no app configured (our own state), is a
+        // refusal, not an upstream error.
+        let result = if matches!(e, CallError::Refused(_) | CallError::OAuthNotConfigured) {
             "refused"
         } else {
             "error"
