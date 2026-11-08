@@ -69,6 +69,13 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup show
       - run: make test-citadel
+  release-scripts:
+    # The release installer tests: bash only, throwaway minisign keys, no cargo.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y minisign
+      - run: bash scripts/release/test-install.sh
   toy:
     # The toy module (the module API guide's reference) is its own small workspace.
     runs-on: ubuntu-24.04

@@ -26,6 +26,22 @@ for gone in ainkradctl ainkrad-ptyhost; do
   rm -rf "$w/short"; cp -R "$w/dist/9.9.9" "$w/short"; rm "$w/short/$gone-9.9.9-$t"; "$here/sign.sh" "$w/short" "$w/a.key" >/dev/null
   rm -rf "$w/run" "$w/prefix"; cp -R "$w/short" "$w/run"; refused "signed set without $gone"
 done
+# Atomic set: a failure at any step leaves the complete OLD set (or nothing on a fresh prefix), exit != 0, no .old/.stage litter.
+setsum() { for b in ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost; do cat "$w/prefix/bin/$b" 2>/dev/null; echo "|$b"; done; }
+for at in 1 2 3 4; do
+  fresh; mkdir -p "$w/prefix/bin"
+  for b in ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost; do echo "OLD $b" > "$w/prefix/bin/$b"; done
+  before=$(setsum)
+  if AINKRAD_INSTALL_FAIL_AT=$at inst; then echo "FAIL fail-at-$at (old set): installed"; fail=1
+  elif [ "$(setsum)" != "$before" ] || [ "$(ls -A "$w/prefix/bin" | wc -l)" -ne 4 ]; then echo "FAIL fail-at-$at (old set): prefix changed"; ls -A "$w/prefix/bin"; tail -2 "$w/out"; fail=1
+  else echo "ok   failure at step $at restores the old set"; fi
+  fresh
+  if AINKRAD_INSTALL_FAIL_AT=$at inst; then echo "FAIL fail-at-$at (fresh): installed"; fail=1
+  elif [ -n "$(ls -A "$w/prefix/bin")" ]; then echo "FAIL fail-at-$at (fresh): bin not empty"; fail=1
+  else echo "ok   failure at step $at leaves a fresh prefix empty"; fi
+done
+fresh; mkdir -p "$w/prefix/bin"; echo "OLD" > "$w/prefix/bin/ainkradctl"; inst && [ "$("$w/prefix/bin/ainkradctl")" = ainkradctl ] && [ "$(ls -A "$w/prefix/bin" | wc -l)" -eq 4 ] \
+  && echo "ok   upgrade replaces the set, no .old left" || { echo "FAIL upgrade"; fail=1; }
 fresh; sed -i.bak '1s/^./0/' "$w/run/SHA256SUMS"; refused "edited SHA256SUMS"
 fresh; refused "foreign public key" "$w/b.pub"
 fresh; rm "$w/run/SHA256SUMS.minisig"; refused "missing signature"
