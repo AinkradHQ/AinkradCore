@@ -2,7 +2,7 @@
 //! proves a credential works (design §3). Capabilities and the operations each one allows are
 //! data, so a new kind needs no new screen and no new store code.
 //!
-//! `Registry::builtin()` holds GitHub (C2), Jira (C3), Linear (C8) and Slack (C9).
+//! `Registry::builtin()` holds GitHub (C2), Jira (C3), Linear (C8), Slack (C9) and Teams (C10).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -260,6 +260,7 @@ pub fn builtin_descriptor(kind: &str) -> Option<&'static Descriptor> {
         &super::jira::DESCRIPTOR,
         &super::linear::DESCRIPTOR,
         &super::slack::DESCRIPTOR,
+        &super::teams::DESCRIPTOR,
     ]
     .into_iter()
     .find(|d| d.kind == kind)
@@ -276,8 +277,9 @@ impl Registry {
         Self::default()
     }
 
-    /// The shipped kinds: `github` (C2), `jira` (C3) and `linear` (C8) and `slack` (C9). Sign in with
-    /// Atlassian, Linear and Slack are off in this one (no app id): for tests and descriptors only. The server uses [`Registry::builtin_with`].
+    /// The shipped kinds: `github` (C2), `jira` (C3), `linear` (C8), `slack` (C9) and `teams`
+    /// (C10). Sign in with Atlassian, Linear, Slack and Microsoft are off in this one (no app id):
+    /// for tests and descriptors only. The server uses [`Registry::builtin_with`].
     pub fn builtin() -> Self {
         Self::builtin_with(Arc::new(super::jira::Jira::new(None)))
     }
@@ -297,16 +299,18 @@ impl Registry {
     ) -> Self {
         let linear = Arc::new(super::linear::Linear::new(None));
         let slack = Arc::new(super::slack::Slack::new(None));
-        Self::builtin_with_all(github, jira, linear, slack)
+        let teams = Arc::new(super::teams::Teams::new(None));
+        Self::builtin_with_all(github, jira, linear, slack, teams)
     }
 
-    /// [`Registry::builtin_with_github`] over THE `Linear` and THE `Slack` the server built (they
-    /// hold the apps and the refresh locks), shared with the broker and the API.
+    /// [`Registry::builtin_with_github`] over THE `Linear`, `Slack` and `Teams` the server built
+    /// (they hold the apps and the refresh locks), shared with the broker and the API.
     pub fn builtin_with_all(
         github: super::github::Github,
         jira: Arc<super::jira::Jira>,
         linear: Arc<super::linear::Linear>,
         slack: Arc<super::slack::Slack>,
+        teams: Arc<super::teams::Teams>,
     ) -> Self {
         let mut r = Self::new();
         r.register(Arc::new(github))
@@ -315,6 +319,8 @@ impl Registry {
         r.register(linear)
             .expect("the shipped descriptors are valid");
         r.register(slack)
+            .expect("the shipped descriptors are valid");
+        r.register(teams)
             .expect("the shipped descriptors are valid");
         r
     }

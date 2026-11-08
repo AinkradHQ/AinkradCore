@@ -128,6 +128,14 @@ pub(super) async fn store(
             };
             app.connections.slack().test_connection(&cx, id).await
         }
+        "teams" => {
+            let cx = crate::connections::teams::Ctx {
+                pool: &app.pool,
+                sealer,
+                who,
+            };
+            app.connections.teams().test_connection(&cx, id).await
+        }
         _ => verdict::run_test(&app.pool, sealer, reg, id, who).await,
     }
 }

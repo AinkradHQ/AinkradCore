@@ -12,7 +12,7 @@
 //!    no allowlist is refused by `resolve` (`allowlist_required`).
 //! 3. `secrets.mode` is on, the arguments are bounded, the session's rate and concurrency
 //!    allow it (`rate_limited`).
-//! 4. The adapter names the resource (`github::ops::build`, `jira::resource_of`, `linear::resource_of`, `slack::resource_of`): a bad argument
+//! 4. The adapter names the resource (`github::ops::build`, `jira::resource_of`, `linear::resource_of`, `slack::resource_of`, `teams::resource_of`): a bad argument
 //!    is `bad_args`, before any decision.
 //! 5. `store::connections::resolve::resolve` decides: effective limits, the default wins, an
 //!    ambiguous use refuses, and a refusal never names a connection the caller is not granted.
@@ -34,6 +34,7 @@
 mod fail;
 mod gate;
 mod health;
+mod late;
 mod prepare;
 mod run;
 mod schemas;
@@ -55,6 +56,7 @@ use sqlx::sqlite::SqlitePool;
 use self::fail::{Fail, of_store, refuse};
 pub use self::gate::Limits;
 use self::gate::{Busy, Rate};
+use self::late::{Late, after};
 use self::prepare::{Prepared, prepare};
 pub use self::supervise::{set_access, supervise};
 use super::adapter::Registry;
@@ -62,6 +64,7 @@ use super::github::Github;
 use super::jira::Jira;
 use super::linear::Linear;
 use super::slack::Slack;
+use super::teams::Teams;
 use crate::ops::secretbox::SecretBox;
 use crate::store::connections::access::{self, Access, Granted};
 use crate::store::connections::resolve::{self, Context};
@@ -80,6 +83,7 @@ pub struct Broker {
     jira: Arc<Jira>,
     linear: Arc<Linear>,
     slack: Arc<Slack>,
+    teams: Arc<Teams>,
     gate: Arc<gate::Gate>,
     redactor: Redactor,
     supervised: std::sync::Mutex<std::collections::HashSet<String>>,
@@ -106,15 +110,18 @@ impl Broker {
         let github = Github::strict();
         let linear = Arc::new(Linear::new(None));
         let slack = Arc::new(Slack::new(None));
+        let teams = Arc::new(Teams::new(None));
         let reg = Registry::builtin_with_all(
             github.clone(),
             Arc::clone(&jira),
             Arc::clone(&linear),
             Arc::clone(&slack),
+            Arc::clone(&teams),
         );
         Self::with(reg, github, jira, Limits::default())
             .with_linear(linear)
             .with_slack(slack)
+            .with_teams(teams)
     }
 
     /// A broker over the given adapters (the tests' loopback ones).
@@ -125,6 +132,7 @@ impl Broker {
             jira,
             linear: Arc::new(Linear::new(None)),
             slack: Arc::new(Slack::new(None)),
+            teams: Arc::new(Teams::new(None)),
             gate: gate::Gate::new(limits),
             redactor: Redactor::new(),
             supervised: std::sync::Mutex::default(),
@@ -148,6 +156,14 @@ impl Broker {
     #[must_use]
     pub fn with_slack(mut self, slack: Arc<Slack>) -> Self {
         self.slack = slack;
+        self
+    }
+
+    /// This broker over THE `Teams` the registry holds (the server's one shared instance; a
+    /// test's loopback one).
+    #[must_use]
+    pub fn with_teams(mut self, teams: Arc<Teams>) -> Self {
+        self.teams = teams;
         self
     }
 
@@ -215,6 +231,11 @@ impl Broker {
     /// The one shared Slack (its OAuth app, flows and refresh locks): the API uses this one.
     pub fn slack(&self) -> &Arc<Slack> {
         &self.slack
+    }
+
+    /// The one shared Teams (its Microsoft app and refresh locks): the API uses this one.
+    pub fn teams(&self) -> &Arc<Teams> {
+        &self.teams
     }
 }
 
@@ -324,6 +345,10 @@ impl Broker {
             .await;
         // Every call that names a known tool is recorded, whatever the end.
         let (result, code) = match &out {
+            // A write whose answer could not be checked is audited as such, not as a failure.
+            Ok(v) if v.get("unverified") == Some(&Value::Bool(true)) => {
+                ("ok", Some("ok_unverified"))
+            }
             Ok(_) => ("ok", None),
             Err(f) => (f.result, Some(f.code.as_str())),
         };
@@ -478,6 +503,7 @@ impl Broker {
             jira: Arc::clone(&self.jira),
             linear: Arc::clone(&self.linear),
             slack: Arc::clone(&self.slack),
+            teams: Arc::clone(&self.teams),
             redactor: self.redactor.clone(),
             pool: env.pool.clone(),
             sealer: Arc::clone(sealer),
@@ -554,83 +580,5 @@ impl Broker {
         ran: &run::Ran,
     ) {
         after(&self.gate, pool, now, (user, agent, id), ran).await;
-    }
-}
-
-async fn after(
-    gate: &gate::Gate,
-    pool: &SqlitePool,
-    now: &str,
-    (user, agent, id): (i64, Option<&str>, i64),
-    ran: &run::Ran,
-) {
-    if let Some((remaining, reset, retry)) = ran.quota {
-        gate.note_upstream(id, remaining, reset, retry);
-    }
-    // Only a call that reached the service says anything about it: a refusal of ours, and an
-    // end the adapter says is not about the credential or the service (a 404, a refused
-    // input, a huge answer), tell health nothing at all.
-    let feed = ran.out.as_ref().err().and_then(|f| f.feed.as_ref());
-    if (ran.out.is_ok() || feed.is_some())
-        && let Err(e) = health::forward(pool, user, id, agent, feed, now).await
-    {
-        tracing::warn!(error = %e, "telling a connection's health failed");
-    }
-}
-
-/// A write whose caller stopped waiting: it finishes here, tells health, and is audited.
-struct Late {
-    pool: SqlitePool,
-    reg: Registry,
-    gate: Arc<gate::Gate>,
-    now: String,
-    user: i64,
-    agent: Option<String>,
-    session: String,
-    allowlist: Option<Vec<String>>,
-    connection: i64,
-    kind: &'static str,
-    cap: &'static str,
-    op: String,
-}
-
-impl Late {
-    async fn finish(self, task: tokio::task::JoinHandle<run::Ran>) {
-        let Ok(ran) = task.await else { return };
-        after(
-            &self.gate,
-            &self.pool,
-            &self.now,
-            (self.user, self.agent.as_deref(), self.connection),
-            &ran,
-        )
-        .await;
-        let (result, code) = match &ran.out {
-            Ok(_) => ("ok", "late_ok".to_owned()),
-            Err(f) => (f.result, format!("late_{}", f.code)),
-        };
-        let cx = Context {
-            workspace: self.user,
-            user: self.user,
-            role: "member",
-            agent: self.agent.as_deref(),
-            session: Some(&self.session),
-            capability: self.cap,
-            operation: Some(&self.op),
-            resource: None,
-            allowlist: self.allowlist.as_deref(),
-        };
-        let rec = resolve::record_use(
-            &self.pool,
-            &self.reg,
-            Some(self.connection),
-            self.kind,
-            (&self.op, result, Some(&code)),
-            &cx,
-        )
-        .await;
-        if let Err(e) = rec {
-            tracing::error!(error = ?e, "recording a late connection use failed");
-        }
     }
 }

@@ -25,6 +25,11 @@ fn arguments(kind: &str) -> &'static str {
             "Arguments (an object): the channel ID (C0123456789, never a name), message \
              timestamp, user ID and text this operation takes. Any other name is refused."
         }
+        "teams" => {
+            "Arguments (an object): the team id (a lower-case GUID), the channel id \
+             (19:...@thread.tacv2, never a name; list_channels gives it), message id and text this \
+             operation takes. Any other name is refused."
+        }
         _ => "Arguments: an object.",
     }
 }

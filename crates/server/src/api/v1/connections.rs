@@ -146,6 +146,7 @@ pub(super) fn configured(app: &App, kind: &str) -> bool {
         "jira" => app.connections.jira().app_configured(),
         "linear" => app.connections.linear().app_configured(),
         "slack" => app.connections.slack().app_configured(),
+        "teams" => app.connections.teams().app_configured(),
         _ => false,
     }
 }

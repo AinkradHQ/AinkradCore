@@ -6,6 +6,7 @@ use crate::connections::github::Outcome;
 use crate::connections::jira::CallError;
 use crate::connections::linear::CallError as LinearError;
 use crate::connections::slack::CallError as SlackError;
+use crate::connections::teams::CallError as TeamsError;
 use crate::store::secrets::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +85,28 @@ impl Fail {
                 | SlackError::Cooling { .. }
         );
         let result = if refusal { "refused" } else { "error" };
+        Self {
+            result,
+            ..Self::upstream(e.code(), &e.to_string(), feed)
+        }
+    }
+
+    pub fn of_teams(e: &TeamsError) -> Self {
+        let feed = e.health().map(|(status, retry_after)| Feed {
+            status,
+            retry_after,
+            reset_at: None,
+        });
+        // Our own rules, our own state (no app, a tenant pin) and our own cooling are refusals,
+        // not upstream errors.
+        let ours = matches!(
+            e,
+            TeamsError::Refused(_)
+                | TeamsError::OAuthNotConfigured
+                | TeamsError::Cooling { .. }
+                | TeamsError::TenantNotAllowed
+        );
+        let result = if ours { "refused" } else { "error" };
         Self {
             result,
             ..Self::upstream(e.code(), &e.to_string(), feed)

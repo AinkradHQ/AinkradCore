@@ -63,6 +63,7 @@ fn start_error(e: StartError) -> ApiError {
     use crate::connections::jira::FlowError;
     use crate::connections::linear::FlowError as LinearFlowError;
     use crate::connections::slack::FlowError as SlackFlowError;
+    use crate::connections::teams::DeviceError as TeamsError;
     match e {
         StartError::NotConfigured(why) => {
             ApiError::new(StatusCode::CONFLICT, "not_configured", why)
@@ -108,6 +109,14 @@ fn start_error(e: StartError) -> ApiError {
             "internal",
             "the sign-in could not be started",
         ),
+        StartError::Teams(e) => {
+            let (status, code) = match e {
+                TeamsError::NotConfigured => (StatusCode::CONFLICT, "not_configured"),
+                TeamsError::WrongTenant => (StatusCode::CONFLICT, "wrong_tenant"),
+                _ => (StatusCode::BAD_GATEWAY, "upstream_failed"),
+            };
+            ApiError::new(status, code, e.to_string())
+        }
         StartError::Device(e) => {
             ApiError::new(StatusCode::BAD_GATEWAY, "upstream_failed", e.to_string())
         }

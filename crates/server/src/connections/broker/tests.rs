@@ -26,6 +26,7 @@ mod limits_cases;
 mod linear;
 mod path;
 mod slack;
+mod teams;
 
 pub const NOW: &str = "2026-11-06T10:00:00.000Z";
 pub const GH_TOKEN: &str = "gh1probe-7f3a9d41e0b2c8a6";

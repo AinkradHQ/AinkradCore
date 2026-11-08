@@ -28,6 +28,7 @@ use crate::connections::jira::{self, Jira, Limit};
 use crate::connections::linear::{self, Linear};
 use crate::connections::material::Material;
 use crate::connections::slack::{self, Slack};
+use crate::connections::teams::{self, Teams};
 use crate::ops::secretbox::SecretBox;
 use crate::scheduler::unix_secs;
 use crate::store::connections::grants::value_matches;
@@ -47,6 +48,7 @@ pub struct Job {
     pub jira: Arc<Jira>,
     pub linear: Arc<Linear>,
     pub slack: Arc<Slack>,
+    pub teams: Arc<Teams>,
     pub redactor: Redactor,
     pub pool: sqlx::sqlite::SqlitePool,
     pub sealer: Arc<SecretBox>,
@@ -96,6 +98,12 @@ pub async fn execute(j: Job) -> Ran {
         // Slack says nothing about a budget beyond a 429's Retry-After (health carries that).
         "slack" => Ran {
             out: slack(&j).await,
+            quota: None,
+        },
+        // A 429 to a call an agent drives cools that channel inside the adapter (`teams::pace`):
+        // it must never become a wait for the whole shared connection, so no quota rides out.
+        "teams" => Ran {
+            out: teams(&j).await,
             quota: None,
         },
         // Never another kind's adapter by default: a kind with no arm here is refused.
@@ -245,6 +253,32 @@ async fn slack(j: &Job) -> Result<Value, Fail> {
     bounded(scrubbed(v, &secrets, &j.redactor))
 }
 
+async fn teams(j: &Job) -> Result<Value, Fail> {
+    let r = &j.resolved;
+    let cx = teams::Ctx {
+        pool: &j.pool,
+        sealer: &j.sealer,
+        who: Who {
+            workspace: j.user,
+            by_device: &j.device,
+            actor: AuditActor::System,
+            now: &j.now,
+        },
+    };
+    let limit = teams::Limit::from_grant(&r.limits);
+    let v = j
+        .teams
+        .call(&cx, &r.connection, &limit, &j.op, &j.args)
+        .await
+        .map_err(|e| Fail::of_teams(&e))?;
+    // The renewed token, if the call renewed it, is the one the answer could echo.
+    let secrets = match secret::open(&j.pool, &j.sealer, j.user, r.connection.id).await {
+        Ok((m, _)) => secrets_of(&m),
+        Err(_) => Vec::new(),
+    };
+    bounded(scrubbed(v, &secrets, &j.redactor))
+}
+
 /// Every string of a credential an answer must not carry: its access and refresh tokens, the
 /// token inside a Jira envelope, and the header forms an upstream or a proxy could echo (`Bearer
 /// <token>`, `Basic <base64 of email:token>` and that base64 on its own).
@@ -259,6 +293,8 @@ fn secrets_of(m: &Material) -> Vec<String> {
         }
         None => {}
     }
+    // A Teams credential is sealed base32; what an answer could echo are the raw tokens.
+    v.extend(teams::secrets_of(m));
     let bearers: Vec<String> = v.iter().map(|t| format!("Bearer {t}")).collect();
     v.extend(bearers);
     v

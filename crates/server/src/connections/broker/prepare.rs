@@ -8,6 +8,7 @@ use crate::connections::github::{self, Built};
 use crate::connections::jira;
 use crate::connections::linear;
 use crate::connections::slack;
+use crate::connections::teams;
 
 /// What a kind's operation touches, found by the adapter before any decision.
 pub(super) struct Prepared {
@@ -41,6 +42,13 @@ pub(super) fn prepare(kind: &str, op: &str, args: &Value) -> Result<Prepared, Fa
         }
         "slack" => {
             let c = slack::resource_of(op, args).map_err(|e| refuse("bad_args", &e))?;
+            Ok(Prepared {
+                built: None,
+                resource: c.map(|c| ("channels", c)),
+            })
+        }
+        "teams" => {
+            let c = teams::resource_of(op, args).map_err(|e| refuse("bad_args", &e))?;
             Ok(Prepared {
                 built: None,
                 resource: c.map(|c| ("channels", c)),

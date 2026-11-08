@@ -1,8 +1,10 @@
 //! Ainkrad's OAuth apps, as the API configures them (C5; design §6, decision 1). The strings are
 //! sealed in `store::connections::apps`; this module says which fields a kind has, checks a value,
 //! and puts a config into force WITHOUT making a second adapter: Atlassian's client id, secret and
-//! redirect go into the one shared `Jira` ([`Jira::set_app`]), Linear's into the one shared
-//! `Linear` ([`Linear::set_app`]), Slack's into the one shared `Slack` ([`Slack::set_app`]); GitHub's client id is held here and
+//! redirect go into the one shared `Jira` (`Jira::set_app`), Linear's into the one shared
+//! `Linear` (`Linear::set_app`), Slack's into the one shared `Slack` (`Slack::set_app`),
+//! Microsoft's client id and tenant into the one shared `Teams` (`Teams::set_app`); GitHub's
+//! client id is held here and
 //! the GitHub App's key goes to the one shared `Github`'s installer.
 //!
 //! The config belongs to the Core, not to a user: it is kept under the admin user (`OWNER`, #18).
@@ -13,11 +15,12 @@ use std::sync::RwLock;
 use serde::Serialize;
 use zeroize::Zeroizing;
 
-use super::github::Github;
+use super::broker::Broker;
 use super::github::app::AppKey;
-use super::jira::{Jira, OAuthApp};
-use super::linear::{Linear, OAuthApp as LinearApp};
-use super::slack::{Slack, SlackApp};
+use super::jira::OAuthApp;
+use super::linear::OAuthApp as LinearApp;
+use super::slack::SlackApp;
+use super::teams::TeamsApp;
 use crate::ops::secretbox::SecretBox;
 use crate::store::connections::apps;
 use crate::store::secrets::Error;
@@ -107,6 +110,21 @@ pub const SLACK_FIELDS: &[Field] = &[
     },
 ];
 
+/// Microsoft's app is a PUBLIC client (the device code flow): a client id and a tenant, no secret.
+/// `tenant` is `organizations` (any work or school tenant; the default) or one tenant's GUID.
+pub const TEAMS_FIELDS: &[Field] = &[
+    Field {
+        name: "client_id",
+        title: "Microsoft app (client) id",
+        secret: false,
+    },
+    Field {
+        name: "tenant",
+        title: "Tenant: organizations, or one tenant's id (a GUID)",
+        secret: false,
+    },
+];
+
 pub const LINEAR_FIELDS: &[Field] = &[
     Field {
         name: "client_id",
@@ -132,6 +150,7 @@ pub fn fields(kind: &str) -> Option<&'static [Field]> {
         "jira" => Some(JIRA_FIELDS),
         "linear" => Some(LINEAR_FIELDS),
         "slack" => Some(SLACK_FIELDS),
+        "teams" => Some(TEAMS_FIELDS),
         _ => None,
     }
 }
@@ -153,6 +172,7 @@ pub fn problem(kind: &str, field: &str, value: &str) -> Option<&'static str> {
         ("jira" | "linear", "loopback_port") => value.parse::<u16>().is_ok_and(|p| p >= 1024),
         ("slack", "redirect_uri") => super::slack::redirect_ok(value),
         ("slack", "catcher_ready" | "token_rotation") => matches!(value, "true" | "false"),
+        ("teams", "tenant") => value == "organizations" || super::teams::tenant_id(value),
         ("github", "app_id") => plain(value, 40, b"_-"),
         ("github", "app_slug") => plain(value, 64, b"-"),
         ("github", "app_key") => {
@@ -201,15 +221,15 @@ impl Apps {
         &self,
         pool: &sqlx::sqlite::SqlitePool,
         sealer: &SecretBox,
-        jira: &Jira,
-        github: &Github,
-        linear: &Linear,
-        slack: &Slack,
+        adapters: &Broker,
     ) -> Result<Changed, Error> {
+        let (jira, github, linear) = (adapters.jira(), adapters.github(), adapters.linear());
+        let (slack, teams) = (adapters.slack(), adapters.teams());
         let g = apps::open_all(pool, sealer, OWNER, "github").await?;
         let j = apps::open_all(pool, sealer, OWNER, "jira").await?;
         let l = apps::open_all(pool, sealer, OWNER, "linear").await?;
         let s = apps::open_all(pool, sealer, OWNER, "slack").await?;
+        let t = apps::open_all(pool, sealer, OWNER, "teams").await?;
         let client = g.get("client_id").cloned();
         let github_changed = {
             let mut held = self
@@ -226,11 +246,13 @@ impl Apps {
         let jira_changed = jira.set_app(jira_app(&j));
         let linear_changed = linear.set_app(linear_app(&l));
         let slack_changed = slack.set_app(slack_app(&s));
+        let teams_changed = teams.set_app(teams_app(&t));
         Ok(Changed {
             github: github_changed,
             jira: jira_changed,
             linear: linear_changed,
             slack: slack_changed,
+            teams: teams_changed,
         })
     }
 }
@@ -242,6 +264,7 @@ pub struct Changed {
     pub jira: bool,
     pub linear: bool,
     pub slack: bool,
+    pub teams: bool,
 }
 
 fn app_key(g: &BTreeMap<String, Zeroizing<String>>) -> Option<AppKey> {
@@ -272,6 +295,11 @@ fn slack_app(s: &BTreeMap<String, Zeroizing<String>>) -> Option<SlackApp> {
     Some(app.rotating(flag("token_rotation")))
 }
 
+fn teams_app(t: &BTreeMap<String, Zeroizing<String>>) -> Option<TeamsApp> {
+    let tenant = t.get("tenant").map_or("organizations", |s| s.as_str());
+    TeamsApp::new(t.get("client_id")?, tenant)
+}
+
 fn linear_app(l: &BTreeMap<String, Zeroizing<String>>) -> Option<LinearApp> {
     let port = l
         .get("loopback_port")
@@ -289,14 +317,7 @@ pub async fn reload(app: &crate::api::App) -> Result<(), Error> {
     };
     let changed = app
         .conn_apps
-        .reload(
-            &app.pool,
-            sealer,
-            app.connections.jira(),
-            app.connections.github(),
-            app.connections.linear(),
-            app.connections.slack(),
-        )
+        .reload(&app.pool, sealer, &app.connections)
         .await?;
     // A sign-in begun under an app that changed cannot finish; one of a kind that did not change
     // goes on.
@@ -306,6 +327,7 @@ pub async fn reload(app: &crate::api::App) -> Result<(), Error> {
         ("jira", changed.jira),
         ("linear", changed.linear),
         ("slack", changed.slack),
+        ("teams", changed.teams),
     ] {
         if hit {
             app.conn_flows.end(kind, "app_changed", why).await;

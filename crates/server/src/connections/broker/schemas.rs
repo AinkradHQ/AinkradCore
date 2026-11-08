@@ -216,6 +216,56 @@ fn slack(op: &str) -> Option<Value> {
     })
 }
 
+fn teams(op: &str) -> Option<Value> {
+    let team = || {
+        json!({"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "description": "The team id, a lower-case GUID (never a name; list_teams gives it)"})
+    };
+    let channel = || {
+        json!({"type": "string", "pattern": "^19:[A-Za-z0-9_-]{8,80}@thread\\.(tacv2|skype)$",
+            "description": "The channel id, like 19:...@thread.tacv2 (never a name; list_channels gives it)"})
+    };
+    let message = || {
+        json!({"type": "string", "pattern": "^[0-9]{10,20}$",
+            "description": "The message id a read gave"})
+    };
+    let top = || json!({"type": "integer", "minimum": 1, "maximum": 50});
+    let cursor = || text(4096, "The next_cursor a previous page gave");
+    let body = || {
+        text(
+            4000,
+            "The message as plain text. Mentions (<at>) and @channel, @team, @everyone and @here \
+             are refused",
+        )
+    };
+    Some(match op {
+        "teams.list_teams" => object(json!({}), &[]),
+        "teams.list_channels" => object(json!({"team": team()}), &["team"]),
+        "teams.list_messages" => object(
+            json!({"team": team(), "channel": channel(), "top": top(), "cursor": cursor()}),
+            &["team", "channel"],
+        ),
+        "teams.get_message" => object(
+            json!({"team": team(), "channel": channel(), "message": message()}),
+            &["team", "channel", "message"],
+        ),
+        "teams.list_replies" => object(
+            json!({"team": team(), "channel": channel(), "message": message(), "top": top(),
+                "cursor": cursor()}),
+            &["team", "channel", "message"],
+        ),
+        "teams.post_message" => object(
+            json!({"team": team(), "channel": channel(), "text": body()}),
+            &["team", "channel", "text"],
+        ),
+        "teams.reply_message" => object(
+            json!({"team": team(), "channel": channel(), "message": message(), "text": body()}),
+            &["team", "channel", "message", "text"],
+        ),
+        _ => return None,
+    })
+}
+
 /// The argument schema of `operation`, when one is known.
 pub fn input_schema(operation: &str) -> Option<Value> {
     ops::find(operation)
@@ -223,6 +273,7 @@ pub fn input_schema(operation: &str) -> Option<Value> {
         .or_else(|| jira(operation))
         .or_else(|| linear(operation))
         .or_else(|| slack(operation))
+        .or_else(|| teams(operation))
 }
 
 #[cfg(test)]
@@ -233,6 +284,7 @@ mod tests {
     use crate::connections::jira::resource_of;
     use crate::connections::linear::resource_of as linear_resource_of;
     use crate::connections::slack::resource_of as slack_resource_of;
+    use crate::connections::teams::resource_of as teams_resource_of;
 
     /// The adapter's own check of `op`'s arguments: Jira's, Linear's or Slack's resource finder.
     fn resource(op: &str, args: &Value) -> Result<(), String> {
@@ -240,13 +292,15 @@ mod tests {
             linear_resource_of(op, args).map(drop)
         } else if op.starts_with("slack.") {
             slack_resource_of(op, args).map(drop)
+        } else if op.starts_with("teams.") {
+            teams_resource_of(op, args).map(drop)
         } else {
             resource_of(op, args).map(drop)
         }
     }
 
     fn all_ops() -> Vec<String> {
-        ["github", "jira", "linear", "slack"]
+        ["github", "jira", "linear", "slack", "teams"]
             .iter()
             .flat_map(|k| builtin_descriptor(k).expect("a built-in kind").capabilities)
             .flat_map(|c| c.operations.iter().map(|o| (*o).to_owned()))
