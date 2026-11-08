@@ -7,7 +7,7 @@ case "$(uname -s)-$(uname -m)" in Linux-aarch64) t=linux-arm64 ;; Linux-x86_64) 
 w=$(mktemp -d); trap 'rm -rf "$w"' EXIT; fail=0
 minisign -G -W -f -p "$w/a.pub" -s "$w/a.key" >/dev/null; minisign -G -W -f -p "$w/b.pub" -s "$w/b.key" >/dev/null
 mkdir -p "$w/dist/9.9.9"
-for b in ainkrad-core-server ainkrad-runner; do printf '#!/bin/sh\necho %s\n' "$b" > "$w/dist/9.9.9/$b-9.9.9-$t"; done
+for b in ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost; do printf '#!/bin/sh\necho %s\n' "$b" > "$w/dist/9.9.9/$b-9.9.9-$t"; done
 printf 'x' > "$w/dist/9.9.9/ainkrad-runner-9.9.9-other-target"
 "$here/sign.sh" "$w/dist/9.9.9" "$w/a.key" >/dev/null
 fresh() { rm -rf "$w/run" "$w/prefix"; cp -R "$w/dist/9.9.9" "$w/run"; }
@@ -16,9 +16,16 @@ refused() { # name
   if inst "${2:-}"; then echo "FAIL $1: installed"; fail=1
   elif [ -e "$w/prefix" ] && [ -n "$(ls -A "$w/prefix" 2>/dev/null)" ]; then echo "FAIL $1: prefix not empty"; fail=1
   else echo "ok   $1: refused ($(tail -1 "$w/out"))"; fi; }
-fresh; inst && [ -x "$w/prefix/bin/ainkrad-runner" ] && [ "$("$w/prefix/bin/ainkrad-core-server")" = ainkrad-core-server ] \
+fresh; inst && [ -x "$w/prefix/bin/ainkrad-runner" ] && [ -x "$w/prefix/bin/ainkradctl" ] && [ -x "$w/prefix/bin/ainkrad-ptyhost" ] && [ "$("$w/prefix/bin/ainkrad-core-server")" = ainkrad-core-server ] \
   && [ ! -e "$w/prefix/bin/.ainkrad-runner.new" ] && echo "ok   good release installs" || { echo "FAIL good release"; cat "$w/out"; fail=1; }
 fresh; printf 'Z' | dd of="$w/run/ainkrad-runner-9.9.9-$t" bs=1 seek=5 conv=notrunc 2>/dev/null; refused "flipped artefact byte"
+fresh; printf 'Z' | dd of="$w/run/ainkradctl-9.9.9-$t" bs=1 seek=5 conv=notrunc 2>/dev/null; refused "flipped ainkradctl byte"
+fresh; printf 'Z' | dd of="$w/run/ainkrad-ptyhost-9.9.9-$t" bs=1 seek=5 conv=notrunc 2>/dev/null; refused "flipped ainkrad-ptyhost byte"
+# A release without the CLI or ptyhost, even if correctly signed, is refused whole (nothing half-installed).
+for gone in ainkradctl ainkrad-ptyhost; do
+  rm -rf "$w/short"; cp -R "$w/dist/9.9.9" "$w/short"; rm "$w/short/$gone-9.9.9-$t"; "$here/sign.sh" "$w/short" "$w/a.key" >/dev/null
+  rm -rf "$w/run" "$w/prefix"; cp -R "$w/short" "$w/run"; refused "signed set without $gone"
+done
 fresh; sed -i.bak '1s/^./0/' "$w/run/SHA256SUMS"; refused "edited SHA256SUMS"
 fresh; refused "foreign public key" "$w/b.pub"
 fresh; rm "$w/run/SHA256SUMS.minisig"; refused "missing signature"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One target's shipped binaries (E1-15.1): scripts/release/build.sh <linux-arm64|linux-x86_64|macos-arm64> <out-dir> [tag]
+# One target's shipped binaries, server, runner, ctl, ptyhost (E1-15.1): scripts/release/build.sh <linux-arm64|linux-x86_64|macos-arm64> <out-dir> [tag]
 # Deterministic: --locked, the `dist` profile (codegen-units=1, strip), SOURCE_DATE_EPOCH and the commit
 # pinned from outside, every build-machine path remapped. `tag` names the scratch target dir, so two builds
 # of the same commit (a, b) share nothing and their equality proves reproducibility.
@@ -10,8 +10,8 @@ cd "$(dirname "$0")/../.."
 : "${CITADEL_GIT_SHA:=$(git rev-parse --short=12 HEAD)}"
 export SOURCE_DATE_EPOCH CITADEL_GIT_SHA
 image=${RUST_IMAGE:-rust:1.99.1}
-bins=(ainkrad-core-server ainkrad-runner)
-cmd="cargo build --profile dist --locked -p ainkrad-core-server -p ainkrad-runner"
+bins=(ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost)
+cmd="cargo build --profile dist --locked -p ainkrad-core-server -p ainkrad-runner -p ainkrad-ctl -p ainkrad-ptyhost"
 mkdir -p "$out/$target"
 case $target in
 macos-arm64)

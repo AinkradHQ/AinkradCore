@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# E1-15.4 SBOM: scripts/release/sbom.sh <dist-dir>  ->  <dist-dir>/sbom/<crate>.cdx.json for the two shipped binaries,
+# E1-15.4 SBOM: scripts/release/sbom.sh <dist-dir>  ->  <dist-dir>/sbom/<crate>.cdx.json for the four shipped binaries,
 # then a sanity check: valid CycloneDX JSON, and every crate `cargo tree` resolves for the binary is a component.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 out=${1:?dist dir}/sbom; mkdir -p "$out"
 trap 'rm -f crates/*/*.cdx.json' EXIT   # cargo-cyclonedx writes beside each manifest; leave the tree clean
-for crate in ainkrad-core-server ainkrad-runner; do
+for crate in ainkrad-core-server ainkrad-runner ainkrad-ctl ainkrad-ptyhost; do
   dir=crates/${crate#ainkrad-}; [ "$crate" = ainkrad-core-server ] && dir=crates/server
   cargo cyclonedx --manifest-path "$dir/Cargo.toml" --format json --describe binaries --target all -q
   # cargo-cyclonedx writes beside the manifest; take it from there and leave the tree clean.

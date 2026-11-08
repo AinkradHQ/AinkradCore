@@ -8,7 +8,8 @@
 #   sudo scripts/install.sh --check [--backup local|bucket]   self-test an existing install
 #   sudo scripts/install.sh --uninstall [--purge]   stop, disable, remove units and binaries; --purge also deletes
 #        the Core's data after you type its host name. Never touches backup.env or the bucket.
-# Options: --binary <dir> (ainkrad-core-server [, ainkradctl, ainkrad-runner, ainkrad-ptyhost]) overrides BINARY_DIR.
+# Options: --binary <dir> (ainkrad-core-server [, ainkradctl, ainkrad-runner, ainkrad-ptyhost]; a signed release puts all four in
+# <prefix>/bin with scripts/release/install.sh) overrides BINARY_DIR.
 # A runner on this host (RUNNER=yes) is installed with its own hardened unit; RUNNER_PTY=yes offers terminals (a
 # shell as the unprivileged runner user, inside the unit's sandbox), RUNNER_PAIR_CODE pairs and starts it.
 # A runner on another Linux host: deploy/install-linux.sh. On a Mac: deploy/launchd/install.sh (or the package).
@@ -169,7 +170,7 @@ stage_binaries() {
   for n in ainkrad-core-server ainkradctl ainkrad-runner ainkrad-ptyhost; do
     if [ -f "$src/$n" ]; then cp "$src/$n" "$STAGE/$n"; chmod 0755 "$STAGE/$n"; say "  $n sha256 $(sha "$STAGE/$n")"
     elif [ "$n" = ainkrad-core-server ] && [ "$DRY" = 0 ]; then die "no $n in $src"
-    else say "  $n: not in $src${n:+ (skipped)}"; fi
+    else warn "$n: not in $src (skipped; every signed release ships it, so a release installed with scripts/release/install.sh has it)"; fi
   done
   if [ "$A_ENABLE_CITADEL" = yes ]; then
     src=${citadel_src:-$src}
