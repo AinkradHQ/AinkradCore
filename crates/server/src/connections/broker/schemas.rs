@@ -170,12 +170,59 @@ fn linear(op: &str) -> Option<Value> {
     })
 }
 
+fn slack(op: &str) -> Option<Value> {
+    let channel = || {
+        json!({"type": "string", "pattern": "^[CG][A-Z0-9]{8,11}$",
+            "description": "The channel ID, like C0123456789 (never a name; list_channels gives it)"})
+    };
+    let ts = |what: &str| json!({"type": "string", "pattern": "^[0-9]{10,11}\\.[0-9]{6}$", "description": what});
+    let cursor = || text(200, "The next_cursor a previous page gave");
+    let page = || json!({"type": "integer", "minimum": 1, "maximum": 15});
+    Some(match op {
+        "slack.list_channels" => object(
+            json!({"limit": {"type": "integer", "minimum": 1, "maximum": 100}, "cursor": cursor()}),
+            &[],
+        ),
+        "slack.read_channel" => object(
+            json!({"channel": channel(), "limit": page(), "cursor": cursor(),
+                "oldest": ts("Only messages after this timestamp"),
+                "latest": ts("Only messages before this timestamp")}),
+            &["channel"],
+        ),
+        "slack.read_thread" => object(
+            json!({"channel": channel(), "ts": ts("The thread's parent message timestamp"),
+                "limit": page(), "cursor": cursor()}),
+            &["channel", "ts"],
+        ),
+        "slack.get_user" => object(
+            json!({"user": {"type": "string", "pattern": "^[UW][A-Z0-9]{8,11}$",
+                "description": "The user ID, like U0123456789"}}),
+            &["user"],
+        ),
+        "slack.post_message" => object(
+            json!({"channel": channel(),
+                "text": text(4000, "The message as plain text. & < > are escaped; @here, \
+                    @channel and @everyone are refused"),
+                "thread_ts": ts("Reply in the thread of this message")}),
+            &["channel", "text"],
+        ),
+        "slack.add_reaction" => object(
+            json!({"channel": channel(), "ts": ts("The message timestamp"),
+                "name": {"type": "string", "pattern": "^[a-z0-9_+-]{1,100}$",
+                    "description": "The emoji name without colons, like thumbsup"}}),
+            &["channel", "ts", "name"],
+        ),
+        _ => return None,
+    })
+}
+
 /// The argument schema of `operation`, when one is known.
 pub fn input_schema(operation: &str) -> Option<Value> {
     ops::find(operation)
         .map(github)
         .or_else(|| jira(operation))
         .or_else(|| linear(operation))
+        .or_else(|| slack(operation))
 }
 
 #[cfg(test)]
@@ -185,18 +232,21 @@ mod tests {
     use crate::connections::github::build;
     use crate::connections::jira::resource_of;
     use crate::connections::linear::resource_of as linear_resource_of;
+    use crate::connections::slack::resource_of as slack_resource_of;
 
-    /// The adapter's own check of `op`'s arguments: Jira's or Linear's resource finder.
+    /// The adapter's own check of `op`'s arguments: Jira's, Linear's or Slack's resource finder.
     fn resource(op: &str, args: &Value) -> Result<(), String> {
         if op.starts_with("linear.") {
             linear_resource_of(op, args).map(drop)
+        } else if op.starts_with("slack.") {
+            slack_resource_of(op, args).map(drop)
         } else {
             resource_of(op, args).map(drop)
         }
     }
 
     fn all_ops() -> Vec<String> {
-        ["github", "jira", "linear"]
+        ["github", "jira", "linear", "slack"]
             .iter()
             .flat_map(|k| builtin_descriptor(k).expect("a built-in kind").capabilities)
             .flat_map(|c| c.operations.iter().map(|o| (*o).to_owned()))

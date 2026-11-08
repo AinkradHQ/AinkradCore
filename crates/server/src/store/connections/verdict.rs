@@ -174,6 +174,12 @@ pub fn usable(c: &Connection) -> Result<(), (&'static str, String)> {
             "auth_failed",
             "the service refused its credential; replace it and test again".to_owned(),
         )),
+        (_, Some("needs_mode_2")) => Err((
+            "needs_mode_2",
+            "the service rotated its token and secrets.mode 2 is needed to store the new one: \
+             raise it, then sign in again"
+                .to_owned(),
+        )),
         (_, Some("auth_suspected")) => Err((
             "auth_pending",
             "the service may have refused its credential; a test decides".to_owned(),

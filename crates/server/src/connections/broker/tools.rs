@@ -21,6 +21,10 @@ fn arguments(kind: &str) -> &'static str {
             "Arguments (an object): the issue identifier (ENG-12), team key, text and ids this \
              operation takes. Any other name is refused."
         }
+        "slack" => {
+            "Arguments (an object): the channel ID (C0123456789, never a name), message \
+             timestamp, user ID and text this operation takes. Any other name is refused."
+        }
         _ => "Arguments: an object.",
     }
 }

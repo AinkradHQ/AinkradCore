@@ -11,10 +11,12 @@ use axum::response::{IntoResponse, Response};
 use super::types::*;
 use super::{ApiError, ApiResult, Caller, kind_of, num, one, parse, sealer, who, workspace};
 use crate::api::App;
+use crate::connections::adapter::{KindAdapter, TestError};
 use crate::connections::github::install::InstallError;
 use crate::connections::jira;
 use crate::connections::linear;
 use crate::connections::material::Material;
+use crate::connections::slack;
 use crate::store::connections::verdict;
 use crate::store::connections::{self as store, Who};
 use crate::store::secrets::Error as StoreError;
@@ -94,6 +96,12 @@ async fn material_of(
         ("linear", "token") => {
             let t = g.token.ok_or_else(|| bad("an API key is required"))?;
             let m = linear::key_material(t).ok_or_else(|| bad("that is not a usable API key"))?;
+            Ok((m, None))
+        }
+        ("slack", "token") => {
+            let t = g.token.ok_or_else(|| bad("a bot token is required"))?;
+            let m = slack::token_material(t)
+                .ok_or_else(|| bad("that is not a bot token (it starts with xoxb-)"))?;
             Ok((m, None))
         }
         ("github", "app_install") => {
@@ -246,6 +254,48 @@ async fn same_workspace(app: &App, c: &store::Connection, m: &Material) -> Resul
     }
 }
 
+/// Checks, before a Slack token replaces a connection's, that it is a bot of the workspace the
+/// connection records, by the workspace's stable id (`T…`; the name can be renamed). There is no
+/// override here (the request has no field for one): a person who means to change workspace makes
+/// a new connection.
+async fn same_slack_workspace(
+    app: &App,
+    c: &store::Connection,
+    m: &Material,
+) -> Result<(), ApiError> {
+    let me = match app.connections.slack().test(m).await {
+        Ok(id) => id.subject,
+        Err(TestError::Rejected) => {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "credential_rejected",
+                "the service did not accept that credential as a bot of one workspace",
+            ));
+        }
+        Err(TestError::Inconclusive) => {
+            return Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_failed",
+                "the service could not be reached to check the token; try again",
+            ));
+        }
+    };
+    let new = slack::workspace_of(&me).unwrap_or_default();
+    match slack::check_team(c.identity.as_deref(), new) {
+        slack::TeamCheck::Same => Ok(()),
+        slack::TeamCheck::Different => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "different_account",
+            "that token belongs to another Slack workspace than this connection's; add a new connection instead",
+        )),
+        slack::TeamCheck::Unknown => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "identity_unknown",
+            "this connection has no recorded workspace to compare with; test it, or add a new connection",
+        )),
+    }
+}
+
 #[utoipa::path(put, path = "/api/v1/connections/{id}/credential",
     operation_id = "replaceConnectionCredential", tag = "connections",
     params(("id" = String, Path, description = "The connection's id")),
@@ -282,6 +332,9 @@ pub async fn replace_credential(
     .await?;
     if c.kind == "linear" {
         same_workspace(&app, &c, &m).await?;
+    }
+    if c.kind == "slack" {
+        same_slack_workspace(&app, &c, &m).await?;
     }
     let now = app.clock.now();
     let who = who(&me, user, &now);
@@ -325,6 +378,14 @@ async fn run_test(app: &App, id: i64, user: i64, who: Who<'_>) -> Result<(), Sto
                 who,
             };
             app.connections.linear().test_connection(&cx, id).await?;
+        }
+        "slack" => {
+            let cx = slack::Ctx {
+                pool: &app.pool,
+                sealer,
+                who,
+            };
+            app.connections.slack().test_connection(&cx, id).await?;
         }
         _ => {
             // A failed renewal leaves the old token, which the test then judges.
