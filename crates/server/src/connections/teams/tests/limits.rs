@@ -197,7 +197,10 @@ async fn the_adapter_and_the_store_decide_alike() {
         (TEAM_A, CH_A1),
         (TEAM_A, CH_A2),
         (TEAM_B, CH_B1),
-        (TEAM_A, "19:4a95f7d8db4c4e7fae857bcebe0623e6\u{40}thread.skype"),
+        (
+            TEAM_A,
+            "19:4a95f7d8db4c4e7fae857bcebe0623e6\u{40}thread.skype",
+        ),
     ];
     for allowed in &entries {
         let limit = Limit::only(allowed);
