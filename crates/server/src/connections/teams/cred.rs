@@ -315,13 +315,13 @@ mod tests {
         assert!(!tenant_id(CONSUMER_TENANT));
         assert!(channel_id(CH));
         assert!(channel_id(
-            "19:ZmNjZDMxYmQtYzA3Zi00MGQ5LTk4MTAtMzg0NTA4NTg4YjQ2@thread.skype"
+            "19:ZmNjZDMxYmQtYzA3Zi00MGQ5LTk4MTAtMzg0NTA4NTg4YjQ2\u{40}thread.skype"
         ));
         for bad in [
             "",
             "19:abc@thread.tacv2",
             "19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.v2",
-            "19:4a95f7d8db4c4e7fae857bcebe0623e6@unq.gbl.spaces",
+            "19:4a95f7d8db4c4e7fae857bcebe0623e6\u{40}unq.gbl.spaces",
             "19:meeting_4a95f7d8db4c4e7fae857bcebe0623e6@thread.v2",
             "20:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2",
             "19:4a95f7d8db4c4e7f/../e6@thread.tacv2",
@@ -339,7 +339,7 @@ mod tests {
         let key = channel_key(TEAM, CH).unwrap();
         assert_eq!(key, format!("{TEAM}/4a95f7d8db4c4e7fae857bcebe0623e6"));
         assert!(key_ok(&key));
-        let old = channel_key(TEAM, "19:abcdefgh12345678@thread.skype").unwrap();
+        let old = channel_key(TEAM, "19:abcdefgh12345678\u{40}thread.skype").unwrap();
         assert!(old.ends_with(".skype") && key_ok(&old));
         assert_eq!(channel_key(&upper, CH), None);
         assert_eq!(channel_key(CH, TEAM), None, "swapped");

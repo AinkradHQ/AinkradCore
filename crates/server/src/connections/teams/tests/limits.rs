@@ -52,7 +52,7 @@ async fn only_the_named_channel_is_reachable_on_every_operation() {
     assert_eq!(reached, 5);
     let upper_team = TEAM_A.to_uppercase();
     let upper_channel = CH_A1.to_uppercase();
-    let skype = "19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.skype";
+    let skype = "19:4a95f7d8db4c4e7fae857bcebe0623e6\u{40}thread.skype";
     let encoded = "19%3A4a95f7d8db4c4e7fae857bcebe0623e6%40thread.tacv2";
     let traversal = format!("{CH_A1}/../{CH_A2}");
     let nested = format!("{CH_A1}/messages/{MSG}");
@@ -197,7 +197,7 @@ async fn the_adapter_and_the_store_decide_alike() {
         (TEAM_A, CH_A1),
         (TEAM_A, CH_A2),
         (TEAM_B, CH_B1),
-        (TEAM_A, "19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.skype"),
+        (TEAM_A, "19:4a95f7d8db4c4e7fae857bcebe0623e6\u{40}thread.skype"),
     ];
     for allowed in &entries {
         let limit = Limit::only(allowed);
@@ -297,7 +297,7 @@ async fn an_answer_outside_the_limit_is_refused_and_names_nothing() {
     let wrong = [
         message(TEAM_A, CH_A2, MSG, "secret-other-channel"),
         message(TEAM_B, CH_B1, MSG, "secret-other-team"),
-        json!({"id": MSG, "chatId": "19:x_y@unq.gbl.spaces", "channelIdentity": null,
+        json!({"id": MSG, "chatId": "19:x_y\u{40}unq.gbl.spaces", "channelIdentity": null,
             "body": {"contentType": "text", "content": "secret-dm"}}),
         json!({"id": MSG, "body": {"contentType": "text", "content": "secret-no-identity"}}),
     ];

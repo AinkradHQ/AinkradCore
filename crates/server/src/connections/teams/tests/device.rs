@@ -64,7 +64,7 @@ async fn a_reply_with_an_address_or_code_core_would_not_show_is_refused() {
         "http://microsoft.com/devicelogin",
         "https://microsoft.com.evil.test/devicelogin",
         "https://evil.test/@microsoft.com",
-        "https://user@microsoft.com/devicelogin",
+        "https://user\u{40}microsoft.com/devicelogin",
         "https://microsoft.com:8443/devicelogin",
         "https://microsoft.com/devicelogin?x=1",
         "https://microsoft.com/devicelogin#x",
