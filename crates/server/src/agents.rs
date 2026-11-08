@@ -785,6 +785,19 @@ async fn run(app: &App, id: &str) {
                 continue;
             }
         };
+        // A client session does not outlive the device that made it (B-M1b). A module's session is
+        // the module's to stop; one created by its own runner is ended by the runner's revocation below.
+        if s.owner_module.is_none()
+            && s.created_by != s.runner
+            && crate::auth::device_now(&app.pool, &s.created_by, None).await
+                == crate::auth::DeviceNow::Gone
+        {
+            if end_for_revoked_creator(app, &s).await {
+                return;
+            }
+            tokio::time::sleep(cfg.retry).await;
+            continue;
+        }
         // A budget stop or an auth failure the last answer recorded.
         gateway::after(app, &s).await;
         let step = match s.state.as_str() {
@@ -839,6 +852,43 @@ async fn run(app: &App, id: &str) {
             }
         }
     }
+}
+
+/// Kills `s`'s harness and ends it, because the device that created it was revoked. False when the
+/// kill did not get through (the runner is away): tried again, so a harness never outlives its
+/// creator by an unanswered stop. A runner that does not know the session has nothing to kill.
+async fn end_for_revoked_creator(app: &App, s: &Session) -> bool {
+    let unstarted = crate::store::alloc::end_unstarted(&app.pool, &s.id, &app.clock.now()).await;
+    if !matches!(unstarted, Ok(true)) {
+        let proof = app.agents.elevated.lock().unwrap().get(&s.id).copied();
+        if proof.is_none() {
+            return false;
+        }
+        let stop = Command::AgentStop(ainkrad_proto::v2::AgentStop {
+            session: s.id.clone(),
+            kill: true,
+        });
+        match ask(app, &s.runner, stop, app.agents.config.answer, proof).await {
+            Ok(_) => {}
+            Err(e) if e.code == ErrorCode::InvalidArgs => {}
+            Err(e) => {
+                tracing::warn!(session = s.id, code = ?e.code, "the kill for a revoked creator did not get through");
+                return false;
+            }
+        }
+        let outcome = json!({"kind": "failed", "reason": "the session's creator device was revoked", "fingerprint": "core"});
+        if store::end(&app.pool, &s.id, "ended", &outcome, &app.clock.now())
+            .await
+            .is_err()
+        {
+            return false;
+        }
+    }
+    if let Err(e) = crate::store::failover::settle(&app.pool, &s.id).await {
+        tracing::error!(session = s.id, error = %e, "settling a failover failed");
+    }
+    app.agents.leases.lock().unwrap().remove(&s.id);
+    true
 }
 
 /// One long poll: stores what came; an `interrupted` or `ended` runner state, once every entry

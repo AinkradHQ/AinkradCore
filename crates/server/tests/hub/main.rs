@@ -11,6 +11,7 @@ mod account_placement;
 mod allocator;
 mod chains;
 mod connection_tools;
+mod creator_revoked;
 mod failover;
 mod fault;
 mod gateway;
