@@ -88,3 +88,14 @@ fn the_identity_line_carries_the_organization_id_and_is_compared_by_it() {
         assert_eq!(check_org(old, ORG_ID), OrgCheck::Unknown, "{old:?}");
     }
 }
+
+#[test]
+fn an_own_shape_refresh_token_needs_a_token_shape() {
+    use crate::connections::linear::DESCRIPTOR;
+    let bad = crate::connections::adapter::Descriptor {
+        token_shapes: &[],
+        ..DESCRIPTOR
+    };
+    assert!(bad.problem().is_some());
+    assert!(DESCRIPTOR.own_shape_refresh && DESCRIPTOR.problem().is_none());
+}

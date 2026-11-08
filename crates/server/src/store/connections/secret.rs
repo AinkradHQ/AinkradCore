@@ -95,7 +95,8 @@ fn unavailable<T>() -> Result<T, Error> {
 /// One narrow lift, for connection credentials only: with `secrets.connections` on, the access
 /// token may be ONE token of a shape the kind declares (`Descriptor::token_shapes`), as a whole
 /// (`single_own_key`: no second key spaced, glued or split in, no other shape inside it). A real
-/// refresh token, another service's shape, or a kind that declares none stays refused. The
+/// refresh token (unless the kind says its own are of its own shape: `own_shape_refresh`, then ONE own
+/// token in that slot too), another service's shape, or a kind that declares none stays refused. The
 /// provider-account gate and `secrets.mode` 2 are untouched.
 pub(super) async fn gate(
     conn: &mut SqliteConnection,
@@ -106,16 +107,24 @@ pub(super) async fn gate(
     if mode < 2 {
         let redactor = Redactor::new();
         let real = |t: &str| Zeroizing::new(redactor.text(t)).as_str() != t;
-        let refresh_real = m.refresh().is_some_and(real);
-        if real(m.access()) || refresh_real {
-            let admitted = !refresh_real
-                && kind
-                    .is_some_and(|d| !d.refresh_prefixes.iter().any(|p| m.access().starts_with(p)))
-                && value_in(conn, Key::SecretsConnections, Scope::Server).await? == 1
+        let (access_real, refresh_real) = (real(m.access()), m.refresh().is_some_and(real));
+        if access_real || refresh_real {
+            let lift = value_in(conn, Key::SecretsConnections, Scope::Server).await? == 1;
+            let admitted = lift
                 && kind.is_some_and(|d| {
-                    d.token_shapes
-                        .iter()
-                        .any(|s| single_own_key(&redactor, m.access(), s))
+                    let own = |t: &str| {
+                        let shapes = d.token_shapes.iter();
+                        shapes.into_iter().any(|s| single_own_key(&redactor, t, s))
+                    };
+                    let barred = d.refresh_prefixes.iter().any(|p| m.access().starts_with(p));
+                    let access_ok = !access_real || (!barred && own(m.access()));
+                    // A real refresh token is admitted only for a kind that says its own are
+                    // of its own shape, and then as ONE own token, like the access token.
+                    let refresh_ok = match m.refresh() {
+                        Some(r) if refresh_real => d.own_shape_refresh && own(r),
+                        _ => true,
+                    };
+                    access_ok && refresh_ok
                 });
             if !admitted {
                 return refused(

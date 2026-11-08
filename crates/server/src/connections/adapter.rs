@@ -63,6 +63,13 @@ pub struct Descriptor {
     /// Prefixes of tokens that look like this kind's shape but are never an access token (a
     /// refresh token): refused in the access slot even when the shape matches.
     pub refresh_prefixes: &'static [&'static str],
+    /// Whether this kind's REFRESH token may itself be a token of its own declared shape (Linear's
+    /// sign-in: access and refresh tokens are both `linear_token`). Then a refresh token that is
+    /// one own-shape token as a whole is admitted in the refresh slot, under the same gate as the
+    /// access token (`secrets.connections` on, `single_own_key`); any other real refresh token is
+    /// refused still. `false` keeps the C2 rule: a real refresh token is never admitted (GitHub's
+    /// `ghr_`). Needs `token_shapes`.
+    pub own_shape_refresh: bool,
     /// Operations that enforce the resource limit themselves (a Jira search, a project list):
     /// they may be asked with no resource under a limited grant, and the adapter is handed the
     /// effective limits (`Resolved::limits`). Every other operation under a limited grant needs
@@ -192,6 +199,11 @@ impl Descriptor {
             .find(|p| p.is_empty() || p.len() > 16 || !p.is_ascii())
         {
             return Some(format!("{kind}: refresh prefix {p:?} is malformed"));
+        }
+        if self.own_shape_refresh && self.token_shapes.is_empty() {
+            return Some(format!(
+                "{kind}: an own-shape refresh token needs a token shape"
+            ));
         }
         for (i, l) in self.limits.iter().enumerate() {
             if !ident(l.key, 32) || self.limits[..i].iter().any(|o| o.key == l.key) {

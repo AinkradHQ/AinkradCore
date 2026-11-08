@@ -146,6 +146,7 @@ static KIND: Descriptor = Descriptor {
     limits: &[],
     token_shapes: &[],
     refresh_prefixes: &[],
+    own_shape_refresh: false,
     self_limited: &[],
     hourly_calls: 1000,
 };

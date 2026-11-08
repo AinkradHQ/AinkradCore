@@ -76,6 +76,23 @@ async fn on_it_admits_one_own_token_and_a_sign_in_with_a_shapeless_refresh_token
     }
     let signed = Material::new(&own("lin_oauth_"), Some("refresh-3b9f6e2d1a70"), None).unwrap();
     let c = try_create(&fx, "linear", "signed", &signed).await.unwrap();
+    // Whether Linear's refresh token shares the access token's prefix is not documented: if it
+    // does, a sign-in is still admitted, as ONE own token in each slot.
+    for (i, (access, refresh)) in [
+        ("shapeless-access-9d41e0b2".to_owned(), own("lin_oauth_")),
+        (own("lin_oauth_"), own("lin_oauth_")),
+        (own("lin_oauth_"), own("lin_api_")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let m = Material::new(&access, Some(&refresh), None).unwrap();
+        let c = try_create(&fx, "linear", &format!("r{i}"), &m)
+            .await
+            .unwrap();
+        let (back, _) = secret::open(&fx.pool, &fx.sealer, 1, c.id).await.unwrap();
+        assert_eq!(back.refresh(), Some(refresh.as_str()), "pair {i}");
+    }
     // A rotation obeys the same gate.
     secret::replace(&fx.pool, &fx.sealer, c.id, &one(&own("lin_api_")), w(NOW))
         .await
@@ -95,9 +112,16 @@ async fn on_it_still_refuses_anything_that_is_not_one_own_token() {
         one(&format!("{a} {b}")),
         one(&format!("{a}{b}")),
         one(&format!("{a}\u{2028}{b}")),
-        // An own token as the refresh token, or a real refresh token beside an own access token.
-        Material::new("shapeless-access-9d41e0b2", Some(&a), None).unwrap(),
-        Material::new(&a, Some(&b), None).unwrap(),
+        // A refresh token that is another service's shape, beside a shapeless or an own access token.
+        Material::new("shapeless-access-9d41e0b2", Some(&own("ghp_")), None).unwrap(),
+        Material::new(&a, Some(&own("sk-proj-")), None).unwrap(),
+        Material::new(&b, Some(&own("ghp_")), None).unwrap(),
+        // A refresh token that is two keys, spaced, glued, or split by a line separator.
+        Material::new("shapeless-access-9d41e0b2", Some(&format!("{a} {b}")), None).unwrap(),
+        Material::new("shapeless-access-9d41e0b2", Some(&format!("{a}{b}")), None).unwrap(),
+        Material::new(&a, Some(&format!("{a}\u{2028}{b}")), None).unwrap(),
+        // An own refresh token beside another service's access token.
+        Material::new(&own("ghp_"), Some(&a), None).unwrap(),
     ];
     for (i, m) in blobs.iter().enumerate() {
         let r = try_create(&fx, "linear", &format!("x{i}"), m).await;
@@ -122,4 +146,30 @@ async fn the_lift_loosens_no_other_gate() {
         &own("lin_api_"),
     );
     assert!(!single);
+}
+
+#[tokio::test]
+async fn github_keeps_its_rule_a_real_refresh_token_is_never_admitted_there() {
+    let mut fx = lin_fx().await;
+    fx.reg
+        .register(Arc::new(crate::connections::github::Github::strict()))
+        .unwrap();
+    set(&fx, Key::SecretsConnections, "1").await;
+    const { assert!(!crate::connections::github::GITHUB.own_shape_refresh) };
+    let (a, r) = (own("ghp_"), own("ghr_"));
+    for (i, m) in [
+        Material::new("shapeless-access-9d41e0b2", Some(&r), None).unwrap(),
+        Material::new("shapeless-access-9d41e0b2", Some(&a), None).unwrap(),
+        Material::new(&a, Some(&r), None).unwrap(),
+        // And `ghr_` is still no access token.
+        one(&r),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let res = try_create(&fx, "github", &format!("g{i}"), m).await;
+        assert_eq!(code(res), "real_secret_refused", "case {i}");
+    }
+    // An own access token alone is still admitted.
+    assert!(try_create(&fx, "github", "ok", &one(&a)).await.is_ok());
 }

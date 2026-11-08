@@ -114,6 +114,9 @@ pub const DESCRIPTOR: Descriptor = Descriptor {
     // `linear_token`. No refresh token prefix is documented, so none is declared.
     token_shapes: &["linear_token"],
     refresh_prefixes: &[],
+    // Whether Linear's refresh tokens share the access token's `lin_oauth_` prefix is not
+    // documented: if they do, a sign-in must not be refused for it.
+    own_shape_refresh: true,
     self_limited: &[
         "linear.search_issues",
         "linear.list_teams",
