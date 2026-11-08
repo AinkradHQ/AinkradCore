@@ -24,6 +24,7 @@ mod finish;
 mod github;
 mod jira;
 mod linear;
+mod slack;
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -37,6 +38,7 @@ pub use self::jira::{Refused, choose};
 use super::github::device::{DeviceError, Prompt};
 use super::jira::{Finished, FlowError, Jira};
 use super::linear::{FlowError as LinearFlowError, Linear};
+use super::slack::{FlowError as SlackFlowError, Slack};
 use crate::api::App;
 
 pub const MAX_PER_USER: usize = 4;
@@ -108,6 +110,9 @@ pub struct Flow {
     /// The Linear adapter holding this flow's pending sign-in (a Linear flow only; its `state` is
     /// `jira_state`, the one slot a redirect's `state` is compared with).
     linear: Option<Arc<Linear>>,
+    /// The Slack adapter holding this flow's pending sign-in (a Slack flow only; its `state` is
+    /// `jira_state` too).
+    slack: Option<Arc<Slack>>,
     view: Mutex<View>,
     done_at: Mutex<Option<Instant>>,
     /// The Jira `state` this flow started with.
@@ -124,6 +129,9 @@ impl Drop for Flow {
         }
         if let (Some(linear), Some(state)) = (&self.linear, &self.jira_state) {
             linear.cancel(self.user, state);
+        }
+        if let (Some(slack), Some(state)) = (&self.slack, &self.jira_state) {
+            slack.cancel(self.user, state);
         }
     }
 }
@@ -193,6 +201,7 @@ pub enum StartError {
     Device(DeviceError),
     Jira(FlowError),
     Linear(LinearFlowError),
+    Slack(SlackFlowError),
     Store(crate::store::secrets::Error),
 }
 
@@ -330,6 +339,7 @@ fn new_flow(
         gate: tokio::sync::Mutex::new(()),
         jira,
         linear: None,
+        slack: None,
         expires: Instant::now() + life.min(MAX_LIFE),
         cancelled: AtomicBool::new(false),
         committed: AtomicBool::new(false),
@@ -363,15 +373,17 @@ pub async fn start(app: &App, s: Start<'_>) -> Result<View, StartError> {
         "github" => github::start(app, s).await,
         "jira" => jira::start(app, s),
         "linear" => linear::start(app, s),
+        "slack" => slack::start(app, s).await,
         _ => Err(StartError::NotConfigured("no sign-in for this kind")),
     }
 }
 
 /// The redirect's `code` and `state` for the sign-in `flow` of any kind that signs in this way
-/// (Atlassian, Linear); a flow of another kind is not waiting for one (`WrongStep`).
+/// (Atlassian, Linear, Slack); a flow of another kind is not waiting for one (`WrongStep`).
 pub async fn callback(app: &App, flow: &Flow, code: &str, state: &str) -> Result<View, Refused> {
     match flow.kind {
         "linear" => linear::callback(app, flow, code, state).await,
+        "slack" => slack::callback(app, flow, code, state).await,
         _ => jira::callback(app, flow, code, state).await,
     }
 }
