@@ -223,7 +223,7 @@ async fn a_site_the_account_lost_is_a_conclusive_rejection_and_a_failed_check_is
 }
 
 #[tokio::test]
-async fn without_an_app_an_expired_or_refused_token_is_an_auth_signal_not_an_internal_error() {
+async fn without_an_app_an_expired_or_refused_token_is_a_plain_refusal_with_no_health_signal() {
     let f = fx(false).await;
     let c = f
         .connect("acme", "oauth", &oauth(ACCESS, REFRESH, 10))
@@ -234,11 +234,9 @@ async fn without_an_app_an_expired_or_refused_token_is_an_auth_signal_not_an_int
         .await
         .map(|_| ())
         .unwrap_err();
-    assert_eq!(e.code(), "oauth_not_configured");
-    assert_eq!(
-        e.health().map(|h| h.0),
-        Some(ainkrad_proto::v2::UpstreamStatus::AuthFailed)
-    );
+    assert_eq!(e, CallError::OAuthNotConfigured);
+    assert_eq!(e.code(), "not_configured");
+    assert_eq!(e.health(), None);
     assert!(e.to_string().contains("not set up"));
     let g = fx(false).await;
     let c = g
@@ -254,7 +252,24 @@ async fn without_an_app_an_expired_or_refused_token_is_an_auth_signal_not_an_int
         .jira
         .call(&g.cx(NOW), &c, &Limit::any(), "jira.get_issue", &args)
         .await;
-    assert_eq!(e.unwrap_err().code(), "oauth_not_configured");
+    let e = e.unwrap_err();
+    assert_eq!((e.code(), e.health()), ("not_configured", None));
+}
+
+#[tokio::test]
+async fn a_test_without_an_app_is_inconclusive_and_the_restored_app_renews_the_same_connection() {
+    let f = fx(false).await;
+    f.fake.rotating();
+    let c = f
+        .connect("acme", "oauth", &oauth(ACCESS, REFRESH, 10))
+        .await;
+    let t = f.jira.test_connection(&f.cx(NOW), c.id).await.unwrap();
+    assert_eq!(t.status, "active", "{:?}", t.state_reason);
+    assert_eq!(f.fake.count("POST /oauth/token"), 0);
+    let app = OAuthApp::new("client-id-8c41", CLIENT_SECRET, &[REDIRECT]);
+    assert!(f.jira.set_app(app));
+    f.jira.fresh(&f.cx(NOW), c.id).await.unwrap();
+    assert_eq!(f.fake.count("POST /oauth/token"), 1);
 }
 
 #[tokio::test]

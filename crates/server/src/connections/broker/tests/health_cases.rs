@@ -6,6 +6,7 @@ use ainkrad_proto::v2::UpstreamStatus;
 
 use super::*;
 use crate::connections::broker::health::{Feed, forward};
+use crate::connections::jira::OAuthApp;
 
 fn get(n: u64) -> Value {
     json!({"repo": "acme/app", "number": n})
@@ -217,13 +218,13 @@ async fn a_refresh_failure_maps_to_a_plain_code_and_a_pending_signal() {
         f.status(c.id).await,
         ("unhealthy".to_owned(), Some("auth_suspected".to_owned()))
     );
-    // Core has no Atlassian app: cannot renew, plain code, same pending signal.
+    // Core has no Atlassian app: cannot renew, a plain refusal, no signal on the connection.
     let f = fx().await;
     let c = oauth(&f, -100).await;
     let s = jira_session(&f, &c).await;
     let r = f.ask(&s, "jira.get_issue", json!({"key": "ABC-1"})).await;
-    assert_eq!((r.ok, code(&r)), (false, "oauth_not_configured"));
-    assert_eq!(f.status(c.id).await.1.as_deref(), Some("auth_suspected"));
+    assert_eq!((r.ok, code(&r)), (false, "not_configured"));
+    assert_eq!(f.status(c.id).await, ("active".to_owned(), None));
     assert!(
         f.j.fake.seen().is_empty(),
         "no request carried the stale token"
@@ -295,4 +296,37 @@ async fn jira_redirects_and_unreadable_answers_give_no_health_signal() {
     f.j.fake.reply(&one, 502, json!({}));
     f.ask(&s, "jira.get_issue", json!({"key": "ABC-1"})).await;
     assert_eq!(streak(&f, c.id).await, 1);
+}
+
+async fn states(f: &Fx) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE action = 'connection.state_set'")
+        .fetch_one(&f.j.pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_missing_app_is_a_plain_refusal_and_the_restored_app_needs_no_manual_test() {
+    let f = fx_app(Limits::default(), true).await;
+    let c = oauth(&f, 10).await; // due: inside the renewal skew
+    f.j.fake.rotating();
+    f.j.fake.reply(
+        &issue_path(),
+        200,
+        json!({"key": "ABC-1", "fields": {"project": {"key": "ABC"}}}),
+    );
+    let s = jira_session(&f, &c).await;
+    let before = states(&f).await;
+    // The admin clears the Atlassian app config.
+    assert!(f.j.jira.set_app(None));
+    let r = f.ask(&s, "jira.get_issue", json!({"key": "ABC-1"})).await;
+    assert_eq!((r.ok, code(&r)), (false, "not_configured"), "{r:?}");
+    assert_eq!(f.status(c.id).await, ("active".to_owned(), None));
+    assert_eq!(states(&f).await, before, "no health change audited");
+    // The config is fixed: the same connection works again, nobody tests it by hand.
+    let app = OAuthApp::new("client-id-8c41", jt::CLIENT_SECRET, &[jt::REDIRECT]);
+    assert!(f.j.jira.set_app(app));
+    let r = f.ask(&s, "jira.get_issue", json!({"key": "ABC-1"})).await;
+    assert!(r.ok, "{r:?}");
+    assert_eq!(f.status(c.id).await, ("active".to_owned(), None));
 }
