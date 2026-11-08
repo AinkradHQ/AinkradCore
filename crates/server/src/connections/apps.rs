@@ -1,9 +1,9 @@
 //! Ainkrad's OAuth apps, as the API configures them (C5; design §6, decision 1). The strings are
 //! sealed in `store::connections::apps`; this module says which fields a kind has, checks a value,
 //! and puts a config into force WITHOUT making a second adapter: Atlassian's client id, secret and
-//! redirect go into the one shared `Jira` ([`Jira::set_app`]), Linear's into the one shared
-//! `Linear` ([`Linear::set_app`]), Slack's into the one shared `Slack` ([`Slack::set_app`]),
-//! Microsoft's client id and tenant into the one shared `Teams` ([`Teams::set_app`]); GitHub's
+//! redirect go into the one shared `Jira` (`Jira::set_app`), Linear's into the one shared
+//! `Linear` (`Linear::set_app`), Slack's into the one shared `Slack` (`Slack::set_app`),
+//! Microsoft's client id and tenant into the one shared `Teams` (`Teams::set_app`); GitHub's
 //! client id is held here and
 //! the GitHub App's key goes to the one shared `Github`'s installer.
 //!
@@ -15,12 +15,12 @@ use std::sync::RwLock;
 use serde::Serialize;
 use zeroize::Zeroizing;
 
-use super::github::Github;
+use super::broker::Broker;
 use super::github::app::AppKey;
-use super::jira::{Jira, OAuthApp};
-use super::linear::{Linear, OAuthApp as LinearApp};
-use super::slack::{Slack, SlackApp};
-use super::teams::{Teams, TeamsApp};
+use super::jira::OAuthApp;
+use super::linear::OAuthApp as LinearApp;
+use super::slack::SlackApp;
+use super::teams::TeamsApp;
 use crate::ops::secretbox::SecretBox;
 use crate::store::connections::apps;
 use crate::store::secrets::Error;
@@ -221,12 +221,10 @@ impl Apps {
         &self,
         pool: &sqlx::sqlite::SqlitePool,
         sealer: &SecretBox,
-        jira: &Jira,
-        github: &Github,
-        linear: &Linear,
-        slack: &Slack,
-        teams: &Teams,
+        adapters: &Broker,
     ) -> Result<Changed, Error> {
+        let (jira, github, linear) = (adapters.jira(), adapters.github(), adapters.linear());
+        let (slack, teams) = (adapters.slack(), adapters.teams());
         let g = apps::open_all(pool, sealer, OWNER, "github").await?;
         let j = apps::open_all(pool, sealer, OWNER, "jira").await?;
         let l = apps::open_all(pool, sealer, OWNER, "linear").await?;
@@ -319,15 +317,7 @@ pub async fn reload(app: &crate::api::App) -> Result<(), Error> {
     };
     let changed = app
         .conn_apps
-        .reload(
-            &app.pool,
-            sealer,
-            app.connections.jira(),
-            app.connections.github(),
-            app.connections.linear(),
-            app.connections.slack(),
-            app.connections.teams(),
-        )
+        .reload(&app.pool, sealer, &app.connections)
         .await?;
     // A sign-in begun under an app that changed cannot finish; one of a kind that did not change
     // goes on.
