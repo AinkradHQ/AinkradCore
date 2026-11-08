@@ -183,6 +183,6 @@ mod tests {
             .iter()
             .map(|d| d.kind)
             .collect();
-        assert_eq!(kinds, ["github", "jira", "linear", "teams"]);
+        assert_eq!(kinds, ["github", "jira", "linear", "slack", "teams"]);
     }
 }

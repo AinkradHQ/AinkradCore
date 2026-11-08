@@ -25,6 +25,7 @@ mod leak;
 mod limits_cases;
 mod linear;
 mod path;
+mod slack;
 mod teams;
 
 pub const NOW: &str = "2026-11-06T10:00:00.000Z";

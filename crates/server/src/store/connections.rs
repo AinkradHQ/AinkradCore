@@ -45,6 +45,7 @@ pub mod health;
 pub(crate) mod notice;
 pub mod resolve;
 pub mod secret;
+pub mod suspend;
 pub mod verdict;
 mod write;
 pub use write::{

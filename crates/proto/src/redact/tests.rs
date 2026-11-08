@@ -31,6 +31,13 @@ fn ordinary_text_is_left_alone() {
         "AKIAlower-case-is-not-a-key",
         "the bearer of bad news",
         "cit_run_42",
+        // Slack prefixes with too short a body, or inside a word, are plain text.
+        "xapp-short",
+        "xoxb-0123456789012345678",
+        "xoxe-0123456789012345678",
+        "xoxs-0123456789012345678",
+        "boxxoxb-0123456789012345678901234",
+        "xoxz-0123456789012345678901234",
         "lin_api_short",
         "lin_oauth_",
         "twin_api_0123456789abcdef0123456789abcdef",

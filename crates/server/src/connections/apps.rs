@@ -2,8 +2,9 @@
 //! sealed in `store::connections::apps`; this module says which fields a kind has, checks a value,
 //! and puts a config into force WITHOUT making a second adapter: Atlassian's client id, secret and
 //! redirect go into the one shared `Jira` ([`Jira::set_app`]), Linear's into the one shared
-//! `Linear` ([`Linear::set_app`]), Microsoft's client id and tenant into the one shared `Teams`
-//! ([`Teams::set_app`]); GitHub's client id is held here and
+//! `Linear` ([`Linear::set_app`]), Slack's into the one shared `Slack` ([`Slack::set_app`]),
+//! Microsoft's client id and tenant into the one shared `Teams` ([`Teams::set_app`]); GitHub's
+//! client id is held here and
 //! the GitHub App's key goes to the one shared `Github`'s installer.
 //!
 //! The config belongs to the Core, not to a user: it is kept under the admin user (`OWNER`, #18).
@@ -18,6 +19,7 @@ use super::github::Github;
 use super::github::app::AppKey;
 use super::jira::{Jira, OAuthApp};
 use super::linear::{Linear, OAuthApp as LinearApp};
+use super::slack::{Slack, SlackApp};
 use super::teams::{Teams, TeamsApp};
 use crate::ops::secretbox::SecretBox;
 use crate::store::connections::apps;
@@ -78,6 +80,36 @@ pub const JIRA_FIELDS: &[Field] = &[
     },
 ];
 
+/// Slack's redirect is an `https` address of Ainkrad's or of this Core (Slack refuses a loopback
+/// `http` one); its own field, registered with Slack exactly.
+pub const SLACK_FIELDS: &[Field] = &[
+    Field {
+        name: "client_id",
+        title: "Slack app client id",
+        secret: false,
+    },
+    Field {
+        name: "client_secret",
+        title: "Slack app client secret",
+        secret: true,
+    },
+    Field {
+        name: "redirect_uri",
+        title: "https redirect URL registered with Slack (where code and state are caught)",
+        secret: false,
+    },
+    Field {
+        name: "catcher_ready",
+        title: "true once a page at that https address hands code and state to Core",
+        secret: false,
+    },
+    Field {
+        name: "token_rotation",
+        title: "true if the Slack app has token rotation on (needs secrets.mode 2)",
+        secret: false,
+    },
+];
+
 /// Microsoft's app is a PUBLIC client (the device code flow): a client id and a tenant, no secret.
 /// `tenant` is `organizations` (any work or school tenant; the default) or one tenant's GUID.
 pub const TEAMS_FIELDS: &[Field] = &[
@@ -117,6 +149,7 @@ pub fn fields(kind: &str) -> Option<&'static [Field]> {
         "github" => Some(GITHUB_FIELDS),
         "jira" => Some(JIRA_FIELDS),
         "linear" => Some(LINEAR_FIELDS),
+        "slack" => Some(SLACK_FIELDS),
         "teams" => Some(TEAMS_FIELDS),
         _ => None,
     }
@@ -133,10 +166,12 @@ fn plain(s: &str, max: usize, extra: &[u8]) -> bool {
 pub fn problem(kind: &str, field: &str, value: &str) -> Option<&'static str> {
     let ok = match (kind, field) {
         (_, "client_id") => plain(value, 64, b"._-"),
-        ("jira" | "linear", "client_secret") => {
+        ("jira" | "linear" | "slack", "client_secret") => {
             (1..=512).contains(&value.len()) && !value.chars().any(char::is_control)
         }
         ("jira" | "linear", "loopback_port") => value.parse::<u16>().is_ok_and(|p| p >= 1024),
+        ("slack", "redirect_uri") => super::slack::redirect_ok(value),
+        ("slack", "catcher_ready" | "token_rotation") => matches!(value, "true" | "false"),
         ("teams", "tenant") => value == "organizations" || super::teams::tenant_id(value),
         ("github", "app_id") => plain(value, 40, b"_-"),
         ("github", "app_slug") => plain(value, 64, b"-"),
@@ -189,11 +224,13 @@ impl Apps {
         jira: &Jira,
         github: &Github,
         linear: &Linear,
+        slack: &Slack,
         teams: &Teams,
     ) -> Result<Changed, Error> {
         let g = apps::open_all(pool, sealer, OWNER, "github").await?;
         let j = apps::open_all(pool, sealer, OWNER, "jira").await?;
         let l = apps::open_all(pool, sealer, OWNER, "linear").await?;
+        let s = apps::open_all(pool, sealer, OWNER, "slack").await?;
         let t = apps::open_all(pool, sealer, OWNER, "teams").await?;
         let client = g.get("client_id").cloned();
         let github_changed = {
@@ -210,11 +247,13 @@ impl Apps {
         github.installer().set_key(app_key(&g));
         let jira_changed = jira.set_app(jira_app(&j));
         let linear_changed = linear.set_app(linear_app(&l));
+        let slack_changed = slack.set_app(slack_app(&s));
         let teams_changed = teams.set_app(teams_app(&t));
         Ok(Changed {
             github: github_changed,
             jira: jira_changed,
             linear: linear_changed,
+            slack: slack_changed,
             teams: teams_changed,
         })
     }
@@ -226,6 +265,7 @@ pub struct Changed {
     pub github: bool,
     pub jira: bool,
     pub linear: bool,
+    pub slack: bool,
     pub teams: bool,
 }
 
@@ -240,6 +280,21 @@ fn jira_app(j: &BTreeMap<String, Zeroizing<String>>) -> Option<OAuthApp> {
         .unwrap_or(DEFAULT_PORT);
     let redirect = Apps::redirect(port);
     OAuthApp::new(j.get("client_id")?, j.get("client_secret")?, &[&redirect])
+}
+
+/// The Slack app in force. Add to Slack signs in only when the https redirect page exists
+/// (`catcher_ready`) and a valid https redirect is set: no page, no sign-in, and the UI shows the
+/// bot token as the working method. The client id and secret alone stay in force either way, so
+/// the tokens already issued keep being renewed.
+fn slack_app(s: &BTreeMap<String, Zeroizing<String>>) -> Option<SlackApp> {
+    let flag = |k: &str| s.get(k).is_some_and(|v| v.as_str() == "true");
+    let (id, secret) = (s.get("client_id")?, s.get("client_secret")?);
+    let signing_in = flag("catcher_ready")
+        .then(|| s.get("redirect_uri"))
+        .flatten()
+        .and_then(|r| SlackApp::new(id, secret, r));
+    let app = signing_in.or_else(|| SlackApp::renewal_only(id, secret))?;
+    Some(app.rotating(flag("token_rotation")))
 }
 
 fn teams_app(t: &BTreeMap<String, Zeroizing<String>>) -> Option<TeamsApp> {
@@ -270,6 +325,7 @@ pub async fn reload(app: &crate::api::App) -> Result<(), Error> {
             app.connections.jira(),
             app.connections.github(),
             app.connections.linear(),
+            app.connections.slack(),
             app.connections.teams(),
         )
         .await?;
@@ -280,6 +336,7 @@ pub async fn reload(app: &crate::api::App) -> Result<(), Error> {
         ("github", changed.github),
         ("jira", changed.jira),
         ("linear", changed.linear),
+        ("slack", changed.slack),
         ("teams", changed.teams),
     ] {
         if hit {

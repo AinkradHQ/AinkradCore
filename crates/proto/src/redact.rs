@@ -65,6 +65,20 @@ const SHAPES: &[Shape] = &[
     // No refresh token prefix is documented, so none is read.
     shape("lin_api_", "linear_token", 30),
     shape("lin_oauth_", "linear_token", 30),
+    // Slack tokens (bot, user, and the rotating `xoxe.` access forms, then the `xoxe-` refresh
+    // token; longest prefix first). The rotating access forms hold a second Slack shape, so the
+    // secret gate admits one only at `secrets.mode` 2 (see `slack::DESCRIPTOR`).
+    shape("xoxe.xoxb-", "slack_token", 20),
+    shape("xoxe.xoxp-", "slack_token", 20),
+    shape("xoxe-", "slack_token", 20),
+    shape("xoxb-", "slack_token", 20),
+    shape("xoxp-", "slack_token", 20),
+    // Slack's other documented prefixes: app-level, legacy workspace and legacy refresh/session
+    // tokens. A different shape name, so they are redacted but never a connection credential.
+    shape("xapp-", "slack_app_token", 20),
+    shape("xoxa-", "slack_app_token", 20),
+    shape("xoxr-", "slack_app_token", 20),
+    shape("xoxs-", "slack_app_token", 20),
     Shape {
         body: upper_digit,
         ..shape("AKIA", "aws_key", 16)
@@ -424,51 +438,8 @@ fn shapes(text: &str) -> String {
     out
 }
 
-/// One fake secret of each shape with its kind, shaped like the real thing but never valid:
-/// for tests here and in the crates that redact.
-pub const PLANTED: &[(&str, &str)] = &[
-    (
-        "anthropic_key",
-        "sk-ant-api03-Zx9QWERTYuiopASDFghjkl0123456789-_abcdEF",
-    ),
-    ("openai_key", "sk-proj-Q1w2E3r4T5y6U7i8O9p0AsDfGhJkLzXcVbNm"),
-    ("openai_key", "sk-Q1w2E3r4T5y6U7i8O9p0AsDfGhJkLzXcVbNm"),
-    ("google_key", "AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBWY"),
-    ("github_token", "ghp_16C7e42F292c6912E7710c838347Ae178B4a"),
-    (
-        "github_token",
-        "github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz",
-    ),
-    (
-        "linear_token",
-        "lin_api_Zx9QWERTYuiopASDFghjkl0123456789abcdEF",
-    ),
-    (
-        "linear_token",
-        "lin_oauth_Zx9QWERTYuiopASDFghjkl0123456789abcdEF",
-    ),
-    ("aws_key", "AKIAIOSFODNN7EXAMPLE"),
-    (
-        "aws_secret",
-        "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-    ),
-    (
-        "run_token",
-        "cit_run_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    ),
-    (
-        "runner_key",
-        "cit_runner_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    ),
-    (
-        "bearer",
-        "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl",
-    ),
-    (
-        "pem_block",
-        "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----",
-    ),
-];
+mod planted;
+pub use planted::PLANTED;
 
 #[cfg(test)]
 mod tests;

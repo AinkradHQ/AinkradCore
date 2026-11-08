@@ -200,7 +200,7 @@ impl SecretBox {
                 format!(
                     "master key {}: {e}; the Core identity and the ACME account are sealed under \
                      it, so the Core will not start without it (restore keys/master.key from a \
-                     backup)",
+                     backup, or make a new home with `ainkrad-core-server init <home>`)",
                     path.display()
                 ),
             )

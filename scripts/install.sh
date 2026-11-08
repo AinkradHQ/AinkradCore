@@ -129,7 +129,7 @@ checks() { # DNS -> this host's public IP; :443 (and :80) free
   step "Checks"
   local problems=0 addrs pub p who
   if ! command -v getent >/dev/null; then warn "no getent here: DNS not checked"; return 0; fi
-  addrs=$(getent ahosts "$A_HOSTNAME" | awk '{print $1}' | sort -u | tr '\n' ' ')
+  addrs=$(getent ahosts "$A_HOSTNAME" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true) # pipefail: an unresolved name must reach the warning below, not kill the script
   pub=${A_PUBLIC_IP:-$(curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS4 --max-time 5 https://checkip.amazonaws.com 2>/dev/null || true)}
   pub=$(printf '%s' "$pub" | tr -d '[:space:]')
   say "  DNS $A_HOSTNAME -> ${addrs:-nothing}; this host's public IPv4: ${pub:-unknown}"

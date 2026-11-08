@@ -278,10 +278,11 @@ async fn replace_with(
     if clear_auth {
         super::verdict::clear_auth_in(&mut tx, id, who.now, "replaced").await?;
     }
-    // An export left it without a credential; this one is the new one.
+    // An export left it without a credential, or a rotation could not be stored below
+    // `secrets.mode` 2; this one is the new one.
     sqlx::query(
         "UPDATE core_connections SET status = 'active', state_reason = NULL, state_until = NULL \
-         WHERE id = ? AND state_reason = 'exported'",
+         WHERE id = ? AND state_reason IN ('exported', 'needs_mode_2')",
     )
     .bind(id)
     .execute(&mut *tx)

@@ -89,8 +89,10 @@ pub fn secret(
     let given = if let Some(v) = flag.1 {
         eprintln!(
             "ainkradctl: warning: {} puts the {what} in the process list and the shell history; \
-             use {} <file>, stdin or ${TOKEN_ENV} instead",
-            flag.0, file.0
+             use {} <file>, stdin or ${} instead",
+            flag.0,
+            file.0,
+            env.unwrap_or(TOKEN_ENV)
         );
         Zeroizing::new(v.to_owned())
     } else if let Some(path) = file.1 {
@@ -104,9 +106,10 @@ pub fn secret(
         Zeroizing::new(v)
     } else if std::io::stdin().is_terminal() {
         return Err(Error::Usage(format!(
-            "the {what} is read from stdin, {} <file> or ${TOKEN_ENV}, never typed here (a \
+            "the {what} is read from stdin, {} <file> or ${}, never typed here (a \
              terminal would echo it): pipe it in",
-            file.0
+            file.0,
+            env.unwrap_or(TOKEN_ENV)
         )));
     } else {
         crate::secrets::value_from_stdin()?

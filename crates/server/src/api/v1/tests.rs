@@ -57,6 +57,7 @@ mod connections_leak;
 mod connections_linear;
 mod connections_review;
 mod connections_routes;
+mod connections_slack;
 mod connections_teams;
 mod costs_api;
 mod costs_store;

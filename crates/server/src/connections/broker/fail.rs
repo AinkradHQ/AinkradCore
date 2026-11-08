@@ -5,6 +5,7 @@ use super::health::Feed;
 use crate::connections::github::Outcome;
 use crate::connections::jira::CallError;
 use crate::connections::linear::CallError as LinearError;
+use crate::connections::slack::CallError as SlackError;
 use crate::connections::teams::CallError as TeamsError;
 use crate::store::secrets::Error;
 
@@ -68,13 +69,36 @@ impl Fail {
         Self::upstream(o.code(), o.message(), feed)
     }
 
+    pub fn of_slack(e: &SlackError) -> Self {
+        let feed = e.health().map(|(status, retry_after)| Feed {
+            status,
+            retry_after,
+            reset_at: None,
+        });
+        // Our own rules, our own state (no app, a rotation that cannot be stored) and our own
+        // cooling are refusals, not upstream errors.
+        let refusal = matches!(
+            e,
+            SlackError::Refused(_)
+                | SlackError::OAuthNotConfigured
+                | SlackError::NeedsMode2
+                | SlackError::Cooling { .. }
+        );
+        let result = if refusal { "refused" } else { "error" };
+        Self {
+            result,
+            ..Self::upstream(e.code(), &e.to_string(), feed)
+        }
+    }
+
     pub fn of_teams(e: &TeamsError) -> Self {
         let feed = e.health().map(|(status, retry_after)| Feed {
             status,
             retry_after,
             reset_at: None,
         });
-        // No app configured is our own state, not the service's answer: a plain refusal.
+        // Our own rules, our own state (no app, a tenant pin) and our own cooling are refusals,
+        // not upstream errors.
         let ours = matches!(
             e,
             TeamsError::Refused(_)

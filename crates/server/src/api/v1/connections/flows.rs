@@ -62,6 +62,7 @@ fn refused(r: Refused) -> ApiError {
 fn start_error(e: StartError) -> ApiError {
     use crate::connections::jira::FlowError;
     use crate::connections::linear::FlowError as LinearFlowError;
+    use crate::connections::slack::FlowError as SlackFlowError;
     use crate::connections::teams::DeviceError as TeamsError;
     match e {
         StartError::NotConfigured(why) => {
@@ -87,7 +88,23 @@ fn start_error(e: StartError) -> ApiError {
             "not_configured",
             "Sign in with Linear is not set up on this Core yet",
         ),
-        StartError::Linear(_) | StartError::Jira(_) => ApiError::new(
+        StartError::Slack(SlackFlowError::TooManyFlows) => ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too_many_flows",
+            "too many sign-ins are waiting; finish or cancel one",
+        ),
+        StartError::Slack(SlackFlowError::NotConfigured) => ApiError::new(
+            StatusCode::CONFLICT,
+            "not_configured",
+            "Add to Slack is not set up on this Core yet",
+        ),
+        StartError::Slack(SlackFlowError::NeedsMode2) => ApiError::new(
+            StatusCode::CONFLICT,
+            "needs_mode_2",
+            "this Slack app rotates its tokens, which needs secrets.mode 2 to store: raise it, or \
+             turn token rotation off in the Slack app",
+        ),
+        StartError::Slack(_) | StartError::Linear(_) | StartError::Jira(_) => ApiError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal",
             "the sign-in could not be started",

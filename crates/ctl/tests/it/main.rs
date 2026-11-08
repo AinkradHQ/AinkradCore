@@ -1,6 +1,10 @@
 //! ctl against the real `ainkrad-core-server` (and, where the real one cannot be made to
 //! misbehave, a fake Core). One test binary, so the server is built once.
 
+mod acct_cli;
+mod acct_fake;
+mod acct_login_cli;
+mod acct_refusals;
 mod chains;
 mod common;
 mod connections;

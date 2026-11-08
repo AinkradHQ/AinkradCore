@@ -6,7 +6,12 @@
 //! or a signature.
 
 pub mod accounts;
+pub mod acct;
+pub mod acct_help;
+pub mod acct_login;
+pub mod acct_usage;
 pub mod agents;
+pub mod budgets;
 pub mod chains;
 pub mod client;
 pub mod cmd;
@@ -19,6 +24,7 @@ pub mod events;
 pub mod keystore;
 pub mod net;
 pub mod pair;
+pub mod pools;
 pub mod proto;
 pub mod runners;
 pub mod secrets;
@@ -129,11 +135,13 @@ pub const EXIT_CODES: &str = "Exit codes:
      conflict: the last admin device, ...); step_up_required only if it persists after
      the one automatic elevation; for `run noop`: runner_offline, unsupported_command
      (409), runner_busy (503), runner_lost, runner_timeout (504), runner_failed (502); for
-     `connection login`: the sign-in expired, was denied or failed (the plain reason is printed)
+     `connection login` and `account login`: the sign-in expired, was denied, failed or was
+     cancelled (the plain reason is printed)
   5  past_retention: the resume point was trimmed (the floor is printed)
   6  revoked: the Core closed this device's stream with 4001
   7  the pairing was rejected or expired
   8  clock_skew: this machine's clock is over 60 s off (server_time is printed)
   9  cannot elevate: this device has no step-up key, the passphrase is wrong, or there is
      no passphrase source (no terminal and no passphrase file); no proof was sent
-  130  `connection login` was cancelled with Ctrl-C (the Core was told to drop the flow)";
+  130  `connection login` or `account login` was cancelled with Ctrl-C (the Core was told to drop
+     the flow)";
