@@ -19,6 +19,7 @@ use crate::store::connections::grants::{self, Limits as Wall, NewGrant};
 use crate::store::connections::{Connection, NewConnection, Who, bindings, create};
 
 mod authz;
+mod c6_adversarial;
 mod health_cases;
 mod leak;
 mod limits_cases;

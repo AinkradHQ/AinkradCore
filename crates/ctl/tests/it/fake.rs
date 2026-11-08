@@ -93,7 +93,13 @@ impl Fake {
                 let (status, text) = answer(&method, &path, &String::from_utf8_lossy(&body));
                 let _ = write!(
                     conn,
-                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{text}",
+                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\n{}content-length: {}\r\nconnection: close\r\n\r\n{text}",
+                    // A 429 says when to come back, as the Core's pacing does.
+                    if status == 429 {
+                        "retry-after: 7\r\n"
+                    } else {
+                        ""
+                    },
                     text.len()
                 );
             }

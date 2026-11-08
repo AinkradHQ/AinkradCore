@@ -33,6 +33,9 @@ fn row(v: &Value) -> String {
 
 const RUN_USAGE: &str = "agent run <runner-id> <harness> [prompt…], or agent run <runner-id> [prompt…] --chain <id> [--agent <name>]";
 
+/// The Core's own `empty_allowlist` sentence, said before anything is sent.
+const EMPTY_ALLOWLIST: &str = "empty_allowlist: connection_access names at least one capability; leave it out for the default (read-class capabilities only)";
+
 fn sid(id: &str) -> Result<&str, Error> {
     let ok = id
         .strip_prefix("as_")
@@ -68,6 +71,8 @@ pub struct Opts<'a> {
     pub agent: Option<&'a str>,
     /// `--run`: `ls` lists only the attempts of this run (its first attempt's id).
     pub run: Option<&'a str>,
+    /// `--connection-access`: the capabilities the session may call through its connections.
+    pub connection_access: Option<&'a str>,
 }
 
 /// `agent …`.
@@ -85,6 +90,7 @@ pub async fn agent(
         chain,
         agent,
         run,
+        connection_access,
     } = *opts;
     let shown = |out: &mut _, v: Value| match json {
         true => print(out, v),
@@ -124,6 +130,13 @@ pub async fn agent(
             };
             if !prompt.is_empty() {
                 body["prompt"] = json!(prompt.join(" "));
+            }
+            if let Some(list) = connection_access {
+                let caps = crate::conn_input::names(list)?;
+                if caps.is_empty() {
+                    return Err(Error::Usage(EMPTY_ALLOWLIST.into()));
+                }
+                body["connection_access"] = json!(caps);
             }
             if let Some(spec) = secrets_flag {
                 body["secrets"] = secrets(spec)?;

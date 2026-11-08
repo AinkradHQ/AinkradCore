@@ -232,7 +232,22 @@ pub(crate) async fn secrets_on(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
     Ok(crate::store::settings::value_in(&mut conn, Key::SecretsMode, Scope::Server).await? != 0)
 }
 
+async fn load(env: &Env<'_>, session: &str) -> Result<Option<Access>, Fail> {
+    access::load(env.pool, session)
+        .await
+        .map_err(|e| of_store(e.into()))
+}
+
 impl Broker {
+    /// The refusal of a call about a session that does not exist, counted in its RUNNER's flood
+    /// row (exact count, registered operation names only; the invented name is never kept).
+    fn stranger(&self, env: &Env<'_>, runner: &str, op: Option<&str>) -> Fail {
+        if self.gate.stranger(runner, op) {
+            self.schedule_flood(env.pool.clone(), gate::Gate::runner_key(runner));
+        }
+        refuse("session", "no such session on this runner")
+    }
+
     /// Runs one call and answers it. Never panics on caller input; every exit is audited.
     pub async fn handle(
         &self,
@@ -275,20 +290,34 @@ impl Broker {
                 let d = a.descriptor();
                 d.capability_of(&call.tool).map(|c| (d.kind, c.name))
             });
+        let key: String = session.chars().take(64).collect();
+        let op = known.map(|_| call.tool.as_str());
+        // A session with a minute window here was seen to exist: its floods are refused without
+        // a read. Any other name is looked up FIRST: one that does not exist has nobody to
+        // attribute a row to and gets no window, however many a runner invents.
+        let seen = match self.gate.has_window(&key) {
+            true => None,
+            false => Some(load(env, session).await?),
+        };
+        if matches!(seen, Some(None)) {
+            return Err(self.stranger(env, runner, op));
+        }
         // Every call of a session, known or not, refused or not, counts against its minute FIRST;
         // past it a call costs nothing but its share of the flood's one audit row, written when
         // the window ends with the exact count.
-        let key: String = session.chars().take(64).collect();
-        let op = known.map(|_| call.tool.as_str());
         if let Rate::Over { first } = self.gate.rate(&key, op) {
             if first {
                 self.schedule_flood(env.pool.clone(), key);
             }
             return Err(refuse("rate_limited", "too many calls from this session"));
         }
-        let acc = access::load(env.pool, session)
-            .await
-            .map_err(|e| of_store(e.into()))?;
+        let acc = match seen {
+            Some(acc) => acc,
+            None => load(env, session).await?,
+        };
+        if acc.is_none() {
+            return Err(self.stranger(env, runner, op));
+        }
         let Some((kind, cap)) = known else {
             let user = acc.as_ref().map_or(0, |a| a.user);
             let session = acc.as_ref().map(|a| a.session.as_str());

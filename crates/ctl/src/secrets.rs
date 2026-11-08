@@ -40,7 +40,7 @@ fn row(v: &Value) -> String {
 }
 
 /// The value from stdin, one trailing newline dropped.
-fn value_from_stdin() -> Result<Zeroizing<String>, Error> {
+pub fn value_from_stdin() -> Result<Zeroizing<String>, Error> {
     let mut v = Zeroizing::new(String::new());
     std::io::stdin()
         .read_to_string(&mut v)
