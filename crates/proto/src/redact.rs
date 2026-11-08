@@ -61,6 +61,10 @@ const SHAPES: &[Shape] = &[
     shape("ghu_", "github_token", 30),
     shape("ghs_", "github_token", 30),
     shape("ghr_", "github_token", 30),
+    // Linear's API keys and OAuth access tokens (its 2021-08-19 changelog, "GitHub Secret Scanning").
+    // No refresh token prefix is documented, so none is read.
+    shape("lin_api_", "linear_token", 30),
+    shape("lin_oauth_", "linear_token", 30),
     Shape {
         body: upper_digit,
         ..shape("AKIA", "aws_key", 16)
@@ -434,6 +438,14 @@ pub const PLANTED: &[(&str, &str)] = &[
     (
         "github_token",
         "github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz",
+    ),
+    (
+        "linear_token",
+        "lin_api_Zx9QWERTYuiopASDFghjkl0123456789abcdEF",
+    ),
+    (
+        "linear_token",
+        "lin_oauth_Zx9QWERTYuiopASDFghjkl0123456789abcdEF",
     ),
     ("aws_key", "AKIAIOSFODNN7EXAMPLE"),
     (

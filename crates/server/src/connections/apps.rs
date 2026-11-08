@@ -1,7 +1,8 @@
 //! Ainkrad's OAuth apps, as the API configures them (C5; design §6, decision 1). The strings are
 //! sealed in `store::connections::apps`; this module says which fields a kind has, checks a value,
 //! and puts a config into force WITHOUT making a second adapter: Atlassian's client id, secret and
-//! redirect go into the one shared `Jira` ([`Jira::set_app`]); GitHub's client id is held here and
+//! redirect go into the one shared `Jira` ([`Jira::set_app`]), Linear's into the one shared
+//! `Linear` ([`Linear::set_app`]); GitHub's client id is held here and
 //! the GitHub App's key goes to the one shared `Github`'s installer.
 //!
 //! The config belongs to the Core, not to a user: it is kept under the admin user (`OWNER`, #18).
@@ -15,6 +16,7 @@ use zeroize::Zeroizing;
 use super::github::Github;
 use super::github::app::AppKey;
 use super::jira::{Jira, OAuthApp};
+use super::linear::{Linear, OAuthApp as LinearApp};
 use crate::ops::secretbox::SecretBox;
 use crate::store::connections::apps;
 use crate::store::secrets::Error;
@@ -74,11 +76,30 @@ pub const JIRA_FIELDS: &[Field] = &[
     },
 ];
 
+pub const LINEAR_FIELDS: &[Field] = &[
+    Field {
+        name: "client_id",
+        title: "Linear OAuth app client id",
+        secret: false,
+    },
+    Field {
+        name: "client_secret",
+        title: "Linear OAuth app client secret",
+        secret: true,
+    },
+    Field {
+        name: "loopback_port",
+        title: "Port of the Mac app's sign-in catcher on 127.0.0.1 (registered with Linear)",
+        secret: false,
+    },
+];
+
 /// The fields of `kind`; `None` for a kind with no app config.
 pub fn fields(kind: &str) -> Option<&'static [Field]> {
     match kind {
         "github" => Some(GITHUB_FIELDS),
         "jira" => Some(JIRA_FIELDS),
+        "linear" => Some(LINEAR_FIELDS),
         _ => None,
     }
 }
@@ -94,10 +115,10 @@ fn plain(s: &str, max: usize, extra: &[u8]) -> bool {
 pub fn problem(kind: &str, field: &str, value: &str) -> Option<&'static str> {
     let ok = match (kind, field) {
         (_, "client_id") => plain(value, 64, b"._-"),
-        ("jira", "client_secret") => {
+        ("jira" | "linear", "client_secret") => {
             (1..=512).contains(&value.len()) && !value.chars().any(char::is_control)
         }
-        ("jira", "loopback_port") => value.parse::<u16>().is_ok_and(|p| p >= 1024),
+        ("jira" | "linear", "loopback_port") => value.parse::<u16>().is_ok_and(|p| p >= 1024),
         ("github", "app_id") => plain(value, 40, b"_-"),
         ("github", "app_slug") => plain(value, 64, b"-"),
         ("github", "app_key") => {
@@ -148,9 +169,11 @@ impl Apps {
         sealer: &SecretBox,
         jira: &Jira,
         github: &Github,
+        linear: &Linear,
     ) -> Result<Changed, Error> {
         let g = apps::open_all(pool, sealer, OWNER, "github").await?;
         let j = apps::open_all(pool, sealer, OWNER, "jira").await?;
+        let l = apps::open_all(pool, sealer, OWNER, "linear").await?;
         let client = g.get("client_id").cloned();
         let github_changed = {
             let mut held = self
@@ -165,9 +188,11 @@ impl Apps {
             g.get("app_slug").map(|s| s.to_string());
         github.installer().set_key(app_key(&g));
         let jira_changed = jira.set_app(jira_app(&j));
+        let linear_changed = linear.set_app(linear_app(&l));
         Ok(Changed {
             github: github_changed,
             jira: jira_changed,
+            linear: linear_changed,
         })
     }
 }
@@ -177,6 +202,7 @@ impl Apps {
 pub struct Changed {
     pub github: bool,
     pub jira: bool,
+    pub linear: bool,
 }
 
 fn app_key(g: &BTreeMap<String, Zeroizing<String>>) -> Option<AppKey> {
@@ -192,6 +218,15 @@ fn jira_app(j: &BTreeMap<String, Zeroizing<String>>) -> Option<OAuthApp> {
     OAuthApp::new(j.get("client_id")?, j.get("client_secret")?, &[&redirect])
 }
 
+fn linear_app(l: &BTreeMap<String, Zeroizing<String>>) -> Option<LinearApp> {
+    let port = l
+        .get("loopback_port")
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(DEFAULT_PORT);
+    let redirect = Apps::redirect(port);
+    LinearApp::new(l.get("client_id")?, l.get("client_secret")?, &[&redirect])
+}
+
 /// Puts the sealed config into force for `app`'s shared adapters (at start, and after a write).
 /// Nothing to do without a master key.
 pub async fn reload(app: &crate::api::App) -> Result<(), Error> {
@@ -205,12 +240,17 @@ pub async fn reload(app: &crate::api::App) -> Result<(), Error> {
             sealer,
             app.connections.jira(),
             app.connections.github(),
+            app.connections.linear(),
         )
         .await?;
     // A sign-in begun under an app that changed cannot finish; one of a kind that did not change
     // goes on.
     let why = "Ainkrad's sign-in app for this service changed; start the sign-in again";
-    for (kind, hit) in [("github", changed.github), ("jira", changed.jira)] {
+    for (kind, hit) in [
+        ("github", changed.github),
+        ("jira", changed.jira),
+        ("linear", changed.linear),
+    ] {
         if hit {
             app.conn_flows.end(kind, "app_changed", why).await;
         }

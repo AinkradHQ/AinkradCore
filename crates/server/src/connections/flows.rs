@@ -23,6 +23,7 @@
 mod finish;
 mod github;
 mod jira;
+mod linear;
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -32,9 +33,10 @@ use std::time::{Duration, Instant};
 use ainkrad_core::audit::AuditActor;
 use zeroize::Zeroizing;
 
-pub use self::jira::{Refused, callback, choose};
+pub use self::jira::{Refused, choose};
 use super::github::device::{DeviceError, Prompt};
 use super::jira::{Finished, FlowError, Jira};
+use super::linear::{FlowError as LinearFlowError, Linear};
 use crate::api::App;
 
 pub const MAX_PER_USER: usize = 4;
@@ -103,6 +105,9 @@ pub struct Flow {
     gate: tokio::sync::Mutex<()>,
     /// The Atlassian adapter holding this flow's pending sign-in (an Atlassian flow only).
     jira: Option<Arc<Jira>>,
+    /// The Linear adapter holding this flow's pending sign-in (a Linear flow only; its `state` is
+    /// `jira_state`, the one slot a redirect's `state` is compared with).
+    linear: Option<Arc<Linear>>,
     view: Mutex<View>,
     done_at: Mutex<Option<Instant>>,
     /// The Jira `state` this flow started with.
@@ -116,6 +121,9 @@ impl Drop for Flow {
     fn drop(&mut self) {
         if let (Some(jira), Some(state)) = (&self.jira, &self.jira_state) {
             jira.cancel(self.user, state);
+        }
+        if let (Some(linear), Some(state)) = (&self.linear, &self.jira_state) {
+            linear.cancel(self.user, state);
         }
     }
 }
@@ -184,6 +192,7 @@ pub enum StartError {
     TooMany,
     Device(DeviceError),
     Jira(FlowError),
+    Linear(LinearFlowError),
     Store(crate::store::secrets::Error),
 }
 
@@ -320,6 +329,7 @@ fn new_flow(
         created: Instant::now(),
         gate: tokio::sync::Mutex::new(()),
         jira,
+        linear: None,
         expires: Instant::now() + life.min(MAX_LIFE),
         cancelled: AtomicBool::new(false),
         committed: AtomicBool::new(false),
@@ -352,7 +362,17 @@ pub async fn start(app: &App, s: Start<'_>) -> Result<View, StartError> {
     match s.kind {
         "github" => github::start(app, s).await,
         "jira" => jira::start(app, s),
+        "linear" => linear::start(app, s),
         _ => Err(StartError::NotConfigured("no sign-in for this kind")),
+    }
+}
+
+/// The redirect's `code` and `state` for the sign-in `flow` of any kind that signs in this way
+/// (Atlassian, Linear); a flow of another kind is not waiting for one (`WrongStep`).
+pub async fn callback(app: &App, flow: &Flow, code: &str, state: &str) -> Result<View, Refused> {
+    match flow.kind {
+        "linear" => linear::callback(app, flow, code, state).await,
+        _ => jira::callback(app, flow, code, state).await,
     }
 }
 

@@ -31,6 +31,9 @@ fn ordinary_text_is_left_alone() {
         "AKIAlower-case-is-not-a-key",
         "the bearer of bad news",
         "cit_run_42",
+        "lin_api_short",
+        "lin_oauth_",
+        "twin_api_0123456789abcdef0123456789abcdef",
         "héllo wörld ✓ ghp_",
         "",
     ] {

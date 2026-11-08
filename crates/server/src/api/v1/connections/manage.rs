@@ -13,6 +13,7 @@ use super::{ApiError, ApiResult, Caller, kind_of, num, one, parse, sealer, who, 
 use crate::api::App;
 use crate::connections::github::install::InstallError;
 use crate::connections::jira;
+use crate::connections::linear;
 use crate::connections::material::Material;
 use crate::store::connections::verdict;
 use crate::store::connections::{self as store, Who};
@@ -88,6 +89,11 @@ async fn material_of(
                 .ok_or_else(|| bad("the site is like acme.atlassian.net"))?;
             let m = jira::token_material(&host, email.trim(), t)
                 .ok_or_else(|| bad("check the email, the site and the API token"))?;
+            Ok((m, None))
+        }
+        ("linear", "token") => {
+            let t = g.token.ok_or_else(|| bad("an API key is required"))?;
+            let m = linear::key_material(t).ok_or_else(|| bad("that is not a usable API key"))?;
             Ok((m, None))
         }
         ("github", "app_install") => {
@@ -201,6 +207,45 @@ async fn free_name(app: &App, user: i64, kind: &str) -> Result<String, ApiError>
         .ok_or_else(|| ApiError::conflict("too many connections of this kind"))
 }
 
+/// A Linear key replaces another only inside the same workspace: team keys (`ENG`) exist in every
+/// workspace, so a key from another one would silently re-aim the connection's team limit at
+/// someone else's teams. The new key is asked who it is first. There is no override here (the
+/// request has no field for one): a person who means to change workspace makes a new connection.
+async fn same_workspace(app: &App, c: &store::Connection, m: &Material) -> Result<(), ApiError> {
+    let cred = linear::unpack(m)
+        .ok_or_else(|| ApiError::bad_request("that is not a usable API key".to_owned()))?;
+    let me = app
+        .connections
+        .linear()
+        .viewer(&cred)
+        .await
+        .map_err(|e| match e {
+            linear::CallError::AuthFailed => ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "credential_rejected",
+                "the service did not accept that credential; check it and try again",
+            ),
+            _ => ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_failed",
+                "the service could not be reached to check the key; try again",
+            ),
+        })?;
+    match linear::check_org(c.identity.as_deref(), &me.org) {
+        linear::OrgCheck::Same => Ok(()),
+        linear::OrgCheck::Different => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "different_account",
+            "that key belongs to another Linear workspace than this connection's; add a new connection instead",
+        )),
+        linear::OrgCheck::Unknown => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "identity_unknown",
+            "this connection has no recorded workspace to compare with; test it, or add a new connection",
+        )),
+    }
+}
+
 #[utoipa::path(put, path = "/api/v1/connections/{id}/credential",
     operation_id = "replaceConnectionCredential", tag = "connections",
     params(("id" = String, Path, description = "The connection's id")),
@@ -235,6 +280,9 @@ pub async fn replace_credential(
         Given::of(&b.token, &b.email, &b.site, b.installation_id),
     )
     .await?;
+    if c.kind == "linear" {
+        same_workspace(&app, &c, &m).await?;
+    }
     let now = app.clock.now();
     let who = who(&me, user, &now);
     // The credential and its installation are written in one transaction: a refused claim (an
@@ -269,6 +317,14 @@ async fn run_test(app: &App, id: i64, user: i64, who: Who<'_>) -> Result<(), Sto
                 who,
             };
             app.connections.jira().test_connection(&cx, id).await?;
+        }
+        "linear" => {
+            let cx = linear::Ctx {
+                pool: &app.pool,
+                sealer,
+                who,
+            };
+            app.connections.linear().test_connection(&cx, id).await?;
         }
         _ => {
             // A failed renewal leaves the old token, which the test then judges.

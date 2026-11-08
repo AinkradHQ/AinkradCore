@@ -51,6 +51,7 @@ pub const FAKE: Descriptor = Descriptor {
     }],
     token_shapes: &["fake_token"],
     refresh_prefixes: &[],
+    own_shape_refresh: false,
     self_limited: &["fake.list_items"],
     hourly_calls: 1000,
 };
@@ -76,6 +77,7 @@ pub const OTHER: Descriptor = Descriptor {
     limits: &[],
     token_shapes: &[],
     refresh_prefixes: &[],
+    own_shape_refresh: false,
     self_limited: &[],
     hourly_calls: 1000,
 };
@@ -181,6 +183,6 @@ mod tests {
             .iter()
             .map(|d| d.kind)
             .collect();
-        assert_eq!(kinds, ["github", "jira"]);
+        assert_eq!(kinds, ["github", "jira", "linear"]);
     }
 }

@@ -5,6 +5,8 @@
 //! - Jira: `Jira::call` opens the credential itself (renewing it first, single flight, before
 //!   it is used) and enforces the project limit it is handed on the request and the answer.
 //!
+//! - Linear: `Linear::call` the same way, with the team limit.
+//!
 //! The answer is cleaned (`scrub`) and bounded before it leaves. A [`Job`] owns everything it
 //! needs, so a call can run in a task of its own that outlives the caller's wait (a write whose
 //! answer is late must still finish and be audited, never be dropped half done).
@@ -22,6 +24,7 @@ use super::fail::{Fail, of_store, refuse};
 use super::scrub::clean;
 use crate::connections::github::{Built, Github};
 use crate::connections::jira::{self, Jira, Limit};
+use crate::connections::linear::{self, Linear};
 use crate::connections::material::Material;
 use crate::ops::secretbox::SecretBox;
 use crate::scheduler::unix_secs;
@@ -40,6 +43,7 @@ pub type Quota = (Option<u64>, Option<i64>, Option<u64>);
 pub struct Job {
     pub github: Github,
     pub jira: Arc<Jira>,
+    pub linear: Arc<Linear>,
     pub redactor: Redactor,
     pub pool: sqlx::sqlite::SqlitePool,
     pub sealer: Arc<SecretBox>,
@@ -76,8 +80,19 @@ fn bounded(v: Value) -> Result<Value, Fail> {
 pub async fn execute(j: Job) -> Ran {
     match j.resolved.connection.kind.as_str() {
         "github" => github(&j).await,
-        _ => Ran {
+        "jira" => Ran {
             out: jira(&j).await,
+            quota: None,
+        },
+        "linear" => {
+            let out = linear(&j).await;
+            // What Linear said about its budget, for the local `connection_busy` refusal.
+            let quota = j.linear.quota(j.resolved.connection.id);
+            Ran { out, quota }
+        }
+        // Never another kind's adapter by default: a kind with no arm here is refused.
+        _ => Ran {
+            out: Err(refuse("unknown_kind", "no such kind")),
             quota: None,
         },
     }
@@ -162,6 +177,32 @@ async fn jira(j: &Job) -> Result<Value, Fail> {
         .call(&cx, &r.connection, &limit, &j.op, &j.args)
         .await
         .map_err(|e| Fail::of_jira(&e))?;
+    // The renewed token, if the call renewed it, is the one the answer could echo.
+    let secrets = match secret::open(&j.pool, &j.sealer, j.user, r.connection.id).await {
+        Ok((m, _)) => secrets_of(&m),
+        Err(_) => Vec::new(),
+    };
+    bounded(scrubbed(v, &secrets, &j.redactor))
+}
+
+async fn linear(j: &Job) -> Result<Value, Fail> {
+    let r = &j.resolved;
+    let cx = linear::Ctx {
+        pool: &j.pool,
+        sealer: &j.sealer,
+        who: Who {
+            workspace: j.user,
+            by_device: &j.device,
+            actor: AuditActor::System,
+            now: &j.now,
+        },
+    };
+    let limit = linear::Limit::from_grant(&r.limits);
+    let v = j
+        .linear
+        .call(&cx, &r.connection, &limit, &j.op, &j.args)
+        .await
+        .map_err(|e| Fail::of_linear(&e))?;
     // The renewed token, if the call renewed it, is the one the answer could echo.
     let secrets = match secret::open(&j.pool, &j.sealer, j.user, r.connection.id).await {
         Ok((m, _)) => secrets_of(&m),

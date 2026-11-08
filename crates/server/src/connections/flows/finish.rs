@@ -112,6 +112,14 @@ pub(super) async fn store(
             };
             app.connections.jira().test_connection(&cx, id).await
         }
+        "linear" => {
+            let cx = crate::connections::linear::Ctx {
+                pool: &app.pool,
+                sealer,
+                who,
+            };
+            app.connections.linear().test_connection(&cx, id).await
+        }
         _ => verdict::run_test(&app.pool, sealer, reg, id, who).await,
     }
 }

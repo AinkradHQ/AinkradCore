@@ -23,6 +23,7 @@ mod c6_adversarial;
 mod health_cases;
 mod leak;
 mod limits_cases;
+mod linear;
 mod path;
 
 pub const NOW: &str = "2026-11-06T10:00:00.000Z";

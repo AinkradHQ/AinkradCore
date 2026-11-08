@@ -2,7 +2,7 @@
 //! proves a credential works (design §3). Capabilities and the operations each one allows are
 //! data, so a new kind needs no new screen and no new store code.
 //!
-//! `Registry::builtin()` holds GitHub (C2); C3 (Jira) registers its own.
+//! `Registry::builtin()` holds GitHub (C2), Jira (C3) and Linear (C8).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -63,6 +63,13 @@ pub struct Descriptor {
     /// Prefixes of tokens that look like this kind's shape but are never an access token (a
     /// refresh token): refused in the access slot even when the shape matches.
     pub refresh_prefixes: &'static [&'static str],
+    /// Whether this kind's REFRESH token may itself be a token of its own declared shape (Linear's
+    /// sign-in: access and refresh tokens are both `linear_token`). Then a refresh token that is
+    /// one own-shape token as a whole is admitted in the refresh slot, under the same gate as the
+    /// access token (`secrets.connections` on, `single_own_key`); any other real refresh token is
+    /// refused still. `false` keeps the C2 rule: a real refresh token is never admitted (GitHub's
+    /// `ghr_`). Needs `token_shapes`.
+    pub own_shape_refresh: bool,
     /// Operations that enforce the resource limit themselves (a Jira search, a project list):
     /// they may be asked with no resource under a limited grant, and the adapter is handed the
     /// effective limits (`Resolved::limits`). Every other operation under a limited grant needs
@@ -193,6 +200,11 @@ impl Descriptor {
         {
             return Some(format!("{kind}: refresh prefix {p:?} is malformed"));
         }
+        if self.own_shape_refresh && self.token_shapes.is_empty() {
+            return Some(format!(
+                "{kind}: an own-shape refresh token needs a token shape"
+            ));
+        }
         for (i, l) in self.limits.iter().enumerate() {
             if !ident(l.key, 32) || self.limits[..i].iter().any(|o| o.key == l.key) {
                 return Some(format!(
@@ -243,9 +255,13 @@ pub trait KindAdapter: Send + Sync {
 /// The built-in kinds' descriptors by kind name, without making an adapter (no HTTP client): for
 /// a check that has only a kind name in hand.
 pub fn builtin_descriptor(kind: &str) -> Option<&'static Descriptor> {
-    [&super::github::GITHUB, &super::jira::DESCRIPTOR]
-        .into_iter()
-        .find(|d| d.kind == kind)
+    [
+        &super::github::GITHUB,
+        &super::jira::DESCRIPTOR,
+        &super::linear::DESCRIPTOR,
+    ]
+    .into_iter()
+    .find(|d| d.kind == kind)
 }
 
 /// The adapters this Core knows, by kind.
@@ -259,8 +275,8 @@ impl Registry {
         Self::default()
     }
 
-    /// The shipped kinds: `github` (C2) and `jira` (C3). Sign in with Atlassian is off in this
-    /// one (no app id): for tests and descriptors only. The server uses [`Registry::builtin_with`].
+    /// The shipped kinds: `github` (C2), `jira` (C3) and `linear` (C8). Sign in with Atlassian and
+    /// with Linear are off in this one (no app id): for tests and descriptors only. The server uses [`Registry::builtin_with`].
     pub fn builtin() -> Self {
         Self::builtin_with(Arc::new(super::jira::Jira::new(None)))
     }
@@ -278,10 +294,23 @@ impl Registry {
         github: super::github::Github,
         jira: Arc<super::jira::Jira>,
     ) -> Self {
+        let linear = Arc::new(super::linear::Linear::new(None));
+        Self::builtin_with_all(github, jira, linear)
+    }
+
+    /// [`Registry::builtin_with_github`] over THE `Linear` the server built (it holds the Linear
+    /// app and the refresh locks), shared with the broker and the API.
+    pub fn builtin_with_all(
+        github: super::github::Github,
+        jira: Arc<super::jira::Jira>,
+        linear: Arc<super::linear::Linear>,
+    ) -> Self {
         let mut r = Self::new();
         r.register(Arc::new(github))
             .expect("the github descriptor is well formed");
         r.register(jira).expect("the shipped descriptors are valid");
+        r.register(linear)
+            .expect("the shipped descriptors are valid");
         r
     }
 

@@ -126,6 +126,7 @@ pub const GITHUB: Descriptor = Descriptor {
     token_shapes: &["github_token"],
     // `github_token` also matches `ghr_` refresh tokens; those are never the access token.
     refresh_prefixes: &["ghr_"],
+    own_shape_refresh: false,
     // Every GitHub operation carries a repository, so none judges its own limits.
     self_limited: &[],
     // GitHub allows 5000 an hour per token; leave room for a person using the same token.

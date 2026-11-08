@@ -61,6 +61,7 @@ fn refused(r: Refused) -> ApiError {
 
 fn start_error(e: StartError) -> ApiError {
     use crate::connections::jira::FlowError;
+    use crate::connections::linear::FlowError as LinearFlowError;
     match e {
         StartError::NotConfigured(why) => {
             ApiError::new(StatusCode::CONFLICT, "not_configured", why)
@@ -75,7 +76,17 @@ fn start_error(e: StartError) -> ApiError {
             "not_configured",
             "Sign in with Atlassian is not set up on this Core yet",
         ),
-        StartError::Jira(_) => ApiError::new(
+        StartError::Linear(LinearFlowError::TooManyFlows) => ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too_many_flows",
+            "too many sign-ins are waiting; finish or cancel one",
+        ),
+        StartError::Linear(LinearFlowError::NotConfigured) => ApiError::new(
+            StatusCode::CONFLICT,
+            "not_configured",
+            "Sign in with Linear is not set up on this Core yet",
+        ),
+        StartError::Linear(_) | StartError::Jira(_) => ApiError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal",
             "the sign-in could not be started",

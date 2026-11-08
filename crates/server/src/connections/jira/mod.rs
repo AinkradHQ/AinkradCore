@@ -110,6 +110,7 @@ pub const DESCRIPTOR: Descriptor = Descriptor {
     // Atlassian's own tokens are not a shape the redactor names (C2 reads this for GitHub).
     token_shapes: &[],
     refresh_prefixes: &[],
+    own_shape_refresh: false,
     self_limited: &["jira.search_issues", "jira.list_projects"],
     // Jira Cloud limits by cost and says so with 429 and Retry-After; this is a conservative ceiling.
     hourly_calls: 2000,

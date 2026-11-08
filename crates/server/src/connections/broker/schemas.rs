@@ -3,7 +3,7 @@
 //! The adapters refuse any argument name they do not know, so each schema is closed
 //! (`additionalProperties: false`) and its `properties` are exactly the names the adapter reads;
 //! the tests hold the two together. GitHub's follow from the operation's path template and method
-//! (`github::ops::OPS`), Jira's are listed per operation.
+//! (`github::ops::OPS`), Jira's and Linear's are listed per operation.
 
 use serde_json::{Value, json};
 
@@ -116,9 +116,66 @@ fn jira(op: &str) -> Option<Value> {
     })
 }
 
+fn linear(op: &str) -> Option<Value> {
+    let id = || text(32, "The issue identifier, like ENG-12 (not a UUID)");
+    let team = |what: &str| text(7, what);
+    let priority = || {
+        json!({"type": "integer", "minimum": 0, "maximum": 4,
+            "description": "0 none, 1 urgent, 2 high, 3 medium, 4 low"})
+    };
+    let first = |max: u64| json!({"type": "integer", "minimum": 1, "maximum": max});
+    Some(match op {
+        "linear.get_issue" => object(json!({"id": id()}), &["id"]),
+        "linear.add_comment" => object(
+            json!({"id": id(), "body": text(30_000, "The comment, as Markdown")}),
+            &["id", "body"],
+        ),
+        "linear.update_issue" => object(
+            json!({"id": id(), "title": text(255, "The new title"),
+                "description": text(30_000, "The new description, as Markdown"),
+                "priority": priority(),
+                "state_id": text(36, "The id list_workflow_states gave")}),
+            &["id"],
+        ),
+        "linear.create_issue" => object(
+            json!({"team": team("The team key, like ENG"), "title": text(255, "The title"),
+                "description": text(30_000, "The description, as Markdown"),
+                "priority": priority()}),
+            &["team", "title"],
+        ),
+        "linear.list_workflow_states" => {
+            object(json!({"team": team("The team key, like ENG")}), &["team"])
+        }
+        "linear.list_teams" => object(json!({}), &[]),
+        "linear.list_projects" => object(
+            json!({"team": team("List this team's projects (no team: the first 10 teams')"),
+                "first": first(50)}),
+            &[],
+        ),
+        "linear.search_issues" => object(
+            json!({"team": team("Search only this team (key)"),
+                "text": text(200, "Words in the title or description"),
+                "state": text(80, "A workflow state's name, like In Progress"),
+                "state_type": {"type": "string", "enum": ["triage", "backlog", "unstarted",
+                    "started", "completed", "canceled"]},
+                "assignee": {"type": "string", "enum": ["me"]},
+                "priority": priority(),
+                "label": text(80, "A label's name"),
+                "order_by": {"type": "string", "enum": ["updated", "created"]},
+                "first": first(50),
+                "after": text(200, "The cursor a previous page gave")}),
+            &[],
+        ),
+        _ => return None,
+    })
+}
+
 /// The argument schema of `operation`, when one is known.
 pub fn input_schema(operation: &str) -> Option<Value> {
-    ops::find(operation).map(github).or_else(|| jira(operation))
+    ops::find(operation)
+        .map(github)
+        .or_else(|| jira(operation))
+        .or_else(|| linear(operation))
 }
 
 #[cfg(test)]
@@ -127,9 +184,19 @@ mod tests {
     use crate::connections::adapter::builtin_descriptor;
     use crate::connections::github::build;
     use crate::connections::jira::resource_of;
+    use crate::connections::linear::resource_of as linear_resource_of;
+
+    /// The adapter's own check of `op`'s arguments: Jira's or Linear's resource finder.
+    fn resource(op: &str, args: &Value) -> Result<(), String> {
+        if op.starts_with("linear.") {
+            linear_resource_of(op, args).map(drop)
+        } else {
+            resource_of(op, args).map(drop)
+        }
+    }
 
     fn all_ops() -> Vec<String> {
-        ["github", "jira"]
+        ["github", "jira", "linear"]
             .iter()
             .flat_map(|k| builtin_descriptor(k).expect("a built-in kind").capabilities)
             .flat_map(|c| c.operations.iter().map(|o| (*o).to_owned()))
@@ -180,7 +247,7 @@ mod tests {
                     // refused as one.
                     build(&op, &args).err().map(|e| format!("{e:?}"))
                 } else {
-                    resource_of(&op, &args).err()
+                    resource(&op, &args).err()
                 };
                 let unknown = refused
                     .as_deref()
@@ -191,7 +258,7 @@ mod tests {
             let refused = if op.starts_with("github.") {
                 format!("{:?}", build(&op, &bogus).unwrap_err())
             } else {
-                resource_of(&op, &bogus).unwrap_err()
+                resource(&op, &bogus).unwrap_err()
             };
             assert!(
                 refused.contains("UnknownField") || refused.contains("no argument named"),
