@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Breaking-change check for api/openapi.json, events.schema.json and runner.schema.json (E1-05.4).
+"""Breaking-change check for every contract file (E1-05.4, C-21).
 
-    schema_compat.py <base-dir> <new-dir>
+    schema_compat.py <base-root> <new-root> <repo-relative file>...
+
+The files are those of scripts/contracts.list. A file with no baseline is new and not compared; a
+file that has a baseline but is gone is a break.
 
 Walks old and new documents together. Within a major the contract is additive-only, so each of
 these fails: a removed path, operation, schema, property, enum value or oneOf variant; a type that
@@ -9,13 +12,12 @@ is narrowed or changed; a property that is required now and was not (this also e
 that every NEW field is `required = false`: a new property listed in `required` is "required now,
 not before"). A schema that is new as a whole is not compared: it has no old shape.
 
-A deliberate break is allowed only by its exact message in `<new-dir>/compat-allow.txt`.
+A deliberate break is allowed only by its exact message in `<new-root>/api/compat-allow.txt`.
 """
 import json
 import sys
 from pathlib import Path
 
-FILES = ("openapi.json", "events.schema.json", "runner.schema.json")
 VARIANTS = ("oneOf", "anyOf")
 
 
@@ -73,18 +75,23 @@ def walk(old, new, path, out):
         out.append(f"{path} changed shape")
 
 
-def main(base, new):
+def main(base, new, *files):
     problems = []
-    for name in FILES:
-        if not (Path(base) / name).exists():  # the baseline predates this file
-            print(f"schema-compat: no baseline for {name}, skipped", file=sys.stderr)
+    for rel in files:
+        # api/ files keep their short name in messages (the allow-list lines say "runner.schema.json: ...")
+        name = rel[len("api/"):] if rel.startswith("api/") else rel
+        if not (Path(base) / rel).exists():  # the baseline predates this file: new, nothing to compare
+            print(f"schema-compat: no baseline for {name}, new file accepted", file=sys.stderr)
             continue
-        old = json.loads((Path(base) / name).read_text())
-        cur = json.loads((Path(new) / name).read_text())
+        if not (Path(new) / rel).exists():
+            problems.append(f"{name}: contract file removed")
+            continue
+        old = json.loads((Path(base) / rel).read_text())
+        cur = json.loads((Path(new) / rel).read_text())
         found = []
         walk(old, cur, "", found)
         problems += [f"{name}: {p}" for p in found]
-    allow_file = Path(new) / "compat-allow.txt"
+    allow_file = Path(new) / "api" / "compat-allow.txt"
     allowed = set()
     if allow_file.exists():
         allowed = {l.strip() for l in allow_file.read_text().splitlines() if l.strip() and not l.startswith("#")}
@@ -99,4 +106,4 @@ def main(base, new):
 
 
 if __name__ == "__main__":
-    sys.exit(main(*sys.argv[1:3]))
+    sys.exit(main(*sys.argv[1:]))
