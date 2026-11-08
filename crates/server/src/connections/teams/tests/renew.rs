@@ -180,14 +180,45 @@ async fn only_invalid_grant_condemns_a_refresh_token() {
             Reply::grant_error(&[50158], None),
             CallError::InteractionRequired,
         ),
-        // A step-up wins over a dead-token code in the same answer, and a suberror alone is one.
+        // A dead-token code is looked at FIRST, whatever suberror comes with it: Entra sends
+        // `bad_token` (and others) with a revoked or expired refresh token.
         (
             Reply::grant_error(&[50173, 53003], None),
+            CallError::AuthFailed,
+        ),
+        (
+            Reply::grant_error(&[700_082], Some("bad_token")),
+            CallError::AuthFailed,
+        ),
+        (
+            Reply::grant_error(&[70008], Some("consent_required")),
+            CallError::AuthFailed,
+        ),
+        (
+            Reply::grant_error(&[50173], Some("basic_action")),
+            CallError::AuthFailed,
+        ),
+        // Only the person-facing suberrors are the person's turn when no dead code is there.
+        (
+            Reply::grant_error(&[], Some("consent_required")),
             CallError::InteractionRequired,
         ),
         (
-            Reply::grant_error(&[700_082], Some("consent_required")),
+            Reply::grant_error(&[], Some("additional_action")),
             CallError::InteractionRequired,
+        ),
+        (
+            Reply::grant_error(&[], Some("message_only")),
+            CallError::InteractionRequired,
+        ),
+        // An unknown suberror, `bad_token` included, with no dead code is no verdict.
+        (
+            Reply::grant_error(&[], Some("bad_token")),
+            CallError::BadRequest(400),
+        ),
+        (
+            Reply::grant_error(&[9_999_999], Some("something_new")),
+            CallError::BadRequest(400),
         ),
         // An invalid_grant with no documented dead-token code condemns nothing.
         (Reply::grant_error(&[], None), CallError::BadRequest(400)),

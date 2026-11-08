@@ -61,7 +61,7 @@ pub const MAX_REQUESTS_PER_CALL: u32 = calls::MAX_REQUESTS;
 /// Microsoft's limit on one channel: 1 request a second per app per tenant (Graph throttling
 /// limits, "channel messages"), the lowest figure this adapter can hit hard from one connection.
 /// (Every connection of one tenant also shares the app's 20 requests a second per tenant; a 429
-/// cools the connection and the broker's `connection_busy` keeps the wait.)
+/// to a call an agent drives cools only that channel, locally, see [`pace`].)
 pub const CHANNEL_REQUESTS_PER_HOUR: u32 = 3_600;
 /// Calls an hour through ONE connection: 60% of that limit, spread over the worst call.
 const HOURLY_CALLS: u32 = CHANNEL_REQUESTS_PER_HOUR * 6 / 10 / MAX_REQUESTS_PER_CALL;

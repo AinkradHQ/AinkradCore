@@ -84,9 +84,22 @@ const DEAD: [u64; 8] = [70000, 70008, 700_082, 700_084, 50173, 50132, 50133, 700
 /// an external challenge, consent): the grant is not dead, a later renewal may pass.
 const INTERACTION: [u64; 5] = [50076, 50079, 53003, 50158, 65001];
 
-/// What an `invalid_grant` comes to. Entra sends it for dead tokens AND for step-ups, so only the
-/// documented dead-token codes condemn; a step-up code or any `suberror` is the person's turn;
-/// anything else is no verdict at all.
+/// `suberror` values that are the person's turn (a step-up, a prompt, consent), not a dead token.
+const PERSON_SUBERRORS: [&str; 4] = [
+    "basic_action",
+    "additional_action",
+    "consent_required",
+    "message_only",
+];
+
+/// What an `invalid_grant` comes to. Entra sends it for dead tokens AND for step-ups, so the
+/// documented dead-token `AADSTS` codes are looked at FIRST and condemn; then a step-up code or one
+/// of the person-facing `suberror`s is the person's turn; anything else, an unknown `suberror`
+/// (`bad_token` among them: Microsoft's reference does not say what it means) included, is no
+/// verdict at all.
+///
+/// ponytail: a refresh that keeps failing with no verdict stays "active" until a call or a test
+/// meets a real dead-token code; counting repeats into "needs sign in" is not built.
 fn invalid_grant(body: &Value, status: u16) -> CallError {
     let codes: Vec<u64> = body
         .get("error_codes")
@@ -94,10 +107,14 @@ fn invalid_grant(body: &Value, status: u16) -> CallError {
         .map(|a| a.iter().filter_map(Value::as_u64).collect())
         .unwrap_or_default();
     let has = |set: &[u64]| codes.iter().any(|c| set.contains(c));
-    if has(&INTERACTION) || body.get("suberror").is_some_and(|s| !s.is_null()) {
-        CallError::InteractionRequired
-    } else if has(&DEAD) {
+    let person_suberror = body
+        .get("suberror")
+        .and_then(Value::as_str)
+        .is_some_and(|s| PERSON_SUBERRORS.contains(&s));
+    if has(&DEAD) {
         CallError::AuthFailed
+    } else if has(&INTERACTION) || person_suberror {
+        CallError::InteractionRequired
     } else {
         CallError::BadRequest(status)
     }

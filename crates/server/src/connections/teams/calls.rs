@@ -84,11 +84,17 @@ impl Teams {
     /// retries once. A refusal that survives that is raised as [`CallError::AuthFailed`] only when
     /// `/me` is refused too: a 401 to one resource while the account itself is fine says nothing
     /// about the credential.
-    async fn authed(&self, cx: &Ctx<'_>, id: i64, req: &Req) -> Result<Value, CallError> {
+    async fn authed(
+        &self,
+        cx: &Ctx<'_>,
+        id: i64,
+        scope: &Scope,
+        req: &Req,
+    ) -> Result<Value, CallError> {
         let not_teams = CallError::Internal("the credential is not a usable Microsoft one");
         let m = self.fresh(cx, id).await?;
         let cred = unpack(&m).ok_or(not_teams.clone())?;
-        let first = self.send(&cred, req).await;
+        let first = self.agent(id, scope, self.send(&cred, req).await);
         let (cred, out) = if matches!(first, Err(CallError::AuthFailed)) {
             let rejected = Zeroizing::new(m.access().to_owned());
             let m = match self.renew(cx, id, Some(rejected.as_str())).await {
@@ -97,7 +103,7 @@ impl Teams {
                 Err(e) => return Err(e),
             };
             let cred = unpack(&m).ok_or(not_teams)?;
-            let again = self.send(&cred, req).await;
+            let again = self.agent(id, scope, self.send(&cred, req).await);
             (cred, again)
         } else {
             (cred, first)
@@ -106,6 +112,25 @@ impl Teams {
             return self.still_refused(&cred).await;
         }
         out
+    }
+
+    /// What a Graph answer to a call an agent drives means for its scope. A 429 cools the scope
+    /// (no health, no connection-wide wait); a 5xx on a resource an agent chose is not Microsoft's
+    /// outage. Only the Graph answer is judged here: an error of the TOKEN endpoint (a renewal)
+    /// keeps its connection-wide treatment, because no agent chose what it said.
+    fn agent(
+        &self,
+        id: i64,
+        scope: &Scope,
+        r: Result<Value, CallError>,
+    ) -> Result<Value, CallError> {
+        match r {
+            Err(CallError::RateLimited { retry_after }) => Err(CallError::Cooling {
+                wait_secs: self.pace.cool(id, scope, retry_after),
+            }),
+            Err(CallError::Upstream(s)) if (500..600).contains(&s) => Err(CallError::BadRequest(s)),
+            other => other,
+        }
     }
 
     /// A token was refused for one resource and could not be renewed (or the renewal did not
@@ -120,8 +145,7 @@ impl Teams {
     }
 
     /// A request an agent drives, in `scope`: refused here while the scope is cooling, and what
-    /// Microsoft says about the scope stays in it. A 429 cools the scope (no health, no
-    /// connection-wide wait); a 5xx on a resource an agent chose is not Microsoft's outage.
+    /// Microsoft says about the scope stays in it (see [`Teams::agent`]).
     async fn run(
         &self,
         cx: &Ctx<'_>,
@@ -132,13 +156,7 @@ impl Teams {
         if let Some(wait_secs) = self.pace.wait(id, scope) {
             return Err(CallError::Cooling { wait_secs });
         }
-        match self.authed(cx, id, req).await {
-            Err(CallError::RateLimited { retry_after }) => Err(CallError::Cooling {
-                wait_secs: self.pace.cool(id, scope, retry_after),
-            }),
-            Err(CallError::Upstream(s)) if (500..600).contains(&s) => Err(CallError::BadRequest(s)),
-            other => other,
-        }
+        self.authed(cx, id, scope, req).await
     }
 
     /// EVERY channel is confirmed before it is read or posted to: `GET /teams/{t}/channels/{c}`
@@ -160,6 +178,12 @@ impl Teams {
         if self.pace.is_confirmed(id, key) {
             return Ok(());
         }
+        // A definitive refusal is remembered a minute, so a grant that is asked for another team's
+        // channel again and again does not spend a lookup each time.
+        let pair = format!("{team}/{channel}");
+        if let Some(e) = self.pace.denied(id, &pair) {
+            return Err(e);
+        }
         let m = self.fresh(cx, id).await?;
         let tenant = unpack(&m)
             .ok_or(CallError::Internal(
@@ -168,8 +192,20 @@ impl Teams {
             .tenant()
             .to_owned();
         let req = get(segs(&["teams", team, "channels", channel]), None);
-        let body = self.run(cx, id, &scope, &req).await?;
-        answer::channel_ok(&body, team, channel, &tenant).map_err(refused)?;
+        let body = match self.run(cx, id, &scope, &req).await {
+            Ok(b) => b,
+            Err(e) => {
+                if matches!(e, CallError::NotFound | CallError::Forbidden) {
+                    self.pace.deny(id, &pair, &e);
+                }
+                return Err(e);
+            }
+        };
+        if let Err(why) = answer::channel_ok(&body, team, channel, &tenant) {
+            let e = refused(why);
+            self.pace.deny(id, &pair, &e);
+            return Err(e);
+        }
         self.pace.confirm(id, key);
         Ok(())
     }

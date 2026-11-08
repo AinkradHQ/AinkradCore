@@ -342,3 +342,74 @@ async fn a_missing_scope_is_forbidden_not_a_verdict() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn a_renewal_that_fails_inside_an_agent_call_keeps_its_connection_wide_treatment() {
+    // The token is due, so the call renews it first; what the TOKEN endpoint says is Microsoft's
+    // about the connection, not about the channel the agent named.
+    for (reply, want) in [
+        (
+            Reply::http(429, json!({})).header("Retry-After", "7"),
+            CallError::RateLimited {
+                retry_after: Some(7),
+            },
+        ),
+        (Reply::http(503, json!({})), CallError::Upstream(503)),
+    ] {
+        let f = fx(true).await;
+        let c = f.connect("acme", &material(ACCESS, REFRESH, 10)).await;
+        f.fake.reply("token", reply.clone());
+        let e = read(&f, &c).await.unwrap_err();
+        assert_eq!(e, want, "{}", reply.status);
+        assert!(e.health().is_some(), "{e:?} is a connection-wide signal");
+        assert_eq!(f.fake.graph_count(), 0, "no Graph request was made");
+        // And it did not cool the channel: once the token endpoint works, the channel does.
+        f.fake.rotating();
+        assert!(read(&f, &c).await.is_ok());
+    }
+}
+
+/// Reads a channel of TEAM_B under a grant of TEAM_A's whole team.
+async fn ask(f: &Fx, c: &Connection) -> Result<Value, CallError> {
+    let wildcard = Limit::only(&[format!("{TEAM_A}/*")]);
+    let a = json!({"team": TEAM_A, "channel": CH_B1});
+    run(f, c, &wildcard, "teams.list_messages", a).await
+}
+
+#[tokio::test]
+async fn a_definitive_refusal_of_a_channel_is_remembered_a_minute_but_a_transient_one_is_not() {
+    // CH_B1 is a channel of TEAM_B: under `A/*` Graph's lookup shows its real team and it is refused.
+    let f = fx(true).await;
+    let c = f.signed_in().await;
+    let other = f.connect("two", &material(ACCESS, REFRESH, 3600)).await;
+    for _ in 0..5 {
+        let e = ask(&f, &c).await.unwrap_err();
+        assert!(matches!(e, CallError::Refused(_)), "{e:?}");
+    }
+    assert_eq!(f.fake.count("channel"), 1, "one lookup, not five");
+    // Per connection.
+    let _ = ask(&f, &other).await.unwrap_err();
+    assert_eq!(f.fake.count("channel"), 2);
+    // A 404 and a 403 are definitive too.
+    for reply in [
+        Reply::graph(404, "ChannelNotFound"),
+        Reply::graph(403, "Forbidden"),
+    ] {
+        let g = fx(true).await;
+        let c = g.signed_in().await;
+        g.fake.reply("channel", reply);
+        for _ in 0..4 {
+            ask(&g, &c).await.unwrap_err();
+        }
+        assert_eq!(g.fake.count("channel"), 1);
+    }
+    // A transient error (a 5xx, a late answer, a cooling) is never remembered.
+    let h = fx(true).await;
+    let c = h.signed_in().await;
+    h.fake
+        .reply("channel", Reply::graph(500, "generalException"));
+    for _ in 0..3 {
+        ask(&h, &c).await.unwrap_err();
+    }
+    assert_eq!(h.fake.count("channel"), 3, "asked each time");
+}

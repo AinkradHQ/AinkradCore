@@ -18,6 +18,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use super::http::CallError;
+
 /// A wait when Microsoft gave none.
 pub const DEFAULT_COOL_SECS: u64 = 60;
 /// The longest a `Retry-After` is believed here.
@@ -26,6 +28,9 @@ pub const MAX_COOL_SECS: u64 = 600;
 pub const CONFIRM_TTL: Duration = Duration::from_secs(300);
 /// Confirmed channels remembered at most (all connections).
 pub const MAX_CONFIRMED: usize = 512;
+/// How long a definitive refusal of a channel is remembered, and how many (all connections).
+pub const DENY_TTL: Duration = Duration::from_secs(60);
+pub const MAX_DENIED: usize = 512;
 
 /// What cools together.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -41,6 +46,7 @@ pub enum Scope {
 pub struct Pace {
     cooling: Mutex<HashMap<(i64, Scope), Instant>>,
     confirmed: Mutex<HashMap<(i64, String), Instant>>,
+    denied: Mutex<HashMap<(i64, String), (Instant, CallError)>>,
     ttl: Duration,
 }
 
@@ -49,6 +55,7 @@ impl Default for Pace {
         Self {
             cooling: Mutex::default(),
             confirmed: Mutex::default(),
+            denied: Mutex::default(),
             ttl: CONFIRM_TTL,
         }
     }
@@ -99,6 +106,27 @@ impl Pace {
         secs_left(*slot, now)
     }
 
+    /// The refusal remembered for `pair` (`<team>/<channel>` as asked) on connection `id`, while
+    /// it lasts.
+    pub fn denied(&self, id: i64, pair: &str) -> Option<CallError> {
+        let now = Instant::now();
+        let map = self.denied.lock().unwrap_or_else(|e| e.into_inner());
+        let (until, e) = map.get(&(id, pair.to_owned()))?;
+        (*until > now).then(|| e.clone())
+    }
+
+    /// Remembers a DEFINITIVE refusal (not found, forbidden, wrong team, shared): never a
+    /// transient error, which the caller does not pass here.
+    pub fn deny(&self, id: i64, pair: &str, e: &CallError) {
+        let now = Instant::now();
+        let mut map = self.denied.lock().unwrap_or_else(|e| e.into_inner());
+        map.retain(|_, (t, _)| *t > now);
+        if map.len() >= MAX_DENIED {
+            map.clear();
+        }
+        map.insert((id, pair.to_owned()), (now + DENY_TTL, e.clone()));
+    }
+
     pub fn is_confirmed(&self, id: i64, key: &str) -> bool {
         let now = Instant::now();
         let map = self.confirmed.lock().unwrap_or_else(|e| e.into_inner());
@@ -134,6 +162,20 @@ mod tests {
         assert_eq!(p.cool(1, &Scope::Teams, Some(0)), 1, "at least a second");
         assert_eq!(p.cool(1, &Scope::Teams, Some(99_999)), MAX_COOL_SECS);
         assert_eq!(p.cool(1, &a, Some(5)), 17, "a longer cooling is kept");
+    }
+
+    #[test]
+    fn a_refusal_is_remembered_per_connection_and_capped() {
+        let p = Pace::default();
+        assert_eq!(p.denied(1, "t/c"), None);
+        p.deny(1, "t/c", &CallError::NotFound);
+        assert_eq!(p.denied(1, "t/c"), Some(CallError::NotFound));
+        assert_eq!(p.denied(2, "t/c"), None);
+        assert_eq!(p.denied(1, "t/d"), None);
+        for i in 0..=MAX_DENIED {
+            p.deny(1, &format!("t/{i}"), &CallError::Forbidden);
+        }
+        assert!(p.denied.lock().unwrap().len() <= MAX_DENIED);
     }
 
     #[test]
