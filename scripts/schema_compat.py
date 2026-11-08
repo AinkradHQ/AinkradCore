@@ -4,7 +4,8 @@
     schema_compat.py <base-root> <new-root> <repo-relative file>...
 
 The files are those of scripts/contracts.list. A file with no baseline is new and not compared; a
-file that has a baseline but is gone is a break.
+file that has a baseline but is gone is a break. A `!path` argument is a baseline contract that
+the new registry stopped matching: a break too.
 
 Walks old and new documents together. Within a major the contract is additive-only, so each of
 these fails: a removed path, operation, schema, property, enum value or oneOf variant; a type that
@@ -78,6 +79,9 @@ def walk(old, new, path, out):
 def main(base, new, *files):
     problems = []
     for rel in files:
+        if rel.startswith("!"):  # a baseline contract the new registry no longer gates
+            problems.append(f"{rel[1:]}: dropped from the contract registry")
+            continue
         # api/ files keep their short name in messages (the allow-list lines say "runner.schema.json: ...")
         name = rel[len("api/"):] if rel.startswith("api/") else rel
         if not (Path(base) / rel).exists():  # the baseline predates this file: new, nothing to compare
