@@ -14,8 +14,8 @@ use crate::net::{Endpoint, Net};
 use crate::pair::{Credential, Pairing};
 use crate::stepup::{self, Passphrase};
 use crate::{
-    EXIT_CODES, Error, accounts, agents, chains, connections, devices, events, pair, runners,
-    secrets, settings, terminals,
+    EXIT_CODES, Error, acct, acct_help, agents, budgets, chains, connections, devices, events,
+    pair, pools, runners, secrets, settings, terminals,
 };
 
 pub const USAGE: &str =
@@ -89,11 +89,7 @@ pub const USAGE: &str =
       after a colon, a model (none: the harness's default). update replaces the whole entry
       list. The Core checks the lot; its 400 (bad input), 404 (no such chain or pool) and 409
       (name taken, a live session walks the chain, ...) are printed in plain words, exit 4.
-  account ls | show <id>
-      The provider accounts (scope admin): state, the sessions holding a slot now against the
-      cap (live N/cap, `-` is no cap) and the health counters; show adds the cooldown's reason
-      and end, the last success, the gateway's last status class and a subscription's plan
-      limit (status, then each window's use and reset).
+@@ACCOUNTS@@
   setting ls [prefix] | get <key> | set <key> <number>* | reset <key>*
       The Core's server-wide settings (scope admin), e.g. `setting ls scheduler.`: the value,
       its unit, default and bounds as the Core reports them. The Core validates a set (400 on
@@ -204,12 +200,15 @@ impl Args {
         let (mut flags, mut words) = (Vec::new(), Vec::new());
         let mut it = args.iter();
         while let Some(a) = it.next() {
-            if VALUED.contains(&a.as_str()) {
+            if VALUED.contains(&a.as_str()) || acct::VALUED.contains(&a.as_str()) {
                 let v = it
                     .next()
                     .ok_or_else(|| Error::Usage(format!("{a} needs a value")))?;
                 flags.push((a.clone(), Some(v.clone())));
-            } else if SWITCHES.contains(&a.as_str()) || a == "-h" {
+            } else if SWITCHES.contains(&a.as_str())
+                || acct::SWITCHES.contains(&a.as_str())
+                || a == "-h"
+            {
                 flags.push((a.clone(), None));
             } else if a.starts_with("--") {
                 return Err(Error::Usage(format!("unknown flag {a}")));
@@ -253,6 +252,10 @@ impl Args {
             clear: self.on("--clear"),
             confirm_identity_change: self.on("--confirm-identity-change"),
         }
+    }
+
+    fn acct_opts(&self) -> acct::Opts<'_> {
+        acct::Opts::new(|n| self.value(n), |n| self.on(n))
     }
 
     fn on(&self, name: &str) -> bool {
@@ -327,7 +330,13 @@ pub async fn run(args: &[String], out: &mut impl Write) -> Result<(), Error> {
     let json = a.on("--json");
     let words: Vec<&str> = a.words.iter().map(String::as_str).collect();
     if a.on("--help") || a.on("-h") || matches!(words.as_slice(), [] | ["help"]) {
-        return line(out, format_args!("{USAGE}\n{EXIT_CODES}"));
+        return line(
+            out,
+            format_args!(
+                "{}\n{EXIT_CODES}",
+                USAGE.replacen("@@ACCOUNTS@@", acct_help::HELP.trim_end(), 1)
+            ),
+        );
     }
     match words.as_slice() {
         ["pair", credential] => {
@@ -393,7 +402,13 @@ pub async fn run(args: &[String], out: &mut impl Write) -> Result<(), Error> {
             connections::connection(&mut a.client()?, rest, &opts, json, out).await
         }
         ["account", rest @ ..] | ["accounts", rest @ ..] => {
-            accounts::account(&mut a.client()?, rest, json, out).await
+            acct::account(&mut a.client()?, rest, &a.acct_opts(), json, out).await
+        }
+        ["pool", rest @ ..] | ["pools", rest @ ..] => {
+            pools::pool(&mut a.client()?, rest, json, out).await
+        }
+        ["budget", rest @ ..] | ["budgets", rest @ ..] => {
+            budgets::budget(&mut a.client()?, rest, &a.acct_opts(), json, out).await
         }
         ["setting", rest @ ..] | ["settings", rest @ ..] => {
             settings::setting(&mut a.client()?, rest, json, out).await
