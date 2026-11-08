@@ -17,7 +17,7 @@ die() { echo "install: REFUSED: $*" >&2; exit 1; }
 command -v minisign >/dev/null || die "minisign is not installed"
 sha() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-fetch() { case $from in http://*) die "plain http is refused" ;; https://*) curl -fsSL --proto '=https' --tlsv1.3 -o "$tmp/$1" "$from/$1" ;; *) cp "$from/$1" "$tmp/$1" ;; esac; }
+fetch() { case $from in http://*) die "plain http is refused" ;; https://*) curl -fsSL --proto '=https' --tlsv1.3 -o "$tmp/$1" "$from/$1" ;; *) cp "$from/$1" "$tmp/$1" 2>/dev/null || die "no $1 in $from" ;; esac; }
 fetch SHA256SUMS; fetch SHA256SUMS.minisig
 minisign -Vq -p "$pub" -x "$tmp/SHA256SUMS.minisig" -m "$tmp/SHA256SUMS" || die "the SHA256SUMS signature does not verify"
 echo "signature OK ($(sed -n 's/^trusted comment: //p' "$tmp/SHA256SUMS.minisig"))"

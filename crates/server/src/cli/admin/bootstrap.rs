@@ -38,9 +38,9 @@ or lapsed attempt can be run again. recover does the same for a new admin device
 devices exist, after you type the host name; it first revokes every app device (they may be
 lost or stolen) unless --keep-devices, and the runners too with --revoke-runners. Both run only
 as the owner of an existing database (the service user), checked before it is opened.
-For a remote Core, forward the socket over SSH as that user, e.g.
-  ssh -L /tmp/core.sock:/var/lib/ainkrad/admin.sock ainkrad@host
-and point the new device at the local end.";
+For a remote Core, relay the socket over SSH as that user with scripts/install/admin-relay.sh
+(a plain `ssh -L` connects as your login user and is refused), then point the new device at the
+local end: ainkradctl --socket <local socket> --host <the Core's host name> pair <code> --core-fp <fp>.";
 
 /// The host's decisions are audited as the system, decided by `local-admin`.
 const HOST: gov::Decider<'static> = gov::Decider {

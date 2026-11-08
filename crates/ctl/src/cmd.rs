@@ -184,8 +184,9 @@ const VALUED: [&str; 34] = [
     "--file",
     "--connection-access",
 ];
-const SWITCHES: [&str; 6] = [
+const SWITCHES: [&str; 7] = [
     "--json",
+    "--version",
     "--no-follow",
     "--help",
     "--no-stepup",
@@ -326,6 +327,12 @@ pub async fn run(args: &[String], out: &mut impl Write) -> Result<(), Error> {
     let a = Args::parse(args)?;
     let json = a.on("--json");
     let words: Vec<&str> = a.words.iter().map(String::as_str).collect();
+    if a.on("--version") {
+        return line(
+            out,
+            format_args!("ainkradctl {}", env!("CARGO_PKG_VERSION")),
+        );
+    }
     if a.on("--help") || a.on("-h") || matches!(words.as_slice(), [] | ["help"]) {
         return line(out, format_args!("{USAGE}\n{EXIT_CODES}"));
     }

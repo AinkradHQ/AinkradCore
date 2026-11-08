@@ -42,6 +42,7 @@ const USAGE: &str = "usage:
   ainkrad-core-server backup <db> <dest>
   ainkrad-core-server restore [--force] <src> <db>
   ainkrad-core-server --help
+  ainkrad-core-server --version
   ainkrad-core-server device list <db>
   ainkrad-core-server device revoke <db> <device-id>
   ainkrad-core-server identity rotate <db>
@@ -115,7 +116,7 @@ pub async fn run(available: Vec<Arc<dyn Module>>) -> ExitCode {
     };
     let result = match args.as_slice() {
         _ if seeded.is_some() => seeded.expect("checked"),
-        [] => {
+        [] | ["--version" | "-V" | "version"] => {
             println!("ainkrad-core-server {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
