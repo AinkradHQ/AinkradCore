@@ -9,7 +9,7 @@ cd "$d"
 ver=$(basename "$PWD")
 # Everything that ships: binaries only (no keys, sums, signatures or the SBOM directory).
 shopt -s nullglob
-files=(ainkrad-core-server-* ainkrad-runner-*)
+files=(ainkrad-core-server-* ainkrad-runner-* ainkradctl-* ainkrad-ptyhost-*)
 [ ${#files[@]} -gt 0 ] || { echo "no artefacts in $d" >&2; exit 1; }
 rm -f SHA256SUMS SHA256SUMS.minisig
 shasum -a 256 "${files[@]}" | LC_ALL=C sort -k2 > SHA256SUMS

@@ -14,7 +14,7 @@ export CITADEL_GIT_SHA=${CITADEL_GIT_SHA:-$(git rev-parse --short=12 HEAD)}
 rm -rf "$out"; mkdir -p "$out" dist/.build
 for t in $targets; do
   $here/build.sh "$t" dist/.build "${BUILD_TAG:-a}"
-  for b in ainkrad-core-server ainkrad-runner; do cp "dist/.build/$t/$b" "$out/$b-$ver-$t"; done
+  for b in ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost; do cp "dist/.build/$t/$b" "$out/$b-$ver-$t"; done
 done
 case " $targets " in *" macos-arm64 "*) $here/macos.sh "$out"/*-macos-arm64 ;; esac
 # A throwaway key: the real one is offline and Ahmed's (custody plan, E1-15.2). Generated per dry run, never kept.
@@ -29,7 +29,10 @@ case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) host=linux-x86_64 ;;
 esac
 p=$(mktemp -d)
-$here/install.sh --from "$out" --pubkey "$out/dry-run-test.pub" --prefix "$p" --target "$host" 2>&1 | tail -4
+$here/install.sh --from "$out" --pubkey "$out/dry-run-test.pub" --prefix "$p" --target "$host" 2>&1 | tail -5
+# The installed set runs (ptyhost has no --version: it must sit beside the runner, where the runner finds it).
+for b in ainkrad-core-server ainkrad-runner ainkradctl; do "$p/bin/$b" --version; done
+[ -x "$p/bin/ainkrad-ptyhost" ] || { echo "release-dry: ainkrad-ptyhost is not installed beside ainkrad-runner" >&2; exit 1; }
 $here/self-verify.sh "$p/bin/ainkrad-runner" --from "$out" --pubkey "$out/dry-run-test.pub"
 rm -rf "$p" dist/.build
 echo; echo "release-dry: $out (nothing tagged, notarised or published)"; cat "$out/SHA256SUMS"

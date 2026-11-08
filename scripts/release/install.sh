@@ -3,7 +3,8 @@
 #   install.sh --from <dir|https-url> [--prefix DIR] [--pubkey FILE] [--target T] [--verify-only FILE]
 # 1. minisign -V over SHA256SUMS with the pinned public key (refuses on any mismatch).
 # 2. SHA-256 of each artefact for this target against the signed sums.
-# 3. Only then `install` into <prefix>/bin via a temp file and rename. Needs `minisign` (brew/apt install minisign).
+# 3. Only then `install` all four (ainkrad-core-server, ainkrad-runner, ainkradctl, ainkrad-ptyhost) into <prefix>/bin via a temp
+#    file and rename: ainkrad-ptyhost sits beside ainkrad-runner, where the runner looks for it. Needs `minisign` (brew/apt install minisign).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 from= prefix=${HOME}/.local pub=${AINKRAD_RELEASE_PUBKEY:-$here/ainkrad-release.pub} target= only=
@@ -30,6 +31,10 @@ if [ -z "$target" ]; then
 fi
 names=$(awk -v t="-$target" '{ n=$2; if (substr(n, length(n)-length(t)+1) == t) print n }' "$tmp/SHA256SUMS")
 [ -n "$names" ] || die "no artefact for $target in the signed sums"
+# A release is all four: a set without the CLI (first-device step) or ptyhost (terminals) is refused, not half-installed.
+for b in ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost; do
+  echo "$names" | grep -qx "$b-[0-9].*-$target" || die "the signed sums have no $b for $target"
+done
 for n in $names; do
   fetch "$n"
   want=$(awk -v n="$n" '$2 == n { print $1 }' "$tmp/SHA256SUMS")
