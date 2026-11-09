@@ -491,6 +491,7 @@ main() {
   install_citadel
   install_backup
   start_core
+  real_credentials
   extras
   [ "$DRY" = 1 ] || selftest "$A_SELFTEST_BACKUP" || warn "self-test failed: see above"
   bootstrap

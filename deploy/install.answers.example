@@ -56,6 +56,12 @@ HARDEN=no
 # IPv6 SSH is not filtered by harden.sh (iptables only).
 SSH_FROM=
 
+# Real credentials (default yes): after the start, secrets.mode, secrets.provider_accounts and secrets.connections
+# are set to 1 when still at their defaults, so the broker takes real provider keys, Claude sign-in tokens and
+# connection tokens of each kind's own shape. A value already set (secrets.mode 0, the kill switch, or 2) is kept.
+# no: the broker stays off (secrets.mode 0) until you set it with `ainkrad-core-server setting set`.
+REAL_CREDENTIALS=yes
+
 # After start: run `bootstrap` now (needs a terminal) or only print how; self-test backup: no, local, bucket.
 BOOTSTRAP=later
 SELFTEST_BACKUP=local

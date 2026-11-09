@@ -1,11 +1,12 @@
 # shellcheck shell=bash
-# Validators, the answers-file parser and the prompt helpers of scripts/install.sh. Sourced, never run.
+# Validators, the answers-file parser, the prompt helpers and the real-credentials step of scripts/install.sh. Sourced, never run.
 # bash 3.2-safe (macOS /bin/bash runs the tests): no ${x,,}, no mapfile, no associative arrays.
 
 # Every key an answers file may hold, and the default of those that have one ('' = no default; ask/require).
 KEYS="BINARY_DIR BUILD HOSTNAME PUBLIC_IP ACME_CONTACT ACME_ENV ACME_CHALLENGE PASSKEYS ALLOW_ORIGINS BACKUP
 BACKUP_ENDPOINT BACKUP_REGION BACKUP_BUCKET BACKUP_PREFIX BACKUP_ACCESS_KEY BACKUP_SECRET_KEY BACKUP_SCHEDULE
-BACKUP_RECIPIENT ENABLE_CITADEL RUNNER RUNNER_PTY RUNNER_PAIR_CODE HARDEN SSH_FROM BOOTSTRAP SELFTEST_BACKUP"
+BACKUP_RECIPIENT ENABLE_CITADEL RUNNER RUNNER_PTY RUNNER_PAIR_CODE HARDEN SSH_FROM BOOTSTRAP SELFTEST_BACKUP
+REAL_CREDENTIALS"
 default_of() {
   case $1 in
     BUILD | PASSKEYS | ENABLE_CITADEL | RUNNER | RUNNER_PTY | HARDEN) echo no ;;
@@ -15,6 +16,7 @@ default_of() {
     BACKUP_SCHEDULE) echo daily ;;
     BOOTSTRAP) echo later ;;
     SELFTEST_BACKUP) echo no ;;
+    REAL_CREDENTIALS) echo yes ;;
     *) echo '' ;;
   esac
 }
@@ -133,7 +135,7 @@ missing_keys() {
 # The validator for a key.
 validator_of() {
   case $1 in
-    BINARY_DIR) echo valid_dir ;; BUILD | PASSKEYS | ENABLE_CITADEL | RUNNER | RUNNER_PTY | HARDEN) echo valid_yesno ;;
+    BINARY_DIR) echo valid_dir ;; BUILD | PASSKEYS | ENABLE_CITADEL | RUNNER | RUNNER_PTY | HARDEN | REAL_CREDENTIALS) echo valid_yesno ;;
     RUNNER_PAIR_CODE) echo valid_pair_code ;;
     HOSTNAME) echo valid_hostname ;; PUBLIC_IP) echo valid_ip_or_empty ;; ACME_CONTACT) echo valid_email ;;
     ACME_ENV) echo valid_acme_env ;; ACME_CHALLENGE) echo valid_challenge ;; ALLOW_ORIGINS) echo valid_origins ;;
@@ -165,4 +167,22 @@ check_answers() {
   done
   [ -z "${A_SSH_FROM:-}" ] || [ "${A_HARDEN:-no}" = yes ] || { echo "SSH_FROM needs HARDEN=yes (harden.sh writes the firewall)" >&2; bad=1; }
   return "$bad"
+}
+
+# REAL_CREDENTIALS=yes (the default; the owner's single-user production decision of 2026-11-09): after the Core is up,
+# the broker is turned on in mode 1 and the two narrow real-credential gates are lifted (provider account keys and
+# subscription tokens; connection tokens). Only a setting still at its default is set, so a re-run never undoes an
+# operator's own value (secrets.mode 0 is the kill switch). no: nothing is set. Mode 2 is never set here.
+CRED_GATES="secrets.mode secrets.provider_accounts secrets.connections"
+real_credentials() {
+  local k src cli=(runuser -u ainkrad -- "$BIN/ainkrad-core-server" setting)
+  if [ "$A_REAL_CREDENTIALS" != yes ]; then step "Real credentials: off (secrets.* keep their defaults)"; return 0; fi
+  step "Real credentials: on ($CRED_GATES at 1 unless already set)"
+  for k in $CRED_GATES; do
+    if [ "$DRY" = 0 ]; then
+      src=$("${cli[@]}" get "$CORE_HOME/core.db" "$k" | cut -f4)
+      [ "$src" = default ] || { say "  $k: kept (set at $src)"; continue; }
+    fi
+    run "${cli[@]}" set "$CORE_HOME/core.db" "$k" 1
+  done
 }
