@@ -11,6 +11,7 @@ mod account_placement;
 mod allocator;
 mod chains;
 mod connection_tools;
+mod creator_revoked;
 mod failover;
 mod fault;
 mod gateway;
@@ -140,7 +141,7 @@ impl Core {
         Self::start_with(name, hub, listen, dir, host, agents::quick()).await
     }
 
-    async fn start_with(
+    pub async fn start_with(
         name: &str,
         hub: HubConfig,
         listen: Listen,

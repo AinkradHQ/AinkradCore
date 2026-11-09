@@ -18,6 +18,7 @@
 //!   driver, or the harness's slot on it, is full (the runner refuses it too).
 
 mod allocate;
+mod ending;
 mod failover;
 pub mod gateway;
 mod launch;
@@ -452,21 +453,6 @@ async fn fail(app: &App, s: &Session, why: &str) {
     }
 }
 
-/// Best effort, before the Core ends a session itself: tells the runner to kill it so a harness that
-/// may still run stops spending. An answer that does not come is logged (never a secret) and passed.
-async fn stop_for_end(app: &App, s: &Session) {
-    let Some(proof) = app.agents.elevated.lock().unwrap().get(&s.id).copied() else {
-        return;
-    };
-    let stop = Command::AgentStop(ainkrad_proto::v2::AgentStop {
-        session: s.id.clone(),
-        kill: true,
-    });
-    if let Err(e) = ask(app, &s.runner, stop, app.agents.config.answer, Some(proof)).await {
-        tracing::warn!(session = s.id, code = ?e.code, "the kill before an end did not get through");
-    }
-}
-
 pub fn describe(r: &Refusal) -> String {
     match r {
         Refusal::Runner(e) => e.message.clone(),
@@ -768,6 +754,7 @@ pub async fn resume_all(app: &App) -> Result<usize, sqlx::Error> {
 async fn run(app: &App, id: &str) {
     let cfg = app.agents.config.clone();
     let mut away: Option<tokio::time::Instant> = None;
+    let mut killed: Option<tokio::time::Instant> = None;
     loop {
         let s = match store::get(&app.pool, id).await {
             Ok(Some(s)) if s.live() => s,
@@ -785,6 +772,15 @@ async fn run(app: &App, id: &str) {
                 continue;
             }
         };
+        // A client session does not outlive the device that made it (B-M1b).
+        match ending::creator_revoked(app, &s, &mut away, &mut killed).await {
+            ending::Revoked::Over => return,
+            ending::Revoked::Retry => {
+                tokio::time::sleep(cfg.retry).await;
+                continue;
+            }
+            ending::Revoked::No => {}
+        }
         // A budget stop or an auth failure the last answer recorded.
         gateway::after(app, &s).await;
         let step = match s.state.as_str() {
@@ -829,7 +825,7 @@ async fn run(app: &App, id: &str) {
                 let since = *away.get_or_insert_with(tokio::time::Instant::now);
                 if since.elapsed() >= cfg.lost_after {
                     // The harness may be alive behind the failing answers: stopped before the end.
-                    stop_for_end(app, &s).await;
+                    let _ = ending::stop_for_end(app, &s).await;
                     fail(app, &s, "bounded agent retries exhausted").await;
                     app.agents.leases.lock().unwrap().remove(id);
                     return;
@@ -909,17 +905,7 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
                 .unwrap_or(Value::Null);
             store::end(&app.pool, &s.id, "ended", &outcome, &app.clock.now()).await?;
             // The runner may drop its copy: the Core holds all of it.
-            let ack = Command::AgentRead(AgentRead {
-                gw_after: crate::store::gateway::ack_after(&app.pool, &s.id).await?,
-                session: s.id.clone(),
-                after: held,
-                wait_ms: None,
-            });
-            // What this last answer carries is stored too: the gateway's final reports (the
-            // requests a stop aborted, charged approximately) may come only with it.
-            if let Ok(ev) = ask(app, &s.runner, ack, cfg.answer, None).await {
-                store::apply(&app.pool, &s.id, &ev, &app.clock.now()).await?;
-            }
+            ending::acknowledge(app, s, held).await?;
         }
         AgentState::Interrupted => {
             let why = "the runner restarted";

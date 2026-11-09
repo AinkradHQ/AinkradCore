@@ -33,6 +33,26 @@ async fn settle(app: &App, id: &str) -> Result<(), Refusal> {
         if v.done || !matches!(v.state.as_str(), "ended" | "lost") {
             return Ok(());
         }
+        // A revoked creator's run goes no further: no successor, pick or hold. A creator that cannot
+        // be read says nothing: the run waits for the read (bounded by `lost_after`), never moves.
+        if !v.module {
+            use crate::auth::{DeviceNow, device_now};
+            match device_now(&app.pool, &v.created_by, None).await {
+                DeviceNow::Gone => {
+                    let why = "its creator was revoked";
+                    return Ok(rows::settle_with(&app.pool, id, why).await?);
+                }
+                DeviceNow::Unknown => {
+                    if began.elapsed() >= app.agents.config.lost_after {
+                        let why = "its creator could not be read, so the run did not move";
+                        return Ok(rows::settle_with(&app.pool, id, why).await?);
+                    }
+                    tokio::time::sleep(app.agents.config.retry).await;
+                    continue;
+                }
+                DeviceNow::Usable => {}
+            }
+        }
         let class = match rows::decide(&v) {
             Decision::End(_) => return Ok(rows::settle(&app.pool, id).await?),
             Decision::Move(class) => class,

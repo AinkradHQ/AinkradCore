@@ -225,8 +225,18 @@ pub async fn end_unstarted(
     session: &str,
     now: &str,
 ) -> Result<bool, sqlx::Error> {
+    end_unstarted_why(pool, session, now, "cancelled before it started").await
+}
+
+/// [`end_unstarted`] with the reason the outcome states.
+pub async fn end_unstarted_why(
+    pool: &SqlitePool,
+    session: &str,
+    now: &str,
+    why: &str,
+) -> Result<bool, sqlx::Error> {
     let mut tx = crate::store::begin_write(pool).await?;
-    let outcome = json!({"kind": "cancelled", "reason": "cancelled before it started"});
+    let outcome = json!({"kind": "cancelled", "reason": why});
     let changed = sqlx::query(
         "UPDATE core_agent_sessions SET state = 'ended', outcome = ?, updated_at = ?, \
          ended_at = ?, waiting = NULL WHERE id = ? AND state = 'starting' \
