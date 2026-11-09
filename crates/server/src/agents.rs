@@ -18,6 +18,7 @@
 //!   driver, or the harness's slot on it, is full (the runner refuses it too).
 
 mod allocate;
+mod ending;
 mod failover;
 pub mod gateway;
 mod launch;
@@ -452,21 +453,6 @@ async fn fail(app: &App, s: &Session, why: &str) {
     }
 }
 
-/// Best effort, before the Core ends a session itself: tells the runner to kill it so a harness that
-/// may still run stops spending. An answer that does not come is logged (never a secret) and passed.
-async fn stop_for_end(app: &App, s: &Session) {
-    let Some(proof) = app.agents.elevated.lock().unwrap().get(&s.id).copied() else {
-        return;
-    };
-    let stop = Command::AgentStop(ainkrad_proto::v2::AgentStop {
-        session: s.id.clone(),
-        kill: true,
-    });
-    if let Err(e) = ask(app, &s.runner, stop, app.agents.config.answer, Some(proof)).await {
-        tracing::warn!(session = s.id, code = ?e.code, "the kill before an end did not get through");
-    }
-}
-
 pub fn describe(r: &Refusal) -> String {
     match r {
         Refusal::Runner(e) => e.message.clone(),
@@ -785,18 +771,14 @@ async fn run(app: &App, id: &str) {
                 continue;
             }
         };
-        // A client session does not outlive the device that made it (B-M1b). A module's session is
-        // the module's to stop; one created by its own runner is ended by the runner's revocation below.
-        if s.owner_module.is_none()
-            && s.created_by != s.runner
-            && crate::auth::device_now(&app.pool, &s.created_by, None).await
-                == crate::auth::DeviceNow::Gone
-        {
-            if end_for_revoked_creator(app, &s).await {
-                return;
+        // A client session does not outlive the device that made it (B-M1b).
+        match ending::creator_revoked(app, &s, &mut away).await {
+            ending::Revoked::Over => return,
+            ending::Revoked::Retry => {
+                tokio::time::sleep(cfg.retry).await;
+                continue;
             }
-            tokio::time::sleep(cfg.retry).await;
-            continue;
+            ending::Revoked::No => {}
         }
         // A budget stop or an auth failure the last answer recorded.
         gateway::after(app, &s).await;
@@ -842,7 +824,7 @@ async fn run(app: &App, id: &str) {
                 let since = *away.get_or_insert_with(tokio::time::Instant::now);
                 if since.elapsed() >= cfg.lost_after {
                     // The harness may be alive behind the failing answers: stopped before the end.
-                    stop_for_end(app, &s).await;
+                    let _ = ending::stop_for_end(app, &s).await;
                     fail(app, &s, "bounded agent retries exhausted").await;
                     app.agents.leases.lock().unwrap().remove(id);
                     return;
@@ -852,43 +834,6 @@ async fn run(app: &App, id: &str) {
             }
         }
     }
-}
-
-/// Kills `s`'s harness and ends it, because the device that created it was revoked. False when the
-/// kill did not get through (the runner is away): tried again, so a harness never outlives its
-/// creator by an unanswered stop. A runner that does not know the session has nothing to kill.
-async fn end_for_revoked_creator(app: &App, s: &Session) -> bool {
-    let unstarted = crate::store::alloc::end_unstarted(&app.pool, &s.id, &app.clock.now()).await;
-    if !matches!(unstarted, Ok(true)) {
-        let proof = app.agents.elevated.lock().unwrap().get(&s.id).copied();
-        if proof.is_none() {
-            return false;
-        }
-        let stop = Command::AgentStop(ainkrad_proto::v2::AgentStop {
-            session: s.id.clone(),
-            kill: true,
-        });
-        match ask(app, &s.runner, stop, app.agents.config.answer, proof).await {
-            Ok(_) => {}
-            Err(e) if e.code == ErrorCode::InvalidArgs => {}
-            Err(e) => {
-                tracing::warn!(session = s.id, code = ?e.code, "the kill for a revoked creator did not get through");
-                return false;
-            }
-        }
-        let outcome = json!({"kind": "failed", "reason": "the session's creator device was revoked", "fingerprint": "core"});
-        if store::end(&app.pool, &s.id, "ended", &outcome, &app.clock.now())
-            .await
-            .is_err()
-        {
-            return false;
-        }
-    }
-    if let Err(e) = crate::store::failover::settle(&app.pool, &s.id).await {
-        tracing::error!(session = s.id, error = %e, "settling a failover failed");
-    }
-    app.agents.leases.lock().unwrap().remove(&s.id);
-    true
 }
 
 /// One long poll: stores what came; an `interrupted` or `ended` runner state, once every entry
@@ -959,17 +904,7 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
                 .unwrap_or(Value::Null);
             store::end(&app.pool, &s.id, "ended", &outcome, &app.clock.now()).await?;
             // The runner may drop its copy: the Core holds all of it.
-            let ack = Command::AgentRead(AgentRead {
-                gw_after: crate::store::gateway::ack_after(&app.pool, &s.id).await?,
-                session: s.id.clone(),
-                after: held,
-                wait_ms: None,
-            });
-            // What this last answer carries is stored too: the gateway's final reports (the
-            // requests a stop aborted, charged approximately) may come only with it.
-            if let Ok(ev) = ask(app, &s.runner, ack, cfg.answer, None).await {
-                store::apply(&app.pool, &s.id, &ev, &app.clock.now()).await?;
-            }
+            ending::acknowledge(app, s, held).await?;
         }
         AgentState::Interrupted => {
             let why = "the runner restarted";

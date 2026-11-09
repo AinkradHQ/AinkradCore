@@ -33,6 +33,14 @@ async fn settle(app: &App, id: &str) -> Result<(), Refusal> {
         if v.done || !matches!(v.state.as_str(), "ended" | "lost") {
             return Ok(());
         }
+        // A revoked creator's run goes no further: no successor, pick or hold.
+        if !v.module
+            && crate::auth::device_now(&app.pool, &v.created_by, None).await
+                == crate::auth::DeviceNow::Gone
+        {
+            let why = "its creator was revoked";
+            return Ok(rows::settle_with(&app.pool, id, why).await?);
+        }
         let class = match rows::decide(&v) {
             Decision::End(_) => return Ok(rows::settle(&app.pool, id).await?),
             Decision::Move(class) => class,
