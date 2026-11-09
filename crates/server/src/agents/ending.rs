@@ -95,8 +95,10 @@ pub(super) async fn creator_revoked(
     let ended = match crate::store::alloc::end_unstarted_why(&app.pool, &s.id, &now, why).await {
         Ok(true) => true,
         _ => match stop_for_end(app, s).await {
-            // The runner answered: the session ends when it says so, unless it already was told once.
-            Ok(Some(_)) if killed.is_none() => {
+            // The runner answered a running session: it ends when the runner says so, unless it already
+            // was told once. A session that is not running (interrupted, starting) is ended here: the
+            // loop would launch it again.
+            Ok(Some(_)) if killed.is_none() && s.state == "running" => {
                 *killed = Some(tokio::time::Instant::now());
                 return Revoked::No;
             }

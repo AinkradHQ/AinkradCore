@@ -641,3 +641,61 @@ async fn an_unreadable_creator_does_not_let_the_run_move() {
         1
     );
 }
+
+/// The creator is revoked while the row is already `interrupted` (no secrets): the runner's answer
+/// to the kill does not stop anything, so the Core must end the session, not grant a grace and
+/// launch the harness again.
+#[tokio::test]
+async fn a_session_already_interrupted_when_its_creator_is_revoked_is_ended_not_relaunched() {
+    let (core, fake, runner, account) = up("creator-pre-int", true, None).await;
+    let session = super::gateway::start(&core, &runner, &account).await;
+    let mut w = W {
+        core,
+        fake,
+        runner,
+        account,
+        session: session.clone(),
+    };
+    started(&mut w, u64::MAX).await;
+    let gone = w.core.device("device", &["admin"]).await;
+    let (stream, cmd) = command(&mut w.fake).await;
+    assert!(matches!(cmd, Command::AgentRead(_)));
+    sqlx::query("UPDATE core_agent_sessions SET created_by = ?, secrets = '[]' WHERE id = ?")
+        .bind(&gone.id)
+        .bind(&session)
+        .execute(&w.core.app.pool)
+        .await
+        .unwrap();
+    revoke(&w.core, &gone.id).await;
+    // The runner restarted: the row goes `interrupted`.
+    let restarted = events(&session, AgentState::Interrupted, vec![]);
+    w.fake
+        .send(stream, Body::Result(Reply::AgentRead(restarted.clone())))
+        .await;
+    // The Core kills (the runner's stop of a session that is not running changes nothing) and
+    // ends it: never an `agent.start`.
+    let (stream, cmd) = loop {
+        let (stream, cmd) = command(&mut w.fake).await;
+        if !matches!(cmd, Command::AgentRead(_)) {
+            break (stream, cmd);
+        }
+        w.fake
+            .send(stream, Body::Result(Reply::AgentRead(restarted.clone())))
+            .await;
+    };
+    assert!(matches!(cmd, Command::AgentStop(_)), "relaunched: {cmd:?}");
+    w.fake
+        .send(stream, Body::Result(Reply::AgentStop(restarted.clone())))
+        .await;
+    if let Ok((stream, Command::AgentRead(_))) =
+        tokio::time::timeout(Duration::from_secs(2), command(&mut w.fake)).await
+    {
+        w.fake
+            .send(stream, Body::Result(Reply::AgentRead(restarted)))
+            .await;
+    }
+    let s = over(&w.core, &session, 10).await;
+    assert_eq!(s.outcome.unwrap()["fingerprint"], "core");
+    let sent = tokio::time::timeout(Duration::from_millis(600), command(&mut w.fake)).await;
+    assert!(sent.is_err(), "nothing more is sent: {sent:?}");
+}
