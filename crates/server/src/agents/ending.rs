@@ -58,17 +58,28 @@ pub(super) async fn acknowledge(app: &App, s: &Session, held: u64) -> Result<(),
     Ok(())
 }
 
+/// How long a killed session may take to report its end (the runner drains the gateway's in-flight
+/// requests for up to 10 s first) before the Core ends it itself.
+const KILL_GRACE: Duration = Duration::from_secs(30);
+
 /// A client session does not outlive the device that created it. A module's session is the
 /// module's to stop; one created by its own runner is ended by the runner's revocation.
+///
+/// The harness is killed once, then the normal read loop carries on until the runner reports the
+/// end (its last gateway reports come with the drain, after the kill), so the usage is stored and
+/// the hold settled as for any end. Only a runner that never reports it within [`KILL_GRACE`]
+/// is overruled: the session is ended here.
 pub(super) async fn creator_revoked(
     app: &App,
     s: &Session,
     away: &mut Option<tokio::time::Instant>,
+    killed: &mut Option<tokio::time::Instant>,
 ) -> Revoked {
     use crate::auth::{DeviceNow, device_now};
     if s.owner_module.is_some()
         || s.created_by == s.runner
         || device_now(&app.pool, &s.created_by, None).await != DeviceNow::Gone
+        || killed.is_some_and(|at| at.elapsed() < KILL_GRACE)
     {
         return Revoked::No;
     }
@@ -78,6 +89,11 @@ pub(super) async fn creator_revoked(
     let ended = match crate::store::alloc::end_unstarted_why(&app.pool, &s.id, &now, why).await {
         Ok(true) => true,
         _ => match stop_for_end(app, s).await {
+            // The runner answered: the session ends when it says so, unless it already was told once.
+            Ok(Some(_)) if killed.is_none() => {
+                *killed = Some(tokio::time::Instant::now());
+                return Revoked::No;
+            }
             Ok(held) => {
                 let outcome = json!({"kind": "failed", "reason": "the session's creator device was revoked", "fingerprint": "core"});
                 let done = store::end(&app.pool, &s.id, "ended", &outcome, &now).await;

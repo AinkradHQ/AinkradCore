@@ -1,6 +1,7 @@
 //! B-M1b: a client session does not outlive the device that created it. The supervisor kills its
-//! harness and ends it (`ended`, fingerprint `core`), stores the runner's last answer and
-//! acknowledges it like any end, and never moves its run. A runner that is away or revoked cannot
+//! harness once and lets the normal read loop carry on until the runner reports the end (its
+//! draining gateway reports arrive after the kill and are stored, the hold is settled once), and
+//! never moves its run. A runner that is away or revoked cannot
 //! hold the session open: it ends `lost`. Revoked through the store alone, as the CLI does.
 
 use std::time::Duration;
@@ -137,9 +138,6 @@ async fn a_session_ends_and_its_harness_is_killed_when_its_creator_is_revoked() 
     revoke(&core, &gone.id).await;
     let s = over(&core, &mine, 10).await;
     assert_eq!(s.state, "ended");
-    let outcome = s.outcome.unwrap();
-    assert_eq!(outcome["fingerprint"], "core");
-    assert_eq!(outcome["kind"], "failed");
     // The bystander is untouched, on the Core and on the runner: it still ticks.
     assert!(state_of(&core, &other).await.live());
     let before = lines(&core, &other).await;
@@ -231,6 +229,10 @@ async fn a_core_restart_mid_retry_still_ends_the_session() {
     tokio::time::sleep(Duration::from_millis(700)).await;
     assert!(state_of(&first, &id).await.live());
     first.app.closing.send_replace(true);
+    // Nobody supervises it now: it stays live while the first Core is stopped.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(state_of(&first, &id).await.live());
+    let restarted = first.app.clock.now();
     let second = Core::start_with(
         "c-restart",
         hub_quick(),
@@ -243,15 +245,18 @@ async fn a_core_restart_mid_retry_still_ends_the_session() {
     assert_eq!(service::resume_all(&second.app).await.unwrap(), 1);
     let s = over(&second, &id, 10).await;
     assert_eq!(s.state, "lost");
+    // The second Core ended it: after it started, with the restart's own lost_after wait.
+    assert!(s.ended_at.unwrap() > restarted, "ended before the restart");
     let _ = std::fs::remove_dir_all(&st.0);
     drop(second);
     drop(first);
 }
 
-/// The kill's answer is stored (the gateway's last reports, charged), the end is acknowledged like
-/// any end, the hold goes back, and the runner was really told to kill.
+/// The runner drains the gateway's in-flight requests after a kill, still `running`, and their
+/// final reports arrive with later reads. The Core must not end the session at the kill: every
+/// report is stored, the hold is held until the runner's `ended`, and released once.
 #[tokio::test]
-async fn the_stop_answer_is_stored_and_the_end_acknowledged_when_the_creator_is_revoked() {
+async fn the_drained_reports_after_a_kill_are_stored_and_the_hold_is_released_once() {
     let (core, fake, runner, account) = up("creator-gw", true, Some(700_000)).await;
     let session = super::gateway::start(&core, &runner, &account).await;
     let mut w = W {
@@ -263,10 +268,9 @@ async fn the_stop_answer_is_stored_and_the_end_acknowledged_when_the_creator_is_
     };
     started(&mut w, 700_000).await;
     let gone = w.core.device("device", &["admin"]).await;
-    assert_eq!(
-        count(&w.core, "SELECT count(*) FROM core_budget_holds").await,
-        1
-    );
+    let holds = "SELECT count(*) FROM core_budget_holds";
+    let costs = "SELECT count(*) FROM core_cost_events";
+    assert_eq!(count(&w.core, holds).await, 1);
     // The first long poll is pending at the runner; the creator is revoked meanwhile.
     let (stream, cmd) = command(&mut w.fake).await;
     assert!(matches!(cmd, Command::AgentRead(_)));
@@ -281,50 +285,61 @@ async fn the_stop_answer_is_stored_and_the_end_acknowledged_when_the_creator_is_
     w.fake
         .send(stream, Body::Result(Reply::AgentRead(ev)))
         .await;
-    // The runner is told to kill, and answers with usage only this answer carries.
+    // The runner is told to kill (once), and is still draining: `running`, with a report.
     let (stream, cmd) = command(&mut w.fake).await;
     let Command::AgentStop(stop) = cmd else {
         panic!("expected agent.stop, got {cmd:?}")
     };
     assert_eq!((stop.session.as_str(), stop.kill), (session.as_str(), true));
-    let mut ended = events(&session, AgentState::Ended, vec![usage(1, 100_000, 20_000)]);
+    let draining = events(
+        &session,
+        AgentState::Running,
+        vec![usage(1, 100_000, 20_000)],
+    );
+    w.fake
+        .send(stream, Body::Result(Reply::AgentStop(draining)))
+        .await;
+    // The Core reads on (no second kill, no end): it acknowledges the stored report; a late one comes.
+    let (stream, cmd) = command(&mut w.fake).await;
+    let Command::AgentRead(read) = cmd else {
+        panic!("expected agent.read, got {cmd:?}")
+    };
+    assert_eq!(read.gw_after, 1, "the stop answer's report was stored");
+    let late = events(&session, AgentState::Running, vec![usage(2, 5_000, 0)]);
+    w.fake
+        .send(stream, Body::Result(Reply::AgentRead(late)))
+        .await;
+    let (stream, cmd) = command(&mut w.fake).await;
+    let Command::AgentRead(read) = cmd else {
+        panic!("expected agent.read, got {cmd:?}")
+    };
+    assert_eq!(read.gw_after, 2, "the late report was stored");
+    assert!(
+        state_of(&w.core, &session).await.live(),
+        "not ended while draining"
+    );
+    assert_eq!(count(&w.core, holds).await, 1, "the hold waits for the end");
+    assert_eq!(count(&w.core, costs).await, 2);
+    // The drain is over: the runner reports the end with the last report.
+    let mut ended = events(&session, AgentState::Ended, vec![usage(3, 1_000, 0)]);
     ended.outcome = Some(Outcome::Cancelled {
         reason: "killed".to_owned(),
     });
     w.fake
-        .send(stream, Body::Result(Reply::AgentStop(ended.clone())))
+        .send(stream, Body::Result(Reply::AgentRead(ended.clone())))
         .await;
-    // The acknowledgement read of any end: it acknowledges the report the stop answer carried.
     let (stream, cmd) = command(&mut w.fake).await;
-    let Command::AgentRead(read) = cmd else {
-        panic!("expected the acknowledging agent.read, got {cmd:?}")
-    };
-    assert_eq!(
-        read.gw_after, 1,
-        "the stop answer's report was stored first"
+    assert!(
+        matches!(cmd, Command::AgentRead(_)),
+        "the acknowledgement read"
     );
-    let last = events(&session, AgentState::Ended, vec![usage(2, 5_000, 0)]);
     w.fake
-        .send(stream, Body::Result(Reply::AgentRead(last)))
+        .send(stream, Body::Result(Reply::AgentRead(ended)))
         .await;
     until("the end", &w.core, &session, |s| !s.live()).await;
-    for _ in 0..100 {
-        if count(&w.core, "SELECT count(*) FROM core_cost_events").await == 2 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(30)).await;
-    }
-    assert_eq!(
-        count(&w.core, "SELECT count(*) FROM core_cost_events").await,
-        2
-    );
-    assert_eq!(
-        count(&w.core, "SELECT count(*) FROM core_budget_holds").await,
-        0
-    );
-    let s = state_of(&w.core, &session).await;
-    assert_eq!(s.state, "ended");
-    assert_eq!(s.outcome.unwrap()["fingerprint"], "core");
+    assert_eq!(count(&w.core, costs).await, 3);
+    assert_eq!(count(&w.core, holds).await, 0);
+    assert_eq!(state_of(&w.core, &session).await.state, "ended");
 }
 
 /// A chain session still waiting for an account has nothing on a runner: it ends `cancelled`

@@ -754,6 +754,7 @@ pub async fn resume_all(app: &App) -> Result<usize, sqlx::Error> {
 async fn run(app: &App, id: &str) {
     let cfg = app.agents.config.clone();
     let mut away: Option<tokio::time::Instant> = None;
+    let mut killed: Option<tokio::time::Instant> = None;
     loop {
         let s = match store::get(&app.pool, id).await {
             Ok(Some(s)) if s.live() => s,
@@ -772,7 +773,7 @@ async fn run(app: &App, id: &str) {
             }
         };
         // A client session does not outlive the device that made it (B-M1b).
-        match ending::creator_revoked(app, &s, &mut away).await {
+        match ending::creator_revoked(app, &s, &mut away, &mut killed).await {
             ending::Revoked::Over => return,
             ending::Revoked::Retry => {
                 tokio::time::sleep(cfg.retry).await;
