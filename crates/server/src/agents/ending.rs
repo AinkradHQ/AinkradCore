@@ -62,6 +62,12 @@ pub(super) async fn acknowledge(app: &App, s: &Session, held: u64) -> Result<(),
 /// requests for up to 10 s first) before the Core ends it itself.
 const KILL_GRACE: Duration = Duration::from_secs(30);
 
+/// [`KILL_GRACE`], and never longer than `lost_after` (so a test paces both with one setting). Only
+/// a `running` session gets it: one the runner lost or restarted must not be launched again.
+fn kill_grace(app: &App) -> Duration {
+    KILL_GRACE.min(app.agents.config.lost_after)
+}
+
 /// A client session does not outlive the device that created it. A module's session is the
 /// module's to stop; one created by its own runner is ended by the runner's revocation.
 ///
@@ -79,7 +85,7 @@ pub(super) async fn creator_revoked(
     if s.owner_module.is_some()
         || s.created_by == s.runner
         || device_now(&app.pool, &s.created_by, None).await != DeviceNow::Gone
-        || killed.is_some_and(|at| at.elapsed() < KILL_GRACE)
+        || killed.is_some_and(|at| s.state == "running" && at.elapsed() < kill_grace(app))
     {
         return Revoked::No;
     }
@@ -108,7 +114,7 @@ pub(super) async fn creator_revoked(
         },
     };
     if ended {
-        if let Err(e) = crate::store::failover::settle(&app.pool, &s.id).await {
+        if let Err(e) = crate::store::failover::settle_with(&app.pool, &s.id, why).await {
             tracing::error!(session = s.id, error = %e, "settling a failover failed");
         }
         app.agents.leases.lock().unwrap().remove(&s.id);

@@ -16,7 +16,7 @@ use ainkrad_proto::v2::{AgentState, Body, Command, Reply};
 
 use super::agents::{Runner, quick as agents_quick, run_runner, script, state_of};
 use super::allocator::{chain_session, pool_of};
-use super::gateway::{W, command, count, events, started, until, up, usage};
+use super::gateway::{W, command, count, events, started, until, up, up_with, usage};
 use super::runner::{paired, state};
 use super::{Core, quick as hub_quick};
 
@@ -119,6 +119,18 @@ fn lines(core: &Core, id: &str) -> impl Future<Output = usize> {
     }
 }
 
+/// The reason the run was settled with (`outcome.failover.why`), once it is.
+async fn settled_why(core: &Core, id: &str) -> String {
+    for _ in 0..100 {
+        let o = state_of(core, id).await.outcome;
+        if let Some(why) = o.as_ref().and_then(|o| o["failover"]["why"].as_str()) {
+            return why.to_owned();
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("{id} was never settled with a reason");
+}
+
 const TICK: &str = "while :; do echo tick; sleep 0.05; done";
 
 #[tokio::test]
@@ -138,6 +150,10 @@ async fn a_session_ends_and_its_harness_is_killed_when_its_creator_is_revoked() 
     revoke(&core, &gone.id).await;
     let s = over(&core, &mine, 10).await;
     assert_eq!(s.state, "ended");
+    // The runner's own end is what the session shows; the revocation is said in the run's settle.
+    assert_eq!(s.outcome.unwrap()["kind"], "cancelled");
+    let why = settled_why(&core, &mine).await;
+    assert_eq!(why, "its creator was revoked");
     // The bystander is untouched, on the Core and on the runner: it still ticks.
     assert!(state_of(&core, &other).await.live());
     let before = lines(&core, &other).await;
@@ -232,7 +248,7 @@ async fn a_core_restart_mid_retry_still_ends_the_session() {
     // Nobody supervises it now: it stays live while the first Core is stopped.
     tokio::time::sleep(Duration::from_millis(400)).await;
     assert!(state_of(&first, &id).await.live());
-    let restarted = first.app.clock.now();
+    let restarted = first.app.clock.unix();
     let second = Core::start_with(
         "c-restart",
         hub_quick(),
@@ -246,18 +262,21 @@ async fn a_core_restart_mid_retry_still_ends_the_session() {
     let s = over(&second, &id, 10).await;
     assert_eq!(s.state, "lost");
     // The second Core ended it: after it started, with the restart's own lost_after wait.
-    assert!(s.ended_at.unwrap() > restarted, "ended before the restart");
+    let ended = ainkrad_core_server::scheduler::unix_secs(&s.ended_at.unwrap()).unwrap();
+    assert!(
+        ended >= restarted + 2,
+        "ended {ended} before the second Core's lost_after ({restarted} + 2 s)"
+    );
     let _ = std::fs::remove_dir_all(&st.0);
     drop(second);
     drop(first);
 }
 
-/// The runner drains the gateway's in-flight requests after a kill, still `running`, and their
-/// final reports arrive with later reads. The Core must not end the session at the kill: every
-/// report is stored, the hold is held until the runner's `ended`, and released once.
-#[tokio::test]
-async fn the_drained_reports_after_a_kill_are_stored_and_the_hold_is_released_once() {
-    let (core, fake, runner, account) = up("creator-gw", true, Some(700_000)).await;
+/// A gateway session whose creator is revoked while its first long poll is pending: the runner is
+/// told to kill (once) and answers still `running` (draining) with a first report. Returns the
+/// world with the next command not yet read.
+async fn kill_ordered(name: &str, cfg: AgentsConfig) -> W {
+    let (core, fake, runner, account) = up_with(name, true, Some(700_000), cfg).await;
     let session = super::gateway::start(&core, &runner, &account).await;
     let mut w = W {
         core,
@@ -268,10 +287,7 @@ async fn the_drained_reports_after_a_kill_are_stored_and_the_hold_is_released_on
     };
     started(&mut w, 700_000).await;
     let gone = w.core.device("device", &["admin"]).await;
-    let holds = "SELECT count(*) FROM core_budget_holds";
-    let costs = "SELECT count(*) FROM core_cost_events";
-    assert_eq!(count(&w.core, holds).await, 1);
-    // The first long poll is pending at the runner; the creator is revoked meanwhile.
+    assert_eq!(count(&w.core, HOLDS).await, 1);
     let (stream, cmd) = command(&mut w.fake).await;
     assert!(matches!(cmd, Command::AgentRead(_)));
     sqlx::query("UPDATE core_agent_sessions SET created_by = ? WHERE id = ?")
@@ -285,7 +301,6 @@ async fn the_drained_reports_after_a_kill_are_stored_and_the_hold_is_released_on
     w.fake
         .send(stream, Body::Result(Reply::AgentRead(ev)))
         .await;
-    // The runner is told to kill (once), and is still draining: `running`, with a report.
     let (stream, cmd) = command(&mut w.fake).await;
     let Command::AgentStop(stop) = cmd else {
         panic!("expected agent.stop, got {cmd:?}")
@@ -299,6 +314,20 @@ async fn the_drained_reports_after_a_kill_are_stored_and_the_hold_is_released_on
     w.fake
         .send(stream, Body::Result(Reply::AgentStop(draining)))
         .await;
+    w
+}
+
+const HOLDS: &str = "SELECT count(*) FROM core_budget_holds";
+const COSTS: &str = "SELECT count(*) FROM core_cost_events";
+
+/// The runner drains the gateway's in-flight requests after a kill, still `running`, and their
+/// final reports arrive with later reads. The Core must not end the session at the kill: every
+/// report is stored, the hold is held until the runner's `ended`, and released once.
+#[tokio::test]
+async fn the_drained_reports_after_a_kill_are_stored_and_the_hold_is_released_once() {
+    let mut w = kill_ordered("creator-gw", agents_quick()).await;
+    let session = w.session.clone();
+    let (holds, costs) = (HOLDS, COSTS);
     // The Core reads on (no second kill, no end): it acknowledges the stored report; a late one comes.
     let (stream, cmd) = command(&mut w.fake).await;
     let Command::AgentRead(read) = cmd else {
@@ -440,5 +469,175 @@ async fn a_run_whose_creator_is_revoked_gets_no_successor() {
     assert_eq!(
         count(&w.core, "SELECT count(*) FROM core_budget_holds").await,
         0
+    );
+}
+
+/// The runner restarts while the kill drains: the row goes `interrupted`, and the Core does not
+/// launch the harness again, it ends the session.
+#[tokio::test]
+async fn a_runner_restart_during_the_grace_does_not_relaunch_the_harness() {
+    let mut w = kill_ordered("creator-int", agents_quick()).await;
+    let session = w.session.clone();
+    // The runner reports itself restarted (reads that only acknowledge the report are answered alike).
+    let (stream, cmd) = loop {
+        let (stream, cmd) = command(&mut w.fake).await;
+        if !matches!(cmd, Command::AgentRead(_)) {
+            break (stream, cmd);
+        }
+        let restarted = events(&session, AgentState::Interrupted, vec![]);
+        w.fake
+            .send(stream, Body::Result(Reply::AgentRead(restarted)))
+            .await;
+    };
+    // Not an `agent.start`: a second kill (the runner knows nothing of it), then the end.
+    assert!(matches!(cmd, Command::AgentStop(_)), "relaunched: {cmd:?}");
+    let gone = events(&session, AgentState::Ended, vec![]);
+    w.fake
+        .send(stream, Body::Result(Reply::AgentStop(gone.clone())))
+        .await;
+    if let Ok((stream, Command::AgentRead(_))) =
+        tokio::time::timeout(Duration::from_secs(2), command(&mut w.fake)).await
+    {
+        w.fake
+            .send(stream, Body::Result(Reply::AgentRead(gone)))
+            .await;
+    }
+    let s = over(&w.core, &session, 10).await;
+    assert_eq!(s.outcome.unwrap()["fingerprint"], "core");
+    assert_eq!(count(&w.core, HOLDS).await, 0);
+    assert_eq!(count(&w.core, COSTS).await, 1);
+    let sent = tokio::time::timeout(Duration::from_millis(600), command(&mut w.fake)).await;
+    assert!(
+        sent.is_err(),
+        "nothing more is sent: {:?}",
+        sent.map(|c| c.1)
+    );
+}
+
+/// A runner that never reports the end (still `running` after the grace, here `lost_after` 2 s) is
+/// overruled: killed again, the session ended with the revocation said, the hold released once and
+/// the resent report not counted twice.
+#[tokio::test]
+async fn a_runner_that_never_reports_the_end_is_overruled_after_the_grace() {
+    let mut w = kill_ordered("creator-grace", short_lost()).await;
+    let session = w.session.clone();
+    let began = std::time::Instant::now();
+    let mut stops = 1;
+    while state_of(&w.core, &session).await.live() {
+        assert!(began.elapsed() < Duration::from_secs(20), "never overruled");
+        let Ok((stream, cmd)) =
+            tokio::time::timeout(Duration::from_secs(3), command(&mut w.fake)).await
+        else {
+            continue;
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let running = events(
+            &session,
+            AgentState::Running,
+            vec![usage(1, 100_000, 20_000)],
+        );
+        match cmd {
+            Command::AgentRead(_) => {
+                w.fake
+                    .send(stream, Body::Result(Reply::AgentRead(running)))
+                    .await
+            }
+            Command::AgentStop(_) => {
+                stops += 1;
+                w.fake
+                    .send(stream, Body::Result(Reply::AgentStop(running)))
+                    .await;
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    assert!(
+        began.elapsed() >= Duration::from_secs(1),
+        "ended inside the grace"
+    );
+    assert_eq!(stops, 2, "one kill, one more at the overrule");
+    let s = state_of(&w.core, &session).await;
+    assert_eq!(
+        (
+            s.state.as_str(),
+            s.outcome.as_ref().unwrap()["fingerprint"].as_str()
+        ),
+        ("ended", Some("core"))
+    );
+    assert_eq!(
+        settled_why(&w.core, &session).await,
+        "its creator was revoked"
+    );
+    assert_eq!(count(&w.core, HOLDS).await, 0);
+    assert_eq!(
+        count(&w.core, COSTS).await,
+        1,
+        "the resent report is one row"
+    );
+}
+
+/// A creator that cannot be read (a failed database read) does not let the run move: it waits,
+/// and the revocation is recorded once the read works again.
+#[tokio::test]
+async fn an_unreadable_creator_does_not_let_the_run_move() {
+    let (core, fake, runner, a) = up("creator-unknown", true, None).await;
+    let b = super::failover::second(&core, &runner).await;
+    let chain = [pool_of(&core, &runner, &[a.id, b.id]).await];
+    let session = chain_session(&core, &runner, &chain).await;
+    let mut w = W {
+        core,
+        fake,
+        runner,
+        account: a,
+        session: session.clone(),
+    };
+    started(&mut w, u64::MAX).await;
+    until("running", &w.core, &session, |s| s.state == "running").await;
+    let gone = w.core.device("device", &["admin"]).await;
+    let (stream, cmd) = command(&mut w.fake).await;
+    assert!(matches!(cmd, Command::AgentRead(_)));
+    sqlx::query("UPDATE core_agent_sessions SET created_by = ? WHERE id = ?")
+        .bind(&gone.id)
+        .bind(&session)
+        .execute(&w.core.app.pool)
+        .await
+        .unwrap();
+    revoke(&w.core, &gone.id).await;
+    let away = "ALTER TABLE core_devices RENAME TO core_devices_away";
+    sqlx::query(away).execute(&w.core.app.pool).await.unwrap();
+    let mut ended = events(&session, AgentState::Ended, vec![]);
+    ended.outcome = Some(Outcome::Failed {
+        reason: "429".to_owned(),
+        fingerprint: Some("rate_limited".to_owned()),
+    });
+    w.fake
+        .send(stream, Body::Result(Reply::AgentRead(ended.clone())))
+        .await;
+    // The creator cannot be read: no successor is started while it stays so.
+    let sent = tokio::time::timeout(Duration::from_millis(1200), async {
+        loop {
+            let (stream, cmd) = command(&mut w.fake).await;
+            if let Command::AgentRead(_) = cmd {
+                w.fake
+                    .send(stream, Body::Result(Reply::AgentRead(ended.clone())))
+                    .await;
+            } else {
+                return cmd;
+            }
+        }
+    })
+    .await;
+    assert!(sent.is_err(), "a successor started: {:?}", sent);
+    sqlx::query("ALTER TABLE core_devices_away RENAME TO core_devices")
+        .execute(&w.core.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        settled_why(&w.core, &session).await,
+        "its creator was revoked"
+    );
+    assert_eq!(
+        count(&w.core, "SELECT count(*) FROM core_agent_sessions").await,
+        1
     );
 }
