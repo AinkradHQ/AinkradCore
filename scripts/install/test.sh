@@ -112,6 +112,17 @@ done
 bash "$HERE/../install.sh" --config "$t/citadelbad" --dry-run >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: ENABLE_CITADEL=maybe accepted" >&2; } || pass=$((pass + 1))
 ok valid_yesno yes; no valid_yesno maybe; [ "$(default_of ENABLE_CITADEL)" = no ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: ENABLE_CITADEL default" >&2; }
 grep -q 'citadel_selftest' "$HERE/../install.sh" && grep -qF '/modules/citadel/v1/companies' "$HERE/../install.sh" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: self-test lacks the citadel check" >&2; }
+# Real credentials: on by default, the three gates set to 1 after the start (each only while at its default); no sets nothing.
+for k in secrets.mode secrets.provider_accounts secrets.connections; do
+  grep -qF -- "ainkrad-core-server setting set /var/lib/ainkrad/core/core.db $k 1" "$t/out" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: dry run does not set $k" >&2; }
+done
+grep -qF 'secrets.mode 2' "$t/out" && { fail=$((fail + 1)); echo "FAIL: the installer sets secrets.mode 2" >&2; } || pass=$((pass + 1))
+[ "$(default_of REAL_CREDENTIALS)" = yes ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: REAL_CREDENTIALS default" >&2; }
+{ answers; echo REAL_CREDENTIALS=no; } >"$t/nocreds"
+bash "$HERE/../install.sh" --config "$t/nocreds" --dry-run >"$t/outn" 2>&1 && grep -qF 'Real credentials: off' "$t/outn" &&
+  ! grep -q 'setting set' "$t/outn" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: REAL_CREDENTIALS=no still sets a gate" >&2; }
+{ answers; echo REAL_CREDENTIALS=maybe; } >"$t/credsbad"
+bash "$HERE/../install.sh" --config "$t/credsbad" --dry-run >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: REAL_CREDENTIALS=maybe accepted" >&2; } || pass=$((pass + 1))
 # Unattended with keys missing: refused, naming them.
 sed '/^BACKUP_RECIPIENT=/d; /^ACME_CONTACT=/d' "$t/answers" >"$t/short"
 if bash "$HERE/../install.sh" --config "$t/short" --dry-run >"$t/out2" 2>&1; then fail=$((fail + 1)); echo "FAIL: missing keys accepted" >&2
