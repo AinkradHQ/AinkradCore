@@ -68,3 +68,30 @@ async fn reads_the_team_and_creates_updates_and_lists_issues_since_a_cursor() {
     assert!(matches!(e, Error::Http { status: 400, .. }), "{e}");
     assert!(!format!("{e:?}").contains("wr0ng"));
 }
+
+/// An endpoint that always says there is another page cannot keep a pass reading for ever.
+#[tokio::test]
+async fn a_team_that_never_ends_is_refused_after_the_page_cap() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let pages = Arc::new(AtomicUsize::new(0));
+    let seen = pages.clone();
+    let app = axum::Router::new().fallback(move || {
+        seen.fetch_add(1, Ordering::SeqCst);
+        async {
+            axum::Json(serde_json::json!({"data": {"issues": {"nodes": [],
+                "pageInfo": {"hasNextPage": true, "endCursor": "c"}}}}))
+        }
+    });
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(l, app).await;
+    });
+    let policy = crate::guard::Policy::new([]).with_test_origin(addr);
+    let lin = Linear::new(policy.client(), &format!("http://{addr}"), Secret::new("k"));
+    let err = lin.issues_since("team-1", None).await.unwrap_err();
+    assert!(err.to_string().contains("pages"), "{err}");
+    assert_eq!(pages.load(Ordering::SeqCst), MAX_PAGES);
+}

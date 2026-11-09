@@ -1,0 +1,1013 @@
+//! The secrets broker v0 (E2-07, P2.9; ADR §Security 4; threat model T-SEC-1..4): agent API
+//! tokens, git credentials and SSH material, held by the Core and handed to a runner only for
+//! what it runs.
+//!
+//! - **At rest** a value is sealed with the master key (`ops::secretbox`: AES-256-GCM, a fresh
+//!   nonce per seal, the key's `key_id` stored beside it). The associated data names the secret
+//!   and its version, so a sealed value cannot be moved to another secret or rolled back to an
+//!   older one.
+//! - **Out** only through a lease: granted (by an elevated `admin` device, or the Core itself)
+//!   for one runner in the secret's scope (`runners`), redeemed once, by that runner, before it
+//!   expires. Nothing lists, returns or logs a value; the plaintext lives in `Zeroizing` buffers.
+//! - **Audited**: every store, rotation, deletion, grant and redemption appends a `secret.*`
+//!   row in the same transaction, naming the secret, never its value.
+//! - **Gate G-SEC** (`secrets.mode`): 0 (the default) refuses every store, rotation, grant and
+//!   redemption; 1 takes throwaway values only (one shaped like a real key is refused); 2 takes
+//!   real ones, once the external review has closed. Listing and deleting always work.
+//! - **Narrow gate** (`secrets.provider_accounts`, default 0): with the broker on and `secrets.mode`
+//!   below 2 it lets only a provider-account secret (`acct.<provider>.<label>`, see [`kind_of`])
+//!   skip the real-shape refusal. The value must then be, as a whole, one key of that
+//!   provider's own shape (no other recognised shape glued to it) or nothing the redactor
+//!   recognises (an OAuth token has no shape; mode 1 already takes such a value, so the gate
+//!   adds only the real key of the provider's own shape). Any `acct.` name is refused `askpass`
+//!   at store and at redemption, in every mode.
+//!   Every other secret keeps the mode 1/2 rule. Under mode 1 an `acct.` name that is not
+//!   `acct.<known provider>.<label>` is refused. The kill switch is `secrets.mode` 0 (leases
+//!   and redemptions check only the mode).
+//!
+//!   **This is a check by redactor SHAPE only**, the same as mode 1 itself. Still accepted, for
+//!   every name in mode 1 and under the gate: base64, hex or percent-encoded keys, a key with a
+//!   letter or digit glued before it (`xghp_...`), keys split by whitespace or zero-width
+//!   characters, `\u`-escaped JSON, and any credential format with no shape (a Linear key), also
+//!   glued after the key. Also admitted: the shape of `openai` is the bare `sk-` catch-all, so
+//!   any vendor's `sk-` key (an OpenRouter `sk-or-v1-...`) passes under `acct.openai.*`, and
+//!   an Anthropic organisation key (`sk-ant-admin01-...`) under `acct.anthropic.*`: the check says
+//!   "a key shaped like this provider's", not "a key of this provider's API".
+//! - **Bounded**: the value's size, the number of secrets and of live leases, and a lease's
+//!   lifetime are settings (`secrets.*`).
+
+use ainkrad_core::audit::{AuditActor, AuditEntity, NewAuditEvent};
+use ainkrad_core::settings::{Key, Scope};
+use ainkrad_proto::redact::Redactor;
+use ring::digest::{SHA256, digest};
+use serde_json::json;
+use sqlx::sqlite::SqlitePool;
+use sqlx::{Row, SqliteConnection};
+use zeroize::Zeroizing;
+
+use super::settings::value_in;
+use crate::ops::secretbox::SecretBox;
+
+/// How a runner hands a secret to a session (E2-07.2).
+pub const DELIVERY: [&str; 3] = ["env", "file", "askpass"];
+
+/// A secret as it is listed: everything but its value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Meta {
+    pub id: i64,
+    pub name: String,
+    /// The device that stored it, `d_…`.
+    pub owner: String,
+    /// The runner devices it may be leased to.
+    pub runners: Vec<String>,
+    pub delivery: String,
+    /// 1 when stored, one more per rotation.
+    pub version: i64,
+    /// The value's length in bytes.
+    pub size: i64,
+    /// The master key it is sealed under.
+    pub key_id: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A value to store, with its scope. No `Debug`: nothing may print it.
+pub struct NewValue<'a> {
+    pub value: &'a str,
+    /// `None` keeps what it was (an empty scope for a new secret).
+    pub runners: Option<&'a [String]>,
+    /// `None` keeps what it was (`env` for a new secret).
+    pub delivery: Option<&'a str>,
+}
+
+/// A redeemed lease: the value and how to deliver it. No `Debug`.
+pub struct Redeemed {
+    pub name: String,
+    pub version: i64,
+    pub delivery: String,
+    pub value: Zeroizing<String>,
+    /// The lease's end, unix seconds: the runner drops the value by then or at session end.
+    pub expires_at: i64,
+}
+
+/// Why the broker refused, with a stable code. The message never holds a value.
+#[derive(Debug)]
+pub enum Error {
+    Refused { code: &'static str, message: String },
+    Db(sqlx::Error),
+}
+
+impl From<sqlx::Error> for Error {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Db(e)
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused { code, message } => write!(f, "{code}: {message}"),
+            Self::Db(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+fn refused<T>(code: &'static str, message: impl Into<String>) -> Result<T, Error> {
+    Err(Error::Refused {
+        code,
+        message: message.into(),
+    })
+}
+
+/// `[a-z][a-z0-9_.-]{0,63}`, the table's own check: a name can carry nothing else into a path,
+/// a log line or an audit row.
+pub fn valid_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name.as_bytes()[0].is_ascii_lowercase()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b))
+}
+
+/// Names under this prefix are provider-account secrets: `acct.<provider>.<label>`.
+pub const ACCOUNT_PREFIX: &str = "acct.";
+
+/// The provider kinds an account secret may name. Extending it is a code change on purpose.
+/// Each is paired with the redactor kind of its own key shape.
+pub const ACCOUNT_PROVIDERS: [(&str, &str); 4] = [
+    ("anthropic", "anthropic_key"),
+    // A Claude subscription's `setup-token` (`sk-ant-oat01-…`): the redactor reads it as an
+    // Anthropic key, so the narrow gate judges it as one.
+    ("claude-sub", "anthropic_key"),
+    ("openai", "openai_key"),
+    ("google", "google_key"),
+];
+
+/// What a secret is for, from its name alone (the account model will mint these names).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A git, forge, Linear or any other secret.
+    Other,
+    /// An AI provider account's key: its provider and its own key shape (see
+    /// [`ACCOUNT_PROVIDERS`]).
+    ProviderAccount {
+        provider: &'static str,
+        shape: &'static str,
+    },
+    /// An account of a user-defined provider (`acct.<definition id>.<id>`, see `secrets_user`).
+    UserAccount,
+}
+
+/// Classifies `name`; fails closed: a name under [`ACCOUNT_PREFIX`] that is not
+/// `acct.<known provider>.<label>` (a label has a letter or digit) is refused, never treated
+/// as `Other`.
+pub fn kind_of(name: &str) -> Result<Kind, Error> {
+    let Some(rest) = name.strip_prefix(ACCOUNT_PREFIX) else {
+        return Ok(Kind::Other);
+    };
+    let found = rest.split_once('.').and_then(|(p, label)| {
+        let (provider, shape) = ACCOUNT_PROVIDERS.iter().find(|(k, _)| *k == p)?;
+        label
+            .bytes()
+            .any(|b| b.is_ascii_alphanumeric())
+            .then_some(Kind::ProviderAccount { provider, shape })
+    });
+    match found {
+        Some(kind) => Ok(kind),
+        None => refused(
+            "bad_request",
+            "a name under acct. is acct.<provider>.<label> with a known provider",
+        ),
+    }
+}
+
+/// The audit tag of a provider-account secret, merged into its details; `lifted` when the gate
+/// admitted a value the mode would have refused.
+fn tag_account(details: &mut serde_json::Value, name: &str, lifted: bool) {
+    // The account model's own name, of any provider, is one too (a user definition's has no `kind_of`).
+    if matches!(kind_of(name), Ok(Kind::ProviderAccount { .. }))
+        || super::gateway::account_secret(name).is_some()
+    {
+        details["kind"] = json!("provider_account");
+        if lifted {
+            details["gate_lifted"] = json!(true);
+        }
+    }
+}
+
+/// The associated data of a sealed value: its secret and version.
+fn label(name: &str, version: i64) -> String {
+    format!("core.secret:{name}:v{version}")
+}
+
+fn hex8(bytes: &[u8]) -> String {
+    bytes[..8].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+async fn setting(conn: &mut SqliteConnection, key: Key) -> Result<i64, Error> {
+    Ok(value_in(conn, key, Scope::Server).await?)
+}
+
+/// Refuses while the broker is off (G-SEC, `secrets.mode` 0); the mode otherwise.
+async fn enabled(conn: &mut SqliteConnection) -> Result<i64, Error> {
+    match setting(conn, Key::SecretsMode).await? {
+        0 => refused(
+            "secrets_disabled",
+            "the secrets broker is off (secrets.mode 0, gate G-SEC)",
+        ),
+        mode => Ok(mode),
+    }
+}
+
+/// Refuses while the broker is off. Credentials a module mints (the run token) pass it too, so
+/// `secrets.mode 0` stops every credential path.
+pub async fn require_enabled(pool: &SqlitePool) -> Result<(), Error> {
+    let mut conn = pool.acquire().await?;
+    enabled(&mut conn).await.map(drop)
+}
+
+/// The checks every value passes before it is sealed.
+async fn check_value(
+    conn: &mut SqliteConnection,
+    name: &str,
+    value: &str,
+    delivery: &str,
+) -> Result<bool, Error> {
+    let mode = enabled(conn).await?;
+    // Fail closed on an unknown `acct.` name, but only below mode 2 (which is unchanged).
+    let kind = match kind_of(name) {
+        Ok(kind) => kind,
+        Err(_) if super::secrets_user::holds(conn, name).await? => Kind::UserAccount,
+        Err(e) if mode < 2 => return Err(e),
+        Err(_) => Kind::Other,
+    };
+    // By the prefix, not the parsed kind: a malformed `acct.` name in mode 2 is `Other` but is
+    // still an account name (KAN-453).
+    if name.starts_with(ACCOUNT_PREFIX) && delivery == "askpass" {
+        return refused(
+            "bad_request",
+            "a provider-account secret is not delivered by askpass",
+        );
+    }
+    let max = setting(conn, Key::SecretsMaxBytes).await?;
+    if value.is_empty() {
+        return refused("bad_request", "the value is empty");
+    }
+    if value.len() as i64 > max {
+        return refused(
+            "too_large",
+            format!("the value is over secrets.max_bytes ({max} bytes)"),
+        );
+    }
+    super::secrets_user::bind(conn, name, value).await?;
+    // Before G-SEC only throwaway values: one the redactor recognises as a real key shape is
+    // refused. ponytail: shapes only, as the redactor; a real value with no known prefix gets
+    // through, which is why mode 1 is a guard rail and the gate itself is mode 2.
+    // The narrow gate lifts the refusal for a provider-account secret, and only when it is on;
+    // such a value still may not look like any other kind of credential.
+    let redactor = Redactor::new();
+    if mode >= 2 || redactor.text(value) == value {
+        return Ok(false);
+    }
+    match kind {
+        Kind::ProviderAccount { shape, .. }
+            if setting(conn, Key::SecretsProviderAccounts).await? == 1
+                && super::secrets_user::single_own_key(&redactor, value, shape) =>
+        {
+            Ok(true)
+        }
+        Kind::UserAccount
+            if setting(conn, Key::SecretsProviderAccounts).await? == 1
+                && super::secrets_user::single_key(&redactor, value) =>
+        {
+            Ok(true)
+        }
+        _ => refused(
+            "real_secret_refused",
+            "the value contains a recognised credential shape and is not, as a whole, one key \
+             of this provider's own shape. A provider's own key needs secrets.provider_accounts; \
+             every other real secret waits for gate G-SEC (secrets.mode 2)",
+        ),
+    }
+}
+
+/// The scope, checked: each an active runner device, no repeats.
+async fn check_runners(conn: &mut SqliteConnection, runners: &[String]) -> Result<(), Error> {
+    for (i, id) in runners.iter().enumerate() {
+        if runners[..i].contains(id) || !active_runner(conn, id).await? {
+            return refused(
+                "bad_request",
+                format!("{id:?} is not an active runner, or is listed twice"),
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn active_runner(conn: &mut SqliteConnection, id: &str) -> Result<bool, Error> {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM core_devices WHERE id = ? AND kind = 'runner' \
+         AND status = 'active' AND revoked_at IS NULL",
+    )
+    .bind(id)
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(n == 1)
+}
+
+fn check_delivery(delivery: &str) -> Result<(), Error> {
+    match DELIVERY.contains(&delivery) {
+        true => Ok(()),
+        false => refused("bad_request", "delivery is env, file or askpass"),
+    }
+}
+
+fn meta(row: sqlx::sqlite::SqliteRow) -> Result<Meta, sqlx::Error> {
+    let runners: String = row.try_get("runners")?;
+    Ok(Meta {
+        id: row.try_get("id")?,
+        name: row.try_get("name")?,
+        owner: row.try_get("owner")?,
+        runners: serde_json::from_str(&runners).unwrap_or_default(),
+        delivery: row.try_get("delivery")?,
+        version: row.try_get("version")?,
+        size: row.try_get("size")?,
+        key_id: row.try_get("key_id")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+const META: &str = "SELECT id, name, owner, runners, delivery, version, size, key_id, \
+                    created_at, updated_at FROM core_secrets";
+
+async fn find(conn: &mut SqliteConnection, name: &str) -> Result<Meta, Error> {
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!("{META} WHERE name = ?")))
+        .bind(name)
+        .fetch_optional(&mut *conn)
+        .await?;
+    match row {
+        Some(row) => Ok(meta(row)?),
+        None => refused("not_found", "no such secret"),
+    }
+}
+
+async fn audit(
+    conn: &mut SqliteConnection,
+    actor: AuditActor,
+    action: &str,
+    id: i64,
+    details: serde_json::Value,
+) -> Result<(), Error> {
+    let event = NewAuditEvent {
+        actor,
+        action: action.to_owned(),
+        entity: Some(AuditEntity {
+            kind: "secret".to_owned(),
+            id,
+        }),
+        details: details.to_string(),
+    };
+    super::audit::append(conn, &event).await?;
+    Ok(())
+}
+
+/// Every secret, by name; never a value.
+pub async fn list(pool: &SqlitePool) -> Result<Vec<Meta>, sqlx::Error> {
+    sqlx::query(sqlx::AssertSqlSafe(format!("{META} ORDER BY name")))
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(meta)
+        .collect()
+}
+
+/// Stores a new secret `name` for `owner` (a device id), audited as `secret.created`.
+pub async fn create(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    name: &str,
+    new: &NewValue<'_>,
+    owner: &str,
+    actor: AuditActor,
+    now: &str,
+) -> Result<Meta, Error> {
+    let mut tx = super::begin_write(pool).await?;
+    let m = create_in(&mut tx, sealer, name, new, owner, actor, now).await?;
+    tx.commit().await?;
+    Ok(m)
+}
+
+/// [`create`] inside the caller's write transaction (the account model stores its row and its
+/// secret together); the caller commits.
+pub async fn create_in(
+    tx: &mut SqliteConnection,
+    sealer: &SecretBox,
+    name: &str,
+    new: &NewValue<'_>,
+    owner: &str,
+    actor: AuditActor,
+    now: &str,
+) -> Result<Meta, Error> {
+    if !valid_name(name) {
+        return refused("bad_request", "a name is [a-z][a-z0-9_.-]{0,63}");
+    }
+    let delivery = new.delivery.unwrap_or("env");
+    check_delivery(delivery)?;
+    let runners = new.runners.unwrap_or_default();
+    let lifted = check_value(&mut *tx, name, new.value, delivery).await?;
+    check_runners(&mut *tx, runners).await?;
+    let max = setting(&mut *tx, Key::SecretsMaxCount).await?;
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM core_secrets")
+        .fetch_one(&mut *tx)
+        .await?;
+    if count >= max {
+        return refused(
+            "limit_reached",
+            format!("the broker holds secrets.max_count ({max}) secrets"),
+        );
+    }
+    let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM core_secrets WHERE name = ?")
+        .bind(name)
+        .fetch_one(&mut *tx)
+        .await?;
+    if exists > 0 {
+        return refused("conflict", "a secret of that name exists; rotate it");
+    }
+    let sealed = sealer
+        .seal(&label(name, 1), new.value.as_bytes())
+        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+    let runners_json = json!(runners).to_string();
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO core_secrets (name, owner, runners, delivery, version, key_id, sealed, \
+         size, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?) RETURNING id",
+    )
+    .bind(name)
+    .bind(owner)
+    .bind(&runners_json)
+    .bind(delivery)
+    .bind(sealer.key_id())
+    .bind(&sealed)
+    .bind(new.value.len() as i64)
+    .bind(now)
+    .bind(now)
+    .fetch_one(&mut *tx)
+    .await?;
+    let mut details = json!({"name": name, "version": 1, "runners": runners, "delivery": delivery,
+                         "size": new.value.len(), "key_id": sealer.key_id(), "by_device": owner});
+    tag_account(&mut details, name, lifted);
+    audit(&mut *tx, actor, "secret.created", id, details).await?;
+    let m = find(&mut *tx, name).await?;
+    Ok(m)
+}
+
+/// Replaces `name`'s value (and its scope or delivery, when given): a new version, audited as
+/// `secret.rotated`. Every outstanding lease on it is dropped in the same transaction (review
+/// M2): a grant made for one version never delivers the next; a new value needs a new grant.
+pub async fn rotate(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    name: &str,
+    new: &NewValue<'_>,
+    by_device: &str,
+    actor: AuditActor,
+    now: &str,
+) -> Result<Meta, Error> {
+    let mut tx = super::begin_write(pool).await?;
+    let m = rotate_in(&mut tx, sealer, name, new, by_device, actor, now).await?;
+    tx.commit().await?;
+    Ok(m)
+}
+
+/// [`rotate`] inside the caller's write transaction; the caller commits.
+pub async fn rotate_in(
+    tx: &mut SqliteConnection,
+    sealer: &SecretBox,
+    name: &str,
+    new: &NewValue<'_>,
+    by_device: &str,
+    actor: AuditActor,
+    now: &str,
+) -> Result<Meta, Error> {
+    let old = find(&mut *tx, name).await?;
+    let delivery = new.delivery.unwrap_or(&old.delivery);
+    check_delivery(delivery)?;
+    let lifted = check_value(&mut *tx, name, new.value, delivery).await?;
+    let runners = new.runners.unwrap_or(&old.runners);
+    check_runners(&mut *tx, runners).await?;
+    let version = old.version + 1;
+    let sealed = sealer
+        .seal(&label(name, version), new.value.as_bytes())
+        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+    sqlx::query(
+        "UPDATE core_secrets SET runners = ?, delivery = ?, version = ?, key_id = ?, sealed = ?, \
+         size = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(json!(runners).to_string())
+    .bind(delivery)
+    .bind(version)
+    .bind(sealer.key_id())
+    .bind(&sealed)
+    .bind(new.value.len() as i64)
+    .bind(now)
+    .bind(old.id)
+    .execute(&mut *tx)
+    .await?;
+    let dropped = sqlx::query("DELETE FROM core_secret_leases WHERE secret_id = ?")
+        .bind(old.id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    let mut details = json!({"name": name, "version": version, "runners": runners,
+                         "delivery": delivery, "size": new.value.len(),
+                         "key_id": sealer.key_id(), "leases_revoked": dropped,
+                         "by_device": by_device});
+    tag_account(&mut details, name, lifted);
+    audit(&mut *tx, actor, "secret.rotated", old.id, details).await?;
+    let m = find(&mut *tx, name).await?;
+    Ok(m)
+}
+
+/// Deletes `name` and its leases, audited as `secret.deleted`. Works whatever the mode.
+pub async fn delete(
+    pool: &SqlitePool,
+    name: &str,
+    by_device: &str,
+    actor: AuditActor,
+) -> Result<(), Error> {
+    let mut tx = super::begin_write(pool).await?;
+    delete_in(&mut tx, name, by_device, actor).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`delete`] inside the caller's write transaction; the caller commits.
+pub async fn delete_in(
+    tx: &mut SqliteConnection,
+    name: &str,
+    by_device: &str,
+    actor: AuditActor,
+) -> Result<(), Error> {
+    let old = find(&mut *tx, name).await?;
+    sqlx::query("DELETE FROM core_secrets WHERE id = ?")
+        .bind(old.id)
+        .execute(&mut *tx)
+        .await?;
+    let details = json!({"name": name, "version": old.version, "by_device": by_device});
+    audit(&mut *tx, actor, "secret.deleted", old.id, details).await?;
+    Ok(())
+}
+
+/// Grants `runner` a lease on `name` for `ttl` seconds (default and most: `secrets.lease_secs`),
+/// audited as `secret.leased`. The runner must be in the secret's scope. Returns the lease's
+/// `l_…` id, which only that runner can redeem, and its end (unix seconds).
+#[allow(clippy::too_many_arguments)]
+pub async fn lease(
+    pool: &SqlitePool,
+    name: &str,
+    runner: &str,
+    ttl: Option<i64>,
+    by_device: &str,
+    actor: AuditActor,
+    now: &str,
+    now_unix: i64,
+) -> Result<(String, i64), Error> {
+    lease_to(
+        pool, name, runner, ttl, by_device, actor, now, now_unix, None,
+    )
+    .await
+}
+
+/// [`lease`] for a reader named in the audit row (`"to": "gateway"`: the runner's auth gateway
+/// redeems it into its own memory, KAN-435).
+#[allow(clippy::too_many_arguments)]
+pub async fn lease_to(
+    pool: &SqlitePool,
+    name: &str,
+    runner: &str,
+    ttl: Option<i64>,
+    by_device: &str,
+    actor: AuditActor,
+    now: &str,
+    now_unix: i64,
+    to: Option<&str>,
+) -> Result<(String, i64), Error> {
+    let mut tx = super::begin_write(pool).await?;
+    enabled(&mut tx).await?;
+    let s = find(&mut tx, name).await?;
+    if !s.runners.iter().any(|r| r == runner) || !active_runner(&mut tx, runner).await? {
+        return refused(
+            "bad_request",
+            "the runner is not an active runner in this secret's scope",
+        );
+    }
+    let most = setting(&mut tx, Key::SecretsLeaseSecs).await?;
+    let ttl = ttl.unwrap_or(most);
+    if !(1..=most).contains(&ttl) {
+        return refused(
+            "bad_request",
+            format!("ttl_secs is 1..={most} (secrets.lease_secs)"),
+        );
+    }
+    // Spent and expired leases go first: they only count against the bound.
+    sqlx::query("DELETE FROM core_secret_leases WHERE used_at IS NOT NULL OR expires_at <= ?")
+        .bind(now_unix)
+        .execute(&mut *tx)
+        .await?;
+    let max = setting(&mut tx, Key::SecretsMaxLeases).await?;
+    let live: i64 = sqlx::query_scalar("SELECT count(*) FROM core_secret_leases")
+        .fetch_one(&mut *tx)
+        .await?;
+    if live >= max {
+        return refused(
+            "limit_reached",
+            format!("secrets.max_leases ({max}) leases are live"),
+        );
+    }
+    // One runner may hold a quarter of them (review L5): a runaway agent session, now that the
+    // Core grants leases itself (E2-08), cannot starve every other runner.
+    let per_runner = (max / 4).max(2).min(max);
+    let mine: i64 = sqlx::query_scalar("SELECT count(*) FROM core_secret_leases WHERE runner = ?")
+        .bind(runner)
+        .fetch_one(&mut *tx)
+        .await?;
+    if mine >= per_runner {
+        return refused(
+            "limit_reached",
+            format!("this runner holds {per_runner} live leases (a quarter of secrets.max_leases)"),
+        );
+    }
+    let id = crate::auth::crypto::random_id("l_");
+    let hash = digest(&SHA256, id.as_bytes());
+    let expires_at = now_unix + ttl;
+    sqlx::query(
+        "INSERT INTO core_secret_leases (hash, secret_id, runner, expires_at, created_at) \
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(hash.as_ref())
+    .bind(s.id)
+    .bind(runner)
+    .bind(expires_at)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+    let mut details = json!({"name": name, "version": s.version, "runner": runner,
+                             "lease": hex8(hash.as_ref()), "expires_at": expires_at,
+                             "by_device": by_device});
+    if let Some(to) = to {
+        details["to"] = json!(to);
+    }
+    super::account_keys::tag_lease(&mut details, name);
+    audit(&mut tx, actor, "secret.leased", s.id, details).await?;
+    tx.commit().await?;
+    Ok((id, expires_at))
+}
+
+/// Redeems lease `id` for `runner` (the calling device): once, before it expires, while the
+/// runner is still in the secret's scope. Audited as `secret.redeemed`. A lease that is not
+/// this runner's is `not_found`, as one that never existed; a spent or expired one is
+/// `lease_expired`. A refusal leaves the lease as it was.
+pub async fn redeem(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    id: &str,
+    runner: &str,
+    actor: AuditActor,
+    now: &str,
+    now_unix: i64,
+) -> Result<Redeemed, Error> {
+    let hash = digest(&SHA256, id.as_bytes());
+    let mut tx = super::begin_write(pool).await?;
+    enabled(&mut tx).await?;
+    let row = sqlx::query(
+        "SELECT l.runner, l.expires_at, l.used_at, s.id, s.name, s.runners, s.delivery, \
+         s.version, s.key_id, s.sealed FROM core_secret_leases l \
+         JOIN core_secrets s ON s.id = l.secret_id WHERE l.hash = ?",
+    )
+    .bind(hash.as_ref())
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(row) =
+        row.filter(|r| r.try_get::<String, _>("runner").ok().as_deref() == Some(runner))
+    else {
+        return refused("not_found", "no such lease");
+    };
+    let used: Option<String> = row.try_get("used_at")?;
+    let expires_at: i64 = row.try_get("expires_at")?;
+    if used.is_some() || expires_at <= now_unix {
+        return refused("lease_expired", "the lease is spent or expired");
+    }
+    let scope: Vec<String> =
+        serde_json::from_str(&row.try_get::<String, _>("runners")?).unwrap_or_default();
+    if !scope.iter().any(|r| r == runner) || !active_runner(&mut tx, runner).await? {
+        return refused("not_found", "no such lease");
+    }
+    let (secret, name): (i64, String) = (row.try_get("id")?, row.try_get("name")?);
+    // A secret stored before the rule, or by any path that skipped it, is still never handed
+    // to askpass if it is an account (KAN-453).
+    if name.starts_with(ACCOUNT_PREFIX) && row.try_get::<String, _>("delivery")? == "askpass" {
+        return refused(
+            "bad_request",
+            "a provider-account secret is not delivered by askpass",
+        );
+    }
+    let version: i64 = row.try_get("version")?;
+    let key_id: String = row.try_get("key_id")?;
+    if !sealer.holds(&key_id) {
+        tracing::error!(
+            name,
+            key_id,
+            loaded = sealer.key_id(),
+            "secret sealed under another master key"
+        );
+        return refused(
+            "secrets_unavailable",
+            "the secret is sealed under a master key this Core does not hold",
+        );
+    }
+    let sealed: Vec<u8> = row.try_get("sealed")?;
+    let plain = match sealer.open_as(&key_id, &label(&name, version), &sealed) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(name, error = %e, "a sealed secret did not open");
+            return refused("secrets_unavailable", "the secret did not open");
+        }
+    };
+    let value = match std::str::from_utf8(&plain) {
+        Ok(v) => Zeroizing::new(v.to_owned()),
+        Err(_) => return refused("secrets_unavailable", "the secret did not open"),
+    };
+    sqlx::query("UPDATE core_secret_leases SET used_at = ? WHERE hash = ?")
+        .bind(now)
+        .bind(hash.as_ref())
+        .execute(&mut *tx)
+        .await?;
+    let delivery: String = row.try_get("delivery")?;
+    let details = json!({"name": name, "version": version, "runner": runner,
+                         "lease": hex8(hash.as_ref()), "delivery": delivery,
+                         "by_device": runner});
+    audit(&mut tx, actor, "secret.redeemed", secret, details).await?;
+    tx.commit().await?;
+    Ok(Redeemed {
+        name,
+        version,
+        delivery,
+        value,
+        expires_at,
+    })
+}
+
+/// Opens secret `name` for the Core's own use on behalf of module `module` (a scheduler job
+/// that calls a forge: no runner is involved, so there is no lease). Only a secret named
+/// `<module>.<…>` may be opened, so a module cannot reach a platform secret or another module's;
+/// the broker must be on (G-SEC); every open is audited as `secret.used` with the name and
+/// `purpose`, never the value. Callers open once per pass and keep the value in the returned
+/// `Zeroizing` buffer only as long as the calls it authenticates.
+pub async fn open_for_module(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    module: &str,
+    name: &str,
+    purpose: &str,
+) -> Result<Zeroizing<String>, Error> {
+    if !valid_name(name) || module == "acct" || name.split_once('.').map(|(m, _)| m) != Some(module)
+    {
+        return refused("not_found", "no such secret");
+    }
+    let mut tx = super::begin_write(pool).await?;
+    enabled(&mut tx).await?;
+    let row = sqlx::query("SELECT id, version, key_id, sealed FROM core_secrets WHERE name = ?")
+        .bind(name)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some(row) = row else {
+        return refused("not_found", "no such secret");
+    };
+    let (id, version): (i64, i64) = (row.try_get("id")?, row.try_get("version")?);
+    let key_id: String = row.try_get("key_id")?;
+    if !sealer.holds(&key_id) {
+        return refused(
+            "secrets_unavailable",
+            "the secret is sealed under a master key this Core does not hold",
+        );
+    }
+    let sealed: Vec<u8> = row.try_get("sealed")?;
+    let value = sealer
+        .open_as(&key_id, &label(name, version), &sealed)
+        .ok()
+        .and_then(|p| {
+            std::str::from_utf8(&p)
+                .ok()
+                .map(|v| Zeroizing::new(v.to_owned()))
+        });
+    let Some(value) = value else {
+        tracing::error!(name, "a sealed secret did not open");
+        return refused("secrets_unavailable", "the secret did not open");
+    };
+    let details = json!({"name": name, "version": version, "module": module,
+                         "purpose": purpose});
+    audit(&mut tx, AuditActor::System, "secret.used", id, details).await?;
+    tx.commit().await?;
+    Ok(value)
+}
+
+/// Opens the secrets `names` so a Core-side redactor can mask their values in text an agent
+/// sends or reads (E2-29). Nothing leaves the Core, so there is no lease and no audit row (one
+/// per tool call would drown the trail); it works while the broker is off, because a value
+/// leased earlier is still in the agent's hands. Fails closed, with `secrets_unavailable`, for
+/// every case where the value the agent holds may not be the one on file: a secret that no
+/// longer exists (deleted), one rotated, or deleted and created again, at or after `since` (when the session
+/// began, so the agent may hold the superseded value), or one that does not open.
+pub async fn open_for_masking(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    names: &[String],
+    since: &str,
+) -> Result<Vec<(String, Zeroizing<String>)>, Error> {
+    let gone = || {
+        refused(
+            "secrets_unavailable",
+            "a secret leased to this session was deleted, rotated or cannot be opened",
+        )
+    };
+    let mut out = Vec::with_capacity(names.len());
+    for name in names {
+        let row = sqlx::query(
+            "SELECT version, key_id, sealed, updated_at FROM core_secrets WHERE name = ?",
+        )
+        .bind(name)
+        .fetch_optional(pool)
+        .await?;
+        let Some(row) = row else { return gone() };
+        let version: i64 = row.try_get("version")?;
+        let updated_at: String = row.try_get("updated_at")?;
+        if updated_at.as_str() >= since {
+            return gone();
+        }
+        let key_id: String = row.try_get("key_id")?;
+        let sealed: Vec<u8> = row.try_get("sealed")?;
+        let value = sealer
+            .holds(&key_id)
+            .then(|| sealer.open_as(&key_id, &label(name, version), &sealed).ok())
+            .flatten()
+            .and_then(|p| {
+                std::str::from_utf8(&p)
+                    .ok()
+                    .map(|v| Zeroizing::new(v.to_owned()))
+            });
+        match value {
+            Some(v) => out.push((name.clone(), v)),
+            None => return gone(),
+        }
+    }
+    Ok(out)
+}
+
+/// What a master-key rotation did: the secrets held and how many it moved to the new key.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Resealed {
+    pub secrets: usize,
+    pub moved: usize,
+    pub from: Vec<String>,
+}
+
+/// Master-key rotation, the database half (E2-07.1): in ONE transaction every secret not yet
+/// under `target` is opened with its own key (`keys` holds the current and retired ones) and
+/// sealed again under `target` with a fresh nonce and the same associated data (name and
+/// version); then every secret is opened with `target` alone before anything commits, so a
+/// value that did not survive the move rolls the whole rotation back. The audit row
+/// `secret.master_rotated` (counts and key ids, no key material) is written in the same
+/// transaction, once per target key. `abort` rolls back after the check (crash injection).
+pub async fn reseal_all(
+    pool: &SqlitePool,
+    keys: &SecretBox,
+    target: &SecretBox,
+    abort: bool,
+) -> Result<Resealed, Error> {
+    let mut tx = super::begin_write(pool).await?;
+    let rows =
+        sqlx::query("SELECT id, name, version, key_id, sealed FROM core_secrets ORDER BY id")
+            .fetch_all(&mut *tx)
+            .await?;
+    let (mut moved, mut from) = (0, Vec::<String>::new());
+    for row in &rows {
+        let (id, name): (i64, String) = (row.try_get("id")?, row.try_get("name")?);
+        let key_id: String = row.try_get("key_id")?;
+        if key_id == target.key_id() {
+            continue;
+        }
+        let aad = label(&name, row.try_get("version")?);
+        let plain = keys
+            .open_as(&key_id, &aad, &row.try_get::<Vec<u8>, _>("sealed")?)
+            .map_err(|_| Error::Refused {
+                code: "secrets_unavailable",
+                message: format!("secret {name:?} did not open under its key {key_id}"),
+            })?;
+        let sealed = target
+            .seal(&aad, &plain)
+            .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+        sqlx::query("UPDATE core_secrets SET key_id = ?, sealed = ? WHERE id = ?")
+            .bind(target.key_id())
+            .bind(&sealed)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        moved += 1;
+        if !from.contains(&key_id) {
+            from.push(key_id);
+        }
+    }
+    // Verify with the new key alone, from what the transaction now holds.
+    let rows = sqlx::query("SELECT name, version, key_id, sealed FROM core_secrets")
+        .fetch_all(&mut *tx)
+        .await?;
+    for row in &rows {
+        let name: String = row.try_get("name")?;
+        let ok = row.try_get::<String, _>("key_id")? == target.key_id()
+            && target
+                .open(
+                    &label(&name, row.try_get("version")?),
+                    &row.try_get::<Vec<u8>, _>("sealed")?,
+                )
+                .is_ok();
+        if !ok {
+            return refused(
+                "secrets_unavailable",
+                format!("secret {name:?} did not verify under the new key; nothing was changed"),
+            );
+        }
+    }
+    // Connections' credentials are sealed under the same master key and move with the rest.
+    let (conn_total, conn_moved, conn_from) =
+        super::connections::secret::reseal_in(&mut tx, keys, target).await?;
+    moved += conn_moved;
+    for id in conn_from {
+        if !from.contains(&id) {
+            from.push(id);
+        }
+    }
+    // So are the OAuth apps' config rows (C5).
+    let (app_total, app_moved, app_from) =
+        super::connections::apps::reseal_in(&mut tx, keys, target).await?;
+    moved += app_moved;
+    for id in app_from {
+        if !from.contains(&id) {
+            from.push(id);
+        }
+    }
+    let total = rows.len() + conn_total + app_total;
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE action = 'secret.master_rotated' \
+         AND json_extract(details, '$.to_key_id') = ?",
+    )
+    .bind(target.key_id())
+    .fetch_one(&mut *tx)
+    .await?;
+    if audited == 0 {
+        let event = NewAuditEvent {
+            actor: AuditActor::System,
+            action: "secret.master_rotated".to_owned(),
+            entity: None,
+            details: json!({"to_key_id": target.key_id(), "from_key_ids": from,
+                            "total": total, "resealed": moved})
+            .to_string(),
+        };
+        super::audit::append(&mut tx, &event).await?;
+    }
+    if abort {
+        return refused("aborted", "stopped before commit (test)");
+    }
+    tx.commit().await?;
+    Ok(Resealed {
+        secrets: total,
+        moved,
+        from,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_are_narrow() {
+        for ok in ["a", "github.token", "ssh-deploy_key.2", &"a".repeat(64)] {
+            assert!(valid_name(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "A",
+            "1a",
+            ".a",
+            "a b",
+            "a/b",
+            "a{b}",
+            "é",
+            &"a".repeat(65),
+        ] {
+            assert!(!valid_name(bad), "{bad}");
+        }
+    }
+}

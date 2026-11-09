@@ -2,15 +2,11 @@
 //! `ainkrad_core::settings::REGISTRY`, per scope, and the resolver every read site goes
 //! through (`value_in`): the most specific allowed scope with a value wins, else the default.
 //!
-//! `set` and `reset` validate against the registry (bounds, allowed scopes, the scope's row
-//! exists) and refuse with the reason, never clamping; each appends `setting.set` /
+//! `set` and `reset` validate against the registry (bounds, allowed scopes) and refuse with the reason, never clamping; each appends `setting.set` /
 //! `setting.reset` with the old and new value, which `history` reads back.
 
 use ainkrad_core::audit::{AuditActor, AuditEntity, AuditSeq, NewAuditEvent};
-use ainkrad_core::exec::RunId;
-use ainkrad_core::org::{AgentId, CompanyId};
-use ainkrad_core::settings::{Key, REGISTRY, Scope, ScopeKind, SettingError, Spec, chain, resolve};
-use ainkrad_core::work::{IssueId, ProjectId};
+use ainkrad_core::settings::{Key, REGISTRY, Scope, ScopeKind, SettingError, Spec, resolve};
 use serde_json::{Value, json};
 use sqlx::sqlite::SqlitePool;
 use sqlx::{Error, Row, SqliteConnection};
@@ -44,8 +40,6 @@ pub struct Change {
 #[derive(Debug)]
 pub enum SetError {
     Refused(SettingError),
-    /// The company, project, runner or account does not exist.
-    NoScope(Scope),
     Db(Error),
 }
 
@@ -59,26 +53,12 @@ impl std::fmt::Display for SetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Refused(e) => e.fmt(f),
-            Self::NoScope(s) => write!(f, "no {s}"),
             Self::Db(e) => e.fmt(f),
         }
     }
 }
 
 impl std::error::Error for SetError {}
-
-/// The company a project belongs to, for the project → company → server chain.
-async fn chain_in(conn: &mut SqliteConnection, at: Scope) -> Result<Vec<Scope>, Error> {
-    let company = match at {
-        Scope::Project(p) => sqlx::query_scalar("SELECT company_id FROM projects WHERE id = ?")
-            .bind(p.0)
-            .fetch_optional(&mut *conn)
-            .await?
-            .map(CompanyId),
-        _ => None,
-    };
-    Ok(chain(at, company))
-}
 
 async fn rows_in(conn: &mut SqliteConnection, key: Key) -> Result<Vec<(Scope, i64)>, Error> {
     let rows = sqlx::query("SELECT scope_kind, scope_id, value FROM settings WHERE key = ?")
@@ -90,8 +70,12 @@ async fn rows_in(conn: &mut SqliteConnection, key: Key) -> Result<Vec<(Scope, i6
         let kind: String = row.try_get("scope_kind")?;
         let value: String = row.try_get("value")?;
         // A value the registry no longer accepts is skipped: the next scope (or default) holds.
-        if let (Ok(kind), Ok(value)) = (kind.parse::<ScopeKind>(), value.parse::<i64>()) {
-            out.push((Scope::of(kind, row.try_get("scope_id")?), value));
+        let scope = kind
+            .parse::<ScopeKind>()
+            .ok()
+            .and_then(|k| Scope::of(k, row.try_get("scope_id").ok()?));
+        if let (Some(scope), Ok(value)) = (scope, value.parse::<i64>()) {
+            out.push((scope, value));
         }
     }
     Ok(out)
@@ -103,8 +87,8 @@ pub(crate) async fn effective_in(
     key: Key,
     at: Scope,
 ) -> Result<Effective, Error> {
-    let chain = chain_in(conn, at).await?;
-    let (value, source) = resolve(key, &chain, &rows_in(conn, key).await?);
+    // The platform's one scope; modules' scopes extend the chain (E1-09.1).
+    let (value, source) = resolve(key, &[at], &rows_in(conn, key).await?);
     Ok(Effective {
         spec: key.spec(),
         value,
@@ -130,52 +114,6 @@ pub async fn effective(pool: &SqlitePool, key: Key, at: Scope) -> Result<Effecti
     effective_in(&mut *pool.acquire().await?, key, at).await
 }
 
-/// Where a run's settings are read: its issue's project, else its agent's company.
-pub(crate) async fn run_scope_in(
-    conn: &mut SqliteConnection,
-    issue: Option<IssueId>,
-    agent: AgentId,
-) -> Result<Scope, Error> {
-    let project: Option<i64> = match issue {
-        Some(i) => {
-            sqlx::query_scalar("SELECT project_id FROM issues WHERE id = ?")
-                .bind(i.0)
-                .fetch_optional(&mut *conn)
-                .await?
-        }
-        None => None,
-    };
-    if let Some(p) = project {
-        return Ok(Scope::Project(ProjectId(p)));
-    }
-    let company: Option<i64> = sqlx::query_scalar("SELECT company_id FROM agents WHERE id = ?")
-        .bind(agent.0)
-        .fetch_optional(&mut *conn)
-        .await?;
-    Ok(company.map_or(Scope::Server, |c| Scope::Company(CompanyId(c))))
-}
-
-/// `run_scope_in` for a run by id; the server for a missing run.
-pub(crate) async fn scope_of_run_in(
-    conn: &mut SqliteConnection,
-    run: RunId,
-) -> Result<Scope, Error> {
-    let found: Option<(Option<i64>, i64)> =
-        sqlx::query_as("SELECT issue_id, agent_id FROM runs WHERE id = ?")
-            .bind(run.0)
-            .fetch_optional(&mut *conn)
-            .await?;
-    match found {
-        Some((issue, agent)) => run_scope_in(conn, issue.map(IssueId), AgentId(agent)).await,
-        None => Ok(Scope::Server),
-    }
-}
-
-/// `scope_of_run_in` on its own connection.
-pub async fn scope_of_run(pool: &SqlitePool, run: RunId) -> Result<Scope, Error> {
-    scope_of_run_in(&mut *pool.acquire().await?, run).await
-}
-
 /// Every setting that may be set at `at`'s kind of scope, with its effective value there.
 pub async fn list(pool: &SqlitePool, at: Scope) -> Result<Vec<Effective>, Error> {
     let mut conn = pool.acquire().await?;
@@ -184,34 +122,6 @@ pub async fn list(pool: &SqlitePool, at: Scope) -> Result<Vec<Effective>, Error>
         out.push(effective_in(&mut conn, spec.key, at).await?);
     }
     Ok(out)
-}
-
-/// Whether the scope's row exists.
-async fn scope_exists(conn: &mut SqliteConnection, at: Scope) -> Result<bool, Error> {
-    let sql = match at {
-        Scope::Server => return Ok(true),
-        Scope::Company(_) => "SELECT EXISTS (SELECT 1 FROM companies WHERE id = ?)",
-        Scope::Project(_) => "SELECT EXISTS (SELECT 1 FROM projects WHERE id = ?)",
-        Scope::Runner(_) => "SELECT EXISTS (SELECT 1 FROM runners WHERE id = ?)",
-        Scope::Account(_) => "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = ?)",
-    };
-    sqlx::query_scalar(sql)
-        .bind(at.id())
-        .fetch_one(&mut *conn)
-        .await
-}
-
-/// The company an audit event about `at` belongs to.
-async fn company_of(conn: &mut SqliteConnection, at: Scope) -> Result<Option<CompanyId>, Error> {
-    Ok(match at {
-        Scope::Company(c) => Some(c),
-        Scope::Project(p) => sqlx::query_scalar("SELECT company_id FROM projects WHERE id = ?")
-            .bind(p.0)
-            .fetch_optional(&mut *conn)
-            .await?
-            .map(CompanyId),
-        _ => None,
-    })
 }
 
 async fn stored_in(conn: &mut SqliteConnection, key: Key, at: Scope) -> Result<Option<i64>, Error> {
@@ -244,9 +154,6 @@ async fn write_in(
             allowed: spec.scopes,
         };
         return Err(SetError::Refused(refused));
-    }
-    if !scope_exists(conn, at).await? {
-        return Err(SetError::NoScope(at));
     }
     let old = stored_in(conn, key, at).await?;
     if new.is_none() && old.is_none() {
@@ -289,8 +196,6 @@ async fn write_in(
             kind: at.kind().as_str().to_owned(),
             id: at.id(),
         }),
-        company_id: company_of(conn, at).await?,
-        run_id: None,
         details: json!({"key": key.name(), "scope": at.to_string(), "old": old, "new": new,
                         "at": now})
         .to_string(),
@@ -333,58 +238,6 @@ pub async fn reset(
     let e = effective_in(&mut tx, key, at).await?;
     tx.commit().await?;
     Ok(e)
-}
-
-/// A value set at a scope: the setting, where, the value, who set it last and when.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Override {
-    pub spec: &'static Spec,
-    pub scope: Scope,
-    pub value: i64,
-    pub by: AuditActor,
-    pub at: String,
-}
-
-/// Every value set at `company` or at one of its projects, by key, then scope. A row the
-/// registry no longer knows, or not an integer, is passed over.
-pub async fn company_overrides(
-    pool: &SqlitePool,
-    company: CompanyId,
-) -> Result<Vec<Override>, Error> {
-    let rows = sqlx::query(
-        "SELECT key, scope_kind, scope_id, value, updated_by_kind, updated_by_id, updated_at \
-         FROM settings WHERE (scope_kind = 'company' AND scope_id = ?1) \
-         OR (scope_kind = 'project' AND scope_id IN (SELECT id FROM projects WHERE company_id = ?1)) \
-         ORDER BY key, scope_kind, scope_id",
-    )
-    .bind(company.0)
-    .fetch_all(pool)
-    .await?;
-    let mut out = vec![];
-    for row in rows {
-        let (key, kind, value, by): (String, String, String, String) = (
-            row.try_get("key")?,
-            row.try_get("scope_kind")?,
-            row.try_get("value")?,
-            row.try_get("updated_by_kind")?,
-        );
-        let (Ok(key), Ok(kind), Ok(value), Some(by)) = (
-            key.parse::<Key>(),
-            kind.parse::<ScopeKind>(),
-            value.parse::<i64>(),
-            AuditActor::from_parts(&by, row.try_get("updated_by_id")?),
-        ) else {
-            continue;
-        };
-        out.push(Override {
-            spec: key.spec(),
-            scope: Scope::of(kind, row.try_get("scope_id")?),
-            value,
-            by,
-            at: row.try_get("updated_at")?,
-        });
-    }
-    Ok(out)
 }
 
 /// Every set and reset of `key` (at `at` only, when given), newest first.

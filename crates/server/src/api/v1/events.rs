@@ -1,6 +1,6 @@
 //! The live event stream with replay (E10.2, decision #14). One sequence (`store::events`)
-//! covers every audited change (issue and run states, approvals, …), transcript chunks and
-//! wakes. Two ways to read it, same `Event` schema:
+//! covers every audited change (`audit`) and whatever kinds the modules write. Two ways to
+//! read it, same `Event` schema:
 //!
 //! - `GET /api/v1/events?after=<seq>&limit=<n>`: a page, oldest first (HTTP replay).
 //! - `GET /api/v1/events/ws`: a WebSocket. The resume point is the `Last-Event-ID` header on
@@ -13,141 +13,84 @@
 //!   stuck socket may never deliver it); a client always resumes from the last seq it read.
 //!   The server holds at most one page per socket, never a growing buffer.
 //!
+//! Retention (E1-04.4): events older than `events.retention_secs` are trimmed, and the newest
+//! trimmed seq is the floor. A resume point below it gets a defined answer instead of a silent
+//! gap: the HTTP replay a 410 `PastRetention` (code `past_retention`, the `floor`); the socket
+//! closes with 4410 and `past retention, floor <seq>`. The client then re-syncs: it reads
+//! `GET /api/v1/events/latest`, reloads the state it shows from the resource routes, and
+//! resumes from that `seq`.
+//!
+//! Scoped (E1-04.3, `store::events::view`): a device gets only the kinds its scopes may see
+//! (`audit` needs `admin`; a module's kinds its `Module::event_scope`), and every number it sees
+//! (each `seq`, `Last-Event-ID`, `after`, the head, the floor) counts its own view, gap-free, so
+//! it cannot tell that a hidden event exists. A cursor belongs to one view: a scope change closes
+//! the socket with 4003 and the client re-syncs from `GET /api/v1/events/latest`.
+//!
 //! Paperclip's UI polled and its socket only invalidated caches, with no replay; here the
 //! app polls nothing and misses nothing across a disconnect.
 
 use std::time::{Duration, Instant};
 
-use ainkrad_core::audit::AuditActor;
-use axum::Extension;
 use axum::Json;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Query, State};
-use axum::http::HeaderMap;
+use axum::extract::{Extension, Query, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use serde_json::Value;
 use utoipa::ToSchema;
 
-use super::model::TranscriptChunk;
-use super::scope::Acting;
-use super::types::{Page, Timestamp, WakeSource, ts};
-use super::{ApiError, ApiResult, Paging};
+use super::types::{Page, Timestamp, ts};
+use super::{ApiError, ApiResult, Paging, trace};
 use crate::api::App;
-use crate::store::events::{self, MAX_EVENTS, StoredEvent, What};
+use crate::store::events::view::{self, View};
+use crate::store::events::{MAX_EVENTS, StoredEvent};
 
-/// Who acted, on an audited change.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum EventActor {
-    User { user_id: i64 },
-    Agent { agent_id: i64 },
-    Runner { runner_id: i64 },
-    System {},
-}
-
-impl From<AuditActor> for EventActor {
-    fn from(actor: AuditActor) -> Self {
-        match actor {
-            AuditActor::User(u) => Self::User { user_id: u.0 },
-            AuditActor::Agent(a) => Self::Agent { agent_id: a.0 },
-            AuditActor::Runner(r) => Self::Runner { runner_id: r.0 },
-            AuditActor::System => Self::System {},
-        }
-    }
-}
-
-/// What happened. New types may be added: a client skips an event it cannot decode.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum EventPayload {
-    /// An audited change: `action` is dotted (`issue.in_review`, `run.failed`,
-    /// `approval.approved`, …) and names the `entity` it happened to.
-    Audit {
-        audit_seq: i64,
-        action: String,
-        actor: EventActor,
-        entity_kind: Option<String>,
-        entity_id: Option<i64>,
-        company_id: Option<i64>,
-        run_id: Option<i64>,
-        #[schema(value_type = Object)]
-        details: Value,
-    },
-    /// A chunk of a run's transcript.
-    Transcript { run_id: i64, chunk: TranscriptChunk },
-    /// A wake queued for an agent.
-    Wake {
-        wake_id: i64,
-        agent_id: i64,
-        issue_id: Option<i64>,
-        source: WakeSource,
-        reason: String,
-    },
-}
-
-/// One entry of the event stream. `seq` only grows: it is the replay cursor.
-#[derive(Debug, Serialize, ToSchema)]
+/// One entry of the event stream. `seq` only grows: it is the replay cursor, counted gap-free over
+/// the events this device's scopes may see (`x-event-scopes`), so it differs between devices
+/// with different scopes. New kinds may be added: a client skips an event whose kind it does not
+/// know.
+#[derive(Debug, Serialize, ToSchema, schemars::JsonSchema)]
 pub struct Event {
     pub seq: i64,
     pub at: Timestamp,
-    pub payload: EventPayload,
+    /// What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,
+    /// `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;
+    /// a device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a
+    /// module writes. The registered kinds are listed in `x-event-kinds`. The payload of
+    /// `agent.state` is `{session, state, reason, …}`: a chain session that waits for an account
+    /// says `reason: "waiting"` and `waiting: {until, why, since}` (`until` an RFC 3339 time, `since`
+    /// the first wait in unix seconds), and one whose launch refused its account, so another was
+    /// picked across a provider or harness, says `reason: "repicked"`, and a run a failover moved across
+    /// them says `reason: "failover"`, both with `from` and `to` (each `{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account
+    /// cooled or limited until `until` (`class` `rate_limited`, `quota` or `plan_limit`; `source`
+    /// `gateway` or `harness`). `account.health` is `{account, user, state, reason}`: an account went
+    /// `unhealthy` (`reason` `upstream_errors` or `auth_suspected`). `account.failover` is `{run,
+    /// user, from_session, to_session, from_account, to_account, from_pool, to_pool, class, hop}`: a
+    /// run moved to `to_session`, or ended (`to_session` null: its chain has nothing left, the hop cap
+    /// or the storm guard; `to_account` is null while the successor waits for one). `account.budget` is
+    /// `{subject_kind, subject, state}` for an account's or a pool's budget (`state` `warning` or
+    /// `exhausted`). `account.expired` is `{account, user, reason}`: a key the provider refused was
+    /// confirmed and the account disabled. `alarm.raised` with `alarm` `failover_storm` and a
+    /// `user` says the bound on that user's failovers stopped a run of theirs from moving (once per
+    /// window and user). `connection.health` is `{connection, user, kind, state, reason}`: a connection's
+    /// health changed (`state` `active`, `cooling`, `limited`, `unhealthy` or `disabled`; `reason` a fixed
+    /// code: `rate_limited`, `quota`, `upstream_errors`, `auth_suspected`, `auth_failed`, `recovered`,
+    /// `auth_cleared`). It is visible to `admin` devices only (`x-event-scopes`), never to a `read` device;
+    /// the push for it goes to the owning user's admin devices only. No payload holds a key, a token or an
+    /// upstream's own words.
+    pub kind: String,
+    #[schema(value_type = Object)]
+    pub payload: Value,
 }
 
 impl From<StoredEvent> for Event {
     fn from(e: StoredEvent) -> Self {
-        let payload = match e.what {
-            What::Audit {
-                audit_seq,
-                action,
-                actor,
-                entity,
-                company_id,
-                run_id,
-                details,
-            } => EventPayload::Audit {
-                audit_seq,
-                action,
-                actor: actor.into(),
-                entity_kind: entity.as_ref().map(|(k, _)| k.clone()),
-                entity_id: entity.map(|(_, id)| id),
-                company_id,
-                run_id,
-                details,
-            },
-            What::Transcript {
-                run_id,
-                seq,
-                at,
-                kind,
-                payload,
-            } => EventPayload::Transcript {
-                run_id,
-                chunk: TranscriptChunk {
-                    seq,
-                    at: ts(&at),
-                    kind,
-                    payload,
-                },
-            },
-            What::Wake {
-                wake_id,
-                agent_id,
-                issue_id,
-                source,
-                reason,
-            } => EventPayload::Wake {
-                wake_id,
-                agent_id,
-                issue_id,
-                source: source.into(),
-                reason,
-            },
-        };
         Self {
             seq: e.seq,
             at: ts(&e.at),
-            payload,
+            kind: e.kind,
+            payload: e.payload.0,
         }
     }
 }
@@ -155,86 +98,91 @@ impl From<StoredEvent> for Event {
 #[utoipa::path(get, path = "/api/v1/events", operation_id = "listEvents", tag = "events",
     params(Paging),
     responses((status = 200, description = "Events after `after` (default 0), oldest first, \
-        at most `limit` (default and most 1000); the same events the WebSocket carries", body = Page<Event>)))]
+        at most `limit` (default and most 1000); the same events the WebSocket carries", body = Page<Event>),
+        (status = 410, description = "`after` is below the retention floor: some events after it \
+        were trimmed. Re-sync from `GET /api/v1/events/latest`", body = PastRetention)))]
 pub async fn replay(
     State(app): State<App>,
-    Extension(acting): Extension<Acting>,
+    Extension(me): Extension<super::Caller>,
     Query(page): Query<Paging>,
-) -> ApiResult<Page<Event>> {
+) -> Response {
     let limit = page.limit.unwrap_or(MAX_EVENTS).clamp(1, MAX_EVENTS - 1);
-    let mut got = events::list_events(&app.pool, page.after.unwrap_or(0), limit + 1).await?;
-    let more = got.len() > limit as usize;
-    got.truncate(limit as usize);
-    // The cursor moves past what a company does not see, so paging never stalls on it.
-    let next_after = more.then(|| got.last().map(|e| e.seq)).flatten();
-    let mut items = vec![];
-    for e in got {
-        if visible(&app, acting, &e).await? {
-            items.push(e.into());
+    let v = View::of(&me.device.scopes);
+    match view::replay(&app.pool, v, page.after.unwrap_or(0), limit + 1).await {
+        Ok(Ok(got)) => {
+            let got = got.into_iter().map(Event::from).collect();
+            Json(Page::of(got, limit, |e| e.seq)).into_response()
+        }
+        Ok(Err(past)) => PastRetention::new(past.floor).into_response(),
+        Err(e) => ApiError::from(e).into_response(),
+    }
+}
+
+/// The 410 of a replay from below the retention floor (E1-04.4).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PastRetention {
+    /// `past_retention`.
+    pub code: String,
+    pub message: String,
+    pub error_id: String,
+    /// The newest trimmed seq: every event above it is still there.
+    pub floor: i64,
+}
+
+impl PastRetention {
+    fn new(floor: i64) -> Self {
+        Self {
+            code: "past_retention".to_owned(),
+            message: format!(
+                "events up to {floor} were trimmed; re-sync from /api/v1/events/latest"
+            ),
+            error_id: trace::error_id(),
+            floor,
         }
     }
-    Ok(Json(Page { items, next_after }))
+}
+
+impl IntoResponse for PastRetention {
+    fn into_response(self) -> Response {
+        tracing::info!(
+            floor = self.floor,
+            error_id = self.error_id,
+            "replay past retention"
+        );
+        (StatusCode::GONE, Json(self)).into_response()
+    }
 }
 
 /// The newest event's seq a client would be shown: the catch-up target.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, ToSchema, schemars::JsonSchema)]
 pub struct LatestEvent {
     /// 0 when there is none yet.
     pub seq: i64,
+    /// The retention floor: events up to it were trimmed, so a client whose last read seq is
+    /// below it re-syncs (E1-04.4). Absent from servers before API minor 2.
+    pub floor: Option<i64>,
 }
 
 #[utoipa::path(get, path = "/api/v1/events/latest", operation_id = "latestEvent",
     tag = "events",
-    responses((status = 200, description = "The newest event's seq, of the acting company's \
-        events when `X-Citadel-Company` is sent: how far a catching-up client has to go", body = LatestEvent)))]
+    responses((status = 200, description = "The newest event's seq: how far a catching-up \
+        client has to go, and where a client past retention resumes after re-syncing", body = LatestEvent)))]
 pub async fn latest(
     State(app): State<App>,
-    Extension(acting): Extension<Acting>,
+    Extension(me): Extension<super::Caller>,
 ) -> ApiResult<LatestEvent> {
+    let (seq, floor) = view::head(&app.pool, View::of(&me.device.scopes)).await?;
     Ok(Json(LatestEvent {
-        seq: latest_seq(&app, acting).await?,
+        seq,
+        floor: Some(floor),
     }))
-}
-
-/// The newest seq of an event `acting` sees.
-pub async fn latest_seq(app: &App, acting: Acting) -> Result<i64, sqlx::Error> {
-    match acting.0 {
-        Some(c) => events::last_company_event_seq(&app.pool, c.0).await,
-        None => events::last_event_seq(&app.pool).await,
-    }
-}
-
-/// Whether `e` belongs to the company a request works in (E15.14): an audited change of it, a
-/// transcript chunk of its run, a wake of its agent; anything when it names none.
-async fn visible(app: &App, acting: Acting, e: &StoredEvent) -> Result<bool, sqlx::Error> {
-    if acting.0.is_none() {
-        return Ok(true);
-    }
-    let company: Option<i64> = match &e.what {
-        What::Audit { company_id, .. } => *company_id,
-        What::Transcript { run_id, .. } => {
-            let sql = "SELECT a.company_id FROM runs r JOIN agents a ON a.id = r.agent_id \
-                       WHERE r.id = ?";
-            sqlx::query_scalar(sql)
-                .bind(run_id)
-                .fetch_optional(&app.pool)
-                .await?
-        }
-        What::Wake { agent_id, .. } => {
-            let sql = "SELECT company_id FROM agents WHERE id = ?";
-            sqlx::query_scalar(sql)
-                .bind(agent_id)
-                .fetch_optional(&app.pool)
-                .await?
-        }
-    };
-    Ok(acting.sees(company))
 }
 
 /// How the socket paces itself.
 #[derive(Debug, Clone, Copy)]
 pub struct StreamConfig {
-    /// How often a caught-up socket looks for new events.
+    /// How often the process looks for new events (`crate::live`: one read of the head for
+    /// every socket; a socket reads its page only when the head moved past it).
     pub poll: Duration,
     /// Ping interval; a socket silent for three is closed.
     pub heartbeat: Duration,
@@ -242,17 +190,18 @@ pub struct StreamConfig {
     pub send_timeout: Duration,
     /// Events read (and held) at a time.
     pub page: u32,
+    /// How often the socket re-checks its device in the database (`auth::BACKSTOP`).
+    pub backstop: Duration,
 }
 
 impl Default for StreamConfig {
     fn default() -> Self {
         Self {
-            // ponytail: each socket polls the table; a broadcast from the writers if many
-            // clients ever make that cost show.
             poll: Duration::from_millis(250),
             heartbeat: Duration::from_secs(20),
             send_timeout: Duration::from_secs(10),
             page: 200,
+            backstop: crate::auth::BACKSTOP,
         }
     }
 }
@@ -272,28 +221,75 @@ fn last_event_id(headers: &HeaderMap) -> Result<Option<i64>, ApiError> {
 
 #[utoipa::path(get, path = "/api/v1/events/ws", operation_id = "streamEvents", tag = "events",
     params(("Last-Event-ID" = Option<i64>, Header,
-        description = "Replay events after this seq first; absent: only new events")),
+        description = "Replay events after this seq first; absent: only new events"),
+        ("Sec-WebSocket-Protocol" = Option<String>, Header,
+            description = "A browser, which cannot sign an upgrade: `ainkrad.v1, \
+            ainkrad-ticket.<ticket>` with a ticket from `POST /api/v1/ws-ticket`, sent unsigned \
+            (the server answers `ainkrad.v1`)")),
     responses((status = 101, description = "Switching to a WebSocket. Each text frame is one \
         `Event` (schema `Event`). Closed with 1013 when the client falls behind (a send blocked too long), \
         with the reason `too slow; resume from the last seq read, at most <seq>`: `<seq>` is \
         the last event the server tried to send. The hint is best effort; the client \
         reconnects with `Last-Event-ID` set to the last seq it actually read. Also closed \
-        with 1001 (no pong) and 1011 (server error), with the same hint")))]
+        with 1001 (no pong), 1011 (server error), 4001 (the device was revoked) and 4003 (its \
+        scopes changed: reconnect), with the same hint; with 4410 and \
+        `past retention, floor <seq>` when the resume point is below the retention floor \
+        (re-sync from `/api/v1/events/latest`)")))]
 pub async fn ws(
     State(app): State<App>,
-    Extension(acting): Extension<Acting>,
+    Extension(me): Extension<super::Caller>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
+    let v = View::of(&me.device.scopes);
     let after = match last_event_id(&headers) {
         Ok(Some(after)) => after,
-        Ok(None) => match events::last_event_seq(&app.pool).await {
-            Ok(head) => head,
+        Ok(None) => match view::head(&app.pool, v).await {
+            Ok((head, _)) => head,
             Err(e) => return ApiError::from(e).into_response(),
         },
         Err(e) => return e.into_response(),
     };
-    ws.on_upgrade(move |socket| stream(app, acting, socket, after))
+    // Subscribed before the upgrade, so a revocation or scope change in between is not missed.
+    let revoked = crate::auth::until_revoked(
+        app.live.devices(&app.pool, app.stream.backstop),
+        app.auth.subscribe(),
+        me.device.id.clone(),
+    );
+    let device_id = me.device.id.clone();
+    let scopes = me.device.scopes.clone();
+    let rescoped = crate::auth::until_rescoped(
+        app.live.devices(&app.pool, app.stream.backstop),
+        app.auth.subscribe_rescoped(),
+        me.device.id,
+        me.device.scopes,
+    );
+    // Re-checked once subscribed: a revocation committed between the gate and the
+    // subscription is seen here, one after it reaches the subscription.
+    match crate::auth::device_now(&app.pool, &device_id, Some(&scopes)).await {
+        crate::auth::DeviceNow::Usable => {}
+        crate::auth::DeviceNow::Gone => return super::gate::auth_failed().into_response(),
+        crate::auth::DeviceNow::Unknown => return unavailable().into_response(),
+    }
+    let changed = async move {
+        tokio::select! {
+            () = revoked => End::Revoked,
+            () = rescoped => End::Rescoped,
+        }
+    };
+    // A browser offers `ainkrad.v1` with its ticket (`ticket`) and drops a socket that does not
+    // answer one it offered.
+    ws.protocols([super::ticket::PROTOCOL])
+        .on_upgrade(move |socket| stream(app, socket, v, after, device_id, changed))
+}
+
+/// A device check that could not be read: neither refused nor allowed.
+pub(crate) fn unavailable() -> ApiError {
+    ApiError::new(
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        "unavailable",
+        "try again",
+    )
 }
 
 /// Why a socket ended, for the log.
@@ -304,64 +300,107 @@ enum End {
     Failed,
     /// The server is stopping.
     Restart,
+    /// The resume point is below the retention floor.
+    Past(i64),
+    /// The device was revoked (handshake spec §10).
+    Revoked,
+    /// The device's scopes changed: it reconnects for a re-filtered stream (§10).
+    Rescoped,
 }
 
-/// Sends every event after `after`, then new ones as they land, until the client goes, falls
-/// behind or goes silent.
-async fn stream(app: App, acting: Acting, mut socket: WebSocket, mut after: i64) {
+/// Sends every event of view `v` after its seq `after`, then new ones as they land, until the
+/// client goes, falls behind or goes silent. `after` stays in the view's numbers (the close
+/// hint); the read position is the global seq it stands for.
+async fn stream(
+    app: App,
+    mut socket: WebSocket,
+    v: View,
+    mut after: i64,
+    device: String,
+    changed: impl std::future::Future<Output = End>,
+) {
+    tokio::pin!(changed);
     let cfg = app.stream;
-    let mut poll = tokio::time::interval(cfg.poll);
+    let mut head = app.live.head(&app.pool, cfg.poll);
     let mut ping = tokio::time::interval(cfg.heartbeat);
     ping.reset();
     let mut heard = Instant::now();
     let mut closing = app.closing.subscribe();
+    // Where the view cursor stands in the global seq; a resume point that fails ends at once.
+    let (mut global, mut ended) = match resume(&app, v, after).await {
+        Ok(Ok(at)) => (at, None),
+        Ok(Err(past)) => (0, Some(End::Past(past.floor))),
+        Err(e) => {
+            tracing::error!(error = %e, "event stream read failed");
+            (0, Some(End::Failed))
+        }
+    };
+    // The first pass always reads (the replay); after it, only a head past the cursor does.
+    let mut first = true;
     let end = 'live: loop {
+        if let Some(end) = ended.take() {
+            break end;
+        }
+        // Seen before the read, so an event landing during it wakes the next pass.
+        let behind = *head.borrow_and_update() > global;
         // Catch up page by page; only one page is ever held.
-        loop {
-            let page = match events::list_events(&app.pool, after, cfg.page).await {
-                Ok(page) => page,
-                Err(e) => {
-                    tracing::error!(error = %e, "event stream read failed");
-                    break 'live End::Failed;
-                }
-            };
-            let full = page.len() == cfg.page as usize;
-            for e in page {
-                let seq = e.seq;
-                match visible(&app, acting, &e).await {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        after = seq;
-                        continue;
-                    }
+        if std::mem::take(&mut first) || behind {
+            loop {
+                let page = match read(&app, v, global, cfg.page).await {
+                    Ok(Ok(page)) => page,
+                    Ok(Err(past)) => break 'live End::Past(past.floor),
                     Err(e) => {
                         tracing::error!(error = %e, "event stream read failed");
                         break 'live End::Failed;
                     }
+                };
+                // Checked after the page is read and before any of it is sent (KAN-417): an event
+                // appended after a revocation committed is read after it, so it is never sent
+                // to the revoked device, through the broadcast or the store alone.
+                match crate::auth::device_now(&app.pool, &device, None).await {
+                    crate::auth::DeviceNow::Usable => {}
+                    crate::auth::DeviceNow::Gone => break 'live End::Revoked,
+                    crate::auth::DeviceNow::Unknown => break 'live End::Failed,
                 }
-                let text = serde_json::to_string(&Event::from(e)).unwrap_or_default();
-                match tokio::time::timeout(
-                    cfg.send_timeout,
-                    socket.send(Message::Text(text.into())),
-                )
-                .await
-                {
-                    Ok(Ok(())) => (after, heard) = (seq, Instant::now()),
-                    Ok(Err(_)) => break 'live End::Gone,
-                    // The frame may still go out: the hint counts it as sent.
-                    Err(_) => {
-                        after = seq;
-                        break 'live End::Slow;
+                let full = page.events.len() == cfg.page as usize;
+                for (g, e) in page.events {
+                    // The catch-up does not wait for the next select: a fanned-out revocation
+                    // or scope change ends it between frames.
+                    tokio::select! {
+                        biased;
+                        end = &mut changed => break 'live end,
+                        () = std::future::ready(()) => {}
+                    }
+                    let seq = e.seq;
+                    let text = serde_json::to_string(&Event::from(e)).unwrap_or_default();
+                    match tokio::time::timeout(
+                        cfg.send_timeout,
+                        socket.send(Message::Text(text.into())),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => (after, global, heard) = (seq, g, Instant::now()),
+                        Ok(Err(_)) => break 'live End::Gone,
+                        // The frame may still go out: the hint counts it as sent.
+                        Err(_) => {
+                            after = seq;
+                            break 'live End::Slow;
+                        }
                     }
                 }
-            }
-            if !full {
-                break;
+                if !full {
+                    // Every hidden event up to the snapshot's head was passed over: never again.
+                    global = global.max(page.scanned_to);
+                    break;
+                }
             }
         }
         tokio::select! {
             () = crate::api::stopping(&mut closing) => break End::Restart,
-            _ = poll.tick() => {}
+            end = &mut changed => break end,
+            moved = head.changed() => if moved.is_err() {
+                break End::Failed;
+            },
             _ = ping.tick() => {
                 if heard.elapsed() > cfg.heartbeat * 3 {
                     break End::Silent;
@@ -379,14 +418,20 @@ async fn stream(app: App, acting: Acting, mut socket: WebSocket, mut after: i64)
             },
         }
     };
+    let hint = format!("resume from the last seq read, at most {after}");
     let (code, why) = match end {
         End::Gone => return,
-        End::Slow => (1013, "too slow"),
-        End::Silent => (1001, "no pong"),
-        End::Failed => (1011, "server error"),
-        End::Restart => (1012, "server restarting"),
+        End::Slow => (1013, format!("too slow; {hint}")),
+        End::Silent => (1001, format!("no pong; {hint}")),
+        End::Failed => (1011, format!("server error; {hint}")),
+        End::Restart => (1012, format!("server restarting; {hint}")),
+        End::Past(floor) => (
+            4410,
+            format!("past retention, floor {floor}; re-sync from /api/v1/events/latest"),
+        ),
+        End::Revoked => (4001, format!("revoked; {hint}")),
+        End::Rescoped => (4003, format!("scope changed; {hint}")),
     };
-    let why = format!("{why}; resume from the last seq read, at most {after}");
     tracing::info!(code, why, "event stream closed");
     let close = Message::Close(Some(CloseFrame {
         code,
@@ -404,4 +449,32 @@ async fn stream(app: App, acting: Acting, mut socket: WebSocket, mut after: i64)
         }
     };
     let _ = tokio::time::timeout(Duration::from_secs(2), closing).await;
+}
+
+/// `view::resume` on its own read.
+async fn resume(
+    app: &App,
+    v: View,
+    after: i64,
+) -> Result<Result<i64, crate::store::events::PastRetention>, sqlx::Error> {
+    app.live
+        .reads
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    view::resume(&mut *app.pool.acquire().await?, v, after).await
+}
+
+/// `view::read` in one snapshot.
+async fn read(
+    app: &App,
+    v: View,
+    global: i64,
+    limit: u32,
+) -> Result<Result<view::Page, crate::store::events::PastRetention>, sqlx::Error> {
+    app.live
+        .reads
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut tx = app.pool.begin().await?;
+    let got = view::read(&mut tx, v, global, limit).await?;
+    tx.commit().await?;
+    Ok(got)
 }

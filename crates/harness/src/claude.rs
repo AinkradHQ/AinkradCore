@@ -21,7 +21,8 @@ use std::io;
 use serde_json::{Value, json};
 use tokio::process::Command;
 
-use crate::proc::{self, Proc};
+use crate::exec::Launch;
+use crate::proc::Proc;
 use crate::{Decision, Harness, HarnessEvent, RateWindow, Spec, TurnOutcome, Usage, sum_tokens};
 
 /// The Claude Code version this adapter was written and recorded against (E3.6 probes it).
@@ -88,6 +89,17 @@ pub fn args(spec: &Spec, resume: Option<&str>) -> Vec<String> {
     ]
     .map(str::to_owned)
     .into();
+    // A gateway session's base URL and placeholder key are pinned in the flag settings, which
+    // outrank the workspace's `.claude/settings.local.json` that the agent can write.
+    if let Some(at) = args.iter().position(|a| a == "--settings") {
+        args[at + 1] = settings::flag(spec);
+    }
+    // The connection tools (C4b): the whole server, whose tools the Core lists and decides.
+    if crate::connections::slot(&spec.env).is_some()
+        && let Some(at) = args.iter().position(|a| a == "--allowedTools")
+    {
+        args[at + 1] = format!("mcp__citadel,mcp__{}", crate::connections::SERVER);
+    }
     args.push(spec.model.clone());
     let mut flag = |name: &str, value: String| args.extend([name.to_owned(), value]);
     if let Some(file) = &spec.instructions {
@@ -106,13 +118,12 @@ pub fn args(spec: &Spec, resume: Option<&str>) -> Vec<String> {
 
 /// The process to spawn: cleared env + allowlist, `CLAUDE_CONFIG_DIR` set to the spec's.
 pub fn command(spec: &Spec, resume: Option<&str>) -> Command {
+    launch(spec, resume).command(spec)
+}
+
+fn launch(spec: &Spec, resume: Option<&str>) -> Launch {
     let program = spec.program.as_deref().unwrap_or("claude".as_ref());
-    proc::command(
-        program.as_os_str(),
-        &args(spec, resume),
-        spec,
-        &[("CLAUDE_CONFIG_DIR", spec.config_dir.as_os_str())],
-    )
+    Launch::new(program, args(spec, resume)).set("CLAUDE_CONFIG_DIR", spec.config_dir.as_os_str())
 }
 
 pub struct Claude {
@@ -124,6 +135,9 @@ pub struct Claude {
     exited: bool,
 }
 
+/// How many assistant message ids one turn keeps live in the `Decoder`.
+const LIVE_MESSAGES: usize = 1024;
+
 /// Turns Claude's stdout messages into events, tracking what the protocol needs.
 #[derive(Default)]
 pub struct Decoder {
@@ -134,7 +148,15 @@ pub struct Decoder {
     /// This turn's assistant messages → their use, for `UsageSoFar`. A message repeats on
     /// the wire, so it is keyed. Its `output_tokens` is the count when it started, so output
     /// is undercounted until the turn's `result`.
+    ///
+    /// Bounded (KAN-420): past `LIVE_MESSAGES` ids the oldest is folded into `folded` and
+    /// forgotten. ponytail: an id that returns after it was folded counts as a new message
+    /// (its old use stays in `folded`); 1024 ids of slack makes that a non-case for real turns.
     messages: HashMap<String, Usage>,
+    /// First-seen order of `messages`, to find the oldest.
+    order: VecDeque<String>,
+    /// The use of messages folded out of `messages` this turn.
+    folded: Usage,
     totals: Usage,
     /// Messages owed to the CLI, e.g. refusals of control requests we do not serve.
     replies: Vec<Value>,
@@ -296,14 +318,29 @@ impl Decoder {
             cost_usd: None,
         };
         let id = text(&message["id"]);
-        if self.messages.insert(id, step) == Some(step) {
-            return None;
+        match self.messages.insert(id.clone(), step) {
+            Some(old) if old == step => return None,
+            Some(_) => {}
+            None => self.order.push_back(id),
         }
-        Some(HarnessEvent::UsageSoFar(sum_tokens(self.messages.values())))
+        while self.order.len() > LIVE_MESSAGES {
+            if let Some(old) = self
+                .order
+                .pop_front()
+                .and_then(|id| self.messages.remove(&id))
+            {
+                self.folded = sum_tokens([&self.folded, &old]);
+            }
+        }
+        Some(HarnessEvent::UsageSoFar(sum_tokens(
+            self.messages.values().chain([&self.folded]),
+        )))
     }
 
     fn result(&mut self, m: &Value) -> Vec<HarnessEvent> {
         self.messages.clear();
+        self.order.clear();
+        self.folded = Usage::default();
         self.refused = None;
         let u = &m["usage"];
         let usage = Usage {
@@ -353,7 +390,7 @@ impl Decoder {
 impl Claude {
     async fn spawn(spec: &Spec, resume: Option<&str>) -> io::Result<Self> {
         let mut claude = Self {
-            proc: Proc::spawn(command(spec, resume))?,
+            proc: Proc::start(spec, launch(spec, resume)).await?,
             decoder: Decoder::default(),
             queued: VecDeque::new(),
             next_id: 0,
@@ -449,5 +486,6 @@ impl Harness for Claude {
     }
 }
 
+mod settings;
 #[cfg(test)]
 mod tests;

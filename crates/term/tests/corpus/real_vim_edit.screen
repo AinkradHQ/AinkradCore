@@ -1,0 +1,53 @@
+size 24x80 alt=true cursor=23,0 hidden=true modes=\e>\e[?1l\e[?2004l
+pen \e[m
+-- scrollback 0
+-- primary screen, under the alt-screen: cursor=0,0
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+-- screen
+|
+|\e[96m/* greeting */
+|\e[38;5;121mint\e[m main(\e[38;5;121mvoid\e[m) {
+|    printf(\e[95m"hello\e[38;5;224m\n\e[95m"\e[m);
+|\e[96m/* more */
+|    \e[93mreturn\e[m \e[95m0\e[m;
+|}
+|\e[94m~                                                                               
+|\e[94m~                                                                               
+|\e[94m~                                                                               
+|\e[94m~                                                                               
+|\e[94m~                                                                               
+|\e[94m~                                                                               
+|\e[94m~                                                                               
+|\e[94m~                                                                               
+|\e[94m~                                                                               
+|\e[94m~                                                                               
+|\e[94m~                                                                               
+|\e[94m~                                                                               
+|\e[94m~                                                                               
+|\e[94m~                                                                               
+|\e[1;7mhello.c [+]                                                   6,10           All
+|"hello.c" 8L, 102B written
+|

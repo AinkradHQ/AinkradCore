@@ -1,0 +1,1 @@
+{"stream_id":5,"kind":"command","seq":0,"payload":{"harness":"claude","model":"haiku","op":"agent.start","policy":{"allow":[],"mode":"ask","sandboxed":false},"prompt":"fix the bug","resume":"h-1","secrets":[{"lease":"l_lease","var":"GH_TOKEN"}],"session":"as_a"}}

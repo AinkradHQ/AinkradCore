@@ -1,0 +1,53 @@
+size 24x80 alt=true cursor=5,22 hidden=false modes=\e=\e[?1h\e[?2004h
+pen \e[m
+-- scrollback 0
+-- primary screen, under the alt-screen: cursor=0,0
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+-- screen
+|$ echo one\e[30C\e[32m│\e[m$ echo two
+|one\e[37C\e[32m│\e[mtwo
+|$ ls --color=always\e[21C\e[32m│\e[m$ 
+|\e[31;1mdata.tar.gz\e[m  \e[36;1mlink\e[m       \e[32;1mrun.sh\e[10C\e[22m│
+|\e[34;1mdir\e[m          notes.txt  wide.txt\e[8C\e[32m│
+|hello.c      plain.txt\e[18C\e[32m│
+|\e[40C\e[32m│
+|\e[40C\e[32m│
+|\e[40C\e[32m│
+|\e[40C\e[32m│
+|\e[40C\e[32m│
+|\e[40C\e[32m├\e[m───────────────────────────────────────
+|\e[40C\e[32m│\e[m$ echo three
+|\e[40C\e[32m│\e[mthree
+|\e[40C\e[32m│\e[m$ 
+|\e[40C\e[32m│
+|\e[40C\e[32m│
+|\e[40C\e[32m│
+|\e[40C\e[32m│
+|\e[40C\e[32m│
+|\e[40C\e[32m│
+|\e[40C\e[32m│
+|\e[40C\e[32m│
+|\e[30;42m[s] 0:main*                                                              ainkrad

@@ -1,0 +1,439 @@
+//! Runner protocol v2 (E1-11.1, decision P1.6): multiplexed streams over one WebSocket.
+//!
+//! v1 (`crate::runner`) stays as it is for the parked Citadel copy; v2 is a separate wire
+//! format, told apart by its `protocol` (`"2.0"`) and by its frame shape.
+//!
+//! **Frame.** Every WebSocket text message is one JSON `Frame`:
+//! `{"stream_id": u64, "kind": "...", "seq": u64, "payload": {...}}`.
+//! - Text JSON for every frame, raw bytes as standard base64 inside the payload
+//!   (`Output::data`). ponytail: base64 costs a third more bytes; that is nothing for `exec`
+//!   and acceptable for terminals at E2's rates. A binary WebSocket frame for `output` is the
+//!   upgrade if throughput ever needs it, and it is additive (a new frame type, not a change).
+//! - `stream_id` 0 is the connection's control stream (`control` hello/welcome, `heartbeat`,
+//!   connection-level `error`). The Core opens command streams with **odd** ids; even ids are
+//!   reserved for streams a runner opens later (E2-03: terminals it re-announces).
+//! - `seq` counts frames per stream and per sender, from 0, by one: what E1-11.4 resumes by.
+//! - The payload is decoded only once `kind` is known (two stages), so an unknown `kind`
+//!   decodes as `FrameKind::Unknown` and is skipped, and an unknown payload field is ignored.
+//!
+//! **Kinds.** `control` (hello/welcome now; resize/snapshot/signal later), `command` (opens a
+//! stream: Core to runner), `result` (a command's last frame, success), `error` (a command's
+//! last frame, failure; or a connection-level problem on stream 0), `output` (bytes on a
+//! stream, either direction), `credit` (flow control: the receiver allows `bytes` more
+//! `output`), `close` (abandon a stream: from the Core, a cancel), `heartbeat`.
+//!
+//! **Terminal frames (E2-01) map onto these with no break:** `out` = `output` runner to Core;
+//! `in` = `output` Core to runner (direction is the sender's); `resize` = a `control` body
+//! `{"type":"resize"}` on the terminal's stream; `snapshot` = a `control` body
+//! `{"type":"snapshot"}` carrying base64 screen bytes; `exit` = `result`; `credit` = `credit`.
+//! A peer ignores a `control` type it does not know, and the Core sends terminal frames only
+//! to a runner that advertised the `pty` driver.
+//!
+//! **Negotiation.** The runner's first frame is `control` `hello` with its `protocol` and its
+//! drivers (`exec` now; `pty`, `harness` later), each with the commands it takes and how many
+//! it runs at once. The Core answers `welcome`, or `error` `unsupported_version` and closes.
+//! The Core sends only commands some advertised driver lists; the runner refuses any other
+//! with `unsupported_command`.
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+mod agent;
+mod auth;
+mod command;
+mod gateway;
+mod login;
+mod plan_limit;
+mod subscription;
+mod terminal;
+mod tools;
+pub use agent::*;
+pub use auth::*;
+pub use command::*;
+pub use gateway::*;
+pub use login::*;
+pub use plan_limit::*;
+pub use subscription::*;
+pub use terminal::*;
+pub use tools::*;
+
+/// The v2 protocol version, `major.minor`; minors only add optional fields and kinds.
+pub const PROTOCOL_VERSION: &str = "2.0";
+
+/// The connection's own stream.
+pub const CONTROL_STREAM: u64 = 0;
+
+/// The `output` bytes either side may send on a new stream before the receiver grants more
+/// with `credit`.
+pub const STREAM_WINDOW: u64 = 64 * 1024;
+
+/// WebSocket close codes the Core uses on a runner connection.
+pub mod close_code {
+    /// The runner device was revoked (handshake spec §10).
+    pub const REVOKED: u16 = 4001;
+    /// A newer connection of the same runner took over. The runner backs off long: another
+    /// process holds its key.
+    pub const REPLACED: u16 = 4009;
+    /// The runner went silent past three heartbeats.
+    pub const SILENT: u16 = 1001;
+    /// The protocol or the proof was broken (`error` says how, if it could).
+    pub const POLICY: u16 = 1008;
+    /// The Core is stopping; reconnect.
+    pub const RESTART: u16 = 1012;
+    /// The runner fell behind the Core's sends.
+    pub const SLOW: u16 = 1013;
+}
+
+/// One WebSocket text message.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Frame {
+    pub stream_id: u64,
+    pub kind: FrameKind,
+    pub seq: u64,
+    /// The body for `kind` (`Body`; schema `V2Payload`); absent for `heartbeat` when its payload
+    /// is the default `Heartbeat`.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    #[schemars(with = "Option<Value>")]
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FrameKind {
+    Control,
+    Command,
+    Result,
+    Error,
+    Output,
+    Credit,
+    Close,
+    Heartbeat,
+    /// A kind from a newer peer: skipped. Never sent.
+    #[serde(other)]
+    Unknown,
+}
+
+/// The host's load when a heartbeat was sent (E2-15.2): its one-minute load average and its
+/// CPU count, so the hub can apply load-based back-pressure and report it through the API.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct HostLoad {
+    /// The one-minute load average.
+    pub avg1: f64,
+    /// How many CPUs the runner sees.
+    pub cores: u32,
+}
+
+/// A runner's heartbeat: carries `load` when the runner measured one, and the isolation it
+/// offers now.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Heartbeat {
+    /// The host's load when the heartbeat was sent; absent when the runner has no measure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load: Option<HostLoad>,
+    /// The isolation the runner offers now (E8a-09): a change shows in the next heartbeat, so a
+    /// tier that goes away is no longer offered by the Core's next placement. Absent from a
+    /// runner that does not report it, and from one that offers no agent driver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<IsolationCaps>,
+}
+
+/// The state of `/dev/kvm` on a runner, for the microvm tier (E8a-09).
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Kvm {
+    /// No VM tier is built into this runner, or the host has no KVM concept (macOS).
+    #[default]
+    NotApplicable,
+    /// The host has no `/dev/kvm`.
+    Absent,
+    /// `/dev/kvm` is there and the probe passed.
+    Usable,
+    /// `/dev/kvm` is there and the probe failed (permissions, a broken host).
+    Unusable,
+    /// A state from a newer runner: read as not usable. Never sent.
+    #[serde(other)]
+    Unknown,
+}
+
+/// What isolation a runner can give right now (E8a-09). Placement is by this, and the runner
+/// checks again when a session starts; a stale or forged advertisement therefore never gets a
+/// session a weaker sandbox than it asked for.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct IsolationCaps {
+    /// Every tier offered now, by name (`Isolation::as_str`). A runner whose probe fails stops
+    /// listing the tier. Names, not the enum, so a tier from a newer runner parses here and
+    /// simply meets nothing.
+    pub tiers: Vec<String>,
+    /// `/dev/kvm`, for the microvm tier.
+    #[serde(default)]
+    pub kvm: Kvm,
+}
+
+impl IsolationCaps {
+    /// A runner offering exactly `tier`.
+    pub fn of(tier: crate::runner::Isolation, kvm: Kvm) -> Self {
+        Self {
+            tiers: vec![tier.as_str().to_owned()],
+            kvm,
+        }
+    }
+
+    /// Whether some offered tier meets `required`; a name this side does not know meets nothing.
+    /// The only way a placement compares what a runner offers with what a session needs.
+    pub fn meets(&self, required: crate::runner::Isolation) -> bool {
+        self.tiers
+            .iter()
+            .filter_map(|t| crate::runner::Isolation::from_name(t))
+            .any(|t| t.satisfies(required))
+    }
+}
+
+/// A frame's payload, typed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Body {
+    Control(Control),
+    Command(Command),
+    Result(Reply),
+    Error(StreamError),
+    Output(Output),
+    Credit(Credit),
+    Close(Close),
+    Heartbeat(Heartbeat),
+}
+
+impl Frame {
+    pub fn new(stream_id: u64, seq: u64, body: Body) -> Self {
+        let json = |v: Result<Value, serde_json::Error>| v.expect("payload serializes");
+        let (kind, payload) = match body {
+            Body::Control(b) => (FrameKind::Control, json(serde_json::to_value(b))),
+            Body::Command(b) => (FrameKind::Command, json(serde_json::to_value(b))),
+            Body::Result(b) => (FrameKind::Result, json(serde_json::to_value(b))),
+            Body::Error(b) => (FrameKind::Error, json(serde_json::to_value(b))),
+            Body::Output(b) => (FrameKind::Output, json(serde_json::to_value(b))),
+            Body::Credit(b) => (FrameKind::Credit, json(serde_json::to_value(b))),
+            Body::Close(b) => (FrameKind::Close, json(serde_json::to_value(b))),
+            Body::Heartbeat(b) => (FrameKind::Heartbeat, json(serde_json::to_value(b))),
+        };
+        Self {
+            stream_id,
+            kind,
+            seq,
+            payload,
+        }
+    }
+
+    /// The typed payload: `Ok(None)` for an unknown kind (skip it), `Err` (`bad_frame`) for a
+    /// payload that does not fit its kind.
+    pub fn body(&self) -> Result<Option<Body>, StreamError> {
+        fn de<T: serde::de::DeserializeOwned>(v: &Value) -> Result<T, StreamError> {
+            T::deserialize(v)
+                .map_err(|e| StreamError::new(ErrorCode::BadFrame, format!("bad payload: {e}")))
+        }
+        let p = &self.payload;
+        Ok(Some(match self.kind {
+            FrameKind::Control => Body::Control(de(p)?),
+            FrameKind::Command => Body::Command(de(p)?),
+            FrameKind::Result => Body::Result(de(p)?),
+            FrameKind::Error => Body::Error(de(p)?),
+            FrameKind::Output => Body::Output(de(p)?),
+            FrameKind::Credit => Body::Credit(de(p)?),
+            FrameKind::Close => Body::Close(if p.is_null() {
+                Close::default()
+            } else {
+                de(p)?
+            }),
+            FrameKind::Heartbeat => Body::Heartbeat(if p.is_null() {
+                Heartbeat::default()
+            } else {
+                de(p)?
+            }),
+            FrameKind::Unknown => return Ok(None),
+        }))
+    }
+}
+
+/// `control` payloads, tagged by `type`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Control {
+    /// Runner to Core, the first frame of a connection, on stream 0.
+    Hello(RunnerHello),
+    /// Core to runner: the hello is accepted.
+    Welcome(CoreWelcome),
+    /// Core to runner: the Core's half of the connection proof (`auth`).
+    Auth(CoreAuth),
+    /// Runner to Core: the runner's half of the connection proof (`auth`).
+    Proof(RunnerProof),
+    /// Core to runner: a planned identity key rotation (`auth`).
+    Rotation(Rotation),
+    /// Runner to Core, the first frame on a `pty.open` or `pty.attach` stream (`terminal`).
+    Opened(TerminalInfo),
+    /// Core to runner on a terminal stream: the client's new size.
+    Resize(Size),
+    /// Core to runner on a terminal stream: deliver a signal to its process group.
+    Signal(SignalReq),
+    /// Runner to Core on a terminal stream: the screen now; output resumes at its `seq`.
+    Snapshot(Snapshot),
+    /// A type from a newer peer: ignored. Never sent.
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RunnerHello {
+    /// `PROTOCOL_VERSION` of the runner; the Core refuses a major it does not speak.
+    pub protocol: String,
+    pub runner_version: String,
+    /// What it can run. The Core sends only commands listed here.
+    pub drivers: Vec<DriverInfo>,
+    /// `macos`/`linux` and `aarch64`/`x86_64`, as Rust names them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch: Option<String>,
+    /// The runner device, `d_…`: the one that signed the upgrade (E1-11.3). The Core refuses a
+    /// hello without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    /// `nonce_r`, 32 random bytes, base64url (`auth`). The Core refuses a hello without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
+    /// The runner process's random id (E1-11.4). The same `boot` as the last connection means
+    /// its streams survived and are resumed; another means they are gone (reported `lost`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot: Option<String>,
+    /// Every command stream the runner still holds, with how many Core frames it received on
+    /// each: the Core resends the rest.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub streams: Vec<StreamState>,
+    /// Every terminal this runner's host processes hold (E2-03), so a Core that lost its
+    /// streams (a runner or Core restart) can `pty.attach` again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terminals: Vec<TerminalInfo>,
+    /// The host's load when the hello was sent (E2-15.2): the one-minute average and CPU count,
+    /// so the hub can apply load-based back-pressure before any heartbeat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load: Option<HostLoad>,
+    /// The isolation the runner offers (E8a-09), beside `arch`. Absent from a runner that does
+    /// not report it: the Core then treats it as offering no guarantee, and places no session on
+    /// it that needs one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<IsolationCaps>,
+}
+
+/// Resume by `seq` (E1-11.4): how many of the peer's frames one side received on a stream.
+/// Frames are numbered from 0, so this is also the next `seq` it expects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct StreamState {
+    pub stream_id: u64,
+    pub received: u64,
+}
+
+/// A driver a runner offers (`exec`, `agent`; `pty` later).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DriverInfo {
+    pub name: String,
+    /// The command ops it takes, e.g. `noop`, `exec.run`.
+    pub commands: Vec<String>,
+    /// How many of its commands run at once; one more is answered `busy`. For `agent`: how
+    /// many sessions.
+    pub capacity: u32,
+    /// Per kind within the driver (`agent`: per harness), how many run at once; together at
+    /// most `capacity`. Empty: no split.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub slots: std::collections::BTreeMap<String, u32>,
+    /// How many of its commands may be in flight at once, when that is not `capacity` (a
+    /// driver whose work outlives its commands, like `agent`): the hub counts these per
+    /// driver. Absent: `capacity`, counted with every other driver's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub streams: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CoreWelcome {
+    /// The version the Core speaks on this connection.
+    pub protocol: String,
+    /// The Core process's random id (E1-11.4): another than last time means the Core
+    /// restarted, and every stream the runner held is gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot: Option<String>,
+    /// Between heartbeats, each way; silent for three is a dead connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heartbeat_ms: Option<u64>,
+    /// Every command stream the Core still has in flight for this runner, with how many runner
+    /// frames it received on each: the runner resends the rest. A stream the runner holds that
+    /// is not listed is over for the Core (answered, or reported lost).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub streams: Vec<StreamState>,
+}
+
+/// Bytes on a stream (exec output later, terminal `out`/`in`), standard base64.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Output {
+    pub data: String,
+}
+
+/// Flow control: the sender of this frame accepts `bytes` more `output` bytes on the stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Credit {
+    pub bytes: u64,
+}
+
+/// A stream given up. From the Core on a running command: cancel it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Close {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// A command's failure, or (on stream 0) a connection's. `message` is human text, redacted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct StreamError {
+    pub code: ErrorCode,
+    pub message: String,
+}
+
+impl StreamError {
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+/// Machine codes, snake_case like the client API's (handshake spec §14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    /// A frame or payload that does not parse, or a stream id that breaks the rules.
+    BadFrame,
+    /// The peer's protocol major is not one this side speaks.
+    UnsupportedVersion,
+    /// No advertised driver takes this command op.
+    UnsupportedCommand,
+    /// The command's arguments are refused (e.g. a relative `cwd`).
+    InvalidArgs,
+    /// The driver is at its advertised capacity; retry later.
+    Busy,
+    /// The program could not be started.
+    SpawnFailed,
+    /// The command was cancelled by a `close`.
+    Cancelled,
+    /// Anything else on the runner's side.
+    Internal,
+    /// The connection proof failed (`auth`); the same answer whatever the reason.
+    AuthFailed,
+    /// The Core's identity is not the one the runner pinned. Logged by the runner; never sent.
+    CoreIdentityMismatch,
+    /// The runner is not connected (Core side, to whoever dispatched).
+    Offline,
+    /// The connection went while the command was in flight and its outcome is unknown: it may
+    /// or may not have run. Reported once per command, never followed by a result.
+    Lost,
+    /// A code from a newer peer. Never sent.
+    #[serde(other)]
+    Unknown,
+}

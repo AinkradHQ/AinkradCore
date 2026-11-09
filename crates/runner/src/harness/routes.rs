@@ -113,7 +113,9 @@ impl HarnessExecutor {
                 _ => ErrorClass::Permanent,
             };
             // The server's settings may keep a class from falling back (1.20).
-            let allowed = job.limits.is_none_or(|l| l.falls_back_on(class.as_str()));
+            // Auth never falls back here (see `RunLimits::falls_back_on`), settings or none.
+            let allowed = class != ErrorClass::Auth
+                && job.limits.is_none_or(|l| l.falls_back_on(class.as_str()));
             if !class.falls_back() || !allowed {
                 return outcome;
             }
@@ -143,19 +145,120 @@ impl HarnessExecutor {
         reports: &mpsc::Sender<Report>,
         meter: &mut Meter,
     ) -> Outcome {
-        let mcp = self.mcp_url.as_deref().map(|url| (url, token));
+        // A session that was handed no token (no MCP) gets no MCP config.
+        let mcp = self
+            .mcp_url
+            .as_deref()
+            .filter(|_| !token.expose().is_empty());
+        // A Linux session with no network (`deny`, the default) or only the egress proxy (`filtered`)
+        // reaches the MCP route through a bridge.
+        let network = |want: &str| {
+            cfg!(target_os = "linux")
+                && self
+                    .run_env
+                    .lock()
+                    .expect("run env lock")
+                    .get(&job.run)
+                    .is_some_and(|e| {
+                        ainkrad_harness::last_env(e, "AINKRAD_SANDBOX_NETWORK")
+                            .is_some_and(|v| v == want)
+                    })
+        };
+        let filtered = network("filtered");
+        let denied = network("deny") || filtered;
+        let bridged = mcp.filter(|_| denied).and_then(crate::mcp_bridge::parse);
+        let mcp = match (&bridged, mcp) {
+            (Some((_, local)), _) => Some((local.as_str(), token)),
+            // No route into a sandbox without network (an URL the bridge refuses to parse
+            // included): the run goes without MCP rather than with a URL it cannot or should not use.
+            (None, _) if denied => None,
+            (None, url) => url.map(|url| (url, token)),
+        };
         let private = self.work_root.join("private");
         let instructions = job.instructions.as_deref();
         // Removed when this future ends or is dropped (a cancelled run).
         // A harness that may be kept warm reads its files from its agent's stable dir (E15.6).
-        let name = match self.limits(job).warm_max > 0 && long_lived(&job.harness) {
+        // A session with no network is never kept warm (`turn.rs`: isolated runs are not), and
+        // its MCP bridge lives and dies with this run, so its files are always the run's own.
+        // A session with the connection tools socket (C4b) is its own and never shares a harness
+        // server with another: its config names its socket.
+        let tools = self
+            .run_env
+            .lock()
+            .expect("run env lock")
+            .get(&job.run)
+            .and_then(|e| ainkrad_harness::connections::slot(e));
+        let name = match self.limits(job).warm_max > 0
+            && long_lived(&job.harness)
+            && !denied
+            && tools.is_none()
+        {
             true => format!("warm-{}-{}", job.agent, job.harness),
             false => format!("run-{}", job.run),
         };
-        let files = match RunFiles::write(&private, &name, &job.harness, mcp, instructions) {
+        let files = match RunFiles::write(
+            &private,
+            &name,
+            &job.harness,
+            mcp,
+            tools
+                .as_ref()
+                .map(|(sock, exe)| (exe.as_str(), sock.as_str())),
+            instructions,
+        ) {
             Ok(files) => files,
             Err(e) => return failed(format!("writing the run's files: {e}"), "run_files"),
         };
+        let mut bridge = None;
+        let mut bridge_env: Vec<(String, std::ffi::OsString)> = Vec::new();
+        if let Some((target, _)) = bridged {
+            let sock = files.dir.join("mcp.sock");
+            match crate::mcp_bridge::start(&sock, target, self.mcp_tls.clone()) {
+                Ok(b) => bridge = Some(b),
+                Err(e) => return failed(format!("the MCP bridge: {e}"), "run_files"),
+            }
+            let exe = std::env::current_exe().unwrap_or_default();
+            bridge_env.extend([
+                ("AINKRAD_SANDBOX_MCP_SOCK".to_owned(), sock.into()),
+                ("AINKRAD_SANDBOX_MCP_FWD".to_owned(), exe.into()),
+                (
+                    "AINKRAD_SANDBOX_MCP_PORT".to_owned(),
+                    crate::mcp_bridge::FORWARD_PORT.to_string().into(),
+                ),
+            ]);
+        }
+        // The egress proxy of a filtered run: no policy or no socket refuses the run, never opens it.
+        let mut egress = None;
+        if filtered {
+            let Some(policy) = self.egress.clone() else {
+                return failed("this runner has no egress policy".to_owned(), "sandbox");
+            };
+            // A session holding a provider account's key never reaches a git or forge host by name.
+            let account = self
+                .run_env
+                .lock()
+                .expect("run env lock")
+                .get(&job.run)
+                .is_some_and(|e| {
+                    ainkrad_harness::last_env(e, crate::egress::ACCOUNT_SESSION).is_some()
+                });
+            let policy = if account {
+                std::sync::Arc::new(policy.without_forges())
+            } else {
+                policy
+            };
+            let sock = crate::egress::socket_in(&files.dir);
+            match crate::egress::start(&sock, policy) {
+                Ok(p) => egress = Some(p),
+                Err(e) => return failed(format!("the egress proxy: {e}"), "sandbox"),
+            }
+            let exe = self
+                .forwarder
+                .clone()
+                .or_else(|| std::env::current_exe().ok())
+                .unwrap_or_default();
+            bridge_env.extend(crate::egress::sandbox_env(&sock, &exe));
+        }
         let config_dir = match self.config_dir(job) {
             Ok(dir) => dir,
             Err(why) => return failed(why, "account"),
@@ -164,23 +267,55 @@ impl HarnessExecutor {
             return failed(format!("{}: {e}", config_dir.display()), "account");
         }
         let mut env_allow = self.env_allow.clone();
-        // The runner's `--env` first: everything the runner sets after it wins over it.
+        // The runner's `--env` first. A variable set more than once takes its LAST value (the
+        // sandbox builder and `Command::envs` both read it that way), so everything the runner
+        // sets after this wins over it. No `AINKRAD_*` name comes from `--env` at all: those are
+        // the runner's own control variables (the sandbox and its network mode).
         let mut env: Vec<(String, std::ffi::OsString)> = self
             .harness_env
             .iter()
+            .filter(|(name, _)| !name.starts_with("AINKRAD_"))
             .map(|(name, value)| (name.clone(), value.into()))
             .collect();
         env.extend(self.workspaces.env());
+        // The run's own (E2-07.2), after the runner's: a session's secret wins.
+        if let Some(own) = self.run_env.lock().expect("run env lock").get(&job.run) {
+            env.extend(own.iter().map(|(n, v)| (n.clone(), v.into())));
+        }
+        env.extend(bridge_env);
         // Every worktree of a repo builds into its one shared cache (E15.9).
         if let (Some(_), Some(issue)) = (&job.workspace, job.issue) {
             env.extend(self.workspaces.cache_env(issue, &job.trees()));
         }
-        if job.account.is_some() {
-            // The account's login or token only, never the runner's own.
-            env_allow.retain(|name| !self.secret_env.contains(name));
-        }
+        // An account's login or token only, never the runner's own; and an isolated agent
+        // session never gets the runner's keys either (it can send them anywhere the
+        // network policy allows): a session's key must be a leased secret.
+        let isolated = env.iter().any(|(n, _)| n == "AINKRAD_SANDBOX");
+        env_allow = allowed_env(
+            env_allow,
+            &self.secret_env,
+            job.account.is_some() || isolated,
+        );
         if let Some(c) = credential {
             env.push((c.var, c.value.into()));
+        }
+        // A gateway session (its slot is set) talks to the gateway: the harness's base URL and a
+        // placeholder key, after everything else so nothing earlier in the environment wins.
+        match crate::gateway::wiring::gateway_port(&env) {
+            Ok(None) => {}
+            Ok(Some(port)) => {
+                let wired = crate::gateway::wiring::wire(
+                    &job.harness,
+                    port,
+                    &config_dir,
+                    &mut env,
+                    &mut env_allow,
+                );
+                if let Err(why) = wired {
+                    return failed(why, "gateway");
+                }
+            }
+            Err(why) => return failed(why, "gateway"),
         }
         // The `citadel` CLI first on `PATH` (E15.18). The run token stays out of the
         // environment, as before: the CLI reads the run's private token file.
@@ -217,9 +352,12 @@ impl HarnessExecutor {
             accept_edits: job.policy.mode == PermissionMode::AcceptEdits,
             instructions: files.instructions.clone(),
             mcp_config: files.mcp_config.clone(),
+            backend: self.backend.clone(),
         };
         let reports = reports.clone();
-        match job.harness.as_str() {
+        let _bridge = bridge; // held until the run ends
+        let _egress = egress;
+        let outcome = match job.harness.as_str() {
             "claude" => self.work::<Claude>(job, spec, reports, meter).await,
             "codex" => self.work::<Codex>(job, spec, reports, meter).await,
             "opencode" => self.work::<OpenCode>(job, spec, reports, meter).await,
@@ -228,6 +366,60 @@ impl HarnessExecutor {
                 format!("harness {other:?} is not supported"),
                 "harness_start",
             ),
+        };
+        if denied {
+            return no_network_note(outcome, filtered);
         }
+        outcome
+    }
+}
+
+/// A failure that looks like an unreachable model API, said plainly for a session with no network.
+fn no_network_note(outcome: Outcome, filtered: bool) -> Outcome {
+    let why = if filtered {
+        "this session reaches only the destinations AINKRAD_AGENT_EGRESS_ALLOW and AINKRAD_AGENT_EGRESS_HOSTS list, through a CONNECT proxy"
+    } else {
+        "this session has no network: AINKRAD_AGENT_NETWORK=deny is the Linux default, so the harness cannot reach its model API; stage 1 uses a local mock model"
+    };
+    const SIGNS: [&str; 7] = [
+        "connect",
+        "network",
+        "dns",
+        "resolve",
+        "unreachable",
+        "timed out",
+        "fetch failed",
+    ];
+    match outcome {
+        Outcome::Failed {
+            reason,
+            fingerprint,
+        } if SIGNS.iter().any(|s| reason.to_lowercase().contains(s)) => Outcome::Failed {
+            reason: format!("{reason} ({why})"),
+            fingerprint,
+        },
+        other => other,
+    }
+}
+
+/// The runner variables a harness may inherit: without its own secrets when the run has an
+/// account or is isolated.
+fn allowed_env(mut allow: Vec<String>, secret: &[String], strip_secrets: bool) -> Vec<String> {
+    if strip_secrets {
+        allow.retain(|name| !secret.contains(name));
+    }
+    allow
+}
+
+#[cfg(test)]
+mod allowed_env_tests {
+    use super::allowed_env;
+
+    #[test]
+    fn an_isolated_run_never_inherits_the_runners_keys() {
+        let allow = vec!["PATH".to_owned(), "ANTHROPIC_API_KEY".to_owned()];
+        let secret = vec!["ANTHROPIC_API_KEY".to_owned()];
+        assert_eq!(allowed_env(allow.clone(), &secret, true), ["PATH"]);
+        assert_eq!(allowed_env(allow, &secret, false).len(), 2);
     }
 }

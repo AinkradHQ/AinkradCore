@@ -19,9 +19,32 @@ mod classify;
 pub mod claude;
 pub mod codex;
 pub mod compat;
+pub mod connections;
+pub mod exec;
 mod meter;
 pub mod opencode;
 mod proc;
+mod safe_fs;
+mod sandbox;
+pub use sandbox::identity as process_identity;
+pub use sandbox::reap_group;
+
+/// The sandboxed command for `program` (test support for the runner's network-isolation test).
+#[doc(hidden)]
+pub fn sandbox_command(
+    program: &std::ffi::OsStr,
+    args: &[String],
+    spec: &Spec,
+) -> tokio::process::Command {
+    sandbox::command(program, args, spec)
+}
+
+/// The value of `key` in an environment list that may repeat a name: the LAST one, which is what
+/// `Command::envs` gives the child. The sandbox builder and the runner both read the network mode
+/// through this, so they can never disagree about it.
+pub fn last_env<'a, V>(env: &'a [(String, V)], key: &str) -> Option<&'a V> {
+    env.iter().rev().find(|(n, _)| n == key).map(|(_, v)| v)
+}
 
 pub use classify::{DROPPED, ErrorClass, PROTOCOL, classify};
 pub use meter::{Meter, tokens, weighted_tokens};
@@ -70,6 +93,9 @@ pub struct Spec {
     pub sandboxed: bool,
     /// The project lets file edits inside `cwd` go ahead without asking (E3.10).
     pub accept_edits: bool,
+    /// Where the process is started (E8a-06); `None` is the local backend: bubblewrap, Seatbelt
+    /// or nothing, as the spec's `AINKRAD_SANDBOX*` variables say.
+    pub backend: Option<std::sync::Arc<dyn exec::ExecBackend>>,
 }
 
 /// One normalised harness event. Serialised as a `run_event` payload.

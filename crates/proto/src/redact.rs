@@ -61,6 +61,24 @@ const SHAPES: &[Shape] = &[
     shape("ghu_", "github_token", 30),
     shape("ghs_", "github_token", 30),
     shape("ghr_", "github_token", 30),
+    // Linear's API keys and OAuth access tokens (its 2021-08-19 changelog, "GitHub Secret Scanning").
+    // No refresh token prefix is documented, so none is read.
+    shape("lin_api_", "linear_token", 30),
+    shape("lin_oauth_", "linear_token", 30),
+    // Slack tokens (bot, user, and the rotating `xoxe.` access forms, then the `xoxe-` refresh
+    // token; longest prefix first). The rotating access forms hold a second Slack shape, so the
+    // secret gate admits one only at `secrets.mode` 2 (see `slack::DESCRIPTOR`).
+    shape("xoxe.xoxb-", "slack_token", 20),
+    shape("xoxe.xoxp-", "slack_token", 20),
+    shape("xoxe-", "slack_token", 20),
+    shape("xoxb-", "slack_token", 20),
+    shape("xoxp-", "slack_token", 20),
+    // Slack's other documented prefixes: app-level, legacy workspace and legacy refresh/session
+    // tokens. A different shape name, so they are redacted but never a connection credential.
+    shape("xapp-", "slack_app_token", 20),
+    shape("xoxa-", "slack_app_token", 20),
+    shape("xoxr-", "slack_app_token", 20),
+    shape("xoxs-", "slack_app_token", 20),
     Shape {
         body: upper_digit,
         ..shape("AKIA", "aws_key", 16)
@@ -89,11 +107,15 @@ const PEM_END: &str = "-----END ";
 /// Values shorter than this are not treated as known secrets: redacting every `1` or `true`
 /// would wreck a transcript and protect nothing.
 const MIN_KNOWN: usize = 8;
+/// The shortest secret prefix held back at a stream boundary.
+const MIN_EDGE: usize = 4;
 
 #[derive(Debug, Clone, Default)]
 pub struct Redactor {
     /// (name, value), longest value first, so a secret containing another goes whole.
     known: Vec<(String, String)>,
+    /// Expected continuations of prefixes withheld at the preceding stream boundary.
+    pending: Vec<(String, String)>,
 }
 
 impl Redactor {
@@ -108,6 +130,50 @@ impl Redactor {
             return;
         }
         self.known.push((name.to_owned(), value.to_owned()));
+        let json = serde_json::to_string(value).expect("string JSON");
+        let hexed = hex(value);
+        let b64 = base64(value);
+        let percent = percent(value);
+        let mut shifted: Vec<String> = Vec::new();
+        for k in 1..=2 {
+            let s = shifted_base64(value, k);
+            if s.len() >= MIN_KNOWN {
+                shifted.push(s.replace('+', "-").replace('/', "_"));
+                shifted.push(s);
+            }
+        }
+        // Aligned at the start: when the value does not fill its last group, the last character
+        // depends on what follows, so only the characters before it are stable.
+        if !value.len().is_multiple_of(3) {
+            let s = b64[..value.len() * 8 / 6].to_owned();
+            if s.len() >= MIN_KNOWN {
+                shifted.push(s.replace('+', "-").replace('/', "_"));
+                shifted.push(s);
+            }
+        }
+        let (upper, lower) = (value.to_uppercase(), value.to_lowercase());
+        for encoded in shifted.into_iter().chain([upper, lower]).chain([
+            hexed.clone(),
+            hexed.to_uppercase(),
+            b64.clone(),
+            b64.trim_end_matches('=').to_owned(),
+            b64.trim_end_matches('=')
+                .replace('+', "-")
+                .replace('/', "_"),
+            percent.clone(),
+            lower_percent_escapes(&percent),
+            value.bytes().map(|b| format!("%{b:02X}")).collect(),
+            value.bytes().map(|b| format!("%{b:02x}")).collect(),
+            value
+                .encode_utf16()
+                .map(|b| format!("\\u{b:04x}"))
+                .collect(),
+            json[1..json.len() - 1].to_owned(),
+        ]) {
+            if !self.known.iter().any(|(_, v)| v == &encoded) {
+                self.known.push((name.to_owned(), encoded));
+            }
+        }
         self.known.sort_by_key(|(_, v)| std::cmp::Reverse(v.len()));
     }
 
@@ -120,6 +186,83 @@ impl Redactor {
             }
         }
         shapes(&out)
+    }
+
+    /// Redaction for streamed content; ambiguous secret edges are withheld.
+    pub fn stream_text(&mut self, text: &str) -> String {
+        let mut consumed = 0;
+        let mut continued = Vec::new();
+        let mut marker = None;
+        for (name, remaining) in std::mem::take(&mut self.pending) {
+            if text.starts_with(&remaining) {
+                consumed = consumed.max(remaining.len());
+                marker = Some(name);
+            } else if !text.is_empty() && remaining.starts_with(text) {
+                consumed = text.len();
+                marker = Some(name.clone());
+                continued.push((name, remaining[text.len()..].to_owned()));
+            }
+        }
+        self.pending = continued;
+        let rest = &text[consumed..];
+        let mut tail = 0;
+        let mut tail_name = "secret";
+        // Match original bytes, never rendered markers. A fabricated "[redacted:"
+        // cannot disable boundary filtering. Only a preceding withheld prefix authorizes
+        // masking the next event's beginning, so ordinary labels stay intact.
+        for (name, value) in &self.known {
+            // The longest suffix of `rest` that is a proper prefix of `value`: the first start
+            // that matches. Each start fails on its first differing byte, so a chunk costs about
+            // its own length, not the square of the secret's.
+            let from = rest.len().saturating_sub(value.len() - 1);
+            for i in from..rest.len() {
+                let n = rest.len() - i;
+                if rest.is_char_boundary(i)
+                    && value.is_char_boundary(n)
+                    && value.as_bytes().starts_with(&rest.as_bytes()[i..])
+                {
+                    self.pending.push((name.clone(), value[n..].to_owned()));
+                    // A short edge (one stray character) is only tracked, so ordinary text
+                    // that merely ends like a secret begins is not mangled: if the rest
+                    // follows, it is masked. A real prefix (MIN_EDGE+) is held back.
+                    if n >= MIN_EDGE && n > tail {
+                        tail = n;
+                        tail_name = name;
+                    }
+                    break;
+                }
+            }
+        }
+        let mut out = marker.map_or_else(String::new, |name| format!("[redacted:{name}]"));
+        out.push_str(&self.text(&rest[..rest.len() - tail]));
+        if tail > 0 {
+            out.push_str(&format!("[redacted:{tail_name}]"));
+        }
+        out
+    }
+
+    /// Stream fields, while retaining protocol keys and discriminators.
+    pub fn stream_json(&mut self, value: &mut Value) {
+        self.json(value);
+        match value {
+            Value::Object(map) => {
+                for (key, value) in map {
+                    if matches!(key.as_str(), "text" | "output" | "delta" | "reason") {
+                        if let Value::String(s) = value {
+                            *s = self.stream_text(s);
+                        }
+                    } else {
+                        self.stream_json(value);
+                    }
+                }
+            }
+            Value::Array(a) => {
+                for v in a {
+                    self.stream_json(v);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Redacts every string in `value`, object keys included.
@@ -137,6 +280,77 @@ impl Redactor {
             _ => {}
         }
     }
+}
+
+fn hex(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn base64(value: &str) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = value.as_bytes();
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let n = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// The base64 of `value` as it appears inside a longer string (`user:VALUE`) that began `k`
+/// bytes (1 or 2) off a three-byte boundary: the characters the preceding bytes share bits
+/// with, and the last one when the value does not fill it, depend on what surrounds the value,
+/// so they are left out; what remains is the same in every context.
+fn shifted_base64(value: &str, k: usize) -> String {
+    let padded = format!("{}{value}", "A".repeat(k));
+    let full = base64(&padded);
+    let whole = (padded.len() * 8) / 6;
+    let skip = (k * 8).div_ceil(6);
+    full.get(skip..whole).unwrap_or_default().to_owned()
+}
+
+fn lower_percent_escapes(value: &str) -> String {
+    let mut bytes = value.as_bytes().to_vec();
+    let mut i = 0;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'%' {
+            bytes[i + 1].make_ascii_lowercase();
+            bytes[i + 2].make_ascii_lowercase();
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    String::from_utf8(bytes).expect("percent encoding is ASCII")
+}
+
+fn percent(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 /// The marker every redaction leaves.
@@ -224,43 +438,8 @@ fn shapes(text: &str) -> String {
     out
 }
 
-/// One fake secret of each shape with its kind, shaped like the real thing but never valid:
-/// for tests here and in the crates that redact.
-pub const PLANTED: &[(&str, &str)] = &[
-    (
-        "anthropic_key",
-        "sk-ant-api03-Zx9QWERTYuiopASDFghjkl0123456789-_abcdEF",
-    ),
-    ("openai_key", "sk-proj-Q1w2E3r4T5y6U7i8O9p0AsDfGhJkLzXcVbNm"),
-    ("openai_key", "sk-Q1w2E3r4T5y6U7i8O9p0AsDfGhJkLzXcVbNm"),
-    ("google_key", "AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBWY"),
-    ("github_token", "ghp_16C7e42F292c6912E7710c838347Ae178B4a"),
-    (
-        "github_token",
-        "github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz",
-    ),
-    ("aws_key", "AKIAIOSFODNN7EXAMPLE"),
-    (
-        "aws_secret",
-        "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-    ),
-    (
-        "run_token",
-        "cit_run_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    ),
-    (
-        "runner_key",
-        "cit_runner_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    ),
-    (
-        "bearer",
-        "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl",
-    ),
-    (
-        "pem_block",
-        "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----",
-    ),
-];
+mod planted;
+pub use planted::PLANTED;
 
 #[cfg(test)]
 mod tests;

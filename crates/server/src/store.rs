@@ -1,4 +1,4 @@
-//! SQLite storage: one pool, WAL journal, reversible migrations from `migrations/`.
+//! SQLite storage: one pool, WAL journal, namespaced reversible migrations (`migrate`).
 
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
@@ -6,71 +6,46 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-use sqlx::Transaction;
-use sqlx::migrate::Migrator;
 use sqlx::sqlite::{
     Sqlite, SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePool,
-    SqlitePoolOptions,
+    SqlitePoolOptions, SqliteSynchronous,
 };
+use sqlx::{AssertSqlSafe, Transaction};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-/// SQL: whether agent `$agent`'s work on issue `$issue` waits on the plan of the issue's
-/// requirement (plan-first, E15.10): the requirement is `planning`, `plan_review` or `cancelled`,
-/// and the agent does not plan the issue's project (its product owner or team lead, the CEO or
-/// the CTO), or the requirement is paused (`paused_at`, for everyone). Dispatch skips such a wake, the stuck detector leaves such an issue alone, and
-/// `start` is refused.
-macro_rules! plan_held {
-    ($agent:literal, $issue:literal) => {
-        concat!(
-            "EXISTS (SELECT 1 FROM issues ph_i \
-             JOIN requirements ph_q ON ph_q.id = ph_i.requirement_id \
-             JOIN projects ph_p ON ph_p.id = ph_i.project_id \
-             JOIN agents ph_a ON ph_a.id = ",
-            $agent,
-            " WHERE ph_i.id = ",
-            $issue,
-            " AND (ph_q.paused_at IS NOT NULL \
-             OR (ph_q.state IN ('planning', 'plan_review', 'cancelled') \
-             AND ph_a.org_role NOT IN ('ceo', 'cto') \
-             AND NOT EXISTS (SELECT 1 FROM team_memberships ph_m \
-                 WHERE ph_m.team_id = ph_p.team_id AND ph_m.agent_id = ph_a.id \
-                 AND ph_m.team_role IN ('product_owner', 'team_lead')))))"
-        )
-    };
-}
-
-pub mod artifacts;
+pub mod account_keys;
+pub mod accounts;
+pub mod agents;
+pub mod alloc;
 pub mod audit;
 mod backup;
+pub mod budgets;
+pub mod chains;
+pub mod connections;
+pub mod costs;
 pub mod events;
-pub mod exec;
-pub mod forge;
+pub mod failover;
+pub mod gateway;
 pub mod gov;
-pub mod linear;
-pub mod org;
+pub mod health;
+pub mod kinds;
+pub mod logins;
+pub mod migrate;
+pub mod modsettings;
+pub mod pools;
+pub mod prices;
+pub mod provider_rules;
+mod provider_url;
+pub mod providers;
+pub mod redact;
+pub mod secrets;
+mod secrets_user;
 pub mod settings;
-pub mod work;
+pub mod usage;
+pub mod usage_meter;
 
 pub use backup::{BackupError, backup, restore};
-
-pub static MIGRATOR: Migrator = sqlx::migrate!();
-
-/// What the store keeps of a runner or device key: its SHA-256, never the key. Keys are
-/// random, so an unsalted digest is enough.
-fn key_hash(key: &str) -> Vec<u8> {
-    use sha2::{Digest, Sha256};
-    Sha256::digest(key.as_bytes()).to_vec()
-}
-
-/// A new secret: `prefix` and 32 bytes (256 bits) from the OS RNG, hex-encoded. The prefix
-/// lets secret scanners spot it.
-fn random_key(prefix: &str) -> Result<String, sqlx::Error> {
-    let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes)
-        .map_err(|e| sqlx::Error::Io(std::io::Error::other(e.to_string())))?;
-    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    Ok(format!("{prefix}{hex}"))
-}
+pub use migrate::{MigrateError, Migration};
 
 /// A write transaction from `begin_write`; derefs to its connection. Dropped without
 /// `commit`, it rolls back.
@@ -129,16 +104,79 @@ pub async fn begin_write(pool: &SqlitePool) -> Result<WriteTx, sqlx::Error> {
     Ok(WriteTx { tx, _turn: turn })
 }
 
-/// Opens (creating if missing) the database at `path` and applies pending migrations.
-pub async fn connect(path: &Path) -> Result<SqlitePool, sqlx::Error> {
-    let options = SqliteConnectOptions::new()
+/// How long a connection waits for another process's write lock (the CLI, a backup) before
+/// `database is locked`. This process's own writers queue on `begin_write` instead.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The pool's size, for a 2 vCPU host. Writes are one at a time anyway (`begin_write`), and a
+/// writer takes its connection only after its turn, so this is one writer plus a few
+/// concurrent readers; more would only add contention for two cores.
+const MAX_CONNECTIONS: u32 = 4;
+
+/// The connection settings every Core database runs with; `connect` asserts them.
+///
+/// `synchronous = FULL`, not the WAL-usual NORMAL: under NORMAL a commit is durable against a
+/// crash of the process but not of the OS or the power, which can lose the last commits. This
+/// database holds auth state (a revoked device key, a spent pairing code), and forgetting one
+/// of those after a reboot reopens access. FULL costs one fsync of the WAL per commit, which
+/// the Core's write rate affords.
+fn options(path: &Path) -> SqliteConnectOptions {
+    SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Full)
         .foreign_keys(true)
-        .busy_timeout(Duration::from_secs(5));
-    let pool = SqlitePoolOptions::new().connect_with(options).await?;
-    MIGRATOR.run(&pool).await?;
+        .busy_timeout(BUSY_TIMEOUT)
+}
+
+/// Fails unless the pool's connections run with `options`' settings: SQLite ignores some
+/// pragmas silently (WAL on a filesystem without shared memory, for one).
+async fn check_pragmas(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let mut conn = pool.acquire().await?;
+    let journal: String = sqlx::query_scalar("PRAGMA journal_mode")
+        .fetch_one(&mut *conn)
+        .await?;
+    let ints = [
+        ("synchronous", 2),
+        ("foreign_keys", 1),
+        ("busy_timeout", BUSY_TIMEOUT.as_millis() as i64),
+    ];
+    let mut wrong = Vec::new();
+    if journal != "wal" {
+        wrong.push(format!("journal_mode = {journal}, want wal"));
+    }
+    for (pragma, want) in ints {
+        let got: i64 = sqlx::query_scalar(AssertSqlSafe(format!("PRAGMA {pragma}")))
+            .fetch_one(&mut *conn)
+            .await?;
+        if got != want {
+            wrong.push(format!("{pragma} = {got}, want {want}"));
+        }
+    }
+    if wrong.is_empty() {
+        Ok(())
+    } else {
+        Err(sqlx::Error::Configuration(wrong.join("; ").into()))
+    }
+}
+
+/// Opens (creating if missing) the database at `path`, asserts its connection settings and
+/// applies the platform's pending migrations and registers its event kinds and audit actions
+/// (`kinds`). Modules' migrations come after, with
+/// `migrate::migrate_modules`. A migration refusal is a `sqlx::Error::Configuration` holding
+/// the `MigrateError`.
+pub async fn connect(path: &Path) -> Result<SqlitePool, sqlx::Error> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(MAX_CONNECTIONS)
+        .connect_with(options(path))
+        .await?;
+    check_pragmas(&pool).await?;
+    migrate::migrate_core(&pool).await.map_err(|e| match e {
+        MigrateError::Database(e) => e,
+        e => sqlx::Error::Configuration(Box::new(e)),
+    })?;
+    kinds::register_platform(&pool).await?;
     Ok(pool)
 }
 
@@ -146,60 +184,15 @@ pub async fn connect(path: &Path) -> Result<SqlitePool, sqlx::Error> {
 mod tests {
     use super::*;
 
-    const TABLES: [&str; 53] = [
+    const TABLES: [&str; 8] = [
         "users",
-        "companies",
-        "departments",
-        "teams",
-        "agents",
-        "team_memberships",
-        "projects",
-        "epics",
-        "sprints",
-        "issues",
-        "labels",
-        "issue_labels",
-        "blocker_links",
-        "comments",
-        "runners",
-        "wake_requests",
-        "runs",
-        "leases",
-        "cost_events",
-        "approvals",
-        "budgets",
-        "skills",
-        "knowledge_entries",
-        "device_keys",
+        "core_devices",
+        "core_pairings",
+        "core_auth_limits",
         "audit_events",
-        "run_tokens",
-        "project_repos",
-        "run_events",
-        "issue_state_history",
-        "wip_limits",
-        "sprint_retro_items",
-        "budget_spend",
-        "prices",
-        "harness_billing",
-        "issue_repos",
-        "issue_prs",
-        "project_linear",
-        "linear_issues",
         "events",
         "push_cursor",
-        "accounts",
-        "account_companies",
-        "account_limits",
-        "account_events",
-        "agent_fallbacks",
         "settings",
-        "requirements",
-        "requirement_plans",
-        "questions",
-        "artifacts",
-        "artifact_reads",
-        "run_controls",
-        "issue_allow_rules",
     ];
 
     async fn tables_present(pool: &SqlitePool) -> usize {
@@ -218,9 +211,9 @@ mod tests {
 
     #[tokio::test]
     async fn migrates_up_down_up_with_pragmas() {
-        let dir = std::env::temp_dir().join(format!("citadel-store-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("core-store-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let pool = connect(&dir.join("citadel.db")).await.unwrap();
+        let pool = connect(&dir.join("core.db")).await.unwrap();
 
         let journal: String = sqlx::query_scalar("PRAGMA journal_mode")
             .fetch_one(&pool)
@@ -237,13 +230,121 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(busy, 5000);
+        let sync: i64 = sqlx::query_scalar("PRAGMA synchronous")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(sync, 2, "FULL");
 
         assert_eq!(tables_present(&pool).await, TABLES.len());
-        MIGRATOR.undo(&pool, 0).await.unwrap();
+        migrate::undo(&pool, migrate::CORE, migrate::CORE_MIGRATIONS, 0)
+            .await
+            .unwrap();
         assert_eq!(tables_present(&pool).await, 0);
-        MIGRATOR.run(&pool).await.unwrap();
+        migrate::migrate_core(&pool).await.unwrap();
         assert_eq!(tables_present(&pool).await, TABLES.len());
 
+        pool.close().await;
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The startup check catches a connection that is not configured as `options` says.
+    #[tokio::test]
+    async fn a_wrongly_configured_pool_fails_the_startup_check() {
+        let dir = std::env::temp_dir().join(format!("core-store-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("core.db");
+        let good = SqlitePool::connect_with(options(&path)).await.unwrap();
+        check_pragmas(&good).await.unwrap();
+        good.close().await;
+        let normal = options(&path)
+            .synchronous(SqliteSynchronous::Normal)
+            .foreign_keys(false);
+        let bad = SqlitePool::connect_with(normal).await.unwrap();
+        let err = check_pragmas(&bad).await.unwrap_err().to_string();
+        assert!(err.contains("synchronous = 1, want 2"), "{err}");
+        assert!(err.contains("foreign_keys = 0, want 1"), "{err}");
+        bad.close().await;
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Fifty writers at once, each a read-modify-write of one counter plus an insert, through
+    /// `connect`'s pool and `begin_write`: none sees `database is locked`, and none loses an
+    /// update.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fifty_concurrent_writers_never_lock_or_lose_an_update() {
+        const WRITERS: i64 = 50;
+        const EACH: i64 = 20;
+        let dir = std::env::temp_dir().join(format!("core-store-50-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = connect(&dir.join("core.db")).await.unwrap();
+        sqlx::raw_sql(
+            "CREATE TABLE counter (n INTEGER NOT NULL); INSERT INTO counter VALUES (0);
+             CREATE TABLE log (writer INTEGER NOT NULL, value INTEGER NOT NULL);",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let writers: Vec<_> = (0..WRITERS)
+            .map(|w| {
+                let pool = pool.clone();
+                tokio::spawn(async move {
+                    for _ in 0..EACH {
+                        let mut tx = begin_write(&pool).await?;
+                        let n: i64 = sqlx::query_scalar("SELECT n FROM counter")
+                            .fetch_one(&mut *tx)
+                            .await?;
+                        tokio::task::yield_now().await;
+                        sqlx::query("UPDATE counter SET n = ?")
+                            .bind(n + 1)
+                            .execute(&mut *tx)
+                            .await?;
+                        sqlx::query("INSERT INTO log VALUES (?, ?)")
+                            .bind(w)
+                            .bind(n + 1)
+                            .execute(&mut *tx)
+                            .await?;
+                        tx.commit().await?;
+                    }
+                    Ok::<_, sqlx::Error>(())
+                })
+            })
+            .collect();
+        // Readers alongside, on the same pool.
+        let readers: Vec<_> = (0..4)
+            .map(|_| {
+                let pool = pool.clone();
+                tokio::spawn(async move {
+                    for _ in 0..50 {
+                        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM log")
+                            .fetch_one(&pool)
+                            .await?;
+                    }
+                    Ok::<_, sqlx::Error>(())
+                })
+            })
+            .collect();
+        for task in writers.into_iter().chain(readers) {
+            task.await.unwrap().expect("no writer or reader failed");
+        }
+
+        let total = WRITERS * EACH;
+        let n: i64 = sqlx::query_scalar("SELECT n FROM counter")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, total);
+        let (rows, sum, distinct): (i64, i64, i64) =
+            sqlx::query_as("SELECT count(*), sum(value), count(DISTINCT value) FROM log")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        // Every value 1..=total exactly once: no two writers read the same counter.
+        assert_eq!(
+            (rows, sum, distinct),
+            (total, total * (total + 1) / 2, total)
+        );
         pool.close().await;
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -254,10 +355,10 @@ mod tests {
     /// `busy_timeout`, and the waiter gets `database is locked`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_waiting_writer_is_not_overtaken_and_never_times_out() {
-        let dir = std::env::temp_dir().join(format!("citadel-store-gate-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("core-store-gate-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let options = SqliteConnectOptions::new()
-            .filename(dir.join("citadel.db"))
+            .filename(dir.join("core.db"))
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .busy_timeout(Duration::from_millis(500));

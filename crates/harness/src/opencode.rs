@@ -24,7 +24,8 @@ use serde_json::{Value, json};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
-use crate::proc::{self, Proc};
+use crate::exec::Launch;
+use crate::proc::Proc;
 use crate::{Decision, Harness, HarnessEvent, Spec, TurnOutcome, Usage, sum_tokens};
 
 /// The OpenCode version this adapter was written and recorded against (E3.6 probes it).
@@ -46,9 +47,22 @@ pub fn env(spec: &Spec, password: &str) -> Vec<(&'static str, OsString)> {
         ("OPENCODE_DISABLE_AUTOUPDATE", "1".into()),
         ("OPENCODE_SERVER_PASSWORD", password.into()),
     ];
+    // The inline config outranks every file (a project's `opencode.json` included), so it also
+    // carries the connection tools server: a project cannot take that name over.
+    let mut inline = serde_json::Map::new();
     if let Some(file) = &spec.instructions {
-        let config = json!({"instructions": [file]});
-        env.push(("OPENCODE_CONFIG_CONTENT", config.to_string().into()));
+        inline.insert("instructions".to_owned(), json!([file]));
+    }
+    if let Some((sock, exe)) = crate::connections::slot(&spec.env)
+        && let Some(Value::Object(own)) = crate::connections::add("opencode", None, &exe, &sock)
+    {
+        inline.extend(own);
+    }
+    if !inline.is_empty() {
+        env.push((
+            "OPENCODE_CONFIG_CONTENT",
+            Value::Object(inline).to_string().into(),
+        ));
     }
     if let Some(file) = &spec.mcp_config {
         env.push(("OPENCODE_CONFIG", file.into()));
@@ -66,11 +80,17 @@ pub fn mcp_config(url: &str, token: &str) -> Value {
 
 /// The server to spawn: cleared env + allowlist + `env`.
 pub fn command(spec: &Spec, password: &str) -> Command {
+    launch(spec, password).command(spec)
+}
+
+fn launch(spec: &Spec, password: &str) -> Launch {
     let program = spec.program.as_deref().unwrap_or("opencode".as_ref());
-    let env = env(spec, password);
-    let set: Vec<_> = env.iter().map(|(k, v)| (*k, v.as_os_str())).collect();
     let args = ["serve", "--port", "0", "--hostname", "127.0.0.1"].map(str::to_owned);
-    proc::command(program.as_os_str(), &args, spec, &set)
+    let mut launch = Launch::new(program, args.into());
+    for (k, v) in env(spec, password) {
+        launch = launch.set(k, v);
+    }
+    launch
 }
 
 /// The session's permission rules (E3.10): edits, shell and fetches ask (Grimoire's Ask
@@ -311,7 +331,7 @@ impl OpenCode {
             ))
         })?;
         let password = crate::claude::new_session_id()?;
-        let mut proc = Proc::spawn(command(spec, &password))?;
+        let mut proc = Proc::start(spec, launch(spec, &password)).await?;
         let listening = async {
             while let Some(line) = proc.line().await {
                 if let Some((_, url)) = line.split_once("listening on ") {

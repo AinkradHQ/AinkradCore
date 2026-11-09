@@ -20,6 +20,9 @@ fn fake(dir: &Path) -> HarnessExecutor {
     let boom = serde_json::json!({"type": "result", "subtype": "error_during_execution",
         "is_error": true, "result": "boom", "usage": {}});
     std::fs::write(dir.join("boom.ndjson"), format!("{boom}\n")).unwrap();
+    let auth = serde_json::json!({"type": "result", "subtype": "success", "is_error": true,
+        "api_error_status": 401, "usage": {}, "result": "authentication_error: invalid x-api-key"});
+    std::fs::write(dir.join("auth.ndjson"), format!("{auth}\n")).unwrap();
     let bin = dir.join("claude");
     let d = dir.display();
     let script = format!(
@@ -28,6 +31,7 @@ fn fake(dir: &Path) -> HarnessExecutor {
          case $model in\n\
          bad*) sed \"s/MODEL/$model/\" {d}/refused.ndjson ;;\n\
          boom) cat {d}/boom.ndjson ;;\n\
+         auth*) cat {d}/auth.ndjson ;;\n\
          *) cat {d}/fixture.ndjson ;;\nesac\n"
     );
     std::fs::write(&bin, script).unwrap();
@@ -129,6 +133,25 @@ async fn a_spent_chain_fails_with_every_reason_and_a_permanent_error_fails_at_on
     assert!(
         matches!(&outcome, Outcome::Failed { fingerprint: Some(f), .. } if f == "claude:success:404"),
         "{outcome:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A 401 is the `auth` class, and in this (v1) path it still ends the run: no silent hop to the
+/// next entry, as before the class existed. The Core's own failover notifies and records.
+#[tokio::test]
+async fn an_auth_failure_ends_the_run_and_does_not_fall_back() {
+    let dir = scratch("fallback-auth");
+    let ex = fake(&dir);
+    let (outcome, reports) = work(&ex, &chain("auth-a", &["haiku"])).await;
+    assert!(
+        matches!(&outcome, Outcome::Failed { fingerprint: Some(f), .. } if f == "claude:success:401"),
+        "{outcome:?}"
+    );
+    assert!(fallbacks(&reports).is_empty());
+    assert_eq!(
+        std::fs::read_to_string(dir.join("models")).unwrap(),
+        "auth-a\n"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

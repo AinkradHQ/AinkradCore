@@ -2,6 +2,7 @@
 //! one in tests.
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -176,6 +177,37 @@ pub trait Executor: Send + Sync + 'static {
         let _ = job;
         vec![]
     }
+
+    /// Variables for run `run`'s harness processes only, before `start` (E2-07.2: a session's
+    /// leased secrets); `None` drops them when it ends. Never the runner's own environment, and
+    /// never another run's. Ignored by an executor that spawns nothing.
+    fn session_env(&self, run: i64, env: Option<Vec<(String, String)>>) {
+        let _ = (run, env);
+    }
+
+    /// Allocates a private git worktree for an agent session.
+    fn prepare_agent_workspace(
+        &self,
+        session: &str,
+        generation: i64,
+        workspace: &Workspace,
+        helper: Option<&std::path::Path>,
+    ) -> impl Future<Output = Result<PathBuf, String>> + Send {
+        let _ = (session, generation, workspace, helper);
+        async { Err("this runner has no git workspace service".to_owned()) }
+    }
+
+    /// Removes all worktrees owned by an agent session.
+    fn cleanup_agent_workspace(
+        &self,
+        session: &str,
+        generation: i64,
+    ) -> impl Future<Output = ()> + Send {
+        let _ = (session, generation);
+        async {}
+    }
+
+    fn recover_agent_workspaces(&self, _adopted: &[String]) {}
 
     /// The issues whose worktrees it holds (E3.7), listed in every `Ready`.
     fn workspaces(&self) -> Vec<i64> {

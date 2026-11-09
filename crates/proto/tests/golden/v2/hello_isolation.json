@@ -1,0 +1,1 @@
+{"stream_id":0,"kind":"control","seq":0,"payload":{"arch":"x86_64","drivers":[{"capacity":2,"commands":["agent.start"],"name":"agent"}],"isolation":{"kvm":"usable","tiers":["process","microvm"]},"os":"linux","protocol":"2.0","runner_version":"0.1.0","type":"hello"}}

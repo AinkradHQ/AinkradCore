@@ -1,219 +1,286 @@
-//! Push notifications (E10.4, decision #14): what the admin must act on reaches the app's
+//! The notifications service (E10.4, E2-12): what the admin must act on reaches the app's
 //! devices even when it is closed. The pusher tails the event log (`store::events`) from a
 //! stored cursor, so no write path has to remember to push and a restart neither repeats nor
-//! skips one; it also checks the stuck detector each tick.
+//! skips one; a service that already knows what happened (a terminal exited) calls
+//! [`Pusher::deliver`] itself.
 //!
-//! Triggers: a new approval (`approval.pending`), an issue blocked (`issue.blocked`), the loop
-//! breaker escalating a failing run (`loop_breaker.tripped`), a provider account near or at a usage
-//! limit (`account.warning`, `account.limited`, E15.2) or dropped by its provider too often
-//! (`account.unhealthy`, E15.4), an issue its automatic repairs gave up on (`repair.exhausted`,
-//! E15.8), a runner whose disk is full (`runner.disk_full`, E15.9) or that the admin asked to wake
-//! (`runner.wake_requested` "now", decision #35: the Mac app keeps the machine awake when it gets
-//! it) or is back after one (`runner.back`), an agent's question for the admin (`question.asked`,
-//! E15.11), and an issue newly stuck (`stuck_report`). Each goes to every live device with a push
-//! token, through a [`Notifier`]: [`LogNotifier`] by default, [`apns::ApnsNotifier`] when the
-//! server has an APNs key.
+//! Which events are pushed is not the platform's call: a [`Classifier`] decides, brought by
+//! the module whose events they are; the platform's own, [`Silent`], pushes nothing.
+//!
+//! A notification leaves through a [`PushProvider`], one per push service a device can
+//! register a token for: [`apns::ApnsNotifier`] (APNs over HTTP/2), [`LogProvider`] when the
+//! server has no key, and the stubs for FCM and web push ([`stub`]). Before that it passes the
+//! rules of [`policy`]: only ids in its payload, only the devices whose scopes allow it, one
+//! merged push for a burst, a ceiling per device. Each attempt is a `notify.delivery` event; a
+//! token the provider calls dead, or one that keeps failing, is removed.
 
-use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures_util::future::join_all;
+
+use ainkrad_core::audit::{AuditActor, AuditEntity, NewAuditEvent};
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 
 use crate::scheduler::Clock;
-use crate::store::events::{StoredEvent, What, last_event_seq, list_events};
-use crate::store::exec::stuck_report;
-use crate::store::gov::{PushTarget, push_cursor, push_targets, set_push_cursor};
+use crate::store::events::{StoredEvent, append, last_event_seq, list_events};
+use crate::store::gov::{
+    PushTarget, TokenResult, note_result, push_cursor, push_targets, set_push_cursor,
+};
+use crate::store::{audit, begin_write};
 
+mod account;
 pub mod apns;
+mod connection;
+pub mod modules;
+pub mod policy;
+pub mod stub;
+
+/// Consecutive failed deliveries after which a token is removed.
+pub const MAX_FAILURES: i64 = 5;
 
 /// One push: a title and body for people, and what it is about for the app.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Notification {
-    /// `approval`, `blocked`, `escalation`, `account`, `runner`, `question` or `stuck`: the app's
-    /// category.
+    /// The app's category, as the classifier names it.
     pub kind: &'static str,
     pub title: String,
     pub body: String,
-    /// The app opens this: `{"issue_id": …}`, `{"approval_id": …}`, `{"seq": …}`.
+    /// What the app opens: ids only (`policy::clean` drops the rest), e.g. `{"approval_id": "a1"}`.
     pub data: Value,
+    /// The scope a device needs to be sent it (`admin` always qualifies).
+    pub scope: &'static str,
+    /// Notifications with the same key in one pass merge into one.
+    pub collapse: Option<String>,
+    /// The user whose devices may be sent it; `None` is every user's (the platform's own).
+    pub user: Option<i64>,
 }
 
-pub type Sent<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
+impl Notification {
+    pub fn new(
+        kind: &'static str,
+        scope: &'static str,
+        title: &str,
+        body: &str,
+        data: Value,
+    ) -> Self {
+        Self {
+            kind,
+            title: title.to_owned(),
+            body: body.to_owned(),
+            data,
+            scope,
+            collapse: None,
+            user: None,
+        }
+    }
 
-/// Delivers a notification to one device.
-pub trait Notifier: Send + Sync {
+    fn platform(kind: &'static str, scope: &'static str, title: &str, data: Value) -> Self {
+        Self {
+            collapse: Some(kind.to_owned()),
+            ..Self::new(kind, scope, title, "", data)
+        }
+    }
+
+    /// An approval waits on someone with `approve`; the id says which.
+    pub fn approval_needed(approval_id: &str) -> Self {
+        let data = json!({"approval_id": approval_id});
+        Self::platform("approval_needed", "approve", "Approval needed", data)
+    }
+
+    /// A terminal exited; its id and exit code, never its output (`terminal` scope).
+    pub fn terminal_exited(terminal_id: &str, exit_code: Option<i32>) -> Self {
+        let data = json!({"terminal_id": terminal_id, "exit_code": exit_code});
+        Self::platform("terminal_exited", "terminal", "Terminal exited", data)
+    }
+
+    /// An agent session finished (`agent` scope).
+    pub fn agent_finished(session_id: &str) -> Self {
+        let data = json!({"session_id": session_id});
+        Self::platform("agent_finished", "agent", "Agent finished", data)
+    }
+}
+
+/// Why a send failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PushError {
+    /// The provider says this token is dead: it is removed.
+    InvalidToken(String),
+    /// Anything else that went wrong; the token goes after [`MAX_FAILURES`] in a row.
+    Failed(String),
+    /// The provider has no transport yet ([`stub`]); the token is left alone.
+    Unsupported,
+}
+
+impl std::fmt::Display for PushError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidToken(why) | Self::Failed(why) => f.write_str(why),
+            Self::Unsupported => f.write_str("no transport for this provider yet"),
+        }
+    }
+}
+
+pub type Sent<'a> = Pin<Box<dyn Future<Output = Result<(), PushError>> + Send + 'a>>;
+
+/// Delivers a notification to one device through one push service.
+pub trait PushProvider: Send + Sync {
+    /// The provider's name as tokens are registered under it: `apns`, `fcm`, `webpush`.
+    fn name(&self) -> &'static str;
+
+    /// Whether this provider sends to tokens registered under `provider`.
+    fn handles(&self, provider: &str) -> bool {
+        self.name() == provider
+    }
+
     fn send<'a>(&'a self, to: &'a PushTarget, n: &'a Notification) -> Sent<'a>;
 }
 
-/// Logs instead of pushing: the default until an APNs key is configured.
-pub struct LogNotifier;
+/// Logs instead of pushing: the default until an APNs key is configured. It takes every token.
+pub struct LogProvider;
 
-impl Notifier for LogNotifier {
+impl PushProvider for LogProvider {
+    fn name(&self) -> &'static str {
+        "log"
+    }
+
+    /// Only APNs tokens: an FCM or web-push token with no transport must reach its stub and
+    /// fail closed (`unsupported`), not be logged as sent.
+    fn handles(&self, provider: &str) -> bool {
+        provider == "apns"
+    }
+
     fn send<'a>(&'a self, to: &'a PushTarget, n: &'a Notification) -> Sent<'a> {
         tracing::info!(device = to.device.0, kind = n.kind, title = %n.title, "push (log only)");
         Box::pin(async { Ok(()) })
     }
 }
 
-/// The push an event calls for, if any.
-pub fn notification(e: &StoredEvent) -> Option<Notification> {
-    let What::Audit {
-        action,
-        entity,
-        details,
-        run_id,
-        ..
-    } = &e.what
-    else {
-        return None;
-    };
-    let id = entity.as_ref().map(|(_, id)| *id);
-    let (kind, title, body, data) = match action.as_str() {
-        "approval.pending" => (
-            "approval",
-            "Approval needed".to_owned(),
-            match details["kind"].as_str() {
-                Some(kind) => format!("A {} waits on you", kind.replace('_', " ")),
-                None => "An approval waits on you".to_owned(),
-            },
-            json!({"approval_id": id}),
-        ),
-        "issue.blocked" => (
-            "blocked",
-            "Issue blocked".to_owned(),
-            format!("Issue {} is blocked", id.unwrap_or_default()),
-            json!({"issue_id": id}),
-        ),
-        "loop_breaker.tripped" => (
-            "escalation",
-            "Run keeps failing".to_owned(),
-            "The loop breaker stopped a run that failed the same way again".to_owned(),
-            json!({"run_id": run_id, "issue_id": id}),
-        ),
-        "repair.exhausted" => (
-            "escalation",
-            "Issue needs you".to_owned(),
-            format!(
-                "Automatic repairs of issue {} gave up; it waits on you",
-                id.unwrap_or_default()
-            ),
-            json!({"issue_id": id}),
-        ),
-        // The Mac app keeps its machine awake (`caffeinate`) when it gets this (decision #35).
-        // "Run when I'm back" pushes nothing now; its runner's return does.
-        "runner.wake_requested" if details["mode"] == "when_back" => return None,
-        "runner.back" => (
-            "runner",
-            "Runner back".to_owned(),
-            format!(
-                "Runner {} is back; its queued work runs now",
-                details["name"].as_str().unwrap_or("?")
-            ),
-            json!({"runner_id": id}),
-        ),
-        "runner.wake_requested" => (
-            "runner",
-            "Wake your Mac".to_owned(),
-            format!(
-                "Runner {} has work waiting; keep it awake",
-                details["name"].as_str().unwrap_or("?")
-            ),
-            json!({"runner_id": id, "wake": true}),
-        ),
-        "runner.disk_full" => (
-            "runner",
-            "Runner disk full".to_owned(),
-            format!(
-                "Runner {} is over its disk cap with nothing left to evict",
-                id.unwrap_or_default()
-            ),
-            json!({"runner_id": id}),
-        ),
-        "account.unhealthy" => (
-            "account",
-            "Account unhealthy".to_owned(),
-            format!(
-                "Account {}: the provider dropped {} turns; its runs fall back",
-                id.unwrap_or_default(),
-                details["drops"]
-            ),
-            json!({"account_id": id}),
-        ),
-        "account.warning" | "account.limited" => (
-            "account",
-            if action == "account.warning" {
-                "Account near its limit".to_owned()
+/// Decides the push an event calls for, if any.
+pub trait Classifier: Send + Sync {
+    fn notification(&self, e: &StoredEvent) -> Option<Notification>;
+}
+
+/// Pushes nothing: the platform's default until a module brings its rules.
+pub struct Silent;
+
+impl Classifier for Silent {
+    fn notification(&self, _: &StoredEvent) -> Option<Notification> {
+        None
+    }
+}
+
+/// The platform's own pushes (E2-08.4): an agent's tool call waiting on a decision (to devices
+/// with `approve`), and an agent session over (`agent`). Ids only, as every push.
+pub struct Platform;
+
+impl Classifier for Platform {
+    fn notification(&self, e: &StoredEvent) -> Option<Notification> {
+        let p = &e.payload.0;
+        if let ("alarm.raised" | "alarm.cleared", Some(alarm)) =
+            (e.kind.as_str(), p["alarm"].as_str())
+        {
+            // The alarm's name and two integers; the debounce is the evaluator's, and a burst
+            // of them merges by `collapse`.
+            let raised = e.kind == "alarm.raised";
+            let (kind, title) = if raised {
+                ("alarm_raised", "Alarm raised")
             } else {
-                "Account at its limit".to_owned()
-            },
-            match (details["window"].as_str(), details["unit"].as_str()) {
-                (Some(window), _) => format!(
-                    "Account {} at {}% of its {window} window",
-                    id.unwrap_or_default(),
-                    details["percent"]
-                ),
-                (None, Some(unit)) => format!(
-                    "Account {}: {} of {} {unit}",
-                    id.unwrap_or_default(),
-                    details["used"],
-                    details["max"]
-                ),
-                _ => format!("Account {} is limited", id.unwrap_or_default()),
-            },
-            json!({"account_id": id}),
-        ),
-        "question.asked" => (
-            "question",
-            "Question for you".to_owned(),
-            format!(
-                "Agent {} asks: {}",
-                details["agent"],
-                details["question"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .chars()
-                    .take(140)
-                    .collect::<String>()
-            ),
-            json!({"question_id": id, "issue_id": details["issue"],
-                   "requirement_id": details["requirement"]}),
-        ),
-        _ => return None,
-    };
-    let mut data = data;
-    data["seq"] = e.seq.into();
-    Some(Notification {
-        kind,
-        title,
-        body,
-        data,
-    })
+                ("alarm_cleared", "Alarm cleared")
+            };
+            let data = json!({"alarm": alarm, "value": p["value"], "threshold": p["threshold"]});
+            // An alarm that names a user (the failover storm) goes to that user's admins only.
+            let user = p["user"].as_i64();
+            let collapse = match user {
+                Some(u) => format!("alarm:{alarm}:{u}"),
+                None => format!("alarm:{alarm}"),
+            };
+            return Some(Notification {
+                collapse: Some(collapse),
+                user,
+                ..Notification::new(kind, "admin", title, "", data)
+            });
+        }
+        if e.kind.starts_with("account.") {
+            return account::notification(e);
+        }
+        if e.kind.starts_with("connection.") {
+            return connection::notification(e);
+        }
+        let session = p["session"].as_str()?;
+        match e.kind.as_str() {
+            "agent.approval_requested" => {
+                let data = json!({"session_id": session, "approval_id": p["request"].as_str()?});
+                Some(Notification {
+                    collapse: Some(format!("approval:{session}")),
+                    ..Notification::new("approval_needed", "approve", "Approval needed", "", data)
+                })
+            }
+            "agent.ended" => Some(Notification::agent_finished(session)),
+            _ => None,
+        }
+    }
+}
+
+/// How hard one send tries: a failure that may pass (`PushError::Failed`) is tried again after
+/// `backoff`, doubling, up to `attempts` in all and `budget` for the whole send. A dead token
+/// (`InvalidToken`) or a missing transport (`Unsupported`) is never tried again.
+#[derive(Debug, Clone, Copy)]
+pub struct Retry {
+    pub attempts: u32,
+    pub backoff: Duration,
+    pub budget: Duration,
+}
+
+impl Default for Retry {
+    fn default() -> Self {
+        Self {
+            attempts: 3,
+            backoff: Duration::from_millis(500),
+            budget: Duration::from_secs(30),
+        }
+    }
 }
 
 /// Tails the event log and pushes what needs the admin.
 pub struct Pusher {
     pub pool: SqlitePool,
-    pub notifier: Arc<dyn Notifier>,
-    pub clock: Arc<dyn Clock + Send + Sync>,
+    pub providers: Vec<Arc<dyn PushProvider>>,
+    pub classifier: Arc<dyn Classifier>,
     pub every: Duration,
+    pub clock: Arc<dyn Clock + Send + Sync>,
+    pub retry: Retry,
+    limiter: policy::Limiter,
 }
 
 /// Events read per tick.
 const PAGE: u32 = 200;
 
 impl Pusher {
-    /// Pushes everything since the stored cursor, then newly stuck issues; returns how many
-    /// notifications went out. The first tick ever starts at the newest event, and the
-    /// first tick of a process counts what is stuck already as seen (`stuck` is `None`):
-    /// history is not pushed.
-    pub async fn tick(
-        &self,
-        stuck: &mut Option<HashSet<(i64, String)>>,
-    ) -> Result<usize, sqlx::Error> {
+    pub fn new(
+        pool: SqlitePool,
+        providers: Vec<Arc<dyn PushProvider>>,
+        classifier: Arc<dyn Classifier>,
+        every: Duration,
+        clock: Arc<dyn Clock + Send + Sync>,
+    ) -> Self {
+        Self {
+            pool,
+            providers,
+            classifier,
+            every,
+            clock,
+            retry: Retry::default(),
+            limiter: policy::Limiter::default(),
+        }
+    }
+
+    /// Pushes everything since the stored cursor; returns how many notifications went out.
+    /// The first tick ever starts at the newest event: history is not pushed.
+    pub async fn tick(&self) -> Result<usize, sqlx::Error> {
         let mut out = vec![];
         let mut after = match push_cursor(&self.pool).await? {
             Some(after) => after,
@@ -224,57 +291,144 @@ impl Pusher {
             let Some(last) = page.last().map(|e| e.seq) else {
                 break;
             };
-            out.extend(page.iter().filter_map(notification));
+            out.extend(page.iter().filter_map(|e| self.classifier.notification(e)));
             after = last;
             if page.len() < PAGE as usize {
                 break;
             }
         }
         set_push_cursor(&self.pool, after).await?;
+        self.deliver(out).await
+    }
 
-        let now: HashSet<(i64, String)> = stuck_report(&self.pool, &self.clock.now())
-            .await?
-            .into_iter()
-            .filter_map(|s| Some((s.issue_id?.0, s.kind.as_str().to_owned())))
-            .collect();
-        if let Some(seen) = stuck.as_ref() {
-            // ponytail: stuck issues already pushed are remembered per process; a restart
-            // re-arms them silently rather than pushing them again.
-            for (issue, kind) in now.difference(seen) {
-                out.push(Notification {
-                    kind: "stuck",
-                    title: "Issue stuck".to_owned(),
-                    body: format!("Issue {issue} is stuck: {}", kind.replace('_', " ")),
-                    data: json!({"issue_id": issue}),
-                });
-            }
+    /// Sends `notifications` to the devices that may have them: cleaned, merged by `collapse`,
+    /// within each device's ceiling. Returns how many (after merging) were sent.
+    /// A send that fails is tried again within [`Retry`]'s bounds; the sends of one notification
+    /// run together, so one slow gateway does not hold up the others. Nothing here is awaited by
+    /// a request: the pusher runs on its own task, and a failure only counts against its token.
+    // ponytail: retries are in memory and end with the pass; a durable retry queue (on the
+    // scheduler's jobs) if a push must survive a restart.
+    pub async fn deliver(&self, notifications: Vec<Notification>) -> Result<usize, sqlx::Error> {
+        let all = policy::coalesce(notifications.into_iter().map(policy::clean).collect());
+        if all.is_empty() {
+            return Ok(0);
         }
-        *stuck = Some(now);
-
         let targets = push_targets(&self.pool).await?;
-        for n in &out {
-            for to in &targets {
-                // ponytail: a failed push is logged, not retried; a retry queue if pushes
-                // ever matter more than the app's own inbox.
-                if let Err(e) = self.notifier.send(to, n).await {
-                    tracing::warn!(device = to.device.0, error = %e, "push failed");
+        let owners = account::device_users(&self.pool, &all).await?;
+        for n in &all {
+            let mut sends = vec![];
+            for to in targets.iter().filter(|t| policy::may_receive(t, n.scope)) {
+                if to
+                    .kinds
+                    .as_ref()
+                    .is_some_and(|k| !k.iter().any(|k| k == n.kind))
+                {
+                    continue; // the device did not opt into this kind
+                }
+                if n.user.is_some_and(|u| owners.get(&to.device.0) != Some(&u)) {
+                    continue; // another user's device
+                }
+                let Some(provider) = self.providers.iter().find(|p| p.handles(&to.provider)) else {
+                    tracing::debug!(provider = %to.provider, "no push provider for this token");
+                    continue;
+                };
+                // A module's kinds are `<id>.<name>`: its own budget; the platform's have none.
+                let bucket = n.kind.split_once('.').map_or("", |(id, _)| id);
+                if !self.limiter.allow(to.device.0, bucket, self.clock.unix()) {
+                    tracing::warn!(
+                        device = to.device.0,
+                        kind = n.kind,
+                        "push rate limit: dropped"
+                    );
+                    continue;
+                }
+                sends.push(async move { (to, self.send(provider.as_ref(), to, n).await) });
+            }
+            for (to, result) in join_all(sends).await {
+                if let Err(e) = self.record(to, n, &result).await {
+                    tracing::warn!(device = to.device.0, error = %e, "recording a push failed");
                 }
             }
         }
-        Ok(out.len())
+        Ok(all.len())
+    }
+
+    /// One send, retried within [`Retry`].
+    async fn send(
+        &self,
+        provider: &dyn PushProvider,
+        to: &PushTarget,
+        n: &Notification,
+    ) -> Result<(), PushError> {
+        let work = async {
+            let mut wait = self.retry.backoff;
+            let mut tries = 1;
+            loop {
+                match provider.send(to, n).await {
+                    Err(PushError::Failed(_)) if tries < self.retry.attempts => {
+                        tokio::time::sleep(wait).await;
+                        wait = wait.saturating_mul(2);
+                        tries += 1;
+                    }
+                    other => return other,
+                }
+            }
+        };
+        tokio::time::timeout(self.retry.budget, work)
+            .await
+            .unwrap_or_else(|_| Err(PushError::Failed("the push timed out".to_owned())))
+    }
+
+    /// The delivery event, and the token's fate, in one transaction.
+    async fn record(
+        &self,
+        to: &PushTarget,
+        n: &Notification,
+        result: &Result<(), PushError>,
+    ) -> Result<(), sqlx::Error> {
+        let (status, token) = match result {
+            Ok(()) => ("sent", TokenResult::Delivered),
+            Err(PushError::InvalidToken(_)) => ("invalid_token", TokenResult::Invalid),
+            Err(PushError::Failed(_)) => ("failed", TokenResult::Failed),
+            Err(PushError::Unsupported) => ("unsupported", TokenResult::Delivered),
+        };
+        let mut tx = begin_write(&self.pool).await?;
+        let pruned = note_result(&mut tx, to, token, MAX_FAILURES).await?;
+        let mut event = json!({
+            "device": to.device_id, "provider": to.provider, "kind": n.kind,
+            "status": status, "pruned": pruned,
+        });
+        if let Err(PushError::Failed(why) | PushError::InvalidToken(why)) = result {
+            event["reason"] = json!(safe_reason(why));
+        }
+        append(&mut tx, "notify.delivery", &event).await?;
+        if pruned {
+            let details =
+                json!({"device": to.device_id, "provider": to.provider, "reason": status});
+            let entry = NewAuditEvent {
+                actor: AuditActor::System,
+                action: "notify.token_pruned".to_owned(),
+                entity: Some(AuditEntity {
+                    kind: "device".to_owned(),
+                    id: to.device.0,
+                }),
+                details: details.to_string(),
+            };
+            audit::append(&mut tx, &entry).await?;
+        }
+        tx.commit().await
     }
 
     /// Ticks every `every` until `shutdown` completes.
     pub async fn run(&self, shutdown: impl Future<Output = ()>) {
         tokio::pin!(shutdown);
         let mut every = tokio::time::interval(self.every);
-        let mut stuck = None;
         loop {
             tokio::select! {
                 biased;
                 () = &mut shutdown => return,
                 _ = every.tick() => {
-                    if let Err(e) = self.tick(&mut stuck).await {
+                    if let Err(e) = self.tick().await {
                         eprintln!("ainkrad-core-server: push tick failed: {e}");
                     }
                 }
@@ -283,5 +437,41 @@ impl Pusher {
     }
 }
 
+/// What may go in a delivery event (readable by any `read` device): the gateway's own answer
+/// (`APNs 410 Unregistered`), or a fixed phrase. Provider error text is never copied, since a
+/// transport error can carry the request URL and with it the device token.
+fn safe_reason(why: &str) -> String {
+    let apns = why
+        .strip_prefix("APNs ")
+        .filter(|r| r.len() <= 60 && r.bytes().all(|b| b.is_ascii_alphanumeric() || b == b' '));
+    match apns {
+        Some(_) => why.to_owned(),
+        None if why.contains("timed out") => "timed out".to_owned(),
+        None => "send failed".to_owned(),
+    }
+}
+
+/// Providers by name, for `serve`: APNs when it has a key, else the log.
+pub fn providers(apns: Option<apns::ApnsNotifier>) -> Vec<Arc<dyn PushProvider>> {
+    let mut all: Vec<Arc<dyn PushProvider>> = vec![];
+    match apns {
+        Some(a) => all.push(Arc::new(a)),
+        None => all.push(Arc::new(LogProvider)),
+    }
+    all.push(Arc::new(stub::Unimplemented("fcm")));
+    all.push(Arc::new(stub::Unimplemented("webpush")));
+    all
+}
+
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_account;
+#[cfg(test)]
+mod tests_apns;
+#[cfg(test)]
+mod tests_connection;
+#[cfg(test)]
+mod tests_modules;
+#[cfg(test)]
+mod tests_optin;

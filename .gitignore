@@ -1,2 +1,8 @@
-/target/
+target/
 .DS_Store
+/state/
+/clients/swift/.build/
+/dist/
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/corpus/

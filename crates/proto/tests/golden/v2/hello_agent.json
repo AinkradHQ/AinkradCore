@@ -1,0 +1,1 @@
+{"stream_id":0,"kind":"control","seq":0,"payload":{"drivers":[{"capacity":2,"commands":["agent.start","agent.read","agent.send","agent.decide","agent.stop"],"name":"agent","slots":{"claude":2,"codex":1},"streams":12}],"protocol":"2.0","runner_version":"0.1.0","type":"hello"}}

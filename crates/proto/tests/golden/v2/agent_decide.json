@@ -1,0 +1,1 @@
+{"stream_id":9,"kind":"command","seq":0,"payload":{"approved":false,"op":"agent.decide","reply":"not on main","request":"t1","session":"as_a"}}

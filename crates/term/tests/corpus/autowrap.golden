@@ -1,0 +1,10 @@
+4 10
+size 4x10 alt=false cursor=3,10 hidden=false modes=\e>\e[?1l\e[?2004l
+pen \e[m
+-- scrollback 1
+0123456789\e[m
+-- screen
+|ABCDEFGHIJ
+|xy
+|exactly10!
+|Z\e[8CQ

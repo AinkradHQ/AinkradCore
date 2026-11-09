@@ -100,7 +100,7 @@ fn env_name(name: &str) -> String {
 }
 
 /// Bytes under `path`, symlinks not followed.
-fn size(path: &Path) -> u64 {
+pub(super) fn size(path: &Path) -> u64 {
     let Ok(meta) = std::fs::symlink_metadata(path) else {
         return 0;
     };

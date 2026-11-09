@@ -1,424 +1,251 @@
-//! Runners from the app (E11.9, protocol 1.20), mirroring `ainkrad-core-server runner add|revoke`:
-//! every runner with what it reports of itself (harness versions, slots, uptime, logins per
-//! harness and account, its last sleep), register one (its key shown once), drain and undrain,
-//! remove, the tail of its own log (read from it while it is connected, redacted), and the
-//! admin's Power Nap preference for it. Runners belong to no company (the admin's own).
+//! Runners (E1-11.6): every paired runner with its live state from the hub (`crate::hub`), and
+//! the no-op command end to end (`ainkradctl run noop`). A runner's presence also goes out as
+//! the `runner.connected`, `runner.disconnected` and `runner.degraded` events.
 
-use std::collections::BTreeMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use ainkrad_core::exec::{self as core, NewRunner, RunnerId, RunnerStatus as CoreStatus};
+use ainkrad_core::audit::{AuditEntity, NewAuditEvent};
+use ainkrad_proto::v2::{ErrorCode, StreamError};
 use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
-use serde::{Deserialize, Serialize};
-use utoipa::{IntoParams, ToSchema};
+use serde::Serialize;
+use serde_json::json;
+use utoipa::ToSchema;
 
-use super::types::{RunnerStatus, Timestamp, opt_ts};
-use super::{ApiError, ApiResult, BY};
+use super::types::{Timestamp, ts};
+use super::{ApiError, ApiResult, BY, Caller};
 use crate::api::App;
-use crate::api::runner::{ProbeFail, harness_policy};
-use crate::store::exec::{self, DeleteRunnerError, RunnerState};
-use crate::store::{gov, settings};
-use ainkrad_core::settings::{Key, Scope};
-use ainkrad_harness::compat;
+use crate::auth::crypto::is_id;
+use crate::hub::RunnerState;
+use crate::scheduler::{iso_of_unix, unix_secs};
+use crate::store::gov;
 
-/// Where a harness or account logs in on the runner's host, and whether it is.
+/// The audit action of a command sent through the API.
+pub const COMMAND: &str = "runner.command";
+
+/// How long `noop` waits for its answer (under the gateway's request deadline).
+const NOOP_WAIT: Duration = Duration::from_secs(20);
+
+/// A driver a runner offers, as it advertised it.
 #[derive(Debug, Serialize, ToSchema)]
-pub struct RunnerLogin {
-    /// Under the runner's config root (`claude`, `accounts/claude-a`), or
-    /// `credentials/<file>` for an account's token file.
-    pub dir: String,
-    /// The harness, when the dir is a harness's own.
-    pub harness: Option<String>,
-    /// `logged_in`, `logged_out`, or `unknown` (the login lives in the keychain) — open.
-    pub state: String,
-    /// The accounts that log in there.
-    pub account_ids: Vec<i64>,
+pub struct RunnerDriver {
+    /// `exec` now; `pty`, `harness` later.
+    pub name: Option<String>,
+    /// The command ops it takes: `noop`, `exec.run`.
+    pub commands: Option<Vec<String>>,
+    /// How many of its commands run at once (`agent`: sessions).
+    pub capacity: Option<u32>,
+    /// `agent`: how many sessions each harness may run at once (E2-08.1); absent, no split.
+    pub slots: Option<std::collections::BTreeMap<String, u32>>,
 }
 
-/// One harness the runner can drive, judged against Citadel's tested versions (E3.6).
-#[derive(Debug, Serialize, ToSchema)]
-pub struct RunnerHarness {
-    pub name: String,
-    /// What it reported; absent when not installed.
-    pub version: Option<String>,
-    /// `supported` (a tested version), `untested_newer` (newer than tested; runs unless the
-    /// settings refuse it), `too_old`, `known_bad`, `missing`, `unreadable` or
-    /// `unknown_harness` — open.
-    pub status: String,
-    /// Whether runs are dispatched to it.
-    pub offered: bool,
-    /// The newest version Citadel's adapter was tested against.
-    pub tested_up_to: Option<String>,
-    /// Why it is refused, or the note on an untested version.
-    pub reason: Option<String>,
-}
-
-/// Every known harness, then any other `reported` one, judged under `policy`.
-fn harness_status(
-    reported: &BTreeMap<String, String>,
-    policy: &compat::Policy,
-) -> Vec<RunnerHarness> {
-    let known = compat::COMPAT.iter().map(|c| c.harness.to_owned());
-    let others = reported
-        .keys()
-        .filter(|h| compat::compat(h).is_none())
-        .cloned();
-    known
-        .chain(others)
-        .map(|name| {
-            let version = reported.get(&name).cloned();
-            let v = compat::check(&name, version.as_deref(), policy);
-            RunnerHarness {
-                status: v.status.as_str().to_owned(),
-                offered: v.offered(),
-                tested_up_to: v.tested_up_to.map(str::to_owned),
-                reason: v.reason,
-                name,
-                version,
-            }
-        })
-        .collect()
-}
-
+/// A paired runner and its live state.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Runner {
-    pub id: i64,
+    /// The runner's device id, `d_…`.
+    pub id: String,
     pub name: String,
-    pub tags: Vec<String>,
-    pub status: RunnerStatus,
-    pub last_seen_at: Option<Timestamp>,
-    /// Why it is unhealthy, when it is.
-    pub health_reason: Option<String>,
-    /// When the admin asked to wake it (`wakeRunner`); absent once it connects.
-    pub wake_requested_at: Option<Timestamp>,
-    /// `now` or `when_back`, with `wake_requested_at`.
-    pub wake_mode: Option<String>,
-    /// Harness → version, from its last hello.
-    pub harnesses: BTreeMap<String, String>,
-    /// Every harness with how its reported version stands against the tested ones (API
-    /// minor 10), under the runner's current settings.
-    pub harness_status: Vec<RunnerHarness>,
-    /// Runs it works at once, as it reported.
-    pub slots: Option<u32>,
-    /// Seconds it had been up at `reported_at`; absent while it is offline.
-    pub uptime_secs: Option<u64>,
-    /// When it last reported its state (runner protocol 1.20).
-    pub reported_at: Option<Timestamp>,
-    pub logins: Vec<RunnerLogin>,
-    /// An offline Mac: most likely asleep (the "Wake my Mac" case).
-    pub asleep: bool,
-    /// How long its machine last slept, as it reported after waking.
-    pub last_slept_secs: Option<u64>,
-    /// When the admin drained it: it takes no new run; its runs finish.
-    pub drained_at: Option<Timestamp>,
-    /// The admin's Power Nap preference for it; absent, none set.
-    pub power_nap: Option<bool>,
-    /// The preference the runner says it holds.
-    pub power_nap_applied: Option<bool>,
-    /// Its operating system as it said in its hello (runner protocol 1.25; API minor 17), as
-    /// Rust names it: `macos`, `linux`, `windows`. Absent until it says (an older runner never
-    /// does).
-    pub os: Option<String>,
-    /// Its CPU architecture, as Rust names it: `aarch64`, `x86_64`.
+    /// Connected to this Core now.
+    pub online: Option<bool>,
+    /// Connected but silent past two heartbeats.
+    pub degraded: Option<bool>,
+    /// Its last frame or request; null if never seen.
+    pub last_seen: Option<Timestamp>,
+    /// What it last advertised (empty until it first connected since the Core started).
+    pub drivers: Option<Vec<RunnerDriver>>,
+    /// Commands it takes at once.
+    pub capacity: Option<u32>,
+    /// Commands in flight.
+    pub load: Option<u32>,
+    /// The host's load as its runner last reported it (E2-15.2), if it has.
+    pub host_load: Option<RunnerHostLoad>,
+    /// Its `ainkrad-runner` version, once connected.
+    pub version: Option<String>,
+    /// The CPU architecture it reported (`aarch64`, `x86_64`), once connected.
     pub arch: Option<String>,
+    /// The isolation it offers now (E8a-09): absent until it reports, and then no tier can be
+    /// assumed.
+    pub isolation: Option<RunnerIsolation>,
 }
 
-/// The runner with its reported state; `accounts` name who logs in where.
-pub fn view(
-    r: core::Runner,
-    state: Option<&RunnerState>,
-    accounts: &[ainkrad_core::gov::Account],
-    policy: &compat::Policy,
-) -> Runner {
-    let info = state.and_then(|s| s.info.as_ref());
-    let online = r.status != CoreStatus::Offline;
-    let logins = info.map_or_else(Vec::new, |i| {
-        i.logins
-            .iter()
-            .map(|l| RunnerLogin {
-                dir: l.dir.clone(),
-                harness: l.harness.clone(),
-                state: l.state.clone(),
-                account_ids: accounts
-                    .iter()
-                    .filter(|a| {
-                        a.config_dir == l.dir
-                            || a.credential_ref
-                                .as_ref()
-                                .is_some_and(|c| format!("credentials/{c}") == l.dir)
-                    })
-                    .map(|a| a.id.0)
-                    .collect(),
-            })
-            .collect()
-    });
+/// The isolation tiers a runner offers and the state of its `/dev/kvm` (E8a-09).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RunnerIsolation {
+    /// Tiers offered now, by name: `none`, `process`, `microvm`.
+    pub tiers: Option<Vec<String>>,
+    /// `not_applicable`, `absent`, `usable` or `unusable`.
+    pub kvm: Option<String>,
+}
+
+fn of(d: gov::Device, live: Option<&RunnerState>) -> Runner {
+    let used = d.last_used_at.as_deref().and_then(unix_secs);
+    let seen = live.map(|s| s.last_seen).into_iter().chain(used).max();
+    let n = |v: usize| Some(u32::try_from(v).unwrap_or(u32::MAX));
     Runner {
-        // ponytail: a sleeping Mac and a stopped one look the same from here (both dropped
-        // the socket); a goodbye message from a stopping runner would tell them apart.
-        asleep: !online && r.tags.iter().any(|t| t == "macos"),
-        harness_status: harness_status(state.map_or(&BTreeMap::new(), |s| &s.harnesses), policy),
-        harnesses: state.map(|s| s.harnesses.clone()).unwrap_or_default(),
-        slots: info.map(|i| i.slots),
-        uptime_secs: info.filter(|_| online).map(|i| i.uptime_secs),
-        reported_at: opt_ts(state.and_then(|s| s.info_at.as_deref())),
-        logins,
-        last_slept_secs: info.and_then(|i| i.slept_secs),
-        drained_at: opt_ts(r.drained_at.as_deref()),
-        power_nap: r.power_nap,
-        power_nap_applied: info.and_then(|i| i.power_nap),
-        os: state.and_then(|s| s.os.clone()),
-        arch: state.and_then(|s| s.arch.clone()),
-        id: r.id.0,
-        name: r.name,
-        tags: r.tags,
-        status: r.status.into(),
-        last_seen_at: opt_ts(r.last_seen_at.as_deref()),
-        health_reason: r.health_reason,
-        wake_requested_at: opt_ts(r.wake_requested_at.as_deref()),
-        wake_mode: r.wake_mode,
+        id: d.id,
+        name: d.name,
+        online: Some(live.is_some_and(|s| s.online)),
+        degraded: Some(live.is_some_and(|s| s.degraded)),
+        last_seen: seen.map(|t| ts(&iso_of_unix(t))),
+        drivers: Some(
+            live.map(|s| s.drivers.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|d| RunnerDriver {
+                    name: Some(d.name),
+                    commands: Some(d.commands),
+                    capacity: Some(d.capacity),
+                    slots: (!d.slots.is_empty()).then_some(d.slots),
+                })
+                .collect(),
+        ),
+        capacity: live.and_then(|s| n(s.capacity)),
+        load: n(live.map_or(0, |s| s.load)),
+        host_load: live.and_then(|s| s.host_load).map(|l| RunnerHostLoad {
+            avg1: l.avg1,
+            cores: l.cores,
+        }),
+        version: live.map(|s| s.version.clone()).filter(|v| !v.is_empty()),
+        arch: live.and_then(|s| s.arch.clone()),
+        isolation: live
+            .and_then(|s| s.isolation.as_ref())
+            .map(|i| RunnerIsolation {
+                tiers: Some(i.tiers.clone()),
+                kvm: serde_json::to_value(i.kvm)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned)),
+            }),
     }
 }
 
-/// `r` as the app shows it.
-pub async fn shown(app: &App, r: core::Runner) -> Result<Runner, ApiError> {
-    let states = exec::runner_states(&app.pool).await?;
-    let accounts = gov::list_accounts(&app.pool).await?;
-    let state = states.get(&r.id.0);
-    let policy = harness_policy(&app.pool, r.id).await;
-    Ok(view(r, state, &accounts, &policy))
+/// A runner device that may connect: approved and not revoked (a pending, rejected or expired
+/// claimant is not a runner yet).
+fn listed(d: &gov::Device) -> bool {
+    d.kind == "runner" && d.usable()
 }
 
-async fn found(app: &App, id: i64) -> Result<core::Runner, ApiError> {
-    exec::get_runner(&app.pool, RunnerId(id))
-        .await?
-        .ok_or_else(|| ApiError::not_found(format!("no runner {id}")))
+/// The host's load as last reported by a runner (E2-15.2), if any.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RunnerHostLoad {
+    /// The one-minute load average.
+    pub avg1: f64,
+    /// How many CPUs the runner sees.
+    pub cores: u32,
 }
 
-#[utoipa::path(get, path = "/api/v1/runners", operation_id = "listRunners", tag = "org",
-    responses((status = 200, description = "Every runner, its health and what it reports of \
-        itself", body = Vec<Runner>)))]
+#[utoipa::path(get, path = "/api/v1/runners", operation_id = "listRunners", tag = "runners",
+    responses((status = 200, description = "Every paired runner that is active (approved, not \
+        revoked), with its live state", body = Vec<Runner>)))]
 pub async fn list(State(app): State<App>) -> ApiResult<Vec<Runner>> {
-    let states = exec::runner_states(&app.pool).await?;
-    let accounts = gov::list_accounts(&app.pool).await?;
-    let mut shown = vec![];
-    for r in exec::list_runners(&app.pool).await? {
-        let state = states.get(&r.id.0);
-        let policy = harness_policy(&app.pool, r.id).await;
-        shown.push(view(r, state, &accounts, &policy));
-    }
-    Ok(Json(shown))
+    let live = app.hub.runners();
+    let devices = gov::list_devices(&app.pool).await?;
+    Ok(Json(
+        devices
+            .into_iter()
+            .filter(listed)
+            .map(|d| {
+                let s = live.get(&d.id);
+                of(d, s)
+            })
+            .collect(),
+    ))
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct NewRunnerBody {
-    /// Unique; 1–64 characters.
-    pub name: String,
-    /// Capabilities it offers, e.g. `macos`, `xcode`; it may send its own when it connects.
-    #[serde(default)]
-    pub tags: Vec<String>,
+async fn one(app: &App, id: &str) -> Result<gov::Device, ApiError> {
+    let found = match is_id(id, "d_") {
+        true => gov::get_device(&app.pool, id).await?,
+        false => None,
+    };
+    found
+        .filter(listed)
+        .ok_or_else(|| ApiError::not_found("no such runner"))
 }
 
-/// A registered runner and its key: shown only now, never stored (only its hash is).
+#[utoipa::path(get, path = "/api/v1/runners/{id}", operation_id = "getRunner", tag = "runners",
+    params(("id" = String, Path, description = "The runner's device id, `d_…`")),
+    responses((status = 200, description = "One runner and its live state", body = Runner)))]
+pub async fn get(State(app): State<App>, Path(id): Path<String>) -> ApiResult<Runner> {
+    let d = one(&app, &id).await?;
+    let live = app.hub.runners();
+    Ok(Json(of(d, live.get(&id))))
+}
+
+/// The no-op's answer.
 #[derive(Debug, Serialize, ToSchema)]
-pub struct RegisteredRunner {
-    pub runner: Runner,
-    pub key: String,
+pub struct NoopResult {
+    /// The runner answered.
+    pub ok: Option<bool>,
+    /// From dispatch to answer.
+    pub duration_ms: Option<u64>,
 }
 
-#[utoipa::path(post, path = "/api/v1/runners", operation_id = "registerRunner", tag = "org",
-    request_body = NewRunnerBody,
-    responses((status = 200, description = "The new runner, offline, and its key, shown only \
-        now (audited as `runner.registered`)", body = RegisteredRunner)))]
-pub async fn register(
+/// A failed command as an API error.
+pub(super) fn failed(e: &StreamError) -> ApiError {
+    let (status, code) = match e.code {
+        ErrorCode::Offline => (StatusCode::CONFLICT, "runner_offline"),
+        ErrorCode::UnsupportedCommand => (StatusCode::CONFLICT, "unsupported_command"),
+        ErrorCode::Busy => (StatusCode::SERVICE_UNAVAILABLE, "runner_busy"),
+        ErrorCode::Lost => (StatusCode::GATEWAY_TIMEOUT, "runner_lost"),
+        _ => (StatusCode::BAD_GATEWAY, "runner_failed"),
+    };
+    ApiError::new(status, code, e.message.clone())
+}
+
+#[utoipa::path(post, path = "/api/v1/runners/{id}/noop", operation_id = "runNoop",
+    tag = "runners",
+    params(("id" = String, Path, description = "The runner's device id, `d_…`")),
+    responses((status = 200, description = "The runner ran the no-op command (audited as \
+        `runner.command`, once per caller, runner and outcome in a window). 409 `runner_offline` or `unsupported_command`, 503 `runner_busy`, \
+        504 `runner_lost` or `runner_timeout`, 502 `runner_failed`", body = NoopResult)))]
+pub async fn noop(
     State(app): State<App>,
-    Json(b): Json<NewRunnerBody>,
-) -> ApiResult<RegisteredRunner> {
-    let name = b.name.trim().to_owned();
-    if name.is_empty() || name.chars().count() > 64 {
-        return Err(ApiError::bad_request("a runner's name is 1-64 characters"));
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<NoopResult> {
+    let d = one(&app, &id).await?;
+    let started = Instant::now();
+    let outcome = match tokio::time::timeout(NOOP_WAIT, app.hub.noop(&id)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(failed(&e)),
+        Err(_) => Err(ApiError::new(
+            StatusCode::GATEWAY_TIMEOUT,
+            "runner_timeout",
+            "the runner did not answer in time",
+        )),
+    };
+    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    // The first call per caller, runner and outcome in a window is audited; the repeats are
+    // counted in memory (`auth::refusals`, bounded), so a device that can call this at its
+    // request rate cannot grow the permanent audit log (security review RH4).
+    let key = format!("{COMMAND}:noop:{}:{id}:{}", me.device.id, outcome.is_ok());
+    if !app.auth.refusals.note(&key, app.clock.unix()) {
+        outcome?;
+        return Ok(Json(NoopResult {
+            ok: Some(true),
+            duration_ms: Some(duration_ms),
+        }));
     }
-    let new = NewRunner {
-        name: name.clone(),
-        tags: b.tags,
+    let event = NewAuditEvent {
+        actor: BY,
+        action: COMMAND.to_owned(),
+        entity: Some(AuditEntity {
+            kind: "device".to_owned(),
+            id: d.seq,
+        }),
+        details: json!({
+            "runner": id,
+            "op": "noop",
+            "by_device": me.device.id,
+            "ok": outcome.is_ok(),
+            "duration_ms": duration_ms,
+        })
+        .to_string(),
     };
-    let (r, key) = match exec::add_runner(&app.pool, &new, BY).await {
-        Ok(added) => added,
-        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-            return Err(ApiError::conflict(format!("runner name {name:?} is taken")));
-        }
-        Err(e) => return Err(e.into()),
-    };
-    Ok(Json(RegisteredRunner {
-        runner: shown(&app, r).await?,
-        key,
+    crate::store::audit::append_one(&app.pool, &event).await?;
+    outcome?;
+    Ok(Json(NoopResult {
+        ok: Some(true),
+        duration_ms: Some(duration_ms),
     }))
-}
-
-async fn drain(app: App, id: i64, on: bool) -> ApiResult<Runner> {
-    let now = app.clock.now();
-    let r = exec::drain_runner(&app.pool, RunnerId(id), on, BY, &now)
-        .await?
-        .ok_or_else(|| ApiError::not_found(format!("no runner {id}")))?;
-    Ok(Json(shown(&app, r).await?))
-}
-
-#[utoipa::path(post, path = "/api/v1/runners/{id}/drain", operation_id = "drainRunner",
-    tag = "org", params(("id" = i64, Path, description = "Runner id")),
-    responses((status = 200, description = "The runner, drained: it takes no new run and its \
-        runs finish (audited as `runner.drained`)", body = Runner)))]
-pub async fn drain_runner(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Runner> {
-    drain(app, id, true).await
-}
-
-#[utoipa::path(delete, path = "/api/v1/runners/{id}/drain", operation_id = "undrainRunner",
-    tag = "org", params(("id" = i64, Path, description = "Runner id")),
-    responses((status = 200, description = "The runner, taking runs again (audited as \
-        `runner.undrained`)", body = Runner)))]
-pub async fn undrain_runner(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Runner> {
-    drain(app, id, false).await
-}
-
-/// A runner that was removed.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct RemovedRunner {
-    pub id: i64,
-}
-
-#[utoipa::path(delete, path = "/api/v1/runners/{id}", operation_id = "removeRunner", tag = "org",
-    params(("id" = i64, Path, description = "Runner id")),
-    responses((status = 200, description = "The runner is gone and its key no longer connects \
-        (audited as `runner.removed`); 409 while it holds live runs (drain it, let them end)",
-        body = RemovedRunner)))]
-pub async fn remove(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<RemovedRunner> {
-    match exec::remove_runner(&app.pool, RunnerId(id), Some(BY)).await {
-        Ok(true) => Ok(Json(RemovedRunner { id })),
-        Ok(false) => Err(ApiError::not_found(format!("no runner {id}"))),
-        Err(DeleteRunnerError::LiveRuns(runs)) => {
-            let ids: Vec<String> = runs.iter().map(|r| r.0.to_string()).collect();
-            Err(ApiError::conflict(format!(
-                "runner {id} holds live runs ({}); drain it and let them end",
-                ids.join(", ")
-            )))
-        }
-        Err(DeleteRunnerError::Db(e)) => Err(e.into()),
-    }
-}
-
-#[derive(Debug, Deserialize, IntoParams)]
-#[into_params(parameter_in = Query)]
-pub struct LogQuery {
-    /// Lines from the end; default and most: `runner.log_tail_max_lines`.
-    pub limit: Option<u32>,
-}
-
-/// The end of a runner's own log, redacted by the runner and again by the server.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct RunnerLog {
-    pub runner_id: i64,
-    pub lines: Vec<String>,
-}
-
-#[utoipa::path(get, path = "/api/v1/runners/{id}/logs", operation_id = "getRunnerLogs",
-    tag = "org", params(("id" = i64, Path, description = "Runner id"), LogQuery),
-    responses((status = 200, description = "The last lines of its log, read from it now; 409 \
-        while it is offline, 502 when it could not read it, 504 when it did not answer within \
-        `runner.log_tail_timeout_secs`", body = RunnerLog)))]
-pub async fn logs(
-    State(app): State<App>,
-    Path(id): Path<i64>,
-    Query(q): Query<LogQuery>,
-) -> ApiResult<RunnerLog> {
-    let r = found(&app, id).await?;
-    if !app.is_connected(r.id) {
-        return Err(ApiError::conflict(format!(
-            "runner {id} is offline; its log is read from it while it is connected"
-        )));
-    }
-    let max = settings::value(&app.pool, Key::RunnerLogTailMaxLines, Scope::Server).await?;
-    let wait = settings::value(&app.pool, Key::RunnerLogTailTimeoutSecs, Scope::Server).await?;
-    let lines = q.limit.unwrap_or(max as u32).clamp(1, max as u32);
-    let (request, answer) = app.log_tails.ask(r.id, lines);
-    match tokio::time::timeout(Duration::from_secs(wait as u64), answer).await {
-        Ok(Ok(Ok(lines))) => Ok(Json(RunnerLog {
-            runner_id: id,
-            lines,
-        })),
-        Ok(Ok(Err(why))) => Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            "runner_error",
-            format!("runner {id} could not read its log: {why}"),
-        )),
-        Ok(Err(_)) | Err(_) => {
-            app.log_tails.forget(request);
-            Err(ApiError::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "runner_timeout",
-                format!("runner {id} did not send its log in {wait} s"),
-            ))
-        }
-    }
-}
-
-#[utoipa::path(post, path = "/api/v1/runners/{id}/probe", operation_id = "probeRunner",
-    tag = "org", params(("id" = i64, Path, description = "Runner id")),
-    responses(
-        (status = 200, description = "The runner after it looked at itself now (API minor 17): \
-            its harness versions and how they stand, its logins and its platform are fresh",
-            body = Runner),
-        (status = 409, description = "It is offline, or its protocol is older than 1.25 \
-            (\"runner too old\")", body = super::types::ErrorBody),
-        (status = 502, description = "It could not look", body = super::types::ErrorBody),
-        (status = 504, description = "It did not answer within `runner.log_tail_timeout_secs`",
-            body = super::types::ErrorBody)))]
-pub async fn probe(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Runner> {
-    let r = found(&app, id).await?;
-    if !app.is_connected(r.id) {
-        return Err(ApiError::conflict(format!(
-            "runner {id} is offline; it is probed while it is connected"
-        )));
-    }
-    let wait = settings::value(&app.pool, Key::RunnerLogTailTimeoutSecs, Scope::Server).await?;
-    let (request, answer) = app.probes.ask(r.id);
-    match tokio::time::timeout(Duration::from_secs(wait as u64), answer).await {
-        Ok(Ok(Ok(()))) => shown(&app, found(&app, id).await?).await.map(Json),
-        Ok(Ok(Err(ProbeFail::TooOld))) => Err(ApiError::conflict(format!(
-            "runner {id} is too old to probe (it needs runner protocol 1.25); update it"
-        ))),
-        Ok(Ok(Err(ProbeFail::Failed(why)))) => Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            "runner_error",
-            format!("runner {id} could not probe itself: {why}"),
-        )),
-        Ok(Err(_)) | Err(_) => {
-            app.probes.forget(request);
-            Err(ApiError::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "runner_timeout",
-                format!("runner {id} did not answer the probe in {wait} s"),
-            ))
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct PowerNapBody {
-    pub enabled: bool,
-}
-
-#[utoipa::path(put, path = "/api/v1/runners/{id}/power-nap", operation_id = "setRunnerPowerNap",
-    tag = "org", params(("id" = i64, Path, description = "Runner id")), request_body = PowerNapBody,
-    responses((status = 200, description = "The runner with the admin's Power Nap preference, \
-        stored (audited as `runner.power_nap`) and pushed to it while it is connected; \
-        `power_nap_applied` shows once it holds it", body = Runner)))]
-pub async fn set_power_nap(
-    State(app): State<App>,
-    Path(id): Path<i64>,
-    Json(b): Json<PowerNapBody>,
-) -> ApiResult<Runner> {
-    let r = exec::set_power_nap(&app.pool, RunnerId(id), b.enabled, BY)
-        .await?
-        .ok_or_else(|| ApiError::not_found(format!("no runner {id}")))?;
-    Ok(Json(shown(&app, r).await?))
 }

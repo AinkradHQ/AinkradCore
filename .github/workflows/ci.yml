@@ -4,6 +4,12 @@ on:
   pull_request:
   push:
     branches: [development]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  # Only a pull request's superseded run is cancelled; pushes to development always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   test:
     strategy:
@@ -13,10 +19,100 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # scripts/api-minor-check.sh compares with origin/development
       - run: rustup show
+      - name: Enable the Linux sandbox (bubblewrap and unprivileged user namespaces)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --unshare-all --ro-bind / / -- /bin/true
+      # On Linux the enforcement tests FAIL, not skip, when the sandbox cannot run.
       - run: make test
+        env:
+          AINKRAD_REQUIRE_SANDBOX: ${{ runner.os == 'Linux' && '1' || '' }}
+  exit-smoke:
+    # The real binaries end to end (Core, runner with the default terminal sandbox, ptyhost, ainkradctl):
+    # the combined exit gate's steps 1-7, which a unit test of any one of them cannot catch.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - name: Enable the Linux sandbox (bubblewrap and unprivileged user namespaces)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --unshare-all --ro-bind / / -- /bin/true
+      - run: make e2-exit
+        env:
+          AINKRAD_REQUIRE_SANDBOX: '1'
+      - name: Keep the evidence report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2-exit-report
+          path: target/e2-exit/
+          if-no-files-found: ignore
   deny:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
+  citadel:
+    # The parked Citadel workspace and the Citadel module are not part of `make test`.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - run: make test-citadel
+  release-scripts:
+    # The release installer tests: bash only, throwaway minisign keys, no cargo.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y minisign
+      - run: bash scripts/release/test-install.sh
+  toy:
+    # The toy module (the module API guide's reference) is its own small workspace.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - run: make test-toy
+  clients-check:
+    # Drift gate (KAN-418): regenerate Swift/Kotlin/C#/TS clients from api/openapi.json, fail if the committed ones differ.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.2"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ainkrad-core-tools
+          key: swift-openapi-generator-1.14.2-${{ runner.os }}
+      - run: make clients-check
+  schema-compat:
+    # Breaking-change gate (KAN-418, KAN-180) against a REAL baseline: the pull request's base commit, or the
+    # push's previous commit. Without BASE_REF it would compare development with itself (there is no v* tag).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Pick the baseline
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          # A new branch or force-push has an all-zero "before"; fall back to the parent commit.
+          case "$BASE" in ''|0000000*) BASE=$(git rev-parse HEAD^1) ;; esac
+          echo "BASE_REF=$BASE" >> "$GITHUB_ENV"
+      - run: make schema-compat
+      - name: Self-test the gate (api/ and module contracts)
+        run: make schema-compat-selftest

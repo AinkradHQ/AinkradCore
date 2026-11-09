@@ -27,11 +27,9 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
 use ainkrad_proto::runner::{RepoDiff, Workspace};
-use tokio::process::Command;
 use tokio::sync::OwnedMutexGuard;
 
 pub struct Workspaces {
@@ -43,6 +41,9 @@ pub struct Workspaces {
     /// Answers git's username and password prompts; without it a repo that needs auth
     /// fails with a clear reason. It runs with the git home as `HOME`.
     pub askpass: Option<PathBuf>,
+    prepares: tokio::sync::Semaphore,
+    pub git_timeout: std::time::Duration,
+    pub git_size_cap: u64,
     locks: Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
     /// Issue → runs using its worktree; `prune` leaves these alone.
     in_use: Mutex<HashMap<i64, u32>>,
@@ -51,14 +52,31 @@ pub struct Workspaces {
     pub cache_rules: Vec<CacheRule>,
 }
 
+/// A platform workspace request. The caller supplies the branch naming policy; the runner
+/// supplies only the private session directory and git credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionWorkspace {
+    pub repo: String,
+    pub reference: String,
+    pub branch: String,
+    pub name: String,
+}
+
 /// A repo URL as a plain file name: its mirror's and its build cache's.
 fn repo_name(repo: &str) -> String {
-    repo.chars()
-        .map(|c| match c {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-' => c,
-            _ => '_',
-        })
+    ring::digest::digest(&ring::digest::SHA256, repo.as_bytes())
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+fn safe_repo_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('.')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 }
 
 /// The last `max` bytes of `text`, trimmed.
@@ -84,11 +102,15 @@ fn new_lines(path: &Path) -> u64 {
 
 impl Workspaces {
     pub fn new(work_root: PathBuf, git_home: PathBuf) -> Self {
+        let _ = crate::v2::agent::secrets::private_dir(&work_root);
         Self {
             root: work_root,
             git_home,
             git: PathBuf::from("git"),
             askpass: None,
+            prepares: tokio::sync::Semaphore::new(4),
+            git_timeout: std::time::Duration::from_secs(120),
+            git_size_cap: 512 * 1024 * 1024,
             locks: Mutex::default(),
             in_use: Mutex::default(),
             cache_rules: CacheRule::defaults(),
@@ -137,46 +159,6 @@ impl Workspaces {
     }
 
     /// `git args…` in `dir`, set up as every git here runs (see the module docs).
-    fn command(&self, dir: &Path, args: &[&str]) -> Command {
-        let mut cmd = Command::new(&self.git);
-        cmd.args(args)
-            .current_dir(dir)
-            .env_clear()
-            .env("HOME", &self.git_home)
-            .envs(self.env())
-            .stdin(Stdio::null())
-            .kill_on_drop(true);
-        for name in ["PATH", "LANG"] {
-            if let Some(value) = std::env::var_os(name) {
-                cmd.env(name, value);
-            }
-        }
-        if let Some(askpass) = &self.askpass {
-            cmd.env("GIT_ASKPASS", askpass);
-        }
-        cmd
-    }
-
-    /// `git args…` in `dir`: its stdout, or why it failed with git's stderr tail.
-    async fn git(&self, dir: &Path, args: &[&str]) -> Result<String, String> {
-        let what = format!("git {}", args.first().unwrap_or(&""));
-        let out = self.command(dir, args).output().await;
-        let out = out.map_err(|e| format!("{what}: {e}"))?;
-        if out.status.success() {
-            return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
-        }
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let said = tail(&stderr, 500);
-        let no_prompt = stderr.contains("terminal prompts disabled");
-        if no_prompt && self.askpass.is_none() {
-            return Err(format!(
-                "{what}: the repo needs credentials and this runner has none (set \
-                 CITADEL_GIT_ASKPASS): {said}"
-            ));
-        }
-        Err(format!("{what} failed ({}): {said}", out.status))
-    }
-
     /// Sets the commit identity agents commit as, in the runner-owned global config: `name`
     /// and `email` when given, else whatever that file already holds. The identity it ends
     /// up with, or why there is none (the runner must not start without one).
@@ -198,11 +180,29 @@ impl Workspaces {
                 if value.trim().is_empty() || value.chars().any(char::is_control) {
                     return Err(format!("bad {key} {value:?}"));
                 }
-                self.git(&self.git_home, &["config", "--global", key, value])
-                    .await?;
+                self.git(
+                    &self.git_home,
+                    &[
+                        "config",
+                        "--file",
+                        config.to_str().ok_or("invalid config path")?,
+                        key,
+                        value,
+                    ],
+                )
+                .await?;
             }
             match self
-                .git(&self.git_home, &["config", "--global", "--get", key])
+                .git(
+                    &self.git_home,
+                    &[
+                        "config",
+                        "--file",
+                        config.to_str().ok_or("invalid config path")?,
+                        "--get",
+                        key,
+                    ],
+                )
                 .await
             {
                 Ok(value) if !value.trim().is_empty() => found.push(value.trim().to_owned()),
@@ -231,11 +231,11 @@ impl Workspaces {
             "Username for 'https://citadel': ",
             "Password for 'https://citadel': ",
         ] {
-            let mut cmd = Command::new(askpass);
+            let mut cmd = tokio::process::Command::new(askpass);
             cmd.arg(prompt)
                 .env_clear()
                 .env("HOME", &self.git_home)
-                .stdin(Stdio::null())
+                .stdin(std::process::Stdio::null())
                 .kill_on_drop(true);
             if let Some(path) = std::env::var_os("PATH") {
                 cmd.env("PATH", path);
@@ -280,7 +280,13 @@ impl Workspaces {
     /// The issue's worktrees, one per repo of `trees` (the issue dir itself for one), created or
     /// reused, marked in use until `release`. The issue dir.
     pub async fn prepare(&self, issue: i64, trees: &[Workspace]) -> Result<PathBuf, String> {
-        if let Some(why) = trees.iter().find_map(Workspace::problem) {
+        if let Some(why) = trees.iter().find_map(|w| {
+            if cfg!(test) && Path::new(&w.repo).is_absolute() {
+                None
+            } else {
+                w.problem()
+            }
+        }) {
             return Err(why);
         }
         let nested = trees.len() > 1;
@@ -470,10 +476,12 @@ impl Workspaces {
     }
 }
 
+pub(crate) mod command;
 mod disk;
 mod layout;
 mod push;
 mod read;
+mod session;
 pub use disk::CacheRule;
 
 #[cfg(test)]

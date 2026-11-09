@@ -1,0 +1,15 @@
+10 30
+size 10x30 alt=false cursor=0,0 hidden=false modes=\e>\e[?1l\e[?2004l
+pen \e[m
+-- scrollback 0
+-- screen
+|+----------------------------+
+||\e[28C|
+|N\e[9CU\e[18C|
+||\e[28C|
+||\e[8CX\e[19C|
+||\e[28C|
+||\e[9CLD\e[3CR\e[3CG\e[9C|
+|P\e[19CV\e[8C|
+||\e[28C|
+|+----------------------------+

@@ -1,232 +1,318 @@
-//! Chain presets and an agent's chain (API minor 18): a company's named chains of (harness,
-//! model, account) entries, and `PUT /agents/{id}/chain` to give an agent a preset or a chain of
-//! its own. A preset's entries replace the agent's fallbacks while it has one; an agent with
-//! neither uses the company's default preset (`is_default`). Audited as `chain_preset.created`,
-//! `.updated`, `.deleted` and `agent.chain_set`, each an event on the stream.
+//! Fallback chains over the API (design `2026-11-06-core-account-scheduler` §13, S7). Every route
+//! is `admin`: reading a chain says which accounts a run may walk. Every write is also
+//! destructive (a step-up), like pool membership: a chain decides which key a run spends next.
+//!
+//! - **One user's.** A chain, its bindings and the pools its entries name belong to the user of
+//!   the calling device (`core_devices.user_id`), never to one a body names. Another user's chain
+//!   does not exist for a caller (404), whatever the verb; a list shows the caller's own.
+//! - **Writes.** `POST` makes a chain, `PUT /chains/{id}` replaces its name and WHOLE entry list,
+//!   `DELETE` removes it (409 while a live session walks it), `PUT …/default` makes it the user's
+//!   default, and an agent's binding says which chain its sessions get. Every write is audited
+//!   `chain.*` with ids, names and models, never a value.
+//! - **Refusals.** `bad_request` is 400, `not_found` 404, `conflict` and `limit_reached` 409
+//!   (the store's own codes, as every other route maps them).
 
-use ainkrad_core::ops::{ChainEntry, ChainPreset, NewChainPreset};
-use ainkrad_core::org::{AgentId, ModelRoute};
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::body::Bytes;
+use axum::extract::{Extension, Path, State};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::org::company;
-use super::types::Harness;
-use super::{ApiError, ApiResult, BY};
+use super::accounts::AccountsDeleted;
+use super::types::{Timestamp, ts};
+use super::{ApiError, ApiResult, BY, Caller};
 use crate::api::App;
-use crate::store::org::{self, AgentChain};
+use crate::store::chains::{self as ch, EntrySpec};
 
-/// One entry of a chain, tried in order.
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct ChainEntryBody {
-    pub harness: Harness,
-    pub model: String,
-    /// Pin the entry to one account of the company's pool; absent: any.
-    pub account_id: Option<i64>,
-}
-
-impl From<ChainEntry> for ChainEntryBody {
-    fn from(e: ChainEntry) -> Self {
-        Self {
-            harness: e.harness.into(),
-            model: e.model,
-            account_id: e.account_id,
-        }
-    }
-}
-
-impl From<ChainEntryBody> for ChainEntry {
-    fn from(e: ChainEntryBody) -> Self {
-        Self {
-            harness: e.harness.into(),
-            model: e.model,
-            account_id: e.account_id,
-        }
-    }
-}
-
+/// One step of a chain: the pool tried at this position, and the harness and model its accounts
+/// run. The harness is the pool's provider's own.
 #[derive(Debug, Serialize, ToSchema)]
-pub struct ChainPresetOut {
+pub struct ChainEntry {
+    /// The pool's id.
+    pub pool: i64,
+    pub provider: String,
+    /// `claude`, `codex` or `agy`.
+    pub harness: String,
+    /// The model for that harness; absent, the harness's default.
+    pub model: Option<String>,
+}
+
+impl From<ch::ChainEntry> for ChainEntry {
+    fn from(e: ch::ChainEntry) -> Self {
+        Self {
+            pool: e.pool,
+            provider: e.provider,
+            harness: e.harness,
+            model: e.model,
+        }
+    }
+}
+
+/// An ordered fallback chain of 1 to 4 pools. A new session draws an account from the first
+/// entry that has one to give.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Chain {
     pub id: i64,
-    pub company_id: i64,
     pub name: String,
-    /// `#rrggbb`.
-    pub color: Option<String>,
-    pub description: String,
-    /// The chain agents with no chain of their own use.
+    /// The user's default chain serves an agent bound to none.
     pub is_default: bool,
-    pub entries: Vec<ChainEntryBody>,
+    /// In fallback order.
+    pub entries: Vec<ChainEntry>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
 }
 
-impl From<ChainPreset> for ChainPresetOut {
-    fn from(p: ChainPreset) -> Self {
+impl From<ch::Chain> for Chain {
+    fn from(c: ch::Chain) -> Self {
         Self {
-            id: p.id,
-            company_id: p.company_id,
-            name: p.name,
-            color: p.color,
-            description: p.description,
-            is_default: p.is_default,
-            entries: p.entries.into_iter().map(Into::into).collect(),
+            id: c.id,
+            name: c.name,
+            is_default: c.is_default,
+            entries: c.entries.into_iter().map(Into::into).collect(),
+            created_at: ts(&c.created_at),
+            updated_at: ts(&c.updated_at),
         }
     }
 }
 
-/// A preset to store; `PUT` replaces all of it.
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct ChainPresetBody {
-    /// 1-100 characters, unique within the company.
+/// An entry to write: a pool and the model its accounts run.
+#[derive(Deserialize, ToSchema)]
+pub struct NewChainEntry {
+    /// The pool's id; it must be the caller's user's, of a `claude`, `codex` or `agy` provider,
+    /// and in the chain once.
+    pub pool: i64,
+    /// A valid model id; an API-key pool's must be priced. Absent, the harness's default.
+    pub model: Option<String>,
+}
+
+/// A chain to write: `[a-z][a-z0-9._-]{0,63}` and 1 to 4 entries, at most one of them a
+/// subscription. For an edit this replaces the name and the whole list.
+#[derive(Deserialize, ToSchema)]
+pub struct NewChain {
     pub name: String,
-    /// `#rrggbb`.
-    pub color: Option<String>,
-    /// At most 2000 characters.
-    #[serde(default)]
-    pub description: String,
-    /// Make it the company's default chain (the old default stops being it).
-    #[serde(default)]
-    pub is_default: bool,
-    /// At most 20; an account pin must be in the company's pool.
-    pub entries: Vec<ChainEntryBody>,
+    pub entries: Vec<NewChainEntry>,
 }
 
-impl From<ChainPresetBody> for NewChainPreset {
-    fn from(b: ChainPresetBody) -> Self {
-        Self {
-            name: b.name,
-            color: b.color,
-            description: b.description,
-            is_default: b.is_default,
-            entries: b.entries.into_iter().map(Into::into).collect(),
-        }
+/// An agent's binding: its sessions get this chain.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ChainBinding {
+    /// The opaque agent id, 1 to 64 of `[A-Za-z0-9._:-]`.
+    pub agent: String,
+    /// The chain's id.
+    pub chain: i64,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct BindChain {
+    /// The chain's id.
+    pub chain: i64,
+}
+
+fn parse<T: DeserializeOwned>(body: &[u8]) -> Result<T, ApiError> {
+    serde_json::from_slice(body)
+        .map_err(|_| ApiError::bad_request("the body is not a valid request for this route"))
+}
+
+/// A numeric path id; anything else is no such chain.
+fn num(s: &str) -> Result<i64, ApiError> {
+    s.parse::<u64>()
+        .ok()
+        .and_then(|n| i64::try_from(n).ok())
+        .ok_or_else(|| ApiError::not_found("no such chain"))
+}
+
+/// The user the caller's device acts as.
+async fn user(app: &App, me: &Caller) -> Result<i64, ApiError> {
+    Ok(ch::user_of(&app.pool, &me.device.id).await?)
+}
+
+/// The chain `id`, if it is `user`'s: another user's is no such chain.
+async fn owned(app: &App, user: i64, id: i64) -> Result<ch::Chain, ApiError> {
+    let c = ch::get(&app.pool, id).await?;
+    match c.user_id == user {
+        true => Ok(c),
+        false => Err(ApiError::not_found("no such chain")),
     }
 }
 
-fn failed(e: sqlx::Error) -> ApiError {
-    match e {
-        sqlx::Error::InvalidArgument(why) => ApiError::bad_request(why),
-        sqlx::Error::Database(d) if d.message().contains("UNIQUE") => {
-            ApiError::conflict("the company has a preset of that name already")
-        }
-        e => e.into(),
-    }
+fn specs(b: &NewChain) -> Vec<EntrySpec<'_>> {
+    b.entries
+        .iter()
+        .map(|e| EntrySpec {
+            pool: e.pool,
+            model: e.model.as_deref(),
+            harness: None,
+        })
+        .collect()
 }
 
-#[utoipa::path(get, path = "/api/v1/companies/{id}/chain-presets", operation_id = "listChainPresets",
-    tag = "org", params(("id" = i64, Path, description = "Company id")),
-    responses((status = 200, description = "The company's chain presets, by name", body = Vec<ChainPresetOut>)))]
-pub async fn list(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Vec<ChainPresetOut>> {
-    let c = company(&app, id).await?;
-    let all = org::list_presets(&app.pool, c.id).await?;
-    Ok(Json(all.into_iter().map(Into::into).collect()))
+#[utoipa::path(get, path = "/api/v1/chains", operation_id = "listChains", tag = "chains",
+    responses((status = 200, description = "The caller's user's chains, each with its entries in \
+        fallback order", body = Vec<Chain>)))]
+pub async fn list(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+) -> ApiResult<Vec<Chain>> {
+    let user = user(&app, &me).await?;
+    let all = ch::list(&app.pool).await?;
+    Ok(Json(
+        all.into_iter()
+            .filter(|c| c.user_id == user)
+            .map(Into::into)
+            .collect(),
+    ))
 }
 
-#[utoipa::path(post, path = "/api/v1/companies/{id}/chain-presets", operation_id = "createChainPreset",
-    tag = "org", params(("id" = i64, Path, description = "Company id")), request_body = ChainPresetBody,
-    responses((status = 200, description = "The preset (audited as `chain_preset.created`); 409 \
-        for a name the company has, 400 for an invalid preset or a pin outside the pool",
-        body = ChainPresetOut)))]
+#[utoipa::path(get, path = "/api/v1/chains/{id}", operation_id = "getChain", tag = "chains",
+    params(("id" = String, Path, description = "The chain's id")),
+    responses((status = 200, description = "One chain; 404 for another user's", body = Chain)))]
+pub async fn get(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<Chain> {
+    let user = user(&app, &me).await?;
+    Ok(Json(owned(&app, user, num(&id)?).await?.into()))
+}
+
+#[utoipa::path(post, path = "/api/v1/chains", operation_id = "createChain", tag = "chains",
+    request_body = NewChain,
+    responses((status = 200, description = "Stored for the caller's user (audited as \
+        `chain.created`). 400 for a bad name, 1 to 4 entries, a pool twice, another user's pool, \
+        a pool that is not a `claude`, `codex` or `agy` one, an unpriced API-key model, or two \
+        subscriptions; 404 for no such pool; 409 `conflict` (the name is taken) or \
+        `limit_reached`", body = Chain)))]
 pub async fn create(
     State(app): State<App>,
-    Path(id): Path<i64>,
-    Json(b): Json<ChainPresetBody>,
-) -> ApiResult<ChainPresetOut> {
-    let c = company(&app, id).await?;
-    let made = org::create_preset(&app.pool, c.id, &b.into(), BY)
-        .await
-        .map_err(failed)?;
-    Ok(Json(made.into()))
+    Extension(me): Extension<Caller>,
+    body: Bytes,
+) -> ApiResult<Chain> {
+    let b: NewChain = parse(&body)?;
+    let user = user(&app, &me).await?;
+    let c = ch::create(
+        &app.pool,
+        user,
+        &b.name,
+        &specs(&b),
+        &me.device.id,
+        BY,
+        &app.clock.now(),
+    )
+    .await?;
+    Ok(Json(c.into()))
 }
 
-#[utoipa::path(put, path = "/api/v1/chain-presets/{id}", operation_id = "updateChainPreset",
-    tag = "org", params(("id" = i64, Path, description = "Chain preset id")), request_body = ChainPresetBody,
-    responses((status = 200, description = "The preset as replaced (audited as \
-        `chain_preset.updated`)", body = ChainPresetOut)))]
-pub async fn update(
+#[utoipa::path(put, path = "/api/v1/chains/{id}", operation_id = "replaceChain", tag = "chains",
+    params(("id" = String, Path, description = "The chain's id")),
+    request_body = NewChain,
+    responses((status = 200, description = "The name and the whole entry list replaced (audited \
+        as `chain.updated`); a run already walking the chain keeps its snapshot. The refusals of \
+        `createChain`; 404 for another user's chain", body = Chain)))]
+pub async fn replace(
     State(app): State<App>,
-    Path(id): Path<i64>,
-    Json(b): Json<ChainPresetBody>,
-) -> ApiResult<ChainPresetOut> {
-    let made = org::update_preset(&app.pool, id, &b.into(), BY)
-        .await
-        .map_err(failed)?
-        .ok_or_else(|| ApiError::not_found(format!("no chain preset {id}")))?;
-    Ok(Json(made.into()))
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> ApiResult<Chain> {
+    let b: NewChain = parse(&body)?;
+    let user = user(&app, &me).await?;
+    let id = owned(&app, user, num(&id)?).await?.id;
+    let c = ch::update(
+        &app.pool,
+        id,
+        &b.name,
+        &specs(&b),
+        &me.device.id,
+        BY,
+        &app.clock.now(),
+    )
+    .await?;
+    Ok(Json(c.into()))
 }
 
-/// What a delete removed.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct Deleted {
-    pub id: i64,
-}
-
-#[utoipa::path(delete, path = "/api/v1/chain-presets/{id}", operation_id = "deleteChainPreset",
-    tag = "org", params(("id" = i64, Path, description = "Chain preset id")),
-    responses((status = 200, description = "Deleted (audited as `chain_preset.deleted`); the \
-        agents using it go back to their own chain", body = Deleted)))]
-pub async fn delete(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<Deleted> {
-    match org::delete_preset(&app.pool, id, BY).await? {
-        true => Ok(Json(Deleted { id })),
-        false => Err(ApiError::not_found(format!("no chain preset {id}"))),
-    }
-}
-
-/// How an agent gets its chain: a preset, or entries of its own. Exactly one.
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct AgentChainBody {
-    /// Use this preset of the agent's company.
-    pub preset_id: Option<i64>,
-    /// Use these fallbacks of its own and no preset (no account pins: pin in a preset); an empty
-    /// list clears them.
-    pub entries: Option<Vec<ChainEntryBody>>,
-}
-
-/// The agent's effective chain after its own entry.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct AgentChainOut {
-    /// The preset the agent has set; absent when it uses its own entries (or the default).
-    pub preset_id: Option<i64>,
-    pub entries: Vec<ChainEntryBody>,
-}
-
-#[utoipa::path(put, path = "/api/v1/agents/{id}/chain", operation_id = "setAgentChain",
-    tag = "org", params(("id" = i64, Path, description = "Agent id")), request_body = AgentChainBody,
-    responses((status = 200, description = "The chain the agent has now (audited as \
-        `agent.chain_set`); 400 unless exactly one of `preset_id` and `entries` is given or for \
-        a preset of another company", body = AgentChainOut)))]
-pub async fn set_chain(
+#[utoipa::path(delete, path = "/api/v1/chains/{id}", operation_id = "deleteChain", tag = "chains",
+    params(("id" = String, Path, description = "The chain's id")),
+    responses((status = 200, description = "Deleted with its entries and bindings (audited as \
+        `chain.deleted`); 409 `conflict` while a live session walks it, 404 for another \
+        user's", body = AccountsDeleted)))]
+pub async fn delete(
     State(app): State<App>,
-    Path(id): Path<i64>,
-    Json(b): Json<AgentChainBody>,
-) -> ApiResult<AgentChainOut> {
-    let chain = match (b.preset_id, b.entries) {
-        (Some(p), None) => AgentChain::Preset(Some(p)),
-        (None, Some(entries)) => {
-            if entries.iter().any(|e| e.account_id.is_some()) {
-                return Err(ApiError::bad_request(
-                    "pin accounts in a preset, not on an agent",
-                ));
-            }
-            let routes = entries.into_iter().map(|e| ModelRoute {
-                harness: e.harness.into(),
-                model: e.model,
-            });
-            AgentChain::Entries(routes.collect())
-        }
-        _ => {
-            return Err(ApiError::bad_request(
-                "give exactly one of preset_id and entries",
-            ));
-        }
-    };
-    match org::set_agent_chain(&app.pool, AgentId(id), &chain, BY).await {
-        Ok(true) => {}
-        Ok(false) => return Err(ApiError::not_found(format!("no agent {id}"))),
-        Err(e) => return Err(failed(e)),
-    }
-    let (preset_id, entries) = org::effective_chain(&app.pool, AgentId(id)).await?;
-    Ok(Json(AgentChainOut {
-        preset_id,
-        entries: entries.into_iter().map(Into::into).collect(),
-    }))
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<AccountsDeleted> {
+    let user = user(&app, &me).await?;
+    let id = owned(&app, user, num(&id)?).await?.id;
+    ch::delete(&app.pool, id, &me.device.id, BY).await?;
+    Ok(Json(AccountsDeleted { deleted: true }))
+}
+
+#[utoipa::path(put, path = "/api/v1/chains/{id}/default", operation_id = "setDefaultChain",
+    tag = "chains", params(("id" = String, Path, description = "The chain's id")),
+    responses((status = 200, description = "The user's default chain from now on, the previous \
+        one no longer (audited as `chain.default_set`); it serves a session that names an agent \
+        bound to none", body = Chain)))]
+pub async fn set_default(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<Chain> {
+    let user = user(&app, &me).await?;
+    let id = owned(&app, user, num(&id)?).await?.id;
+    let c = ch::set_default(&app.pool, id, &me.device.id, BY, &app.clock.now()).await?;
+    Ok(Json(c.into()))
+}
+
+#[utoipa::path(get, path = "/api/v1/chains/bindings", operation_id = "listChainBindings",
+    tag = "chains",
+    responses((status = 200, description = "The caller's user's agent bindings, by agent", body = Vec<ChainBinding>)))]
+pub async fn list_bindings(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+) -> ApiResult<Vec<ChainBinding>> {
+    let user = user(&app, &me).await?;
+    let all = ch::list_bindings(&app.pool).await?;
+    Ok(Json(
+        all.into_iter()
+            .filter(|b| b.user_id == user)
+            .map(|b| ChainBinding {
+                agent: b.agent,
+                chain: b.chain_id,
+            })
+            .collect(),
+    ))
+}
+
+#[utoipa::path(put, path = "/api/v1/chains/bindings/{agent}", operation_id = "bindAgentChain",
+    tag = "chains", params(("agent" = String, Path, description = "The agent's id")),
+    request_body = BindChain,
+    responses((status = 200, description = "The agent's sessions get this chain, replacing an \
+        earlier binding (audited as `chain.bound`); 400 for a bad agent id, 404 for no such \
+        chain", body = ChainBinding)))]
+pub async fn bind(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(agent): Path<String>,
+    body: Bytes,
+) -> ApiResult<ChainBinding> {
+    let b: BindChain = parse(&body)?;
+    let user = user(&app, &me).await?;
+    let id = owned(&app, user, b.chain).await?.id;
+    ch::bind(&app.pool, &agent, id, &me.device.id, BY, &app.clock.now()).await?;
+    Ok(Json(ChainBinding { agent, chain: id }))
+}
+
+#[utoipa::path(delete, path = "/api/v1/chains/bindings/{agent}",
+    operation_id = "unbindAgentChain", tag = "chains",
+    params(("agent" = String, Path, description = "The agent's id")),
+    responses((status = 200, description = "The agent's sessions fall back to the default chain \
+        (audited as `chain.unbound`); 404 when it had no binding", body = AccountsDeleted)))]
+pub async fn unbind(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(agent): Path<String>,
+) -> ApiResult<AccountsDeleted> {
+    let user = user(&app, &me).await?;
+    ch::unbind(&app.pool, user, &agent, &me.device.id, BY).await?;
+    Ok(Json(AccountsDeleted { deleted: true }))
 }

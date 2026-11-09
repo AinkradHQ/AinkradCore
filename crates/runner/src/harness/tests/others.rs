@@ -132,6 +132,7 @@ async fn works_a_run_through_agy_only_when_sandboxed() {
             mode: PermissionMode::Sandboxed,
             allow: vec![],
             sandboxed: true,
+            ..Policy::default()
         },
         ..job
     };

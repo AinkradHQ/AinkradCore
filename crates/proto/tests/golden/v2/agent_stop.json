@@ -1,0 +1,1 @@
+{"stream_id":11,"kind":"command","seq":0,"payload":{"kill":true,"op":"agent.stop","session":"as_a"}}

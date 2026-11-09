@@ -1,0 +1,50 @@
+# The fuzz crate's own supply-chain gate (E1-17.2): `make audit-fuzz`. The root deny.toml plus one licence exception.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+  # Both "unmaintained", both reached only through `age`'s localisation proc-macros (`i18n-embed-fl`,
+  # `i18n-embed-impl` -> `i18n-config`), which read the crate's own i18n.toml at compile time: no runtime code,
+  # no untrusted input. Every `age` release carries them (checked 0.11.5 and 0.12.1, E1-13.2). Drop when age does.
+  { id = "RUSTSEC-2026-0374", reason = "basic-toml: build-time only, via age's i18n proc-macros" },
+  { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2: build-time only, via age's i18n proc-macros" },
+]
+
+[licenses]
+version = 2
+# Our own crates are `publish = false` and carry no licence field.
+private = { ignore = true }
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "MPL-2.0",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+]
+# libfuzzer-sys is "(MIT OR Apache-2.0) AND NCSA" (LLVM's libFuzzer). NCSA is permissive (BSD-like); it is allowed for this one
+# crate, which only exists in fuzz builds and never ships.
+exceptions = [{ allow = ["NCSA"], crate = "libfuzzer-sys" }]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# `path` dependencies between our private crates are not wildcards.
+allow-wildcard-paths = true
+# Platform crates must never depend on a module: `crates/server/tests/dependency_direction.rs` (E1-02.6).
+deny = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

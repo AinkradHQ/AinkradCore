@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# E1-15.4: verify, then install. Nothing is written to the prefix unless the signature AND every checksum hold.
+#   install.sh --from <dir|https-url> [--prefix DIR] [--pubkey FILE] [--target T] [--verify-only FILE]
+# 1. minisign -V over SHA256SUMS with the pinned public key (refuses on any mismatch).
+# 2. SHA-256 of each artefact for this target against the signed sums.
+# 3. Only then install all four (ainkrad-core-server, ainkrad-runner, ainkradctl, ainkrad-ptyhost) into <prefix>/bin as one set:
+#    stage them in a temp dir inside <prefix>/bin (same filesystem), then rename into place in that order, keeping each previous
+#    binary as <name>.old until all four are in; any failure restores the originals (or removes the new ones on a fresh prefix) and
+#    exits non-zero. ainkrad-ptyhost sits beside ainkrad-runner, where the runner looks for it. Needs `minisign` (brew/apt install minisign).
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+from= prefix=${HOME}/.local pub=${AINKRAD_RELEASE_PUBKEY:-$here/ainkrad-release.pub} target= only=
+while [ $# -gt 0 ]; do case $1 in
+  --from) from=$2; shift 2 ;; --prefix) prefix=$2; shift 2 ;; --pubkey) pub=$2; shift 2 ;;
+  --target) target=$2; shift 2 ;; --verify-only) only=$2; shift 2 ;; *) echo "unknown option $1" >&2; exit 2 ;;
+esac; done
+die() { echo "install: REFUSED: $*" >&2; exit 1; }
+[ -n "$from" ] || die "--from is required"
+[ -f "$pub" ] || die "no public key at $pub (the release key is generated offline; pass --pubkey)"
+command -v minisign >/dev/null || die "minisign is not installed"
+sha() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
+tmp=$(mktemp -d); stage=; trap 'rm -rf "$tmp" ${stage:+"$stage"}' EXIT
+fetch() { case $from in http://*) die "plain http is refused" ;; https://*) curl -fsSL --proto '=https' --tlsv1.3 -o "$tmp/$1" "$from/$1" ;; *) cp "$from/$1" "$tmp/$1" 2>/dev/null || die "no $1 in $from" ;; esac; }
+fetch SHA256SUMS; fetch SHA256SUMS.minisig
+minisign -Vq -p "$pub" -x "$tmp/SHA256SUMS.minisig" -m "$tmp/SHA256SUMS" || die "the SHA256SUMS signature does not verify"
+echo "signature OK ($(sed -n 's/^trusted comment: //p' "$tmp/SHA256SUMS.minisig"))"
+if [ -n "$only" ]; then
+  h=$(sha "$only"); grep -q "^$h  " "$tmp/SHA256SUMS" || die "$only is not in the signed sums"
+  echo "self-verify OK: $only ($h)"; exit 0
+fi
+if [ -z "$target" ]; then
+  case "$(uname -s)-$(uname -m)" in Linux-aarch64) target=linux-arm64 ;; Linux-x86_64) target=linux-x86_64 ;; Darwin-arm64) target=macos-arm64 ;; *) die "no build for $(uname -sm)" ;; esac
+fi
+names=$(awk -v t="-$target" '{ n=$2; if (substr(n, length(n)-length(t)+1) == t) print n }' "$tmp/SHA256SUMS")
+[ -n "$names" ] || die "no artefact for $target in the signed sums"
+# A release is all four: a set without the CLI (first-device step) or ptyhost (terminals) is refused, not half-installed.
+for b in ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost; do
+  echo "$names" | grep -qx "$b-[0-9].*-$target" || die "the signed sums have no $b for $target"
+done
+for n in $names; do
+  fetch "$n"
+  want=$(awk -v n="$n" '$2 == n { print $1 }' "$tmp/SHA256SUMS")
+  [ "$(sha "$tmp/$n")" = "$want" ] || die "$n does not match its signed checksum"
+done
+bindir=$prefix/bin
+mkdir -p "$bindir"
+stage=$(mktemp -d "$bindir/.stage.XXXXXX") || die "cannot stage in $bindir"
+order="ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost"
+for b in $order; do
+  n=$(echo "$names" | grep -x "$b-[0-9].*-$target" | head -1)   # ainkrad-runner-0.1.0-linux-arm64 -> ainkrad-runner
+  install -m 755 "$tmp/$n" "$stage/$b" || die "cannot stage $b in $bindir"
+done
+placed= moved=
+rollback() {
+  for b in $placed; do rm -f "$bindir/$b"; done
+  for b in $moved; do mv -f "$bindir/$b.old" "$bindir/$b"; done
+}
+step=0
+for b in $order; do
+  step=$((step + 1))
+  # AINKRAD_INSTALL_FAIL_AT=<n> makes step n fail; it exists for test-install.sh only.
+  [ "${AINKRAD_INSTALL_FAIL_AT:-}" != "$step" ] || { rollback; die "could not install $b; restored the previous binaries in $bindir"; }
+  if [ -e "$bindir/$b" ]; then
+    { rm -f "$bindir/$b.old" && mv -f "$bindir/$b" "$bindir/$b.old"; } || { rollback; die "could not install $b; restored the previous binaries in $bindir"; }
+    moved="$moved $b"
+  fi
+  mv -f "$stage/$b" "$bindir/$b" || { rollback; die "could not install $b; restored the previous binaries in $bindir"; }
+  placed="$placed $b"
+done
+for b in $order; do rm -f "$bindir/$b.old"; echo "installed $bindir/$b"; done

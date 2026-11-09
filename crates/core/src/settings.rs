@@ -1,7 +1,8 @@
 //! Configurable limits (E15.17, decision #52): every quota, limit and threshold is a setting
 //! with a default, bounds and the scopes it may be set at. A value set at a more specific
-//! scope wins: project → company → server, runner → server, account → server. Nothing here
-//! reads storage; the store looks the rows up and `resolve` picks one.
+//! scope wins; the platform has one scope, the server, and the chain grows with the scopes
+//! modules bring (E1-09.1). Nothing here reads storage; the store looks the rows up and
+//! `resolve` picks one.
 //!
 //! Every value is an integer in the setting's `unit`. Out-of-bounds or wrong-scope values are
 //! refused (`SettingError`), never clamped.
@@ -9,44 +10,22 @@
 use std::fmt;
 use std::str::FromStr;
 
-use crate::exec::{
-    AGENT_BREAKER_TRIPS, AGENT_BREAKER_WINDOW_SECS, LEASE_GRACE_SECS, LEASE_TTL_SECS,
-    LOOP_BREAKER_THRESHOLD, MAX_RETRY_BACKOFF_SECS, MAX_WAKE_ATTEMPTS, RunnerId, STALL_AFTER_SECS,
-    STUCK_AFTER_SECS,
-};
-/// The default of `run.tool_output_bytes`, as the runner protocol's (1.18).
-const TOOL_OUTPUT_BYTES: i64 = 2048;
-
-use crate::gov::{AccountId, ApprovalKind, KNOWLEDGE_BUDGET_BYTES, SKILL_BUDGET_BYTES};
-use crate::org::{CompanyId, UnknownVariant, text_enum};
-use crate::work::ProjectId;
+use crate::ids::{UnknownVariant, text_enum};
 
 text_enum!(ScopeKind {
     Server => "server",
-    Company => "company",
-    Project => "project",
-    Runner => "runner",
-    Account => "account",
 });
 
 /// Where a value is set, or read for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Scope {
     Server,
-    Company(CompanyId),
-    Project(ProjectId),
-    Runner(RunnerId),
-    Account(AccountId),
 }
 
 impl Scope {
     pub fn kind(self) -> ScopeKind {
         match self {
             Self::Server => ScopeKind::Server,
-            Self::Company(_) => ScopeKind::Company,
-            Self::Project(_) => ScopeKind::Project,
-            Self::Runner(_) => ScopeKind::Runner,
-            Self::Account(_) => ScopeKind::Account,
         }
     }
 
@@ -54,32 +33,21 @@ impl Scope {
     pub fn id(self) -> i64 {
         match self {
             Self::Server => 0,
-            Self::Company(c) => c.0,
-            Self::Project(p) => p.0,
-            Self::Runner(r) => r.0,
-            Self::Account(a) => a.0,
         }
     }
 
-    /// The inverse of (`kind`, `id`).
-    pub fn of(kind: ScopeKind, id: i64) -> Self {
+    /// The inverse of (`kind`, `id`); `None` for an id the kind does not have.
+    pub fn of(kind: ScopeKind, id: i64) -> Option<Self> {
         match kind {
-            ScopeKind::Server => Self::Server,
-            ScopeKind::Company => Self::Company(CompanyId(id)),
-            ScopeKind::Project => Self::Project(ProjectId(id)),
-            ScopeKind::Runner => Self::Runner(RunnerId(id)),
-            ScopeKind::Account => Self::Account(AccountId(id)),
+            ScopeKind::Server => (id == 0).then_some(Self::Server),
         }
     }
 }
 
-/// `server`, `company:1`, `project:3`, `runner:2`, `account:4`.
+/// `server`.
 impl fmt::Display for Scope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Server => f.write_str("server"),
-            s => write!(f, "{}:{}", s.kind().as_str(), s.id()),
-        }
+        f.write_str(self.kind().as_str())
     }
 }
 
@@ -87,16 +55,10 @@ impl FromStr for Scope {
     type Err = UnknownVariant;
 
     fn from_str(s: &str) -> Result<Self, UnknownVariant> {
-        let bad = || UnknownVariant(s.to_owned());
-        if s == "server" {
-            return Ok(Self::Server);
+        match s {
+            "server" => Ok(Self::Server),
+            _ => Err(UnknownVariant(s.to_owned())),
         }
-        let (kind, id) = s.split_once(':').ok_or_else(bad)?;
-        let kind: ScopeKind = kind.parse().map_err(|_| bad())?;
-        let id: i64 = id.parse().map_err(|_| bad())?;
-        (kind != ScopeKind::Server && id > 0)
-            .then(|| Self::of(kind, id))
-            .ok_or_else(bad)
     }
 }
 
@@ -105,10 +67,8 @@ text_enum!(Unit {
     Milliseconds => "milliseconds",
     Percent => "percent",
     Count => "count",
-    Tokens => "tokens",
     Bytes => "bytes",
     PerMinute => "per_minute",
-    Version => "version",
 });
 
 /// One tunable.
@@ -125,20 +85,8 @@ pub struct Spec {
     pub description: &'static str,
 }
 
-use ScopeKind::{Account as A, Company as C, Project as P, Runner as R, Server as S};
-
-const SCP: &[ScopeKind] = &[S, C, P];
-const SC: &[ScopeKind] = &[S, C];
-const SCA: &[ScopeKind] = &[S, C, A];
-const SR: &[ScopeKind] = &[S, R];
-const SA: &[ScopeKind] = &[S, A];
-const SO: &[ScopeKind] = &[S];
-
-/// A day and a year, in seconds.
-const DAY: i64 = 86_400;
-const YEAR: i64 = 365 * DAY;
-/// The largest version setting: 999999.999999.999999.
-const MAX_VERSION: i64 = 999_999_999_999_999_999;
+/// Set at the server only.
+const SO: &[ScopeKind] = &[ScopeKind::Server];
 
 macro_rules! registry {
     ($($key:ident $name:literal $unit:ident $default:expr, $min:expr, $max:expr, $scopes:ident,
@@ -166,17 +114,6 @@ mod registry;
 pub use registry::*;
 
 impl Key {
-    /// The `harness.<name>.max_version` setting of `harness`.
-    pub fn max_version(harness: &str) -> Option<Self> {
-        Some(match harness {
-            "claude" => Self::ClaudeMaxVersion,
-            "codex" => Self::CodexMaxVersion,
-            "opencode" => Self::OpencodeMaxVersion,
-            "agy" => Self::AgyMaxVersion,
-            _ => return None,
-        })
-    }
-
     pub fn spec(self) -> &'static Spec {
         &REGISTRY[self as usize]
     }
@@ -187,19 +124,6 @@ impl Key {
 
     pub fn default(self) -> i64 {
         self.spec().default
-    }
-
-    /// The deadline setting of approvals of `kind`.
-    pub fn approval_deadline(kind: ApprovalKind) -> Self {
-        match kind {
-            ApprovalKind::SprintCommit => Self::DeadlineSprintCommit,
-            ApprovalKind::PrMerge => Self::DeadlinePrMerge,
-            ApprovalKind::BudgetOverrun => Self::DeadlineBudgetOverrun,
-            ApprovalKind::HireAgent => Self::DeadlineHireAgent,
-            ApprovalKind::PermissionEscalation => Self::DeadlinePermissionEscalation,
-            ApprovalKind::PlanApproval => Self::DeadlinePlanApproval,
-            ApprovalKind::WorkflowPush => Self::DeadlineWorkflowPush,
-        }
     }
 }
 
@@ -305,19 +229,6 @@ impl Spec {
         }
         Ok(value)
     }
-}
-
-/// The scopes a read `at` consults, most specific first. A project's company comes from the
-/// store (`company`); without it the project falls back to the server.
-pub fn chain(at: Scope, company: Option<CompanyId>) -> Vec<Scope> {
-    let mut chain = vec![at];
-    if let Some(c) = company.filter(|_| matches!(at, Scope::Project(_))) {
-        chain.push(Scope::Company(c));
-    }
-    if at != Scope::Server {
-        chain.push(Scope::Server);
-    }
-    chain
 }
 
 /// The effective value of `key` along `chain`, from the stored rows (any scopes), and the

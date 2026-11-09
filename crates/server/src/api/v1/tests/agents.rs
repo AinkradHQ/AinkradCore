@@ -1,298 +1,749 @@
-//! Editing and ending an agent (API minor 17): `updateAgent`, `wakeAgent`, `terminateAgent`, and
-//! a hire's profile, team seat and palette applied when it is approved.
+//! Agent sessions' routes (E2-08) without a runner: what is refused before anything reaches
+//! one (a bad body, an offline runner, no step-up, the wrong scope, an unknown session), that a
+//! refusal never quotes the prompt and grows no audit row, and the transcript and list reads.
+//! The runner end to end is `tests/hub/agents.rs`.
 
-use ainkrad_core::work::ProjectMode;
+use axum::http::{Method, StatusCode};
 use serde_json::json;
 
 use super::*;
-use crate::store::org::{self, add_department, add_team};
+use crate::store::agents::{self as store, NewSession, SessionSecret};
 
-async fn patch(fx: &Fx, id: i64, body: Value) -> (StatusCode, Value) {
-    let uri = format!("/api/v1/agents/{id}");
-    send(&fx.app, req(Method::PATCH, &uri, Some(&fx.key), Some(body))).await
+const PROMPT: &str = "a private prompt 3c9f";
+
+#[tokio::test]
+async fn naming_a_secret_requires_admin_even_with_agent_step_up() {
+    let fx = fx().await;
+    let agent = super::stepup::plain(&fx, "agent-only", &["agent", "read"], true).await;
+    assert_eq!(super::stepup::step_up(&fx, &agent).await.0, StatusCode::OK);
+    let r = call(
+        &fx,
+        &agent,
+        Method::POST,
+        "/api/v1/agent-sessions",
+        json!({
+            "runner": "d_00000000000000000000000000",
+            "harness": "claude",
+            "secrets": [{"name": "git.token", "var": "GIT_TOKEN"}]
+        }),
+    )
+    .await;
+    assert_eq!(
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("forbidden_scope"))
+    );
 }
 
-async fn seats(fx: &Fx, agent: i64) -> Vec<String> {
-    sqlx::query_scalar("SELECT team_role FROM team_memberships WHERE agent_id = ?")
-        .bind(agent)
-        .fetch_all(&fx.app.pool)
+async fn call(fx: &Fx, dev: &TestDevice, m: Method, uri: &str, body: Value) -> (StatusCode, Value) {
+    let body = (!body.is_null()).then_some(body);
+    send(&fx.app, req(m, uri, Some(dev), body)).await
+}
+
+async fn stored(fx: &Fx, runner: &str) -> store::Session {
+    let policy = json!({});
+    let secrets = [SessionSecret {
+        name: "git.token".into(),
+        var: "GIT_TOKEN".into(),
+    }];
+    let new = NewSession {
+        runner,
+        harness: "claude",
+        model: None,
+        prompt: Some(PROMPT),
+        workspace: None,
+        policy: &policy,
+        secrets: &secrets,
+        created_by: &fx.dev.id,
+    };
+    store::create(&fx.app.pool, &new, super::super::BY, NOW)
         .await
         .unwrap()
 }
 
-async fn audited(fx: &Fx, action: &str) -> i64 {
-    sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE action = ?")
-        .bind(action)
+#[tokio::test]
+async fn a_create_is_checked_before_any_runner_is_asked() {
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let ok = json!({"runner": vm.id, "harness": "claude", "prompt": PROMPT});
+    for (why, body) in [
+        ("runner id", json!({"runner": "vm", "harness": "claude"})),
+        (
+            "harness",
+            json!({"runner": vm.id, "harness": "Claude Code"}),
+        ),
+        (
+            "var",
+            json!({"runner": vm.id, "harness": "claude",
+                       "secrets": [{"name": "git.token", "var": "LD_PRELOAD"}]}),
+        ),
+        (
+            "reserved run token var",
+            json!({"runner": vm.id, "harness": "claude",
+                       "secrets": [{"name": "git.token", "var": "CITADEL_RUN_TOKEN"}]}),
+        ),
+        (
+            "name",
+            json!({"runner": vm.id, "harness": "claude",
+                        "secrets": [{"name": "Git", "var": "T"}]}),
+        ),
+        (
+            "policy",
+            json!({"runner": vm.id, "harness": "claude", "policy": {"mode": "yolo"}}),
+        ),
+        (
+            "prompt",
+            json!({"runner": vm.id, "harness": "claude", "prompt": "x".repeat(70_000)}),
+        ),
+    ] {
+        let r = call(&fx, &fx.dev, Method::POST, "/api/v1/agent-sessions", body).await;
+        assert_eq!(r.0, StatusCode::BAD_REQUEST, "{why}: {}", r.1);
+    }
+    // A runner that is not connected: refused, and no session (nor lease) made.
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::POST,
+        "/api/v1/agent-sessions",
+        ok.clone(),
+    )
+    .await;
+    assert_eq!(
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::CONFLICT, Some("runner_offline"))
+    );
+    assert!(!r.1.to_string().contains(PROMPT));
+    assert!(
+        fx.ok("/api/v1/agent-sessions")
+            .await
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let leases: i64 = sqlx::query_scalar("SELECT count(*) FROM core_secret_leases")
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(leases, 0);
+    // A device with `read` only, and one without a step-up.
+    let reader = enroll(&fx.app, &fx.clock, "reader", &["read"]).await;
+    let r = call(
+        &fx,
+        &reader,
+        Method::POST,
+        "/api/v1/agent-sessions",
+        ok.clone(),
+    )
+    .await;
+    assert_eq!(
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("forbidden_scope"))
+    );
+    let unelevated = super::stepup::plain(&fx, "plain", &["agent"], false).await;
+    let r = call(&fx, &unelevated, Method::POST, "/api/v1/agent-sessions", ok).await;
+    assert_eq!(
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("step_up_required"))
+    );
+    // A runner device reaches none of it.
+    let r = call(&fx, &vm, Method::GET, "/api/v1/agent-sessions", Value::Null).await;
+    assert_eq!(r.0, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn sessions_list_read_and_replay_their_transcript_by_seq() {
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let s = stored(&fx, &vm.id).await;
+    let ev = ainkrad_proto::v2::AgentEvents {
+        gateway: vec![],
+        session: s.id.clone(),
+        state: ainkrad_proto::v2::AgentState::Running,
+        last_seq: 4,
+        // 3 comes before 2 is held: only the run continuing the stored one is taken.
+        entries: [1, 3]
+            .map(|seq| ainkrad_proto::v2::TranscriptEntry {
+                seq,
+                at: 1,
+                body: json!({"type": "line", "n": seq}),
+            })
+            .into(),
+        harness_session: Some("h-1".into()),
+        usage: None,
+        outcome: None,
+        plan_limit: None,
+    };
+    assert_eq!(
+        store::apply(&fx.app.pool, &s.id, &ev, NOW).await.unwrap(),
+        1
+    );
+    let full = ainkrad_proto::v2::AgentEvents {
+        gateway: vec![],
+        entries: (1..=4)
+            .map(|seq| ainkrad_proto::v2::TranscriptEntry {
+                seq,
+                at: 1,
+                body: json!({"type": if seq == 4 { "approval_request" } else { "line" },
+                             "id": "t1", "tool": "Bash", "n": seq}),
+            })
+            .collect(),
+        ..ev
+    };
+    // A resend of 1 and the rest: each stored once.
+    assert_eq!(
+        store::apply(&fx.app.pool, &s.id, &full, NOW).await.unwrap(),
+        4
+    );
+    assert_eq!(
+        store::apply(&fx.app.pool, &s.id, &full, NOW).await.unwrap(),
+        4
+    );
+    let uri = format!("/api/v1/agent-sessions/{}/transcript?after=2", s.id);
+    let t = fx.ok(&uri).await;
+    let seqs: Vec<u64> = t["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["seq"].as_u64().unwrap())
+        .collect();
+    assert_eq!(seqs, [3, 4]);
+    let got = fx.ok(&format!("/api/v1/agent-sessions/{}", s.id)).await;
+    assert_eq!(
+        (got["state"].as_str(), got["last_seq"].as_i64()),
+        (Some("starting"), Some(4))
+    );
+    assert_eq!(got["secrets"], json!(["git.token"]), "names only");
+    assert!(!got.to_string().contains(PROMPT));
+    assert_eq!(
+        fx.ok("/api/v1/agent-sessions")
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    // The events: one transcript range per new run, the approval for `approve`.
+    let kinds: Vec<String> =
+        sqlx::query_scalar("SELECT kind FROM events WHERE kind LIKE 'agent.%' ORDER BY seq")
+            .fetch_all(&fx.app.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        kinds,
+        [
+            "agent.created",
+            "agent.transcript",
+            "agent.approval_requested",
+            "agent.transcript"
+        ]
+    );
+    assert_eq!(
+        crate::store::kinds::platform_scope("agent.approval_requested"),
+        "approve"
+    );
+    assert_eq!(
+        crate::store::kinds::platform_scope("agent.transcript"),
+        "agent"
+    );
+    let audit: String =
+        sqlx::query_scalar("SELECT details FROM audit_events WHERE action = 'agent.created'")
+            .fetch_one(&fx.app.pool)
+            .await
+            .unwrap();
+    assert!(
+        !audit.contains(PROMPT) && audit.contains("git.token"),
+        "{audit}"
+    );
+    // Unknown sessions, and actions on one whose runner is away.
+    for uri in [
+        "/api/v1/agent-sessions/as_nope",
+        "/api/v1/agent-sessions/d_x/transcript",
+    ] {
+        assert_eq!(
+            call(&fx, &fx.dev, Method::GET, uri, Value::Null).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    let kill = format!("/api/v1/agent-sessions/{}/kill", s.id);
+    let r = call(&fx, &fx.dev, Method::POST, &kill, Value::Null).await;
+    assert_eq!(r.1["code"], "runner_offline");
+    let resume = format!("/api/v1/agent-sessions/{}/resume", s.id);
+    let r = call(&fx, &fx.dev, Method::POST, &resume, Value::Null).await;
+    assert_eq!(
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::CONFLICT, Some("not_resumable"))
+    );
+}
+
+/// Review M1's lesson for the new writes: refusals a caller can repeat at will are counted,
+/// not written to the permanent audit log.
+#[tokio::test]
+async fn refused_agent_writes_grow_no_audit_rows() {
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let s = stored(&fx, &vm.id).await;
+    let rows = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_events WHERE action = 'api.refused'",
+        )
         .fetch_one(&fx.app.pool)
         .await
         .unwrap()
-}
-
-#[tokio::test]
-async fn an_agent_is_edited_field_by_field_and_audited() {
-    let fx = fx().await;
-    let a = seed(&fx.app.pool, "A", "AAA", ProjectMode::Kanban).await;
-    let b = seed(&fx.app.pool, "B", "BBB", ProjectMode::Kanban).await;
-    let id = a.agent.0;
-    let before = fx.ok(&format!("/api/v1/agents/{id}")).await;
-    assert_eq!(before["effort"], Value::Null);
-    assert_eq!(before["guidelines"], json!([]));
-
-    let all = json!({"role": " QA lead ", "description": "Finds bugs", "harness": "claude",
-        "model": "sonnet", "effort": "high", "sandbox": "read-only",
-        "runner_tags": ["macos"], "instructions": "Be thorough.",
-        "guidelines": ["Test first", "No force pushes"]});
-    let (status, got) = patch(&fx, id, all).await;
-    assert_eq!(status, StatusCode::OK, "{got}");
-    assert_eq!(got["role"], "QA lead");
-    assert_eq!(got["harness"], "claude");
-    assert_eq!(got["effort"], "high");
-    assert_eq!(got["sandbox"], "read-only");
-    assert_eq!(got["runner_tags"], json!(["macos"]));
-    assert_eq!(got["guidelines"], json!(["Test first", "No force pushes"]));
-    assert_eq!(
-        fx.ok(&format!("/api/v1/agents/{id}")).await["instructions"],
-        "Be thorough."
-    );
-
-    // A partial change keeps the rest; null clears effort and the sandbox.
-    let (status, got) = patch(&fx, id, json!({"effort": null, "sandbox": "full-access"})).await;
-    assert_eq!(status, StatusCode::OK, "{got}");
-    assert_eq!(
-        (&got["effort"], &got["sandbox"], &got["role"]),
-        (&Value::Null, &json!("full-access"), &json!("QA lead"))
-    );
-    assert_eq!(audited(&fx, "agent.updated").await, 2);
-    let details: String = sqlx::query_scalar(
-        "SELECT details FROM audit_events WHERE action = 'agent.updated' ORDER BY seq DESC LIMIT 1",
-    )
-    .fetch_one(&fx.app.pool)
-    .await
-    .unwrap();
-    let details: Value = serde_json::from_str(&details).unwrap();
-    assert_eq!(details["fields"], json!(["effort", "sandbox"]));
-
-    // Refused: nothing to change, a blank role, a bad value, a bad tag.
-    for bad in [
-        json!({}),
-        json!({"role": " "}),
-        json!({"effort": "extreme"}),
-        json!({"sandbox": "read_only"}),
-        json!({"runner_tags": ["a b"]}),
-        json!({"guidelines": [""]}),
-    ] {
-        let (status, _) = patch(&fx, id, bad.clone()).await;
-        assert!(status.is_client_error(), "{bad}: {status}");
-        assert_ne!(status, StatusCode::OK, "{bad}");
-    }
-    assert_eq!(patch(&fx, id, json!({})).await.0, StatusCode::BAD_REQUEST);
-    assert_eq!(
-        patch(&fx, 999, json!({"role": "x"})).await.0,
-        StatusCode::NOT_FOUND
-    );
-
-    // A reporting line: another company's manager is not found, a loop is a conflict.
-    let boss = org::create_agent(
-        &fx.app.pool,
-        &NewAgent {
-            company_id: a.company,
-            name: "Boss".to_owned(),
-            role: "Lead".to_owned(),
-            org_role: OrgRole::None,
-            reports_to: None,
-            harness: Harness::Claude,
-            model: String::new(),
-            runner_tags: vec![],
-            status: AgentStatus::Active,
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        patch(&fx, id, json!({"reports_to": b.agent.0})).await.0,
-        StatusCode::NOT_FOUND
-    );
-    let (status, got) = patch(&fx, id, json!({"reports_to": boss.id.0})).await;
-    assert_eq!(
-        (status, &got["reports_to"]),
-        (StatusCode::OK, &json!(boss.id.0))
-    );
-    assert_eq!(
-        patch(&fx, boss.id.0, json!({"reports_to": id})).await.0,
-        StatusCode::CONFLICT
-    );
-    let (_, got) = patch(&fx, id, json!({"reports_to": null})).await;
-    assert_eq!(got["reports_to"], Value::Null);
-}
-
-#[tokio::test]
-async fn wake_runs_the_active_agent_and_refuses_the_paused() {
-    let fx = fx().await;
-    let a = seed(&fx.app.pool, "A", "AAA", ProjectMode::Kanban).await;
-    let uri = format!("/api/v1/agents/{}/wake", a.agent.0);
-    let woken = fx.ok_post(&uri, json!({})).await;
-    assert_eq!(woken["status"], "active");
-    assert_eq!(audited(&fx, "agent.woken").await, 1);
-    let manual: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM wake_requests WHERE agent_id = ? AND source = 'manual' \
-         AND issue_id = ?",
-    )
-    .bind(a.agent.0)
-    .bind(a.issue.0)
-    .fetch_one(&fx.app.pool)
-    .await
-    .unwrap();
-    assert_eq!(manual, 1, "on the issue waiting on it");
-    fx.ok_post(&format!("/api/v1/agents/{}/pause", a.agent.0), json!({}))
+    };
+    let before = rows().await;
+    let create = json!({"runner": vm.id, "harness": "claude"});
+    for _ in 0..20 {
+        call(
+            &fx,
+            &fx.dev,
+            Method::POST,
+            "/api/v1/agent-sessions",
+            create.clone(),
+        )
         .await;
-    assert_eq!(fx.post(&uri, json!({})).await.0, StatusCode::CONFLICT);
+        let uri = format!("/api/v1/agent-sessions/{}/approvals/t1", s.id);
+        call(&fx, &fx.dev, Method::POST, &uri, json!({"approved": true})).await;
+        let uri = format!("/api/v1/agent-sessions/{}/messages", s.id);
+        call(&fx, &fx.dev, Method::POST, &uri, json!({"text": "hi"})).await;
+    }
+    assert_eq!(rows().await, before);
+}
+
+/// A module drives only the sessions it created (E2-13 S7): never a client's, never another
+/// module's, never a command that starts code, and never one that is over.
+#[tokio::test]
+async fn a_module_drives_only_its_own_live_sessions() {
+    use crate::agents::{ModuleAgents, Refusal};
+    use ainkrad_proto::v2::{AgentRead, AgentSend, AgentStop, Command};
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let policy = json!({});
+    let new = NewSession {
+        runner: &vm.id,
+        harness: "claude",
+        model: None,
+        prompt: None,
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: &fx.dev.id,
+    };
+    let owned = store::create_owned(
+        &fx.app.pool,
+        &new,
+        Some("citadel"),
+        ainkrad_core::audit::AuditActor::System,
+        NOW,
+    )
+    .await
+    .unwrap();
+    let clients = store::create(
+        &fx.app.pool,
+        &new,
+        ainkrad_core::audit::AuditActor::System,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!(owned.owner_module.as_deref(), Some("citadel"));
+    assert_eq!(clients.owner_module, None);
+    let stop = |s: &store::Session| {
+        Command::AgentStop(AgentStop {
+            session: s.id.clone(),
+            kill: true,
+        })
+    };
+    let why = |r: Result<(), Refusal>| match r {
+        Err(Refusal::Runner(e)) => e.message,
+        other => format!("{other:?}"),
+    };
+    let (citadel, other_module) = (ModuleAgents::named("citadel"), ModuleAgents::named("other"));
+    // A client's session, and a session of another module's name.
+    assert!(
+        why(citadel.instruct(&fx.app, &clients.id, stop(&clients)).await)
+            .contains("not this module's")
+    );
+    assert!(
+        why(other_module
+            .instruct(&fx.app, &owned.id, stop(&owned))
+            .await)
+        .contains("not this module's")
+    );
+    // A command that would start or read, and one about another session.
+    let read = Command::AgentRead(AgentRead {
+        gw_after: 0,
+        session: owned.id.clone(),
+        after: 0,
+        wait_ms: None,
+    });
+    assert!(why(citadel.instruct(&fx.app, &owned.id, read).await).contains("only stop"));
+    let other = Command::AgentSend(AgentSend {
+        session: clients.id.clone(),
+        text: "x".into(),
+    });
+    assert!(why(citadel.instruct(&fx.app, &owned.id, other).await).contains("another session"));
+    // A session id that does not exist is not this module's either.
+    assert!(
+        why(citadel.instruct(&fx.app, "as_missing", stop(&owned)).await)
+            .contains("not this module's")
+    );
+    // Over: nothing is sent.
+    store::end(
+        &fx.app.pool,
+        &owned.id,
+        "ended",
+        &json!({"kind": "done"}),
+        NOW,
+    )
+    .await
+    .unwrap();
+    let over = store::get(&fx.app.pool, &owned.id).await.unwrap().unwrap();
+    assert!(why(citadel.instruct(&fx.app, &over.id, stop(&over)).await).contains("over"));
+}
+
+/// A client's write on a session a module drives would bypass the module's own audit and
+/// approvals: every client write route refuses it, and the transcript is an `admin` read.
+#[tokio::test]
+async fn a_client_cannot_drive_or_read_a_session_a_module_owns() {
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let policy = json!({});
+    let new = NewSession {
+        runner: &vm.id,
+        harness: "claude",
+        model: None,
+        prompt: None,
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: &fx.dev.id,
+    };
+    let owned = store::create_owned(
+        &fx.app.pool,
+        &new,
+        Some("citadel"),
+        ainkrad_core::audit::AuditActor::System,
+        NOW,
+    )
+    .await
+    .unwrap();
+    let base = format!("/api/v1/agent-sessions/{}", owned.id);
+    for (path, body) in [
+        ("messages", json!({"text": "hi"})),
+        ("cancel", Value::Null),
+        ("resume", Value::Null),
+        ("wake", json!({})),
+        ("approvals/req-1", json!({"approved": true})),
+    ] {
+        let r = call(&fx, &fx.dev, Method::POST, &format!("{base}/{path}"), body).await;
+        assert_eq!(
+            (r.0, r.1["code"].as_str()),
+            (StatusCode::CONFLICT, Some("module_owned")),
+            "{path}"
+        );
+    }
+    // The transcript: an `agent` device is refused, the admin reads it.
+    let agent = super::stepup::plain(&fx, "agent-only", &["agent", "read"], true).await;
+    let r = call(
+        &fx,
+        &agent,
+        Method::GET,
+        &format!("{base}/transcript"),
+        Value::Null,
+    )
+    .await;
     assert_eq!(
-        fx.post("/api/v1/agents/999/wake", json!({})).await.0,
-        StatusCode::NOT_FOUND
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("forbidden_scope"))
+    );
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::GET,
+        &format!("{base}/transcript"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(r.0, StatusCode::OK, "{r:?}");
+    // A client session that holds secrets is the admin's alone, not the module rule's (B-H1).
+    let own = stored(&fx, &vm.id).await;
+    let r = call(
+        &fx,
+        &agent,
+        Method::GET,
+        &format!("/api/v1/agent-sessions/{}/transcript", own.id),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(r.0, StatusCode::FORBIDDEN, "{r:?}");
+}
+
+/// What a module's `create` answers (the refusal's message), for these inputs.
+async fn module_create(
+    fx: &Fx,
+    runner: &str,
+    by: &str,
+    secrets: &[SessionSecret],
+    policy: &Value,
+    prompt: Option<&str>,
+) -> String {
+    use crate::agents::{ModuleAgents, Refusal};
+    let new = NewSession {
+        runner,
+        harness: "claude",
+        model: None,
+        prompt,
+        workspace: None,
+        policy,
+        secrets,
+        created_by: by,
+    };
+    match ModuleAgents::named("citadel").create(&fx.app, &new).await {
+        Err(Refusal::Runner(e)) => e.message,
+        other => format!("{:?}", other.map(|s| s.id)),
+    }
+}
+
+/// A module creates a session through the same checks as the client route: naming a broker
+/// secret needs `created_by` to be an admin device, and a malformed policy, an oversized prompt
+/// or a sandbox mode without the flag is refused (never defaulted).
+#[tokio::test]
+async fn a_module_create_passes_the_same_checks_as_the_route() {
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let agent = super::stepup::plain(&fx, "agent-only", &["agent", "read"], true).await;
+    let secrets = [SessionSecret {
+        name: "git.token".into(),
+        var: "GIT_TOKEN".into(),
+    }];
+    let ask = json!({"mode": "ask"});
+    for by in [agent.id.as_str(), "d_00000000000000000000000000"] {
+        let why = module_create(&fx, &vm.id, by, &secrets, &ask, None).await;
+        assert!(why.contains("admin scope"), "{by}: {why}");
+    }
+    let (by, admin) = (agent.id.as_str(), fx.dev.id.as_str());
+    let bad = [
+        (by, json!({"mode": "yolo"}), None, "does not have its shape"),
+        (by, ask.clone(), Some("x".repeat(70_000)), "too long"),
+        (
+            admin,
+            json!({"mode": "sandboxed", "sandboxed": false}),
+            None,
+            "sandbox flag",
+        ),
+    ];
+    for (by, policy, prompt, expect) in bad {
+        let why = module_create(&fx, &vm.id, by, &[], &policy, prompt.as_deref()).await;
+        assert!(why.contains(expect), "{expect}: {why}");
+    }
+    // The admin device passes validation and reaches the runner check (not connected here).
+    let why = module_create(&fx, &vm.id, &fx.dev.id, &secrets, &ask, None).await;
+    assert!(!why.contains("admin scope"), "{why}");
+    assert!(
+        fx.ok("/api/v1/agent-sessions")
+            .await
+            .as_array()
+            .unwrap()
+            .is_empty()
     );
 }
 
+/// Break-glass (M3): an `admin` device kills a module's runaway session through the Core;
+/// message, cancel and resume stay the module's, and a non-admin cannot kill it.
 #[tokio::test]
-async fn terminate_ends_runs_hands_issues_to_the_admin_and_wakes_nothing_again() {
+async fn an_admin_may_kill_a_module_session_and_nobody_else() {
     let fx = fx().await;
-    let pool = &fx.app.pool;
-    let a = seed(pool, "A", "AAA", ProjectMode::Kanban).await;
-    let uri = format!("/api/v1/agents/{}/terminate", a.agent.0);
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let policy = json!({});
+    let new = NewSession {
+        runner: &vm.id,
+        harness: "claude",
+        model: None,
+        prompt: None,
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: &fx.dev.id,
+    };
+    let owned = store::create_owned(
+        &fx.app.pool,
+        &new,
+        Some("citadel"),
+        ainkrad_core::audit::AuditActor::System,
+        NOW,
+    )
+    .await
+    .unwrap();
+    let uri = format!("/api/v1/agent-sessions/{}/kill", owned.id);
+    let agent = super::stepup::plain(&fx, "agent-only", &["agent", "read"], true).await;
+    assert_eq!(super::stepup::step_up(&fx, &agent).await.0, StatusCode::OK);
+    let r = call(&fx, &agent, Method::POST, &uri, Value::Null).await;
     assert_eq!(
-        fx.post(&uri, json!({"reason": " "})).await.0,
-        StatusCode::BAD_REQUEST
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("forbidden_scope")),
+        "{r:?}"
     );
-    assert_eq!(
-        fx.post("/api/v1/agents/999/terminate", json!({"reason": "x"}))
-            .await
-            .0,
-        StatusCode::NOT_FOUND
-    );
+    // The admin gets past the module guard: the refusal is now the offline runner's.
+    let r = call(&fx, &fx.dev, Method::POST, &uri, Value::Null).await;
+    assert_ne!(r.1["code"].as_str(), Some("module_owned"), "{r:?}");
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::POST,
+        &uri.replace("kill", "cancel"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(r.1["code"].as_str(), Some("module_owned"), "{r:?}");
+}
 
-    let gone = fx.ok_post(&uri, json!({"reason": "Replaced by Sam"})).await;
-    assert_eq!(gone["status"], "terminated", "{gone}");
-    let run: String = sqlx::query_scalar("SELECT state FROM runs WHERE id = ?")
-        .bind(a.run.id.0)
-        .fetch_one(pool)
+/// What a session's outcome says reaches `read` devices (a module's run list): a key shape in a
+/// harness error is redacted when the outcome is stored, as a transcript entry is.
+#[tokio::test]
+async fn an_outcome_reason_is_redacted_when_stored() {
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let s = stored(&fx, &vm.id).await;
+    let key = "sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let outcome = json!({"kind": "failed", "reason": format!("auth failed with {key}")});
+    store::end(&fx.app.pool, &s.id, "ended", &outcome, NOW)
         .await
         .unwrap();
-    assert_eq!(run, "cancelled");
-    let (agent, user): (Option<i64>, Option<i64>) =
-        sqlx::query_as("SELECT next_agent_id, next_user_id FROM issues WHERE id = ?")
-            .bind(a.issue.0)
-            .fetch_one(pool)
-            .await
-            .unwrap();
-    assert_eq!((agent, user), (None, Some(1)), "handed to the admin");
-    let details: String =
-        sqlx::query_scalar("SELECT details FROM audit_events WHERE action = 'agent.terminated'")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-    let details: Value = serde_json::from_str(&details).unwrap();
-    assert_eq!(details["reason"], "Replaced by Sam");
-    assert_eq!(details["issues"], json!([a.issue.0]));
-    assert_eq!(details["runs"], json!([a.run.id.0]));
-
-    // No new wakes: one asked for it is kept as a dropped record; waking it by hand is refused.
-    let wake = NewWakeRequest {
-        agent_id: a.agent,
-        issue_id: Some(a.issue),
-        source: WakeSource::Comment,
-        reason: "late".to_owned(),
-        idempotency_key: "late".to_owned(),
-        not_before: None,
-    };
-    let stored = enqueue_wake(pool, &wake).await.unwrap();
-    assert_eq!(stored.status.as_str(), "dropped");
-    assert_eq!(
-        fx.post(&format!("/api/v1/agents/{}/wake", a.agent.0), json!({}))
-            .await
-            .0,
-        StatusCode::CONFLICT
-    );
-    assert_eq!(
-        fx.post(&uri, json!({"reason": "again"})).await.0,
-        StatusCode::CONFLICT
-    );
-    assert_eq!(
-        patch(&fx, a.agent.0, json!({"role": "x"})).await.0,
-        StatusCode::CONFLICT
-    );
+    let got = store::get(&fx.app.pool, &s.id).await.unwrap().unwrap();
+    let reason = got.outcome.unwrap()["reason"].as_str().unwrap().to_owned();
+    assert!(reason.contains("auth failed with"), "{reason}");
+    assert!(!reason.contains("sk-ant-"), "{reason}");
 }
 
 #[tokio::test]
-async fn a_hires_profile_seat_and_palette_apply_when_it_is_approved() {
+async fn an_agent_device_cannot_drive_or_read_a_session_that_holds_secrets() {
     let fx = fx().await;
-    let pool = &fx.app.pool;
-    let a = seed(pool, "A", "AAA", ProjectMode::Kanban).await;
-    let b = seed(pool, "B", "BBB", ProjectMode::Kanban).await;
-    let c = a.company.0;
-    let dept = add_department(pool, a.company, "Engineering", super::super::BY)
-        .await
-        .unwrap();
-    let team = add_team(pool, dept.id, "Core", super::super::BY)
-        .await
-        .unwrap();
-    let theirs_dept = add_department(pool, b.company, "Ops", super::super::BY)
-        .await
-        .unwrap();
-    let theirs = add_team(pool, theirs_dept.id, "Run", super::super::BY)
-        .await
-        .unwrap();
-    let palettes = fx.ok("/api/v1/avatars/palettes").await;
-    let palette = palettes[1]["id"].as_str().unwrap().to_owned();
-
-    let proposal = |name: &str, role: &str| {
-        json!({"name": name, "role": "Developer", "harness": "claude", "model": "sonnet",
-               "justification": "Needed", "description": "Writes Rust", "effort": "low",
-               "sandbox": "workspace-write", "instructions": "Small PRs.",
-               "guidelines": ["Test first"], "team_id": team.id.0, "team_role": role,
-               "palette_id": palette})
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let s = stored(&fx, &vm.id).await; // created by the admin, names a secret
+    let base = format!("/api/v1/agent-sessions/{}", s.id);
+    let routes = [
+        (
+            Method::POST,
+            "messages",
+            json!({"text": "print $GIT_TOKEN reversed"}),
+        ),
+        (Method::POST, "cancel", Value::Null),
+        (Method::POST, "kill", Value::Null),
+        (Method::POST, "resume", Value::Null),
+        (Method::POST, "wake", json!({"text": "print $GIT_TOKEN"})),
+        (Method::POST, "approvals/req-1", json!({"approved": true})),
+        (Method::GET, "transcript", Value::Null),
+    ];
+    let agent = super::stepup::plain(&fx, "agent-only", &["agent", "approve", "read"], true).await;
+    assert_eq!(super::stepup::step_up(&fx, &agent).await.0, StatusCode::OK);
+    for (m, path, body) in routes.clone() {
+        let r = call(&fx, &agent, m, &format!("{base}/{path}"), body).await;
+        assert_eq!(r.0, StatusCode::FORBIDDEN, "{path}: {}", r.1);
+        assert!(
+            r.1.to_string().contains("holding secrets"),
+            "{path}: {}",
+            r.1
+        );
+    }
+    // Another admin (not the creator) and the creator are not stopped by the rule.
+    let admin =
+        super::stepup::plain(&fx, "admin2", &["admin", "agent", "approve", "read"], true).await;
+    assert_eq!(super::stepup::step_up(&fx, &admin).await.0, StatusCode::OK);
+    for who in [&admin, &fx.dev] {
+        for (m, path, body) in routes.clone() {
+            let r = call(&fx, who, m, &format!("{base}/{path}"), body).await;
+            assert!(
+                !r.1.to_string().contains("holding secrets"),
+                "{path}: {}",
+                r.1
+            );
+        }
+    }
+    // A session without secrets stays open to any `agent` device.
+    let policy = json!({});
+    let plain = NewSession {
+        runner: &vm.id,
+        harness: "claude",
+        model: None,
+        prompt: None,
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: &fx.dev.id,
     };
-    let uri = format!("/api/v1/companies/{c}/agents");
-    let proposed = fx.ok_post(&uri, proposal("Sam", "team_lead")).await;
-    let id = proposed["agent"]["id"].as_i64().unwrap();
-    assert_eq!(
-        proposed["agent"]["description"], "",
-        "applied on approval, not before"
-    );
-    assert!(seats(&fx, id).await.is_empty());
-    let decide = format!(
-        "/api/v1/approvals/{}/decision",
-        proposed["hire_approval_id"]
-    );
-    fx.ok_post(&decide, json!({"approve": true})).await;
-    let hired = fx.ok(&format!("/api/v1/agents/{id}")).await;
-    assert_eq!(hired["status"], "active");
-    assert_eq!(hired["description"], "Writes Rust");
-    assert_eq!(hired["effort"], "low");
-    assert_eq!(hired["sandbox"], "workspace-write");
-    assert_eq!(hired["instructions"], "Small PRs.");
-    assert_eq!(hired["guidelines"], json!(["Test first"]));
-    assert_eq!(hired["appearance"]["palette_id"], json!(palette));
-    assert_eq!(seats(&fx, id).await, ["team_lead"]);
+    let open = store::create(&fx.app.pool, &plain, super::super::BY, NOW)
+        .await
+        .unwrap();
+    let r = call(
+        &fx,
+        &agent,
+        Method::GET,
+        &format!("/api/v1/agent-sessions/{}/transcript", open.id),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+}
 
-    // Refused at the proposal: the lead seat is taken, another company's team, an unknown
-    // palette, a role without a team, a bad profile.
+/// The policy's isolation fields (E8a-08) are bounded at the Core, before any runner is asked:
+/// out-of-range resources, a malformed digest and a host name in an egress rule are a 400, an
+/// in-bounds policy reaches the runner check (not connected here), and an unknown tier is refused.
+#[tokio::test]
+async fn isolation_fields_are_checked_at_the_boundary() {
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let create = |policy: Value| json!({"runner": vm.id, "harness": "claude", "prompt": PROMPT, "policy": policy});
+    for (why, policy) in [
+        ("vcpus", json!({"mode": "ask", "vcpus": 0})),
+        ("memory", json!({"mode": "ask", "memory_mb": 999_999_999})),
+        ("disk", json!({"mode": "ask", "disk_mb": 1})),
+        ("wall", json!({"mode": "ask", "wall_secs": 0})),
+        ("digest", json!({"mode": "ask", "image": "ubuntu:latest"})),
+        (
+            "host name",
+            json!({"mode": "ask", "egress": {"allow": ["example.com"]}}),
+        ),
+        (
+            "prefix",
+            json!({"mode": "ask", "egress": {"deny": ["10.0.0.0/33"]}}),
+        ),
+        ("tier", json!({"mode": "ask", "min_isolation": "vm"})),
+    ] {
+        let r = call(
+            &fx,
+            &fx.dev,
+            Method::POST,
+            "/api/v1/agent-sessions",
+            create(policy),
+        )
+        .await;
+        assert_eq!(r.0, StatusCode::BAD_REQUEST, "{why}: {}", r.1);
+    }
+    // In bounds: past validation, it reaches the placement check (the runner is not connected).
+    let good = json!({"mode": "ask", "min_isolation": "process", "memory_mb": 512,
+                      "wall_secs": 60, "egress": {"allow": ["10.0.0.0/8"]}});
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::POST,
+        "/api/v1/agent-sessions",
+        create(good),
+    )
+    .await;
     assert_eq!(
-        fx.post(&uri, proposal("Kim", "team_lead")).await.0,
-        StatusCode::CONFLICT
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::CONFLICT, Some("runner_offline"))
     );
-    let mut other = proposal("Kim", "member");
-    other["team_id"] = json!(theirs.id.0);
-    assert_eq!(fx.post(&uri, other).await.0, StatusCode::NOT_FOUND);
-    let mut bad = proposal("Kim", "member");
-    bad["palette_id"] = json!("nope");
-    assert_eq!(fx.post(&uri, bad).await.0, StatusCode::BAD_REQUEST);
-    let mut bad = proposal("Kim", "member");
-    bad["team_id"] = Value::Null;
-    assert_eq!(fx.post(&uri, bad).await.0, StatusCode::BAD_REQUEST);
-    let mut bad = proposal("Kim", "member");
-    bad["guidelines"] = json!([" "]);
-    assert_eq!(fx.post(&uri, bad).await.0, StatusCode::BAD_REQUEST);
-    // A plain proposal (API minor 16) still works.
-    let plain = json!({"name": "Old", "role": "QA", "harness": "claude", "model": "sonnet",
-                       "justification": "Needed"});
-    fx.ok_post(&uri, plain).await;
+    // A policy with none of the fields places as before (the runner is not connected here).
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::POST,
+        "/api/v1/agent-sessions",
+        create(json!({"mode": "ask"})),
+    )
+    .await;
+    assert_eq!(
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::CONFLICT, Some("runner_offline"))
+    );
 }

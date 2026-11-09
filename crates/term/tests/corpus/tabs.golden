@@ -1,0 +1,8 @@
+3 40
+size 3x40 alt=false cursor=2,17 hidden=false modes=\e>\e[?1l\e[?2004l
+pen \e[m
+-- scrollback 0
+-- screen
+|a\e[7Cb\e[7Cc
+|\e[8Cx\e[15Cy
+|12345678\e[8C9

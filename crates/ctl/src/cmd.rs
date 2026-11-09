@@ -1,0 +1,493 @@
+//! The command line: global flags, the commands, and what each prints. `run` is the whole
+//! program but for the exit code (`main`).
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use serde_json::{Value, json};
+
+use crate::client::Client;
+use crate::devices::s;
+use crate::keystore::{self, Keystore};
+use crate::net::{Endpoint, Net};
+use crate::pair::{Credential, Pairing};
+use crate::stepup::{self, Passphrase};
+use crate::{
+    EXIT_CODES, Error, acct, acct_help, agents, budgets, chains, connections, devices, events,
+    pair, pools, runners, secrets, settings, terminals,
+};
+
+pub const USAGE: &str =
+    "usage: ainkradctl [--socket <path> | --url <http(s)://host:port>] [--host <name>]
+                  [--keystore <file>] [--ca <roots.pem>] [--json]
+                  [--stepup-passphrase-file <file>] <command>
+
+  pair <code | ainkrad-pair:v1?...> [--core-fp <fp>] [--wait <secs>] [--no-stepup]
+      Pair this machine as a new device: makes its two keys (routine and step-up), claims
+      the pairing, prints the device id and the check code (SAS) to compare on the
+      approving device, and waits for the approval. It asks for a passphrase (twice) that
+      seals the step-up key; --no-stepup enrols none, and the device can then never
+      elevate. The first device claims the code `ainkrad-core-server bootstrap` prints,
+      over the server's Unix socket (--core-fp: the fingerprint it printed). A QR payload
+      names its Core; a typed code needs --socket or --url.
+  health
+      The Core's identity (against the pinned one), versions, and this device's session.
+  elevate
+      Step up (asks for the step-up passphrase): elevates this device's session for the
+      Core's window (default 5 minutes) and prints elevated_until. Sessions this device
+      opens in that window carry the elevation over. Commands that need it (marked *)
+      elevate by themselves once when the Core asks, then retry once.
+  device ls | show <id>
+  device revoke <id>*  |  rename <id> <name>*  |  scopes <id> <scope>...*
+      Revoking or demoting the last admin device that can elevate is refused (409).
+  device add <name>* [--kind device|runner] [--scopes read,approve,...]
+      Start pairing another device: prints the one-time code and QR payload (5 minutes).
+  device pairing <pairing-id>
+  device approve <pairing-id> <SAS>* [--scopes ...]
+      Approve with the SAS the NEW device shows (typed from its screen, never copied from
+      this one: the Core checks it matches the one it computed).
+  device reject <pairing-id>*
+  lockouts ls | clear <key>*
+      The auth lockouts (ip:..., ipdev:..., stepup:<device>) and clearing one.
+  runner ls | show <id>
+      The paired runners: id, name, online|degraded|offline, load/capacity, the commands
+      it advertised, its version and last_seen (scope read).
+  run noop <runner-id>
+      Sends the runner the no-op command through the Core and prints `ok <ms> ms`
+      (scope agent; no step-up; audited as runner.command).
+  secret ls
+  secret set <name>* [--runners <runner-id>,...] [--delivery env|file|askpass]
+  secret rotate <name>* [--runners ...] [--delivery ...]  |  secret rm <name>*
+      The Core's secrets (scope admin): set and rotate read the value from stdin (never
+      the command line); there is no get, a value never comes back to a client. A secret
+      is leased only to the runners listed (default none).
+  agent ls  |  show <id>  |  tail <id> [--after <seq>] [--no-follow]
+  agent run <runner-id> <harness> [prompt...]* [--secrets <name>:<VAR>,...]
+  agent send <id> <message...>*  |  approve <id> <request>  |  deny <id> <request> [reason...]
+  agent cancel <id>*  |  agent kill <id>*
+      Agent sessions on runners (scope agent): run starts one (the runner must offer
+      agents: ainkrad-runner connect --enable-agents); --secrets leases each named secret
+      to that runner for the session, delivered under VAR; show prints its transcript, and
+      above it the scheduler's fields when it has them: agent, chain and position, account,
+      waiting (until, why), repicked, upstream_class.
+  agent ls --run <id>  |  agent wake <id> [text...]*
+      --run lists only the attempts of one run (its first attempt's id): a failover is a new
+      session of the same run. show adds run, attempt, failover_of, failed_over_to and, for an
+      admin, failover_class and skip_pools; a run that could not move on adds
+      `failover ended: <why>` and one line per reason. wake queues a turn for an idle session; a session a
+      failover replaced is a 409 whose message names the attempt to wake.
+  agent run <runner-id> [prompt...] --chain <id> [--agent <name>]*
+  agent run <runner-id> [prompt...] --agent <name>*
+      A session served by a fallback chain (scope admin): --chain names the chain, --agent
+      the agent whose bound (else the default) chain serves it. Give no harness and no model:
+      the account the Core picks from the chain sets them. `agent start` is `agent run`.
+  chains ls | show <id> | bindings
+  chains create <name> <pool[:model]>...*  |  update <id> <name> <pool[:model]>...*
+  chains delete <id>*  |  default <id>*  |  bind <agent> <chain-id>*  |  unbind <agent>*
+      Fallback chains (scope admin): 1 to 4 entries in fallback order, each a pool's id and,
+      after a colon, a model (none: the harness's default). update replaces the whole entry
+      list. The Core checks the lot; its 400 (bad input), 404 (no such chain or pool) and 409
+      (name taken, a live session walks the chain, ...) are printed in plain words, exit 4.
+@@ACCOUNTS@@
+  setting ls [prefix] | get <key> | set <key> <number>* | reset <key>*
+      The Core's server-wide settings (scope admin), e.g. `setting ls scheduler.`: the value,
+      its unit, default and bounds as the Core reports them. The Core validates a set (400 on
+      an unknown key or a value out of bounds); ctl keeps no list of either.
+  agent run <runner-id> ... --connection-access cap1,cap2*
+      Names the capabilities the session may call through its connections (scope admin; see
+      `connection kinds`). Left out: read-class capabilities only. An empty list is refused here
+      with the Core's own `empty_allowlist` text, before anything is sent.
+  connection kinds  |  ls [--kind k]  |  show <id>  |  test <id>
+      The connections to outside services (`connections` too): kinds lists what each kind can
+      do (capabilities with their read/write class, limit keys, whether sign-in is set up);
+      show prints identity, status (reason, until), last test, default and grants count. A test
+      the Core paces (429) prints how long to wait.
+  connection add <kind>* [--token-file <f>] [--email e] [--site s] [--name n] [--label l]
+  connection credential <id>* [--token-file <f>] [--email e] [--site s]
+      A pasted token (Jira: email, site and API token). The token is read from --token-file,
+      else $AINKRAD_CONNECTION_TOKEN, else stdin (never a terminal); --token works but is
+      warned about (process list, shell history). It is sent in the request body only and never
+      printed.
+  connection login <kind>* [--name n] [--label l] [--connection <id>] [--site s]
+                          [--callback-url <redirect url>] [--confirm-identity-change]
+      Signs in: GitHub shows an address and a code, Jira an authorize address. Then it follows
+      the flow, printing each step (waiting, approved, choose a site, connected as ...). Jira's
+      browser ends on a loopback address that may not load: give it as --callback-url or paste
+      it at the prompt (its code and state are posted to the flow, never printed). A site is
+      --site <number|id|name> or asked. Ctrl-C drops the flow (exit 130); expired, denied or
+      failed is exit 4 with the reason.
+  connection rename <id> <name>*  |  enable <id>*  |  disable <id>*  |  rm <id>*
+      Removing the default connection of its kind is refused (409); the message says the fix.
+  connection grants <id>  |  grant <id> <user|role|agent> <who>* --caps a,b [--limit key=v1,v2]...
+  connection revoke <id> <grantee-kind> <who>*
+  connection default [kind]  |  default <kind> <id>*  |  default <kind> --clear*
+  connection activity <id> [--limit n]
+      Who may use a connection and for what (capabilities and limits), a kind's default, and the
+      connection's last uses.
+  connection app <kind>  |  app <kind> set* --field name=value ...
+      Ainkrad's sign-in app of a kind (only the Core's owner admin sets it; others get a 403).
+      `--field name=-` reads a value from stdin or --file (a secret field is refused on the
+      command line); `--field name=` clears one.
+  events tail [--after <seq>] [--no-follow]
+      Events after <seq> (default: from now), one JSON object per line (every kind this
+      device may see, runner.connected/.disconnected/.degraded included); follows the live
+      stream and resumes after drops and Core restarts, without gaps or repeats.
+
+The keystore (default $AINKRADCTL_KEYSTORE, else ~/.config/ainkradctl/keystore.json) holds
+this device's routine key (mode 0600) and the Core fingerprint pinned at pairing; the
+step-up key is beside it (<keystore>.stepup.json, 0600), sealed with its passphrase
+(PBKDF2-HMAC-SHA256, 600k rounds, AES-256-GCM). The passphrase comes from
+--stepup-passphrase-file, else $AINKRAD_STEPUP_PASSPHRASE_FILE, else the terminal. Nothing is
+signed or sent before the Core signs a fresh nonce with that key (POST /handshake). The Host header is
+`localhost` on a socket and the URL's host:port otherwise (--host overrides; a TCP Core's
+admin socket answers to the Core's own host name).
+";
+
+const VALUED: [&str; 34] = [
+    "--socket",
+    "--url",
+    "--host",
+    "--keystore",
+    "--ca",
+    "--after",
+    "--scopes",
+    "--kind",
+    "--core-fp",
+    "--wait",
+    "--stepup-passphrase-file",
+    "--runners",
+    "--delivery",
+    "--secrets",
+    "--rows",
+    "--cols",
+    "--cwd",
+    "--signal",
+    "--chain",
+    "--agent",
+    "--run",
+    "--token",
+    "--token-file",
+    "--email",
+    "--site",
+    "--name",
+    "--label",
+    "--connection",
+    "--caps",
+    "--limit",
+    "--callback-url",
+    "--field",
+    "--file",
+    "--connection-access",
+];
+const SWITCHES: [&str; 7] = [
+    "--json",
+    "--version",
+    "--no-follow",
+    "--help",
+    "--no-stepup",
+    "--clear",
+    "--confirm-identity-change",
+];
+
+/// The arguments: flags (anywhere) and the words.
+struct Args {
+    flags: Vec<(String, Option<String>)>,
+    words: Vec<String>,
+}
+
+impl Args {
+    fn parse(args: &[String]) -> Result<Self, Error> {
+        let (mut flags, mut words) = (Vec::new(), Vec::new());
+        let mut it = args.iter();
+        while let Some(a) = it.next() {
+            if VALUED.contains(&a.as_str()) || acct::VALUED.contains(&a.as_str()) {
+                let v = it
+                    .next()
+                    .ok_or_else(|| Error::Usage(format!("{a} needs a value")))?;
+                flags.push((a.clone(), Some(v.clone())));
+            } else if SWITCHES.contains(&a.as_str())
+                || acct::SWITCHES.contains(&a.as_str())
+                || a == "-h"
+            {
+                flags.push((a.clone(), None));
+            } else if a.starts_with("--") {
+                return Err(Error::Usage(format!("unknown flag {a}")));
+            } else {
+                words.push(a.clone());
+            }
+        }
+        Ok(Self { flags, words })
+    }
+
+    fn value(&self, name: &str) -> Option<&str> {
+        self.flags
+            .iter()
+            .rev()
+            .find(|(f, _)| f == name)
+            .and_then(|(_, v)| v.as_deref())
+    }
+
+    /// Every value of a flag given more than once, in order.
+    fn values(&self, name: &str) -> Vec<&str> {
+        let all = self.flags.iter().filter(|(f, _)| f == name);
+        all.filter_map(|(_, v)| v.as_deref()).collect()
+    }
+
+    fn connection_opts(&self) -> connections::Opts<'_> {
+        connections::Opts {
+            token: self.value("--token"),
+            token_file: self.value("--token-file"),
+            email: self.value("--email"),
+            site: self.value("--site"),
+            name: self.value("--name"),
+            label: self.value("--label"),
+            kind: self.value("--kind"),
+            connection: self.value("--connection"),
+            caps: self.value("--caps"),
+            limits: self.values("--limit"),
+            callback_url: self.value("--callback-url"),
+            fields: self.values("--field"),
+            file: self.value("--file"),
+            limit: self.value("--limit"),
+            clear: self.on("--clear"),
+            confirm_identity_change: self.on("--confirm-identity-change"),
+        }
+    }
+
+    fn acct_opts(&self) -> acct::Opts<'_> {
+        acct::Opts::new(|n| self.value(n), |n| self.on(n))
+    }
+
+    fn on(&self, name: &str) -> bool {
+        self.flags.iter().any(|(f, _)| f == name)
+    }
+
+    fn number(&self, name: &str) -> Result<Option<i64>, Error> {
+        self.value(name)
+            .map(|v| {
+                v.parse()
+                    .map_err(|_| Error::Usage(format!("{name} takes a number")))
+            })
+            .transpose()
+    }
+
+    fn scopes(&self) -> Option<Vec<String>> {
+        self.value("--scopes").map(|s| {
+            s.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+    }
+
+    fn endpoint(&self) -> Result<Option<Endpoint>, Error> {
+        match (self.value("--socket"), self.value("--url")) {
+            (Some(_), Some(_)) => Err(Error::Usage("one of --socket and --url".into())),
+            (Some(s), None) => Ok(Some(Endpoint::Unix(s.into()))),
+            (None, Some(u)) => Endpoint::parse(u).map(Some),
+            (None, None) => Ok(None),
+        }
+    }
+
+    fn keystore(&self) -> Result<PathBuf, Error> {
+        self.value("--keystore")
+            .map(PathBuf::from)
+            .or_else(keystore::default_path)
+            .ok_or_else(|| Error::Usage("no --keystore and no HOME".into()))
+    }
+
+    /// A client for the paired device in the keystore.
+    fn client(&self) -> Result<Client, Error> {
+        let store = Keystore::load(&self.keystore()?).map_err(Error::Usage)?;
+        let endpoint = match self.endpoint()? {
+            Some(e) => e,
+            None => Endpoint::parse(&store.endpoint)?,
+        };
+        let host = self
+            .value("--host")
+            .map(str::to_owned)
+            .or_else(|| store.host.clone());
+        let net = Net::new(endpoint, host, self.value("--ca").map(Path::new))?;
+        let mut c = Client::new(net, store);
+        c.stepup_file = Some(stepup::path_for(&self.keystore()?));
+        c.passphrase = self.passphrase();
+        Ok(c)
+    }
+
+    fn passphrase(&self) -> Passphrase {
+        Passphrase::new(self.value("--stepup-passphrase-file"))
+    }
+}
+
+fn line(out: &mut impl Write, text: impl std::fmt::Display) -> Result<(), Error> {
+    writeln!(out, "{text}").map_err(|e| Error::Unreachable(format!("stdout: {e}")))
+}
+
+/// The program: parses `args` and runs the command, printing to `out`.
+pub async fn run(args: &[String], out: &mut impl Write) -> Result<(), Error> {
+    let a = Args::parse(args)?;
+    let json = a.on("--json");
+    let words: Vec<&str> = a.words.iter().map(String::as_str).collect();
+    if a.on("--version") {
+        return line(
+            out,
+            format_args!("ainkradctl {}", env!("CARGO_PKG_VERSION")),
+        );
+    }
+    if a.on("--help") || a.on("-h") || matches!(words.as_slice(), [] | ["help"]) {
+        return line(
+            out,
+            format_args!(
+                "{}\n{EXIT_CODES}",
+                USAGE.replacen("@@ACCOUNTS@@", acct_help::HELP.trim_end(), 1)
+            ),
+        );
+    }
+    match words.as_slice() {
+        ["pair", credential] => {
+            let wait = a.number("--wait")?.unwrap_or(300).max(1) as u64;
+            let ks = a.keystore()?;
+            let p = Pairing {
+                endpoint: a.endpoint()?,
+                host: a.value("--host").map(str::to_owned),
+                ca: a.value("--ca").map(Path::new),
+                keystore: &ks,
+                core_fp: a.value("--core-fp").map(str::to_owned),
+                json,
+                wait: Duration::from_secs(wait),
+                stepup: (!a.on("--no-stepup")).then(|| a.passphrase()),
+            };
+            pair::pair(Credential::parse(credential)?, p, out).await
+        }
+        ["health"] => health(&mut a.client()?, json, out).await,
+        ["elevate"] => {
+            let mut c = a.client()?;
+            let until = c.elevate().await?;
+            let v = json!({"elevated_until": until});
+            match json {
+                true => line(out, v),
+                false => line(out, format_args!("elevated_until {until}")),
+            }
+        }
+        ["device", rest @ ..] => {
+            let mut c = a.client()?;
+            devices::device(&mut c, rest, a.value("--kind"), a.scopes(), json, out).await
+        }
+        ["lockouts", rest @ ..] => devices::lockouts(&mut a.client()?, rest, json, out).await,
+        ["runner", rest @ ..] => runners::runner(&mut a.client()?, rest, json, out).await,
+        ["run", rest @ ..] => runners::run(&mut a.client()?, rest, json, out).await,
+        ["secret", rest @ ..] => {
+            let runners = a.value("--runners").map(|r| {
+                r.split(',')
+                    .map(str::trim)
+                    .filter(|r| !r.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            });
+            let delivery = a.value("--delivery");
+            secrets::secret(&mut a.client()?, rest, runners, delivery, json, out).await
+        }
+        ["agent", rest @ ..] | ["agents", rest @ ..] => {
+            let opts = agents::Opts {
+                secrets: a.value("--secrets"),
+                after: a.number("--after")?,
+                follow: !a.on("--no-follow"),
+                chain: a.number("--chain")?,
+                agent: a.value("--agent"),
+                run: a.value("--run"),
+                connection_access: a.value("--connection-access"),
+            };
+            agents::agent(&mut a.client()?, rest, &opts, json, out).await
+        }
+        ["chains", rest @ ..] | ["chain", rest @ ..] => {
+            chains::chains(&mut a.client()?, rest, json, out).await
+        }
+        ["connection", rest @ ..] | ["connections", rest @ ..] => {
+            let opts = a.connection_opts();
+            connections::connection(&mut a.client()?, rest, &opts, json, out).await
+        }
+        ["account", rest @ ..] | ["accounts", rest @ ..] => {
+            acct::account(&mut a.client()?, rest, &a.acct_opts(), json, out).await
+        }
+        ["pool", rest @ ..] | ["pools", rest @ ..] => {
+            pools::pool(&mut a.client()?, rest, json, out).await
+        }
+        ["budget", rest @ ..] | ["budgets", rest @ ..] => {
+            budgets::budget(&mut a.client()?, rest, &a.acct_opts(), json, out).await
+        }
+        ["setting", rest @ ..] | ["settings", rest @ ..] => {
+            settings::setting(&mut a.client()?, rest, json, out).await
+        }
+        ["term", rest @ ..] | ["terminal", rest @ ..] => {
+            let options = terminals::Options {
+                rows: a.number("--rows")?,
+                cols: a.number("--cols")?,
+                cwd: a.value("--cwd"),
+                signal: a.value("--signal"),
+            };
+            terminals::terminal(&mut a.client()?, rest, &options, json, out).await
+        }
+        ["events", "tail"] => {
+            let mut c = a.client()?;
+            events::tail(&mut c, a.number("--after")?, !a.on("--no-follow"), out).await
+        }
+        _ => Err(Error::Usage(format!(
+            "unknown command {:?}; see --help",
+            words.join(" ")
+        ))),
+    }
+}
+
+async fn health(c: &mut Client, json: bool, out: &mut impl Write) -> Result<(), Error> {
+    let up = c.net.send("GET", "/healthz", &[], Vec::new()).await?;
+    if up.status != 200 {
+        return Err(Error::Protocol(format!("/healthz answered {}", up.status)));
+    }
+    let h = c.check_identity().await?;
+    let session = c.open_session().await?.clone();
+    let me: Value = c.get("/api/v1/me", "").await?;
+    let api = &me["versions"]["api"];
+    let summary = json!({
+        "endpoint": c.net.endpoint.to_string(),
+        "core_fp": c.store.core_fp,
+        "identity": "pinned",
+        "server_version": h.server_version,
+        "api": format!("{}.{}", s(&api["major"]), api["minor"]),
+        "device_id": me["device"]["id"],
+        "device_name": me["device"]["name"],
+        "scopes": session.scopes,
+        "session_expires": session.expires,
+        "elevated_until": session.elevated_until,
+    });
+    if json {
+        return line(out, summary);
+    }
+    line(out, format_args!("endpoint {}", c.net.endpoint))?;
+    line(
+        out,
+        format_args!("core_fp {} (matches the pinned one)", c.store.core_fp),
+    )?;
+    line(
+        out,
+        format_args!(
+            "server {} api {}",
+            h.server_version.as_deref().unwrap_or("-"),
+            summary["api"].as_str().unwrap_or("-")
+        ),
+    )?;
+    line(
+        out,
+        format_args!(
+            "device {} {}",
+            s(&me["device"]["id"]),
+            s(&me["device"]["name"])
+        ),
+    )?;
+    line(out, format_args!("scopes {}", session.scopes.join(",")))?;
+    match session.elevated_until {
+        Some(t) => line(out, format_args!("elevated_until {t}")),
+        None => line(out, "elevated_until -"),
+    }
+}

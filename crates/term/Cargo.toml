@@ -1,0 +1,15 @@
+[package]
+name = "ainkrad-term"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The headless emulator (E2-04.1): MIT, nine crates, no I/O; it ships the screen serialiser and diff we replay.
+vt100 = "0.18.1"
+
+[dev-dependencies]
+proptest = "1.12.0"

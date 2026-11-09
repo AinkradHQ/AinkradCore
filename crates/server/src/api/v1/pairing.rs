@@ -1,113 +1,272 @@
-//! Pairing a device with a code (API minor 18). The admin, from a device already paired, asks
-//! for a 6-character code (`startPairing`, good for 5 minutes); the new device sends it with a
-//! name to `pairDevice`, which needs no key (it has none yet) and answers with its device key,
-//! once. A code works once. Wrong codes count against the client address like wrong keys do
-//! (the `api.auth_failure_*` limits, then 429), and every pairing is audited (`device.paired`).
+//! Pairing, the approver's side (handshake spec §7.2 steps 1, 5 and 7): an `admin` device
+//! creates a pairing bound to a name, kind and scopes (never wider than its own), sees the
+//! claimant and the SAS the Core computed, and approves by sending that SAS back, or rejects.
+//! Every route needs `admin` (`scopes`) and a live elevation (`scopes::DESTRUCTIVE`). The new
+//! device's side is `pair` (`passkey` for a browser's passkey).
 
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Instant;
-
-use axum::extract::{ConnectInfo, Request, State};
-use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
-use axum::routing::post;
-use axum::{Extension, Json, Router};
+use ainkrad_core::settings::{Key, Scope};
+use axum::Json;
+use axum::extract::{Extension, Path, State};
+use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::devices::{Device, IssuedDevice};
 use super::types::{Timestamp, ts};
-use super::{ApiError, ApiResult, BY, Client, too_many};
-use crate::api::{App, refusal};
-use crate::store::gov::{pair_device, start_pairing};
+use super::{ApiError, ApiResult, BY, Caller};
+use crate::api::App;
+use crate::auth::crypto::is_id;
+use crate::auth::pairing::{qr, show_code};
+use crate::scheduler::iso_of_unix;
+use crate::store::gov::{self, Decider, Decision, NewPairing, SCOPES};
 
-#[derive(Debug, Serialize, ToSchema)]
-pub struct Pairing {
-    /// Six characters, letters and digits; shown to the user once.
-    pub code: String,
-    pub expires_at: Timestamp,
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NewPairingBody {
+    /// What to call the new device.
+    pub name: String,
+    /// `device`, `runner`, or `passkey` (a browser, E1-08; only when the Core has passkeys).
+    pub kind: String,
+    /// What it may do: within the approver's own scopes; a runner gets exactly `runner`.
+    pub scopes: Vec<String>,
 }
 
-#[utoipa::path(post, path = "/api/v1/devices/pairing", operation_id = "startPairing", tag = "devices",
-    responses((status = 200, description = "A pairing code, good once for 5 minutes (audited as \
-        `device.pairing_started`)", body = Pairing)))]
-pub async fn start(State(app): State<App>) -> ApiResult<Pairing> {
-    let (code, expires) = start_pairing(&app.pool, BY, &app.clock.now()).await?;
-    Ok(Json(Pairing {
-        code,
-        expires_at: ts(&expires),
-    }))
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PairingCreated {
+    /// `p_…`.
+    pub pairing_id: Option<String>,
+    /// The typed code, `ABCDE-FGHJK`: shown once, good once, for 5 minutes.
+    pub code: Option<String>,
+    /// `ainkrad-pair:v1?h=…&p=…&c=<core_fp>&s=<secret>&e=…`, for a QR code: shown once.
+    pub qr: Option<String>,
+    pub expires_at: Option<Timestamp>,
+}
+
+/// A pairing as the approver sees it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PairingView {
+    pub pairing_id: Option<String>,
+    pub kind: Option<String>,
+    pub name: Option<String>,
+    pub scopes: Option<Vec<String>>,
+    /// `live`, `claimed`, `approved`, `rejected`, `expired` or `burned`.
+    pub status: Option<String>,
+    pub expires_at: Option<Timestamp>,
+    /// The claimant, once claimed.
+    pub device_id: Option<String>,
+    /// The SAS the Core computed from its key and the claimant's: compare it with the new
+    /// device's screen, then send it back to approve.
+    pub sas: Option<String>,
+    /// The claimant's routine key fingerprint.
+    pub fingerprint: Option<String>,
+    pub platform: Option<String>,
+    /// Where the claimant says its key lives: a claim, not verified.
+    pub key_storage: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-pub struct PairBody {
-    /// The code the admin was shown, in any case.
-    pub code: String,
-    /// What to call the new device.
-    pub name: String,
+#[serde(deny_unknown_fields)]
+pub struct ApproveBody {
+    /// The SAS shown on both screens.
+    pub sas: String,
+    /// Narrower scopes than the pairing bound; never wider.
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
 }
 
-#[utoipa::path(post, path = "/api/v1/devices/pair", operation_id = "pairDevice", tag = "devices",
-    request_body = PairBody, security(()),
-    responses((status = 200, description = "The new device and its key, shown only now; the code \
-        is spent (audited as `device.paired`). Needs no device key. 404 for a code that is \
-        unknown, used or expired, counted against the client address; 429 once too many are",
-        body = IssuedDevice)))]
-pub async fn pair(
+/// T-PK-3: a passkey never gets `admin` unless `auth.passkey_admin` is 1. Checked wherever a
+/// passkey device would newly hold it: at pairing, at approval and at a scope change.
+pub(super) async fn passkey_admin(
+    app: &App,
+    kind: &str,
+    scopes: &[String],
+) -> Result<(), ApiError> {
+    if kind != "passkey" || !scopes.iter().any(|s| s == "admin") {
+        return Ok(());
+    }
+    let on = crate::store::settings::value(&app.pool, Key::AuthPasskeyAdmin, Scope::Server).await?;
+    match on {
+        0 => Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden_scope",
+            "a passkey does not get the admin scope (setting auth.passkey_admin)",
+        )),
+        _ => Ok(()),
+    }
+}
+
+fn forbidden_scope() -> ApiError {
+    ApiError::new(
+        StatusCode::FORBIDDEN,
+        "forbidden_scope",
+        "this device's scopes do not allow that",
+    )
+}
+
+#[utoipa::path(post, path = "/api/v1/pairings", operation_id = "createPairing", tag = "pairing",
+    request_body = NewPairingBody,
+    responses((status = 200, description = "A pairing, live 5 minutes, with its typed code and \
+        QR payload, shown only now (audited as `pairing.created`). Needs `admin`; the scopes are \
+        within the caller's (403 otherwise); 409 with three live already", body = PairingCreated)))]
+pub async fn create(
     State(app): State<App>,
-    Extension(client): Extension<Client>,
-    Json(b): Json<PairBody>,
-) -> ApiResult<IssuedDevice> {
-    if b.name.trim().is_empty() {
-        return Err(ApiError::bad_request("a device needs a name"));
+    Extension(me): Extension<Caller>,
+    Json(b): Json<NewPairingBody>,
+) -> ApiResult<PairingCreated> {
+    let mut scopes = b.scopes;
+    scopes.sort();
+    scopes.dedup();
+    if b.name.trim().is_empty() || b.name.len() > 100 {
+        return Err(ApiError::bad_request(
+            "a device needs a name, at most 100 bytes",
+        ));
     }
-    match pair_device(&app.pool, &b.code, &b.name, &app.clock.now()).await? {
-        Some((device, key)) => Ok(Json(IssuedDevice {
-            device: Device::from(device),
-            key,
-        })),
-        None => {
-            app.limits.failures.take(&client.0, Instant::now()).ok();
-            tracing::warn!(client = client.0, "pairing code refused");
-            Err(ApiError::not_found("no such pairing code"))
+    match b.kind.as_str() {
+        "device" => {}
+        "runner" if scopes == ["runner"] => {}
+        "runner" => {
+            return Err(ApiError::bad_request(
+                "a runner gets exactly the runner scope",
+            ));
         }
+        // A browser's passkey (E1-08.2): created only here, by an elevated admin device, never
+        // by the browser itself; it never holds `runner`.
+        "passkey" if app.passkeys.is_none() => {
+            return Err(ApiError::bad_request(
+                "passkeys are not enabled on this Core",
+            ));
+        }
+        "passkey" if scopes.iter().any(|s| s == "runner") => {
+            return Err(ApiError::bad_request(
+                "a passkey never gets the runner scope",
+            ));
+        }
+        "passkey" => {}
+        _ => return Err(ApiError::bad_request("kind is device, runner or passkey")),
+    }
+    if scopes.iter().any(|s| !SCOPES.contains(&s.as_str())) {
+        return Err(ApiError::bad_request("unknown scope"));
+    }
+    if scopes.iter().any(|s| !me.device.scopes.contains(s)) {
+        return Err(forbidden_scope());
+    }
+    passkey_admin(&app, &b.kind, &scopes).await?;
+    let new = NewPairing {
+        kind: &b.kind,
+        name: &b.name,
+        scopes: &scopes,
+        created_by: Some(&me.device.id),
+        bootstrap: false,
+        recovery: false,
+    };
+    let created = gov::create_pairing(&app.pool, &new, BY, app.clock.unix())
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::InvalidArgument(why) => ApiError::conflict(why),
+            e => e.into(),
+        })?;
+    Ok(Json(PairingCreated {
+        pairing_id: Some(created.id),
+        code: Some(show_code(&created.code)),
+        qr: Some(qr(
+            &app.host,
+            &app.auth.identity.fp,
+            &created.secret,
+            created.expires,
+        )),
+        expires_at: Some(ts(&iso_of_unix(created.expires))),
+    }))
+}
+
+async fn view(app: &App, id: &str) -> ApiResult<PairingView> {
+    let p = match is_id(id, "p_") {
+        true => gov::get_pairing(&app.pool, id).await?,
+        false => None,
+    }
+    .ok_or_else(|| ApiError::not_found("no such pairing"))?;
+    let device = match &p.device_id {
+        Some(d) => gov::get_device(&app.pool, d).await?,
+        None => None,
+    };
+    Ok(Json(PairingView {
+        pairing_id: Some(p.id),
+        kind: Some(p.kind),
+        name: Some(p.name),
+        scopes: Some(p.scopes),
+        status: Some(p.status),
+        expires_at: Some(ts(&p.expires_at)),
+        device_id: p.device_id,
+        sas: p.sas,
+        fingerprint: device.as_ref().map(|d| d.fingerprint.clone()),
+        platform: device.as_ref().and_then(|d| d.platform.clone()),
+        key_storage: device.and_then(|d| d.key_storage),
+    }))
+}
+
+#[utoipa::path(get, path = "/api/v1/pairings/{id}", operation_id = "getPairing", tag = "pairing",
+    params(("id" = String, Path, description = "Pairing id, `p_…`")),
+    responses((status = 200, description = "The pairing, and once claimed the claimant and the \
+        SAS to compare. Needs `admin`", body = PairingView)))]
+pub async fn get(State(app): State<App>, Path(id): Path<String>) -> ApiResult<PairingView> {
+    view(&app, &id).await
+}
+
+fn decision(d: Decision) -> Result<(), ApiError> {
+    let conflict = |code, why: &str| ApiError::new(StatusCode::CONFLICT, code, why);
+    match d {
+        Decision::Done => Ok(()),
+        Decision::NotFound => Err(ApiError::not_found("no such pairing")),
+        Decision::NotPending => Err(conflict(
+            "conflict",
+            "the pairing is not waiting on a decision",
+        )),
+        Decision::Expired => Err(conflict("pairing_expired", "the pairing expired")),
+        Decision::SasMismatch => Err(conflict("sas_mismatch", "the SAS does not match")),
+        Decision::Wider => Err(forbidden_scope()),
     }
 }
 
-/// The routes with a key: asking for a code.
-pub fn routes() -> Router<App> {
-    Router::new().route("/api/v1/devices/pairing", post(start))
+#[utoipa::path(post, path = "/api/v1/pairings/{id}/approve", operation_id = "approvePairing",
+    tag = "pairing", request_body = ApproveBody,
+    params(("id" = String, Path, description = "Pairing id, `p_…`")),
+    responses((status = 200, description = "Approved: the claimant is active with the bound (or \
+        narrower) scopes (audited as `pairing.approved`). 409 `sas_mismatch` leaves it pending; \
+        409 `pairing_expired` past its 5 minutes; 403 for scopes wider than bound. Needs `admin`",
+        body = PairingView)))]
+pub async fn approve(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    Json(b): Json<ApproveBody>,
+) -> ApiResult<PairingView> {
+    let by = Decider {
+        actor: BY,
+        device: Some(&me.device.id),
+        scopes: Some(&me.device.scopes),
+    };
+    // The setting may have been turned off since the pairing was created. Kind and bound
+    // scopes never change after creation, so this read cannot race the decision below.
+    if let Some(p) = gov::get_pairing(&app.pool, &id).await? {
+        passkey_admin(&app, &p.kind, b.scopes.as_deref().unwrap_or(&p.scopes)).await?;
+    }
+    let now = app.clock.unix();
+    decision(gov::approve_pairing(&app.pool, &id, &b.sas, b.scopes.as_deref(), by, now).await?)?;
+    view(&app, &id).await
 }
 
-/// The one route without a key, behind the shared gate (host, no origin) and the client
-/// address's failure bucket.
-pub fn public_router(app: App) -> Router {
-    Router::new()
-        .route("/api/v1/devices/pair", post(pair))
-        .route_layer(middleware::from_fn_with_state(app.clone(), gate))
-        .with_state(app)
-}
-
-async fn gate(State(app): State<App>, mut req: Request, next: Next) -> Response {
-    if let Some((status, why)) = refusal(&app, req.uri(), req.headers(), |q| q.is_empty()) {
-        return ApiError::new(status, "refused", why).into_response();
-    }
-    let client = req
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map_or_else(
-            || "local".to_owned(),
-            |c| {
-                let xff = req.headers().get_all("x-forwarded-for").iter();
-                let xff = xff.filter_map(|v| v.to_str().ok());
-                crate::api::limit::client_ip(c.0.ip(), xff, &app.trusted_proxies).to_string()
-            },
-        );
-    let limits = Arc::clone(&app.limits);
-    if let Err(wait) = limits.failures.check(&client, Instant::now()) {
-        return too_many(wait);
-    }
-    req.extensions_mut().insert(Client(client));
-    next.run(req).await
+#[utoipa::path(post, path = "/api/v1/pairings/{id}/reject", operation_id = "rejectPairing",
+    tag = "pairing", params(("id" = String, Path, description = "Pairing id, `p_…`")),
+    responses((status = 200, description = "Rejected, claimed or not: a claimant is never \
+        usable (audited as `pairing.rejected`). Needs `admin`", body = PairingView)))]
+pub async fn reject(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<PairingView> {
+    let by = Decider {
+        actor: BY,
+        device: Some(&me.device.id),
+        scopes: Some(&me.device.scopes),
+    };
+    decision(gov::reject_pairing(&app.pool, &id, by, app.clock.unix()).await?)?;
+    view(&app, &id).await
 }

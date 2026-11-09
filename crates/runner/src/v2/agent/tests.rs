@@ -1,0 +1,1454 @@
+//! The agent driver on its own, with a scripted harness (`Script`): capacity and slots, the
+//! transcript (seq, acknowledgement, gap), approvals and messages, cancel and kill, restart and
+//! resume; and the security properties of secret delivery (E2-07.2/.3): only the session's
+//! harness sees a value, the transcript never holds it, its files are 0600 in a 0700 dir and go
+//! at the end, at a kill, and after a `kill -9` of the runner.
+
+use crate::workspace::command::Group;
+use crate::workspace::tests::TestDir;
+use std::collections::HashMap;
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
+use std::path::Path;
+use std::process::Stdio;
+
+use ainkrad_proto::v2::SecretGrant;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use zeroize::Zeroizing;
+
+use super::*;
+use crate::{Executor, Job, Report};
+
+mod sub;
+mod tools_driver;
+
+/// Throwaway values: at least 8 bytes (the redactor's floor), shaped like no real key.
+const ENV_VALUE: &str = "throwaway-env-value-41c7";
+const FILE_VALUE: &str = "throwaway-file-value-9d2e";
+const ASKPASS_VALUE: &str = "throwaway-askpass-value-77b0";
+
+#[derive(Default)]
+struct Seen {
+    env: HashMap<i64, Vec<(String, String)>>,
+    messages: Vec<String>,
+    resumes: Vec<Option<String>>,
+}
+
+/// A harness that runs `sh -c <script>` with the run's own variables: each stdout line is a
+/// `line` event; a line `APPROVAL` asks for a tool approval and reports the answer. A non-zero
+/// exit fails with its last line as the reason.
+#[derive(Clone)]
+struct Script {
+    script: String,
+    seen: Arc<Mutex<Seen>>,
+}
+
+fn script(s: &str) -> Script {
+    Script {
+        script: s.to_owned(),
+        seen: Arc::default(),
+    }
+}
+
+impl Executor for Script {
+    async fn start(&self, job: &Job) -> Result<Option<String>, String> {
+        self.seen
+            .lock()
+            .unwrap()
+            .resumes
+            .push(job.resume_session.clone());
+        Ok(Some(format!("h-{}", job.context_ref)))
+    }
+
+    async fn run(&self, job: &Job, _: RunToken, reports: mpsc::Sender<Report>) -> Outcome {
+        let env = self
+            .seen
+            .lock()
+            .unwrap()
+            .env
+            .get(&job.run)
+            .cloned()
+            .unwrap_or_default();
+        let mut command = tokio::process::Command::new("/bin/sh");
+        if std::env::var_os("AGENT_KILL9_ROOT").is_none() {
+            command.as_std_mut().process_group(0);
+        }
+        let mut child = command
+            .arg("-c")
+            .arg(&self.script)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .envs(env)
+            .stdout(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let _group = Group(child.id().unwrap());
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut last = String::new();
+        while let Ok(Some(line)) = lines.next_line().await {
+            if line == "APPROVAL" {
+                let (reply, answer) = crate::Reply::new();
+                let ask = Report::Approval {
+                    id: "t1".to_owned(),
+                    tool: "Bash".to_owned(),
+                    input: json!({"command": "make deploy"}),
+                    timeout_secs: 30,
+                    reply,
+                };
+                let _ = reports.send(ask).await;
+                let a = answer.await.unwrap();
+                let _ = reports
+                    .send(Report::Event(
+                        json!({"type": "answer", "approved": a.approved}),
+                    ))
+                    .await;
+                continue;
+            }
+            let _ = reports
+                .send(Report::Event(json!({"type": "line", "text": line})))
+                .await;
+            last = line;
+        }
+        let _ = reports
+            .send(Report::Usage(Tokens {
+                input: 3,
+                output: 4,
+                ..Tokens::default()
+            }))
+            .await;
+        match child.wait().await {
+            Ok(s) if s.success() => Outcome::Succeeded,
+            _ => Outcome::Failed {
+                reason: last,
+                fingerprint: None,
+            },
+        }
+    }
+
+    fn control(&self, _: i64, control: Control) {
+        if let Control::Message { text, .. } = control {
+            self.seen.lock().unwrap().messages.push(text);
+        }
+    }
+
+    fn session_env(&self, run: i64, env: Option<Vec<(String, String)>>) {
+        let mut seen = self.seen.lock().unwrap();
+        match env {
+            Some(env) => drop(seen.env.insert(run, env)),
+            None => drop(seen.env.remove(&run)),
+        }
+    }
+}
+
+pub(super) fn dirs(name: &str) -> (TestDir, AgentConfig) {
+    let base = if cfg!(target_os = "linux") {
+        std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir())
+            .unwrap_or_else(|| PathBuf::from("/dev/shm"))
+    } else {
+        std::env::var_os("AINKRAD_TEST_RAMDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+    };
+    let root = base.join(format!("agent-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let config = AgentConfig {
+        stop_grace: Duration::from_millis(300),
+        ..AgentConfig::new(root.join("agents"), root.join("secrets"))
+    };
+    (TestDir(root), config)
+}
+
+pub(super) fn start(session: &str, harness: &str) -> AgentStart {
+    AgentStart {
+        session: session.to_owned(),
+        harness: harness.to_owned(),
+        model: None,
+        prompt: Some("do it".to_owned()),
+        workspace: None,
+        policy: Default::default(),
+        resume: None,
+        secrets: vec![],
+        gateway: None,
+        epoch: 0,
+    }
+}
+
+/// Leases `l_env`, `l_file`, `l_askpass`, each delivered its own way.
+fn leases() -> Redeem {
+    Arc::new(|lease: String| {
+        Box::pin(async move {
+            let (delivery, value) = match lease.as_str() {
+                "l_env" => ("env", ENV_VALUE),
+                "l_file" => ("file", FILE_VALUE),
+                "l_askpass" => ("askpass", ASKPASS_VALUE),
+                _ => return Err("no such lease".to_owned()),
+            };
+            Ok(secrets::Leased {
+                name: format!("test.{delivery}"),
+                delivery: delivery.to_owned(),
+                value: Zeroizing::new(value.to_owned()),
+            })
+        })
+    })
+}
+
+/// An unconfined sandbox that lists the gateway capability, as a proven runner does.
+struct GatewayCapable;
+
+impl Sandbox for GatewayCapable {
+    fn name(&self) -> &'static str {
+        "gateway-capable"
+    }
+    fn prepare(&self, _: &AgentStart, _: &mut Vec<(String, String)>) -> Result<(), String> {
+        Ok(())
+    }
+    fn capabilities(&self) -> &'static [&'static str] {
+        &[ainkrad_proto::v2::CAP_GATEWAY]
+    }
+}
+
+fn grants() -> Vec<SecretGrant> {
+    [
+        ("l_env", "TOKEN"),
+        ("l_file", "TOKEN_FILE"),
+        ("l_askpass", "ASKPASS"),
+    ]
+    .map(|(lease, var)| SecretGrant {
+        lease: lease.to_owned(),
+        var: var.to_owned(),
+    })
+    .into()
+}
+
+/// Reads the whole transcript until the session is no longer running.
+async fn drain(d: &AgentDriver, session: &str) -> (Vec<TranscriptEntry>, AgentEvents) {
+    drain_from(d, session, 0).await
+}
+
+/// Reads the transcript after `from` (what the Core holds) until the session is over.
+async fn drain_from(
+    d: &AgentDriver,
+    session: &str,
+    from: u64,
+) -> (Vec<TranscriptEntry>, AgentEvents) {
+    let mut all = Vec::new();
+    for _ in 0..200 {
+        let after = all.last().map_or(from, |e: &TranscriptEntry| e.seq);
+        let read = AgentRead {
+            gw_after: 0,
+            session: session.to_owned(),
+            after,
+            wait_ms: Some(2000),
+        };
+        let ev = d.read(&read).await.unwrap();
+        all.extend(ev.entries.clone());
+        if ev.state != AgentState::Running && all.last().map_or(0, |e| e.seq) == ev.last_seq {
+            return (all, ev);
+        }
+    }
+    panic!("the session did not end");
+}
+
+async fn until(what: &str, mut f: impl FnMut() -> bool) {
+    for _ in 0..300 {
+        if f() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("timed out waiting for {what}");
+}
+
+fn types(entries: &[TranscriptEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .map(|e| e.body["type"].as_str().unwrap_or("").to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn two_sessions_run_at_once_and_capacity_and_slots_hold() {
+    let (root, mut config) = dirs("capacity");
+    config.slots = BTreeMap::from([("fake".to_owned(), 2), ("other".to_owned(), 1)]);
+    let gate = root.join("go");
+    let s = script(&format!(
+        "echo up; while [ ! -e '{}' ]; do sleep 0.05; done; echo done",
+        gate.display()
+    ));
+    let d = Arc::new(AgentDriver::new(config, s).unwrap());
+    let info = d.info();
+    assert_eq!((info.capacity, info.streams), (2, Some(14)));
+    d.start(start("as_a", "fake")).unwrap();
+    d.start(start("as_b", "fake")).unwrap();
+    // Both are running at the same time: each has said `up` and neither has ended.
+    for s in ["as_a", "as_b"] {
+        let read = AgentRead {
+            gw_after: 0,
+            session: s.to_owned(),
+            after: 0,
+            wait_ms: Some(2000),
+        };
+        let mut seen = Vec::new();
+        while !seen
+            .iter()
+            .any(|e: &TranscriptEntry| e.body["text"] == "up")
+        {
+            let ev = d
+                .read(&AgentRead {
+                    gw_after: 0,
+                    after: seen.last().map_or(0, |e| e.seq),
+                    ..read.clone()
+                })
+                .await
+                .unwrap();
+            assert_eq!(ev.state, AgentState::Running);
+            seen.extend(ev.entries);
+        }
+    }
+    assert_eq!(
+        d.states()
+            .values()
+            .filter(|s| **s == AgentState::Running)
+            .count(),
+        2
+    );
+    let busy = d.start(start("as_c", "other")).unwrap_err();
+    assert_eq!(busy.code, ErrorCode::Busy, "past the driver's capacity");
+    let refused = d.start(start("as_d", "unlisted")).unwrap_err();
+    assert_eq!(
+        refused.code,
+        ErrorCode::InvalidArgs,
+        "a harness with no slot"
+    );
+    // A resent start of a running session answers with it and starts nothing.
+    assert_eq!(
+        d.start(start("as_a", "fake")).unwrap().state,
+        AgentState::Running
+    );
+    std::fs::write(&gate, "").unwrap();
+    for s in ["as_a", "as_b"] {
+        let (entries, ev) = drain(&d, s).await;
+        assert_eq!(ev.outcome, Some(Outcome::Succeeded));
+        assert_eq!(ev.usage.map(|u| u.output), Some(4), "metered");
+        assert_eq!(
+            ev.harness_session.as_deref(),
+            Some(format!("h-{s}").as_str())
+        );
+        let seqs: Vec<u64> = entries.iter().map(|e| e.seq).collect();
+        assert_eq!(seqs, (1..=ev.last_seq).collect::<Vec<_>>(), "no gap");
+    }
+    // A slot frees as a session ends.
+    d.start(start("as_c", "other")).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn two_agy_runs_never_share_the_one_mcp_link() {
+    let (root, mut config) = dirs("agy-one");
+    config.slots = BTreeMap::from([("agy".to_owned(), 2), ("fake".to_owned(), 2)]);
+    let d = Arc::new(AgentDriver::new(config, script("sleep 5")).unwrap());
+    d.start(start("as_a", "agy")).unwrap();
+    assert_eq!(
+        d.start(start("as_b", "agy")).unwrap_err().code,
+        ErrorCode::Busy,
+        "a second agy would repoint the first's MCP link"
+    );
+    d.start(start("as_c", "fake")).unwrap();
+    for s in ["as_a", "as_c"] {
+        d.stop(AgentStop {
+            session: s.to_owned(),
+            kill: true,
+        })
+        .unwrap();
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn slots_split_the_capacity_per_harness() {
+    let (root, mut config) = dirs("slots");
+    config.slots = BTreeMap::from([("fake".to_owned(), 1), ("other".to_owned(), 1)]);
+    let d = Arc::new(AgentDriver::new(config, script("sleep 5")).unwrap());
+    d.start(start("as_a", "fake")).unwrap();
+    assert_eq!(
+        d.start(start("as_b", "fake")).unwrap_err().code,
+        ErrorCode::Busy
+    );
+    d.start(start("as_c", "other")).unwrap();
+    for s in ["as_a", "as_c"] {
+        d.stop(AgentStop {
+            session: s.to_owned(),
+            kill: true,
+        })
+        .unwrap();
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn a_read_acknowledges_what_the_core_holds_and_a_gap_is_explicit() {
+    let (root, mut config) = dirs("ack");
+    config.max_entries = 3;
+    let d = Arc::new(
+        AgentDriver::new(
+            config.clone(),
+            script("for i in 1 2 3 4 5 6; do echo $i; done"),
+        )
+        .unwrap(),
+    );
+    d.start(start("as_a", "fake")).unwrap();
+    until("the end", || d.states()["as_a"] == AgentState::Ended).await;
+    // Nothing was read: past `max_entries`, the oldest went, and the read says so first.
+    let ev = d
+        .read(&AgentRead {
+            gw_after: 0,
+            session: "as_a".into(),
+            after: 0,
+            wait_ms: None,
+        })
+        .await
+        .unwrap();
+    let gap = &ev.entries[0];
+    assert_eq!(gap.body["type"], "gap");
+    assert_eq!(
+        (gap.body["from"].as_u64(), gap.seq),
+        (Some(1), ev.last_seq - 3)
+    );
+    let seqs: Vec<u64> = ev.entries.iter().map(|e| e.seq).collect();
+    assert_eq!(seqs, (ev.last_seq - 3..=ev.last_seq).collect::<Vec<_>>());
+    // The Core holding everything: the transcript file goes, the state stays.
+    let file = config.dir.join("as_a/transcript.jsonl");
+    assert!(file.exists());
+    let done = d
+        .read(&AgentRead {
+            gw_after: 0,
+            session: "as_a".into(),
+            after: ev.last_seq,
+            wait_ms: None,
+        })
+        .await
+        .unwrap();
+    assert!(done.entries.is_empty() && done.state == AgentState::Ended);
+    assert!(!file.exists(), "a fully read transcript is not kept");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn an_approval_and_a_message_round_trip() {
+    let (root, config) = dirs("approve");
+    let s = script("echo before; echo APPROVAL; echo after");
+    let seen = Arc::clone(&s.seen);
+    let d = Arc::new(AgentDriver::new(config, s).unwrap());
+    d.start(start("as_a", "fake")).unwrap();
+    let mut entries = Vec::new();
+    while !types(&entries).contains(&"approval_request".to_owned()) {
+        let after = entries.last().map_or(0, |e: &TranscriptEntry| e.seq);
+        entries.extend(
+            d.read(&AgentRead {
+                gw_after: 0,
+                session: "as_a".into(),
+                after,
+                wait_ms: Some(2000),
+            })
+            .await
+            .unwrap()
+            .entries,
+        );
+    }
+    let ask = entries
+        .iter()
+        .find(|e| e.body["type"] == "approval_request")
+        .unwrap();
+    assert_eq!(
+        (ask.body["id"].as_str(), ask.body["tool"].as_str()),
+        (Some("t1"), Some("Bash"))
+    );
+    d.send("as_a", "also run the tests".to_owned()).unwrap();
+    assert_eq!(seen.lock().unwrap().messages, ["also run the tests"]);
+    let wrong = AgentDecide {
+        session: "as_a".into(),
+        request: "t9".into(),
+        approved: true,
+        reply: None,
+    };
+    assert_eq!(d.decide(wrong).unwrap_err().code, ErrorCode::InvalidArgs);
+    let ok = AgentDecide {
+        session: "as_a".into(),
+        request: "t1".into(),
+        approved: true,
+        reply: None,
+    };
+    d.decide(ok).unwrap();
+    let (rest, ev) = drain(&d, "as_a").await;
+    let all: Vec<_> = rest.iter().map(|e| e.body.clone()).collect();
+    assert!(
+        all.iter()
+            .any(|b| b["type"] == "approval_decided" && b["approved"] == true),
+        "{all:?}"
+    );
+    assert!(
+        all.iter()
+            .any(|b| b["type"] == "answer" && b["approved"] == true),
+        "the harness got it"
+    );
+    assert!(all.iter().any(|b| b["type"] == "message"));
+    assert_eq!(ev.outcome, Some(Outcome::Succeeded));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn cancel_ends_after_the_grace_and_kill_at_once() {
+    let (root, config) = dirs("stop");
+    let d = Arc::new(AgentDriver::new(config, script("echo up; sleep 30")).unwrap());
+    d.start(start("as_a", "fake")).unwrap();
+    d.start(start("as_b", "fake")).unwrap();
+    d.stop(AgentStop {
+        session: "as_a".into(),
+        kill: true,
+    })
+    .unwrap();
+    until("kill teardown", || d.states()["as_a"] == AgentState::Ended).await;
+    d.stop(AgentStop {
+        session: "as_b".into(),
+        kill: false,
+    })
+    .unwrap();
+    until("the grace", || d.states()["as_b"] == AgentState::Ended).await;
+    for s in ["as_a", "as_b"] {
+        let (_, ev) = drain(&d, s).await;
+        assert!(
+            matches!(ev.outcome, Some(Outcome::Cancelled { .. })),
+            "{:?}",
+            ev.outcome
+        );
+    }
+    // Stopping an ended session is answered, not refused.
+    assert_eq!(
+        d.stop(AgentStop {
+            session: "as_a".into(),
+            kill: true
+        })
+        .unwrap()
+        .state,
+        AgentState::Ended
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn a_new_driver_reloads_a_running_session_as_interrupted_and_resumes_it() {
+    let (root, config) = dirs("restart");
+    let first =
+        Arc::new(AgentDriver::new(config.clone(), script("echo one; echo two; sleep 30")).unwrap());
+    first.start(start("as_a", "fake")).unwrap();
+    let mut seen = Vec::new();
+    while seen.len() < 3 {
+        let after = seen.last().map_or(0, |e: &TranscriptEntry| e.seq);
+        seen.extend(
+            first
+                .read(&AgentRead {
+                    gw_after: 0,
+                    session: "as_a".into(),
+                    after,
+                    wait_ms: Some(2000),
+                })
+                .await
+                .unwrap()
+                .entries,
+        );
+    }
+    // The Core read up to `one` only; then the runner process goes (its state stays on disk).
+    let held = seen.iter().find(|e| e.body["text"] == "one").unwrap().seq;
+    first
+        .read(&AgentRead {
+            gw_after: 0,
+            session: "as_a".into(),
+            after: held,
+            wait_ms: None,
+        })
+        .await
+        .unwrap();
+    let s = script("echo resumed");
+    let resumes = Arc::clone(&s.seen);
+    let second = Arc::new(AgentDriver::new(config, s).unwrap());
+    let ev = second
+        .read(&AgentRead {
+            gw_after: 0,
+            session: "as_a".into(),
+            after: held,
+            wait_ms: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(ev.state, AgentState::Interrupted);
+    assert_eq!(
+        ev.entries[0].seq,
+        held + 1,
+        "the rest of the transcript, from where the Core is"
+    );
+    assert_eq!(ev.entries[0].body["text"], "two");
+    assert_eq!(ev.entries.last().unwrap().body["type"], "interrupted");
+    assert_eq!(ev.harness_session.as_deref(), Some("h-as_a"));
+    let mut again = start("as_a", "fake");
+    again.resume = ev.harness_session.clone();
+    second.start(again).unwrap();
+    let (rest, end) = drain_from(&second, "as_a", held).await;
+    assert_eq!(resumes.lock().unwrap().resumes, [Some("h-as_a".to_owned())]);
+    assert_eq!(
+        rest[0].seq,
+        held + 1,
+        "numbering continues across the restart"
+    );
+    assert!(
+        rest.iter()
+            .any(|e| e.body["type"] == "started" && e.body["resumed"] == true)
+    );
+    assert_eq!(end.outcome, Some(Outcome::Succeeded));
+    first
+        .stop(AgentStop {
+            session: "as_a".into(),
+            kill: true,
+        })
+        .unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A session that ended is started again (a wake) only by a resume with a newer epoch, and the
+/// transcript's numbering goes on; the same resume sent twice, an old epoch and a start that
+/// names no harness session to continue never run it a second time.
+#[tokio::test]
+async fn an_ended_session_is_woken_by_a_newer_resume_and_never_twice() {
+    let (root, config) = dirs("wake");
+    let s = script("echo turn");
+    let seen = Arc::clone(&s.seen);
+    let d = Arc::new(AgentDriver::new(config, s).unwrap());
+    d.start(start("as_w", "fake")).unwrap();
+    let (first, end) = drain(&d, "as_w").await;
+    assert_eq!(end.state, AgentState::Ended);
+    let held = end.last_seq;
+    assert_eq!(first.last().unwrap().seq, held);
+    let harness = end.harness_session.clone();
+    assert!(harness.is_some());
+    // The Core acknowledged everything, as it does when a session ends.
+    d.read(&AgentRead {
+        gw_after: 0,
+        session: "as_w".into(),
+        after: held,
+        wait_ms: None,
+    })
+    .await
+    .unwrap();
+    let wake = |epoch: u32, resume: Option<String>| AgentStart {
+        resume,
+        epoch,
+        ..start("as_w", "fake")
+    };
+    // Not a wake: no harness session to continue, or an epoch that is not newer.
+    for refused in [wake(1, None), wake(0, harness.clone())] {
+        assert_eq!(d.start(refused).unwrap().state, AgentState::Ended);
+    }
+    assert_eq!(seen.lock().unwrap().resumes.len(), 1, "still the one run");
+    // The wake: the harness runs again on its own session, numbering from where it was.
+    d.start(wake(1, harness.clone())).unwrap();
+    let (rest, end) = drain_from(&d, "as_w", held).await;
+    assert_eq!(rest[0].seq, held + 1);
+    assert!(rest.iter().any(|e| e.body["resumed"] == true));
+    assert_eq!(end.outcome, Some(Outcome::Succeeded));
+    assert_eq!(seen.lock().unwrap().resumes.len(), 2);
+    // The same wake sent again (its answer was lost) is answered, not run again.
+    let again = d.start(wake(1, harness.clone())).unwrap();
+    assert_eq!(again.state, AgentState::Ended);
+    assert_eq!(seen.lock().unwrap().resumes.len(), 2, "never twice");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+fn mode(p: &Path) -> u32 {
+    std::fs::metadata(p).unwrap().permissions().mode() & 0o777
+}
+
+/// E2-07.2/.3: each delivery reaches the session's harness, and only it; every value it
+/// prints is masked in the transcript (memory and disk) and in its failure reason; the files
+/// are private and gone at the end.
+#[tokio::test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "OWNER: requires AINKRAD_TEST_RAMDIR on a verified RAM disk"
+)]
+async fn a_secret_reaches_only_its_session_and_never_its_transcript() {
+    let (root, config) = dirs("secrets");
+    let gate = root.join("go");
+    let s = script(&format!(
+        "echo \"env=$TOKEN\"; echo \"file=$(cat \"$TOKEN_FILE\")\"; echo \"askpass=$(\"$ASKPASS\")\"; \
+         echo \"same=$ASKPASS\"; while [ ! -e '{}' ]; do sleep 0.05; done; echo \"$TOKEN\"; exit 3",
+        gate.display()
+    ));
+    let d = Arc::new(
+        AgentDriver::new(config.clone(), s)
+            .unwrap()
+            .with_redeem(leases()),
+    );
+    let mut req = start("as_a", "fake");
+    req.secrets = grants();
+    d.start(req).unwrap();
+    // An unrelated session on the same runner, printing its whole environment.
+    let other = Arc::new(AgentDriver::new(dirs("secrets-other").1, script("env")).unwrap());
+    let mut seen = Vec::new();
+    while seen.len() < 5 {
+        let after = seen.last().map_or(0, |e: &TranscriptEntry| e.seq);
+        seen.extend(
+            d.read(&AgentRead {
+                gw_after: 0,
+                session: "as_a".into(),
+                after,
+                wait_ms: Some(2000),
+            })
+            .await
+            .unwrap()
+            .entries,
+        );
+    }
+    let text = serde_json::to_string(&seen).unwrap();
+    for (label, name) in [
+        ("env", "test.env"),
+        ("file", "test.file"),
+        ("askpass", "test.askpass"),
+    ] {
+        let line = format!("{label}=[redacted:{name}]");
+        assert!(
+            text.contains(&line),
+            "{label} was delivered and masked: {text}"
+        );
+    }
+    // The files are 0600 in a 0700 dir; the helper is 0700 and holds no value.
+    let dir = config.secrets_dir.join("as_a");
+    assert_eq!(mode(&dir), 0o700);
+    assert_eq!(mode(&config.secrets_dir), 0o700);
+    for f in std::fs::read_dir(&dir).unwrap().flatten() {
+        let body = std::fs::read_to_string(f.path()).unwrap();
+        if f.file_name().to_string_lossy().ends_with(".askpass")
+            || f.file_name() == "git-credential"
+        {
+            assert_eq!(mode(&f.path()), 0o700);
+            assert!(
+                !body.contains(ASKPASS_VALUE),
+                "the helper reads the file, never holds the value"
+            );
+        } else {
+            assert_eq!(mode(&f.path()), 0o600);
+        }
+    }
+    // Not in this (the runner's) process, nor in what it spawns, nor in another session.
+    let runner_env: String = std::env::vars()
+        .map(|(k, v)| format!("{k}={v}\n"))
+        .collect();
+    let child = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg("env")
+        .output()
+        .unwrap();
+    other.start(start("as_o", "fake")).unwrap();
+    let (other_entries, _) = drain(&other, "as_o").await;
+    let other_text = serde_json::to_string(&other_entries).unwrap();
+    for v in [ENV_VALUE, FILE_VALUE, ASKPASS_VALUE] {
+        assert!(
+            !runner_env.contains(v),
+            "the runner's own env holds a session's secret"
+        );
+        assert!(
+            !String::from_utf8_lossy(&child.stdout).contains(v),
+            "a sibling process got it"
+        );
+        assert!(!other_text.contains(v), "another session got it");
+    }
+    std::fs::write(&gate, "").unwrap();
+    let (rest, ev) = drain(&d, "as_a").await;
+    let all = serde_json::to_string(&[seen, rest]).unwrap() + &format!("{ev:?}");
+    let disk = std::fs::read_dir(config.dir.join("as_a"))
+        .unwrap()
+        .flatten()
+        .map(|f| std::fs::read_to_string(f.path()).unwrap_or_default())
+        .collect::<String>();
+    for v in [ENV_VALUE, FILE_VALUE, ASKPASS_VALUE] {
+        assert!(
+            !all.contains(v),
+            "a value in the transcript or the outcome: {all}"
+        );
+        assert!(!disk.contains(v), "a value on disk beside the transcript");
+    }
+    assert!(
+        matches!(&ev.outcome, Some(Outcome::Failed { reason, .. }) if reason == "[redacted:test.env]"),
+        "the failure reason is masked too: {:?}",
+        ev.outcome
+    );
+    assert!(!dir.exists(), "the session's secrets went with it");
+    // A lease the runner cannot redeem fails the session, not the runner.
+    let mut bad = start("as_b", "fake");
+    bad.secrets = vec![SecretGrant {
+        lease: "l_nope".into(),
+        var: "X".into(),
+    }];
+    d.start(bad).unwrap();
+    let (_, ev) = drain(&d, "as_b").await;
+    assert!(matches!(ev.outcome, Some(Outcome::Failed { .. })));
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(dirs("secrets-other").0);
+}
+
+#[tokio::test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "OWNER: requires AINKRAD_TEST_RAMDIR on a verified RAM disk"
+)]
+async fn a_kill_removes_the_secrets_and_a_reserved_variable_is_refused() {
+    let (root, config) = dirs("kill");
+    let d = Arc::new(
+        AgentDriver::new(config.clone(), script("sleep 30"))
+            .unwrap()
+            .with_redeem(leases()),
+    );
+    let mut req = start("as_a", "fake");
+    req.secrets = grants();
+    d.start(req).unwrap();
+    let dir = config.secrets_dir.join("as_a");
+    until("delivery", || dir.join("s1").exists()).await;
+    d.stop(AgentStop {
+        session: "as_a".into(),
+        kill: true,
+    })
+    .unwrap();
+    until("removal", || !dir.exists()).await;
+    for var in [
+        "PATH",
+        "LD_PRELOAD",
+        "DYLD_INSERT_LIBRARIES",
+        "lower",
+        "A-B",
+        "",
+    ] {
+        let mut req = start("as_b", "fake");
+        req.secrets = vec![SecretGrant {
+            lease: "l_env".into(),
+            var: var.into(),
+        }];
+        assert_eq!(
+            d.start(req).unwrap_err().code,
+            ErrorCode::InvalidArgs,
+            "{var}"
+        );
+    }
+    assert_eq!(
+        d.start(start("../x", "fake")).unwrap_err().code,
+        ErrorCode::InvalidArgs
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// The other half of the next test: a runner process that delivers a file secret, says so,
+/// and waits to be killed. Does nothing unless the parent test set `AGENT_KILL9_ROOT`.
+#[tokio::test]
+async fn kill9_helper() {
+    let Some(root) = std::env::var_os("AGENT_KILL9_ROOT") else {
+        return;
+    };
+    let root = PathBuf::from(root);
+    let config = AgentConfig::new(root.join("agents"), root.join("secrets"));
+    let d = Arc::new(
+        AgentDriver::new(config, script("sleep 5"))
+            .unwrap()
+            .with_redeem(leases()),
+    );
+    let mut req = start("as_a", "fake");
+    req.secrets = grants();
+    d.start(req).unwrap();
+    until("delivery", || root.join("secrets/as_a/s1").exists()).await;
+    // A real orphan group with an environment secret must die before startup sweeps files.
+    let mut orphan = std::process::Command::new("/bin/sh");
+    use std::os::unix::process::CommandExt;
+    let mut child = orphan
+        .args(["-c", "sleep 600 & wait"])
+        .env("ORPHAN_SECRET", ENV_VALUE)
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    std::fs::write(
+        root.join("agents/as_a/pgid"),
+        ainkrad_harness::process_identity(pid).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(root.join("orphan-pid"), pid.to_string()).unwrap();
+    println!("AGENT-KILL9-READY");
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+/// A runner killed with SIGKILL removes nothing; the next one to start removes it all, and
+/// finds the session interrupted.
+#[tokio::test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "OWNER: requires AINKRAD_TEST_RAMDIR on a verified RAM disk"
+)]
+async fn after_a_kill_9_the_next_runner_removes_the_secrets() {
+    let (root, config) = dirs("kill9");
+    let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+    command.as_std_mut().process_group(0);
+    let mut child = command
+        .args([
+            "--exact",
+            "v2::agent::tests::kill9_helper",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("AGENT_KILL9_ROOT", &root)
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let _group = Group(child.id().unwrap());
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let ready = tokio::time::timeout(Duration::from_secs(30), async {
+        while let Ok(Some(l)) = lines.next_line().await {
+            if l.contains("AGENT-KILL9-READY") {
+                return true;
+            }
+        }
+        false
+    });
+    assert!(ready.await.unwrap(), "the helper delivered its secrets");
+    child.start_kill().unwrap(); // SIGKILL
+    child.wait().await.unwrap();
+    let file = config.secrets_dir.join("as_a/s1");
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        FILE_VALUE,
+        "a kill -9 cleans nothing up"
+    );
+    let next = AgentDriver::new(config.clone(), script("true")).unwrap();
+    assert!(
+        !config.secrets_dir.join("as_a").exists(),
+        "the next runner removed them"
+    );
+    assert_eq!(std::fs::read_dir(&config.secrets_dir).unwrap().count(), 0);
+    assert_eq!(next.states()["as_a"], AgentState::Interrupted);
+    let pid = std::fs::read_to_string(root.join("orphan-pid")).unwrap();
+    until("whole orphan group gone", || {
+        let ps = std::process::Command::new("ps")
+            .args(["-A", "-o", "pgid=,stat="])
+            .output()
+            .unwrap();
+        !String::from_utf8_lossy(&ps.stdout).lines().any(|line| {
+            let mut cols = line.split_whitespace();
+            cols.next() == Some(pid.trim()) && !cols.next().unwrap_or("").starts_with('Z')
+        })
+    })
+    .await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn a_stale_process_record_cannot_kill_an_unrelated_group() {
+    use std::os::unix::process::CommandExt;
+    let (root, config) = dirs("stale-pid");
+    let mut unrelated = std::process::Command::new("sleep")
+        .arg("60")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let pid = unrelated.id();
+    let dir = config.dir.join("as_stale");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("pgid"), format!("{pid}:wrong-start-time")).unwrap();
+    let _driver = AgentDriver::new(config, script("true")).unwrap();
+    assert!(
+        unrelated.try_wait().unwrap().is_none(),
+        "a recycled pid was killed"
+    );
+    unrelated.kill().unwrap();
+    unrelated.wait().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn requested_isolation_never_falls_back_to_unconfined() {
+    let mut request = start("as_closed", "fake");
+    request.policy.sandboxed = true;
+    assert!(Unconfined.prepare(&request, &mut vec![]).is_err());
+}
+
+/// A sandbox that offers a tier and records what it was asked to prepare.
+struct Tiered(Isolation, Arc<Mutex<usize>>);
+
+impl Sandbox for Tiered {
+    fn name(&self) -> &'static str {
+        "tiered"
+    }
+    fn tier(&self) -> Isolation {
+        self.0
+    }
+    fn prepare(&self, _: &AgentStart, _: &mut Vec<(String, String)>) -> Result<(), String> {
+        *self.1.lock().unwrap() += 1;
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_session_needing_more_isolation_than_the_runner_offers_is_refused_before_anything_starts()
+{
+    let (root, config) = dirs("tier");
+    let prepared = Arc::new(Mutex::new(0));
+    let driver = Arc::new(
+        AgentDriver::new(config, script("true"))
+            .unwrap()
+            .with_sandbox(Arc::new(Tiered(Isolation::Process, prepared.clone()))),
+    );
+    let mut vm = start("as_vm", "fake");
+    vm.policy.min_isolation = Some(Isolation::Microvm);
+    let why = driver.start(vm).unwrap_err();
+    assert_eq!(why.code, ErrorCode::InvalidArgs);
+    assert!(
+        why.message.contains("microvm") && why.message.contains("process"),
+        "{why:?}"
+    );
+    assert_eq!(*prepared.lock().unwrap(), 0, "the sandbox was never asked");
+    assert!(driver.info().commands.contains(&"agent.start".to_owned()));
+    // Control: the tier it does offer starts.
+    let mut ok = start("as_ok", "fake");
+    ok.policy.min_isolation = Some(Isolation::Process);
+    assert!(driver.start(ok).is_ok());
+    // A weaker requirement than the offer starts too.
+    let mut weak = start("as_weak", "fake");
+    weak.policy.min_isolation = Some(Isolation::None);
+    assert!(driver.start(weak).is_ok());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn an_unconfined_runner_refuses_every_isolation_field_and_takes_a_plain_policy() {
+    let (root, config) = dirs("unconfined-fields");
+    let driver = Arc::new(AgentDriver::new(config, script("true")).unwrap());
+    let mut min = start("as_min", "fake");
+    min.policy.min_isolation = Some(Isolation::Process);
+    assert!(driver.start(min).is_err());
+    for set in [
+        (|p: &mut ainkrad_proto::runner::Policy| p.wall_secs = Some(5))
+            as fn(&mut ainkrad_proto::runner::Policy),
+        |p| p.memory_mb = Some(128),
+        |p| p.disk_mb = Some(128),
+        |p| p.vcpus = Some(1),
+        |p| p.egress = Some(Default::default()),
+    ] {
+        let mut request = start("as_fields", "fake");
+        set(&mut request.policy);
+        assert!(Unconfined.prepare(&request, &mut vec![]).is_err());
+    }
+    assert!(
+        Unconfined
+            .prepare(&start("as_plain", "fake"), &mut vec![])
+            .is_ok()
+    );
+    // A policy out of bounds is refused by the runner too, whatever the Core said.
+    let mut wild = start("as_wild", "fake");
+    wild.policy.vcpus = Some(0);
+    assert_eq!(driver.start(wild).unwrap_err().code, ErrorCode::InvalidArgs);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A sandbox whose tier the test sets: 0 none, 1 process.
+struct Switch(Arc<std::sync::atomic::AtomicU8>);
+
+impl Sandbox for Switch {
+    fn name(&self) -> &'static str {
+        "switch"
+    }
+    fn tier(&self) -> Isolation {
+        match self.0.load(std::sync::atomic::Ordering::SeqCst) {
+            0 => Isolation::None,
+            _ => Isolation::Process,
+        }
+    }
+    fn prepare(&self, _: &AgentStart, _: &mut Vec<(String, String)>) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn the_runner_advertises_exactly_what_its_sandbox_gives_now() {
+    use ainkrad_proto::v2::Kvm;
+    let (root, config) = dirs("advertise");
+    let flag = Arc::new(std::sync::atomic::AtomicU8::new(1));
+    let d = AgentDriver::new(config, script("true"))
+        .unwrap()
+        .with_sandbox(Arc::new(Switch(flag.clone())));
+    assert_eq!(d.isolation().tiers, ["process"]);
+    flag.store(0, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(d.isolation().tiers, ["none"]);
+    assert_eq!(d.isolation().kvm, Kvm::NotApplicable);
+    // The default sandbox confines nothing, so it offers nothing more than `none`.
+    let (root2, config) = dirs("advertise-default");
+    let d = AgentDriver::new(config, script("true")).unwrap();
+    assert_eq!(d.isolation().tiers, ["none"]);
+    assert!(!d.isolation().meets(Isolation::Process));
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(root2);
+}
+
+#[tokio::test]
+async fn a_running_session_is_ended_loudly_when_its_tier_goes_away_and_others_are_left() {
+    let (root, config) = dirs("tier-loss");
+    let flag = Arc::new(std::sync::atomic::AtomicU8::new(1));
+    let d = Arc::new(
+        AgentDriver::new(config, script("echo up; sleep 30"))
+            .unwrap()
+            .with_sandbox(Arc::new(Switch(flag.clone()))),
+    );
+    let mut needing = start("as_needs", "fake");
+    needing.policy.min_isolation = Some(Isolation::Process);
+    d.start(needing).unwrap();
+    d.start(start("as_plain", "fake")).unwrap();
+    until("both up", || {
+        d.states().values().all(|s| *s == AgentState::Running)
+    })
+    .await;
+    // The tier holds: a check ends nothing.
+    assert_eq!(d.check_isolation(), 0);
+    flag.store(0, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(d.check_isolation(), 1);
+    until("the end", || d.states()["as_needs"] == AgentState::Ended).await;
+    let (entries, _) = drain_from(&d, "as_needs", 0).await;
+    let last = entries.last().unwrap();
+    assert_eq!(last.body["type"], "ended");
+    let reason = last.body["outcome"]["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("no longer available") && reason.contains("process"),
+        "{reason}"
+    );
+    assert_eq!(last.body["outcome"]["fingerprint"], "isolation");
+    // A session with no requirement runs on, and a second check finds nothing more to end.
+    assert_eq!(d.states()["as_plain"], AgentState::Running);
+    assert_eq!(d.check_isolation(), 0);
+    d.stop(AgentStop {
+        session: "as_plain".into(),
+        kill: true,
+    })
+    .unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn a_session_that_needs_the_tier_only_through_a_field_or_the_legacy_flag_ends_when_it_goes() {
+    let (root, config) = dirs("tier-loss-implied");
+    let flag = Arc::new(std::sync::atomic::AtomicU8::new(1));
+    let d = Arc::new(
+        AgentDriver::new(
+            AgentConfig {
+                capacity: 8,
+                ..config
+            },
+            script("echo up; sleep 30"),
+        )
+        .unwrap()
+        .with_sandbox(Arc::new(Switch(flag.clone()))),
+    );
+    let mut wall = start("as_wall", "fake");
+    wall.policy.wall_secs = Some(600);
+    let mut legacy = start("as_legacy", "fake");
+    legacy.policy.sandboxed = true;
+    let mut mode = start("as_mode", "fake");
+    mode.policy.mode = ainkrad_proto::runner::PermissionMode::Sandboxed;
+    for request in [wall, legacy, mode, start("as_plain", "fake")] {
+        d.start(request).unwrap();
+    }
+    until("all up", || {
+        d.states().values().all(|s| *s == AgentState::Running)
+    })
+    .await;
+    flag.store(0, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(d.check_isolation(), 3);
+    for session in ["as_wall", "as_legacy", "as_mode"] {
+        until("the end", || d.states()[session] == AgentState::Ended).await;
+    }
+    assert_eq!(d.states()["as_plain"], AgentState::Running);
+    // The runner and the Core derive the requirement from one function.
+    use ainkrad_proto::runner::Policy;
+    assert_eq!(Policy::default().required_tier(), None);
+    d.stop(AgentStop {
+        session: "as_plain".into(),
+        kill: true,
+    })
+    .unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// KAN-429: the runner applies the variable allowlist itself. An account secret in a variable
+/// that is not its harness's own, or any variable that redirects traffic beside one, fails the
+/// session before the harness starts; the allowed variable runs it.
+#[tokio::test]
+async fn the_runner_refuses_an_account_secret_in_the_wrong_variable() {
+    let redeem: Redeem = Arc::new(|lease: String| {
+        Box::pin(async move {
+            let name = match lease.as_str() {
+                "l_acct" => "acct.anthropic.main",
+                "l_openai" => "acct.openai.main",
+                "l_google" => "acct.google.main",
+                "l_git" => "git.token",
+                _ => return Err("no such lease".to_owned()),
+            };
+            Ok(secrets::Leased {
+                name: name.to_owned(),
+                delivery: "env".to_owned(),
+                value: Zeroizing::new(format!("v-{name}")),
+            })
+        })
+    });
+    let grant = |lease: &str, var: &str| SecretGrant {
+        lease: lease.to_owned(),
+        var: var.to_owned(),
+    };
+    let cases: [(&str, Vec<SecretGrant>, bool); 14] = [
+        ("claude", vec![grant("l_acct", "ANTHROPIC_API_KEY")], true),
+        ("claude", vec![grant("l_acct", "HTTPS_PROXY")], false),
+        ("claude", vec![grant("l_acct", "OPENAI_API_KEY")], false),
+        ("fake", vec![grant("l_acct", "ANTHROPIC_API_KEY")], false),
+        (
+            "claude",
+            vec![
+                grant("l_acct", "ANTHROPIC_API_KEY"),
+                grant("l_git", "ANTHROPIC_BASE_URL"),
+            ],
+            false,
+        ),
+        // Control: no account secret, the old rule.
+        ("claude", vec![grant("l_git", "HTTPS_PROXY")], true),
+        // The provider: each account secret runs only its own harness, even in that harness's
+        // own variable.
+        ("codex", vec![grant("l_openai", "OPENAI_API_KEY")], true),
+        ("agy", vec![grant("l_google", "GEMINI_API_KEY")], true),
+        ("codex", vec![grant("l_acct", "OPENAI_API_KEY")], false),
+        ("agy", vec![grant("l_acct", "GEMINI_API_KEY")], false),
+        (
+            "claude",
+            vec![grant("l_openai", "ANTHROPIC_API_KEY")],
+            false,
+        ),
+        ("agy", vec![grant("l_openai", "GEMINI_API_KEY")], false),
+        (
+            "claude",
+            vec![grant("l_google", "ANTHROPIC_API_KEY")],
+            false,
+        ),
+        ("codex", vec![grant("l_google", "OPENAI_API_KEY")], false),
+    ];
+    for (n, (harness, grants, runs)) in cases.into_iter().enumerate() {
+        let (_root, config) = dirs(&format!("acct-var-{n}"));
+        let d = Arc::new(
+            AgentDriver::new(config, script("echo ran"))
+                .unwrap()
+                .with_redeem(redeem.clone()),
+        );
+        let mut req = start("as_var", harness);
+        req.secrets = grants;
+        d.start(req).unwrap();
+        let (entries, ev) = drain(&d, "as_var").await;
+        let text = serde_json::to_string(&entries).unwrap();
+        assert_eq!(
+            text.contains(r#""text":"ran""#),
+            runs,
+            "case {n}: {text} {:?}",
+            ev.outcome
+        );
+        if !runs {
+            assert!(
+                matches!(&ev.outcome, Some(Outcome::Failed { reason, .. })
+                    if reason.contains("authentication variables")
+                        || reason.contains("redirect")
+                        || reason.contains("its own provider")),
+                "case {n}: {:?}",
+                ev.outcome
+            );
+        }
+    }
+}
+
+/// The proto table the Core and the runner share is the harness crate's own list.
+#[test]
+fn the_shared_account_variable_table_is_the_harnesss_auth_env() {
+    for harness in ["claude", "codex", "agy", "opencode", "fake", ""] {
+        assert_eq!(
+            ainkrad_proto::v2::account_vars(harness),
+            ainkrad_harness::auth_env(harness),
+            "{harness}"
+        );
+    }
+}
+
+/// KAN-433: a session holding a provider-account secret (an `acct.` name) is marked in its run
+/// environment, so the filtered proxy drops forge hosts; one holding any other secret is not.
+#[tokio::test]
+async fn an_account_secret_marks_its_session_and_no_other_secret_does() {
+    let redeem: Redeem = Arc::new(|lease: String| {
+        Box::pin(async move {
+            let name = match lease.as_str() {
+                "l_acct" => "acct.anthropic.main",
+                "l_git" => "git.token",
+                _ => return Err("no such lease".to_owned()),
+            };
+            Ok(secrets::Leased {
+                name: name.to_owned(),
+                delivery: "env".to_owned(),
+                value: Zeroizing::new(format!("v-{name}")),
+            })
+        })
+    });
+    for (lease, want) in [("l_acct", "1"), ("l_git", "none")] {
+        let (_root, config) = dirs(&format!("acct-{lease}"));
+        let s = script("echo \"mark=${AINKRAD_ACCOUNT_SESSION:-none}\"");
+        let d = Arc::new(
+            AgentDriver::new(config, s)
+                .unwrap()
+                .with_redeem(redeem.clone()),
+        );
+        let mut req = start("as_acct", "claude");
+        // An ordinary secret may not take the harness's authentication variable.
+        let var = if lease == "l_acct" {
+            "ANTHROPIC_API_KEY"
+        } else {
+            "GH_TOKEN"
+        };
+        req.secrets = vec![SecretGrant {
+            lease: lease.to_owned(),
+            var: var.to_owned(),
+        }];
+        d.start(req).unwrap();
+        let (entries, _) = drain(&d, "as_acct").await;
+        let text = serde_json::to_string(&entries).unwrap();
+        assert!(text.contains(&format!("mark={want}")), "{lease}: {text}");
+    }
+}
+
+/// KAN-435 G3: a session with a gateway grant gets the gateway slot (a socket and a forwarder,
+/// no key), the gateway closes before the harness is signalled on a stop, and a grant that cannot
+/// be served fails the session without naming the lease or the key.
+#[tokio::test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "OWNER: requires AINKRAD_TEST_RAMDIR on a verified RAM disk"
+)]
+async fn a_gateway_grant_gives_the_harness_a_socket_not_a_key_and_a_stop_closes_it() {
+    use ainkrad_proto::v2::{Ceiling, GatewayAuth, GatewayGrant, ModelPrice, Rate, Upstream, Wire};
+    let key = format!("sk-ant-{}", "k9".repeat(12));
+    let value = key.clone();
+    let redeem: secrets::Redeem = Arc::new(move |lease: String| {
+        let value = value.clone();
+        Box::pin(async move {
+            if lease != "l_gw" {
+                return Err("no such lease".to_owned());
+            }
+            Ok(secrets::Leased {
+                name: "acct.anthropic.1".to_owned(),
+                delivery: "gateway".to_owned(),
+                value: Zeroizing::new(value),
+            })
+        })
+    });
+    let grant = |lease: &str, host: &str| {
+        Box::new(GatewayGrant {
+            lease: lease.to_owned(),
+            account: 1,
+            provider: "anthropic".to_owned(),
+            user_key: None,
+            upstream: Upstream {
+                host: host.to_owned(),
+                base_path: String::new(),
+                wire: Wire::AnthropicMessages,
+                auth: GatewayAuth::XApiKey,
+            },
+            models: vec!["m".to_owned()],
+            prices: vec![ModelPrice {
+                model: "m".to_owned(),
+                input: 1,
+                output: 1,
+                cache_read: 1,
+                cache_write: 1,
+            }],
+            ceiling: Ceiling {
+                tokens: 1,
+                usd_micros: 1,
+            },
+            rate: Rate {
+                per_minute: 1,
+                concurrent: 1,
+            },
+        })
+    };
+    let (root, config) = dirs("gateway");
+    let _ = &root;
+    // The harness reports whether the slot's socket is there, and what the slot names.
+    let s = script(
+        "echo \"sock=$([ -S \"$AINKRAD_SANDBOX_GW_SOCK\" ] && echo yes || echo no)\"; \
+         echo \"slot=$AINKRAD_SANDBOX_GW_SOCK $AINKRAD_SANDBOX_GW_FWD $AINKRAD_SANDBOX_GW_PORT\"; \
+         sleep 30",
+    );
+    let d = Arc::new(
+        AgentDriver::new(config.clone(), s)
+            .unwrap()
+            .with_redeem(redeem)
+            .with_sandbox(Arc::new(GatewayCapable)),
+    );
+    let mut req = start("as_gw", "fake");
+    req.gateway = Some(grant("l_gw", "api.anthropic.com"));
+    d.start(req).unwrap();
+    let sock = config.dir.join("as_gw").join("gateway.sock");
+    let mut seen = Vec::new();
+    while seen.len() < 3 {
+        let after = seen.last().map_or(0, |e: &TranscriptEntry| e.seq);
+        seen.extend(
+            d.read(&AgentRead {
+                gw_after: 0,
+                session: "as_gw".into(),
+                after,
+                wait_ms: Some(2000),
+            })
+            .await
+            .unwrap()
+            .entries,
+        );
+    }
+    let text = serde_json::to_string(&seen).unwrap();
+    assert!(text.contains("sock=yes"), "{text}");
+    assert!(
+        text.contains(&format!("slot={} ", sock.display())),
+        "{text}"
+    );
+    assert!(!text.contains(&key), "the key reached the transcript");
+    d.stop(AgentStop {
+        session: "as_gw".into(),
+        kill: false,
+    })
+    .unwrap();
+    // The gateway is closed by the stop itself, before the harness has been signalled or ended.
+    assert!(!sock.exists(), "the gateway socket outlived the stop");
+    let (_, ev) = drain(&d, "as_gw").await;
+    assert_ne!(ev.state, AgentState::Running);
+
+    // A lease the Core did not mint, and a key for another host: failed, no value in the reason.
+    for (name, lease, host) in [
+        ("as_bad", "l_other", "api.anthropic.com"),
+        ("as_host", "l_gw", "api.openai.com"),
+    ] {
+        let mut req = start(name, "fake");
+        req.gateway = Some(grant(lease, host));
+        d.start(req).unwrap();
+        let (_, ev) = drain(&d, name).await;
+        let why = format!("{:?}", ev.outcome);
+        assert!(
+            matches!(&ev.outcome, Some(Outcome::Failed { .. })),
+            "{name}: {why}"
+        );
+        assert!(!why.contains(&key) && !why.contains(lease), "{why}");
+    }
+}

@@ -1,221 +1,116 @@
-//! Every tunable (E15.17, decision #52): name, unit, default, bounds, scopes, meaning. A new
-//! one is appended at the end: `Key` indexes `REGISTRY` by position.
+//! Every platform tunable (E15.17, decision #52): name, unit, default, bounds, scopes, meaning. A
+//! new one is appended at the end: `Key` indexes `REGISTRY` by position.
 
 use super::*;
 
 registry! {
-    RunTokenCap "run.token_cap" Tokens 2_000_000, 1_000, 100_000_000, SCP,
-        "Tokens a run may use when no budget caps it lower; a run is never uncapped.";
-    StuckAfterSecs "run.stuck_after_secs" Seconds STUCK_AFTER_SECS, 60, 7 * DAY, SCP,
-        "How long an issue sits with no wake path, or a wake or queued run waits, before it \
-         is reported stuck.";
-    WakeMaxAttempts "wake.max_attempts" Count MAX_WAKE_ATTEMPTS, 1, 20, SCP,
-        "Attempts a wake gets before a failure stops retrying and escalates.";
-    RetryBackoffMaxSecs "wake.retry_backoff_max_secs" Seconds MAX_RETRY_BACKOFF_SECS, 30, DAY,
-        SCP, "Longest wait before a retry (30 s, doubling per attempt, up to this).";
-    LoopBreakerThreshold "breaker.loop_threshold" Count LOOP_BREAKER_THRESHOLD as i64, 2, 20,
-        SCP, "Runs in a row on one agent and issue ending with the same failure before the \
-              loop breaker stops retrying and escalates.";
-    AgentBreakerTrips "breaker.agent_trips" Count AGENT_BREAKER_TRIPS, 1, 50, SC,
-        "Loop-breaker trips of one agent within the window that pause it.";
-    AgentBreakerWindowSecs "breaker.agent_window_secs" Seconds AGENT_BREAKER_WINDOW_SECS, 60,
-        7 * DAY, SC, "The window agent trips are counted over.";
-    LeaseTtlSecs "lease.ttl_secs" Seconds LEASE_TTL_SECS, 15, 3600, SR,
-        "How long a run's lease lasts without a heartbeat; the runner renews every third.";
-    KnowledgeBudgetBytes "knowledge.budget_bytes" Bytes KNOWLEDGE_BUDGET_BYTES as i64, 0,
-        256 * 1024, SCP, "The most of its project's knowledge a run is given.";
-    SkillBudgetBytes "skills.budget_bytes" Bytes SKILL_BUDGET_BYTES as i64, 0, 512 * 1024, SCP,
-        "The most of its skills' bodies a run is given.";
-    VelocityWindow "sprint.velocity_window" Count 3, 1, 20, SCP,
-        "Closed sprints a sprint review compares its velocity against.";
-    DeadlineSprintCommit "approval.deadline.sprint_commit" Seconds 0, 0, YEAR, SC,
-        "How long a sprint commit approval waits before it expires; 0 waits until decided.";
-    DeadlinePrMerge "approval.deadline.pr_merge" Seconds 0, 0, YEAR, SC,
-        "How long a PR merge approval waits before it expires; 0 waits until decided.";
-    DeadlineBudgetOverrun "approval.deadline.budget_overrun" Seconds 0, 0, YEAR, SC,
-        "How long a budget overrun approval waits before it expires; 0 waits until decided.";
-    DeadlineHireAgent "approval.deadline.hire_agent" Seconds 0, 0, YEAR, SC,
-        "How long a hire approval waits before it expires; 0 waits until decided.";
-    DeadlinePermissionEscalation "approval.deadline.permission_escalation" Seconds 900, 1,
-        7 * DAY, SCP, "How long an escalated tool call waits for a reviewer before the runner \
-                       denies it.";
-    DeadlinePlanApproval "approval.deadline.plan_approval" Seconds 0, 0, YEAR, SC,
-        "How long a requirement's plan approval waits before it expires; 0 waits until decided.";
-    DeadlineWorkflowPush "approval.deadline.workflow_push" Seconds 0, 0, YEAR, SC,
-        "How long a workflow push approval waits for a human to push before it expires; 0 waits \
-         until decided.";
-    BudgetWarnPercent "budget.warn_percent" Percent 80, 1, 100, SC,
-        "A new budget's warning threshold when none is given.";
-    AccountWarnPercent "account.warn_percent" Percent 80, 1, 100, SA,
-        "Share of an account's limit (or of a harness-reported window) at which the admin is \
-         warned; a new limit's default.";
-    DropThreshold "account.drop_threshold" Count 3, 1, 100, SA,
-        "Provider drops within the window that make an account unhealthy.";
-    DropWindowSecs "account.drop_window_secs" Seconds 600, 60, DAY, SA,
-        "The window provider drops are counted over.";
-    UnhealthySecs "account.unhealthy_secs" Seconds 600, 60, 7 * DAY, SA,
-        "How long an account that dropped too often stays unhealthy.";
-    RefusalCoolOffSecs "account.refusal_cooloff_secs" Seconds 900, 60, DAY, SA,
-        "How long an account a turn found rate-limited or out of quota is left alone, when \
-         its harness gave no reset.";
-    RefusedSecs "account.refused_secs" Seconds 3600, 60, 7 * DAY, SA,
-        "How long an account its harness reports at its plan limit stays limited, when the \
-         harness gave no reset.";
-    MaxResumes "runner.max_resumes" Count 2, 0, 10, SR,
-        "Resumes of a session the provider dropped before the run gives up on its model.";
-    ResumeBackoffMs "runner.resume_backoff_ms" Milliseconds 2000, 10, 60_000, SR,
-        "The first wait before a resume, doubling per drop.";
-    ResumeBackoffMaxMs "runner.resume_backoff_max_ms" Milliseconds 30_000, 10, 600_000, SR,
-        "The longest wait before a resume.";
-    RoutingSmallMaxPoints "routing.small_max_points" Count 2, 0, 100, SCP,
-        "An issue with at most this many points runs on its agent's small tier, unless a \
-         routing rule names its tier.";
-    RoutingLargeMinPoints "routing.large_min_points" Count 8, 1, 1000, SCP,
-        "An issue with at least this many points runs on its agent's large tier, unless a \
-         routing rule names its tier.";
-    ResumeUnfinished "run.resume_unfinished" Count 0, 0, 1, SCP,
-        "1 lets a new run of an issue resume its agent's previous session when that run ended \
-         unfinished (failed, timed out or lost); 0 starts every run in a fresh session.";
-    FirstTokenBudgetSecs "latency.first_token_budget_secs" Seconds 10, 1, 3600, SCP,
-        "Longest a run may take from its wake to its model's first answer before a \
-         run.first_token_slow warning.";
-    WarmMax "runner.warm_max" Count 2, 0, 16, SR,
-        "Idle harness servers (OpenCode serve, Codex app-server) a runner keeps for its next \
-         runs, each run a new session on one; 0 starts a new process every run.";
-    DispatchPollMs "dispatch.fallback_poll_ms" Milliseconds 5000, 100, 60_000, SO,
-        "How often a waiting runner looks for work besides being told of new wakes (wakes \
-         that came due, or were written by another process); read at start.";
     SchedulerTickSecs "scheduler.tick_secs" Seconds 10, 1, 300, SO,
-        "Time between scheduler ticks (timers, lease reaping, approval expiry); read at start.";
+        "Time between scheduler ticks; read at start.";
     PushIntervalSecs "push.interval_secs" Seconds 5, 1, 300, SO,
         "Time between push passes to the app's devices; read at start.";
-    ForgePollSecs "forge.poll_secs" Seconds 60, 10, 3600, SO,
-        "Time between forge and Linear polls; read at start.";
     ApiRequestBurst "api.request_burst" Count 120, 10, 10_000, SO,
         "Client API requests one device may send at once; read at start.";
     ApiRequestsPerMin "api.requests_per_min" PerMinute 1200, 60, 60_000, SO,
         "Client API requests one device may send per minute, sustained; read at start.";
-    ApiAuthFailureBurst "api.auth_failure_burst" Count 10, 3, 100, SO,
-        "Failed authentications one address may make before it is refused; read at start.";
-    ApiAuthFailuresPerMin "api.auth_failures_per_min" PerMinute 10, 1, 60, SO,
-        "Failed authentications one address regains per minute; read at start.";
-    StallAfterSecs "run.stall_after_secs" Seconds STALL_AFTER_SECS, 60, 7 * DAY, SCP,
-        "How long a running run may go without progress (a tool call, a file change, a new \
-         message, more tokens) before its runner stops it as stalled and its issue escalates.";
-    RepairBudget "repair.budget" Count 3, 0, 50, SCP,
-        "Automatic repairs one stuck issue gets within the window before it goes to the admin \
-         with its repair history; 0 sends it at once.";
-    RepairWindowSecs "repair.window_secs" Seconds DAY, 3600, 30 * DAY, SCP,
-        "The window an issue's repairs are counted over.";
-    IdleEscalateSecs "issue.idle_escalate_secs" Seconds DAY, 0, 30 * DAY, SCP,
-        "How long an open issue may go untouched before it is escalated up the chain from \
-         whoever it waits on; 0 never escalates for idleness.";
-    DiskCapBytes "runner.disk_cap_bytes" Bytes 50_000_000_000, 5_000_000_000,
-        1_000_000_000_000_000, SR,
-        "The most a runner's work root may hold: worktrees, shared build caches and repo \
-         mirrors; sent when it connects.";
-    DiskEvictPercent "runner.disk_evict_percent" Percent 90, 50, 100, SR,
-        "Share of the disk cap past which a runner evicts idle worktrees, oldest first, then \
-         build caches; active worktrees never.";
-    WorkspaceIdleSecs "workspace.idle_secs" Seconds DAY, 3600, 30 * DAY, SR,
-        "How long a worktree may sit with no run before its runner removes it (its work kept \
-         on its branch), recreated on demand.";
-    WarmIdleSecs "runner.warm_idle_secs" Seconds 900, 60, DAY, SR,
-        "How long a warm harness server may sit idle before its runner stops it.";
-    ArtifactMaxFileBytes "artifact.max_file_bytes" Bytes 10_000_000, 1_000, 12_000_000, SC,
-        "The largest file an agent may publish as an artifact; a file read from a worktree \
-         travels in one runner message, which caps it at 12 MB.";
-    ArtifactCompanyQuotaBytes "artifact.company_quota_bytes" Bytes 2_000_000_000, 1_000_000,
-        1_000_000_000_000, SC,
-        "Artifact storage a company may use (each distinct file once); a publish past it is \
-         refused, with the reason on the run.";
-    ProfileBudgetBytes "profile.budget_bytes" Bytes 4096, 0, 64 * 1024, SCP,
-        "The most of its project's profile a run is given in its instructions; what does not \
-         fit is named, and the agent reads it with get_context.";
-    McpRoleScopedTools "mcp.role_scoped_tools" Count 1, 0, 1, SCP,
-        "1 gives each run only its role's MCP tools (plus search_tools and describe_tool to \
-         find the rest), so fewer definitions fill its context; 0 lists every tool. Calls are \
-         permission-checked either way.";
-    CliMaxBatchOps "cli.max_batch_ops" Count 100, 1, 1000, SCP,
-        "Operations one `citadel batch` may run, in order; a longer batch is refused whole.";
-    IssueAllowSecs "approval.issue_allow_secs" Seconds DAY, 60, 30 * DAY, SCP,
-        "How long \"allow for this issue\" on a permission escalation lets the same call through \
-         on the issue's runs without asking.";
-    IssueTokenCap "issue.token_cap" Tokens 0, 0, 1_000_000_000, SCP,
-        "Tokens all the runs of one issue may use together; a run is capped at what is left of \
-         it (and at run.token_cap). 0: no cap per issue.";
-    ToolOutputBytes "run.tool_output_bytes" Bytes TOOL_OUTPUT_BYTES, 256, 64 * 1024, SCP,
-        "The most of a tool call's output its transcript keeps (its head and its tail, with the \
-         full size); the run's runner cuts it before it is sent.";
-    AvatarMaxBytes "avatar.max_bytes" Bytes 512 * 1024, 1024, 8 * 1024 * 1024, SC,
-        "The largest image the admin may upload as an agent's avatar (PNG, JPEG or WebP), shown \
-         instead of its figure.";
-    RunnerLogTailMaxLines "runner.log_tail_max_lines" Count 200, 1, 2000, SO,
-        "The most lines of a runner's own log the app may ask for at once; read from the \
-         runner while it is connected, redacted.";
-    RunnerLogTailTimeoutSecs "runner.log_tail_timeout_secs" Seconds 10, 1, 120, SO,
-        "How long a request for a runner's log waits for the runner to answer.";
-    DropDisplayWindowSecs "account.drop_display_window_secs" Seconds DAY, 3600, 30 * DAY, SA,
-        "The window an account's provider drops are counted over for the app (not the window \
-         that makes it unhealthy, account.drop_window_secs).";
-    FallbackOnModelUnavailable "fallback.on_model_unavailable" Count 1, 0, 1, SCP,
-        "1 moves a run to the next entry of its agent's fallback chain when its model is \
-         unavailable; 0 fails the run instead.";
-    FallbackOnRateLimited "fallback.on_rate_limited" Count 1, 0, 1, SCP,
-        "1 moves a run to the next entry of its agent's fallback chain when it is rate-limited; \
-         0 fails the run instead.";
-    FallbackOnQuota "fallback.on_quota" Count 1, 0, 1, SCP,
-        "1 moves a run to the next entry of its agent's fallback chain when its account is out \
-         of quota; 0 fails the run instead.";
-    FallbackOnUnhealthy "fallback.on_unhealthy" Count 1, 0, 1, SCP,
-        "1 moves a run to the next entry of its agent's fallback chain when its account dropped \
-         too often; 0 fails the run instead.";
-    AccountAtLimit "account.at_limit" Count 0, 0, 1, SCA,
-        "When no account a chain entry may use is active (limited, unhealthy, disabled): 0 \
-         starts the run on the next entry of the agent's chain; 1 waits for one of them.";
-    AccountPickStrategy "account.pick_strategy" Count 0, 0, 2, SC,
-        "Which account a run gets: 0 the least used in its limit windows, then the least \
-         recently used; 1 the least recently used (round robin); 2 the first by id until it is \
-         limited (fill first).";
-    TranscriptRetentionSecs "transcript.retention_secs" Seconds 0, 0, 10 * YEAR, SC,
-        "How long a run's transcript is kept after the run ends, then pruned (the run stays); \
-         0 keeps every transcript.";
-    FlowWindowSecs "flow.window_secs" Seconds 30 * DAY, DAY, YEAR, SCP,
-        "The window a project's throughput and mean cycle and lead times are measured over when \
-         the client names none.";
-    AllowUntestedNewer "harness.allow_untested_newer" Count 1, 0, 1, SR,
-        "1 lets a runner drive a harness version newer than its adapter was tested against (not \
-         older than its minimum, not known bad), noted on the runner's harness status; 0 refuses it, making the \
-         runner unhealthy for that harness. Read when the runner connects.";
-    ClaudeMaxVersion "harness.claude.max_version" Version 0, 0, MAX_VERSION, SR,
-        "The newest Claude Code version a runner may drive (major·10¹² + minor·10⁶ + patch: \
-         2.3.0 is 2000003000000); 0 caps nothing. Read when the runner connects.";
-    CodexMaxVersion "harness.codex.max_version" Version 0, 0, MAX_VERSION, SR,
-        "The newest Codex version a runner may drive (major·10¹² + minor·10⁶ + patch: 0.160.0 \
-         is 160000000); 0 caps nothing. Read when the runner connects.";
-    OpencodeMaxVersion "harness.opencode.max_version" Version 0, 0, MAX_VERSION, SR,
-        "The newest OpenCode version a runner may drive (major·10¹² + minor·10⁶ + patch: \
-         1.20.0 is 1000020000000); 0 caps nothing. Read when the runner connects.";
-    AgyMaxVersion "harness.agy.max_version" Version 0, 0, MAX_VERSION, SR,
-        "The newest agy version a runner may drive (major·10¹² + minor·10⁶ + patch: 1.5.0 is \
-         1000005000000); 0 caps nothing. Read when the runner connects.";
-    SkillMaxBytes "skills.max_bytes" Bytes 64 * 1024, 1, 512 * 1024, SC,
-        "The largest skill body the admin may publish (a new version of a company's skill).";
-    MaxNoActionRewakes "run.max_no_action_rewakes" Count 1, 0, 10, SCP,
-        "Times an agent is woken again, with a nudge, after a run that ended without acting on \
-         an issue still waiting on it (no state-changing Citadel call); the next such run \
-         escalates the issue up the chain. Reset when the issue changes.";
-    CostDailyWarn "cost.daily_warn_usd_micros" Count 0, 0, 1_000_000_000_000, SC,
-        "A company's spend in a day, in millionths of a US dollar (1000000 is $1), at which the \
-         app warns; 0 sets no warning. Kept for the app: the server does not act on it.";
-    AgentWipMax "agent.wip_max" Count 0, 0, 100, SCP,
-        "The most issues an agent should work on at once; 0 sets no limit. Kept for the app: \
-         the server does not enforce it.";
-    RunCacheWeightDivisor "run.cache_weight_divisor" Count 10, 1, 100, SCP,
-        "How much a run's cache reads and writes count against `run.token_cap`, as a divisor: \
-         10 counts a tenth, so the cap tracks the work a run does rather than the context it \
-         re-reads; 1 counts every token in full. Budgets and the issue cap always count in full.";
-    LeaseGraceSecs "lease.grace_secs" Seconds LEASE_GRACE_SECS, 0, 3600, SR,
-        "How long a run's lease may lapse after its heartbeat stops before the run is lost; a \
-         runner back inside it re-claims its run. 0 loses it at once.";
+    EventsRetentionSecs "events.retention_secs" Seconds 2_592_000, 3_600, 315_360_000, SO,
+        "How long events stay replayable; older ones are trimmed and a client resuming from \
+         before them re-syncs. Read every scheduler tick.";
+    AuthStepUpSecs "auth.step_up_secs" Seconds 300, 60, 900, SO,
+        "How long a step-up (user verification on the device) keeps its session elevated for \
+         destructive routes; read at each step-up.";
+    AuthWebSessionSecs "auth.web_session_secs" Seconds 28_800, 3_600, 86_400, SO,
+        "How long a web session from a passkey sign-in lives, absolute (never extended); read at \
+         each sign-in.";
+    AuthPasskeyAdmin "auth.passkey_admin" Count 0, 0, 1, SO,
+        "1 lets a passkey (a browser, E1-08) hold the admin scope, 0 (the default) refuses it at \
+         pairing, approval and a scope change: a synced passkey is only as strong as its Apple or \
+         Google account (threat model T-PK-3). Devices that hold it already keep it. Read at \
+         each of those.";
+    SecretsMode "secrets.mode" Count 0, 0, 2, SO,
+        "The secrets broker (E2-07) and gate G-SEC: 0 (the default) is off, refusing every store, \
+         rotation, lease and redemption; 1 takes throwaway credentials only, refusing a value \
+         shaped like a real one (a provider key, a GitHub token, a Bearer credential, a PEM block); \
+         2 takes real credentials, and is set only once the external security review (G-SEC) has \
+         closed. Listing and deleting always work. Read at each use.";
+    SecretsMaxBytes "secrets.max_bytes" Bytes 8_192, 1, 65_536, SO,
+        "The largest secret value the broker stores; read at each store and rotation.";
+    SecretsMaxCount "secrets.max_count" Count 64, 1, 1_024, SO,
+        "How many secrets the broker holds at most; read at each store.";
+    SecretsLeaseSecs "secrets.lease_secs" Seconds 120, 10, 900, SO,
+        "The longest (and the default) lifetime of a secret lease, from grant to redemption; read \
+         at each grant.";
+    SecretsMaxLeases "secrets.max_leases" Count 64, 1, 1_024, SO,
+        "How many unredeemed, unexpired secret leases may exist at once; read at each grant.";
+    TerminalIdleSecs "terminal.idle_secs" Seconds 86_400, 0, 2_592_000, SO,
+        "How long a running terminal with no client attached is kept before the Core closes it \
+         (a client that attaches again restarts the count); 0 never closes one. Read at each \
+         pass of the idle reaper, every 30 seconds.";
+    TerminalMaxPerDevice "terminal.max_per_device" Count 8, 1, 64, SO,
+        "How many terminals (not yet ended) one device may have open; read at each create.";
+    TerminalMaxPerRunner "terminal.max_per_runner" Count 16, 1, 256, SO,
+        "How many terminals (not yet ended) one runner may hold for the Core; read at each \
+         create.";
+    AlarmBackupMaxAgeSecs "alarm.backup_max_age_secs" Seconds 172_800, 3_600, 31_536_000, SO,
+        "The alarm `backup_age` raises when the newest backup in the home is older than this (or \
+         there is none and the database is older); it clears once a newer one lands. Read at \
+         each alarm pass.";
+    AlarmCertMinDays "alarm.cert_min_days" Count 14, 1, 90, SO,
+        "The alarm `cert_expiry` raises when the public listener's certificate has fewer than this \
+         many days left; it clears once it is renewed. Read at each alarm pass.";
+    AlarmDiskMinFreePct "alarm.disk_min_free_pct" Percent 10, 1, 90, SO,
+        "The alarm `disk_free` raises when the filesystem holding the database has less than this \
+         share free; it clears once there is more. Read at each alarm pass.";
+    TerminalReapGraceSecs "terminal.reap_grace_secs" Seconds 300, 1, 86_400, SO,
+        "How long after a `terminal.reap_warning` an idle terminal (see terminal.idle_secs) is \
+         closed, unless a client attaches meanwhile; read at each pass of the idle reaper.";
+    TerminalOrphanGraceSecs "terminal.orphan_grace_secs" Seconds 600, 1, 86_400, SO,
+        "How long a terminal host that a runner holds but the Core has no live record of is \
+         flagged (`terminal.reap_warning`, reason orphan) before the Core closes it; read at \
+         each pass of the reaper.";
+    TerminalScrollbackBytes "terminal.scrollback_bytes" Bytes 8_388_608, 262_144, 67_108_864, SO,
+        "The disk cap of one terminal's scrollback ring on its runner (output only, `0600`); \
+         sent with each create, so it applies to terminals opened after the change.";
+    TerminalScrollbackBudget "terminal.scrollback_budget_bytes" Bytes 268_435_456, 1_048_576, 68_719_476_736, SO,
+        "The scrollback disk budget of one runner across its terminals: past it the runner \
+         frees the least recently used terminals that have no client attached, within about a \
+         second; sent with each create.";
+    AuditAnchorIntervalSecs "audit.anchor_interval_secs" Seconds 3_600, 300, 86_400, SO,
+        "Time between off-box anchors of the audit chain head (E1-10.4), written only when the \
+         backup bucket is configured; read at start.";
+    SecretsProviderAccounts "secrets.provider_accounts" Count 0, 0, 1, SO,
+        "The narrow gate for AI provider accounts: 1 lets a secret named acct.<provider>.<label> \
+         (a known provider) be one real key of that provider's own shape while secrets.mode is \
+         1 (a value with no known shape, such as an OAuth token, mode 1 already takes); git, \
+         forge and Linear secrets stay throwaway-only until gate G-SEC closes. 0 (the default) refuses it like any other. \
+         The check is by redactor shape only, as mode 1 itself: base64, hex or percent-encoded \
+         keys, a key with a letter or digit glued before it, keys split by whitespace, \
+         \\u-escaped JSON and formats with no shape stay accepted, for every name. It never turns \
+         the broker on (the kill switch is secrets.mode 0: leases and redemptions check only the \
+         mode); mode 2 behaves as before, except that an acct.* secret is never delivered by \
+         askpass. Setting it needs admin and a step-up and is audited. Read at each store and \
+         rotation.";
+    SecretsConnections "secrets.connections" Count 0, 0, 1, SO,
+        "The narrow gate for connection credentials (GitHub, Jira, ...): 1 lets C2 admit ONE token \
+         of the kind's own declared shape (the adapter descriptor's token_shapes) as a connection \
+         credential while secrets.mode is 1: the access token only, as a whole, never a refresh \
+         token, another service's shape or several keys in one value. 0 (the default) refuses real \
+         token shapes like any other secret. It lifts nothing for provider accounts, user \
+         providers or other secrets, and secrets.mode 2 is unchanged. Setting it needs admin and \
+         a step-up and is audited.";
+    SchedulerWaitMaxSecs "scheduler.wait_max_secs" Seconds 900, 1, 86_400, SO,
+        "How long a chain session waits in all for an account that is cooling or at its cap \
+         (counted from its first wait) before the run ends with `no account is available`. \
+         Read at each pick, so a change applies to sessions already waiting.";
+    SchedulerQuotaCooldownSecs "scheduler.quota_cooldown_secs" Seconds 21_600, 60, 604_800, SO,
+        "How long an account stays `limited` after a quota failure when nothing says when its \
+         limit resets. A gateway report may name its own reset (kept to 7 days); a harness's \
+         own quota signal is cut to 6 hours whatever this says. Read at each signal.";
+    SchedulerMaxHops "scheduler.max_hops" Count 4, 0, 16, SO,
+        "The most failover hops (new attempts on the next account) one run may take; 0 turns \
+         failover off. Read at each move.";
+    SchedulerFailoversPer10Min "scheduler.failovers_per_10min" Count 10, 1, 1_000, SO,
+        "The failover storm guard: at most this many failover hops one user's runs start in any 10 \
+         minutes (1 at least: failover is turned off with scheduler.max_hops 0); beyond it a run of \
+         that user ends instead of moving, and `alarm.raised` says so once a window. Read at each \
+         move.";
 }

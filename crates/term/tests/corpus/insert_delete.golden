@@ -1,0 +1,11 @@
+6 20
+size 6x20 alt=false cursor=4,0 hidden=false modes=\e>\e[?1l\e[?2004l
+pen \e[m
+-- scrollback 0
+-- screen
+|row1INS-0123456789
+|row223456789
+|
+|
+|row4-0123456789
+|

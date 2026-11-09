@@ -392,6 +392,7 @@ mod disk;
 mod drops;
 mod env;
 mod fallbacks;
+mod gateway;
 mod mcp;
 mod others;
 mod permissions;

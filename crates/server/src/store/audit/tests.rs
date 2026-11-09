@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ainkrad_core::org::AgentId;
-use ainkrad_core::work::UserId;
+use ainkrad_core::ids::UserId;
 
 use super::*;
-use crate::store::org::{create_company, delete_company};
-use crate::store::{MIGRATOR, connect};
+use crate::auth::testing::TestDevice;
+use crate::store::connect;
+use crate::store::migrate::{CORE, CORE_MIGRATIONS, migrate_core, undo};
 
 /// A migrated database in its own temp dir, removed on drop.
 struct Db {
@@ -23,14 +23,32 @@ impl Drop for Db {
 async fn db() -> Db {
     static N: AtomicUsize = AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("citadel-audit-{}-{n}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("core-audit-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let pool = connect(&dir.join("citadel.db")).await.unwrap();
+    let pool = connect(&dir.join("core.db")).await.unwrap();
+    allow(&pool).await;
     Db { pool, dir }
+}
+
+/// The actions these tests record.
+async fn allow(pool: &SqlitePool) {
+    let actions = [
+        "thing.state_changed",
+        "thing.created",
+        "thing.commented",
+        "server.started",
+        "run.started",
+    ];
+    crate::store::kinds::allow(pool, &[], &actions).await;
 }
 
 fn is_raised(e: &Error, message: &str) -> bool {
     matches!(e, Error::Database(d) if d.message() == message)
+}
+
+fn is_chained(e: &Error) -> bool {
+    let text = e.to_string();
+    text.contains("hash-chained") || text.contains("unknown audit action")
 }
 
 fn is_constraint(e: &Error) -> bool {
@@ -42,11 +60,9 @@ fn new_event(action: &str) -> NewAuditEvent {
         actor: AuditActor::User(UserId(1)),
         action: action.to_owned(),
         entity: Some(AuditEntity {
-            kind: "issue".to_owned(),
+            kind: "thing".to_owned(),
             id: 7,
         }),
-        company_id: None,
-        run_id: None,
         details: r#"{"from":"todo","to":"in_progress"}"#.to_owned(),
     }
 }
@@ -61,14 +77,14 @@ async fn count(pool: &SqlitePool) -> i64 {
 #[tokio::test]
 async fn append_and_read_back() {
     let db = db().await;
-    let e = append(&db.pool, &new_event("issue.state_changed"))
+    let e = append_one(&db.pool, &new_event("thing.state_changed"))
         .await
         .unwrap();
     assert_eq!(e.actor, AuditActor::User(UserId(1)));
-    assert_eq!(e.action, "issue.state_changed");
+    assert_eq!(e.action, "thing.state_changed");
     assert_eq!(
         e.entity.as_ref().map(|x| (x.kind.as_str(), x.id)),
-        Some(("issue", 7))
+        Some(("thing", 7))
     );
     assert!(!e.at.is_empty());
 
@@ -77,7 +93,7 @@ async fn append_and_read_back() {
         entity: None,
         ..new_event("server.started")
     };
-    let s = append(&db.pool, &system).await.unwrap();
+    let s = append_one(&db.pool, &system).await.unwrap();
     assert_eq!(s.actor, AuditActor::System);
     assert_eq!(s.entity, None);
 
@@ -90,9 +106,11 @@ async fn append_and_read_back() {
 #[tokio::test]
 async fn update_and_delete_are_rejected() {
     let db = db().await;
-    let e = append(&db.pool, &new_event("issue.created")).await.unwrap();
+    let e = append_one(&db.pool, &new_event("thing.created"))
+        .await
+        .unwrap();
 
-    let err = sqlx::query("UPDATE audit_events SET action = 'issue.deleted' WHERE seq = ?")
+    let err = sqlx::query("UPDATE audit_events SET action = 'thing.deleted' WHERE seq = ?")
         .bind(e.seq.0)
         .execute(&db.pool)
         .await
@@ -121,13 +139,13 @@ async fn update_and_delete_are_rejected() {
 #[tokio::test]
 async fn append_rolls_back_with_its_transaction() {
     let db = db().await;
-    let mut tx = db.pool.begin().await.unwrap();
-    append(&mut *tx, &new_event("issue.created")).await.unwrap();
+    let mut tx = crate::store::begin_write(&db.pool).await.unwrap();
+    append(&mut tx, &new_event("thing.created")).await.unwrap();
     tx.rollback().await.unwrap();
     assert_eq!(count(&db.pool).await, 0);
 
-    let mut tx = db.pool.begin().await.unwrap();
-    append(&mut *tx, &new_event("issue.created")).await.unwrap();
+    let mut tx = crate::store::begin_write(&db.pool).await.unwrap();
+    append(&mut tx, &new_event("thing.created")).await.unwrap();
     tx.commit().await.unwrap();
     assert_eq!(count(&db.pool).await, 1);
 }
@@ -137,7 +155,7 @@ async fn seq_strictly_increases() {
     let db = db().await;
     let mut last = 0;
     for _ in 0..20 {
-        let e = append(&db.pool, &new_event("issue.commented"))
+        let e = append_one(&db.pool, &new_event("thing.commented"))
             .await
             .unwrap();
         assert!(e.seq.0 > last);
@@ -148,24 +166,30 @@ async fn seq_strictly_increases() {
 #[tokio::test]
 async fn event_survives_deleting_its_entity() {
     let db = db().await;
-    let c = create_company(&db.pool, "Acme").await.unwrap();
-    let e = NewAuditEvent {
-        entity: Some(AuditEntity {
-            kind: "company".to_owned(),
-            id: c.id.0,
-        }),
-        company_id: Some(c.id),
-        run_id: Some(RunId(99)),
-        ..new_event("company.created")
+    let clock = std::sync::Arc::new(crate::scheduler::SystemClock);
+    let mac = TestDevice::enroll(&db.pool, "Mac", "device", &[], "fp", clock).await;
+    let seq: i64 = sqlx::query_scalar("SELECT seq FROM core_devices WHERE id = ?")
+        .bind(&mac.id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let entity = AuditEntity {
+        kind: "device".to_owned(),
+        id: seq,
     };
-    let e = append(&db.pool, &e).await.unwrap();
-    assert!(delete_company(&db.pool, c.id).await.unwrap());
+    sqlx::query("DELETE FROM core_devices WHERE seq = ?")
+        .bind(seq)
+        .execute(&db.pool)
+        .await
+        .unwrap();
 
     let filter = AuditFilter {
-        company_id: Some(c.id),
+        entity: Some(entity),
         ..AuditFilter::default()
     };
-    assert_eq!(list(&db.pool, &filter, None, 10).await.unwrap(), vec![e]);
+    let left = list(&db.pool, &filter, None, 10).await.unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].action, "device.enrolled");
 }
 
 #[tokio::test]
@@ -173,15 +197,20 @@ async fn rejects_invalid_details_action_and_actor() {
     let db = db().await;
     let bad_json = NewAuditEvent {
         details: "{not json".to_owned(),
-        ..new_event("issue.created")
+        ..new_event("thing.created")
     };
-    let err = append(&db.pool, &bad_json).await.unwrap_err();
+    let err = append_one(&db.pool, &bad_json).await.unwrap_err();
     assert!(is_constraint(&err), "{err}");
 
-    for action in ["issue", "Issue.Created", "issue created", ".created", ""] {
-        let err = append(&db.pool, &new_event(action)).await.unwrap_err();
-        assert!(is_constraint(&err), "{action}: {err}");
+    // A malformed action can never be registered, so it is refused as unknown.
+    for action in ["thing", "Thing.Created", "thing created", ".created", ""] {
+        let err = append_one(&db.pool, &new_event(action)).await.unwrap_err();
+        assert!(
+            err.to_string().contains("unknown audit action"),
+            "{action}: {err}"
+        );
     }
+    // Raw inserts break the CHECKs below, and are refused before them by the chain trigger.
 
     let err = sqlx::query(
         "INSERT INTO audit_events (actor_kind, actor_id, action) VALUES ('system', 1, 'a.b')",
@@ -189,35 +218,43 @@ async fn rejects_invalid_details_action_and_actor() {
     .execute(&db.pool)
     .await
     .unwrap_err();
-    assert!(is_constraint(&err), "{err}");
+    assert!(is_chained(&err), "{err}");
     let err = sqlx::query(
-        "INSERT INTO audit_events (actor_kind, action, entity_kind) VALUES ('system', 'a.b', 'issue')",
+        "INSERT INTO audit_events (actor_kind, actor_id, action) VALUES ('robot', 1, 'a.b')",
     )
     .execute(&db.pool)
     .await
     .unwrap_err();
-    assert!(is_constraint(&err), "{err}");
+    assert!(is_chained(&err), "{err}");
+    let err = sqlx::query(
+        "INSERT INTO audit_events (actor_kind, action, entity_kind) VALUES ('system', 'a.b', 'thing')",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap_err();
+    assert!(is_chained(&err), "{err}");
     assert_eq!(count(&db.pool).await, 0);
 }
 
 #[tokio::test]
 async fn list_filters_and_pages() {
     let db = db().await;
-    let by_agent = NewAuditEvent {
-        actor: AuditActor::Agent(AgentId(3)),
-        run_id: Some(RunId(5)),
+    let by_system = NewAuditEvent {
+        actor: AuditActor::System,
         ..new_event("run.started")
     };
-    let a = append(&db.pool, &by_agent).await.unwrap();
-    let b = append(&db.pool, &new_event("issue.created")).await.unwrap();
+    let a = append_one(&db.pool, &by_system).await.unwrap();
+    let b = append_one(&db.pool, &new_event("thing.created"))
+        .await
+        .unwrap();
     let other = NewAuditEvent {
         entity: Some(AuditEntity {
-            kind: "issue".to_owned(),
+            kind: "thing".to_owned(),
             id: 8,
         }),
-        ..new_event("issue.created")
+        ..new_event("thing.created")
     };
-    let c = append(&db.pool, &other).await.unwrap();
+    let c = append_one(&db.pool, &other).await.unwrap();
 
     let by = |filter: AuditFilter| {
         let pool = db.pool.clone();
@@ -225,15 +262,7 @@ async fn list_filters_and_pages() {
     };
     assert_eq!(
         by(AuditFilter {
-            actor: Some(AuditActor::Agent(AgentId(3))),
-            ..AuditFilter::default()
-        })
-        .await,
-        vec![a.clone()]
-    );
-    assert_eq!(
-        by(AuditFilter {
-            run_id: Some(RunId(5)),
+            actor: Some(AuditActor::System),
             ..AuditFilter::default()
         })
         .await,
@@ -242,7 +271,7 @@ async fn list_filters_and_pages() {
     assert_eq!(
         by(AuditFilter {
             entity: Some(AuditEntity {
-                kind: "issue".to_owned(),
+                kind: "thing".to_owned(),
                 id: 7,
             }),
             ..AuditFilter::default()
@@ -264,18 +293,26 @@ async fn list_filters_and_pages() {
 #[tokio::test]
 async fn migrates_up_down_up_with_events() {
     let db = db().await;
-    append(&db.pool, &new_event("issue.created")).await.unwrap();
-    // Undo only the audit migration: dropping the table must not trip the delete trigger.
-    MIGRATOR.undo(&db.pool, 20261021000003).await.unwrap();
+    append_one(&db.pool, &new_event("thing.created"))
+        .await
+        .unwrap();
+    // Undo the baseline: dropping the table must not trip the delete trigger.
+    undo(&db.pool, CORE, CORE_MIGRATIONS, 0).await.unwrap();
     let present: i64 =
         sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name = 'audit_events'")
             .fetch_one(&db.pool)
             .await
             .unwrap();
     assert_eq!(present, 0);
-    MIGRATOR.run(&db.pool).await.unwrap();
+    migrate_core(&db.pool).await.unwrap();
     assert_eq!(count(&db.pool).await, 0);
-    append(&db.pool, &new_event("issue.created")).await.unwrap();
+    crate::store::kinds::register_platform(&db.pool)
+        .await
+        .unwrap();
+    allow(&db.pool).await;
+    append_one(&db.pool, &new_event("thing.created"))
+        .await
+        .unwrap();
     let err = sqlx::query("DELETE FROM audit_events")
         .execute(&db.pool)
         .await

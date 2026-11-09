@@ -1,0 +1,1 @@
+{"stream_id":7,"kind":"command","seq":0,"payload":{"cwd":"/home/example","env":{"LANG":"en_US.UTF-8"},"env_pass":["PATH"],"op":"pty.open","size":{"cols":80,"rows":24}}}

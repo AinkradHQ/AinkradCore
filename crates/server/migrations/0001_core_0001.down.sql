@@ -1,0 +1,12 @@
+DROP TABLE settings;
+DROP TABLE push_cursor;
+DROP TRIGGER events_no_delete;
+DROP TRIGGER events_no_update;
+DROP TRIGGER events_from_audit;
+DROP TABLE events;
+DROP TRIGGER audit_events_no_delete;
+DROP TRIGGER audit_events_no_update;
+DROP TABLE audit_events;
+DROP TABLE device_pairings;
+DROP TABLE device_keys;
+DROP TABLE users;

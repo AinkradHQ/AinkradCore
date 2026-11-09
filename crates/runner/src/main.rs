@@ -17,6 +17,9 @@ const USAGE: &str = "usage:
                  [--git-name <name>] [--git-email <email>] [--env <KEY=VAL>…]
   ainkrad-runner install-launchd <server-url> --key-file <path> [runner flags…] [--load]
   ainkrad-runner uninstall-launchd [--unload]
+  ainkrad-runner pair …          (protocol v2: enrol with an Ainkrad Core; `pair` alone for help)
+  ainkrad-runner connect …       (protocol v2: serve the paired Core; `connect --help`)
+  ainkrad-runner --version
 
 The runner key comes from CITADEL_RUNNER_KEY, or else from --key-file; never from the
 command line. The URL is wss://<server>/runner/v1/connect (ws:// only to loopback).
@@ -33,21 +36,26 @@ $HOME/.ainkrad-runner/<harness>, logged in once:
   codex   `CODEX_HOME=$HOME/.ainkrad-runner/codex codex login`
   opencode nothing for the free `opencode/*` models; others
           `XDG_DATA_HOME=$HOME/.ainkrad-runner/opencode/data opencode auth login`
-  agy     `HOME=$HOME/.ainkrad-runner/agy agy`; agy cannot ask before acting, so it runs
-          only when CITADEL_RUNNER_SANDBOXED=1 says this runner's workspaces are sandboxes
-          and the project's permission policy is sandboxed
+  agy     `HOME=$HOME/.ainkrad-runner/agy agy`; agy cannot ask before acting, and this
+          mode runs no harness in a sandbox, so agy is refused here (use `connect`)
 A run the server gives a provider account (`ainkrad-core-server account add`) uses that account's
 config dir $HOME/.ainkrad-runner/<config-dir> (default accounts/<label>; log it in there, as
 above) and, when the account names a credential file, the token in
 $HOME/.ainkrad-runner/credentials/<file> (mode 0600), read when the run starts and passed
 only in the harness's environment; the runner's own CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY
 are then withheld. A missing file fails the run with the path in its reason.
-Each run's harness reaches the server's MCP tools at <server>/mcp/v1 (https://, or http:// to
+Agent sessions have no network on Linux by default (AINKRAD_AGENT_NETWORK=allow lifts that for sessions
+without secrets, stage-1 hosts only); their MCP route is bridged in, so stage 1 runs a local mock model.
+AINKRAD_AGENT_NETWORK=filtered (`connect`, Linux) keeps them off the network but lets a CONNECT proxy outside the
+sandbox reach AINKRAD_AGENT_EGRESS_ALLOW (CIDRs), AINKRAD_AGENT_EGRESS_HOSTS (host names only the proxy resolves)
+and AINKRAD_AGENT_EGRESS_PORTS (default 443); the runner checks the filter at start and refuses to start without it.
+Each run's harness reaches the server's MCP tools at <server>/token/citadel/v1/mcp (https://, or http:// to
 loopback) with the run's token, from a 0600 config file in $TMPDIR/citadel-runs/private/run-<id>
 removed when the run ends. Tool calls follow each project's permission policy (default: ask);
 the Citadel MCP tools always go ahead, as the token scopes them. One outside it waits for
 a reviewer's approval on the server, and is denied after 15 minutes without one. Projects
-whose runs must be sandboxed run only with CITADEL_RUNNER_SANDBOXED=1.
+whose runs must be sandboxed are refused: this mode runs harnesses unconfined, and no
+environment variable claims otherwise (CITADEL_RUNNER_SANDBOXED is ignored; use `connect`).
 At start each harness's `--version` is probed. A missing harness is not offered; one at a
 version this runner was not built for marks the runner unhealthy and is not offered either.
 Without --tags a Mac offers `macos`, plus `xcode` when `xcode-select -p` finds Xcode.
@@ -71,10 +79,11 @@ struct Args {
     env: Vec<(String, String)>,
 }
 
-/// `KEY=VAL` as `--env` takes it; `None` without a `=` or with an empty key.
+/// `KEY=VAL` as `--env` takes it; `None` without a `=`, with an empty key, or with an `AINKRAD_*`
+/// key: those are the runner's own control variables (sandbox and network mode), never a harness's.
 fn env_pair(pair: &str) -> Option<(String, String)> {
     let (key, value) = pair.split_once('=')?;
-    (!key.is_empty()).then(|| (key.to_owned(), value.to_owned()))
+    (!key.is_empty() && !key.starts_with("AINKRAD_")).then(|| (key.to_owned(), value.to_owned()))
 }
 
 /// `None` on anything it does not know.
@@ -185,6 +194,24 @@ async fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
+        ["--version" | "-V"] => {
+            println!("ainkrad-runner {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
+        ["pair", rest @ ..] => return ainkrad_runner::v2::cli::pair_main(rest).await,
+        ["connect", rest @ ..] => {
+            tracing_subscriber::fmt()
+                .with_writer(std::io::stderr)
+                .init();
+            return ainkrad_runner::v2::cli::connect_main(rest).await;
+        }
+        ["mcp-forward", port, sock] => {
+            return ainkrad_runner::mcp_bridge::forward_main(port, sock).await;
+        }
+        // The harness's MCP server for the connection tools (C4b): stdio to the session's socket.
+        ["mcp-stdio", sock] => {
+            return ainkrad_runner::v2::agent::tools::sock::stdio_main(sock).await;
+        }
         ["install-launchd", rest @ ..] => return install_launchd(rest),
         ["uninstall-launchd"] => return uninstall_launchd(false),
         ["uninstall-launchd", "--unload"] => return uninstall_launchd(true),
@@ -220,8 +247,14 @@ async fn main() -> ExitCode {
         home.join(".ainkrad-runner"),
     )
     .with_env(args.env);
-    executor.sandboxed = std::env::var("CITADEL_RUNNER_SANDBOXED").as_deref() == Ok("1");
-    executor.mcp_url = ainkrad_runner::mcp_url(&args.url);
+    // Never a claim from the environment: this mode runs no `ProcessSandbox`, so a flag saying
+    // "this host is a sandbox" would auto-approve unconfined agents (review A M1).
+    if std::env::var_os("CITADEL_RUNNER_SANDBOXED").is_some() {
+        eprintln!(
+            "ainkrad-runner: CITADEL_RUNNER_SANDBOXED is ignored; sandboxed runs are refused in this mode"
+        );
+    }
+    executor.mcp_url = ainkrad_runner::core_mcp_url(&args.url);
     executor.workspaces.askpass = std::env::var_os("CITADEL_GIT_ASKPASS").map(PathBuf::from);
     if let Err(why) = executor.check_roots(&home) {
         eprintln!("ainkrad-runner: {why}");
@@ -310,5 +343,13 @@ mod tests {
         assert!(parse(&["wss://x", "--env", "FOO"]).is_none(), "no =");
         assert!(parse(&["wss://x", "--env", "=bar"]).is_none(), "no key");
         assert!(parse(&["wss://x", "--env"]).is_none(), "no value");
+        for key in [
+            "AINKRAD_SANDBOX_NETWORK",
+            "AINKRAD_SANDBOX_EGRESS_SOCK",
+            "AINKRAD_X",
+        ] {
+            let pair = format!("{key}=allow");
+            assert!(parse(&["wss://x", "--env", &pair]).is_none(), "{key}");
+        }
     }
 }

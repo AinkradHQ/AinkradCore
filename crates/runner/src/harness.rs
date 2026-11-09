@@ -43,7 +43,7 @@ use ainkrad_proto::runner::{
 use serde_json::json;
 use tokio::sync::mpsc;
 
-use crate::workspace::Workspaces;
+use crate::workspace::{SessionWorkspace, Workspaces};
 use crate::{Executor, Job, Report};
 
 /// The harnesses this runner drives, with the model a job without one gets (the cheapest).
@@ -81,14 +81,16 @@ pub struct HarnessExecutor {
     /// The file-edit tools `accept_edits` lets through when every path they name is inside
     /// the run's working dir.
     pub edit_tools: Vec<String>,
-    /// This runner's workspaces are disposable sandboxes (a container or VM): only it may take
-    /// a project's sandboxed runs, and agy, which cannot ask before acting, runs only then.
+    /// This runner's runs are confined by a sandbox it installs itself. Never set from the
+    /// environment or a flag: nothing in this mode installs one, so it stays false and a
+    /// project's sandboxed runs are refused (review A M1).
     pub sandboxed: bool,
     /// How long an escalated tool call waits for a reviewer before it is denied, when the
     /// server sends no `limits` (an older server); likewise the resume settings below.
     pub approval_timeout: Duration,
     /// Per-issue git worktrees under `work_root`; git's config under `<config_root>/git`.
     pub workspaces: Workspaces,
+    agent_workspaces: Mutex<HashMap<(String, i64), PathBuf>>,
     /// The token cap of a job that carries none (an older server).
     pub default_token_cap: u64,
     /// How often a run's usage so far is reported.
@@ -101,6 +103,13 @@ pub struct HarnessExecutor {
     /// The Citadel MCP server harnesses call back to (`mcp_url` of the server URL); `None`
     /// gives a harness no MCP server.
     pub mcp_url: Option<String>,
+    /// The runner's pinned TLS config for the Core, used by the MCP bridge of a networkless sandbox.
+    pub mcp_tls: Option<Arc<rustls::ClientConfig>>,
+    /// The egress allow policy of `AINKRAD_AGENT_NETWORK=filtered`; a filtered run without it is refused.
+    pub egress: Option<Arc<crate::egress::Policy>>,
+    /// The executable a filtered sandbox runs as its in-sandbox forwarder (`mcp-forward`); `None`
+    /// is this runner's own executable. Tests point it at the built binary.
+    pub forwarder: Option<PathBuf>,
     /// Idle long-lived harness servers kept for later runs (E15.6), when the server sends no
     /// `limits`; 0 keeps none.
     pub warm_max: u32,
@@ -116,11 +125,19 @@ pub struct HarnessExecutor {
     sessions: Mutex<HashMap<i64, String>>,
     /// Each running job's controls from the admin (1.19).
     inboxes: Mutex<HashMap<i64, Arc<inbox::Inbox>>>,
+    /// Each run's own variables (`Executor::session_env`), set on its harness processes only.
+    pub(crate) run_env: Mutex<HashMap<i64, Vec<(String, String)>>>,
     /// Account tokens read by `start` for each entry of the run's chain (or why one could not
     /// be), until `run` hands them to the harness.
     credentials: Mutex<HashMap<i64, Vec<Read>>>,
     /// Harness → the version `probe` found, named in a protocol failure.
     versions: Mutex<BTreeMap<String, String>>,
+    /// Where harness processes start (E8a-06); `None` is the local backend (bubblewrap or
+    /// Seatbelt, as `AINKRAD_SANDBOX*` say). Set it before the first run.
+    pub backend: Option<Arc<dyn ainkrad_harness::exec::ExecBackend>>,
+    /// The connection tools the Core lists for each session (C4b), which the policy checks a
+    /// connection tool's name against (`connection_call`); the agent driver is given the same.
+    pub tools: Option<Arc<crate::v2::agent::tools::Tools>>,
 }
 
 impl HarnessExecutor {
@@ -136,6 +153,7 @@ impl HarnessExecutor {
             secret_env,
             harness_env: vec![],
             workspaces: Workspaces::new(work_root.clone(), config_root.join("git")),
+            agent_workspaces: Mutex::default(),
             credentials_dir: config_root.join("credentials"),
             work_root,
             config_root,
@@ -160,6 +178,9 @@ impl HarnessExecutor {
             resume_backoff: Duration::from_secs(2),
             resume_backoff_max: Duration::from_secs(30),
             mcp_url: None,
+            mcp_tls: None,
+            egress: None,
+            forwarder: None,
             warm_max: 0,
             stall_after: Duration::from_secs(STALL_AFTER_SECS),
             tool_output: TOOL_OUTPUT_BYTES as usize,
@@ -167,8 +188,11 @@ impl HarnessExecutor {
             runner_limits: Mutex::new(RunnerLimits::default()),
             sessions: Mutex::new(HashMap::new()),
             inboxes: Mutex::new(HashMap::new()),
+            run_env: Mutex::new(HashMap::new()),
             credentials: Mutex::new(HashMap::new()),
             versions: Mutex::new(BTreeMap::new()),
+            backend: None,
+            tools: None,
         }
     }
 
@@ -255,6 +279,13 @@ impl HarnessExecutor {
     fn cwd(&self, job: &Job) -> PathBuf {
         match (&job.workspace, job.issue) {
             (Some(_), Some(issue)) => self.workspaces.path(issue),
+            (Some(_), None) => self
+                .agent_workspaces
+                .lock()
+                .expect("agent workspaces")
+                .get(&(job.context_ref.clone(), job.run))
+                .cloned()
+                .unwrap_or_else(|| self.work_root.join(format!("run-{}", job.run))),
             _ => self.work_root.join(format!("run-{}", job.run)),
         }
     }
@@ -278,6 +309,19 @@ impl Executor for HarnessExecutor {
         if contained && !self.sandboxed {
             return Err("the project's runs must be sandboxed, and this runner is not".to_owned());
         }
+        // The agent driver's sandbox marks the run's environment once it has applied the policy's
+        // isolation fields; without that mark nothing has, and the run is refused.
+        let isolated = self
+            .run_env
+            .lock()
+            .expect("run env lock")
+            .get(&job.run)
+            .is_some_and(|e| e.iter().any(|(n, _)| n == "AINKRAD_SANDBOX"));
+        if job.policy.asks_for_isolation() && !isolated {
+            return Err(
+                "the policy sets isolation fields, and this runner has no sandbox".to_owned(),
+            );
+        }
         let config = self.config_dir(job)?;
         std::fs::create_dir_all(&config).map_err(|e| format!("{}: {e}", config.display()))?;
         // The fallbacks' tokens are read now too, so the run redacts them from the start; one
@@ -292,6 +336,16 @@ impl Executor for HarnessExecutor {
             (Some(_), Some(issue)) => {
                 let path = self.workspaces.prepare(issue, &job.trees()).await;
                 path.map_err(|e| format!("workspace: {e}"))?;
+            }
+            (Some(_), None) => {
+                if !self
+                    .agent_workspaces
+                    .lock()
+                    .expect("agent workspaces")
+                    .contains_key(&(job.context_ref.clone(), job.run))
+                {
+                    return Err("agent workspace was not prepared".to_owned());
+                }
             }
             _ => {
                 let dir = self.cwd(job);
@@ -373,8 +427,60 @@ impl Executor for HarnessExecutor {
         self.workspaces.held()
     }
 
+    async fn prepare_agent_workspace(
+        &self,
+        session: &str,
+        generation: i64,
+        workspace: &ainkrad_proto::runner::Workspace,
+        helper: Option<&Path>,
+    ) -> Result<PathBuf, String> {
+        let mut requests = vec![SessionWorkspace {
+            repo: workspace.repo.clone(),
+            reference: workspace.base.clone(),
+            branch: workspace.branch.clone(),
+            name: workspace.name.clone(),
+        }];
+        requests.extend(workspace.also.iter().map(|w| SessionWorkspace {
+            repo: w.repo.clone(),
+            reference: w.base.clone(),
+            branch: w.branch.clone(),
+            name: w.name.clone(),
+        }));
+        let path = self
+            .workspaces
+            .prepare_session(session, generation, &requests, helper)
+            .await?;
+        self.agent_workspaces
+            .lock()
+            .expect("agent workspaces")
+            .insert((session.to_owned(), generation), path.clone());
+        Ok(path)
+    }
+
+    async fn cleanup_agent_workspace(&self, session: &str, generation: i64) {
+        self.agent_workspaces
+            .lock()
+            .expect("agent workspaces")
+            .remove(&(session.to_owned(), generation));
+        if let Err(why) = self.workspaces.cleanup_session(session, generation).await {
+            tracing::warn!(session, %why, "agent workspace cleanup failed");
+        }
+    }
+
+    fn recover_agent_workspaces(&self, adopted: &[String]) {
+        self.workspaces.recover_sessions(adopted);
+    }
+
     fn control(&self, run: i64, control: crate::Control) {
         self.inbox(run).put(control);
+    }
+
+    fn session_env(&self, run: i64, env: Option<Vec<(String, String)>>) {
+        let mut all = self.run_env.lock().expect("run env lock");
+        match env {
+            Some(env) => drop(all.insert(run, env)),
+            None => drop(all.remove(&run)),
+        }
     }
 
     async fn prune(&self, issues: Vec<i64>) {
@@ -416,7 +522,7 @@ mod warm;
 mod watch;
 
 use account::Credential;
-pub use files::mcp_url;
+pub use files::{core_mcp_url, mcp_url};
 use routes::routes;
 
 #[cfg(test)]

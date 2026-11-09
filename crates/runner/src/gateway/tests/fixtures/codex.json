@@ -1,0 +1,137 @@
+{
+ "body": {
+  "client_metadata": {},
+  "include": [
+   "reasoning.encrypted_content"
+  ],
+  "input": [
+   {
+    "content": [
+     {
+      "text": "You are a coding agent r...",
+      "type": "input_text"
+     }
+    ],
+    "id": "msg_9d107540-8ed7-531f-a40d-cc3dbbc179cf",
+    "role": "developer",
+    "type": "message"
+   }
+  ],
+  "model": "gpt-5.1-codex",
+  "parallel_tool_calls": true,
+  "prompt_cache_key": "x",
+  "reasoning": {
+   "summary": "auto"
+  },
+  "store": false,
+  "stream": true,
+  "tool_choice": "auto",
+  "tools": [
+   {
+    "description": "x",
+    "name": "exec_command",
+    "parameters": {},
+    "strict": false,
+    "type": "function"
+   },
+   {
+    "description": "x",
+    "name": "write_stdin",
+    "parameters": {},
+    "strict": false,
+    "type": "function"
+   },
+   {
+    "description": "x",
+    "name": "request_user_input",
+    "parameters": {},
+    "strict": false,
+    "type": "function"
+   },
+   {
+    "description": "x",
+    "name": "view_image",
+    "parameters": {},
+    "strict": false,
+    "type": "function"
+   },
+   {
+    "description": "x",
+    "name": "multi_agent_v1",
+    "tools": [
+     {
+      "description": "x",
+      "name": "close_agent",
+      "parameters": {},
+      "strict": false,
+      "type": "function"
+     },
+     {
+      "description": "x",
+      "name": "resume_agent",
+      "parameters": {},
+      "strict": false,
+      "type": "function"
+     },
+     {
+      "description": "x",
+      "name": "send_input",
+      "parameters": {},
+      "strict": false,
+      "type": "function"
+     },
+     {
+      "description": "x",
+      "name": "spawn_agent",
+      "parameters": {},
+      "strict": false,
+      "type": "function"
+     },
+     {
+      "description": "x",
+      "name": "wait_agent",
+      "parameters": {},
+      "strict": false,
+      "type": "function"
+     }
+    ],
+    "type": "namespace"
+   },
+   {
+    "description": "x",
+    "name": "get_goal",
+    "parameters": {},
+    "strict": false,
+    "type": "function"
+   },
+   {
+    "description": "x",
+    "name": "create_goal",
+    "parameters": {},
+    "strict": false,
+    "type": "function"
+   },
+   {
+    "description": "x",
+    "name": "update_goal",
+    "parameters": {},
+    "strict": false,
+    "type": "function"
+   }
+  ]
+ },
+ "harness": "codex",
+ "headers": {
+  "accept": "text/event-stream",
+  "authorization": "Bearer placeholder",
+  "content-type": "application/json",
+  "originator": "citadel",
+  "user-agent": "citadel/0.166.0 (Mac OS 27.2.0; arm64) unknown (citadel; 0)",
+  "x-codex-beta-features": "remote_compaction_v2"
+ },
+ "method": "POST",
+ "mode": "codex app-server, thread/start + turn/start",
+ "source": "real binary on a Mac under sandbox-exec, against a local Python listener, dummy key, empty HOME, 2026-11-05",
+ "target": "/v1/responses",
+ "version": "0.166.0"
+}

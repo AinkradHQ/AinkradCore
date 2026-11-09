@@ -46,7 +46,9 @@ impl HarnessExecutor {
         }
         // A new session, unless the server named one to continue (E15.5); on a warm server
         // of this agent's when one is idle (E15.6).
-        let warm = H::LONG_LIVED && limits.warm_max > 0 && job.resume_session.is_none();
+        let isolated = spec.env.iter().any(|(n, _)| n == "AINKRAD_SANDBOX");
+        let warm =
+            !isolated && H::LONG_LIVED && limits.warm_max > 0 && job.resume_session.is_none();
         // A server kept warm outlives this run's worktree: it works from the work root (E15.9).
         let spec = Spec {
             process_dir: warm.then(|| self.work_root.clone()),
@@ -301,19 +303,24 @@ impl HarnessExecutor {
             match event {
                 HarnessEvent::SessionStarted { id } => *session = Some(id),
                 HarnessEvent::ApprovalRequested { id, tool, input } => {
-                    let decision =
-                        match self.decide(&inbox.policy(&job.policy), &tool, &input, &spec.cwd) {
-                            Ok(()) => Decision::Allow,
-                            Err(why) => {
-                                emit(Report::Event(
-                                    json!({"type": "approval_escalated", "id": id,
+                    let own = self.connection_call(job, &spec.env, &tool);
+                    let decided = if own {
+                        Ok(())
+                    } else {
+                        self.decide(&inbox.policy(&job.policy), &tool, &input, &spec.cwd)
+                    };
+                    let decision = match decided {
+                        Ok(()) => Decision::Allow,
+                        Err(why) => {
+                            emit(Report::Event(
+                                json!({"type": "approval_escalated", "id": id,
                                         "tool": tool, "reason": why}),
-                                ))
-                                .await;
-                                self.escalate(&id, &tool, &input, reports, approval_timeout)
-                                    .await
-                            }
-                        };
+                            ))
+                            .await;
+                            self.escalate(&id, &tool, &input, reports, approval_timeout)
+                                .await
+                        }
+                    };
                     let (approved, reason) = match &decision {
                         Decision::Allow => (true, None),
                         Decision::Deny { reason } => (false, Some(reason)),

@@ -1,0 +1,11 @@
+{
+  "challenge": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "comment": "Step-up golden vector (handshake spec §8, E1-09.3; v1). The step-up key (a second P-256 key, which the OS releases only after user verification) signs, ES256 raw r||s base64url, the UTF-8 string \"AINKRAD-STEPUP-V1\\n\" + core_fp + \"\\n\" + device_id + \"\\n\" + session_id + \"\\n\" + challenge, with no trailing newline; challenge is exactly the base64url text POST /api/v1/auth/step-up/challenge returned for that session. Signatures are randomised: verify them, never expect to reproduce them. stepup_pkcs8 is a throwaway TEST key made for this file: never use it for anything else.",
+  "core_fp": "PDOmx45LxkvLz2wKudVnqJKGS5lvgtRgUjrDnYVbiOU",
+  "device_id": "d_0123456789abcdefghjkmnpqrs",
+  "message": "AINKRAD-STEPUP-V1\nPDOmx45LxkvLz2wKudVnqJKGS5lvgtRgUjrDnYVbiOU\nd_0123456789abcdefghjkmnpqrs\ns_0123456789abcdefghjkmnpqrs\nAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "session_id": "s_0123456789abcdefghjkmnpqrs",
+  "stepup_pkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgobnJA0knlcBJU3OAdgD11xfsJQz5TgVYHzaljcnpM3KhRANCAAQ5Vgl2Oykt764mx7tPJfDVVEqYBYzoDq59vfuLhiHlR-J-P4jR6ESwP0m7XzIO74P3XGM_y3qOoD_4cWTnaHyT",
+  "stepup_sig": "BIsg7dHrhWUQXE5RY8WF2E99YfDLqEj-cqn14wGrlGcugBVGCwc4VVV92R6aW0-qIL76d6VseP5Kop_PhJct6w",
+  "stepup_spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEOVYJdjspLe-uJse7TyXw1VRKmAWM6A6ufb37i4Yh5Ufifj-I0ehEsD9Ju18yDu-D91xjP8t6jqA_-HFk52h8kw"
+}

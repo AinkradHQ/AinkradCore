@@ -1,0 +1,19 @@
+{
+  "body": "{\"token\":\"abababababababababababababababababababababababababababababababab\"}",
+  "body_sha256": "AyQvgCLeGOUd6Im0VF3YCymPZOLTzhrT8TEczuuOcKU",
+  "canonical": "AINKRAD-REQ-V1\nEpGb6nSf7oTkVNn4nFAi3_4oofCpfpiRXxLVfDw8FQM\nES256\nd_5v0v4qa7a8h2tb3219mtz5znvv\ns_5axns063ydfd2frg3xgeyxx46v\nPUT\n/api/v1/push-token\n\n1761730000\nHwYGcAPdeWzU7D4WLASryA\nAyQvgCLeGOUd6Im0VF3YCymPZOLTzhrT8TEczuuOcKU",
+  "comment": "Handshake spec v1 golden vector (§5.2, §17.1). The canonical string is the exact bytes signed (UTF-8, fields joined by LF, no trailing newline); the signature is ES256 raw r||s, base64url without padding. ECDSA signatures are randomised: verify this one, never expect to reproduce it. core_pkcs8 and device_pkcs8 are throwaway TEST keys made for this vector: never use them for anything else.",
+  "core_fp": "EpGb6nSf7oTkVNn4nFAi3_4oofCpfpiRXxLVfDw8FQM",
+  "core_pkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgryNOWKS4UmJNii79Ir3HsEg2M0u_CAkWzhh8NiWgdouhRANCAAQfwINJHCxqgwGCVTBHkgg22Z46rmov08WMvz6varuHtvw0HveikB5V2hb-VQd94Lx-wzlvh2JNgtOkqzhWLExm",
+  "device_fingerprint": "fX--O-_x4yfZKR8IM4Oax0ru1tMhGj3RZOIuGQYVfEI",
+  "device_id": "d_5v0v4qa7a8h2tb3219mtz5znvv",
+  "device_pkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgm6HqRhEPpLlDdiHRRwxlyZwcWpA9pY7pXJd4_KchS16hRANCAAQRvcn6FfUpRVhhdsaWcU9_MOOwqW2c0WOCCwhj_tDu8pD2d057531Bqr-sBtomXPeHXxrwgUnPlp2VFG259SBL",
+  "device_spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEEb3J-hX1KUVYYXbGlnFPfzDjsKltnNFjggsIY_7Q7vKQ9ndOe-d9Qaq_rAbaJlz3h18a8IFJz5adlRRtufUgSw",
+  "method": "PUT",
+  "nonce": "HwYGcAPdeWzU7D4WLASryA",
+  "path": "/api/v1/push-token",
+  "query": "",
+  "session_id": "s_5axns063ydfd2frg3xgeyxx46v",
+  "signature": "wXiotmEmByN7CNfUbHWvYcFgSijI9mEnCOy9Ci_sUf4ZF6YH_TdGlVbFHmzYc3t6lWRhby73HF6gaU11pLBZCg",
+  "timestamp": 1761730000
+}

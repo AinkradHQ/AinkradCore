@@ -162,7 +162,10 @@ impl Forge for GitLab {
             .await?;
         match merged["state"].as_str() {
             Some("merged") => Ok(()),
-            _ => Err(Error::Decode(format!("not merged: {merged}"))),
+            _ => Err(Error::Decode(format!(
+                "not merged: {}",
+                merged.to_string().chars().take(200).collect::<String>()
+            ))),
         }
     }
 

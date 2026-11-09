@@ -1,5 +1,5 @@
-//! The contract's shared shapes (E10.1): timestamps, pages, errors, the enums and the actor
-//! unions. Each enum mirrors a core enum variant for variant (a new core variant fails to
+//! The contract's shared shapes (E10.1): timestamps, pages, errors and the enums. Each enum
+//! mirrors a core enum variant for variant (a new core variant fails to
 //! compile here) and is on the wire as the core's snake_case text.
 //!
 //! Versioning (E0.4): adding an enum value, a union variant or an optional field is allowed
@@ -12,70 +12,143 @@
 //! `GET /api/v1/me` and knows a server below the minor it was built for lacks something.
 
 /// The `/api/v1` minor version: bumped by one on every additive change to the contract.
-/// 1: `GET /api/v1/me` and `GET /api/v1/events/latest`.
-/// 2: transcript `tool_result` chunks documented (runner protocol 1.18).
-/// 3: the admin's controls (pause, resume, stop, message, wake, nudge, reassign, allow for an
-/// issue); `Agent.paused_at`, `Runner.wake_requested_at`.
-/// 4: reads for the home, agent, run, stuck and cost screens (agent skills, company runs, open
-/// questions, spend by hour or day, spend by agent and department, issue diff);
-/// `Agent.hired_at`, `run_token_cap`, `issue_token_cap`; `Run.diff_repos`;
-/// `StuckIssue.stuck_since`.
-/// 5: prices and budget caps set from the app, move an issue to the backlog (the `shelve`
-/// transition), "run when I'm back" (`wakeRunner` `when`, `Runner.wake_mode`).
-/// 6: runner admin (register, drain, undrain, remove, log tail, Power Nap) and what a runner
-/// reports (`Runner.harnesses`, `slots`, `uptime_secs`, `reported_at`, `logins`, `asleep`,
-/// `last_slept_secs`, `drained_at`, `power_nap`, `power_nap_applied`); `Account.plan_tier`
-/// (`setAccountPlan`); `AccountUsage.drops_window_secs`, `recent_drops`,
-/// `recent_drops_window_secs`; `ErrorBody.error_id`; `Run.transcript_gone_reason`,
-/// `transcript_pruned_at`.
-/// 7: staffing and planning from the app: apply the Engineering template, propose an agent
-/// (a hire), create a project, decide a profile proposal and read the profile's history
-/// (`ProfileProposal.rationale`), rename and cancel a requirement, attach a file to its thread.
-/// 8: the stuck list's actions (release a dead checkout, retry a run on a runner, bump an issue;
-/// `Issue.priority`), budget create and delete, price history, a company's overridden settings.
-/// 9: Quest from the app: the owner's sprint commit, project labels and labels on issues
-/// (`Issue.labels`), team capacity, project and issue flow times, a sprint's review and retro
-/// proposals, project settings (`updateProject`), epic keys (`Epic.key`, `Epic.number`), and
-/// `project_id` in every `issue.*` event's details.
-/// 10: harness versions against the tested ones (`Runner.harness_status`: `status`,
-/// `tested_up_to`, `offered`, `reason`); the `version` setting unit (`harness.*.max_version`).
-/// 12: `setIssueSprint` changes an active sprint's scope (audited `sprint.scope_added` /
-/// `sprint.scope_removed`, committed points moved).
-/// 13: `deleteSprint` (`DELETE /api/v1/sprints/{id}`) deletes an empty planned sprint
-/// (audited `sprint.deleted`).
-/// 14: the admin's blocker links (`listBlockers`, `linkBlocker`, `unlinkBlocker`; the `block`
-/// transition's `blocker_issue_id`), and `NewComment.wake_agent_id` (a comment's wake otherwise
-/// goes to the agent it `@mentions`, else the issue's working agent).
-/// 15: the `workflow_push` approval kind (a branch push refused for its workflow files waits for
-/// a human to push it; approving lets its PR open).
-/// 16: an issue's pull requests (`listIssuePrs`), the audit log newest first (`listAudit`,
-/// `before`, `kind`, `target`), a project's knowledge (`listKnowledge`) and a human's
-/// decision on a proposal (`acceptKnowledge`, `rejectKnowledge`); `Knowledge.created_at`,
-/// `updated_at`, `superseded_by`, `body_truncated`, `reason`, `rationale`, `target`,
-/// `proposed_by_agent_id`.
-/// 17: the prototype's first server tranche: a company's profile (`Company.color`,
-/// `description`, `industries`, `website`, `timezone`, `work_start`, `work_end`, `work_days`,
-/// `logo_url`; `getCompanyLogo`, `uploadCompanyLogo`, `resetCompanyLogo`); `Approval.created_at`
-/// and `decided_at`; an agent's profile (`Agent.description`, `effort`, `sandbox`, `instructions`,
-/// `guidelines`; `updateAgent`, `wakeAgent`, `terminateAgent`; `AgentProposal` takes the profile,
-/// a team seat and a palette, applied when the hire is approved); departments and teams shaped over
-/// HTTP (`createDepartment`, `updateDepartment`, `deleteDepartment`, `createTeam`, `updateTeam`,
-/// `deleteTeam`, `seatAgent`, `unseatAgent`; `Department.about`, `head_agent_id`); `Runner.os`,
-/// `arch` and `probeRunner` (runner protocol 1.25); `listAudit`'s `actor`; `deleteAccount`; the
-/// settings `cost.daily_warn_usd_micros` and `agent.wip_max`, and `account.at_limit` per account.
-/// 18: the prototype's second server tranche (B2): dollar budgets (`BudgetBody.usd_cap_micros`,
-/// `BudgetStanding.usd_*`) and the `issue` budget scope, unpriced models (`listUnpriced`) and
-/// `NewPrice.apply_from`.
-/// 20: `Issue.repo_implicit` (R19), true on a single-issue read when it has no explicit repo in a
-/// project with several.
-pub const API_MINOR: u32 = 20;
+/// 0: the platform contract (E1-02): devices and pairing, push tokens, the event stream, the
+/// audit log and settings. Citadel's contract, which reached minor 20, is parked with it in
+/// `modules/citadel/api/openapi.json`.
+/// 1: `GET /handshake` (E1-05.5).
+/// 2: the event bus and audit hardening (E1-04, E1-10): `LatestEvent.floor`, the 410
+/// `PastRetention` of `listEvents`, the socket's 4410 close, and the registered event kinds and
+/// audit actions as `x-event-kinds` and `x-audit-actions`.
+/// 3: signed requests and device identity (E1-07): `POST /handshake/challenge` and
+///    `/handshake/session`, `identity_fingerprint` filled, devices by `d_…` id with kind,
+///    scopes and fingerprint, `ErrorBody.server_time`. Bearer device keys, `createDevice` and
+///    the six-character pairing are gone (a deliberate break before any client shipped; see
+///    `api/compat-allow.txt`).
+/// 4: pairing (E1-07.4, .7): `createPairing`, `getPairing`, `approvePairing`, `rejectPairing`,
+///    and the pre-auth `claimPairing` and `pairStatus`.
+/// 5: step-up, device management and lockouts (E1-09.3–.6): `createStepUpChallenge`, `stepUp`,
+///    `getDevice`, `renameDevice`, `setDeviceScopes`, `listLockouts`, `clearLockout`,
+///    `Device.stepup`, `x-ainkrad-destructive` and 403 `step_up_required`, and the socket's
+///    4003 close on a scope change.
+/// 6: scoped event streams (E1-04.3): `Event.seq` counts the device's own view, and
+///    `x-event-scopes` lists each kind's scope.
+/// 7: the runner hub (E1-11.2/.3): the `runner.refused` audit action.
+/// 8: runner health (E1-11.4/.6): `listRunners`, `getRunner`, `runNoop`, the
+///    `runner.connected`/`.disconnected`/`.degraded` event kinds (scope `read`), the
+///    `runner.command` audit action.
+/// 9: passkeys and the web client (E1-08): `passkeyRegistrationOptions`,
+///    `claimPasskeyPairing`, `webSignInOptions`, `webSignIn`, `createWsTicket`; the pairing kind
+///    `passkey`; `StepUpRequest.assertion` (and `stepup_sig` optional), `Challenge.options`; the
+///    `passkey.locked` audit action.
+/// 10: handshake hardening (KAN-251/252): `proveHandshake` (`POST /handshake {nonce}` with
+///    `core_spki` and `core_sig`), `AuditEntry.entity_ref` (a device's `d_…` id; its
+///    `entity_id` is now absent), `target=device:d_…`, and `entity_ref` in `audit` events.
+/// 11: handshake review (L3, L4, M1): `proveHandshake` answers its own `HandshakeProof`, with
+///    `core_spki` and `core_sig` required, and is under the challenge rate (429); a challenge is
+///    stateless (still 32 bytes, 43 characters).
+/// 12: scheduler and notifications (E2-11/12): the `job.ran`, `job.failed`, `job.missed` and
+///    `notify.token_pruned` audit actions, the `notify.delivery` event kind (scope `admin`).
+/// 13: the secrets broker (E2-07): `listSecrets`, `createSecret`, `rotateSecret`, `deleteSecret`,
+///    `leaseSecret`, `redeemSecretLease` (scope `runner`), the `secret.*` audit actions.
+/// 14: terminals (E2-01): `createTerminal`, `listTerminals`, `getTerminal`, `closeTerminal`,
+///    `signalTerminal`, `attachTerminal` (501 until the terminal service, E2-05), the scope
+///    `terminal` with step-up on create and attach, and the `terminal.*` event kinds.
+/// 15: agent sessions (E2-08): `createAgentSession`, `listAgentSessions`, `getAgentSession`,
+///    `getAgentTranscript`, `sendAgentMessage`, `decideAgentApproval` (scope `approve`),
+///    `cancelAgentSession`, `killAgentSession`, `resumeAgentSession`; the `agent.*` event kinds
+///    (scope `agent`, approvals `approve`) and audit actions; `RunnerDriver.slots`.
+/// 16: runner host load in the API (E2-15.2): `Runner.host_load` carries `avg1` and `cores`.
+/// 17: terminal service (E2-05/06): live attach/detach, resize, signal and close behavior.
+/// 18: `killAgentSession` also stops a module's session, for an `admin` device (break-glass).
+/// 19: terminal lifecycle (E2-05/06): `Terminal.orphaned`, a terminal whose runner host died ends
+///    `exited` (`terminal.exited` with reason `host_lost`), idle terminals are closed
+///    (`terminal.closed`, reason `idle`), and the settings `terminal.idle_secs`,
+///    `terminal.max_per_device` and `terminal.max_per_runner`.
+/// 20: the `secret.used` audit action (additive enum value).
+/// 21: the `secret.master_rotated` audit action (master-key rotation, E2-07.1).
+/// 22: health (E1-13.4, E1-19.3, E1-11.8): `getMetrics` (`GET /api/v1/metrics`, Prometheus text,
+///    scope `admin`), the `alarm.raised` and `alarm.cleared` event kinds and audit actions (scope
+///    `admin`), the `identity.rotation.started`, `.announced` and `.switched` audit actions, and
+///    the `alarm.*` settings.
+/// 23: terminal storage (E2-04.3, E2-06): the `terminal.reap_warning` event, the settings
+///    `terminal.reap_grace_secs`, `terminal.orphan_grace_secs`, `terminal.scrollback_bytes` and
+///    `terminal.scrollback_budget_bytes`, and `watch` and the scrollback limits on the runner's
+///    `pty.open` and `pty.attach`.
+/// 24: the setting `audit.anchor_interval_secs` (E1-10.4, off-box anchors of the audit chain head).
+/// 25: the policy isolation fields (E8a-08): `min_isolation`, `image`, `vcpus`, `memory_mb`, `disk_mb`,
+///    `wall_secs`, `egress` and `workspace` on the runner policy (`runner.schema.json`), all optional.
+/// 26: runner isolation capability (E8a-09): `Runner.arch` and `Runner.isolation` (tiers offered now
+///    and the `/dev/kvm` state) in the API; `isolation` on the runner's hello and heartbeat; a
+///    session whose policy needs a tier is refused placement where it is not offered.
+/// 27: push opt-in (E2-12): `getPushKinds` and `setPushKinds` (`/api/v1/push-token/kinds`, scope
+///    `read`); registering a push token another device holds is now refused (400).
+/// 28: the agent wake queue (E2-11.3): `wakeAgentSession` (`POST /agent-sessions/{id}/wake`) and
+///    `AgentWake`/`AgentWakeRequest`; `AgentStart.epoch` in the runner schema (optional, 0 when absent).
+/// 29: the Citadel module's `applySeed` (`POST /modules/citadel/v1/admin/seed`, `admin`, step-up) seeds a
+///    live server (KAN-275); the Core's own paths are unchanged.
+/// 30: Core-owned provider accounts (KAN-428): the `account.created`, `.secret_replaced`, `.state_set`,
+///    `.cap_set` and `.deleted` audit actions. The routes follow (KAN-432).
+/// 31: provider definitions (KAN-429): the `provider.created`, `.updated` and `.deleted` audit actions.
+/// 32: account pools and bindings (KAN-431): the `pool.*` audit actions.
+/// 33: provider accounts over the API (KAN-432): `listAccounts`, `getAccount` (scope `read`; no key, secret
+///    name or runner scope), `createAccount`, `replaceAccountSecret`, `setAccountState`, `setAccountCap`,
+///    `deleteAccount`, `listProviders`, `createProvider`, `replaceProvider`, `deleteProvider`, `listPools`,
+///    `createPool`, `deletePool`, `addPoolMember`, `removePoolMember`, `setDefaultPool`, `listBindings`,
+///    `bindAgent`, `unbindAgent` (every write `admin` and destructive).
+/// 34: the cost ledger, prices and account usage (KAN-449): `listCosts`, `listPrices`, `accountsUsage` (scope
+///    `read`), `setPrice`, `setAccountLimit`, `clearAccountLimit` (`admin` and destructive); the `price.set`,
+///    `account.limit_set` and `account.limit_cleared` audit actions. No route writes the ledger.
+/// 35: the budget engine (KAN-448): `listBudgets` (scope `read`; filter by `kind`, `subject`, `company`),
+///    `setBudget`, `deleteBudget`, `raiseBudget` (`admin` and destructive); the `budget.*` audit actions.
+/// 36: Citadel's budgets and costs live in the Core (KAN-450): the Citadel module's `citadel.ledger.migrated`
+///    audit action; no operation changes.
+/// 37: the auth gateway's runner ops and grant (KAN-435 G1): `GatewayGrant`, `AgentLimit`, `GatewayTest` and
+///    `GatewayTested` in the runner schema; no operation changes.
+/// 38: the auth gateway's usage reports (KAN-435 G4): `GatewayReport` in `AgentEvents` and `gw_after` in
+///    `AgentRead`, in the runner schema; no operation changes.
+/// 39: the auth gateway's account signals (KAN-435 G5): the `account.auth_failed` and `account.auth_inconclusive`
+///    audit actions; no operation changes.
+/// 40: the auth gateway's account API (KAN-435 G7): `testAccount` (`admin`, one free request through a runner's
+///    gateway) and `setAccountSessionLimits` (`admin` and destructive); `session_limits` and `last_test` on
+///    `ProviderAccount`; `wire` and `key_prefix` on `Provider`; the `account.session_limits_set` and
+///    `account.tested` audit actions.
+/// 41: the Claude subscription sign-in (KAN-441 L1): `startAccountLogin` (`admin` and destructive),
+///    `getAccountLogin`, `sendAccountLoginCode` and `cancelAccountLogin` (`admin`); `AccountLogin`; the
+///    `account.login.started|url|done|failed` events and the `account.login_started|failed|cancelled`
+///    audit actions; the `login.*` ops in the runner schema.
+/// 42: the harness's plan-limit signal (KAN-436 S2): `PlanLimit` and `PlanWindow` in the runner schema,
+///    `AgentEvents.plan_limit` (optional, sent only by a runner that lists the `plan-limit` command); no
+///    operation changes.
+/// 43: chain audit actions (`chain.created`, `chain.updated`, `chain.deleted`, `chain.default_set`,
+///    `chain.bound`, `chain.unbound`) in `x-audit-actions` (S5); no operation changes.
+/// 44: the scheduler's API (S7): `listChains`, `getChain`, `createChain`, `replaceChain`, `deleteChain`,
+///    `setDefaultChain`, `listChainBindings`, `bindAgentChain` and `unbindAgentChain` (`admin`; every write
+///    destructive); `createAgentSession` takes `chain` and `agent` (`admin`) and `harness` is optional with a
+///    chain; `AgentSession` gains `agent`, `chain_id`, `chain`, `chain_pos`, `account`, `waiting`, `repicked`
+///    and `upstream_class`; `ProviderAccount` gains `live` and `health`; the `account.limited` and
+///    `account.health` events; the payloads of `agent.state` (`waiting`, `repicked`) documented in the events
+///    schema; the `scheduler.*` settings; the pool-binding routes (`/api/v1/bindings`) deprecated.
+/// 45: the connection broker (C4): the `agent.tools` op in the runner schema (`ToolsPoll`, `ToolBatch`,
+///    `ToolCall`, `ToolResult`, `ConnTool`); the `connection.*` audit actions in `x-audit-actions`
+///    (`connection.used` is written by the broker); no operation changes.
+/// 46: the connections API (C5): `listConnectionKinds`, `listConnections`, `getConnection` (`read`),
+///    `createConnection`, `updateConnection`, `deleteConnection`, `replaceConnectionCredential`,
+///    `testConnection`, `listConnectionActivity`, `startConnectionFlow`, `getConnectionFlow`,
+///    `cancelConnectionFlow`, `connectionFlowCallback`, `chooseConnectionSite`, `listConnectionGrants`,
+///    `setConnectionGrant`, `revokeConnectionGrant`, `listConnectionDefaults`, `setConnectionDefault`,
+///    `clearConnectionDefault`, `getConnectionApp`, `setConnectionApp` (`admin`, every write destructive);
+///    `createAgentSession` takes `connection_access` (`admin`); the `connection.health` event; the
+///    `connection.app_set` audit action.
+/// 47: connection tools in a sandbox (C4b): `ConnTool.input_schema` (optional, the JSON Schema of a tool's
+///    arguments) in the runner schema; no operation changes.
+pub const API_MINOR: u32 = 47;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 /// RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a
 /// client's date parser never meets a second one (E0.4).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
 #[schema(value_type = String, format = DateTime)]
 pub struct Timestamp(String);
 
@@ -127,6 +200,9 @@ pub struct ErrorBody {
     /// `err_` and a ULID, unique to this answer: logged with it (and, for a refused write,
     /// audited as `api.refused`), for the app's "Copy error".
     pub error_id: String,
+    /// The server's clock in unix seconds, on a `clock_skew` refusal only (handshake spec §5.3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_time: Option<i64>,
 }
 
 macro_rules! api_enum {
@@ -150,366 +226,19 @@ macro_rules! api_enum {
     };
 }
 
-use ainkrad_core::{exec, gov, org, settings, work};
+use ainkrad_core::settings;
 
-api_enum!(ProjectMode = work::ProjectMode { Scrum, Kanban });
-api_enum!(
-    /// The admin's own company, or a client's (E15.14).
-    CompanyKind = org::CompanyKind { Own, Client }
-);
-api_enum!(
-    SprintApproval = work::SprintApproval {
-        Owner,
-        ProductOwner
-    }
-);
-api_enum!(
-    PermissionMode = ainkrad_proto::runner::PermissionMode {
-        Ask,
-        AcceptEdits,
-        Sandboxed
-    }
-);
-api_enum!(
-    EpicStatus = work::EpicStatus {
-        Open,
-        InProgress,
-        Done,
-        Cancelled
-    }
-);
-api_enum!(
-    IssueKind = work::IssueKind {
-        Story,
-        Task,
-        Bug,
-        Chore,
-        Spike,
-        Subtask
-    }
-);
-api_enum!(
-    /// How much an issue matters (API minor 18).
-    PriorityLevel = work::PriorityLevel {
-        None,
-        Low,
-        Medium,
-        High,
-        Urgent
-    }
-);
-api_enum!(
-    IssueState = work::IssueState {
-        Backlog,
-        Todo,
-        InProgress,
-        InReview,
-        Blocked,
-        Done,
-        Cancelled
-    }
-);
-api_enum!(
-    RequirementState = work::RequirementState {
-        Planning,
-        PlanReview,
-        InProgress,
-        Done,
-        Cancelled
-    }
-);
-api_enum!(
-    QuestionState = work::QuestionState {
-        Open,
-        Answered,
-        Cancelled
-    }
-);
-api_enum!(
-    SprintState = work::SprintState {
-        Planned,
-        Active,
-        Closed
-    }
-);
-api_enum!(
-    TeamRole = org::TeamRole {
-        ProductOwner,
-        TeamLead,
-        Member
-    }
-);
-api_enum!(OrgRole = org::OrgRole { Ceo, Cto, None });
-api_enum!(
-    /// How hard an agent thinks (API minor 17).
-    Effort = org::Effort { Low, Medium, High }
-);
-/// What an agent's harness may touch (API minor 17): `read-only`, `workspace-write` or
-/// `full-access`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum Sandbox {
-    ReadOnly,
-    WorkspaceWrite,
-    FullAccess,
-}
-
-impl From<org::Sandbox> for Sandbox {
-    fn from(v: org::Sandbox) -> Self {
-        match v {
-            org::Sandbox::ReadOnly => Self::ReadOnly,
-            org::Sandbox::WorkspaceWrite => Self::WorkspaceWrite,
-            org::Sandbox::FullAccess => Self::FullAccess,
-        }
-    }
-}
-
-impl From<Sandbox> for org::Sandbox {
-    fn from(v: Sandbox) -> Self {
-        match v {
-            Sandbox::ReadOnly => Self::ReadOnly,
-            Sandbox::WorkspaceWrite => Self::WorkspaceWrite,
-            Sandbox::FullAccess => Self::FullAccess,
-        }
-    }
-}
-api_enum!(
-    Harness = org::Harness {
-        Claude,
-        Codex,
-        Opencode,
-        Agy
-    }
-);
-api_enum!(
-    Tier = org::Tier {
-        Small,
-        Standard,
-        Large
-    }
-);
-api_enum!(
-    AgentStatus = org::AgentStatus {
-        Active,
-        Paused,
-        PendingApproval,
-        Terminated
-    }
-);
-api_enum!(
-    RunnerStatus = exec::RunnerStatus {
-        Online,
-        Offline,
-        Unhealthy
-    }
-);
-api_enum!(
-    RunState = exec::RunState {
-        Queued,
-        Claimed,
-        Running,
-        Succeeded,
-        Failed,
-        Cancelled,
-        TimedOut,
-        RunnerLost
-    }
-);
-api_enum!(
-    WakeSource = exec::WakeSource {
-        Assignment,
-        Comment,
-        BlockerClosed,
-        Timer,
-        Manual,
-        Approval,
-        Escalation,
-        Retry
-    }
-);
-api_enum!(
-    ApprovalKind = gov::ApprovalKind {
-        SprintCommit,
-        PrMerge,
-        BudgetOverrun,
-        HireAgent,
-        PermissionEscalation,
-        PlanApproval,
-        WorkflowPush
-    }
-);
-api_enum!(
-    ArtifactKind = gov::ArtifactKind {
-        Report,
-        File,
-        Screenshot,
-        Other
-    }
-);
-api_enum!(
-    ApprovalStatus = gov::ApprovalStatus {
-        Pending,
-        Approved,
-        Rejected,
-        Expired
-    }
-);
-api_enum!(
-    Billing = gov::Billing {
-        Metered,
-        Subscription
-    }
-);
-api_enum!(LimitUnit = gov::LimitUnit { Tokens, Messages });
-api_enum!(
-    KnowledgeKind = gov::KnowledgeKind {
-        Decision,
-        Landmine,
-        State,
-        Retro
-    }
-);
-api_enum!(
-    KnowledgeStatus = gov::KnowledgeStatus {
-        Proposed,
-        Accepted,
-        Rejected,
-        Retired
-    }
-);
-api_enum!(
-    /// Where an issue's pull request is: `requested` (opened once the run that asked ends),
-    /// `open`, `merging` (approved; the poller merges it), `merged`, `closed` (not merged).
-    PrState = crate::store::forge::PrPhase {
-        Requested,
-        Open,
-        Merging,
-        Merged,
-        Closed
-    }
-);
-api_enum!(
-    /// Where a setting may be set (E15.17).
-    SettingScope = settings::ScopeKind {
-        Server,
-        Company,
-        Project,
-        Runner,
-        Account
-    }
-);
+api_enum!(SettingScope = settings::ScopeKind { Server });
 api_enum!(
     SettingUnit = settings::Unit {
         Seconds,
         Milliseconds,
         Percent,
         Count,
-        Tokens,
         Bytes,
-        PerMinute,
-        Version
+        PerMinute
     }
 );
-api_enum!(
-    AccountStatus = gov::AccountStatus {
-        Active,
-        Limited,
-        Unhealthy,
-        Disabled
-    }
-);
-api_enum!(
-    BudgetPeriod = gov::BudgetPeriod {
-        Day,
-        Week,
-        Month,
-        Total
-    }
-);
-api_enum!(
-    StuckKind = exec::StuckKind {
-        NoNextActor,
-        BlockedNoBlocker,
-        BlockedBlockersClosed,
-        AgentPausedByBreaker,
-        ReviewerInactive,
-        NextActorInactive,
-        ReviewNoReviewer,
-        InProgressIdle,
-        TodoIdle,
-        WakeNoRunner,
-        RunQueuedNoLease,
-        CheckoutDead,
-        RunnerDiskFull
-    }
-);
-api_enum!(
-    RepairAction = exec::RepairAction {
-        Rewake,
-        ReassignToLead,
-        Escalate,
-        Unblock,
-        ReleaseCheckout,
-        Requeue,
-        DropWake,
-        Notify
-    }
-);
-
-/// An agent or a person: who owns an issue, wrote a comment, reviews.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Actor {
-    Agent { agent_id: i64 },
-    Human { user_id: i64 },
-}
-
-impl From<work::Actor> for Actor {
-    fn from(a: work::Actor) -> Self {
-        match a {
-            work::Actor::Agent(id) => Self::Agent { agent_id: id.0 },
-            work::Actor::Human(id) => Self::Human { user_id: id.0 },
-        }
-    }
-}
-
-impl From<Actor> for work::Actor {
-    fn from(a: Actor) -> Self {
-        match a {
-            Actor::Agent { agent_id } => Self::Agent(org::AgentId(agent_id)),
-            Actor::Human { user_id } => Self::Human(work::UserId(user_id)),
-        }
-    }
-}
-
-/// Who moves an issue next: an agent, a person, or a timer at `at`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum NextActor {
-    Agent { agent_id: i64 },
-    Human { user_id: i64 },
-    Timer { at: String },
-}
-
-impl From<work::NextActor> for NextActor {
-    fn from(a: work::NextActor) -> Self {
-        match a {
-            work::NextActor::Agent(id) => Self::Agent { agent_id: id.0 },
-            work::NextActor::Human(id) => Self::Human { user_id: id.0 },
-            work::NextActor::Timer(at) => Self::Timer { at },
-        }
-    }
-}
-
-impl From<NextActor> for work::NextActor {
-    fn from(a: NextActor) -> Self {
-        match a {
-            NextActor::Agent { agent_id } => Self::Agent(org::AgentId(agent_id)),
-            NextActor::Human { user_id } => Self::Human(work::UserId(user_id)),
-            NextActor::Timer { at } => Self::Timer(at),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -534,16 +263,10 @@ mod tests {
     #[test]
     fn enums_speak_the_core_text() {
         assert_eq!(
-            s(&IssueState::from(work::IssueState::InReview)),
-            "\"in_review\""
+            s(&SettingUnit::from(settings::Unit::PerMinute)),
+            "\"per_minute\""
         );
-        assert_eq!(s(&AgentStatus::PendingApproval), "\"pending_approval\"");
-        assert_eq!(s(&StuckKind::RunQueuedNoLease), "\"run_queued_no_lease\"");
-        assert_eq!(s(&OrgRole::None), "\"none\"");
-        assert_eq!(
-            s(&Actor::Agent { agent_id: 3 }),
-            r#"{"kind":"agent","agent_id":3}"#
-        );
+        assert_eq!(s(&SettingScope::Server), "\"server\"");
     }
 
     #[test]

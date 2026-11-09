@@ -1,0 +1,17 @@
+[package]
+name = "ainkrad-sys"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The one crate allowed `unsafe` (decision P2.2): not the workspace's `forbid`, which no
+# `allow` can lift. Each block is allowed where it stands and carries a `SAFETY:` comment.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "deny"
+
+[dependencies]
+libc = "0.2.191"

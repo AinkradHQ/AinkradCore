@@ -1,0 +1,4340 @@
+{
+  "$defs": {
+    "Account": {
+      "description": "A provider account, by reference only (E15.1): never its secret.",
+      "properties": {
+        "config_dir": {
+          "description": "The harness's config dir, relative to the runner's config root (`relative_path_ok`).",
+          "type": "string"
+        },
+        "credential_env": {
+          "default": null,
+          "description": "The variable the token goes in, one of the harness's auth variables.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "credential_ref": {
+          "default": null,
+          "description": "The file holding the token, relative to the runner's credentials dir.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "config_dir"
+      ],
+      "type": "object"
+    },
+    "AgentDecide": {
+      "properties": {
+        "approved": {
+          "type": "boolean"
+        },
+        "reply": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request": {
+          "description": "The `id` of the transcript's `approval_request`.",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "request",
+        "approved"
+      ],
+      "type": "object"
+    },
+    "AgentEvents": {
+      "description": "Runner to Core: a session's state, and (for `agent.read`) its entries after `after`.",
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/TranscriptEntry"
+          },
+          "type": "array"
+        },
+        "gateway": {
+          "description": "What the session's auth gateway reported after `AgentRead::gw_after` (KAN-435). A channel\nof its own, never the transcript: only the gateway task writes it.",
+          "items": {
+            "$ref": "#/$defs/GatewayReport"
+          },
+          "type": "array"
+        },
+        "harness_session": {
+          "description": "The harness's own session id, once known: what a resume continues.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_seq": {
+          "description": "The newest `seq` the session has.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Outcome"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Once `ended`."
+        },
+        "plan_limit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanLimit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The harness's latest plan-limit event (KAN-436), a snapshot that each newer one replaces.\nSent only by a runner that lists `CAP_PLAN_LIMIT`. The agent can influence it (its tools can\nforge the harness's own output), so it is a hint: cool an account from it, never disable one."
+        },
+        "session": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/AgentState"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tokens"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "session",
+        "state",
+        "last_seq"
+      ],
+      "type": "object"
+    },
+    "AgentLimit": {
+      "description": "Core to runner: set the ceiling of a live gateway session.",
+      "properties": {
+        "ceiling": {
+          "$ref": "#/$defs/Ceiling",
+          "description": "All zero: refuse every request and abort open streams."
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "ceiling"
+      ],
+      "type": "object"
+    },
+    "AgentRead": {
+      "description": "Core to runner: the transcript after `after`.",
+      "properties": {
+        "after": {
+          "description": "The last `seq` the Core holds (0 for none): entries above it are sent, those at or below\nit may be dropped by the runner.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "gw_after": {
+          "description": "The last `gw_seq` the Core holds (0 for none): gateway reports above it are sent, those at\nor below it may be dropped by the runner (KAN-435).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "session": {
+          "type": "string"
+        },
+        "wait_ms": {
+          "description": "How long to wait for a first entry; absent or 0 answers at once.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session",
+        "after"
+      ],
+      "type": "object"
+    },
+    "AgentSend": {
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "text"
+      ],
+      "type": "object"
+    },
+    "AgentStart": {
+      "description": "Core to runner: run `harness` in session `session`.",
+      "properties": {
+        "epoch": {
+          "description": "Which resume this is, 0 for the first start. A session that has ended is started again\n(a wake) only by a `resume` whose `epoch` is newer than the one it last ran under; the\nsame one again is a resent start and is answered, never run twice.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "gateway": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GatewayGrant"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The API key the runner's gateway serves this session (KAN-435); sent only to a runner\nthat lists the `gateway` command. Never logged."
+        },
+        "harness": {
+          "type": "string"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policy": {
+          "$ref": "#/$defs/Policy",
+          "default": {
+            "allow": [],
+            "mode": "ask",
+            "sandboxed": false
+          }
+        },
+        "prompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resume": {
+          "description": "The harness's own session to continue (`AgentEvents::harness_session`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "secrets": {
+          "description": "Leases the runner redeems for this session, once each. Never logged.",
+          "items": {
+            "$ref": "#/$defs/SecretGrant"
+          },
+          "type": "array"
+        },
+        "session": {
+          "description": "The Core's id, `as_…`.",
+          "type": "string"
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Workspace"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The repo and worktree to work in; absent, a scratch dir of the session's own."
+        }
+      },
+      "required": [
+        "session",
+        "harness"
+      ],
+      "type": "object"
+    },
+    "AgentState": {
+      "description": "Where a session is, as its runner sees it.",
+      "oneOf": [
+        {
+          "enum": [
+            "running"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "ended",
+          "description": "Its harness ended (`outcome`).",
+          "type": "string"
+        },
+        {
+          "const": "interrupted",
+          "description": "Its harness went with a runner restart; the transcript is kept. The Core resumes it.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A state from a newer runner. Never sent.",
+          "type": "string"
+        }
+      ]
+    },
+    "AgentStop": {
+      "properties": {
+        "kill": {
+          "default": false,
+          "description": "Kill the harness now; otherwise let its tool call in flight finish, then end it.",
+          "type": "boolean"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "type": "object"
+    },
+    "Captured": {
+      "description": "One output pipe: redacted UTF-8 (lossy), cut at the limit with a marker.",
+      "properties": {
+        "bytes": {
+          "description": "How many bytes the process wrote, kept or not.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        },
+        "truncated": {
+          "description": "`text` was cut at the limit and ends in `TRUNCATED_MARKER`.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "text",
+        "bytes",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "Ceiling": {
+      "description": "What a session may spend through the gateway; `agent.limit` changes it while it runs.",
+      "properties": {
+        "tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "usd_micros": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "tokens",
+        "usd_micros"
+      ],
+      "type": "object"
+    },
+    "Close": {
+      "description": "A stream given up. From the Core on a running command: cancel it.",
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Command": {
+      "description": "Core to runner, the first frame of a command stream.",
+      "oneOf": [
+        {
+          "description": "Answers `result` at once: proves the path end to end.",
+          "properties": {
+            "op": {
+              "const": "noop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ExecRun",
+          "properties": {
+            "op": {
+              "const": "exec.run",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/PtyOpen",
+          "properties": {
+            "op": {
+              "const": "pty.open",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/PtyAttach",
+          "properties": {
+            "op": {
+              "const": "pty.attach",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/PtyClose",
+          "properties": {
+            "op": {
+              "const": "pty.close",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentStart",
+          "properties": {
+            "op": {
+              "const": "agent.start",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentRead",
+          "properties": {
+            "op": {
+              "const": "agent.read",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentSend",
+          "properties": {
+            "op": {
+              "const": "agent.send",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentDecide",
+          "properties": {
+            "op": {
+              "const": "agent.decide",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentStop",
+          "properties": {
+            "op": {
+              "const": "agent.stop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentLimit",
+          "properties": {
+            "op": {
+              "const": "agent.limit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/GatewayTest",
+          "properties": {
+            "op": {
+              "const": "gateway.test",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/LoginStart",
+          "properties": {
+            "op": {
+              "const": "login.start",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/LoginCode",
+          "properties": {
+            "op": {
+              "const": "login.code",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/LoginCancel",
+          "properties": {
+            "op": {
+              "const": "login.cancel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ToolsPoll",
+          "properties": {
+            "op": {
+              "const": "agent.tools",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An op from a newer Core: answered `unsupported_command`. Never sent.",
+          "properties": {
+            "op": {
+              "const": "Unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ConnTool": {
+      "description": "One tool the harness may see.",
+      "properties": {
+        "description": {
+          "description": "What it does and the arguments it takes, for the model.",
+          "type": "string"
+        },
+        "input_schema": {
+          "description": "The JSON Schema (an object schema) of its arguments, for the harness's tool list. Absent\nfrom an older Core: the runner then lists an open object."
+        },
+        "name": {
+          "description": "The operation, `github.get_issue`.",
+          "type": "string"
+        },
+        "write": {
+          "default": false,
+          "description": "It changes something upstream.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ],
+      "type": "object"
+    },
+    "Control": {
+      "description": "`control` payloads, tagged by `type`.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/RunnerHello",
+          "description": "Runner to Core, the first frame of a connection, on stream 0.",
+          "properties": {
+            "type": {
+              "const": "hello",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/CoreWelcome",
+          "description": "Core to runner: the hello is accepted.",
+          "properties": {
+            "type": {
+              "const": "welcome",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/CoreAuth",
+          "description": "Core to runner: the Core's half of the connection proof (`auth`).",
+          "properties": {
+            "type": {
+              "const": "auth",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/RunnerProof",
+          "description": "Runner to Core: the runner's half of the connection proof (`auth`).",
+          "properties": {
+            "type": {
+              "const": "proof",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/Rotation",
+          "description": "Core to runner: a planned identity key rotation (`auth`).",
+          "properties": {
+            "type": {
+              "const": "rotation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TerminalInfo",
+          "description": "Runner to Core, the first frame on a `pty.open` or `pty.attach` stream (`terminal`).",
+          "properties": {
+            "type": {
+              "const": "opened",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/Size",
+          "description": "Core to runner on a terminal stream: the client's new size.",
+          "properties": {
+            "type": {
+              "const": "resize",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SignalReq",
+          "description": "Core to runner on a terminal stream: deliver a signal to its process group.",
+          "properties": {
+            "type": {
+              "const": "signal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/Snapshot",
+          "description": "Runner to Core on a terminal stream: the screen now; output resumes at its `seq`.",
+          "properties": {
+            "type": {
+              "const": "snapshot",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A type from a newer peer: ignored. Never sent.",
+          "properties": {
+            "type": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CoreAuth": {
+      "description": "Core to runner, the answer to `hello`.",
+      "properties": {
+        "core_spki": {
+          "description": "The Core identity SPKI (91 bytes), base64url.",
+          "type": "string"
+        },
+        "nonce": {
+          "description": "`nonce_c`, 32 bytes, base64url.",
+          "type": "string"
+        },
+        "sig": {
+          "description": "ES256, raw r‖s, base64url: the Core key over `core_auth_message`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "core_spki",
+        "nonce",
+        "sig"
+      ],
+      "type": "object"
+    },
+    "CoreWelcome": {
+      "properties": {
+        "boot": {
+          "description": "The Core process's random id (E1-11.4): another than last time means the Core\nrestarted, and every stream the runner held is gone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "heartbeat_ms": {
+          "description": "Between heartbeats, each way; silent for three is a dead connection.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "protocol": {
+          "description": "The version the Core speaks on this connection.",
+          "type": "string"
+        },
+        "streams": {
+          "description": "Every command stream the Core still has in flight for this runner, with how many runner\nframes it received on each: the runner resends the rest. A stream the runner holds that\nis not listed is over for the Core (answered, or reported lost).",
+          "items": {
+            "$ref": "#/$defs/StreamState"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "Credit": {
+      "description": "Flow control: the sender of this frame accepts `bytes` more `output` bytes on the stream.",
+      "properties": {
+        "bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "DiskReport": {
+      "description": "A runner's disk use (1.15, E15.9), as measured after its last clean-up pass.",
+      "properties": {
+        "caches_bytes": {
+          "description": "The shared build caches, one per repo (`CARGO_TARGET_DIR`, package stores, …).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cap_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "full": {
+          "description": "Over the cap with nothing left it may evict.",
+          "type": "boolean"
+        },
+        "mirrors_bytes": {
+          "description": "The bare repo mirrors, which hold every issue's branch: never evicted.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "removed": {
+          "default": [],
+          "description": "Issues whose worktrees this pass removed: idle past the limit, or evicted for room.",
+          "items": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "used_bytes": {
+          "description": "Everything under its work root.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "worktrees": {
+          "description": "Each worktree it holds, oldest use first.",
+          "items": {
+            "$ref": "#/$defs/WorktreeDisk"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "used_bytes",
+        "cap_bytes",
+        "caches_bytes",
+        "mirrors_bytes",
+        "worktrees",
+        "full"
+      ],
+      "type": "object"
+    },
+    "DriverInfo": {
+      "description": "A driver a runner offers (`exec`, `agent`; `pty` later).",
+      "properties": {
+        "capacity": {
+          "description": "How many of its commands run at once; one more is answered `busy`. For `agent`: how\nmany sessions.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "commands": {
+          "description": "The command ops it takes, e.g. `noop`, `exec.run`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "slots": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "description": "Per kind within the driver (`agent`: per harness), how many run at once; together at\nmost `capacity`. Empty: no split.",
+          "type": "object"
+        },
+        "streams": {
+          "description": "How many of its commands may be in flight at once, when that is not `capacity` (a\ndriver whose work outlives its commands, like `agent`): the hub counts these per\ndriver. Absent: `capacity`, counted with every other driver's.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "commands",
+        "capacity"
+      ],
+      "type": "object"
+    },
+    "Egress": {
+      "additionalProperties": false,
+      "description": "Destinations a session may (`allow`) or may not (`deny`) reach, as IP literals or CIDR\nblocks. Host names are refused: they are the runner operator's, resolved only by the\negress proxy outside the sandbox. A session's rules can only narrow what the runner allows.",
+      "properties": {
+        "allow": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deny": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ErrorCode": {
+      "description": "Machine codes, snake_case like the client API's (handshake spec §14).",
+      "oneOf": [
+        {
+          "const": "bad_frame",
+          "description": "A frame or payload that does not parse, or a stream id that breaks the rules.",
+          "type": "string"
+        },
+        {
+          "const": "unsupported_version",
+          "description": "The peer's protocol major is not one this side speaks.",
+          "type": "string"
+        },
+        {
+          "const": "unsupported_command",
+          "description": "No advertised driver takes this command op.",
+          "type": "string"
+        },
+        {
+          "const": "invalid_args",
+          "description": "The command's arguments are refused (e.g. a relative `cwd`).",
+          "type": "string"
+        },
+        {
+          "const": "busy",
+          "description": "The driver is at its advertised capacity; retry later.",
+          "type": "string"
+        },
+        {
+          "const": "spawn_failed",
+          "description": "The program could not be started.",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "description": "The command was cancelled by a `close`.",
+          "type": "string"
+        },
+        {
+          "const": "internal",
+          "description": "Anything else on the runner's side.",
+          "type": "string"
+        },
+        {
+          "const": "auth_failed",
+          "description": "The connection proof failed (`auth`); the same answer whatever the reason.",
+          "type": "string"
+        },
+        {
+          "const": "core_identity_mismatch",
+          "description": "The Core's identity is not the one the runner pinned. Logged by the runner; never sent.",
+          "type": "string"
+        },
+        {
+          "const": "offline",
+          "description": "The runner is not connected (Core side, to whoever dispatched).",
+          "type": "string"
+        },
+        {
+          "const": "lost",
+          "description": "The connection went while the command was in flight and its outcome is unknown: it may\nor may not have run. Reported once per command, never followed by a result.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A code from a newer peer. Never sent.",
+          "type": "string"
+        }
+      ]
+    },
+    "ExecLimits": {
+      "description": "What the Core asks for; the runner clamps each to its own ceiling and uses its default\nfor an absent one.",
+      "properties": {
+        "max_output_bytes": {
+          "description": "The most of stdout, and of stderr, kept; the rest is dropped and marked.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "timeout_ms": {
+          "description": "Wall clock until the process group gets TERM, then KILL.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ExecResult": {
+      "properties": {
+        "duration_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "exit_code": {
+          "description": "Absent when it was ended by a signal (its timeout included).",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "$ref": "#/$defs/Captured"
+        },
+        "stdout": {
+          "$ref": "#/$defs/Captured"
+        },
+        "timed_out": {
+          "description": "It ran past its timeout and was killed.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "timed_out",
+        "duration_ms",
+        "stdout",
+        "stderr"
+      ],
+      "type": "object"
+    },
+    "ExecRun": {
+      "description": "Runs `program args…` to its end, bounded, and answers with its exit and output.",
+      "properties": {
+        "args": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cwd": {
+          "description": "An absolute directory; absent, the runner's own working directory.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Variables set in the child as given.",
+          "type": "object"
+        },
+        "env_pass": {
+          "description": "Names of the runner's own variables to pass on. Only those also on the runner's\nallow-list are; the child's environment starts empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limits": {
+          "$ref": "#/$defs/ExecLimits",
+          "default": {}
+        },
+        "program": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "program"
+      ],
+      "type": "object"
+    },
+    "Frame": {
+      "description": "One WebSocket text message.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/FrameKind"
+        },
+        "payload": {
+          "description": "The body for `kind` (`Body`; schema `V2Payload`); absent for `heartbeat` when its payload\nis the default `Heartbeat`."
+        },
+        "seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stream_id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "stream_id",
+        "kind",
+        "seq"
+      ],
+      "type": "object"
+    },
+    "FrameKind": {
+      "oneOf": [
+        {
+          "enum": [
+            "control",
+            "command",
+            "result",
+            "error",
+            "output",
+            "credit",
+            "close",
+            "heartbeat"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A kind from a newer peer: skipped. Never sent.",
+          "type": "string"
+        }
+      ]
+    },
+    "GatewayAuth": {
+      "description": "The header the gateway puts the key in.",
+      "oneOf": [
+        {
+          "const": "x_api_key",
+          "description": "`x-api-key: <key>`",
+          "type": "string"
+        },
+        {
+          "const": "bearer",
+          "description": "`Authorization: Bearer <key>`",
+          "type": "string"
+        },
+        {
+          "const": "x_goog_api_key",
+          "description": "`x-goog-api-key: <key>`",
+          "type": "string"
+        }
+      ]
+    },
+    "GatewayGrant": {
+      "description": "Core to runner, in `AgentStart`: the key of one account, served to the harness by the runner's\ngateway. `lease` is redeemed into the gateway's memory, never the env or a file. No `Debug`.",
+      "properties": {
+        "account": {
+          "description": "The account id, for the runner's logs; the ledger takes it from the Core's own row.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "ceiling": {
+          "$ref": "#/$defs/Ceiling"
+        },
+        "lease": {
+          "description": "`l_…`, single use, this runner only.",
+          "type": "string"
+        },
+        "models": {
+          "description": "The model ids the session may name.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "prices": {
+          "description": "The list price of each model in `models`, for the per-request reservation.",
+          "items": {
+            "$ref": "#/$defs/ModelPrice"
+          },
+          "type": "array"
+        },
+        "provider": {
+          "default": "",
+          "description": "The account's provider id (`anthropic`, or a user definition's id): the runner runs\n[`key_host_problem`] with it before dialing. Absent reads as empty, which no key passes.",
+          "type": "string"
+        },
+        "rate": {
+          "$ref": "#/$defs/Rate"
+        },
+        "upstream": {
+          "$ref": "#/$defs/Upstream"
+        },
+        "user_key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UserKeyDef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The user definition's key shape and host, for a user-defined provider."
+        }
+      },
+      "required": [
+        "lease",
+        "account",
+        "upstream",
+        "models",
+        "ceiling",
+        "rate"
+      ],
+      "type": "object"
+    },
+    "GatewayReport": {
+      "description": "Runner to Core, in [`AgentEvents::gateway`](super::AgentEvents): what the gateway saw. It has\nits own channel and its own `gw_seq` (per session, from 1, by one), acknowledged by\n[`AgentRead::gw_after`](super::AgentRead), and only the gateway task writes it: nothing the\nharness prints can become one. It names no account and no model the Core did not allow; the\nCore takes the account from its own session row.",
+      "properties": {
+        "approximate": {
+          "default": false,
+          "description": "The counts are the gateway's estimate: the stream was cut, dropped or never reported usage.",
+          "type": "boolean"
+        },
+        "cache_read": {
+          "default": 0,
+          "description": "Input tokens read from a cache.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cache_write": {
+          "default": 0,
+          "description": "Input tokens written to a cache.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "epoch": {
+          "description": "The `epoch` of the start the report was made under (`AgentStart::epoch`), set by the runner\nwhen it numbers the report. The ledger's key is session, epoch and `gw_seq`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "gw_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input": {
+          "default": 0,
+          "description": "Input tokens not served from a cache.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/GatewayReportKind"
+        },
+        "model": {
+          "description": "The model the request named (checked against the grant), for a usage report.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reported_usd_micros": {
+          "description": "What the provider itself reported as the cost, when a response header the gateway parsed\nsaid so. Absent otherwise.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reset_at": {
+          "description": "When the upstream's limit resets, as it said (an RFC 3339 time), for an upstream report.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retry_after": {
+          "description": "Seconds the upstream asked to wait (`retry-after`), for an upstream report.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/UpstreamStatus",
+          "description": "The outcome class of the request."
+        }
+      },
+      "required": [
+        "gw_seq",
+        "kind",
+        "status"
+      ],
+      "type": "object"
+    },
+    "GatewayReportKind": {
+      "description": "What a [`GatewayReport`] says.",
+      "oneOf": [
+        {
+          "const": "usage",
+          "description": "One request's tokens: the ledger records it.",
+          "type": "string"
+        },
+        {
+          "const": "upstream",
+          "description": "An upstream signal (rate limit, auth failure, ...): no tokens.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A kind from a newer runner. Never sent.",
+          "type": "string"
+        }
+      ]
+    },
+    "GatewayTest": {
+      "description": "Core to runner: redeem `lease`, run the dial checks, make one free request.",
+      "properties": {
+        "lease": {
+          "type": "string"
+        },
+        "provider": {
+          "default": "",
+          "description": "As in [`GatewayGrant`].",
+          "type": "string"
+        },
+        "test_path": {
+          "description": "The path of the one request, under the upstream's base path, when the provider's own model\nlist is not an authenticated call (OpenRouter lists models without a key, so a revoked key\nwould read as `ok`). Absent: the wire's own model list, which every built-in provider\nauthenticates.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "upstream": {
+          "$ref": "#/$defs/Upstream"
+        },
+        "user_key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UserKeyDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "lease",
+        "upstream"
+      ],
+      "type": "object"
+    },
+    "GatewayTested": {
+      "description": "Runner to Core: the status class and latency of a [`GatewayTest`]; never a body.",
+      "properties": {
+        "latency_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "result": {
+          "$ref": "#/$defs/UpstreamStatus"
+        }
+      },
+      "required": [
+        "result",
+        "latency_ms"
+      ],
+      "type": "object"
+    },
+    "Heartbeat": {
+      "description": "A runner's heartbeat: carries `load` when the runner measured one, and the isolation it\noffers now.",
+      "properties": {
+        "isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IsolationCaps"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The isolation the runner offers now (E8a-09): a change shows in the next heartbeat, so a\ntier that goes away is no longer offered by the Core's next placement. Absent from a\nrunner that does not report it, and from one that offers no agent driver."
+        },
+        "load": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostLoad2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The host's load when the heartbeat was sent; absent when the runner has no measure."
+        }
+      },
+      "type": "object"
+    },
+    "HostLoad": {
+      "description": "The host's load when a heartbeat was sent (1.26): its one-minute load average and its CPU\ncount. The server stretches a loaded runner's lease by `avg1 / cores`, up to a cap.",
+      "properties": {
+        "avg1": {
+          "format": "double",
+          "type": "number"
+        },
+        "cores": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "avg1",
+        "cores"
+      ],
+      "type": "object"
+    },
+    "HostLoad2": {
+      "description": "The host's load when a heartbeat was sent (E2-15.2): its one-minute load average and its\nCPU count, so the hub can apply load-based back-pressure and report it through the API.",
+      "properties": {
+        "avg1": {
+          "description": "The one-minute load average.",
+          "format": "double",
+          "type": "number"
+        },
+        "cores": {
+          "description": "How many CPUs the runner sees.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "avg1",
+        "cores"
+      ],
+      "type": "object"
+    },
+    "Isolation": {
+      "description": "How strongly a session is isolated from its host, weakest to strongest.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "The harness runs as the runner's user (the default of a runner with no sandbox).",
+          "type": "string"
+        },
+        {
+          "const": "process",
+          "description": "A process sandbox: bubblewrap or Seatbelt.",
+          "type": "string"
+        },
+        {
+          "const": "microvm",
+          "description": "A virtual machine with its own kernel.",
+          "type": "string"
+        }
+      ]
+    },
+    "IsolationCaps": {
+      "description": "What isolation a runner can give right now (E8a-09). Placement is by this, and the runner\nchecks again when a session starts; a stale or forged advertisement therefore never gets a\nsession a weaker sandbox than it asked for.",
+      "properties": {
+        "kvm": {
+          "$ref": "#/$defs/Kvm",
+          "default": "not_applicable",
+          "description": "`/dev/kvm`, for the microvm tier."
+        },
+        "tiers": {
+          "description": "Every tier offered now, by name (`Isolation::as_str`). A runner whose probe fails stops\nlisting the tier. Names, not the enum, so a tier from a newer runner parses here and\nsimply meets nothing.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tiers"
+      ],
+      "type": "object"
+    },
+    "Kvm": {
+      "description": "The state of `/dev/kvm` on a runner, for the microvm tier (E8a-09).",
+      "oneOf": [
+        {
+          "const": "not_applicable",
+          "description": "No VM tier is built into this runner, or the host has no KVM concept (macOS).",
+          "type": "string"
+        },
+        {
+          "const": "absent",
+          "description": "The host has no `/dev/kvm`.",
+          "type": "string"
+        },
+        {
+          "const": "usable",
+          "description": "`/dev/kvm` is there and the probe passed.",
+          "type": "string"
+        },
+        {
+          "const": "unusable",
+          "description": "`/dev/kvm` is there and the probe failed (permissions, a broken host).",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A state from a newer runner: read as not usable. Never sent.",
+          "type": "string"
+        }
+      ]
+    },
+    "Login": {
+      "description": "A login place on a runner host (1.20): `dir` is relative to its config root\n(`claude`, `accounts/claude-a`), or `credentials/<file>` for an account's token file.",
+      "properties": {
+        "dir": {
+          "type": "string"
+        },
+        "harness": {
+          "default": null,
+          "description": "The harness, when the dir is a harness's own.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "`logged_in`, `logged_out`, or `unknown` (the login lives in the keychain).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dir",
+        "state"
+      ],
+      "type": "object"
+    },
+    "LoginCancel": {
+      "description": "Core to runner: stop the sign-in and wipe what it made.",
+      "properties": {
+        "login_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "login_id"
+      ],
+      "type": "object"
+    },
+    "LoginCode": {
+      "description": "Core to runner: the approval code the user pasted.",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "login_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "login_id",
+        "code"
+      ],
+      "type": "object"
+    },
+    "LoginResult": {
+      "description": "Runner to Core, the answer to `login.code` and `login.cancel`: the token (once; the runner\nzeroizes its copy) or an error, never both.",
+      "properties": {
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "login_id": {
+          "type": "string"
+        },
+        "token": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "login_id"
+      ],
+      "type": "object"
+    },
+    "LoginStart": {
+      "description": "Core to runner: begin the sign-in of `harness` (`claude`).",
+      "properties": {
+        "harness": {
+          "type": "string"
+        },
+        "login_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "login_id",
+        "harness"
+      ],
+      "type": "object"
+    },
+    "LoginUrl": {
+      "description": "Runner to Core, the answer to `login.start`: where the user signs in.",
+      "properties": {
+        "login_id": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "login_id",
+        "url"
+      ],
+      "type": "object"
+    },
+    "ModelPrice": {
+      "description": "The list price of one model, in micro-dollars per million tokens, for the gateway's\nper-request reservation (decision: the Core's price book, carried in the grant).",
+      "properties": {
+        "cache_read": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cache_write": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "output": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "model",
+        "input",
+        "output",
+        "cache_read",
+        "cache_write"
+      ],
+      "type": "object"
+    },
+    "Outcome": {
+      "description": "How a run ended, as its runner saw it.",
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "succeeded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`fingerprint` is the error class + step, for the loop breaker.",
+          "properties": {
+            "fingerprint": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "failed",
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "cancelled",
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Usage reached the run's token cap.",
+          "properties": {
+            "kind": {
+              "const": "token_cap",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "No progress for `RunLimits.stall_after_secs` (1.14): the runner stopped it.",
+          "properties": {
+            "kind": {
+              "const": "stalled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Output": {
+      "description": "Bytes on a stream (exec output later, terminal `out`/`in`), standard base64.",
+      "properties": {
+        "data": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "type": "object"
+    },
+    "PermissionMode": {
+      "oneOf": [
+        {
+          "const": "ask",
+          "description": "Everything outside the allowlist asks.",
+          "type": "string"
+        },
+        {
+          "const": "accept_edits",
+          "description": "File edits inside the run's directory go ahead; the rest asks.",
+          "type": "string"
+        },
+        {
+          "const": "sandboxed",
+          "description": "The harness acts without asking. Only with `sandboxed`.",
+          "type": "string"
+        }
+      ]
+    },
+    "PlanLimit": {
+      "description": "The latest plan-limit event of a session, overwritten by each newer one (no sequence number).",
+      "properties": {
+        "status": {
+          "description": "The harness's own word: `allowed`, `allowed_warning`, `rejected`.",
+          "type": "string"
+        },
+        "windows": {
+          "items": {
+            "$ref": "#/$defs/PlanWindow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "PlanWindow": {
+      "description": "One plan window, e.g. Claude's `five_hour` and `seven_day`.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "resets_at": {
+          "description": "When the window resets, in seconds since the epoch.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "utilization": {
+          "description": "A fraction of the window's limit: 0.0 to 1.0, and past it at the limit.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "utilization"
+      ],
+      "type": "object"
+    },
+    "Policy": {
+      "additionalProperties": false,
+      "description": "A project's harness permission policy (1.3). Never full-auto by default.",
+      "properties": {
+        "allow": {
+          "default": [],
+          "description": "Tools the harness may use without asking: a tool name (`Edit`, `fileChange`), or\n`<tool>:<command prefix>` (`Bash:cargo test`) for a command with no shell operators, or a\nchain of commands each of which it covers.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "disk_mb": {
+          "description": "Disk cap in MiB, 16 to 1048576. It can only lower the runner's own cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "egress": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Egress"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Destinations the session may reach, narrowing the runner's own allowlist."
+        },
+        "image": {
+          "description": "The guest image, by digest (`sha256:` + 64 hex). Only a tier that boots an image takes it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "memory_mb": {
+          "description": "Memory cap in MiB, 64 to 262144. It can only lower the runner's own cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min_isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Isolation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The weakest isolation the session may run in (E8a-08). Absent: any runner. A runner that\ncannot offer it is never given the session, and refuses it if it is (E8a-09)."
+        },
+        "mode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "sandboxed": {
+          "default": false,
+          "description": "Runs must work in a disposable sandbox: only a sandboxed runner may take them.",
+          "type": "boolean"
+        },
+        "vcpus": {
+          "description": "Virtual CPUs, 1 to 32. Only a VM tier has them.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "wall_secs": {
+          "description": "A hard wall-clock cap in seconds, 1 to 86400: the host kills the sandbox at the deadline.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkspaceMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the workspace reaches the sandbox. Absent: `bind`."
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
+    },
+    "PtyAttach": {
+      "description": "`pty.attach`: reach a running terminal and resume its output at `seq`.",
+      "properties": {
+        "seq": {
+          "default": 0,
+          "description": "The next output byte the attacher wants; older than the runner keeps gets a snapshot.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminal": {
+          "type": "string"
+        },
+        "watch": {
+          "description": "Only watches for the exit (the Core's monitor), not a client; see [`PtyOpen::watch`].",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "terminal"
+      ],
+      "type": "object"
+    },
+    "PtyClose": {
+      "description": "`pty.close`: hang the terminal up (HUP, then TERM, then KILL) and answer its exit.",
+      "properties": {
+        "terminal": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "terminal"
+      ],
+      "type": "object"
+    },
+    "PtyOpen": {
+      "description": "`pty.open`: a login shell, or `program args…`, in a new PTY.",
+      "properties": {
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cwd": {
+          "description": "An absolute directory; absent, the user's home.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Set in the child as given.",
+          "type": "object"
+        },
+        "env_pass": {
+          "description": "Names of the runner's own variables to pass on; only those on its allow-list are.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "program": {
+          "description": "Absent: the user's login shell.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scrollback_budget": {
+          "description": "The runner's total scrollback disk budget (E2-06.2), applied by LRU across its\nterminals; the runner clamps it. Absent: unchanged.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "scrollback_bytes": {
+          "description": "The disk cap for this terminal's scrollback; the runner clamps it to its bounds.\nAbsent: the runner's default.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "size": {
+          "$ref": "#/$defs/Size"
+        },
+        "watch": {
+          "description": "This stream only watches for the exit (the Core's monitor): it is not a client, so it\ndoes not protect the terminal's scrollback from the disk budget.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "size"
+      ],
+      "type": "object"
+    },
+    "Rate": {
+      "description": "How fast a session may call.",
+      "properties": {
+        "concurrent": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "per_minute": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "per_minute",
+        "concurrent"
+      ],
+      "type": "object"
+    },
+    "Reply": {
+      "description": "Runner to Core, a command's last frame when it ran.",
+      "oneOf": [
+        {
+          "properties": {
+            "op": {
+              "const": "noop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ExecResult",
+          "properties": {
+            "op": {
+              "const": "exec.run",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TerminalExit",
+          "description": "A terminal's exit, on the stream of the op that saw it.",
+          "properties": {
+            "op": {
+              "const": "pty.open",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TerminalExit",
+          "properties": {
+            "op": {
+              "const": "pty.attach",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TerminalExit",
+          "properties": {
+            "op": {
+              "const": "pty.close",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentEvents",
+          "description": "Every `agent.*` op answers with the session's state (`agent.read` with its entries).",
+          "properties": {
+            "op": {
+              "const": "agent.start",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentEvents",
+          "properties": {
+            "op": {
+              "const": "agent.read",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentEvents",
+          "properties": {
+            "op": {
+              "const": "agent.send",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentEvents",
+          "properties": {
+            "op": {
+              "const": "agent.decide",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentEvents",
+          "properties": {
+            "op": {
+              "const": "agent.stop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentEvents",
+          "properties": {
+            "op": {
+              "const": "agent.limit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/GatewayTested",
+          "properties": {
+            "op": {
+              "const": "gateway.test",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/LoginUrl",
+          "description": "The answer to `login.start`.",
+          "properties": {
+            "op": {
+              "const": "login.url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/LoginResult",
+          "description": "The answer to `login.code` and `login.cancel`.",
+          "properties": {
+            "op": {
+              "const": "login.result",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ToolBatch",
+          "description": "(After every older op, as `Command`'s.) The answer to `agent.tools`: the calls the harness made.",
+          "properties": {
+            "op": {
+              "const": "agent.tools",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An op from a newer runner. Never sent.",
+          "properties": {
+            "op": {
+              "const": "Unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RepoDiff": {
+      "description": "One repo's worktree against its base (1.18): `git diff --numstat` plus untracked files.",
+      "properties": {
+        "deletions": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "files": {
+          "description": "Files changed, added or untracked.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "insertions": {
+          "description": "Lines added (an untracked text file's every line) and removed.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repo": {
+          "default": "",
+          "description": "The repo's name in its project; empty for an issue's only repo.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "files",
+        "insertions",
+        "deletions"
+      ],
+      "type": "object"
+    },
+    "Rotation": {
+      "description": "Core to runner: move the pin from `old_fp` to `new_fp`.",
+      "properties": {
+        "new_fp": {
+          "type": "string"
+        },
+        "not_before": {
+          "description": "Unix seconds from which the Core may present the new key.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "old_fp": {
+          "type": "string"
+        },
+        "seq": {
+          "description": "Increases with every rotation; a runner applies only a higher one.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sig": {
+          "description": "ES256 by the old key over `rotation_message`, base64url.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "old_fp",
+        "new_fp",
+        "not_before",
+        "seq",
+        "sig"
+      ],
+      "type": "object"
+    },
+    "Route": {
+      "description": "One entry of an agent's fallback chain (E15.3), with the account picked for it.",
+      "properties": {
+        "account": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Account"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "harness": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "harness",
+        "model"
+      ],
+      "type": "object"
+    },
+    "RunLimits": {
+      "description": "What the runner is told of the server's settings for one run (1.11, E15.17).",
+      "properties": {
+        "approval_timeout_secs": {
+          "description": "How long an escalated tool call waits for a reviewer before it is denied.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fallback_on_model_unavailable": {
+          "default": true,
+          "description": "Whether a turn failing for this class moves the run to the next entry of its fallback\nchain (1.20); otherwise the run fails. Absent from an older server: it does.",
+          "type": "boolean"
+        },
+        "fallback_on_quota": {
+          "default": true,
+          "type": "boolean"
+        },
+        "fallback_on_rate_limited": {
+          "default": true,
+          "type": "boolean"
+        },
+        "fallback_on_unhealthy": {
+          "default": true,
+          "type": "boolean"
+        },
+        "max_resumes": {
+          "description": "Resumes of a dropped session before the run gives up on its model (E15.4).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resume_backoff_max_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resume_backoff_ms": {
+          "description": "The first wait before a resume, doubling per drop, and the longest.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stall_after_secs": {
+          "default": 600,
+          "description": "How long the run may go without progress before it is stopped as stalled (1.14,\nE15.7). Absent from an older server: `STALL_AFTER_SECS`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool_output_bytes": {
+          "default": 2048,
+          "description": "The most of a tool's output a `tool_result` transcript event carries (1.18). Absent\nfrom an older server: `TOOL_OUTPUT_BYTES`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "warm_max": {
+          "default": 0,
+          "description": "Idle harness servers the runner keeps for later runs (1.13, E15.6); 0, none. Absent\nfrom an older server: none.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "approval_timeout_secs",
+        "max_resumes",
+        "resume_backoff_ms",
+        "resume_backoff_max_ms"
+      ],
+      "type": "object"
+    },
+    "RunToken": {
+      "description": "A run token on the wire. Its `Debug` is redacted, so logging a message never logs it;\n`expose` is the one way to read it.",
+      "type": "string"
+    },
+    "RunnerHello": {
+      "properties": {
+        "arch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "boot": {
+          "description": "The runner process's random id (E1-11.4). The same `boot` as the last connection means\nits streams survived and are resumed; another means they are gone (reported `lost`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "device_id": {
+          "description": "The runner device, `d_…`: the one that signed the upgrade (E1-11.3). The Core refuses a\nhello without it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "drivers": {
+          "description": "What it can run. The Core sends only commands listed here.",
+          "items": {
+            "$ref": "#/$defs/DriverInfo"
+          },
+          "type": "array"
+        },
+        "isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IsolationCaps"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The isolation the runner offers (E8a-09), beside `arch`. Absent from a runner that does\nnot report it: the Core then treats it as offering no guarantee, and places no session on\nit that needs one."
+        },
+        "load": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostLoad2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The host's load when the hello was sent (E2-15.2): the one-minute average and CPU count,\nso the hub can apply load-based back-pressure before any heartbeat."
+        },
+        "nonce": {
+          "description": "`nonce_r`, 32 random bytes, base64url (`auth`). The Core refuses a hello without it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "os": {
+          "description": "`macos`/`linux` and `aarch64`/`x86_64`, as Rust names them.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "protocol": {
+          "description": "`PROTOCOL_VERSION` of the runner; the Core refuses a major it does not speak.",
+          "type": "string"
+        },
+        "runner_version": {
+          "type": "string"
+        },
+        "streams": {
+          "description": "Every command stream the runner still holds, with how many Core frames it received on\neach: the Core resends the rest.",
+          "items": {
+            "$ref": "#/$defs/StreamState"
+          },
+          "type": "array"
+        },
+        "terminals": {
+          "description": "Every terminal this runner's host processes hold (E2-03), so a Core that lost its\nstreams (a runner or Core restart) can `pty.attach` again.",
+          "items": {
+            "$ref": "#/$defs/TerminalInfo"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "protocol",
+        "runner_version",
+        "drivers"
+      ],
+      "type": "object"
+    },
+    "RunnerInfo": {
+      "description": "What a runner says of itself (1.20).",
+      "properties": {
+        "logins": {
+          "default": [],
+          "description": "Each harness and account config dir (and account token file) it found, and whether it\nis logged in there.",
+          "items": {
+            "$ref": "#/$defs/Login"
+          },
+          "type": "array"
+        },
+        "power_nap": {
+          "default": null,
+          "description": "The Power Nap preference it holds, as the server last sent it.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "slept_secs": {
+          "default": null,
+          "description": "How long its machine last slept, if it slept since the daemon started.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "slots": {
+          "description": "Runs it works at once.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uptime_secs": {
+          "description": "Seconds since the daemon started.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "slots",
+        "uptime_secs"
+      ],
+      "type": "object"
+    },
+    "RunnerLimits": {
+      "description": "What the runner is told of the server's settings for it (1.15, E15.9, decision #57: server-wide\nper runner, not per company).",
+      "properties": {
+        "disk_cap_bytes": {
+          "description": "The most its work root may hold: worktrees, shared build caches and repo mirrors.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "disk_evict_percent": {
+          "description": "Share of the cap past which idle worktrees are evicted, oldest first, then caches.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "warm_idle_secs": {
+          "description": "How long a warm harness server may sit idle before it is stopped (E15.6).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workspace_idle_secs": {
+          "description": "How long a worktree may sit with no run before it is removed (its work kept on its\nbranch, uncommitted changes on `refs/citadel/wip/<issue>`), recreated on demand.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "disk_cap_bytes",
+        "disk_evict_percent",
+        "workspace_idle_secs",
+        "warm_idle_secs"
+      ],
+      "type": "object"
+    },
+    "RunnerProof": {
+      "description": "Runner to Core, once it has checked `CoreAuth`.",
+      "properties": {
+        "sig": {
+          "description": "ES256, raw r‖s, base64url: the runner's routine key over `runner_auth_message`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sig"
+      ],
+      "type": "object"
+    },
+    "SecretGrant": {
+      "description": "One secret for a session: its lease, and the variable it is delivered under.",
+      "properties": {
+        "lease": {
+          "description": "`l_…`, redeemable once, by this runner only.",
+          "type": "string"
+        },
+        "var": {
+          "description": "The environment variable: the value itself (`env`), the file's path (`file`), or the\naskpass helper's path (`askpass`, also set as `GIT_ASKPASS`). `[A-Z_][A-Z0-9_]*`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "lease",
+        "var"
+      ],
+      "type": "object"
+    },
+    "SignalReq": {
+      "description": "`control` `signal`: deliver one of [`SIGNALS`] to the terminal's process group.",
+      "properties": {
+        "signal": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "signal"
+      ],
+      "type": "object"
+    },
+    "Size": {
+      "description": "A terminal's size in cells; `control` `resize` carries one.",
+      "properties": {
+        "cols": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rows": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rows",
+        "cols"
+      ],
+      "type": "object"
+    },
+    "Snapshot": {
+      "description": "`control` `snapshot`: the visible screen as bytes a terminal view replays (standard\nbase64), after which output resumes at `seq`.",
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "data"
+      ],
+      "type": "object"
+    },
+    "StreamError": {
+      "description": "A command's failure, or (on stream 0) a connection's. `message` is human text, redacted.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "StreamState": {
+      "description": "Resume by `seq` (E1-11.4): how many of the peer's frames one side received on a stream.\nFrames are numbered from 0, so this is also the next `seq` it expects.",
+      "properties": {
+        "received": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stream_id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "stream_id",
+        "received"
+      ],
+      "type": "object"
+    },
+    "TerminalExit": {
+      "description": "How a terminal's child ended: the `result` of every `pty.*` op.",
+      "properties": {
+        "exit_code": {
+          "description": "Absent when it was ended by a signal.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "signal": {
+          "description": "The signal's description, when one ended it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "terminal": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "terminal"
+      ],
+      "type": "object"
+    },
+    "TerminalInfo": {
+      "description": "A terminal as its runner sees it: `control` `opened`, and each entry of\n`RunnerHello::terminals`.",
+      "properties": {
+        "exit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalExit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Set once the child exited."
+        },
+        "pid": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "seq": {
+          "description": "Output bytes so far: the next byte's offset.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "size": {
+          "$ref": "#/$defs/Size"
+        },
+        "state": {
+          "$ref": "#/$defs/TerminalState"
+        },
+        "terminal": {
+          "description": "`t_…`, chosen by the runner.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "terminal",
+        "state",
+        "size",
+        "seq"
+      ],
+      "type": "object"
+    },
+    "TerminalState": {
+      "description": "A terminal's lifecycle (E2-01.1): created → running → exited → reaped.",
+      "oneOf": [
+        {
+          "enum": [
+            "running"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "created",
+          "description": "Asked for; the child is not running yet.",
+          "type": "string"
+        },
+        {
+          "const": "exited",
+          "description": "The child ended (it is waited for); its exit is not read yet.",
+          "type": "string"
+        },
+        {
+          "const": "reaped",
+          "description": "A client read the exit: the host is gone and the id is free.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A state from a newer peer.",
+          "type": "string"
+        }
+      ]
+    },
+    "TokenCaps": {
+      "description": "A run's caps, split (1.27): what the runner counts its tokens against. A run stops when\neither applies. Its tokens are counted from its events, and the caps stay exact for the\nbudgets and the issue; only `run` is weighted.",
+      "properties": {
+        "cache_weight_divisor": {
+          "description": "How much a cache token counts against `run`, as a divisor (1: every token in full).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "exact": {
+          "description": "The least left in the budgets and the issue's cap that apply, counted in full (0 is\nstop at once); absent when none applies.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run": {
+          "description": "`run.token_cap`, compared with the run's tokens where cache reads and writes count at\n`1 / cache_weight_divisor` (0 is stop at once).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run",
+        "cache_weight_divisor"
+      ],
+      "type": "object"
+    },
+    "Tokens": {
+      "description": "Token counts. A cap counts their `sum`.",
+      "properties": {
+        "cache_read": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cache_write": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cost_usd_micros": {
+          "description": "What the harness itself says the run has cost so far, in millionths of a US dollar,\nwhen it says (Claude's `total_cost_usd`, OpenCode's session cost; 1.6). Not part of\n`sum`. Absent: the server prices the tokens, or leaves them unpriced.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "input": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "input",
+        "output",
+        "cache_read",
+        "cache_write"
+      ],
+      "type": "object"
+    },
+    "ToolBatch": {
+      "description": "Runner to Core: the calls after `ToolsPoll::after`.",
+      "properties": {
+        "calls": {
+          "items": {
+            "$ref": "#/$defs/ToolCall"
+          },
+          "type": "array"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "type": "object"
+    },
+    "ToolCall": {
+      "description": "Runner to Core: the harness called `tool`.",
+      "properties": {
+        "args": {
+          "description": "The harness's arguments, as given."
+        },
+        "id": {
+          "description": "Made by the runner; the result names it.",
+          "type": "string"
+        },
+        "tc_seq": {
+          "description": "Per session, from 1, by one: the Core's cursor over it.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tc_seq",
+        "id",
+        "tool",
+        "args"
+      ],
+      "type": "object"
+    },
+    "ToolResult": {
+      "description": "Core to runner: how call `id` ended. Either `result`, or a plain `code` and a fixed `message`.",
+      "properties": {
+        "code": {
+          "description": "A refusal or upstream class (`not_granted`, `rate_limited`, `not_found`, ...).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "result": true
+      },
+      "required": [
+        "id",
+        "ok"
+      ],
+      "type": "object"
+    },
+    "ToolsPoll": {
+      "description": "Core to runner: the poll.",
+      "properties": {
+        "after": {
+          "description": "The last `tc_seq` the Core holds (0 for none).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "results": {
+          "items": {
+            "$ref": "#/$defs/ToolResult"
+          },
+          "type": "array"
+        },
+        "session": {
+          "type": "string"
+        },
+        "tools": {
+          "description": "The whole tool list now; absent: unchanged. An empty list takes every tool away.",
+          "items": {
+            "$ref": "#/$defs/ConnTool"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "wait_ms": {
+          "description": "How long to wait for a first call; absent or 0 answers at once.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session",
+        "after"
+      ],
+      "type": "object"
+    },
+    "TranscriptEntry": {
+      "description": "One transcript entry: redacted by the runner before it is kept.",
+      "properties": {
+        "at": {
+          "description": "Unix milliseconds.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "body": {
+          "description": "The harness event, or the driver's own (`approval_request`, `gap`, `ended`, …)."
+        },
+        "seq": {
+          "description": "From 1, by one, per session.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "at",
+        "body"
+      ],
+      "type": "object"
+    },
+    "Upstream": {
+      "description": "Where the gateway dials: from the account row's frozen `base_url`, never from the agent.",
+      "properties": {
+        "auth": {
+          "$ref": "#/$defs/GatewayAuth"
+        },
+        "base_path": {
+          "default": "",
+          "description": "The path the wire's routes hang under (`\"\"`, or `/v1` for the OpenAI wire).",
+          "type": "string"
+        },
+        "host": {
+          "description": "The host name, no scheme, port or trailing dot (443 only).",
+          "type": "string"
+        },
+        "wire": {
+          "$ref": "#/$defs/Wire"
+        }
+      },
+      "required": [
+        "host",
+        "wire",
+        "auth"
+      ],
+      "type": "object"
+    },
+    "UpstreamStatus": {
+      "description": "The outcome class of an upstream request or test: a status class only, never provider text.",
+      "oneOf": [
+        {
+          "enum": [
+            "ok",
+            "rate_limited",
+            "quota",
+            "auth_failed",
+            "server_error",
+            "unreachable",
+            "refused_address",
+            "tls_failed"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A class from a newer runner. Never sent.",
+          "type": "string"
+        }
+      ]
+    },
+    "UserKeyDef": {
+      "description": "A user-defined provider's key shape and frozen host: what the runner needs to run\n[`key_host_problem`] as the broker did. Absent for a built-in provider.",
+      "properties": {
+        "host": {
+          "description": "The definition's frozen host.",
+          "type": "string"
+        },
+        "prefix": {
+          "description": "The definition's declared `key_prefix`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "prefix",
+        "host"
+      ],
+      "type": "object"
+    },
+    "V2Payload": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Control"
+        },
+        {
+          "$ref": "#/$defs/Command"
+        },
+        {
+          "$ref": "#/$defs/Reply"
+        },
+        {
+          "$ref": "#/$defs/StreamError"
+        },
+        {
+          "$ref": "#/$defs/Output"
+        },
+        {
+          "$ref": "#/$defs/Credit"
+        },
+        {
+          "$ref": "#/$defs/Close"
+        },
+        {
+          "$ref": "#/$defs/Heartbeat"
+        },
+        {
+          "$ref": "#/$defs/HostLoad2"
+        }
+      ],
+      "description": "A v2 Frame's payload by kind: control Control, command Command, result Reply, error StreamError, output Output, credit Credit, close Close, heartbeat Heartbeat."
+    },
+    "Wire": {
+      "description": "The upstream API dialects the gateway speaks: a closed set, so the route table is code.",
+      "enum": [
+        "anthropic-messages",
+        "openai-responses",
+        "gemini-generate"
+      ],
+      "type": "string"
+    },
+    "Workspace": {
+      "description": "Where an issue's run works: a git worktree of `repo` on `branch`, cut from `base`.",
+      "properties": {
+        "also": {
+          "description": "The issue's other repos, in its project's order, when it touches several (1.16).",
+          "items": {
+            "$ref": "#/$defs/Workspace"
+          },
+          "type": "array"
+        },
+        "base": {
+          "description": "The project's default branch.",
+          "type": "string"
+        },
+        "branch": {
+          "description": "The issue's branch, `citadel/<project key>-<number>`.",
+          "type": "string"
+        },
+        "expected_head": {
+          "description": "The sha the branch was last pushed at (1.28), `None` before its first push. The runner\nleases its push on it, so a rewritten branch lands only over the head it last saw.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The repo's name in its project (1.16): its worktree's directory in a multi-repo workspace.",
+          "type": "string"
+        },
+        "push": {
+          "default": false,
+          "description": "Push the branch to the repo's origin when the run ends (1.7): its project is on a forge,\nwhere a PR is opened from it (E9.1).",
+          "type": "boolean"
+        },
+        "repo": {
+          "description": "A URL or path git can clone, never holding credentials (`repo_url_problem`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repo",
+        "base",
+        "branch"
+      ],
+      "type": "object"
+    },
+    "WorkspaceMode": {
+      "description": "How the session's workspace reaches the sandbox.",
+      "oneOf": [
+        {
+          "const": "bind",
+          "description": "The worktree is bound into the sandbox (every process tier).",
+          "type": "string"
+        },
+        {
+          "const": "copy",
+          "description": "The worktree is copied in and the result copied out; no host path is shared (a VM).",
+          "type": "string"
+        }
+      ]
+    },
+    "WorktreeDisk": {
+      "description": "One issue's worktree in a `DiskReport`.",
+      "properties": {
+        "active": {
+          "description": "A run is using it: never evicted.",
+          "type": "boolean"
+        },
+        "bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "idle_secs": {
+          "description": "Seconds since a run last used it.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "issue": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "issue",
+        "bytes",
+        "active",
+        "idle_secs"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "RunnerMessage: runner to server (v1). ServerMessage: server to runner (v1). Frame: either way (v2, multiplexed streams).",
+  "oneOf": [
+    {
+      "description": "Runner → server.",
+      "oneOf": [
+        {
+          "description": "The first message of every connection.",
+          "properties": {
+            "arch": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "disk": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DiskReport"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Its last disk report (1.15), if it made one."
+            },
+            "harnesses": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Installed harness → version, e.g. `claude` → `2.1.306`, from its `--version` (or\n`unknown (…)` when unreadable). A version at or above the adapter's minimum and not\nknown bad gets work (1.21); a refused one marks the runner unhealthy (E3.6).",
+              "type": "object"
+            },
+            "info": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RunnerInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Its state (1.20); absent from an older runner."
+            },
+            "os": {
+              "default": null,
+              "description": "Its operating system and CPU architecture (1.25), e.g. `macos` and `aarch64`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "protocol": {
+              "type": "string"
+            },
+            "runner_version": {
+              "type": "string"
+            },
+            "runs": {
+              "description": "Runs it is still working on, to resume after a reconnect.",
+              "items": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "tags": {
+              "description": "Capabilities it offers, e.g. `linux`, `macos`, `xcode`.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "hello",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "protocol",
+            "runner_version",
+            "tags",
+            "harnesses",
+            "runs"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The answer to `Probe` `request` (1.25): what it found now.",
+          "properties": {
+            "arch": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "error": {
+              "default": null,
+              "description": "Why it could not look, if it could not.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "harnesses": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {},
+              "description": "Installed harness → version, as in `Hello`.",
+              "type": "object"
+            },
+            "info": {
+              "$ref": "#/$defs/RunnerInfo"
+            },
+            "os": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "probed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request",
+            "info"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Its state, after each clean-up pass (1.20).",
+          "properties": {
+            "info": {
+              "$ref": "#/$defs/RunnerInfo"
+            },
+            "type": {
+              "const": "status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "info"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The answer to `ReadLog` `request` (1.20): the last lines of its log, redacted, or why\nnot.",
+          "properties": {
+            "error": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "lines": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "request": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "log_tail",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Its disk use after a clean-up pass (1.15, E15.9).",
+          "properties": {
+            "report": {
+              "$ref": "#/$defs/DiskReport"
+            },
+            "type": {
+              "const": "disk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "report"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "It has a free slot and wants one run. `workspaces`: the issues it holds a worktree\nfor (1.1).",
+          "properties": {
+            "type": {
+              "const": "ready",
+              "type": "string"
+            },
+            "workspaces": {
+              "default": [],
+              "items": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "It is still working on `run`; `load` (1.26) is the host's load when it says.",
+          "properties": {
+            "load": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HostLoad"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "heartbeat",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`run` progressed (1.14): a tool call, a file change, a new message or more tokens.\n`diff_files`: how many files its worktree differs from the base in, when measured.",
+          "properties": {
+            "diff_files": {
+              "default": null,
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "repos": {
+              "description": "Each repo's diff against its base, in the issue's repo order (1.18); empty when not\nmeasured.",
+              "items": {
+                "$ref": "#/$defs/RepoDiff"
+              },
+              "type": "array"
+            },
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "progress",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The harness for `run` is up; `session` is its resumable session id, if it has one.",
+          "properties": {
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "session": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "run_started",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "One transcript chunk, numbered from 1 per run, redacted (`redact`). The server stores\neach `seq` once; a resend is ignored.",
+          "properties": {
+            "payload": true,
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "seq": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "run_event",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run",
+            "seq",
+            "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "outcome": {
+              "$ref": "#/$defs/Outcome"
+            },
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "run_ended",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run",
+            "outcome"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The run's token totals so far, numbered from 1 per run (1.2). Totals, not deltas: a\nlost or repeated report loses or double-counts nothing.",
+          "properties": {
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "seq": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "run_usage",
+              "type": "string"
+            },
+            "usage": {
+              "$ref": "#/$defs/Tokens"
+            }
+          },
+          "required": [
+            "type",
+            "run",
+            "seq",
+            "usage"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The harness asks for a tool call the run's policy does not allow (1.3). `id` is the\nharness's request id, unique within the run; `input` is redacted. Resent after a\nreconnect until answered; the server keeps one approval per `(run, id)`.\nThe run moved to the next entry of its fallback chain (1.9): `harness` and `model` as\nin the `Assign`'s `fallbacks`, working as `account`; `class` is why (`model_unavailable`,\n`rate_limited`, `quota`, `no_account`), `reason` the harness's words, redacted.",
+          "properties": {
+            "account": {
+              "default": null,
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "class": {
+              "type": "string"
+            },
+            "harness": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "run_fallback",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run",
+            "harness",
+            "model",
+            "class",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The provider dropped the run's turn and the runner resumes its session (1.10). Not\nresent: a drop lost to a dropped connection is not counted.",
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "provider_drop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "input": true,
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "timeout_secs": {
+              "default": null,
+              "description": "How long the runner waits before denying it (1.5), so the server expires the\napproval at the same moment. Absent from an older runner: the server's deadline.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "tool": {
+              "type": "string"
+            },
+            "type": {
+              "const": "approval_request",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run",
+            "id",
+            "tool",
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The answer to `ReadFile` `request` (1.17): the file's bytes in standard base64, or why\nit was not read.",
+          "properties": {
+            "content": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "error": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "file_read",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    {
+      "description": "Server → runner.",
+      "oneOf": [
+        {
+          "properties": {
+            "lease_ttl_secs": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "limits": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RunnerLimits"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Its disk and warm-process settings (1.15); absent, the runner's defaults."
+            },
+            "power_nap": {
+              "default": null,
+              "description": "The admin's Power Nap preference for it (1.20); absent, none set.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "runner": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "welcome",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "runner",
+            "lease_ttl_secs"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A claimed run for the runner to start. Holds no secret.",
+          "properties": {
+            "account": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Account"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The provider account to work as (1.8); absent, the runner's own harness login."
+            },
+            "agent": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "context_ref": {
+              "description": "Where the run's context is read, through the Citadel MCP server (E4.2).",
+              "type": "string"
+            },
+            "fallbacks": {
+              "default": [],
+              "description": "The rest of the agent's fallback chain, in order (1.9).",
+              "items": {
+                "$ref": "#/$defs/Route"
+              },
+              "type": "array"
+            },
+            "harness": {
+              "type": "string"
+            },
+            "instructions": {
+              "default": null,
+              "description": "The run's skills rendered as markdown, for the harness's instructions file (1.4,\nE4.3); absent when the run has none.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "issue": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "issue_key": {
+              "default": null,
+              "description": "The issue's key, e.g. `CIT-12`, for the prompt (1.4).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "limits": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RunLimits"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The run's limits from the server's settings (1.11); absent, the runner's defaults."
+            },
+            "model": {
+              "type": "string"
+            },
+            "policy": {
+              "$ref": "#/$defs/Policy",
+              "default": {
+                "allow": [],
+                "mode": "ask",
+                "sandboxed": false
+              },
+              "description": "The project's permission policy (1.3); absent, the default (ask)."
+            },
+            "prompt": {
+              "default": null,
+              "description": "The run's first turn (1.22): its job on this wake and its done rule; absent, the\nrunner's own.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resume_session": {
+              "default": null,
+              "description": "A session of the run's harness to continue rather than starting a new one (1.12,\nE15.5); absent, a fresh session.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "token_cap": {
+              "default": null,
+              "description": "Tokens the run may use: the least left in any budget that applies, or the\nserver's default (1.2). Absent from an older server: the runner's default.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "token_caps": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TokenCaps"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The run's caps split (1.27), see `TokenCaps`; absent from an older server, which\nsends `token_cap` alone."
+            },
+            "type": {
+              "const": "assign",
+              "type": "string"
+            },
+            "workspace": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Workspace"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The issue's git worktree, when its project has a repo (1.1)."
+            }
+          },
+          "required": [
+            "type",
+            "run",
+            "agent",
+            "harness",
+            "model",
+            "context_ref"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The started run's token, for the harness to call back with. Sent once per start or\nre-start (a resumed `RunStarted` rotates it).",
+          "properties": {
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "token": {
+              "$ref": "#/$defs/RunToken"
+            },
+            "type": {
+              "const": "token",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run",
+            "token"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Stop and forget `run`: it was cancelled, ended already, or this runner no longer holds\nit. Send no `RunEnded`.",
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "cancel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`RunEnded` for `run` was recorded.",
+          "properties": {
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "ack",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The answer to `ApprovalRequest` `id` of `run` (1.3): `reply` is the reviewer's note,\nwhich a denial passes to the agent as its reason.",
+          "properties": {
+            "approved": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "reply": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "approval",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run",
+            "id",
+            "approved"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Finish the tool call in flight, then stop `run`'s turn and end it `Cancelled` (1.19).",
+          "properties": {
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "pause",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The admin's message `id` for `run`'s harness, given to it as its next turn (1.19).",
+          "properties": {
+            "id": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run",
+            "id",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Remove the worktrees of these issues: they are done, cancelled or gone (1.1).",
+          "properties": {
+            "issues": {
+              "items": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "prune",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "issues"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Read `path`, relative to `run`'s worktree, of at most `max_bytes` (1.17); answered by\n`FileRead`.",
+          "properties": {
+            "max_bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "path": {
+              "type": "string"
+            },
+            "request": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "read_file",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run",
+            "request",
+            "path",
+            "max_bytes"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The last `lines` lines of the runner's own log (1.20); answered by `LogTail`.",
+          "properties": {
+            "lines": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "request": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "read_log",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request",
+            "lines"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The admin changed its Power Nap preference (1.20).",
+          "properties": {
+            "power_nap": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "prefs",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "power_nap"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Look at yourself again now (1.25); answered by `Probed`.",
+          "properties": {
+            "request": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "probe",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`run`'s permission policy changed (1.24): its next tool calls are decided by `policy`.",
+          "properties": {
+            "policy": {
+              "$ref": "#/$defs/Policy"
+            },
+            "run": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "policy_update",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run",
+            "policy"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A message was refused for a reason other than the run: a protocol or storage error.",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "const": "error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    {
+      "$ref": "#/$defs/Frame"
+    }
+  ],
+  "title": "Ainkrad runner protocol"
+}

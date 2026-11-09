@@ -1,21 +1,18 @@
 //! Audit repository: append and read the append-only log. There is no update or delete;
 //! the schema's triggers reject both.
 //!
-//! `append` takes any executor, so a write path appends inside its own transaction and the
-//! event commits or rolls back with the change it records.
+//! `append` runs inside the caller's write transaction, so the row commits or rolls back with
+//! the change it records. Rows are hash-chained (`chain`, E1-10.1).
 
 use ainkrad_core::audit::{
     AuditActor, AuditEntity, AuditEvent, AuditFilter, AuditSeq, NewAuditEvent,
 };
-use ainkrad_core::exec::RunId;
-use ainkrad_core::org::CompanyId;
-use sqlx::sqlite::{SqliteExecutor, SqlitePool, SqliteRow};
+use sqlx::sqlite::{SqliteConnection, SqlitePool, SqliteRow};
 use sqlx::{Error, Row};
 
 macro_rules! audit_columns {
     () => {
-        "seq, at, actor_kind, actor_id, action, entity_kind, entity_id, company_id, run_id, \
-         details"
+        "seq, at, actor_kind, actor_id, action, entity_kind, entity_id, details"
     };
 }
 
@@ -37,40 +34,75 @@ fn event(row: SqliteRow) -> Result<AuditEvent, Error> {
         entity: entity_kind
             .zip(entity_id)
             .map(|(kind, id)| AuditEntity { kind, id }),
-        company_id: row.try_get::<Option<i64>, _>("company_id")?.map(CompanyId),
-        run_id: row.try_get::<Option<i64>, _>("run_id")?.map(RunId),
         details: row.try_get("details")?,
     })
 }
 
-/// Appends one event. Pass `&mut *tx` to append inside a write's transaction.
-pub async fn append<'e>(
-    executor: impl SqliteExecutor<'e>,
-    e: &NewAuditEvent,
-) -> Result<AuditEvent, Error> {
+/// The user every row belongs to until there are more (#18); part of the hashed row.
+const USER: i64 = 1;
+
+/// Appends one row inside the caller's write transaction (`store::begin_write`), so it commits
+/// or rolls back with the change it records. Its `details` are redacted first (`redact`), then
+/// it is chained (`chain`): it reads the newest row's hash and takes the next seq, so it must run
+/// under the write gate; a racing writer outside the gate is refused by the chain trigger rather
+/// than forking the chain. The `audit` event comes with it, written by trigger.
+pub async fn append(conn: &mut SqliteConnection, e: &NewAuditEvent) -> Result<AuditEvent, Error> {
     let (actor_kind, actor_id) = e.actor.parts();
-    // Every `issue.*` event about an issue says which project it is in (`project_id`), so a
-    // client reloads one project, whichever write path appended it.
+    let (at, seq, prev): (String, i64, Option<Vec<u8>>) = sqlx::query_as(
+        "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), \
+         coalesce((SELECT seq FROM sqlite_sequence WHERE name = 'audit_events'), 0) + 1, \
+         (SELECT hash FROM audit_events ORDER BY seq DESC LIMIT 1)",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    let prev = prev.unwrap_or_else(|| vec![0; 32]);
+    let row = chain::ChainRow {
+        seq,
+        at,
+        user_id: USER,
+        actor_kind: actor_kind.to_owned(),
+        actor_id,
+        action: e.action.clone(),
+        entity_kind: e.entity.as_ref().map(|x| x.kind.clone()),
+        entity_id: e.entity.as_ref().map(|x| x.id),
+        details: crate::store::redact::text(&e.details),
+        prev_hash: None,
+        hash: None,
+    };
+    let hash = chain::digest(&row, &chain::hex(&prev));
     sqlx::query(concat!(
-        "INSERT INTO audit_events (actor_kind, actor_id, action, entity_kind, entity_id, \
-         company_id, run_id, details) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, \
-         CASE WHEN ?3 LIKE 'issue.%' AND ?4 = 'issue' AND json_valid(?8) THEN \
-             CASE WHEN json_type(?8) = 'object' THEN json_insert(?8, '$.project_id', \
-                 (SELECT project_id FROM issues WHERE id = ?5)) ELSE ?8 END \
-         ELSE ?8 END) RETURNING ",
+        "INSERT INTO audit_events (seq, at, user_id, actor_kind, actor_id, action, entity_kind, \
+         entity_id, details, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING ",
         audit_columns!()
     ))
-    .bind(actor_kind)
-    .bind(actor_id)
-    .bind(&e.action)
-    .bind(e.entity.as_ref().map(|x| &x.kind))
-    .bind(e.entity.as_ref().map(|x| x.id))
-    .bind(e.company_id.map(|c| c.0))
-    .bind(e.run_id.map(|r| r.0))
-    .bind(&e.details)
-    .fetch_one(executor)
+    .bind(row.seq)
+    .bind(&row.at)
+    .bind(row.user_id)
+    .bind(&row.actor_kind)
+    .bind(row.actor_id)
+    .bind(&row.action)
+    .bind(&row.entity_kind)
+    .bind(row.entity_id)
+    .bind(&row.details)
+    .bind(prev)
+    .bind(&hash[..])
+    .fetch_one(&mut *conn)
     .await
+    .map_err(|err| match &err {
+        Error::Database(d) if d.message() == "unknown audit action" => {
+            Error::InvalidArgument(format!("unknown audit action {:?}", e.action))
+        }
+        _ => err,
+    })
     .and_then(event)
+}
+
+/// Appends one row in a write transaction of its own.
+pub async fn append_one(pool: &SqlitePool, e: &NewAuditEvent) -> Result<AuditEvent, Error> {
+    let mut tx = crate::store::begin_write(pool).await?;
+    let row = append(&mut tx, e).await?;
+    tx.commit().await?;
+    Ok(row)
 }
 
 /// Up to `limit` events matching `filter` with `seq` above `after` (all when `None`),
@@ -86,15 +118,11 @@ pub async fn list(
         "SELECT ",
         audit_columns!(),
         " FROM audit_events WHERE seq > ?1 \
-         AND (?2 IS NULL OR company_id = ?2) \
-         AND (?3 IS NULL OR run_id = ?3) \
-         AND (?4 IS NULL OR (entity_kind = ?4 AND entity_id = ?5)) \
-         AND (?6 IS NULL OR (actor_kind = ?6 AND actor_id IS ?7)) \
-         ORDER BY seq LIMIT ?8"
+         AND (?2 IS NULL OR (entity_kind = ?2 AND entity_id = ?3)) \
+         AND (?4 IS NULL OR (actor_kind = ?4 AND actor_id IS ?5)) \
+         ORDER BY seq LIMIT ?6"
     ))
     .bind(after.map_or(0, |s| s.0))
-    .bind(filter.company_id.map(|c| c.0))
-    .bind(filter.run_id.map(|r| r.0))
     .bind(filter.entity.as_ref().map(|x| &x.kind))
     .bind(filter.entity.as_ref().map(|x| x.id))
     .bind(actor.map(|(kind, _)| kind))
@@ -107,13 +135,11 @@ pub async fn list(
     .collect()
 }
 
-/// Up to `limit` events below `before` (all when `None`), newest first: of `company` when
-/// given, whose action starts with `action_prefix`, about `entity` (a kind, and an id when
-/// given), done by an `actor` kind (`user`, `agent`, `runner`, `system`) when given. Page by
-/// passing the last `seq` seen as `before`.
+/// Up to `limit` events below `before` (all when `None`), newest first: whose action starts
+/// with `action_prefix`, about `entity` (a kind, and an id when given), done by an `actor`
+/// kind (`user`, `system`) when given. Page by passing the last `seq` seen as `before`.
 pub async fn page(
     pool: &SqlitePool,
-    company: Option<CompanyId>,
     before: Option<AuditSeq>,
     action_prefix: Option<&str>,
     entity: Option<(&str, Option<i64>)>,
@@ -124,26 +150,26 @@ pub async fn page(
         "SELECT ",
         audit_columns!(),
         " FROM audit_events WHERE (?1 IS NULL OR seq < ?1) \
-         AND (?2 IS NULL OR company_id = ?2) \
-         AND (?3 IS NULL OR substr(action, 1, length(?3)) = ?3) \
-         AND (?4 IS NULL OR entity_kind = ?4) \
-         AND (?5 IS NULL OR entity_id = ?5) \
-         AND (?7 IS NULL OR actor_kind = ?7) \
+         AND (?2 IS NULL OR substr(action, 1, length(?2)) = ?2) \
+         AND (?3 IS NULL OR entity_kind = ?3) \
+         AND (?4 IS NULL OR entity_id = ?4) \
+         AND (?5 IS NULL OR actor_kind = ?5) \
          ORDER BY seq DESC LIMIT ?6"
     ))
     .bind(before.map(|s| s.0))
-    .bind(company.map(|c| c.0))
     .bind(action_prefix)
     .bind(entity.map(|(kind, _)| kind))
     .bind(entity.and_then(|(_, id)| id))
-    .bind(limit)
     .bind(actor)
+    .bind(limit)
     .fetch_all(pool)
     .await?
     .into_iter()
     .map(event)
     .collect()
 }
+
+pub mod chain;
 
 #[cfg(test)]
 mod tests;

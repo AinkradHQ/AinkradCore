@@ -1,226 +1,186 @@
-//! The event log (E10.2): what the client stream and its HTTP replay read. The `events`
-//! table is written only by triggers (see its migration); this reads it with what each row
-//! points at. A row whose target is gone (a test deleted a run) is skipped: its seq is a
-//! gap, never a different event.
+//! The event log (E10.2, E1-04): what the client stream and its HTTP replay read. One strictly
+//! increasing `seq` over every row; each row is a registered `kind` (`store::kinds`) and a JSON
+//! `payload`.
+//!
+//! **The transaction rule.** An event is written in the same write transaction as the change it
+//! describes, so both commit or neither does, and a reader never sees one without the other:
+//! a write path takes `store::begin_write`, makes its change, calls [`append`] (or
+//! `audit::append`) on the same transaction, and commits. There is no other way to emit an event.
+//! SQLite has one writer at a time, so seq order is commit order.
+//!
+//! **One definition of an event.** Two paths write rows, and the database holds both to the same
+//! rules (migrations `0001`, `0002`): [`append`] for a module's kinds, and the
+//! `events_from_audit` trigger, which writes an `audit` event for every audit row. Either way the
+//! kind must be registered, the payload is JSON, and the payload is redacted: [`append`] redacts
+//! it here, and an audit row's details are redacted by `audit::append` before the trigger copies
+//! them.
+//!
+//! **Retention** (E1-04.4): [`trim`] removes the oldest events, those older than the
+//! `events.retention_secs` setting, and raises the floor; a client resuming below it is told so
+//! ([`replay`] returns [`PastRetention`]) and re-syncs from a snapshot.
 
-use ainkrad_core::audit::AuditActor;
-use ainkrad_core::exec::WakeSource;
 use serde_json::Value;
-use sqlx::sqlite::{SqlitePool, SqliteRow};
+use sqlx::sqlite::{SqliteConnection, SqlitePool};
 use sqlx::types::Json;
-use sqlx::{Error, Row};
 
-use super::org::text;
-
-/// One event as stored, with its target's fields.
-#[derive(Debug, Clone, PartialEq)]
+/// One event as stored.
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct StoredEvent {
     pub seq: i64,
     pub at: String,
-    pub what: What,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum What {
-    Audit {
-        audit_seq: i64,
-        action: String,
-        actor: AuditActor,
-        entity: Option<(String, i64)>,
-        company_id: Option<i64>,
-        run_id: Option<i64>,
-        details: Value,
-    },
-    Transcript {
-        run_id: i64,
-        seq: i64,
-        at: String,
-        kind: String,
-        payload: Value,
-    },
-    Wake {
-        wake_id: i64,
-        agent_id: i64,
-        issue_id: Option<i64>,
-        source: WakeSource,
-        reason: String,
-    },
+    pub kind: String,
+    pub payload: Json<Value>,
 }
 
 /// The most events a read returns.
 pub const MAX_EVENTS: u32 = 1000;
 
-fn stored(row: &SqliteRow) -> Result<Option<StoredEvent>, Error> {
-    let kind: String = row.try_get("kind")?;
-    let ref_id: i64 = row.try_get("ref_id")?;
-    let what =
-        match kind.as_str() {
-            "audit" => {
-                let Some(actor_kind) = row.try_get::<Option<String>, _>("actor_kind")? else {
-                    return Ok(None);
-                };
-                let actor = AuditActor::from_parts(&actor_kind, row.try_get("actor_id")?)
-                    .ok_or_else(|| Error::ColumnDecode {
-                        index: "actor_kind".to_owned(),
-                        source: format!("bad actor `{actor_kind}`").into(),
-                    })?;
-                let entity_kind: Option<String> = row.try_get("entity_kind")?;
-                let details: String = row.try_get("details")?;
-                What::Audit {
-                    audit_seq: ref_id,
-                    action: row.try_get("action")?,
-                    actor,
-                    entity: entity_kind.zip(row.try_get::<Option<i64>, _>("entity_id")?),
-                    company_id: row.try_get("company_id")?,
-                    run_id: row.try_get("a_run")?,
-                    details: serde_json::from_str(&details).unwrap_or(Value::String(details)),
-                }
+/// Appends one event of a registered `kind` inside the caller's write transaction (see the
+/// transaction rule above); returns its seq. The payload is redacted first. An unregistered kind
+/// is an `InvalidArgument` naming it, and nothing is written.
+pub async fn append(
+    conn: &mut SqliteConnection,
+    kind: &str,
+    payload: &Value,
+) -> Result<i64, sqlx::Error> {
+    let mut payload = payload.clone();
+    crate::store::redact::json(&mut payload);
+    sqlx::query_scalar("INSERT INTO events (kind, payload) VALUES (?, ?) RETURNING seq")
+        .bind(kind)
+        .bind(payload.to_string())
+        .fetch_one(conn)
+        .await
+        .map_err(|e| match &e {
+            sqlx::Error::Database(d) if d.message() == "unknown event kind" => {
+                sqlx::Error::InvalidArgument(format!("unknown event kind {kind:?}"))
             }
-            "transcript" => {
-                let Some(run_id) = row.try_get::<Option<i64>, _>("t_run")? else {
-                    return Ok(None);
-                };
-                What::Transcript {
-                    run_id,
-                    seq: row.try_get("t_seq")?,
-                    at: row.try_get("t_at")?,
-                    kind: row.try_get("t_kind")?,
-                    payload: row.try_get::<Json<Value>, _>("t_payload")?.0,
-                }
-            }
-            _ => {
-                let Some(agent_id) = row.try_get::<Option<i64>, _>("w_agent")? else {
-                    return Ok(None);
-                };
-                What::Wake {
-                    wake_id: ref_id,
-                    agent_id,
-                    issue_id: row.try_get("w_issue")?,
-                    source: text(row, "w_source")?,
-                    reason: row.try_get("w_reason")?,
-                }
-            }
-        };
-    Ok(Some(StoredEvent {
-        seq: row.try_get("seq")?,
-        at: row.try_get("at")?,
-        what,
-    }))
+            _ => e,
+        })
 }
 
-/// Up to `limit` (at most [`MAX_EVENTS`]) events with seq above `after`, oldest first.
+/// Up to `limit` (at most [`MAX_EVENTS`]) events with seq above `after`, oldest first, whatever
+/// the floor (the pusher's read: it only needs what is there).
 pub async fn list_events(
     pool: &SqlitePool,
     after: i64,
     limit: u32,
-) -> Result<Vec<StoredEvent>, Error> {
-    let rows = sqlx::query(
-        "SELECT e.seq, e.at, e.kind, e.ref_id, \
-         a.action, a.actor_kind, a.actor_id, a.entity_kind, a.entity_id, a.company_id, \
-         a.run_id AS a_run, a.details, \
-         r.run_id AS t_run, r.seq AS t_seq, r.at AS t_at, r.kind AS t_kind, \
-         r.payload AS t_payload, \
-         w.agent_id AS w_agent, w.issue_id AS w_issue, w.source AS w_source, \
-         w.reason AS w_reason \
-         FROM events e \
-         LEFT JOIN audit_events a ON e.kind = 'audit' AND a.seq = e.ref_id \
-         LEFT JOIN run_events r ON e.kind = 'transcript' AND r.id = e.ref_id \
-         LEFT JOIN wake_requests w ON e.kind = 'wake' AND w.id = e.ref_id \
-         WHERE e.seq > ? ORDER BY e.seq LIMIT ?",
-    )
-    .bind(after)
-    .bind(limit.min(MAX_EVENTS))
-    .fetch_all(pool)
-    .await?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in &rows {
-        out.extend(stored(row)?);
-    }
-    Ok(out)
-}
-
-/// The newest event's seq; 0 when there is none.
-pub async fn last_event_seq(pool: &SqlitePool) -> Result<i64, Error> {
-    sqlx::query_scalar("SELECT coalesce(max(seq), 0) FROM events")
-        .fetch_one(pool)
+) -> Result<Vec<StoredEvent>, sqlx::Error> {
+    sqlx::query_as("SELECT seq, at, kind, payload FROM events WHERE seq > ? ORDER BY seq LIMIT ?")
+        .bind(after)
+        .bind(limit.min(MAX_EVENTS))
+        .fetch_all(pool)
         .await
 }
 
-/// The newest seq of an event of `company` (an audited change of it, a transcript chunk of
-/// its run, a wake of its agent), as the scoped stream shows them; 0 when there is none.
-/// Read from the newest down, so it stops at the company's latest event.
-pub async fn last_company_event_seq(pool: &SqlitePool, company: i64) -> Result<i64, Error> {
-    sqlx::query_scalar(
-        "SELECT coalesce((SELECT e.seq FROM events e \
-         LEFT JOIN audit_events a ON e.kind = 'audit' AND a.seq = e.ref_id \
-         LEFT JOIN run_events r ON e.kind = 'transcript' AND r.id = e.ref_id \
-         LEFT JOIN runs ru ON ru.id = r.run_id \
-         LEFT JOIN agents ra ON ra.id = ru.agent_id \
-         LEFT JOIN wake_requests w ON e.kind = 'wake' AND w.id = e.ref_id \
-         LEFT JOIN agents wa ON wa.id = w.agent_id \
-         WHERE coalesce(a.company_id, ra.company_id, wa.company_id) = ? \
-         ORDER BY e.seq DESC LIMIT 1), 0)",
+/// A resume point below the retention floor: events after it are gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PastRetention {
+    /// The newest trimmed seq; events above it are all there.
+    pub floor: i64,
+}
+
+/// A client's read: the events after `after`, as [`list_events`], or [`PastRetention`] when
+/// some of them were trimmed. Floor and events are read in one snapshot, so a trim in between
+/// cannot leave a silent gap.
+pub async fn replay(
+    pool: &SqlitePool,
+    after: i64,
+    limit: u32,
+) -> Result<Result<Vec<StoredEvent>, PastRetention>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let floor = floor_in(&mut tx).await?;
+    if after < floor {
+        return Ok(Err(PastRetention { floor }));
+    }
+    let events = sqlx::query_as(
+        "SELECT seq, at, kind, payload FROM events WHERE seq > ? ORDER BY seq LIMIT ?",
     )
-    .bind(company)
+    .bind(after)
+    .bind(limit.min(MAX_EVENTS))
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Ok(events))
+}
+
+async fn floor_in(conn: &mut SqliteConnection) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT seq FROM events_floor")
+        .fetch_one(conn)
+        .await
+}
+
+/// The retention floor: the newest trimmed seq, 0 before any trim.
+pub async fn floor(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
+    floor_in(&mut *pool.acquire().await?).await
+}
+
+/// The newest event's seq (the floor when every event is trimmed); 0 when there is none.
+pub async fn last_event_seq(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT max(coalesce((SELECT max(seq) FROM events), 0), (SELECT seq FROM events_floor))",
+    )
     .fetch_one(pool)
     .await
 }
 
-#[cfg(test)]
-mod tests {
-    use ainkrad_core::audit::{AuditEntity, NewAuditEvent};
-    use serde_json::json;
-
-    use super::*;
-    use crate::store::{audit, connect};
-
-    #[tokio::test]
-    async fn every_audit_is_an_event_in_commit_order_and_rollbacks_leave_none() {
-        let dir = std::env::temp_dir().join(format!("citadel-events-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let pool = connect(&dir.join("citadel.db")).await.unwrap();
-        let event = |n: i64| NewAuditEvent {
-            actor: AuditActor::System,
-            action: "test.happened".to_owned(),
-            entity: Some(AuditEntity {
-                kind: "issue".to_owned(),
-                id: n,
-            }),
-            company_id: None,
-            run_id: None,
-            details: json!({"n": n}).to_string(),
-        };
-        assert_eq!(last_event_seq(&pool).await.unwrap(), 0);
-        audit::append(&pool, &event(1)).await.unwrap();
-        let mut tx = pool.begin().await.unwrap();
-        audit::append(&mut *tx, &event(2)).await.unwrap();
-        tx.rollback().await.unwrap();
-        audit::append(&pool, &event(3)).await.unwrap();
-
-        let all = list_events(&pool, 0, 10).await.unwrap();
-        let ns: Vec<Value> = all
-            .iter()
-            .map(|e| match &e.what {
-                What::Audit { details, .. } => details["n"].clone(),
-                other => panic!("{other:?}"),
-            })
-            .collect();
-        assert_eq!(ns, [json!(1), json!(3)], "the rolled back one is not there");
-        assert!(all[0].seq < all[1].seq);
-        assert_eq!(list_events(&pool, all[0].seq, 10).await.unwrap(), all[1..]);
-        assert_eq!(last_event_seq(&pool).await.unwrap(), all[1].seq);
-        let edit = sqlx::query("UPDATE events SET kind = 'wake'")
-            .execute(&pool)
-            .await;
-        assert!(edit.is_err(), "append-only");
-        assert!(
-            sqlx::query("DELETE FROM events")
-                .execute(&pool)
-                .await
-                .is_err()
-        );
-
-        pool.close().await;
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
+/// What one [`trim`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Trimmed {
+    pub floor: i64,
+    pub removed: u64,
 }
+
+/// Trims events older than `keep_secs` before `now`, at most `batch` of them, oldest first. Only the unbroken run of old events from the floor up is
+/// trimmed, so the floor is a seq below which everything is gone and above which nothing is.
+/// `None` when there is nothing to trim.
+///
+/// The floor is raised first; the delete trigger lets only rows at or below it go. Not audited:
+/// under steady traffic a trim runs every scheduler tick, and an audit row each time would grow
+/// the never-trimmed audit log forever; the floor row is the record (the scheduler logs each
+/// trim).
+pub async fn trim(
+    pool: &SqlitePool,
+    now: &str,
+    keep_secs: i64,
+    batch: u32,
+) -> Result<Option<Trimmed>, sqlx::Error> {
+    let mut tx = crate::store::begin_write(pool).await?;
+    let floor = floor_in(&mut tx).await?;
+    let old: Vec<(i64, bool)> = sqlx::query_as(
+        "SELECT seq, at < strftime('%Y-%m-%dT%H:%M:%fZ', ?1, '-' || ?2 || ' seconds') \
+         FROM events WHERE seq > ?3 ORDER BY seq LIMIT ?4",
+    )
+    .bind(now)
+    .bind(keep_secs)
+    .bind(floor)
+    .bind(batch)
+    .fetch_all(&mut *tx)
+    .await?;
+    let Some(new) = old.iter().take_while(|(_, old)| *old).last().map(|r| r.0) else {
+        return Ok(None);
+    };
+    sqlx::query("UPDATE events_floor SET seq = ?")
+        .bind(new)
+        .execute(&mut *tx)
+        .await?;
+    let removed = sqlx::query("DELETE FROM events WHERE seq <= ?")
+        .bind(new)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    // The floor's own totals stay: they are each view's floor (`view`).
+    sqlx::query("DELETE FROM event_views WHERE seq < ?")
+        .bind(new)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(Some(Trimmed {
+        floor: new,
+        removed,
+    }))
+}
+
+pub mod view;
+
+#[cfg(test)]
+mod tests;

@@ -102,3 +102,115 @@ async fn a_cancelled_run_loses_its_files_too() {
     assert_eq!(left(&private), ["bin"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// C4b: a session whose sandbox slot is set (`AINKRAD_SANDBOX_TOOLS_*`, from the driver) gets the
+/// `ainkrad-connections` stdio server in its private config, even with no Citadel server and no
+/// token, and the harness is told to allow that server; both paths, no secret; gone with the run.
+#[tokio::test]
+async fn a_session_with_the_tools_slot_gets_the_connections_server_and_nothing_secret() {
+    let dir = scratch("conn");
+    std::fs::write(dir.join("fixture.ndjson"), FIXTURE).unwrap();
+    let bin = dir.join("claude");
+    let d = dir.display();
+    std::fs::write(
+        &bin,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {d}/argv\n\
+             mcp=$(sed -n '/^--mcp-config$/{{n;p;}}' {d}/argv)\n\
+             cp \"$mcp\" {d}/mcp.json\nhead -n 2 > {d}/stdin\n\
+             sed '/\"type\":\"result\"/q' {d}/fixture.ndjson\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut ex = HarnessExecutor::new(dir.join("work"), dir.join("config"));
+    ex.bins.insert("claude".to_owned(), bin);
+    // The fixture asks to use a tool: denied at once, not waited on.
+    ex.approval_timeout = Duration::from_millis(50);
+    let job = Job {
+        prompt: Some("Say hello.".to_owned()),
+        ..job("claude")
+    };
+    ex.start(&job).await.unwrap();
+    let (sock, exe) = (
+        "/state/agents/as_x/tools.sock",
+        "/opt/ainkrad/ainkrad-runner",
+    );
+    ex.session_env(
+        job.run,
+        Some(vec![
+            ("AINKRAD_SANDBOX_TOOLS_SOCK".to_owned(), sock.to_owned()),
+            ("AINKRAD_SANDBOX_TOOLS_FWD".to_owned(), exe.to_owned()),
+        ]),
+    );
+    let (tx, _rx) = mpsc::channel(256);
+    let run = ex.run(&job, RunToken::new("t".to_owned()), tx);
+    let outcome = tokio::time::timeout(Duration::from_secs(20), run)
+        .await
+        .expect("the run did not end");
+    assert_eq!(outcome, Outcome::Succeeded);
+    let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap();
+    let config: Value = serde_json::from_str(&read("mcp.json")).unwrap();
+    assert_eq!(
+        config["mcpServers"]["ainkrad-connections"],
+        json!({"type": "stdio", "command": exe, "args": ["mcp-stdio", sock]})
+    );
+    assert!(config["mcpServers"].get("citadel").is_none());
+    assert!(
+        read("argv").contains("--allowedTools\nmcp__citadel,mcp__ainkrad-connections\n"),
+        "{}",
+        read("argv")
+    );
+    assert_eq!(left(&dir.join("work/private")), Vec::<String>::new());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// C4b review: the connection tools skip the reviewer only for a session that has the slot, under
+/// exactly this server's namespace, and for a tool the Core listed for that session. A repo's own MCP
+/// server that reuses the name is not trusted.
+#[tokio::test]
+async fn a_connection_tool_is_trusted_only_with_the_slot_and_only_when_listed() {
+    use ainkrad_proto::v2::{ConnTool, ToolsPoll};
+    let dir = scratch("conn-trust");
+    let tools = Arc::new(crate::v2::agent::tools::Tools::default());
+    let mut ex = HarnessExecutor::new(dir.join("work"), dir.join("config"));
+    ex.tools = Some(tools.clone());
+    let job = job("claude");
+    let listed = ToolsPoll {
+        session: job.context_ref.clone(),
+        after: 0,
+        wait_ms: None,
+        results: vec![],
+        tools: Some(vec![ConnTool {
+            name: "github.get_issue".to_owned(),
+            description: "d".to_owned(),
+            write: false,
+            input_schema: None,
+        }]),
+    };
+    tools.poll(&listed, Duration::ZERO).await;
+    let slot: Vec<(String, std::ffi::OsString)> = vec![
+        ("AINKRAD_SANDBOX_TOOLS_SOCK".to_owned(), "/s".into()),
+        ("AINKRAD_SANDBOX_TOOLS_FWD".to_owned(), "/f".into()),
+    ];
+    let name = "mcp__ainkrad-connections__github_get_issue";
+    assert!(ex.connection_call(&job, &slot, name));
+    // The looser forms another server could pick are not taken.
+    assert!(!ex.connection_call(&job, &slot, "ainkrad-connections_github_get_issue"));
+    assert!(!ex.connection_call(&job, &slot, "ainkrad_connections_github_get_issue"));
+    // No slot: a name alone is nothing. Not listed, or another server, or another session: no.
+    assert!(!ex.connection_call(&job, &[], name));
+    assert!(!ex.connection_call(&job, &slot, "mcp__ainkrad-connections__github_drop_repo"));
+    assert!(!ex.connection_call(&job, &slot, "mcp__repo-server__github_get_issue"));
+    let other = Job {
+        context_ref: "as_other".to_owned(),
+        ..job.clone()
+    };
+    assert!(!ex.connection_call(&other, &slot, name));
+    // And the permission policy itself has no shortcut for it any more.
+    assert!(
+        ex.decide(&Policy::default(), name, &json!({}), &dir)
+            .is_err()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

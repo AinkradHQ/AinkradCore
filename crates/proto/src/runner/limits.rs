@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::{STALL_AFTER_SECS, TOOL_OUTPUT_BYTES};
 
 /// What the runner is told of the server's settings for one run (1.11, E15.17).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RunLimits {
     /// How long an escalated tool call waits for a reviewer before it is denied.
     pub approval_timeout_secs: u64,
@@ -51,6 +51,10 @@ impl RunLimits {
             "rate_limited" => self.fallback_on_rate_limited,
             "quota" => self.fallback_on_quota,
             "unhealthy" => self.fallback_on_unhealthy,
+            // An auth failure moved no v1 run before (it was `permanent`) and still moves none:
+            // the Core-driven failover (S6) notifies and records the switch, a silent v1 hop
+            // would not. A `fallback_on_auth` setting is a follow-up.
+            "auth" => false,
             _ => true,
         }
     }
@@ -66,7 +70,7 @@ fn tool_output_bytes() -> u64 {
 
 /// What the runner is told of the server's settings for it (1.15, E15.9, decision #57: server-wide
 /// per runner, not per company).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RunnerLimits {
     /// The most its work root may hold: worktrees, shared build caches and repo mirrors.
     pub disk_cap_bytes: u64,
@@ -92,7 +96,7 @@ impl Default for RunnerLimits {
 }
 
 /// A runner's disk use (1.15, E15.9), as measured after its last clean-up pass.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiskReport {
     /// Everything under its work root.
     pub used_bytes: u64,
@@ -111,7 +115,7 @@ pub struct DiskReport {
 }
 
 /// One issue's worktree in a `DiskReport`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WorktreeDisk {
     pub issue: i64,
     pub bytes: u64,
@@ -122,7 +126,7 @@ pub struct WorktreeDisk {
 }
 
 /// What a runner says of itself (1.20).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RunnerInfo {
     /// Runs it works at once.
     pub slots: u32,
@@ -142,7 +146,7 @@ pub struct RunnerInfo {
 
 /// A login place on a runner host (1.20): `dir` is relative to its config root
 /// (`claude`, `accounts/claude-a`), or `credentials/<file>` for an account's token file.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Login {
     pub dir: String,
     /// The harness, when the dir is a harness's own.
@@ -150,4 +154,25 @@ pub struct Login {
     pub harness: Option<String>,
     /// `logged_in`, `logged_out`, or `unknown` (the login lives in the keychain).
     pub state: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_never_falls_back_in_the_v1_path_and_the_rest_follow_their_settings() {
+        let l: RunLimits = serde_json::from_str(
+            r#"{"approval_timeout_secs": 1, "max_resumes": 1, "resume_backoff_ms": 1,
+                "resume_backoff_max_ms": 1}"#,
+        )
+        .unwrap();
+        assert!(!l.falls_back_on("auth"));
+        assert!(l.falls_back_on("quota") && l.falls_back_on("protocol"));
+        let off = RunLimits {
+            fallback_on_quota: false,
+            ..l
+        };
+        assert!(!off.falls_back_on("quota") && !off.falls_back_on("auth"));
+    }
 }

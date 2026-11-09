@@ -7,6 +7,9 @@
 
 use serde_json::{Value, json};
 
+/// The most pages `issues_since` reads.
+pub const MAX_PAGES: usize = 20;
+
 use super::*;
 
 /// The GraphQL endpoint of linear.app.
@@ -154,7 +157,15 @@ impl Linear {
             filter["updatedAt"] = json!({"gt": since});
         }
         let (mut found, mut after) = (vec![], Value::Null);
-        loop {
+        // Bounded: a team (or an endpoint that always says there is more) cannot run a pass for
+        // ever or fill memory. ponytail: 20 pages of 100; a cursor that resumes across passes if a
+        // team ever has more changed issues than that between two syncs.
+        for page in 0.. {
+            if page == MAX_PAGES {
+                return Err(Error::Decode(format!(
+                    "more than {MAX_PAGES} pages of issues; refusing to read on"
+                )));
+            }
             let vars = json!({"filter": filter, "after": after});
             let data = self.run("Issues", &query, vars).await?;
             for n in data["issues"]["nodes"].as_array().into_iter().flatten() {

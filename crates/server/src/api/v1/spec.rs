@@ -15,257 +15,302 @@
 //! 4. Every string enum component becomes open, `anyOf: [the enum, any string]`, which the
 //!    generator turns into a known case or the raw string: an older client survives a value
 //!    added later (the versioning rule in `types`).
-//! 5. The bearer scheme, required everywhere, and the shared error answers on every
-//!    operation, each an `ErrorBody`.
+//! 5. The signed-request scheme (handshake spec §5), required everywhere, and the shared
+//!    error answers on every operation, each an `ErrorBody`.
+//!
+//! After normalising, the registered names (`store::kinds`, E1-04.2, E1-10.2) are listed as
+//! extensions: `Event` carries `x-event-kinds`, `AuditEntry` `x-audit-actions`, the platform's
+//! and those of the modules given to [`json_for`]. Extensions, not enums: `kind` stays an open
+//! string, so a client keeps decoding an event of a kind it was not built with.
+
+use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 use utoipa::OpenApi;
 
+use crate::module::Module;
+use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
+
 use super::{
-    account_usage, accounts, agent_stats, agents, artifacts, audit, avatars, chains, companies,
-    controls, devices, disk, events, fallbacks, gov, hire, hub, issues, library, me, model, money,
-    notifications, org, pairing, profile, project_charts, project_logo, projects, quest, reads,
-    repos, requirements, roles, routing, runners, runs, settings, structure, stuck, types,
+    accounts, agents, audit, budgets, chains, connections, costs, devices, events, handshake,
+    lockouts, me, pair, pairing, passkey, runners, secrets, session, settings, stepup, terminals,
+    ticket, types, websession,
 };
 
 #[derive(OpenApi)]
 #[openapi(
-    info(title = "Citadel", version = "1.0.0"),
+    info(title = "Ainkrad Core", version = "1.0.0"),
     paths(
-        accounts::list,
-        accounts::create,
-        accounts::assign,
-        accounts::unassign,
-        accounts::delete,
-        accounts::set_status,
-        accounts::set_plan,
-        account_usage::set_limit,
-        account_usage::clear_limit,
-        account_usage::usage,
-        account_usage::company_usage,
         devices::list,
-        devices::create,
         devices::revoke,
+        devices::get,
+        devices::rename,
+        devices::set_scopes,
         devices::set_push,
         devices::clear_push,
+        devices::get_push_kinds,
+        devices::set_push_kinds,
         events::replay,
         events::ws,
         events::latest,
+        ticket::issue,
+        handshake::handshake,
+        handshake::prove,
+        websession::options,
+        websession::session,
+        session::challenge,
+        session::session,
+        pair::claim,
+        pair::status,
+        passkey::options_route,
+        passkey::claim_route,
+        pairing::create,
+        pairing::get,
+        pairing::approve,
+        pairing::reject,
         me::me,
-        companies::list,
-        companies::create,
-        companies::update,
-        companies::get_logo,
-        companies::upload_logo,
-        companies::reset_logo,
-        org::org_chart,
-        org::list_agents,
-        org::get_agent,
-        hire::apply_template,
-        hire::propose_agent,
-        structure::create_department,
-        structure::update_department,
-        structure::delete_department,
-        structure::create_team,
-        structure::update_team,
-        structure::delete_team,
-        structure::seat,
-        structure::unseat,
-        agents::update,
-        agents::wake,
-        agents::terminate,
-        avatars::palettes,
-        avatars::set_appearance,
-        avatars::get,
-        avatars::upload,
-        avatars::reset,
-        fallbacks::list,
-        fallbacks::set,
-        routing::list_tiers,
-        routing::set_tiers,
-        routing::get_rules,
-        routing::set_rules,
-        routing::task_costs,
-        runners::list,
-        runners::register,
-        runners::drain_runner,
-        runners::undrain_runner,
-        runners::remove,
-        runners::logs,
-        runners::probe,
-        runners::set_power_nap,
-        disk::get_disk,
-        org::list_stuck,
-        org::submit_request,
-        runs::list_agent_runs,
-        reads::agent_skills,
-        reads::company_runs,
-        reads::open_questions,
-        reads::spend_series,
-        reads::spend_breakdown,
-        reads::issue_diff,
-        reads::issue_prs,
         audit::list,
-        controls::pause_agent,
-        controls::resume_agent,
-        controls::pause_company,
-        controls::resume_company,
-        controls::stop_run,
-        controls::message_run,
-        controls::wake_runner,
-        controls::nudge_issue,
-        controls::move_to_backlog,
-        money::list_prices,
-        money::set_price,
-        money::set_budget,
-        money::create_budget,
-        money::delete_budget,
-        money::price_history,
-        money::list_unpriced,
-        chains::list,
-        chains::create,
-        chains::update,
-        chains::delete,
-        chains::set_chain,
-        pairing::start,
-        pairing::pair,
-        notifications::get,
-        notifications::set,
-        notifications::test,
-        agent_stats::get,
-        roles::list,
-        roles::create,
-        roles::update,
-        roles::delete,
-        stuck::release_checkout,
-        stuck::retry_run,
-        stuck::bump_issue,
-        controls::reassign_issue,
-        controls::allow_for_issue,
-        runs::get_run,
-        runs::transcript,
-        runs::timing,
-        gov::list_approvals,
-        gov::decide,
-        gov::company_costs,
-        gov::sprint_costs,
-        projects::list_projects,
-        projects::create_project,
-        projects::get_project,
-        quest::update_project,
-        quest::list_labels,
-        quest::add_label,
-        quest::rename_label,
-        quest::delete_label,
-        quest::label_issue,
-        quest::unlabel_issue,
-        quest::capacity,
-        quest::set_capacity,
-        quest::project_flow,
-        quest::issue_flow,
-        quest::commit_sprint,
-        quest::sprint_review,
-        profile::get,
-        profile::update,
-        profile::history,
-        profile::decide,
-        repos::list,
-        repos::add,
-        repos::probe,
-        repos::update,
-        repos::remove,
-        repos::primary,
-        repos::order,
-        repos::get_issue_repos,
-        repos::set_issue_repos,
-        projects::list_issues,
-        project_charts::cfd,
-        project_charts::preview,
-        project_logo::get,
-        project_logo::upload,
-        project_logo::reset,
-        projects::backlog,
-        projects::list_epics,
-        projects::create_epic,
-        projects::update_epic,
-        projects::list_sprints,
-        projects::plan_sprint,
-        projects::close_sprint,
-        projects::delete_sprint,
-        projects::sprint_report,
-        projects::velocity,
-        projects::wip_limits,
-        projects::set_wip_limit,
-        issues::get_issue,
-        issues::update_issue,
-        issues::activity,
-        issues::create_issue,
-        issues::transition,
-        issues::move_issue,
-        issues::estimate,
-        issues::set_epic,
-        issues::set_sprint,
-        issues::list_comments,
-        issues::post_comment,
-        issues::list_blockers,
-        issues::link_blocker,
-        issues::unlink_blocker,
+        crate::health::metrics::get,
+        runners::list,
+        runners::get,
+        runners::noop,
+        terminals::create,
+        terminals::list,
+        terminals::get,
+        terminals::close,
+        terminals::signal,
+        terminals::attach,
         settings::list_server,
         settings::list,
         settings::get,
         settings::set,
         settings::reset,
         settings::history,
-        settings::overridden,
-        requirements::list,
-        requirements::rename,
-        requirements::cancel,
-        requirements::pause,
-        requirements::resume,
-        requirements::finish,
-        hub::attach,
-        requirements::get,
-        requirements::tree,
-        hub::get,
-        hub::post,
-        artifacts::list,
-        artifacts::get,
-        artifacts::download,
-        artifacts::preview,
-        artifacts::usage,
-        library::get_policy,
-        library::set_policy,
-        library::list_skills,
-        library::publish_skill,
-        library::list_knowledge,
-        library::accept,
-        library::reject,
-        library::retire,
-        library::supersede,
+        stepup::challenge,
+        stepup::step_up,
+        lockouts::list,
+        lockouts::clear,
+        accounts::list,
+        accounts::create,
+        accounts::get,
+        accounts::delete,
+        accounts::replace_secret,
+        accounts::set_state,
+        accounts::set_cap,
+        accounts::set_session_limits,
+        accounts::test_account,
+        accounts::start_login,
+        accounts::get_login,
+        accounts::send_login_code,
+        accounts::cancel_login,
+        accounts::list_providers,
+        accounts::create_provider,
+        accounts::replace_provider,
+        accounts::delete_provider,
+        accounts::list_pools,
+        accounts::create_pool,
+        accounts::delete_pool,
+        accounts::add_member,
+        accounts::remove_member,
+        accounts::set_default,
+        accounts::list_bindings,
+        accounts::bind,
+        accounts::unbind,
+        chains::list,
+        chains::get,
+        chains::create,
+        chains::replace,
+        chains::delete,
+        chains::set_default,
+        chains::list_bindings,
+        chains::bind,
+        chains::unbind,
+        costs::list,
+        costs::list_prices,
+        costs::set_price,
+        costs::accounts_usage,
+        costs::set_limit,
+        costs::clear_limit,
+        budgets::list,
+        budgets::set,
+        budgets::delete,
+        budgets::raise,
+        secrets::list,
+        secrets::create,
+        secrets::rotate,
+        secrets::delete,
+        secrets::lease,
+        secrets::redeem,
+        agents::create,
+        agents::list,
+        agents::get,
+        agents::transcript,
+        agents::message,
+        agents::decide,
+        agents::cancel,
+        agents::kill,
+        agents::resume,
+        agents::wake,
     ),
-    components(schemas(types::ErrorBody, model::Issue, events::Event))
+    components(schemas(types::ErrorBody, events::Event))
 )]
 struct ApiDoc;
 
-const DESCRIPTION: &str = "The Citadel client API, for the Ainkrad app. Every request carries \
-a device key as `Authorization: Bearer` (never in the URL) and the server's own `Host`, and \
-no `Origin`. A client working in one company sends its id as `X-Citadel-Company`: every \
-route then answers 404 for another company's data, and lists that span companies keep to it. \
-Times are RFC 3339 UTC with milliseconds. Versioning: within /api/v1, enum \
-values, union variants, optional fields and operations may be added; a client must keep an \
-unknown enum value (every enum is open) and skip an event or union variant it cannot decode. \
-Anything removed or renamed is a new /api/v2. `info.version` is `1.<minor>.0`; the minor \
+const DESCRIPTION: &str = "The Ainkrad Core client API, for the Ainkrad app. Every request \
+is signed by the device's own P-256 key (ES256, raw r||s): the headers Ainkrad-Device, \
+Ainkrad-Session, Ainkrad-Alg (ES256), Ainkrad-Timestamp, Ainkrad-Nonce and Ainkrad-Signature \
+cover an exact canonical string of the Core identity fingerprint, the method, path, query, \
+time, nonce and the body's SHA-256 (handshake spec §5). A session comes from \
+POST /handshake/challenge then POST /handshake/session and lasts 15 minutes; there is no bearer \
+secret, and an Authorization header is refused. A signed body is at most 1 MiB: a larger one \
+is answered 401 auth_failed and counted as a failure against the address, so keep uploads below \
+it. Before trusting a Core, POST /handshake with a fresh nonce and check that core_sig verifies \
+under core_spki and that its fingerprint is the pinned one. Requests carry the server's own Host and no \
+Origin, or the Core's own origin from its web client. A web client signs in with a passkey \
+(POST /handshake/passkey/options, then POST /handshake/passkey/session) and signs every request \
+with a non-extractable WebCrypto P-256 session key in the same way; its event socket takes a \
+one-time ticket (POST /api/v1/ws-ticket) in Sec-WebSocket-Protocol. Times are RFC 3339 UTC with milliseconds. Versioning: within /api/v1, enum values, \
+union variants, optional fields and operations may be added; a client must keep an unknown enum \
+value (every enum is open) and skip an event or union variant it cannot decode. Anything \
+removed or renamed is a new /api/v2. `info.version` is `1.<minor>.0`; the minor \
 (`GET /api/v1/me`, `versions.api.minor`) is bumped on every addition.";
 
-/// The normalised spec, as committed: pretty JSON with sorted keys and a final newline.
+/// The normalised spec, as committed: pretty JSON with sorted keys and a final newline. Lists
+/// the platform's event kinds and audit actions; `serve` mounts no module yet.
 pub fn json() -> String {
-    let mut spec = serde_json::to_value(ApiDoc::openapi()).expect("spec serialises");
+    json_for(&[])
+}
+
+/// The platform's names and `modules`', sorted: event kinds, then audit actions.
+pub fn registered(modules: &[Arc<dyn Module>]) -> [Vec<&'static str>; 2] {
+    let mut kinds = PLATFORM_EVENT_KINDS.to_vec();
+    let mut actions = PLATFORM_AUDIT_ACTIONS.to_vec();
+    for m in modules {
+        kinds.extend(m.event_kinds());
+        actions.extend(m.audit_actions());
+    }
+    kinds.sort_unstable();
+    actions.sort_unstable();
+    [kinds, actions]
+}
+
+/// Each registered event kind and the scope a device needs to see it (E1-04.3).
+pub fn event_scopes(
+    modules: &[Arc<dyn Module>],
+) -> std::collections::BTreeMap<&'static str, &'static str> {
+    let platform = PLATFORM_EVENT_KINDS
+        .iter()
+        .map(|k| (*k, crate::store::kinds::platform_scope(k)));
+    let theirs = modules
+        .iter()
+        .flat_map(|m| m.event_kinds().iter().map(|k| (*k, m.event_scope(k))));
+    platform.chain(theirs).collect()
+}
+
+/// [`json`] with `modules`' event kinds and audit actions listed too.
+pub fn json_for(modules: &[Arc<dyn Module>]) -> String {
+    let mut spec = connections::contract(ApiDoc::openapi());
+    merge_modules(&mut spec, modules);
     normalise(&mut spec);
+    module_extensions(&mut spec, modules);
+    super::deprecation::mark(&mut spec, super::deprecation::DEPRECATED);
+    let [kinds, actions] = registered(modules);
+    spec["components"]["schemas"]["Event"]["x-event-kinds"] = json!(kinds);
+    spec["components"]["schemas"]["Event"]["x-event-scopes"] = json!(event_scopes(modules));
+    spec["components"]["schemas"]["AuditEntry"]["x-audit-actions"] = json!(actions);
     spec["info"]["description"] = json!(DESCRIPTION);
     spec["info"]["version"] = json!(format!("1.{}.0", types::API_MINOR));
     let mut text = serde_json::to_string_pretty(&spec).expect("spec serialises");
     text.push('\n');
     text
+}
+
+/// Merges each module's OpenAPI paths and schemas (`Module::openapi`) into `spec`, before
+/// `normalise`: its paths move under `/modules/<id>/v1`, so it cannot describe (or shadow) a
+/// platform path or another module's; what it wrote under `x-ainkrad-*` and `security` is
+/// dropped (the Core sets them, `module_extensions`); an operation id or schema name that is
+/// already taken stops the contract.
+///
+/// # Panics
+///
+/// On a clash or a malformed document: a programming error that must not ship a contract.
+fn merge_modules(spec: &mut Value, modules: &[Arc<dyn Module>]) {
+    let mut ids: std::collections::HashSet<String> = spec["paths"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .flat_map(|(_, item)| item.as_object().into_iter().flatten())
+        .filter_map(|(_, op)| op["operationId"].as_str().map(str::to_owned))
+        .collect();
+    for m in modules {
+        let doc = m.openapi();
+        if doc.is_null() {
+            continue;
+        }
+        let id = m.id();
+        for (path, item) in doc["paths"].as_object().into_iter().flatten() {
+            assert!(
+                path.starts_with('/') && !path.contains("..") && !path.contains("//"),
+                "module {id}: bad path {path:?}"
+            );
+            let mut item = item.clone();
+            for (method, op) in item.as_object_mut().into_iter().flatten() {
+                let Some(op) = op.as_object_mut() else {
+                    continue;
+                };
+                op.retain(|k, _| !k.starts_with("x-ainkrad-") && k != "security");
+                if let Some(op_id) = op.get("operationId").and_then(Value::as_str) {
+                    assert!(
+                        ids.insert(op_id.to_owned()),
+                        "module {id}: operationId {op_id:?} ({method} {path}) is taken"
+                    );
+                }
+            }
+            let full = format!("/modules/{id}/v1{path}");
+            assert!(
+                spec["paths"].get(&full).is_none(),
+                "module {id}: path {full} is taken"
+            );
+            spec["paths"][&full] = item;
+        }
+        for (name, schema) in doc["components"]["schemas"]
+            .as_object()
+            .into_iter()
+            .flatten()
+        {
+            let taken = spec["components"]["schemas"].get(name);
+            assert!(
+                taken.is_none_or(|t| t == schema),
+                "module {id}: schema {name:?} is taken by another definition"
+            );
+            spec["components"]["schemas"][name] = schema.clone();
+        }
+    }
+}
+
+/// `x-ainkrad-scope` and `x-ainkrad-destructive` on every module operation, from the module's
+/// own tables (`scopes::module_scope`, `module_destructive`): what the gate enforces.
+fn module_extensions(spec: &mut Value, modules: &[Arc<dyn Module>]) {
+    for (path, item) in spec["paths"].as_object_mut().into_iter().flatten() {
+        let Some(rest) = path.strip_prefix("/modules/") else {
+            continue;
+        };
+        let Some((id, sub)) = rest.split_once("/v1") else {
+            continue;
+        };
+        let Some(m) = modules.iter().find(|m| m.id() == id) else {
+            continue;
+        };
+        for (method, op) in item.as_object_mut().into_iter().flatten() {
+            if !op.is_object() {
+                continue;
+            }
+            op["x-ainkrad-scope"] = json!(super::scopes::module_scope(m.as_ref(), method, sub));
+            if super::scopes::module_destructive(m.as_ref(), method, sub) {
+                op["x-ainkrad-destructive"] = json!(true);
+            }
+        }
+    }
 }
 
 pub fn normalise(spec: &mut Value) {
@@ -413,23 +458,41 @@ const ERRORS: [(&str, &str, &str); 7] = [
     (
         "401",
         "Unauthorized",
-        "Missing, invalid or revoked device key",
+        "auth_failed (any signature or device failure, alike whatever the reason), clock_skew \
+         (with server_time), or session_expired",
     ),
-    ("403", "Forbidden", "Wrong Host, or an Origin header"),
-    ("404", "NotFound", "No such resource"),
     (
-        "409",
-        "Conflict",
-        "Refused by the engine's rules (state, WIP, sprint, approval)",
+        "403",
+        "Forbidden",
+        "Wrong Host (unknown_host), an Origin header (origin_refused), a scope the device \
+         lacks (forbidden_scope; see each operation's x-ainkrad-scope), or an operation marked \
+         x-ainkrad-destructive without a live step-up elevation (step_up_required)",
     ),
+    ("404", "NotFound", "No such resource"),
+    ("409", "Conflict", "Conflicts with the current state"),
     ("429", "TooManyRequests", "Rate limited; see Retry-After"),
     ("500", "InternalError", "Internal error"),
 ];
 
 fn security_and_errors(spec: &mut Value) {
-    spec["components"]["securitySchemes"] =
-        json!({"device_key": {"type": "http", "scheme": "bearer"}});
-    spec["security"] = json!([{"device_key": []}]);
+    spec["components"]["securitySchemes"] = json!({"device_signature": {
+        "type": "apiKey", "in": "header", "name": "Ainkrad-Signature",
+        "description": "ES256 over the canonical request string, with Ainkrad-Device, \
+            Ainkrad-Session, Ainkrad-Alg, Ainkrad-Timestamp and Ainkrad-Nonce alongside \
+            (handshake spec §5)"}});
+    spec["security"] = json!([{"device_signature": []}]);
+    // The scope each authenticated operation needs (`scopes::ROUTES`); the pre-auth ones have
+    // `security: [{}]` and none.
+    for (path, item) in spec["paths"].as_object_mut().into_iter().flatten() {
+        for (method, op) in item.as_object_mut().into_iter().flatten() {
+            if let Some(scope) = super::scopes::declared(method, path) {
+                op["x-ainkrad-scope"] = json!(scope);
+            }
+            if super::scopes::declared_destructive(method, path) {
+                op["x-ainkrad-destructive"] = json!(true);
+            }
+        }
+    }
     let error = json!({"application/json": {"schema": {"$ref": "#/components/schemas/ErrorBody"}}});
     for (_, name, description) in ERRORS {
         spec["components"]["responses"][name] =
@@ -458,78 +521,4 @@ fn security_and_errors(spec: &mut Value) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rewrites_nullable_ref_tagged_union_inlined_generic_and_enums() {
-        let mut spec = json!({
-            "paths": {},
-            "components": { "schemas": {
-                "Issue": { "type": "object", "properties": {
-                    "next": { "oneOf": [{ "$ref": "#/components/schemas/Actor" }, { "type": "null" }] }
-                }},
-                "Actor": { "oneOf": [
-                    { "type": "object", "properties": { "kind": { "type": "string", "enum": ["agent"] } } },
-                    { "type": "object", "properties": { "kind": { "type": "string", "enum": ["human"] }, "user_id": { "type": "string" } } }
-                ]},
-                "Page_Issue": { "type": "object", "properties": { "items": { "type": "array", "items":
-                    { "type": "object", "properties": { "next": { "oneOf": [{ "$ref": "#/components/schemas/Actor" }, { "type": "null" }] } } }
-                }}},
-                "State": { "type": "string", "enum": ["open", "done"] }
-            }}
-        });
-        normalise(&mut spec);
-        let s = &spec["components"]["schemas"];
-        assert_eq!(
-            s["Issue"]["properties"]["next"],
-            json!({ "$ref": "#/components/schemas/Actor" })
-        );
-        assert_eq!(
-            s["Actor"]["discriminator"]["mapping"]["human"],
-            "#/components/schemas/ActorHuman"
-        );
-        assert_eq!(
-            s["ActorAgent"]["properties"]["kind"]["enum"],
-            json!(["agent"])
-        );
-        assert_eq!(
-            s["Page_Issue"]["properties"]["items"]["items"],
-            json!({ "$ref": "#/components/schemas/Issue" })
-        );
-        assert_eq!(s["State"]["anyOf"][1], json!({"type": "string"}));
-        assert_eq!(s["State"]["anyOf"][0]["enum"], json!(["open", "done"]));
-    }
-
-    /// The committed contract is what the code generates. On failure: `make contract`, and
-    /// review the diff like code — a client is generated from it.
-    #[test]
-    fn the_committed_contract_is_current() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../api/openapi.json");
-        let committed = std::fs::read_to_string(path).unwrap_or_default();
-        let current = json();
-        assert!(
-            committed == current,
-            "api/openapi.json is stale: run `make contract` and commit it"
-        );
-        let spec: Value = serde_json::from_str(&current).unwrap();
-        assert_eq!(spec["openapi"], "3.1.0");
-        let text = current.as_str();
-        assert!(
-            !text.contains("\"type\": \"null\""),
-            "a null branch survived"
-        );
-        for op in spec["paths"].as_object().unwrap().values() {
-            for (method, op) in op.as_object().unwrap() {
-                assert!(op["operationId"].is_string(), "{method}: no operationId");
-                for (status, r) in op["responses"].as_object().unwrap() {
-                    let named = r["$ref"].is_string();
-                    assert!(
-                        named || r["description"].is_string(),
-                        "{status}: no description"
-                    );
-                }
-            }
-        }
-    }
-}
+mod tests;

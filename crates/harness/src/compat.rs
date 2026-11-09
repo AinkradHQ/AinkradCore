@@ -296,7 +296,18 @@ pub async fn probe(program: &Path, home: &Path, timeout: Duration) -> Option<Str
     if let Some(path) = std::env::var_os("PATH") {
         cmd.env("PATH", path);
     }
-    let output = match tokio::time::timeout(timeout, cmd.output()).await {
+    // The binary may be mid-write (ETXTBSY: another thread's fork still holds the write handle): retry that.
+    let run = async {
+        loop {
+            match cmd.output().await {
+                Err(e) if crate::exec::local::text_busy(&e) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                other => break other,
+            }
+        }
+    };
+    let output = match tokio::time::timeout(timeout, run).await {
         Err(_) => return Some(format!("unknown (no answer within {timeout:?})")),
         Ok(Err(e)) if e.kind() == io::ErrorKind::NotFound => return None,
         Ok(Err(e)) => return Some(format!("unknown ({e})")),
@@ -317,6 +328,7 @@ pub async fn probe(program: &Path, home: &Path, timeout: Duration) -> Option<Str
 mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     use super::*;
 
@@ -459,6 +471,35 @@ mod tests {
         std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
+    }
+
+    /// A binary written a moment ago can be busy (ETXTBSY) when another thread forks in that
+    /// window; the probe retries, so a script written and probed at once always answers.
+    #[tokio::test]
+    async fn a_freshly_written_binary_is_probed_while_other_threads_fork() {
+        let dir = std::env::temp_dir().join(format!("ainkrad-etxtbsy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let forkers: Vec<_> = (0..4)
+            .map(|_| {
+                let stop = stop.clone();
+                std::thread::spawn(move || {
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        let _ = std::process::Command::new("/bin/true").status();
+                    }
+                })
+            })
+            .collect();
+        for i in 0..300 {
+            let bin = script(&dir, &format!("v{i}"), "echo 'codex-cli 0.154.0'");
+            let got = probe(&bin, &dir, Duration::from_secs(10)).await;
+            assert_eq!(got.as_deref(), Some("0.154.0"), "round {i}");
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        for f in forkers {
+            f.join().unwrap();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

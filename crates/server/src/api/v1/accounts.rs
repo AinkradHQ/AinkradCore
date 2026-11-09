@@ -1,231 +1,384 @@
-//! The provider account pool (E15.1), for the admin: list, add, assign to companies, disable
-//! or enable. No secret goes in or comes out: an account names a token file on the runner
-//! hosts, never the token.
+//! AI provider accounts, pools and bindings over the API (KAN-432; design
+//! `2026-11-02-ai-provider-accounts` §10, §11b). Reading is `read` and shows only what a phone
+//! may see: no secret name, no runner scope, never a value. Every write is `admin` and
+//! destructive (a step-up): storing or replacing a key, enabling or disabling an account, its
+//! cap, a pool's members, a binding, the default, a provider definition's edit.
+//!
+//! A key is written, never read: [`NewProviderAccount`] and [`ReplaceKey`] parse their own body (a
+//! serde error could quote the key) and have no `Debug`; nothing returns it.
 
-use ainkrad_core::gov::AccountId;
-use ainkrad_core::org::CompanyId;
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::body::Bytes;
+use axum::extract::{Extension, Path, State};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+use zeroize::Zeroizing;
 
-use super::org::company;
-use super::types::{AccountStatus, Billing, Harness, Timestamp, opt_ts};
-use super::{ApiError, ApiResult, BY};
+use super::types::{Timestamp, opt_ts, ts};
+use super::{ApiError, ApiResult, BY, Caller};
 use crate::api::App;
-use crate::store::gov;
+use crate::ops::secretbox::SecretBox;
+use crate::store::providers::{Definition, Model};
+use crate::store::secrets::Error as StoreError;
+use crate::store::{account_keys, accounts as acc, pools as pl, providers as prov};
 
-/// A provider account, by reference only.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct Account {
-    pub id: i64,
-    pub harness: Harness,
-    pub label: String,
-    /// The token file's name under each runner's credentials dir; absent when the account
-    /// logs in through its config dir.
-    pub credential_ref: Option<String>,
-    /// The harness variable the token goes in.
-    pub credential_env: Option<String>,
-    /// The account's harness config dir, under each runner's config root.
-    pub config_dir: String,
-    pub billing: Billing,
-    pub status: AccountStatus,
-    /// Why it is not active.
-    pub status_reason: Option<String>,
-    /// When a `limited` or `unhealthy` status ends by itself, if known.
-    pub status_until: Option<Timestamp>,
-    pub last_used_at: Option<Timestamp>,
-    /// The companies whose runs may use it.
-    pub company_ids: Vec<i64>,
-    /// Its plan tier as the admin wrote it (`Max 20x`, `Pro`); shown, never enforced.
-    pub plan_tier: Option<String>,
+fn parse<T: DeserializeOwned>(body: &[u8]) -> Result<T, ApiError> {
+    serde_json::from_slice(body)
+        .map_err(|_| ApiError::bad_request("the body is not a valid request for this route"))
 }
 
-impl From<ainkrad_core::gov::Account> for Account {
-    fn from(a: ainkrad_core::gov::Account) -> Self {
-        Self {
-            id: a.id.0,
-            harness: a.harness.into(),
-            label: a.label,
-            credential_ref: a.credential_ref,
-            credential_env: a.credential_env,
-            config_dir: a.config_dir,
-            billing: a.billing.into(),
-            status: a.status.into(),
-            status_reason: a.status_reason,
-            status_until: opt_ts(a.status_until.as_deref()),
-            last_used_at: opt_ts(a.last_used_at.as_deref()),
-            company_ids: a.companies,
-            plan_tier: a.plan_tier,
-        }
+/// A numeric path id; anything else is no such row.
+fn num(s: &str, what: &str) -> Result<i64, ApiError> {
+    s.parse::<u64>()
+        .ok()
+        .and_then(|n| i64::try_from(n).ok())
+        .ok_or_else(|| ApiError::not_found(format!("no such {what}")))
+}
+
+fn sealer(app: &App) -> Result<&SecretBox, ApiError> {
+    app.secrets.as_deref().ok_or_else(|| {
+        ApiError::new(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "secrets_unavailable",
+            "this Core has no master key loaded",
+        )
+    })
+}
+
+fn err(e: StoreError) -> ApiError {
+    e.into()
+}
+
+// ----- providers --------------------------------------------------------------------------
+
+#[utoipa::path(get, path = "/api/v1/accounts/providers", operation_id = "listProviders",
+    tag = "accounts",
+    responses((status = 200, description = "The built-in providers, then the user definitions", body = Vec<Provider>)))]
+pub async fn list_providers(State(app): State<App>) -> ApiResult<Vec<Provider>> {
+    let all = prov::list(&app.pool).await?;
+    Ok(Json(all.into_iter().map(Into::into).collect()))
+}
+
+#[utoipa::path(post, path = "/api/v1/accounts/providers", operation_id = "createProvider",
+    tag = "accounts", request_body = Provider,
+    responses((status = 200, description = "Stored (audited as `provider.created`). 400 for a \
+        definition that fails validation (https DNS base URL, the harness's own variable); 409 \
+        `conflict` or `limit_reached`", body = Provider)))]
+pub async fn create_provider(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    body: Bytes,
+) -> ApiResult<Provider> {
+    let p: Provider = parse(&body)?;
+    let d = prov::create(&app.pool, &p.into(), &me.device.id, BY, &app.clock.now())
+        .await
+        .map_err(err)?;
+    Ok(Json(d.into()))
+}
+
+#[utoipa::path(put, path = "/api/v1/accounts/providers/{id}", operation_id = "replaceProvider",
+    tag = "accounts", params(("id" = String, Path, description = "The provider's id")),
+    request_body = Provider,
+    responses((status = 200, description = "A new version (audited as `provider.updated`). \
+        Accounts already stored keep the base URL they were bound to", body = Provider)))]
+pub async fn replace_provider(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> ApiResult<Provider> {
+    let mut p: Provider = parse(&body)?;
+    if p.id != id {
+        return Err(ApiError::bad_request("the body's id is not the path's"));
+    }
+    p.id = id;
+    let d = prov::replace(&app.pool, &p.into(), &me.device.id, BY, &app.clock.now())
+        .await
+        .map_err(err)?;
+    Ok(Json(d.into()))
+}
+
+#[utoipa::path(delete, path = "/api/v1/accounts/providers/{id}", operation_id = "deleteProvider",
+    tag = "accounts", params(("id" = String, Path, description = "The provider's id")),
+    responses((status = 200, description = "Deleted (audited as `provider.deleted`); a built-in \
+        or one an account uses is refused", body = AccountsDeleted)))]
+pub async fn delete_provider(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<AccountsDeleted> {
+    prov::delete(&app.pool, &id, &me.device.id, BY)
+        .await
+        .map_err(err)?;
+    Ok(Json(AccountsDeleted { deleted: true }))
+}
+
+/// The accounts' load and health, for an `admin` device only: how many sessions hold an account
+/// says what other users are running.
+async fn statuses_for(
+    app: &App,
+    me: &Caller,
+) -> Result<std::collections::HashMap<i64, crate::store::health::Status>, ApiError> {
+    match me.device.scopes.iter().any(|s| s == "admin") {
+        true => Ok(crate::store::health::statuses(&app.pool).await?),
+        false => Ok(Default::default()),
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct NewAccount {
-    pub harness: Harness,
-    /// Unique, `[a-z0-9][a-z0-9._-]*`.
-    pub label: String,
-    /// A file name under each runner's credentials dir; never the token itself.
-    pub credential_ref: Option<String>,
-    /// Default: the harness's first auth variable, e.g. `CLAUDE_CODE_OAUTH_TOKEN`.
-    pub credential_env: Option<String>,
-    /// Default: `accounts/<label>`.
-    pub config_dir: Option<String>,
-    /// Default: the harness's billing.
-    pub billing: Option<Billing>,
-}
-
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct StatusChange {
-    /// `active` or `disabled`; the others are the server's to set.
-    pub status: AccountStatus,
-    pub reason: Option<String>,
-}
-
-pub(super) async fn found(app: &App, id: i64) -> Result<ainkrad_core::gov::Account, ApiError> {
-    gov::get_account(&app.pool, AccountId(id))
-        .await?
-        .ok_or_else(|| ApiError::not_found(format!("no account {id}")))
-}
+// ----- accounts ---------------------------------------------------------------------------
 
 #[utoipa::path(get, path = "/api/v1/accounts", operation_id = "listAccounts", tag = "accounts",
-    responses((status = 200, description = "The whole pool; in a company (`X-Citadel-Company`), \
-        the accounts its runs may use", body = Vec<Account>)))]
+    responses((status = 200, description = "Every account: its key's last four characters, \
+        never the key, its secret's name or its runner scope; with its `live` session count and \
+        `health` (`admin` devices only)", body = Vec<ProviderAccount>)))]
 pub async fn list(
     State(app): State<App>,
-    axum::Extension(acting): axum::Extension<super::scope::Acting>,
-) -> ApiResult<Vec<Account>> {
-    let all = gov::list_accounts(&app.pool).await?;
-    // In a company (E15.14): the accounts its runs may use.
-    let mine = all
-        .into_iter()
-        .filter(|a| acting.0.is_none_or(|c| a.companies.contains(&c.0)));
-    Ok(Json(mine.map(Into::into).collect()))
+    Extension(me): Extension<Caller>,
+) -> ApiResult<Vec<ProviderAccount>> {
+    let status = statuses_for(&app, &me).await?;
+    Ok(Json(
+        acc::list(&app.pool)
+            .await?
+            .into_iter()
+            .map(|a| {
+                let st = status.get(&a.id);
+                ProviderAccount::from(a).with_status(st)
+            })
+            .collect(),
+    ))
+}
+
+#[utoipa::path(get, path = "/api/v1/accounts/{id}", operation_id = "getAccount", tag = "accounts",
+    params(("id" = String, Path, description = "The account's id")),
+    responses((status = 200, description = "One account, with its `live` session count and \
+        `health` (`admin` devices only)", body = ProviderAccount)))]
+pub async fn get(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<ProviderAccount> {
+    let a = acc::get(&app.pool, num(&id, "account")?)
+        .await
+        .map_err(err)?;
+    let status = statuses_for(&app, &me).await?;
+    let st = status.get(&a.id);
+    Ok(Json(ProviderAccount::from(a).with_status(st)))
 }
 
 #[utoipa::path(post, path = "/api/v1/accounts", operation_id = "createAccount", tag = "accounts",
-    request_body = NewAccount,
-    responses((status = 200, description = "The new account, active and assigned to no company", body = Account)))]
-pub async fn create(State(app): State<App>, Json(n): Json<NewAccount>) -> ApiResult<Account> {
-    let new = gov::new_account(
-        &app.pool,
-        n.harness.into(),
-        &n.label,
-        n.credential_ref,
-        n.credential_env,
-        n.config_dir,
-        n.billing.map(Into::into),
-    )
-    .await?;
-    match gov::create_account(&app.pool, &new, BY).await {
-        Ok(a) => Ok(Json(a.into())),
-        Err(sqlx::Error::InvalidArgument(why)) => Err(ApiError::bad_request(why)),
-        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => Err(ApiError::conflict(
-            format!("label {:?} is taken", new.label),
-        )),
-        Err(e) => Err(e.into()),
+    request_body = NewProviderAccount,
+    responses((status = 200, description = "Stored with its key in the secrets broker (audited \
+        as `account.created`, and the broker's own `secret.created`). 409 `secrets_disabled` \
+        (`secrets.mode` 0), `real_secret_refused` (a real key shape while \
+        `secrets.provider_accounts` is off), `conflict` or `limit_reached`; 400 for a bad \
+        provider, label, cap or runner; 503 `secrets_unavailable`", body = AccountDetail)))]
+pub async fn create(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    body: Bytes,
+) -> ApiResult<AccountDetail> {
+    let b: NewProviderAccount = parse(&body)?;
+    // A subscription's token never comes in a body: only a sign-in (`startAccountLogin`) makes one.
+    if account_keys::subscription_provider(&b.provider) {
+        return Err(ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            "login_required",
+            "a subscription account is made by signing in (POST /api/v1/accounts/logins), not by a key",
+        ));
     }
+    let new = acc::NewAccount {
+        provider: &b.provider,
+        label: &b.label,
+        value: &b.value,
+        runners: b.runners.as_deref().unwrap_or_default(),
+        cap: b.cap,
+    };
+    let a = acc::create(
+        &app.pool,
+        sealer(&app)?,
+        &new,
+        &me.device.id,
+        BY,
+        &app.clock.now(),
+    )
+    .await
+    .map_err(err)?;
+    Ok(Json(a.into()))
 }
 
-/// What a delete removed.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct RemovedAccount {
-    pub id: i64,
+#[utoipa::path(put, path = "/api/v1/accounts/{id}/secret", operation_id = "replaceAccountSecret",
+    tag = "accounts", params(("id" = String, Path, description = "The account's id")),
+    request_body = ReplaceKey,
+    responses((status = 200, description = "A new key version, its last four characters cut \
+        again, every outstanding lease on the old one dropped (audited as \
+        `account.secret_replaced`); the refusals of `createAccount`", body = AccountDetail)))]
+pub async fn replace_secret(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> ApiResult<AccountDetail> {
+    let id = num(&id, "account")?;
+    let b: ReplaceKey = parse(&body)?;
+    let a = acc::replace_secret(
+        &app.pool,
+        sealer(&app)?,
+        id,
+        &b.value,
+        b.runners.as_deref(),
+        &me.device.id,
+        BY,
+        &app.clock.now(),
+    )
+    .await
+    .map_err(err)?;
+    Ok(Json(a.into()))
+}
+
+#[utoipa::path(put, path = "/api/v1/accounts/{id}/state", operation_id = "setAccountState",
+    tag = "accounts", params(("id" = String, Path, description = "The account's id")),
+    request_body = SetState,
+    responses((status = 200, description = "Enables (`active`) or disables the account, or \
+        marks it cooling, limited or unhealthy (audited as `account.state_set`)",
+        body = ProviderAccount)))]
+pub async fn set_state(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    Json(b): Json<SetState>,
+) -> ApiResult<ProviderAccount> {
+    let a = crate::agents::subscription::set_state(
+        &app,
+        num(&id, "account")?,
+        &b.state,
+        b.reason.as_deref(),
+        b.until.as_deref(),
+        &me.device.id,
+        BY,
+    )
+    .await
+    .map_err(err)?;
+    Ok(Json(a.into()))
+}
+
+#[utoipa::path(put, path = "/api/v1/accounts/{id}/cap", operation_id = "setAccountCap",
+    tag = "accounts", params(("id" = String, Path, description = "The account's id")),
+    request_body = SetCap,
+    responses((status = 200, description = "The concurrency cap, 0 (no cap) to 64 (audited as \
+        `account.cap_set`)", body = ProviderAccount)))]
+pub async fn set_cap(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    Json(b): Json<SetCap>,
+) -> ApiResult<ProviderAccount> {
+    let a = acc::set_cap(
+        &app.pool,
+        num(&id, "account")?,
+        b.cap,
+        &me.device.id,
+        BY,
+        &app.clock.now(),
+    )
+    .await
+    .map_err(err)?;
+    Ok(Json(a.into()))
+}
+
+#[utoipa::path(put, path = "/api/v1/accounts/{id}/session-limits",
+    operation_id = "setAccountSessionLimits", tag = "accounts",
+    params(("id" = String, Path, description = "The account's id")),
+    request_body = SessionLimits,
+    responses((status = 200, description = "What one session may spend through this account \
+        (audited as `account.session_limits_set`); a dimension left out is cleared. The Core's \
+        ceiling for a gateway session honours it beside the budgets, from the next time a \
+        ceiling is set (a session's start, its resume, or the top-up of its ceiling): a session \
+        that is running keeps the ceiling it holds until then. It raises what a session may \
+        spend, so it needs a step-up", body = ProviderAccount)))]
+pub async fn set_session_limits(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    Json(b): Json<SessionLimits>,
+) -> ApiResult<ProviderAccount> {
+    let a = account_keys::set_session_limits(
+        &app.pool,
+        num(&id, "account")?,
+        b.max_tokens,
+        b.max_usd_micros,
+        &me.device.id,
+        BY,
+        &app.clock.now(),
+    )
+    .await
+    .map_err(err)?;
+    Ok(Json(a.into()))
+}
+
+#[utoipa::path(post, path = "/api/v1/accounts/{id}/test", operation_id = "testAccount",
+    tag = "accounts", params(("id" = String, Path, description = "The account's id")),
+    responses((status = 200, description = "One free request (a model list) made through the \
+        gateway of a runner that is online, in the key's scope and offers it: the status class \
+        and the latency, never a body. Stored on the account and audited as `account.tested`. 409 \
+        `no_runner` when none is ready; 429 when the account was tested within a minute or a \
+        test is running. A provider whose model list needs no key and that declares no \
+        `test_path` answers `inconclusive` (nothing is sent), never `ok`", body = AccountTested),
+        (status = 502, description = "The runner failed or did not answer the test (code \
+        `runner_failed`); the attempt is recorded as `failed` and counts for the rate limit")))]
+pub async fn test_account(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<AccountTested> {
+    use crate::agents::gateway::test::{Failed, run};
+    let id = num(&id, "account")?;
+    match run(&app, &me, id).await {
+        Ok(t) => Ok(Json(AccountTested {
+            result: t.result,
+            latency_ms: t.latency_ms,
+            runner: t.runner,
+        })),
+        Err(Failed::Gone) => Err(ApiError::not_found("no such account")),
+        Err(Failed::Soon(why)) => Err(ApiError::new(
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            why,
+        )),
+        Err(Failed::NoRunner) => Err(ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            "no_runner",
+            "no runner in this key's scope is online and offers the gateway",
+        )),
+        Err(Failed::Refused(why)) => Err(ApiError::conflict(why)),
+        Err(Failed::Runner(why)) => Err(ApiError::new(
+            axum::http::StatusCode::BAD_GATEWAY,
+            "runner_failed",
+            why,
+        )),
+        Err(Failed::Db(e)) => Err(e.into()),
+    }
 }
 
 #[utoipa::path(delete, path = "/api/v1/accounts/{id}", operation_id = "deleteAccount",
-    tag = "accounts", params(("id" = i64, Path, description = "Account id")),
-    responses(
-        (status = 200, description = "The account is gone with its company assignments and \
-            limits (audited as `account.deleted`)", body = RemovedAccount),
-        (status = 409, description = "Live runs use it, or it has run or been billed (the cost \
-            ledger keeps its name: disable it instead)", body = super::types::ErrorBody)))]
-pub async fn delete(State(app): State<App>, Path(id): Path<i64>) -> ApiResult<RemovedAccount> {
-    match gov::delete_account(&app.pool, AccountId(id), BY).await {
-        Ok(true) => Ok(Json(RemovedAccount { id })),
-        Ok(false) => Err(ApiError::not_found(format!("no account {id}"))),
-        Err(gov::DeleteAccountError::Db(e)) => Err(e.into()),
-        Err(e) => Err(ApiError::conflict(format!("account {id}: {e}"))),
-    }
-}
-
-#[utoipa::path(put, path = "/api/v1/accounts/{id}/companies/{company_id}",
-    operation_id = "assignAccount", tag = "accounts",
-    params(("id" = i64, Path, description = "Account id"),
-           ("company_id" = i64, Path, description = "Company id")),
-    responses((status = 200, description = "The account, now assigned", body = Account)))]
-pub async fn assign(
+    tag = "accounts", params(("id" = String, Path, description = "The account's id")),
+    responses((status = 200, description = "Deleted with its key, its leases and its pool \
+        seats (audited as `account.deleted`)", body = AccountsDeleted)))]
+pub async fn delete(
     State(app): State<App>,
-    Path((id, company_id)): Path<(i64, i64)>,
-) -> ApiResult<Account> {
-    let (a, c) = (found(&app, id).await?, company(&app, company_id).await?);
-    gov::assign_account(&app.pool, a.id, c.id, true, BY).await?;
-    Ok(Json(found(&app, id).await?.into()))
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<AccountsDeleted> {
+    crate::agents::subscription::delete(&app, num(&id, "account")?, &me.device.id, BY)
+        .await
+        .map_err(err)?;
+    Ok(Json(AccountsDeleted { deleted: true }))
 }
 
-#[utoipa::path(delete, path = "/api/v1/accounts/{id}/companies/{company_id}",
-    operation_id = "unassignAccount", tag = "accounts",
-    params(("id" = i64, Path, description = "Account id"),
-           ("company_id" = i64, Path, description = "Company id")),
-    responses((status = 200, description = "The account; runs already on it keep it", body = Account)))]
-pub async fn unassign(
-    State(app): State<App>,
-    Path((id, company_id)): Path<(i64, i64)>,
-) -> ApiResult<Account> {
-    let a = found(&app, id).await?;
-    gov::assign_account(&app.pool, a.id, CompanyId(company_id), false, BY).await?;
-    Ok(Json(found(&app, id).await?.into()))
-}
+mod logins;
+mod pools;
+mod types;
 
-#[utoipa::path(post, path = "/api/v1/accounts/{id}/status", operation_id = "setAccountStatus",
-    tag = "accounts", params(("id" = i64, Path, description = "Account id")),
-    request_body = StatusChange,
-    responses((status = 200, description = "The account", body = Account)))]
-pub async fn set_status(
-    State(app): State<App>,
-    Path(id): Path<i64>,
-    Json(change): Json<StatusChange>,
-) -> ApiResult<Account> {
-    let a = found(&app, id).await?;
-    let status: ainkrad_core::gov::AccountStatus = change.status.into();
-    use ainkrad_core::gov::AccountStatus as S;
-    if !matches!(status, S::Active | S::Disabled) {
-        return Err(ApiError::bad_request(
-            "only active or disabled is set by hand",
-        ));
-    }
-    gov::set_account_status(&app.pool, a.id, status, change.reason.as_deref(), BY).await?;
-    Ok(Json(found(&app, id).await?.into()))
-}
-
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct PlanBody {
-    /// 1–64 characters, e.g. `Max 20x`; absent or empty clears it.
-    pub plan_tier: Option<String>,
-}
-
-#[utoipa::path(put, path = "/api/v1/accounts/{id}/plan", operation_id = "setAccountPlan",
-    tag = "accounts", params(("id" = i64, Path, description = "Account id")),
-    request_body = PlanBody,
-    responses((status = 200, description = "The account with its plan tier (audited as \
-        `account.plan_set`)", body = Account)))]
-pub async fn set_plan(
-    State(app): State<App>,
-    Path(id): Path<i64>,
-    Json(b): Json<PlanBody>,
-) -> ApiResult<Account> {
-    let a = found(&app, id).await?;
-    let tier = b
-        .plan_tier
-        .as_deref()
-        .map(str::trim)
-        .filter(|t| !t.is_empty());
-    if tier.is_some_and(|t| t.chars().count() > 64) {
-        return Err(ApiError::bad_request(
-            "a plan tier is at most 64 characters",
-        ));
-    }
-    gov::set_account_plan(&app.pool, a.id, tier, BY).await?;
-    Ok(Json(found(&app, id).await?.into()))
-}
+pub use logins::*;
+pub use pools::*;
+pub use types::*;

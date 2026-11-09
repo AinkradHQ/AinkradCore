@@ -18,11 +18,13 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
+use std::path::Path;
 
 use serde_json::{Value, json};
 use tokio::process::Command;
 
-use crate::proc::{self, Proc};
+use crate::exec::Launch;
+use crate::proc::Proc;
 use crate::{Decision, Harness, HarnessEvent, Spec, TurnOutcome, Usage};
 
 /// The agy version this adapter was written and recorded against (E3.6 probes it). Tool names
@@ -31,6 +33,20 @@ pub const VERSION: &str = "1.4.4";
 
 /// The runner-owned settings: there is no one to ask, so every tool proceeds.
 pub const SETTINGS: &str = r#"{"toolPermission": "always-proceed"}"#;
+
+/// The settings of a session that reaches Gemini through the runner's auth gateway (KAN-435 G6):
+/// agy takes a Gemini key (`GEMINI_API_KEY`, here a placeholder) only with `modelProvider` set.
+pub const GATEWAY_SETTINGS: &str =
+    r#"{"toolPermission": "always-proceed", "modelProvider": "gemini"}"#;
+
+/// The runner sets `GOOGLE_GEMINI_BASE_URL` for a gateway session only; a session that logs in
+/// keeps its own provider.
+fn settings_for(spec: &Spec) -> &'static str {
+    match crate::last_env(&spec.env, "GOOGLE_GEMINI_BASE_URL") {
+        Some(_) => GATEWAY_SETTINGS,
+        None => SETTINGS,
+    }
+}
 
 /// The argv: flags only, `-p=` last (`-p` takes the next argument as its prompt).
 pub fn args(spec: &Spec, resume: Option<&str>) -> Vec<String> {
@@ -57,13 +73,12 @@ pub fn args(spec: &Spec, resume: Option<&str>) -> Vec<String> {
 
 /// The process to spawn: cleared env + allowlist, `HOME` set to the spec's config dir.
 pub fn command(spec: &Spec, resume: Option<&str>) -> Command {
+    launch(spec, resume).command(spec)
+}
+
+fn launch(spec: &Spec, resume: Option<&str>) -> Launch {
     let program = spec.program.as_deref().unwrap_or("agy".as_ref());
-    proc::command(
-        program.as_os_str(),
-        &args(spec, resume),
-        spec,
-        &[("HOME", spec.config_dir.as_os_str())],
-    )
+    Launch::new(program, args(spec, resume)).set("HOME", spec.config_dir.as_os_str())
 }
 
 /// The spec's MCP file for the Citadel MCP server at `url`, in agy's `mcp_config.json` form
@@ -77,16 +92,19 @@ pub fn mcp_config(url: &str, token: &str) -> Value {
 /// the spec's files are linked there, MCP servers as `.gemini/config/mcp_config.json` and
 /// instructions as `.gemini/GEMINI.md`; a file the spec lacks removes a stale link. Links,
 /// not copies: the run token stays only in the runner's per-run file, and dies with it.
-// ponytail: one home per runner, so two agy runs at once would share these links; the runner
-// works one run at a time. A home per run is the upgrade if that changes.
+// ponytail: one home per runner, so two agy runs at once would share these links: the v2
+// driver admits one agy at a time (`one_at_a_time`). A home per run is the upgrade.
 fn link_files(spec: &Spec) -> io::Result<()> {
+    // The home is the agent's to write in: no link may stand where a directory belongs, or the
+    // removals and links below would land outside it.
+    std::fs::create_dir_all(&spec.config_dir)?;
+    crate::safe_fs::real_dir(&spec.config_dir, Path::new(".gemini/config"))?;
     let gemini = spec.config_dir.join(".gemini");
     let links = [
         (&spec.mcp_config, gemini.join("config/mcp_config.json")),
         (&spec.instructions, gemini.join("GEMINI.md")),
     ];
     for (file, at) in links {
-        std::fs::create_dir_all(at.parent().expect("a parent"))?;
         match std::fs::remove_file(&at) {
             Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
             _ => {}
@@ -276,10 +294,10 @@ impl Agy {
         }
         link_files(spec)?;
         let settings = spec.config_dir.join(".gemini/antigravity-cli");
-        std::fs::create_dir_all(&settings)?;
-        std::fs::write(settings.join("settings.json"), SETTINGS)?;
+        crate::safe_fs::real_dir(&spec.config_dir, Path::new(".gemini/antigravity-cli"))?;
+        crate::safe_fs::write_replacing(&settings, "settings.json", settings_for(spec))?;
         Ok(Self {
-            proc: Proc::spawn(command(spec, resume))?,
+            proc: Proc::start(spec, launch(spec, resume)).await?,
             decoder: Decoder {
                 resumed: resume.is_some(),
                 ..Decoder::default()
@@ -346,5 +364,7 @@ impl Harness for Agy {
     }
 }
 
+#[cfg(test)]
+mod links_tests;
 #[cfg(test)]
 mod tests;

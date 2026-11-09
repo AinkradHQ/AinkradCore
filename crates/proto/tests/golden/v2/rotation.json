@@ -1,0 +1,1 @@
+{"stream_id":0,"kind":"control","seq":3,"payload":{"new_fp":"new","not_before":1761730000,"old_fp":"old","seq":1,"sig":"sig_old","type":"rotation"}}

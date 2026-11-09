@@ -1,0 +1,29 @@
+24 80
+size 24x80 alt=false cursor=6,0 hidden=false modes=\e>\e[?1l\e[?2004l
+pen \e[m
+-- scrollback 0
+-- screen
+|ascii | plain
+|cjk   | 你好世界 こんにちは 한글
+|emoji | 😀🚀👨‍👩‍👧 ❤️ 🇩🇪
+|comb  | é ä ñ नमस्ते
+|mixed | a你b😀cxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+|xxxxx你好 wraps
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
