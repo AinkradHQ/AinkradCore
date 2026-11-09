@@ -31,6 +31,7 @@ use crate::cli::Result_;
 pub const USAGE: &str = "Devices (E1-07):
   ainkrad-core-server bootstrap <db> [<name>]
   ainkrad-core-server recover <db> [--keep-devices] [--revoke-runners] [<name>]
+  ainkrad-core-server pairing-invite <db> <host> [<name>]
 bootstrap pairs the first device, and only the first: it prints a one-time code, good for 5
 minutes and only over the server's Unix socket (core.sock, or admin.sock beside a TCP or public
 listener) from this user, then the claimant's SAS, and approves it when you type y. A declined
@@ -38,6 +39,12 @@ or lapsed attempt can be run again. recover does the same for a new admin device
 devices exist, after you type the host name; it first revokes every app device (they may be
 lost or stolen) unless --keep-devices, and the runners too with --revoke-runners. Both run only
 as the owner of an existing database (the service user), checked before it is opened.
+pairing-invite is the installer's way to the first owner: like bootstrap it is refused once any
+device exists, but it prints one link, ainkrad://connect?host=<host>&fp=<core fp>&secret=<secret>
+(<host> is what clients send as Host), that never expires and is claimed once, from anywhere, by
+its secret alone: that device is the owner with every scope at once, with no SAS. The secret is
+shown here and nowhere else (not logged, not audited, not stored); running it again burns the
+previous link.
 For a remote Core, relay the socket over SSH as that user with scripts/install/admin-relay.sh
 (a plain `ssh -L` connects as your login user and is refused), then point the new device at the
 local end: ainkradctl --socket <local socket> --host <the Core's host name> pair <code> --core-fp <fp>.";
@@ -137,6 +144,46 @@ pub async fn recover(db: &Path, name: &str, keep_devices: bool, revoke_runners: 
     enrol(&pool, db, name, true).await
 }
 
+/// The first owner's invite: created, printed as a link and left for the claim (§7.3).
+pub async fn invite(db: &Path, host: &str, name: &str) -> Result_ {
+    if host.is_empty()
+        || !host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b".-:[]".contains(&b))
+    {
+        return Err("host is the name clients send as Host (letters, digits, . - : [ ])".into());
+    }
+    owner_only(db)?;
+    let pool = store::connect(db).await?;
+    let identity = Identity::load_or_create(
+        state_dir(db),
+        &ainkrad_core_server::ops::secretbox::SecretBox::for_home(state_dir(db))?,
+    )?;
+    ainkrad_core_server::auth::identity::audit_switch(&pool, &identity).await;
+    let scopes: Vec<String> = gov::SCOPES.iter().map(|s| (*s).to_owned()).collect();
+    let new = gov::NewPairing {
+        kind: "device",
+        name,
+        scopes: &scopes,
+        created_by: None,
+        bootstrap: true,
+        recovery: false,
+        invite: true,
+    };
+    let created = gov::create_pairing(&pool, &new, AuditActor::System, SystemClock.unix())
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::InvalidArgument(why) => format!("refused: {why}").into(),
+            e => Box::<dyn std::error::Error>::from(e),
+        })?;
+    println!(
+        "{}",
+        ainkrad_core_server::auth::pairing::invite_link(host, &identity.fp, &created.secret)
+    );
+    eprintln!("Valid until used, once; running this again replaces it.");
+    Ok(())
+}
+
 /// Creates the host's pairing, waits for its claim, shows the SAS and approves on `y`.
 async fn enrol(pool: &SqlitePool, db: &Path, name: &str, recovery: bool) -> Result_ {
     let identity = Identity::load_or_create(
@@ -152,6 +199,7 @@ async fn enrol(pool: &SqlitePool, db: &Path, name: &str, recovery: bool) -> Resu
         created_by: None,
         bootstrap: !recovery,
         recovery,
+        invite: false,
     };
     let created = gov::create_pairing(pool, &new, AuditActor::System, SystemClock.unix())
         .await

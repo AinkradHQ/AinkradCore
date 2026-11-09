@@ -164,6 +164,12 @@ pub async fn run(available: Vec<Arc<dyn Module>>) -> ExitCode {
         ["device", "list", db] => list_devices(Path::new(db)).await,
         ["bootstrap", db] => admin::bootstrap::bootstrap(Path::new(db), "first device").await,
         ["bootstrap", db, name] => admin::bootstrap::bootstrap(Path::new(db), name).await,
+        ["pairing-invite", db, host] => {
+            admin::bootstrap::invite(Path::new(db), host, "first owner").await
+        }
+        ["pairing-invite", db, host, name] => {
+            admin::bootstrap::invite(Path::new(db), host, name).await
+        }
         ["recover", db, rest @ ..] => {
             let flag = |f: &str| rest.contains(&f);
             let names: Vec<&&str> = rest.iter().filter(|a| !a.starts_with("--")).collect();

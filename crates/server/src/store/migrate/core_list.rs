@@ -185,4 +185,10 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0030_connection_apps.up.sql"),
         down: include_str!("../../../migrations/0030_connection_apps.down.sql"),
     },
+    Migration {
+        version: 31,
+        name: "pairing_invite",
+        up: include_str!("../../../migrations/0031_pairing_invite.up.sql"),
+        down: include_str!("../../../migrations/0031_pairing_invite.down.sql"),
+    },
 ];

@@ -67,6 +67,11 @@ pub fn secret_hash(secret: &[u8]) -> [u8; 32] {
     sha256(secret)
 }
 
+/// `ainkrad://connect?host=<host>&fp=<core_fp>&secret=<secret>`: an invite, as a link or QR.
+pub fn invite_link(host: &str, core_fp: &str, secret: &str) -> String {
+    format!("ainkrad://connect?host={host}&fp={core_fp}&secret={secret}")
+}
+
 /// `ainkrad-pair:v1?h=<host>&p=<port>&c=<core_fp>&s=<secret>&e=<expires unix>`. `host` is the
 /// Host clients send (`core.example`, or `127.0.0.1:7700` with its port; 443 without one).
 pub fn qr(host: &str, core_fp: &str, secret: &str, expires: i64) -> String {

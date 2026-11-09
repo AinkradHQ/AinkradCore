@@ -5,7 +5,8 @@
 //! A wrong, used, expired or burned credential is the one `pairing_failed`, counted against the
 //! address (§11) and the global wrong-claim budget (20 in 5 minutes burn every live pairing,
 //! §7.4), and audited. A bootstrap pairing is claimable only over this server's Unix socket by
-//! its own user (§7.3).
+//! its own user, unless it is an invite, which the QR secret alone claims from anywhere and
+//! which enrols the device active at once (§7.3).
 
 use axum::Json;
 use axum::extract::{Request, State};
@@ -255,8 +256,13 @@ pub(super) async fn live_pairing(
     if (pairing.kind == "passkey") != passkey {
         return Err("a passkey pairing on the device path, or the other way round");
     }
+    // An invite is claimed by its QR secret alone, never by the short code (§7.3).
+    if pairing.invite && by_code {
+        return Err("an invite claimed by its typed code");
+    }
     let local = parts.extensions.get::<Local>().is_some_and(|l| l.same_user);
-    if (pairing.bootstrap || pairing.recovery) && !local {
+    // An invite is the one bootstrap-class pairing that may come from the network.
+    if ((pairing.bootstrap && !pairing.invite) || pairing.recovery) && !local {
         return Err("bootstrap claimed from outside the host's socket");
     }
     Ok(Ok((pairing, hash)))

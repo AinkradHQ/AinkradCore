@@ -150,6 +150,7 @@ async fn a_bootstrap_claim_rechecks_that_no_device_exists() {
         created_by: None,
         bootstrap: true,
         recovery: false,
+        invite: false,
     };
     let created = create_pairing(
         &fx.app.pool,

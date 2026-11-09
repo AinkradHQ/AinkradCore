@@ -139,6 +139,7 @@ async fn another_uid_on_the_admin_socket_cannot_claim_a_bootstrap_pairing() {
         created_by: None,
         bootstrap: true,
         recovery: false,
+        invite: false,
     };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

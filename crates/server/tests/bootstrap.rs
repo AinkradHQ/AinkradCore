@@ -308,3 +308,65 @@ async fn the_host_verbs_never_create_a_database() {
         assert!(!h.dir.join("missing.db-wal").exists());
     }
 }
+
+/// `pairing-invite` prints one link and nothing else sensitive; its secret claims once, from the
+/// network (no host-socket peer), and enrols the owner with every scope at once; it is then
+/// refused, and its secret is in no audit row.
+#[tokio::test]
+async fn pairing_invite_prints_one_link_that_enrols_the_first_owner() {
+    let h = host("invite").await;
+    let db = h.db.to_str().unwrap();
+    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_ainkrad-core-server"))
+        .args(["pairing-invite", db, "core.test", "Mac"])
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let link = String::from_utf8(out.stdout).unwrap();
+    let link = link.trim();
+    let fp = &h.identity.fp;
+    let prefix = format!("ainkrad://connect?host=core.test&fp={fp}&secret=");
+    let secret = link.strip_prefix(prefix.as_str()).expect(link);
+    assert_eq!(secret.len(), 22, "one line: the link, nothing else");
+
+    let dev = TestDevice::new(fp, Arc::new(SystemClock));
+    let claim = |dev: &TestDevice| {
+        let r = Request::post("/pair/claim")
+            .header("host", "localhost")
+            .header("content-type", "application/json")
+            .body(Body::from(dev.claim_body(None, Some(secret)).to_string()))
+            .unwrap();
+        router(h.app.clone()).oneshot(r)
+    };
+    let res = claim(&dev).await.unwrap();
+    assert_eq!(res.status(), 202, "claimed without the host's socket");
+    let got: serde_json::Value =
+        serde_json::from_slice(&to_bytes(res.into_body(), 1 << 16).await.unwrap()).unwrap();
+    let (st, scopes, revoked) = status(&h, got["device_id"].as_str().unwrap()).await;
+    assert_eq!(
+        (st.as_str(), scopes, revoked),
+        ("active", gov::SCOPES.map(str::to_owned).to_vec(), false)
+    );
+    let second = claim(&TestDevice::new(fp, Arc::new(SystemClock)))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), 401, "single use");
+
+    let again = tokio::process::Command::new(env!("CARGO_BIN_EXE_ainkrad-core-server"))
+        .args(["pairing-invite", db, "core.test"])
+        .output()
+        .await
+        .unwrap();
+    assert!(!again.status.success());
+    assert!(String::from_utf8_lossy(&again.stderr).contains("a device exists"));
+    let rows: String =
+        sqlx::query_scalar("SELECT group_concat(action || details, ' ') FROM audit_events")
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+    assert!(!rows.contains(secret), "the secret is in an audit row");
+}
