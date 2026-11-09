@@ -10,6 +10,11 @@ ignore = [
   # E2-19 (iroh): "unmaintained", a compile-time macro crate reached through netlink-packet-core (netwatch, the
   # Linux/Android network-change monitor). No runtime code, no untrusted input. Drop when iroh's netwatch moves off it.
   { id = "RUSTSEC-2024-0436", reason = "paste: macro only, via iroh -> netwatch -> netlink-packet-core" },
+  # RUSTSEC-2026-0459 (libsqlite3-sys 0.37.0, bundled SQLite < 3.54.0): needs a hostile -wal file with a mismatched page
+  # size next to a database the process opens. Core opens only its own databases, so exposure is low. Blocked because
+  # sqlx-sqlite 0.9.0 caps libsqlite3-sys at <0.38 (fix is >=0.39). Remove when sqlx ships 0.39 support.
+  # Time-boxed: re-check by 2026-12-09.
+  { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys: hostile -wal needed, own databases only; blocked on sqlx-sqlite <0.38 cap; re-check 2026-12-09" },
 ]
 
 [licenses]
