@@ -177,5 +177,15 @@ if [ "$(uname -s)" = Darwin ]; then
   grep -q 'NOT RUN: notarisation' "$t/out8" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: ad hoc package did not say notarisation is not run" >&2; }
 fi
 
+# Guided mode (the default): given the two answers up front it asks nothing, shows all ten steps in order, uses the plain
+# fallback without a TTY, defaults to local backups and root-capable runner, and never prints an invite in a dry run.
+mkdir -p "$t/gb"
+AINKRAD_HOSTNAME=core.example.com AINKRAD_ACME_EMAIL=ops@example.com bash "$HERE/../install.sh" --dry-run --binary "$t/gb" >"$t/gout" 2>&1 </dev/null
+for want in 'step 1 of 10' 'step 10 of 10' 'Using core.example.com' 'no bucket: encrypted snapshots' 'Ainkrad Core is ready'; do
+  grep -q -- "$want" "$t/gout" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: guided dry run lacks '$want'" >&2; }
+done
+grep -q $'\033' "$t/gout" && { fail=$((fail + 1)); echo "FAIL: guided output has colour codes without a TTY" >&2; } || pass=$((pass + 1))
+grep -q 'secret=' "$t/gout" && { fail=$((fail + 1)); echo "FAIL: guided dry run printed an invite" >&2; } || pass=$((pass + 1))
+
 echo "install tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]

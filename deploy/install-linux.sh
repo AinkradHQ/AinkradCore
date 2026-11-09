@@ -2,23 +2,28 @@
 # Installs the ainkrad-runner systemd unit (E1-12.3; protocol v2 since E1-14.5; terminals and pairing E2-15).
 # Idempotent; does not start unless --start or --pair. Works on the Core's own host and on a remote Linux host.
 #   install-linux.sh [--binary PATH] [--ptyhost PATH] [--pty] [--ca PEM]
-#                    [--pair https://<core> --code <CODE>] [--start] [--prefix DIR] [--dry-run]
+#                    [--exec] [--root] [--pair https://<core> --code <CODE>] [--start] [--prefix DIR] [--dry-run]
 # --pty      offer terminals (--enable-pty); needs ainkrad-ptyhost (--ptyhost, default: beside --binary). The shell
 #            runs as the unprivileged ainkrad-runner user inside the unit's sandbox. Off unless asked.
 # --ca       a PEM the runner trusts instead of the system roots (a test Core's CA only).
 # --pair     pair as the service user now (waits for the approver; compare the SAS it prints), then start.
-# exec.run stays OFF: add --enable-exec to RUNNER_ARGS in /etc/ainkrad-runner/runner.env yourself if wanted.
+# --exec     turn exec.run on (--enable-exec): the Core can run any program as the runner's user. Off unless asked.
+# --root     full authority on this host (the guided installer): run the unit as root, without the unit's sandbox
+#            (a drop-in, ainkrad-runner.service.d/authority.conf). Agent sessions stay inside their own bubblewrap
+#            sandbox. Without it a re-run removes the drop-in.
 # --prefix installs under DIR (a throwaway root, for tests): no user creation, no systemctl.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-binary="$HERE/../target/release/ainkrad-runner" ptyhost='' pty=0 ca='' pair='' code='' prefix='' start=0 dry=0
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+binary="$HERE/../target/release/ainkrad-runner" ptyhost='' pty=0 ca='' pair='' code='' prefix='' start=0 dry=0 exec_on=0 root=0
+usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 while [ $# -gt 0 ]; do
   case $1 in
     --binary) binary=${2:?}; shift 2 ;;
     --ptyhost) ptyhost=${2:?}; shift 2 ;;
     --pty) pty=1; shift ;;
+    --exec) exec_on=1; shift ;;
+    --root) root=1; shift ;;
     --ca) ca=${2:?}; shift 2 ;;
     --pair) pair=${2:?}; shift 2 ;;
     --code) code=${2:?}; shift 2 ;;
@@ -57,8 +62,38 @@ run install -m 0644 "$HERE/systemd/ainkrad-runner.service" "$prefix/etc/systemd/
 # runner.env: RUNNER_ARGS from these flags, replaced on every run (so a re-run without --pty turns terminals off).
 args=''
 [ "$pty" = 1 ] && args="--enable-pty"
+[ "$exec_on" = 1 ] && args="${args:+$args }--enable-exec"
 [ -z "$ca" ] || args="${args:+$args }--ca $ca"
 if [ -n "$prefix" ]; then run install -d "$prefix/etc/ainkrad-runner"; fi
+dropin="$prefix/etc/systemd/system/ainkrad-runner.service.d"
+if [ "$root" = 1 ]; then
+  run install -d "$dropin"
+  printf '+ write %s/authority.conf\n' "$dropin"
+  if [ "$dry" = 0 ]; then cat >"$dropin/authority.conf" <<'CONF'
+# Written by deploy/install-linux.sh --root: the runner is the app's hands on this machine, so it runs as root with
+# every capability and no filesystem sandbox. Agent sessions are sandboxed by the runner itself (bubblewrap).
+[Service]
+User=root
+Group=root
+NoNewPrivileges=no
+CapabilityBoundingSet=
+CapabilityBoundingSet=~
+AmbientCapabilities=
+ProtectSystem=no
+ProtectHome=no
+PrivateDevices=no
+DevicePolicy=auto
+ProtectKernelTunables=no
+ProtectKernelModules=no
+ProtectKernelLogs=no
+ProtectControlGroups=no
+ProtectClock=no
+ProtectHostname=no
+RestrictNamespaces=no
+SystemCallFilter=
+CONF
+  fi
+else run rm -rf "$dropin"; fi
 envfile="$prefix/etc/ainkrad-runner/runner.env"
 printf '+ write %s: RUNNER_ARGS=%s\n' "$envfile" "$args"
 if [ "$dry" = 0 ]; then

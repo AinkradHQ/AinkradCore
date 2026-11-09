@@ -2,7 +2,8 @@
 # Guided installer for the Ainkrad Core on a Linux + systemd host (E1-16.x). Nothing about your environment lives
 # in the repo: the wizard asks for it (or reads an answers file) and writes /etc/ainkrad/core.env (settings) and
 # /etc/ainkrad/backup.env (bucket credentials, root:ainkrad 0640). Idempotent: re-run it to change an answer.
-#   sudo scripts/install.sh                      interactive wizard
+#   sudo scripts/install.sh                      guided install (default): asks only the DNS name and ACME email
+#   sudo scripts/install.sh --wizard             the classic question-by-question wizard
 #   sudo scripts/install.sh --config <answers>   unattended (see deploy/install.answers.example)
 #   scripts/install.sh --config <answers> --dry-run   print every action, change nothing (no root needed)
 #   sudo scripts/install.sh --check [--backup local|bucket]   self-test an existing install
@@ -20,21 +21,23 @@ umask 077
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=scripts/install/lib.sh
 . "$ROOT/scripts/install/lib.sh"
+# shellcheck source=scripts/install/guided.sh
+. "$ROOT/scripts/install/guided.sh"
 
 CORE_HOME=/var/lib/ainkrad/core ETC=/etc/ainkrad BIN=/usr/local/bin UNITS=/etc/systemd/system
 STAGING_DIR=https://acme-staging-v02.api.letsencrypt.org/directory
-MODE=install CONFIG='' DRY=0 PURGE=0 CHECK_BACKUP=no CLI_BINARY='' STAGE=''
+MODE=install GUIDED=0 CONFIG='' DRY=0 PURGE=0 CHECK_BACKUP=no CLI_BINARY='' STAGE=''
 
 say() { printf '%s\n' "$*"; }
-step() { printf '\n== %s\n' "$*"; }
+step() { if [ "$GUIDED" = 1 ]; then guided_step "$*"; else printf '\n== %s\n' "$*"; fi; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
 warn() { printf 'install: WARNING: %s\n' "$*" >&2; }
-run() { printf '+ %s\n' "$*"; [ "$DRY" = 1 ] || "$@"; }
+run() { trace "$@"; [ "$DRY" = 1 ] || "$@"; }
 # write_file PATH MODE OWNER:GROUP CONTENT [SHOWN]: atomically, via a temp file beside it; SHOWN replaces
 # CONTENT in the dry-run listing (secrets masked). printf is a builtin: CONTENT never reaches an argv.
 write_file() {
   local path=$1 mode=$2 owner=$3 content=$4 shown=${5:-$4} tmp
-  printf '+ write %s (%s %s)\n' "$path" "$owner" "$mode"
+  trace "write $path ($owner $mode)"
   if [ "$DRY" = 1 ]; then printf '%s\n' "$shown" | sed 's/^/    /'; return; fi
   tmp=$(mktemp "$(dirname "$path")/.$(basename "$path").XXXXXX")
   printf '%s\n' "$content" >"$tmp"
@@ -150,7 +153,7 @@ checks() { # DNS -> this host's public IP; :443 (and :80) free
   say "  Reachability of :443/:80 from the internet cannot be tested from here: ACME issuance below proves it."
   [ "$problems" = 0 ] && return 0
   [ "$DRY" = 1 ] && { warn "checks failed (dry run continues)"; return 0; }
-  [ -z "$CONFIG" ] && yes_no "Continue anyway?" && return 0
+  [ -z "$CONFIG" ] && yes_no "Continue anyway? (the certificate will fail until DNS is right)" && return 0
   die "checks failed"
 }
 
@@ -198,7 +201,7 @@ harden() {
     for p in $peers; do ip_in_cidrs "$p" "$A_SSH_FROM" || die "SSH_FROM $A_SSH_FROM would lock out the open SSH session from $p"; done
     say "  SSH will be admitted only from $A_SSH_FROM (current sessions: ${peers:-none seen}). Your cloud firewall may need the same."
   fi
-  [ -n "$CONFIG" ] || [ "$DRY" = 1 ] || yes_no "Apply it now?" || { say "  skipped"; return 0; }
+  [ -n "$CONFIG" ] || [ "$DRY" = 1 ] || [ "$GUIDED" = 1 ] || yes_no "Apply it now?" || { say "  skipped"; return 0; }
   run env AINKRAD_SSH_FROM="$A_SSH_FROM" bash "$ROOT/scripts/host/harden.sh"
 }
 
@@ -206,7 +209,7 @@ install_core() {
   step "Core: user, binary, unit, home"
   local out prev_env tls=$CORE_HOME/tls dry=()
   [ "$DRY" = 1 ] && dry=(--dry-run)
-  out=$(bash "$ROOT/deploy/install-core-linux.sh" --binary "$STAGE/ainkrad-core-server" ${dry[@]+"${dry[@]}"} | tee /dev/stderr)
+  out=$(bash "$ROOT/deploy/install-core-linux.sh" --binary "$STAGE/ainkrad-core-server" ${dry[@]+"${dry[@]}"} | tee "$([ "$GUIDED$DRY" = 10 ] && echo /dev/null || echo /dev/stderr)")
   # The signer's fingerprint, base64url(SHA-256(SPKI)) as `init` prints it, from the key itself (so a re-run has it).
   SIGNER=''
   [ "$DRY" = 1 ] || SIGNER=$(openssl pkey -inform DER -in "$CORE_HOME/keys/backup-signing.p8" -pubout -outform DER |
@@ -294,7 +297,7 @@ start_core() {
   say "  waiting for https://$A_HOSTNAME/healthz (the first certificate can take a minute)..."
   local end=$((SECONDS + 240))
   until health >/dev/null 2>&1; do
-    [ "$SECONDS" -lt "$end" ] || { journalctl -u ainkrad-core -n 20 --no-pager >&2; die "the Core did not become healthy"; }
+    [ "$SECONDS" -lt "$end" ] || { journalctl -u ainkrad-core -n 20 --no-pager >&2; die "the Core did not become healthy: check that $A_HOSTNAME points at this machine and that your cloud firewall allows inbound 443 (the log is above)"; }
     sleep 3
   done
   say "  healthy"
@@ -311,6 +314,7 @@ extras() {
   step "Runner on this host (terminals $([ "$A_RUNNER_PTY" = yes ] && echo ON || echo off); exec.run OFF)"
   [ -f "$STAGE/ainkrad-runner" ] || { warn "no ainkrad-runner binary: runner skipped"; return 0; }
   local a=(--binary "$STAGE/ainkrad-runner") code=${A_RUNNER_PAIR_CODE:-}
+  [ "$GUIDED" = 0 ] || a+=(--exec --root) # full authority on this host: root, exec.run on; agent sessions stay in bubblewrap
   [ "$DRY" = 1 ] && a+=(--dry-run)
   if [ "$A_RUNNER_PTY" = yes ]; then
     [ -f "$STAGE/ainkrad-ptyhost" ] || die "RUNNER_PTY=yes but no ainkrad-ptyhost binary beside the others"
@@ -429,7 +433,7 @@ uninstall() {
   # KillMode=process: stopping the runner leaves its terminal hosts running on purpose; removing it ends them.
   run systemctl kill --kill-whom=all ainkrad-runner.service 2>/dev/null || true
   run rm -rf "$UNITS/ainkrad-core.service" "$UNITS/ainkrad-runner.service" "$UNITS/ainkrad-backup.service" \
-    "$UNITS/ainkrad-backup.timer" "$UNITS/ainkrad-backup.timer.d" "$UNITS/ainkrad-backup.service.d" "$UNITS/ainkrad-core.service.d"
+    "$UNITS/ainkrad-backup.timer" "$UNITS/ainkrad-backup.timer.d" "$UNITS/ainkrad-backup.service.d" "$UNITS/ainkrad-core.service.d" "$UNITS/ainkrad-runner.service.d"
   run systemctl daemon-reload
   run systemctl reset-failed 2>/dev/null || true
   run rm -f "$BIN/ainkrad-core-server" "$BIN/ainkradctl" "$BIN/ainkrad-runner" "$BIN/ainkrad-ptyhost" "$BIN/ainkrad-core-citadel"
@@ -453,6 +457,8 @@ main() {
       --config) CONFIG=${2:?}; shift 2 ;;
       --binary) CLI_BINARY=${2:?}; shift 2 ;;
       --dry-run) DRY=1; shift ;;
+      --guided) GUIDED=1; shift ;;
+      --wizard) GUIDED=-1; shift ;;
       --uninstall) MODE=uninstall; shift ;;
       --purge) PURGE=1; shift ;;
       --check) MODE=check; shift ;;
@@ -470,7 +476,11 @@ main() {
       selftest "$CHECK_BACKUP"; return ;;
   esac
   preflight
-  if [ -n "$CONFIG" ]; then
+  # No answers file and no --wizard: the guided install is the default.
+  if [ -n "$CONFIG" ] || [ "$GUIDED" = -1 ]; then GUIDED=0; else GUIDED=1; fi
+  if [ "$GUIDED" = 1 ]; then
+    ui_init; guided_banner; guided_answers; check_answers || die "invalid answers"
+  elif [ -n "$CONFIG" ]; then
     parse_answers "$CONFIG" || die "fix the answers file above"
     [ -z "$CLI_BINARY" ] || A_BINARY_DIR=$CLI_BINARY
     local missing; missing=$(missing_keys)
@@ -481,8 +491,8 @@ main() {
     wizard; check_answers || die "invalid answers"
   fi
   A_HOSTNAME=$(lower "$A_HOSTNAME")
-  review
-  [ -n "$CONFIG" ] || [ "$DRY" = 1 ] || yes_no "Install with these answers?" || die "aborted, nothing changed"
+  if [ "$GUIDED" = 1 ]; then guided_backup_key; else review; fi
+  [ -n "$CONFIG" ] || [ "$DRY" = 1 ] || [ "$GUIDED" = 1 ] || yes_no "Install with these answers?" || die "aborted, nothing changed"
   [ "$DRY" = 0 ] || say "(dry run: the commands below are printed, not run)"
   checks
   stage_binaries
@@ -494,6 +504,14 @@ main() {
   real_credentials
   extras
   [ "$DRY" = 1 ] || selftest "$A_SELFTEST_BACKUP" || warn "self-test failed: see above"
+  if [ "$GUIDED" = 1 ]; then
+    local rc=0
+    step "First device"
+    guided_invite || rc=1
+    guided_summary "$rc"
+    [ "$rc" != 0 ] || [ -z "$INVITE" ] || guided_show_invite
+    return "$rc"
+  fi
   bootstrap
   summary
 }
