@@ -1,0 +1,14 @@
+# The one registry of contract files (C-21). Each line: <path or glob> [api-minor]; `!` excludes.
+# scripts/schema-compat.sh (additive-only) and scripts/api-minor-check.sh both read it through
+# scripts/contracts.sh, so a new module contract matching a glob is gated with no edit anywhere else.
+#   api-minor  a change needs a higher API_MINOR (types.rs). Citadel's openapi.core.json is the
+#              platform contract with Citadel's routes merged in, so it is part of the platform version;
+#              a module's own contract is not (it versions itself, e.g. a future BRAIN_MINOR).
+api/openapi.json                        api-minor
+api/events.schema.json                  api-minor
+api/runner.schema.json                  api-minor
+modules/citadel/api/openapi.core.json   api-minor
+# every module contract: modules/<name>/api/*.json
+modules/*/api/*.json
+# the parked Citadel monolith's own API, a static copy that no generator touches: not gated today
+!modules/citadel/api/openapi.json

@@ -114,3 +114,5 @@ jobs:
           case "$BASE" in ''|0000000*) BASE=$(git rev-parse HEAD^1) ;; esac
           echo "BASE_REF=$BASE" >> "$GITHUB_ENV"
       - run: make schema-compat
+      - name: Self-test the gate (api/ and module contracts)
+        run: make schema-compat-selftest
