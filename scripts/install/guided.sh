@@ -36,7 +36,8 @@ guided_step() {
   case $1 in
     Checks*) n=1 t="Checking this machine" w="The DNS name must point here and ports 80/443 must be free, or no certificate can be issued." ;;
     Binaries*) n=2 t="Checking the Core programs" w="Confirms they run on this CPU and shows their SHA-256 (the release signature was already verified)." ;;
-    "Host hardening"*) n=3 t="Securing the machine" w="Firewall to SSH, 80 and 443, key-only SSH where that is safe, no core dumps or swap, automatic security updates." ;;
+    "Host hardening skipped"*) n=3 t="Host hardening: skipped (opt-in)" w="SSH config and firewall are untouched. Use your provider's firewall; --harden applies it (experimental)." ;;
+    "Host hardening"*) n=3 t="Securing the machine (experimental, opt-in)" w="Firewall to SSH, 80 and 443, key-only SSH where that is safe, no core dumps or swap, automatic security updates." ;;
     "Core: user"*) n=4 t="Installing the Core" w="Creates a service account, the Core's home with its keys and database, and its systemd service." ;;
     Backups*) n=5 t="Setting up backups" w="Encrypted snapshots of the Core every day, kept on this machine (a bucket can be added later)." ;;
     Start*) n=6 t="Starting the Core" w="Enables the service at boot and waits for its first HTTPS certificate (up to a minute or two)." ;;
@@ -65,7 +66,7 @@ guided_answers() {
   A_BINARY_DIR=${CLI_BINARY:-${A_BINARY_DIR:-/usr/local/bin}}
   A_HOSTNAME=${A_HOSTNAME:-${AINKRAD_HOSTNAME:-}} A_ACME_CONTACT=${A_ACME_CONTACT:-${AINKRAD_ACME_EMAIL:-}}
   A_ACME_ENV=${AINKRAD_ACME_ENV:-production}
-  A_BACKUP=local A_BACKUP_RECIPIENT=${A_BACKUP_RECIPIENT:-} A_RUNNER=yes A_RUNNER_PTY=yes A_HARDEN=yes A_REAL_CREDENTIALS=yes
+  A_BACKUP=local A_BACKUP_RECIPIENT=${A_BACKUP_RECIPIENT:-} A_RUNNER=yes A_RUNNER_PTY=yes A_HARDEN=no A_REAL_CREDENTIALS=yes
   A_BOOTSTRAP=later A_SELFTEST_BACKUP=no
   [ -n "$A_HOSTNAME" ] && ! valid_hostname "$A_HOSTNAME" && { warn "AINKRAD_HOSTNAME '$A_HOSTNAME' is not a DNS name"; A_HOSTNAME=''; }
   [ -n "$A_ACME_CONTACT" ] && ! valid_email "$A_ACME_CONTACT" && { warn "AINKRAD_ACME_EMAIL is not a valid email"; A_ACME_CONTACT=''; }
@@ -167,6 +168,7 @@ box() { # box LINE...: a rounded box, ASCII content only (padding counts bytes)
 firewall_decide() {
   local listeners notice h=$ROOT/scripts/host/harden.sh
   FW_CHOICE=${AINKRAD_FIREWALL:-yes}
+  case $FW_CHOICE in yes | no) ;; *) die "AINKRAD_FIREWALL must be yes or no (got '$FW_CHOICE')" ;; esac
   if [ "$FW_CHOICE" = no ]; then say "  Firewall step skipped (AINKRAD_FIREWALL=no): ports are left as they are."; return 0; fi
   notice=$(AINKRAD_HARDEN_SOURCE_ONLY=1 bash -c '. "$1"; firewall_notice' _ "$h" 2>/dev/null || true)
   [ -z "$notice" ] || printf '%s\n' "$notice"
@@ -204,19 +206,24 @@ ssh_state() {
 }
 
 guided_summary() { # guided_summary INVITE_RC
-  local runner=installed fw='(dry run)' sshs='(dry run)'
-  [ "$DRY" = 1 ] || { fw=$(fw_state); sshs=$(ssh_state); }
+  local runner=installed fw='(dry run)' sshs='(dry run)' rows=()
   [ -e /var/lib/ainkrad-runner/core/enrolment.json ] || runner="installed, waiting to be paired from the app"
+  rows+=("Address     https://$A_HOSTNAME")
+  rows+=("Certificate $([ "$A_ACME_ENV" = staging ] && echo 'STAGING (test, not trusted by browsers)' || echo "Let's Encrypt, renews by itself")")
+  if [ "$A_HARDEN" = yes ]; then
+    [ "$DRY" = 1 ] || { fw=$(fw_state); sshs=$(ssh_state); }
+    rows+=("Firewall    $fw" "SSH         $sshs" "Updates     automatic security updates; reboots stay manual")
+  else
+    rows+=("Hardening   NOT applied (opt-in): SSH, firewall untouched")
+  fi
+  rows+=("Backups     $([ -n "$A_BACKUP_RECIPIENT" ] && echo "daily, encrypted, in $CORE_HOME/backups" || echo 'OFF (no key; re-run from a terminal)')")
+  rows+=("Runner      $runner" "            unprivileged user; terminals on, exec.run off")
   printf '\n'
-  box "Ainkrad Core is $([ "$1" = 0 ] && echo 'ready' || echo 'running, but has no connect link yet')" "" \
-    "Address     https://$A_HOSTNAME" \
-    "Certificate $([ "$A_ACME_ENV" = staging ] && echo 'STAGING (test, not trusted by browsers)' || echo "Let's Encrypt, renews by itself")" \
-    "Firewall    $fw" \
-    "SSH         $sshs" \
-    "Updates     automatic security updates; reboots stay manual" \
-    "Backups     $([ -n "$A_BACKUP_RECIPIENT" ] && echo "daily, encrypted, in $CORE_HOME/backups" || echo 'OFF (no key; re-run from a terminal)')" \
-    "Runner      $runner" \
-    "            unprivileged user; terminals on, exec.run off"
+  box "Ainkrad Core is $([ "$1" = 0 ] && echo 'ready' || echo 'running, but has no connect link yet')" "" "${rows[@]}"
+  if [ "$A_HARDEN" != yes ]; then
+    say "
+ Host hardening NOT applied: SSH config and firewall untouched. Use your provider's firewall; re-run with --harden or use the app's Core machine screen later."
+  fi
   if [ -s "${HARDEN_WARN:-/nonexistent}" ]; then
     say "
  Heads-up from host hardening:"

@@ -6,19 +6,27 @@
 # file cannot touch the firewall of a machine that has the real tools. `command -v X` answers from $HAVE.
 # Each check FAILS when the rule it guards is broken (mutants: see the PR).
 # SC2015: `check && pass || fail` is meant. SC2031/SC2154/SC2329: stubs and sourced libraries run in subshells on purpose.
-# shellcheck disable=SC2015,SC2016,SC2030,SC2031,SC2120,SC2154,SC2269,SC2329
+# shellcheck disable=SC2015,SC2016,SC2030,SC2031,SC2120,SC2154,SC2178,SC2269,SC2329
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 pass=0 fail=0
 ok() { pass=$((pass + 1)); }
 bad() { fail=$((fail + 1)); echo "FAIL: $*" >&2; }
+# These tests stub every tool that changes a machine, but they never run as root: a mistake must not be able to change a firewall.
+[ "$(id -u)" != 0 ] || { echo "harden-test: refusing to run as root (run it as an ordinary user)" >&2; exit 1; }
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
 : >"$t/violation"
+# Belt and braces for subshells and `bash -c` children: the real tools are shadowed for the whole run by shims that only record.
+mkdir "$t/shim"
+for f in ufw iptables ip6tables netfilter-persistent systemctl sshd; do
+  printf '#!/bin/sh\necho "SHIM %s $*" >>"%s"\nexit 99\n' "$f" "$t/violation" >"$t/shim/$f"; chmod +x "$t/shim/$f"
+done
+export PATH="$t/shim:$PATH"
 
 # hz SNIPPET: harden.sh sourced in test mode, with violating default stubs and `command -v` answering from $HAVE
 hz() {
-  ( export AINKRAD_HARDEN_SOURCE_ONLY=1 SUDO_USER=ops
+  ( export AINKRAD_HARDEN_SOURCE_ONLY=1 AINKRAD_INSTALL_TEST=1 SUDO_USER=ops
     # shellcheck source=scripts/host/harden.sh
     . "$ROOT/scripts/host/harden.sh"
     for f in ufw iptables ip6tables netfilter-persistent systemctl sshd; do
@@ -70,8 +78,10 @@ AINKRAD_TEST_HOME=$h3 AINKRAD_TEST_SSHD_T=$h3/sshd_t AINKRAD_TEST_SS=$h2/empty A
 out=$(AINKRAD_HARDEN_SOURCE_ONLY=1 bash "$ROOT/scripts/host/harden.sh" 2>&1); rc=$?
 { [ "$rc" = 0 ] && grep -q 'nothing was done' <<<"$out"; } && ok || bad "harden.sh executed with AINKRAD_HARDEN_SOURCE_ONLY=1 did not stop at once ($rc)"
 sed 's|^\[ "\$(id -u)" = 0 \] .*|echo "PEERS=${AINKRAD_TEST_PEERS+set}"; exit 0|' "$ROOT/scripts/host/harden.sh" >"$t/harden-prod.sh"
+grep -q '^echo "PEERS=' "$t/harden-prod.sh" && ok || { bad "the production copy of harden.sh was not made (the sed pattern no longer matches): the checks below would prove nothing"; }
 [ "$(AINKRAD_TEST_PEERS=203.0.113.5 AINKRAD_TEST_HOME=/x bash "$t/harden-prod.sh" 2>&1 | grep PEERS=)" = "PEERS=" ] && ok || bad "harden.sh honours AINKRAD_TEST_* overrides outside the install tests"
-[ "$(AINKRAD_HARDEN_SOURCE_ONLY=1 AINKRAD_TEST_PEERS=203.0.113.5 bash -c '. "$1"; echo "PEERS=${AINKRAD_TEST_PEERS+set}"' _ "$ROOT/scripts/host/harden.sh")" = "PEERS=set" ] && ok || bad "harden.sh drops the overrides even in test mode"
+[ "$(AINKRAD_HARDEN_SOURCE_ONLY=1 AINKRAD_TEST_PEERS=203.0.113.5 bash -c '. "$1"; echo "PEERS=${AINKRAD_TEST_PEERS+set}"' _ "$ROOT/scripts/host/harden.sh")" = "PEERS=" ] && ok || bad "harden.sh keeps the test overrides with only AINKRAD_HARDEN_SOURCE_ONLY=1 (AINKRAD_INSTALL_TEST=1 is also required)"
+[ "$(AINKRAD_HARDEN_SOURCE_ONLY=1 AINKRAD_INSTALL_TEST=1 AINKRAD_TEST_PEERS=203.0.113.5 bash -c '. "$1"; echo "PEERS=${AINKRAD_TEST_PEERS+set}"' _ "$ROOT/scripts/host/harden.sh")" = "PEERS=set" ] && ok || bad "harden.sh drops the overrides even in test mode"
 
 # --- sshd ports, other listeners, the notice ---
 printf 'port 2222\n' >"$t/t2222"; : >"$t/none"
@@ -97,7 +107,7 @@ decide() { # NAME WANT ANSWER(y|n|-) LISTEN-FILE [env]  -> FW_CHOICE and whether
   ( . "$ROOT/scripts/install/lib.sh"; . "$ROOT/scripts/install/guided.sh"
     GUIDED=1 DRY=0; ans=$3; say() { echo "$*"; }; have_tty() { [ "$ans" != - ]; }
     yes_no() { echo asked >>"$f"; [ "$ans" = y ]; }
-    export AINKRAD_TEST_SSHD_T=$t/t2222 AINKRAD_TEST_SSH_LISTEN=$t/none AINKRAD_TEST_LISTEN_ALL=$4
+    export AINKRAD_INSTALL_TEST=1 AINKRAD_TEST_SSHD_T=$t/t2222 AINKRAD_TEST_SSH_LISTEN=$t/none AINKRAD_TEST_LISTEN_ALL=$4
     eval "${5:-}"
     firewall_decide >/dev/null; echo "$FW_CHOICE" >>"$f.out" ) 2>/dev/null
   local got; got=$(tail -n1 "$f.out" 2>/dev/null); rm -f "$f.out"
@@ -110,7 +120,7 @@ decide "AINKRAD_FIREWALL=no" no y "$t/all" 'export AINKRAD_FIREWALL=no'
 printf 'tcp LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* users:(("sshd",pid=900,fd=3))\n' >"$t/only-ssh"
 decide "nothing else listening: applies without asking" yes n "$t/only-ssh"
 : >"$t/decide"; ( . "$ROOT/scripts/install/lib.sh"; . "$ROOT/scripts/install/guided.sh"; GUIDED=1 DRY=0; say() { :; }; have_tty() { return 0; }; yes_no() { echo asked >>"$t/decide"; return 0; }
-  export AINKRAD_TEST_SSHD_T=$t/t2222 AINKRAD_TEST_SSH_LISTEN=$t/none AINKRAD_TEST_LISTEN_ALL=$t/only-ssh; firewall_decide >/dev/null ) 2>/dev/null
+  export AINKRAD_INSTALL_TEST=1 AINKRAD_TEST_SSHD_T=$t/t2222 AINKRAD_TEST_SSH_LISTEN=$t/none AINKRAD_TEST_LISTEN_ALL=$t/only-ssh; firewall_decide >/dev/null ) 2>/dev/null
 [ ! -s "$t/decide" ] && ok || bad "firewall_decide asked although only ssh/80/443 listen"
 
 # --- the firewall step against stubs ---
@@ -216,9 +226,22 @@ fwstate yes yes 'firewall=failed' | grep -q 'NOT applied completely' && ok || ba
 fwstate yes yes $'firewall=iptables\nipv6=unfiltered' | grep -q 'IPv6 open' && ok || bad "fw_state does not say IPv6 is unfiltered"
 # outside test mode the rules file path override is ignored
 ( . "$ROOT/scripts/install/lib.sh"; . "$ROOT/scripts/install/guided.sh"; A_HARDEN=yes HARDEN_STATE=/nonexistent
-  iptables() { [ "$1" = -S ] && echo '-A INPUT -j AINKRAD_IN'; return 0; }; ip6tables() { return 0; }
+  ufw() { echo 'Status: inactive'; }; iptables() { [ "$1" = -S ] && echo '-A INPUT -j AINKRAD_IN'; return 0; }; ip6tables() { return 0; }
   echo AINKRAD_IN >"$t/forged"; AINKRAD_RULES_V4=$t/forged fw_state ) | grep -q 'until next reboot' && ok || bad "fw_state honours AINKRAD_RULES_V4 outside test mode"
 ( . "$ROOT/scripts/install/lib.sh"; [ "$(clean_ip 203.0.113.9)" = 203.0.113.9 ] && [ "$(clean_ip 2001:db8::1)" = 2001:db8::1 ] && [ -z "$(clean_ip $'203.0.113.8\n<script>')" ] && [ -z "$(clean_ip $'\033[31mevil')" ] && [ -z "$(clean_ip 'not an ip')" ] ) && ok || bad "clean_ip lets a non-address through"
+
+# --- install.sh harden(): the notice of what stops being reachable comes BEFORE the "Apply it now?" consent ---
+( . "$ROOT/scripts/install.sh"
+  : >"$t/order"; A_HARDEN=yes GUIDED=0 CONFIG='' DRY=0 A_SSH_FROM='' STAGE=$t
+  step() { :; }; say() { :; }; run() { echo run >>"$t/order"; }
+  firewall_decide() { echo decide >>"$t/order"; FW_CHOICE=yes; }
+  yes_no() { echo consent >>"$t/order"; return 0; }
+  harden ) >/dev/null 2>&1
+[ "$(tr '\n' ' ' <"$t/order")" = "decide consent run " ] && ok || bad "the non-guided path asked for consent before showing what will stop being reachable (order: $(tr '\n' ' ' <"$t/order"))"
+# AINKRAD_FIREWALL must be yes or no
+out=$( ( . "$ROOT/scripts/install/lib.sh"; . "$ROOT/scripts/install/guided.sh"; GUIDED=0 DRY=0; die() { echo "die: $*"; exit 3; }; say() { :; }
+  AINKRAD_FIREWALL=maybe firewall_decide ) 2>&1 )
+grep -q 'must be yes or no' <<<"$out" && ok || bad "AINKRAD_FIREWALL=maybe was accepted"
 
 # --- install-linux.sh: the runner restart sequence, modelled (SIGTERM from kill is a clean exit: no auto-restart) ---
 seq() { # NAME WANT-ACTIVE-AFTER WAS-ACTIVE OLD_ROOT ROOT OLD_ARGS ARGS [expected sequence regex]

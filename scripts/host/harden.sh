@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Idempotent hardening for an Ainkrad Core host (E1-16.3). Run as root on a fresh Ubuntu VM:
+# Idempotent hardening for an Ainkrad Core host (E1-16.3). EXPERIMENTAL and OPT-IN (scripts/install.sh --harden); the default
+# install never runs it. Run as root on a fresh Ubuntu VM:
 #   ssh <user>@<host> 'sudo bash -s' < scripts/host/harden.sh
 # SSH stays reachable. Key-only SSH is switched on ONLY when it cannot lock the operator out: the installing user
 # (SUDO_USER, else root) has a real key line (authorized_keys, authorized_keys2 or the AuthorizedKeysFile sshd really uses),
@@ -21,8 +22,9 @@ set -euo pipefail
 if [ "${AINKRAD_HARDEN_SOURCE_ONLY:-}" = 1 ] && [ "${BASH_SOURCE[0]:-}" = "$0" ]; then
   echo "harden.sh: AINKRAD_HARDEN_SOURCE_ONLY=1 is for tests that source this file; nothing was done" >&2; exit 0
 fi
-# The AINKRAD_TEST_* overrides exist for the install tests only: honoured with AINKRAD_HARDEN_SOURCE_ONLY=1, else dropped.
-if [ "${AINKRAD_HARDEN_SOURCE_ONLY:-}" != 1 ]; then unset AINKRAD_TEST_PEERS AINKRAD_SSH_LOG AINKRAD_TEST_HOME AINKRAD_TEST_SSHD_T AINKRAD_TEST_SS AINKRAD_TEST_SSH_LISTEN AINKRAD_TEST_DROPIN AINKRAD_TEST_RULES_V4 AINKRAD_TEST_LISTEN_ALL AINKRAD_TEST_UFW_DEFAULT; fi
+# The AINKRAD_TEST_* overrides exist for the install tests only: honoured with AINKRAD_HARDEN_SOURCE_ONLY=1 AND
+# AINKRAD_INSTALL_TEST=1, else dropped.
+if [ "${AINKRAD_HARDEN_SOURCE_ONLY:-}" != 1 ] || [ "${AINKRAD_INSTALL_TEST:-}" != 1 ]; then unset AINKRAD_TEST_PEERS AINKRAD_SSH_LOG AINKRAD_TEST_HOME AINKRAD_TEST_SSHD_T AINKRAD_TEST_SS AINKRAD_TEST_SSH_LISTEN AINKRAD_TEST_DROPIN AINKRAD_TEST_RULES_V4 AINKRAD_TEST_LISTEN_ALL AINKRAD_TEST_UFW_DEFAULT; fi
 
 # --- helpers; AINKRAD_HARDEN_SOURCE_ONLY=1 stops after them (the install tests source this file) ---
 warn() { echo "WARNING: $*" >&2; [ -z "${AINKRAD_HARDEN_WARN:-}" ] || echo "$*" >>"$AINKRAD_HARDEN_WARN"; }

@@ -6,10 +6,11 @@
 # Optional, to skip the two questions (the Mac app can put them in the command):
 #   ... | sudo AINKRAD_HOSTNAME=core.example.com AINKRAD_ACME_EMAIL=you@example.com sh
 #
-# What it does, in order: checks the machine, installs what the Core needs (curl, minisign, bubblewrap, a firewall,
-# qrencode) with apt, downloads the signed release, VERIFIES the minisign signature over SHA256SUMS against the
+# What it does, in order: checks the machine, installs what the Core needs (curl, minisign, bubblewrap, qrencode) with apt, downloads the signed release, VERIFIES the minisign signature over SHA256SUMS against the
 # release key pinned below (any mismatch stops everything; nothing of the release is installed), checks every file
 # against the signed sums, installs the Core and runs the guided installer.
+# Host hardening (SSH config, firewall, unattended updates, no swap) is OPT-IN and experimental: the default install does not
+# touch SSH or the firewall and installs no firewall tooling. `... | sudo sh -s -- --harden` (or AINKRAD_HARDEN=yes) turns it on.
 # The one-time connect link and the backup key are shown on the terminal only (/dev/tty), never on stdout, so a
 # captured stdout (cloud-init, CI, `> log`, tee) does not keep them. With no terminal they are not created at all
 # and the command to run later is printed. They are not in a log or a file of ours; a terminal's own scrollback or
@@ -53,6 +54,9 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   trap '[ -z "$W" ] || rm -rf "$W"' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
+  harden=0
+  case ${AINKRAD_HARDEN:-} in '' | no) ;; yes) harden=1 ;; *) die "AINKRAD_HARDEN must be yes or no (got '$AINKRAD_HARDEN')" ;; esac
+  for a in "$@"; do [ "$a" != --harden ] || harden=1; done
 
   printf '\n%s Ainkrad Core%s\n %sOne command, one guided install.%s\n' "$B" "$R" "$D" "$R"
 
@@ -69,15 +73,15 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     command -v apt-get >/dev/null || die "apt-get not found: only Debian and Ubuntu are supported by this installer"
     ok "Linux $(uname -m), $TARGET"
 
-    step "Installing prerequisites" "curl, minisign (checks the release signature), bubblewrap (agent sandbox), iptables (firewall), qrencode (QR code)."
+    pkgs='ca-certificates curl minisign bubblewrap qrencode openssl iproute2' persist=''
+    # Firewall tooling only when hardening was asked for. iptables-persistent clashes with ufw: with ufw installed nothing is
+    # added that could remove it; APT::Get::Remove=false makes apt refuse any removal instead of doing it.
+    if [ "$harden" = 1 ]; then pkgs="$pkgs iptables"; dpkg -s ufw >/dev/null 2>&1 || persist=iptables-persistent; fi
+    step "Installing prerequisites" "curl, minisign (checks the release signature), bubblewrap (agent sandbox), qrencode (QR code)$([ "$harden" = 1 ] && echo ', iptables (firewall, --harden)')."
     export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
-    # iptables-persistent keeps the firewall across reboots, but it clashes with ufw: with ufw present, ufw is used and
-    # nothing is installed that could remove it. APT::Get::Remove=false makes apt refuse any removal instead of doing it.
-    persist=iptables-persistent
-    if dpkg -s ufw >/dev/null 2>&1; then persist=''; fi
-    # shellcheck disable=SC2086 # $persist is empty or one package name
+    # shellcheck disable=SC2086 # $pkgs and $persist are plain package names
     apt_out=$(apt-get update -qq 2>&1 &&
-      apt-get install -y -qq -o APT::Get::Remove=false --no-install-recommends ca-certificates curl minisign bubblewrap iptables $persist qrencode openssl iproute2 2>&1) ||
+      apt-get install -y -qq -o APT::Get::Remove=false --no-install-recommends $pkgs $persist 2>&1) ||
       { printf '%s\n' "$apt_out" >&2; die "could not install the prerequisites with apt-get (output above; apt never removes a package here)"; }
     command -v minisign >/dev/null || die "minisign is not available on this distribution; it is required to verify the release"
     ok "installed"
@@ -133,8 +137,8 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
  Starting the guided installer..."
   # Only the child gets the terminal (stdin was the pipe: curl ... | sh); this shell keeps reading nothing from it.
   rc=0
-  if ( : </dev/tty ) 2>/dev/null; then bash "$INST/scripts/install.sh" --binary /usr/local/bin </dev/tty || rc=$?
-  else bash "$INST/scripts/install.sh" --binary /usr/local/bin </dev/null || rc=$?; fi
+  if ( : </dev/tty ) 2>/dev/null; then bash "$INST/scripts/install.sh" --binary /usr/local/bin "$@" </dev/tty || rc=$?
+  else bash "$INST/scripts/install.sh" --binary /usr/local/bin "$@" </dev/null || rc=$?; fi
   exit "$rc" # not exec: the trap must still remove the download directory
 }
 

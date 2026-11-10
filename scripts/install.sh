@@ -6,6 +6,8 @@
 #   sudo scripts/install.sh --wizard             the classic question-by-question wizard
 #   sudo scripts/install.sh --config <answers>   unattended (see deploy/install.answers.example)
 #   scripts/install.sh --config <answers> --dry-run   print every action, change nothing (no root needed)
+#   --harden (or AINKRAD_HARDEN=yes; only yes|no are accepted) also runs scripts/host/harden.sh: key-only SSH where safe, a firewall
+#        that rejects every inbound port but ssh/80/443, unattended updates, no swap/core dumps. EXPERIMENTAL and OFF by default.
 #   sudo scripts/install.sh --check [--backup local|bucket]   self-test an existing install
 #   sudo scripts/install.sh --uninstall [--purge]   stop, disable, remove units and binaries; --purge also deletes
 #        the Core's data after you type its host name. Never touches backup.env or the bucket.
@@ -26,7 +28,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 CORE_HOME=/var/lib/ainkrad/core ETC=/etc/ainkrad BIN=/usr/local/bin UNITS=/etc/systemd/system
 STAGING_DIR=https://acme-staging-v02.api.letsencrypt.org/directory
-HARDEN_WARN='' HARDEN_STATE='' FW_CHOICE=yes MODE=install GUIDED=0 CONFIG='' DRY=0 PURGE=0 CHECK_BACKUP=no CLI_BINARY='' STAGE=''
+HARDEN_REQ='' HARDEN_WARN='' HARDEN_STATE='' FW_CHOICE=yes MODE=install GUIDED=0 CONFIG='' DRY=0 PURGE=0 CHECK_BACKUP=no CLI_BINARY='' STAGE=''
 
 say() { printf '%s\n' "$*"; }
 step() { if [ "$GUIDED" = 1 ]; then guided_step "$*"; else printf '\n== %s\n' "$*"; fi; }
@@ -190,8 +192,10 @@ stage_binaries() {
   fi
 }
 
+apply_harden_req() { [ -z "$HARDEN_REQ" ] || A_HARDEN=$HARDEN_REQ; }
+
 harden() {
-  [ "$A_HARDEN" = yes ] || return 0
+  if [ "$A_HARDEN" != yes ]; then step "Host hardening skipped"; [ "$GUIDED" = 1 ] || say "  Host hardening skipped (opt-in): SSH config and firewall untouched. Use --harden to apply it (experimental)."; return 0; fi
   step "Host hardening (scripts/host/harden.sh)"
   grep -E '^# [0-9]\.' "$ROOT/scripts/host/harden.sh" | sed 's/^# /  /'
   if [ -n "$A_SSH_FROM" ]; then
@@ -201,9 +205,9 @@ harden() {
     for p in $peers; do ip_in_cidrs "$p" "$A_SSH_FROM" || die "SSH_FROM $A_SSH_FROM would lock out the open SSH session from $p"; done
     say "  SSH will be admitted only from $A_SSH_FROM (current sessions: ${peers:-none seen}). Your cloud firewall may need the same."
   fi
+  firewall_decide # what will stop being reachable, BEFORE any consent below
   [ -n "$CONFIG" ] || [ "$DRY" = 1 ] || [ "$GUIDED" = 1 ] || yes_no "Apply it now?" || { say "  skipped"; return 0; }
   HARDEN_WARN=$STAGE/harden.warn HARDEN_STATE=$STAGE/harden.state
-  firewall_decide
   run env AINKRAD_SSH_FROM="$A_SSH_FROM" AINKRAD_FIREWALL="$FW_CHOICE" AINKRAD_NOTICE_SHOWN=1 \
     AINKRAD_HARDEN_WARN="$HARDEN_WARN" AINKRAD_HARDEN_STATE="$HARDEN_STATE" bash "$ROOT/scripts/host/harden.sh"
 }
@@ -463,16 +467,19 @@ main() {
       --config) CONFIG=${2:?}; shift 2 ;;
       --binary) CLI_BINARY=${2:?}; shift 2 ;;
       --dry-run) DRY=1; shift ;;
+      --harden) HARDEN_REQ=yes; shift ;;
       --guided) GUIDED=1; shift ;;
       --wizard) GUIDED=-1; shift ;;
       --uninstall) MODE=uninstall; shift ;;
       --purge) PURGE=1; shift ;;
       --check) MODE=check; shift ;;
       --backup) CHECK_BACKUP=${2:?}; valid_selftest "$CHECK_BACKUP" || die "--backup local|bucket"; shift 2 ;;
-      -h | --help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-      *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+      -h | --help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+      *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
     esac
   done
+  case ${AINKRAD_HARDEN:-} in '' | yes | no) [ -n "$HARDEN_REQ" ] || HARDEN_REQ=${AINKRAD_HARDEN:-} ;; # the --harden flag wins over the variable
+ *) die "AINKRAD_HARDEN must be yes or no (got '$AINKRAD_HARDEN')" ;; esac
   case $MODE in
     uninstall) uninstall; return ;;
     check)
@@ -485,16 +492,16 @@ main() {
   # No answers file and no --wizard: the guided install is the default.
   if [ -n "$CONFIG" ] || [ "$GUIDED" = -1 ]; then GUIDED=0; else GUIDED=1; fi
   if [ "$GUIDED" = 1 ]; then
-    ui_init; guided_banner; guided_answers; check_answers || die "invalid answers"
+    ui_init; guided_banner; guided_answers; apply_harden_req; check_answers || die "invalid answers"
   elif [ -n "$CONFIG" ]; then
     parse_answers "$CONFIG" || die "fix the answers file above"
     [ -z "$CLI_BINARY" ] || A_BINARY_DIR=$CLI_BINARY
     local missing; missing=$(missing_keys)
     [ -z "$missing" ] || die "missing in $CONFIG: $(echo "$missing" | tr '\n' ',' | sed 's/,$//; s/,/, /g')"
-    check_answers || die "fix the answers above"
+    apply_harden_req; check_answers || die "fix the answers above"
   else
     [ -z "$CLI_BINARY" ] || A_BINARY_DIR=$CLI_BINARY
-    wizard; check_answers || die "invalid answers"
+    wizard; apply_harden_req; check_answers || die "invalid answers"
   fi
   A_HOSTNAME=$(lower "$A_HOSTNAME")
   if [ "$GUIDED" = 1 ]; then guided_backup_key; else review; fi

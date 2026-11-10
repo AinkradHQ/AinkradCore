@@ -186,5 +186,36 @@ AINKRAD_HOSTNAME=core.example.com AINKRAD_ACME_EMAIL=ops@example.com bash "$tree
 grep -qE -- '--root|--exec' "$t/argv" && bad "the guided path passed --root or --exec to install-linux.sh: $(cat "$t/argv")" || ok
 
 
+
+# --- host hardening is OPT-IN: the default install (guided and non-guided) never runs harden.sh ---
+dry() { # NAME env...: guided dry run in the recorded tree; output in $t/oo
+  ( cd "$t" && env AINKRAD_HOSTNAME=core.example.com AINKRAD_ACME_EMAIL=ops@example.com "$@" bash "$tree/scripts/install.sh" --dry-run --binary "$t/gbin" ) >"$t/oo" 2>&1 </dev/null
+}
+dryargs() { ( cd "$t" && AINKRAD_HOSTNAME=core.example.com AINKRAD_ACME_EMAIL=ops@example.com bash "$tree/scripts/install.sh" --dry-run --binary "$t/gbin" "$@" ) >"$t/oo" 2>&1 </dev/null; }
+dry X=1
+grep -q '^+ env .*harden.sh' "$t/oo" && bad "the default guided install runs harden.sh" || ok
+grep -q 'Host hardening: skipped (opt-in)' "$t/oo" && ok || bad "the step list does not show hardening as 'skipped (opt-in)'"
+grep -qF "Host hardening NOT applied: SSH config and firewall untouched. Use your provider's firewall; re-run with --harden or use the app's Core machine screen later." "$t/oo" && ok || bad "the summary lacks the plain 'hardening NOT applied' message"
+grep -qiE 'Firewall   |key-only|automatic security updates|sshd_config|swapoff|sysctl|rejects every other' "$t/oo" && bad "the default guided output claims or touches hardening: $(grep -iE 'Firewall   |key-only|automatic security|sshd_config|swapoff|sysctl|rejects every' "$t/oo" | head -3)" || ok
+dryargs --harden; grep -q '^+ env .*harden.sh' "$t/oo" && ok || bad "--harden did not run harden.sh"
+grep -q 'NOT applied' "$t/oo" && bad "--harden still says hardening was not applied" || ok
+dry AINKRAD_HARDEN=yes; grep -q '^+ env .*harden.sh' "$t/oo" && ok || bad "AINKRAD_HARDEN=yes did not run harden.sh"
+dry AINKRAD_HARDEN=no; grep -q '^+ env .*harden.sh' "$t/oo" && bad "AINKRAD_HARDEN=no ran harden.sh" || ok
+if dry AINKRAD_HARDEN=maybe; then bad "AINKRAD_HARDEN=maybe was accepted"; else grep -q 'must be yes or no' "$t/oo" && ok || bad "AINKRAD_HARDEN=maybe died without the message"; fi
+( cd "$t" && AINKRAD_HARDEN=no AINKRAD_HOSTNAME=core.example.com AINKRAD_ACME_EMAIL=ops@example.com bash "$tree/scripts/install.sh" --harden --dry-run --binary "$t/gbin" ) >"$t/oo" 2>&1 </dev/null
+grep -q '^+ env .*harden.sh' "$t/oo" && ok || bad "the --harden flag must win over AINKRAD_HARDEN=no"
+# non-guided (--config): HARDEN unset means no; HARDEN=yes still hardens, unchanged
+Rk=age1$(printf 'q%.0s' $(seq 58))
+printf 'BINARY_DIR=%s\nHOSTNAME=core.example.com\nACME_CONTACT=ops@example.com\nBACKUP=local\nBACKUP_RECIPIENT=%s\n' "$t/gbin" "$Rk" >"$t/ans-default"
+{ cat "$t/ans-default"; echo HARDEN=yes; } >"$t/ans-yes"
+( cd "$t" && bash "$tree/scripts/install.sh" --config "$t/ans-default" --dry-run ) >"$t/oo" 2>&1 </dev/null
+grep -q '^+ env .*harden.sh' "$t/oo" && bad "the default non-guided install runs harden.sh" || { grep -q 'Host hardening skipped' "$t/oo" && ok || bad "the non-guided default does not say hardening was skipped"; }
+( cd "$t" && bash "$tree/scripts/install.sh" --config "$t/ans-yes" --dry-run ) >"$t/oo" 2>&1 </dev/null
+grep -q '^+ env .*harden.sh' "$t/oo" && ok || bad "HARDEN=yes in an answers file no longer hardens"
+# get.sh: no firewall tooling by default, and a bad AINKRAD_HARDEN dies before anything runs
+grep -qE "^ *pkgs='[^']*(iptables|ufw)" "$GET" && bad "get.sh installs firewall tooling unconditionally" || ok
+out=$(cd "$t/empty" && AINKRAD_HARDEN=maybe sh "$GET" 2>&1); rc=$?
+{ [ "$rc" != 0 ] && grep -q 'must be yes or no' <<<"$out" && ! grep -q 'Checking this machine' <<<"$out"; } && ok || bad "get.sh accepted AINKRAD_HARDEN=maybe or ran on ($rc)"
+
 echo "get/guided tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]
