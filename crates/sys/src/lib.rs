@@ -17,6 +17,10 @@ pub const INVENTORY: &[(&str, &str)] = &[
         "libc::kill with one positive pid: integers only",
     ),
     ("getuid", "libc::getuid: no arguments, cannot fail"),
+    (
+        "peer_uid",
+        "libc::getsockopt(SO_PEERCRED) into a ucred we own, on a borrowed descriptor",
+    ),
     ("wait_exited", "libc::waitid into a zeroed siginfo_t we own"),
     ("reap", "libc::waitpid with a null status pointer"),
     (
@@ -114,6 +118,47 @@ pub fn kill_pid(pid: u32, signal: i32) -> io::Result<bool> {
 pub fn getuid() -> u32 {
     // SAFETY: getuid(2) takes no arguments and always succeeds.
     unsafe { libc::getuid() }
+}
+
+/// The effective user id of the process on the other end of the connected Unix socket `fd`, as
+/// the kernel recorded it when the connection was made (`SO_PEERCRED`); the peer cannot choose it.
+/// Linux only: elsewhere it is an `Unsupported` error, so a caller that fails closed refuses.
+#[allow(unsafe_code)]
+pub fn peer_uid(fd: std::os::fd::BorrowedFd<'_>) -> io::Result<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        let mut cred = libc::ucred {
+            pid: 0,
+            uid: 0,
+            gid: 0,
+        };
+        let want = size_of::<libc::ucred>();
+        let mut len = want as libc::socklen_t;
+        // SAFETY: `fd` is a descriptor borrowed for the call; `cred` is a plain C struct we own,
+        // `len` is its size, and the kernel writes at most `len` bytes into it.
+        let r = unsafe {
+            libc::getsockopt(
+                fd.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&raw mut cred).cast(),
+                &mut len,
+            )
+        };
+        if r != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if len as usize != want {
+            return Err(io::Error::from(io::ErrorKind::InvalidData));
+        }
+        Ok(cred.uid)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = fd;
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
 }
 
 /// How a waited-for child ended.
@@ -285,6 +330,16 @@ mod tests {
             .args(["-KILL", &pid.to_string()])
             .status()
             .map(drop)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_socket_peer_is_this_user_and_a_plain_file_is_refused() {
+        use std::os::fd::AsFd;
+        let (a, _b) = std::os::unix::net::UnixStream::pair().unwrap();
+        assert_eq!(peer_uid(a.as_fd()).unwrap(), getuid());
+        let f = std::fs::File::open("/dev/null").unwrap();
+        assert!(peer_uid(f.as_fd()).is_err());
     }
 
     #[test]

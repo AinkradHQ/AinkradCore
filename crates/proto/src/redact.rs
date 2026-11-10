@@ -438,6 +438,7 @@ fn shapes(text: &str) -> String {
     out
 }
 
+pub mod names;
 mod planted;
 pub use planted::PLANTED;
 
