@@ -9,6 +9,7 @@ cd "$d"
 ver=$(basename "$PWD")
 # Everything that ships: binaries, the installer bundle and get.sh (which runs it) only (no keys, sums, signatures or the SBOM directory).
 shopt -s nullglob
+[ -f get.sh ] || { echo "sign.sh: $d/get.sh is missing: get.sh ships in the signed sums (scripts/release/dry.sh puts it there)" >&2; exit 1; }
 files=(ainkrad-core-server-* ainkrad-runner-* ainkradctl-* ainkrad-ptyhost-* ainkrad-core-installer-* get.sh)
 [ ${#files[@]} -gt 0 ] || { echo "no artefacts in $d" >&2; exit 1; }
 rm -f SHA256SUMS SHA256SUMS.minisig

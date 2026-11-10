@@ -216,7 +216,7 @@ install_core() {
   step "Core: user, binary, unit, home"
   local out prev_env tls=$CORE_HOME/tls dry=()
   [ "$DRY" = 1 ] && dry=(--dry-run)
-  out=$(bash "$ROOT/deploy/install-core-linux.sh" --binary "$STAGE/ainkrad-core-server" ${dry[@]+"${dry[@]}"} | tee "$([ "$GUIDED$DRY" = 10 ] && echo /dev/null || echo /dev/stderr)")
+  out=$(bash "$ROOT/deploy/install-core-linux.sh" --binary "$STAGE/ainkrad-core-server" ${dry[@]+"${dry[@]}"} | tee -a "$([ "$GUIDED$DRY" = 10 ] && echo /dev/null || echo /dev/stderr)") # -a: on Linux a plain tee reopens a redirected stderr file and truncates it
   # The signer's fingerprint, base64url(SHA-256(SPKI)) as `init` prints it, from the key itself (so a re-run has it).
   SIGNER=''
   [ "$DRY" = 1 ] || SIGNER=$(openssl pkey -inform DER -in "$CORE_HOME/keys/backup-signing.p8" -pubout -outform DER |
