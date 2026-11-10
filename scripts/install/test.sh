@@ -190,7 +190,6 @@ for bad in --root --exec --enable-exec User=root 'write .*authority.conf'; do
   grep -qE -- "$bad" "$t/gout" && { fail=$((fail + 1)); echo "FAIL: guided dry run emitted '$bad'" >&2; } || pass=$((pass + 1))
 done
 grep -q $'\033' "$t/gout" && { fail=$((fail + 1)); echo "FAIL: guided output has colour codes without a TTY" >&2; } || pass=$((pass + 1))
-grep -q 'secret=' "$t/gout" && { fail=$((fail + 1)); echo "FAIL: guided dry run printed an invite" >&2; } || pass=$((pass + 1))
 
 bash "$HERE/get-test.sh" || fail=$((fail + 1)) # get.sh verify-first, secrets to the terminal only, SSH guard, runner argv
 

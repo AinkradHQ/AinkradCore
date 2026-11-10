@@ -26,7 +26,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 CORE_HOME=/var/lib/ainkrad/core ETC=/etc/ainkrad BIN=/usr/local/bin UNITS=/etc/systemd/system
 STAGING_DIR=https://acme-staging-v02.api.letsencrypt.org/directory
-MODE=install GUIDED=0 CONFIG='' DRY=0 PURGE=0 CHECK_BACKUP=no CLI_BINARY='' STAGE=''
+HARDEN_WARN='' MODE=install GUIDED=0 CONFIG='' DRY=0 PURGE=0 CHECK_BACKUP=no CLI_BINARY='' STAGE=''
 
 say() { printf '%s\n' "$*"; }
 step() { if [ "$GUIDED" = 1 ]; then guided_step "$*"; else printf '\n== %s\n' "$*"; fi; }
@@ -135,7 +135,7 @@ checks() { # DNS -> this host's public IP; :443 (and :80) free
   if ! command -v getent >/dev/null; then warn "no getent here: DNS not checked"; return 0; fi
   addrs=$(getent ahosts "$A_HOSTNAME" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true) # pipefail: an unresolved name must reach the warning below, not kill the script
   pub=${A_PUBLIC_IP:-$(curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS4 --max-time 5 https://checkip.amazonaws.com 2>/dev/null || true)}
-  pub=$(printf '%s' "$pub" | tr -d '[:space:]')
+  pub=$(clean_ip "$pub")
   say "  DNS $A_HOSTNAME -> ${addrs:-nothing}; this host's public IPv4: ${pub:-unknown}"
   if [ -z "$addrs" ]; then warn "$A_HOSTNAME does not resolve: add an A record for this host"; problems=1
   elif [ -n "$pub" ] && ! printf ' %s ' "$addrs" | grep -q " $pub "; then
@@ -196,13 +196,14 @@ harden() {
   grep -E '^# [0-9]\.' "$ROOT/scripts/host/harden.sh" | sed 's/^# /  /'
   if [ -n "$A_SSH_FROM" ]; then
     local peers p
-    peers=$(ss -Htn state established '( sport = :22 )' 2>/dev/null | awk '{print $4}' | sed -E 's/^\[?(.*)\]?:[0-9]+$/\1/; s/^::ffff://; s/\]$//' | sort -u || true)
+    peers=$(AINKRAD_HARDEN_SOURCE_ONLY=1 bash -c '. "$1"; ssh_peers' _ "$ROOT/scripts/host/harden.sh" 2>/dev/null || true) # on every sshd port
     [ -n "$peers$DRY" ] || die "SSH_FROM: cannot see your SSH session's address; refusing to restrict SSH blind"
     for p in $peers; do ip_in_cidrs "$p" "$A_SSH_FROM" || die "SSH_FROM $A_SSH_FROM would lock out the open SSH session from $p"; done
     say "  SSH will be admitted only from $A_SSH_FROM (current sessions: ${peers:-none seen}). Your cloud firewall may need the same."
   fi
   [ -n "$CONFIG" ] || [ "$DRY" = 1 ] || [ "$GUIDED" = 1 ] || yes_no "Apply it now?" || { say "  skipped"; return 0; }
-  run env AINKRAD_SSH_FROM="$A_SSH_FROM" bash "$ROOT/scripts/host/harden.sh"
+  HARDEN_WARN=$STAGE/harden.warn
+  run env AINKRAD_SSH_FROM="$A_SSH_FROM" AINKRAD_HARDEN_WARN="$HARDEN_WARN" bash "$ROOT/scripts/host/harden.sh"
 }
 
 install_core() {

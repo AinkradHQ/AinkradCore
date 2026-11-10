@@ -36,7 +36,7 @@ guided_step() {
   case $1 in
     Checks*) n=1 t="Checking this machine" w="The DNS name must point here and ports 80/443 must be free, or no certificate can be issued." ;;
     Binaries*) n=2 t="Checking the Core programs" w="Confirms they run on this CPU and shows their SHA-256 (the release signature was already verified)." ;;
-    "Host hardening"*) n=3 t="Securing the machine" w="Firewall to SSH, 80 and 443 only, key-only SSH, no core dumps or swap, automatic security updates." ;;
+    "Host hardening"*) n=3 t="Securing the machine" w="Firewall to SSH, 80 and 443, key-only SSH where that is safe, no core dumps or swap, automatic security updates." ;;
     "Core: user"*) n=4 t="Installing the Core" w="Creates a service account, the Core's home with its keys and database, and its systemd service." ;;
     Backups*) n=5 t="Setting up backups" w="Encrypted snapshots of the Core every day, kept on this machine (a bucket can be added later)." ;;
     Start*) n=6 t="Starting the Core" w="Enables the service at boot and waits for its first HTTPS certificate (up to a minute or two)." ;;
@@ -71,8 +71,8 @@ guided_answers() {
   [ -n "$A_ACME_CONTACT" ] && ! valid_email "$A_ACME_CONTACT" && { warn "AINKRAD_ACME_EMAIL is not a valid email"; A_ACME_CONTACT=''; }
   if [ -z "$A_HOSTNAME" ] || [ -z "$A_ACME_CONTACT" ]; then
     have_tty || die "no terminal to ask on: set AINKRAD_HOSTNAME=<dns name> and AINKRAD_ACME_EMAIL=<email> and run again"
-    pub=$(curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || true)
-    printf '\n%s The Core is served over HTTPS with a free Let'"'"'s Encrypt certificate, so it needs a public DNS name that points at\n this machine%s (an A record%s).%s Core does not support an IP-only or self-signed setup yet. No name? Any free dynamic-DNS\n name works: create it first, then come back.%s\n' "$B" "${pub:+ ($pub)}" "$R$D" "$R$D" "$R"
+    pub=$(clean_ip "$(curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || true)")
+    printf '\n%s The Core is served over HTTPS with a free Let'"'"'s Encrypt certificate, so it needs a public DNS name that points at\n this machine%s (an A record%s; the address was looked up at api.ipify.org).%s Core does not support an IP-only or self-signed setup yet. No name? Any free dynamic-DNS\n name works: create it first, then come back.%s\n' "$B" "${pub:+ ($pub)}" "$R$D" "$R$D" "$R"
     [ -n "$A_HOSTNAME" ] || ask HOSTNAME "DNS name for this Core, for example core.yourdomain.com"
     [ -n "$A_ACME_CONTACT" ] || ask ACME_CONTACT "Email for the certificate account (expiry notices only)."
   else ok_line "Using $A_HOSTNAME and $A_ACME_CONTACT (given up front)"; fi
@@ -125,19 +125,21 @@ guided_invite() {
   # <host> is required (the Core does not store its public host); the Core listens on 443 here, so no :port. stderr is
   # folded in to classify a refusal; only the line that is the link is ever kept.
   # No core.env here: the command needs only the db and the host (and sourcing that file as shell breaks on its flags).
+  # A non-zero exit is a refusal even if something that looks like a link was printed.
   out=$(runuser -u ainkrad -- "$BIN/ainkrad-core-server" pairing-invite "$CORE_HOME/core.db" "$A_HOSTNAME" owner 2>&1) || out="REFUSED:$out"
   case $out in
-    *ainkrad://connect\?*host=*fp=*secret=*) INVITE=$(printf '%s\n' "$out" | grep -m1 '^ainkrad://connect?') ;;
     REFUSED:*[Dd]evice*)
       printf '   %s! this Core already has a paired device, so it will not make a first-owner link%s\n' "$YL" "$R" >&2
       say "     The Core is installed and running. Add more devices from the Mac app that owns it; to start over on this machine,"
       say "     run this installer with --uninstall --purge first."
       return 1 ;;
-    *) printf '   %s! the installed ainkrad-core-server could not make the connect link%s\n' "$YL" "$R" >&2
-       say "     The Core is installed and running. This release may predate 'pairing-invite'. With a newer one, run:"
-       say "       $cmd"
-       return 1 ;;
+    REFUSED:*) ;;
+    *ainkrad://connect\?*host=*fp=*secret=*) INVITE=$(printf '%s\n' "$out" | grep -m1 '^ainkrad://connect?'); return 0 ;;
   esac
+  printf '   %s! the installed ainkrad-core-server could not make the connect link%s\n' "$YL" "$R" >&2
+  say "     The Core is installed and running. This release may predate 'pairing-invite'. With a newer one, run:"
+  say "       $cmd"
+  return 1
 }
 
 # The link, the secret alone and a QR: to the terminal only.
@@ -159,18 +161,46 @@ box() { # box LINE...: a rounded box, ASCII content only (padding counts bytes)
   printf ' %s%s%s\n' "$U_BL" "$(repeat "$U_H" "$w")" "$U_BR"
 }
 
+# What the host really has now, read back (not what we meant to do).
+fw_state() {
+  if [ "$A_HARDEN" != yes ]; then echo "not changed (hardening off)"; return; fi
+  local v6='' how
+  if command -v ufw >/dev/null && grep -q '^Status: active' <<<"$(ufw status 2>/dev/null)"; then echo "ufw: ssh, 80, 443 allowed, rest denied"; return; fi
+  if grep -q AINKRAD_IN <<<"$(iptables -S INPUT 2>/dev/null)"; then
+    grep -q AINKRAD_IN <<<"$(ip6tables -S INPUT 2>/dev/null)" && v6=' +IPv6'
+    how='until next reboot'; grep -qs AINKRAD_IN "${AINKRAD_RULES_V4:-/etc/iptables/rules.v4}" && how='saved for reboot'
+    echo "ssh/80/443 only (IPv4$v6), $how"
+  else echo "NOT applied (see below)"; fi
+}
+ssh_state() {
+  if ! command -v sshd >/dev/null; then echo "no sshd here"; elif grep -qi '^passwordauthentication no' <<<"$(sshd -T 2>/dev/null)"; then echo "key-only login (verified)"
+  else echo "passwords still allowed (see below)"; fi
+}
+
 guided_summary() { # guided_summary INVITE_RC
-  local runner=installed
+  local runner=installed fw='(dry run)' sshs='(dry run)'
+  [ "$DRY" = 1 ] || { fw=$(fw_state); sshs=$(ssh_state); }
   [ -e /var/lib/ainkrad-runner/core/enrolment.json ] || runner="installed, waiting to be paired from the app"
   printf '\n'
   box "Ainkrad Core is $([ "$1" = 0 ] && echo 'ready' || echo 'running, but has no connect link yet')" "" \
     "Address     https://$A_HOSTNAME" \
     "Certificate $([ "$A_ACME_ENV" = staging ] && echo 'STAGING (test, not trusted by browsers)' || echo "Let's Encrypt, renews by itself")" \
-    "Firewall    inbound only 22, 80, 443 (IPv4 and IPv6, this host)" \
+    "Firewall    $fw" \
+    "SSH         $sshs" \
     "Updates     automatic security updates; reboots stay manual" \
     "Backups     $([ -n "$A_BACKUP_RECIPIENT" ] && echo "daily, encrypted, in $CORE_HOME/backups" || echo 'OFF (no key; re-run from a terminal)')" \
     "Runner      $runner" \
     "            unprivileged user; terminals on, exec.run off"
+  if [ -s "${HARDEN_WARN:-/nonexistent}" ]; then
+    say "
+ Heads-up from host hardening:"
+    sed 's/^/   - /' "$HARDEN_WARN"
+  fi
+  if [ "$DRY" = 0 ] && [ "$A_HARDEN" = yes ] && grep -q AINKRAD_IN <<<"$(iptables -S INPUT 2>/dev/null)"; then
+    say "
+ The firewall rejects every other inbound TCP port and all inbound UDP (e.g. WireGuard) on this host. Docker-published
+ ports go through FORWARD and stay reachable. Your cloud firewall is separate."
+  fi
   if [ -n "$BACKUP_IDENTITY" ]; then
     tty_say "
  Backup key (decrypts the backups; shown once on this terminal, never stored; keep it OFF this machine, e.g. in a password manager):

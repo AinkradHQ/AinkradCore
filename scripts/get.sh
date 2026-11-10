@@ -13,7 +13,7 @@
 # The one-time connect link and the backup key are shown on the terminal only (/dev/tty), never on stdout, so a
 # captured stdout (cloud-init, CI, `> log`, tee) does not keep them. With no terminal they are not created at all
 # and the command to run later is printed. They are not in a log or a file of ours; a terminal's own scrollback or
-# recording (tmux, script) still keeps what it displays.
+# recording still keeps what it displays (tmux, `script`, `ssh -t host ... > log`).
 #
 # Verify first, then run (get.sh is itself in the signed SHA256SUMS; the pinned key below is the same as
 # scripts/release/ainkrad-release.pub, key id FB3618BCFCA5393E):
@@ -25,7 +25,11 @@
 #
 # AINKRAD_RELEASE_URL=<https url or directory> reads another release (the pinned key still applies).
 # AINKRAD_GET_VERIFY_ONLY=1 stops after the signature and checksum checks, installing nothing (used by the tests).
-# A signed release older than MIN_VERSION (the version this get.sh was built from) is refused: no downgrade.
+# Version floor: a signed release older than MIN_VERSION (the version this get.sh was built from) is refused, so a newer
+# get.sh cannot be pointed at an older signed release. That does NOT stop a replay of an OLD get.sh together with its own
+# old signed sums: the floor lives in the file being run. The command the Mac app shows therefore carries
+#   ... | sudo AINKRAD_MIN_VERSION=<current version> sh
+# and the HIGHER of the two floors applies. The verify-first path below has the same limit: check the version yourself.
 #
 # The whole script is one function called on the LAST line, so a download cut short runs nothing.
 
@@ -99,8 +103,10 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   ok "signature OK ($comment)"
   ver=${comment#ainkrad-core }
   case $ver in '' | "$comment" | *[!0-9.]*) die "the signed release has no version in its trusted comment ('$comment')" ;; esac
-  [ "$(printf '%s\n%s\n' "$MIN_VERSION" "$ver" | sort -V | head -n1)" = "$MIN_VERSION" ] ||
-    die "the signed release is $ver, older than $MIN_VERSION which this installer was built from: refused (no downgrade)"
+  case ${AINKRAD_MIN_VERSION:-0} in '' | *[!0-9.]*) die "AINKRAD_MIN_VERSION must look like 1.2.3" ;; esac
+  floor=$(printf '%s\n%s\n' "$MIN_VERSION" "${AINKRAD_MIN_VERSION:-0}" | sort -V | tail -n1)
+  [ "$(printf '%s\n%s\n' "$floor" "$ver" | sort -V | head -n1)" = "$floor" ] ||
+    die "the signed release is $ver, older than $floor (the build's floor or AINKRAD_MIN_VERSION): refused (no downgrade)"
   files=$(awk -v t="-$TARGET" 'substr($2, length($2) - length(t) + 1) == t || $2 ~ /^ainkrad-core-installer-.*\.tar\.gz$/ { print $2 }' "$W/SHA256SUMS")
   [ "$(echo "$files" | grep -c '^ainkrad-core-installer-')" = 1 ] || die "the signed release must have exactly one installer bundle"
   echo "$files" | grep -q "^ainkrad-core-server-.*-$TARGET\$" || die "the signed release has no Core build for $TARGET"

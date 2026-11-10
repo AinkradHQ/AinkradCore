@@ -105,6 +105,13 @@ if [ "$dry" = 0 ]; then
   printf '# Written by deploy/install-linux.sh. exec.run is off unless --enable-exec is added here.\nRUNNER_ARGS=%s\n' "$args" >"$envfile"
   chmod 0640 "$envfile"; [ -n "$prefix" ] || chown root:ainkrad-runner "$envfile"
 fi
+# Demoting a root runner: its terminal hosts (ptyhosts, started as root; KillMode=process keeps them alive across a restart)
+# must end too. The unprivileged runner cannot adopt them (a ptyhost serves only its own uid, and the runner's state dir
+# must belong to its user), and root shells should not outlive the demotion. Before any restart below.
+if [ "$old_root" = 1 ] && [ "$root" = 0 ] && { [ -z "$prefix" ] || [ "$dry" = 1 ]; }; then
+  echo "demoting the runner from root: ending its terminal hosts (they run as root and cannot be adopted by the unprivileged runner)"
+  run systemctl kill --kill-whom=all ainkrad-runner.service || true
+fi
 if [ -z "$prefix" ]; then
   run systemctl daemon-reload
   if [ -n "$pair" ]; then
@@ -121,7 +128,11 @@ if [ -z "$prefix" ]; then
     run systemctl restart ainkrad-runner.service
   else
     echo "installed, not started. Pair it (see the unit's header), then: systemctl enable --now ainkrad-runner"
-    # A runner that is already running keeps its old user and flags until restarted: demote (or change) it now.
-    if [ "$old_root" != "$root" ] || [ "$old_args" != "$args" ]; then run systemctl try-restart ainkrad-runner.service; fi
   fi
+fi
+# A runner that is already running keeps its old user and flags until restarted: pick the change up now (also for a dry run
+# with --prefix, so it can be seen and tested).
+if [ "$start" != 1 ] && [ -z "$pair" ] && { [ -z "$prefix" ] || [ "$dry" = 1 ]; } &&
+  { [ "$old_root" != "$root" ] || [ "$old_args" != "$args" ]; }; then
+  run systemctl try-restart ainkrad-runner.service
 fi
