@@ -7494,7 +7494,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The restart is accepted (audited first as `host.restart_requested`, then `host.action_result`). A Core restart answers before the Core goes down; clients reconnect. Needs `admin` and a step-up. 400 for a body other than `{"target": "core" | "runner"}`; 409 `not_installed` (no local runner); 429 with `Retry-After` (the helper's limits); 503 `host_helper_unavailable`, `host_helper_busy` or `host_state_unavailable`; 504 `host_helper_timeout`; 502 `host_helper_failed` */
+            /** @description The restart is accepted (audited first as `host.restart_requested`, then `host.action_result`). A Core restart answers before the Core goes down; clients reconnect. A 429 or any failure holds the same restart back for a while (`Retry-After` on a 429). Do not retry a 504 on your own: a retry is a new request the helper cannot tell from the first. Needs `admin` and a step-up. 400 for a body other than `{"target": "core" | "runner"}`; 409 `not_installed` (no local runner); 429 with `Retry-After` (the helper's limits); 503 `host_helper_unavailable`, `host_helper_busy` or `host_state_unavailable`; 504 `host_helper_timeout`; 502 `host_helper_failed` */
             202: {
                 headers: {
                     [name: string]: unknown;

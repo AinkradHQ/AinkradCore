@@ -187,7 +187,10 @@ mod tests {
         let text = String::from_utf8(out).unwrap();
         assert!(!text.contains(['\u{1b}', '\u{7}', '\r']), "{text:?}");
         assert_eq!(text.lines().count(), 5, "{text:?}");
-        assert!(text.contains("co?re\tact?[2J/r\tsince t?\trestarts 0"), "{text:?}");
+        assert!(
+            text.contains("co?re\tact?[2J/r\tsince t?\trestarts 0"),
+            "{text:?}"
+        );
     }
 
     #[test]

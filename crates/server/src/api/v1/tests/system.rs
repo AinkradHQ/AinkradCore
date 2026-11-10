@@ -553,11 +553,15 @@ async fn read_refusals_are_audited_once_per_window() {
 /// version, a line over 512 KiB, not JSON, no `ok`. 502, never a hang or a panic.
 #[tokio::test]
 async fn a_garbled_helper_answer_is_502() {
-    let good = |id: &str, v: u32| format!("{{\"v\":{v},\"id\":\"{id}\",\"ok\":true,\"result\":{{}}}}\n");
+    let good =
+        |id: &str, v: u32| format!("{{\"v\":{v},\"id\":\"{id}\",\"ok\":true,\"result\":{{}}}}\n");
     let mut huge = vec![b'a'; 600 * 1024];
     huge.push(b'\n');
     for (what, bytes) in [
-        ("wrong id", good("01ARZ3NDEKTSV4RRFFQ69G5FAV", 1).into_bytes()),
+        (
+            "wrong id",
+            good("01ARZ3NDEKTSV4RRFFQ69G5FAV", 1).into_bytes(),
+        ),
         ("wrong version", good("whatever", 2).into_bytes()),
         ("not json", b"hello\n".to_vec()),
         ("no newline", b"{\"v\":1}".to_vec()),
@@ -567,9 +571,17 @@ async fn a_garbled_helper_answer_is_502() {
         let mut fx = fast(fx().await).await;
         fake(&mut fx, Mode::Raw(bytes)).await;
         let (s, b) = restart(&fx, &fx.dev, json!({"target": "runner"})).await;
-        assert_eq!((s, b["code"].as_str()), (StatusCode::BAD_GATEWAY, Some("host_helper_failed")), "{what}");
+        assert_eq!(
+            (s, b["code"].as_str()),
+            (StatusCode::BAD_GATEWAY, Some("host_helper_failed")),
+            "{what}"
+        );
         let (s, b) = get(&fx, &fx.dev, &logs_uri("core")).await;
-        assert_eq!((s, b["code"].as_str()), (StatusCode::BAD_GATEWAY, Some("host_helper_failed")), "{what} logs");
+        assert_eq!(
+            (s, b["code"].as_str()),
+            (StatusCode::BAD_GATEWAY, Some("host_helper_failed")),
+            "{what} logs"
+        );
     }
 }
 
@@ -578,12 +590,19 @@ async fn a_garbled_helper_answer_is_502() {
 async fn a_helper_that_never_answers_is_504() {
     let mut fx = fast(fx().await).await;
     fake(&mut fx, Mode::Hang(5)).await;
-    fx.app.host_helper = Arc::new(Client::at(fx.dir.join("host.sock")).with_deadline(Duration::from_millis(300)));
+    fx.app.host_helper =
+        Arc::new(Client::at(fx.dir.join("host.sock")).with_deadline(Duration::from_millis(300)));
     let t = std::time::Instant::now();
     let (s, b) = restart(&fx, &fx.dev, json!({"target": "core"})).await;
-    assert_eq!((s, b["code"].as_str()), (StatusCode::GATEWAY_TIMEOUT, Some("host_helper_timeout")));
+    assert_eq!(
+        (s, b["code"].as_str()),
+        (StatusCode::GATEWAY_TIMEOUT, Some("host_helper_timeout"))
+    );
     assert!(t.elapsed() < Duration::from_secs(3));
-    assert_eq!(rows(&fx, "host.action_result").await[0].1["code"], "timeout");
+    assert_eq!(
+        rows(&fx, "host.action_result").await[0].1["code"],
+        "timeout"
+    );
 }
 
 /// A restart whose request row cannot be written never reaches the helper; logs whose audit row
@@ -600,8 +619,15 @@ async fn an_audit_write_failure_is_500_and_the_helper_is_never_asked() {
     .await
     .unwrap();
     let (s, b) = restart(&fx, &fx.dev, json!({"target": "core"})).await;
-    assert_eq!((s, b["code"].as_str()), (StatusCode::INTERNAL_SERVER_ERROR, Some("internal")));
-    assert!(calls(&seen).is_empty(), "the helper was asked: {:?}", calls(&seen));
+    assert_eq!(
+        (s, b["code"].as_str()),
+        (StatusCode::INTERNAL_SERVER_ERROR, Some("internal"))
+    );
+    assert!(
+        calls(&seen).is_empty(),
+        "the helper was asked: {:?}",
+        calls(&seen)
+    );
     sqlx::query(
         "CREATE TRIGGER no_log_rows BEFORE INSERT ON audit_events \
          WHEN NEW.action = 'host.logs_read' BEGIN SELECT RAISE(ABORT, 'no'); END",
@@ -643,7 +669,12 @@ async fn fifty_refused_restarts_add_at_most_one_refusal_row() {
     // The wait runs down with the clock, then the helper is asked again.
     fx.clock.advance(20);
     let r = router(fx.app.clone())
-        .oneshot(req(Method::POST, "/api/v1/system/restart", Some(&fx.dev), Some(json!({"target": "core"}))))
+        .oneshot(req(
+            Method::POST,
+            "/api/v1/system/restart",
+            Some(&fx.dev),
+            Some(json!({"target": "core"})),
+        ))
         .await
         .unwrap();
     assert_eq!(r.headers()[header::RETRY_AFTER], "20");
@@ -670,7 +701,10 @@ async fn fifty_refused_restarts_add_at_most_one_refusal_row() {
 async fn an_accepted_core_restart_holds_the_next_for_the_helpers_gap() {
     let mut fx = fast(fx().await).await;
     let seen = fake(&mut fx, Mode::Ok).await;
-    assert_eq!(restart(&fx, &fx.dev, json!({"target": "core"})).await.0, StatusCode::ACCEPTED);
+    assert_eq!(
+        restart(&fx, &fx.dev, json!({"target": "core"})).await.0,
+        StatusCode::ACCEPTED
+    );
     let (s, _) = restart(&fx, &fx.dev, json!({"target": "core"})).await;
     assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(calls(&seen).len(), 1);
@@ -684,8 +718,10 @@ async fn log_text_and_status_strings_are_plain_and_a_bad_cursor_is_dropped() {
     let evil = "red\u{1b}[31m\u{1b}]0;pwned\u{7}\nline2\tok";
     fake(
         &mut fx,
-        Mode::Result(json!({"lines": [{"at": "t\u{1b}", "level": "i\u{7}", "text": evil}],
-            "next_before": "-r", "units": {"core": {"active": "act\u{1b}[2J"}}})),
+        Mode::Result(
+            json!({"lines": [{"at": "t\u{1b}", "level": "i\u{7}", "text": evil}],
+            "next_before": "-r", "units": {"core": {"active": "act\u{1b}[2J"}}}),
+        ),
     )
     .await;
     let (s, b) = get(&fx, &fx.dev, &logs_uri("core")).await;
@@ -706,6 +742,12 @@ async fn a_socket_served_by_the_wrong_user_is_refused() {
     let other = ainkrad_sys::getuid() + 1;
     fx.app.host_helper = Arc::new(Client::at(fx.dir.join("host.sock")).expecting_uid(other));
     let (s, b) = restart(&fx, &fx.dev, json!({"target": "runner"})).await;
-    assert_eq!((s, b["code"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("host_helper_unavailable")));
+    assert_eq!(
+        (s, b["code"].as_str()),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Some("host_helper_unavailable")
+        )
+    );
     assert!(calls(&seen).is_empty());
 }
