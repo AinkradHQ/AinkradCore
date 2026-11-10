@@ -126,7 +126,7 @@ reask() { # KEY ANSWER1 ANSWER2
     ANS1=$2 ANS2=$3 UI_Q_N=0 UI_Q_TOTAL=2; ui_check_dns() { :; }
     ask "$1" "label" ) 2>&1
 }
-o=$(reask HOSTNAME 1.2.3.4 core.example.com)
+o=$(reask HOSTNAME 203.0.113.4 core.example.com)
 { grep -q 'That is not a DNS name' <<<"$o" && grep -q '<<READ2>>' <<<"$o" && grep -q 'HOSTNAME = core.example.com' <<<"$o"; } && ok || bad "an invalid hostname was not explained in plain words and re-asked: $o"
 o=$(reask ACME_CONTACT not-an-email you@example.com)
 { grep -q 'does not look like an email' <<<"$o" && grep -q 'ACME_CONTACT = you@example.com' <<<"$o"; } && ok || bad "an invalid email was not explained and re-asked: $o"
@@ -182,7 +182,7 @@ ld=$( ( . "$ROOT/scripts/install/ui.sh"; ui_init; ui_logopen; ui_traps; echo "$U
 [ ! -e "$ld" ] && ok || bad "the install log was kept after a successful run"
 ld=$( ( . "$ROOT/scripts/install/ui.sh"; ui_init; ui_logopen; ui_traps; echo "$UI_LOGDIR"; exit 3 ) )
 [ -d "$ld" ] && ok || bad "the install log was removed after a failure"
-[ -d "$ld" ] && [ "$(stat -f %Lp "$ld" 2>/dev/null || stat -c %a "$ld")" = 700 ] && ok || bad "the log directory is not root-only (0700)"
+[ -d "$ld" ] && [ "$(stat -c %a "$ld" 2>/dev/null || stat -f %Lp "$ld")" = 700 ] && ok || bad "the log directory is not root-only (0700)"
 rm -rf "$ld"
 
 # --- the spinner in a real terminal: one rewritten line, no scrolling, fits the width ---

@@ -103,6 +103,11 @@ ui_rname() { # the roadmap
     5) echo "Your 2 answers" ;; 6) echo "Set up the Core" ;; 7) echo "Start and get the certificate" ;; 8) echo "Your connect link" ;;
   esac
 }
+ui_short() { # short names for the "Done so far" line
+  case $1 in
+    1) echo "Machine" ;; 2) echo "Prerequisites" ;; 3) echo "Download" ;; 4) echo "Programs" ;; 5) echo "Answers" ;; 6) echo "Set up" ;; 7) echo "Certificate" ;;
+  esac
+}
 ui_roadmap() {
   printf '\n %sAinkrad Core setup%s\n %sHere is what will happen (about 5 minutes):%s\n' "$B" "$R" "$D" "$R"
   _i=$((UI_BASE + 1))
@@ -119,7 +124,7 @@ ui_step() { # ui_step N "Title" "why": the persistent header (N is the roadmap n
     printf '\n %s%s%s step %s of %s %s·%s %s%s%s %s·%s %s elapsed\n' "$CY" "$(ui_bar "$_n" "$UI_TOTAL")" "$R" "$_n" "$UI_TOTAL" "$D" "$R" "$B" "$2" "$R" "$D" "$R" "$(ui_el)"
     [ -z "${3:-}" ] || printf '   %s%s%s\n' "$D" "$3" "$R"
     if [ "$_n" -gt 1 ]; then
-      _d=''; _i=$((UI_BASE + 1)); while [ "$_i" -lt "$1" ]; do _d="$_d $OKG $(ui_rname "$_i") "; _i=$((_i + 1)); done
+      _d=''; _i=$((UI_BASE + 1)); while [ "$_i" -lt "$1" ]; do _d="$_d $OKG $(ui_short "$_i") "; _i=$((_i + 1)); done
       if [ "${#_d}" -gt $((UI_W - 20)) ]; then _d=" $OKG $((_n - 1)) steps done, latest: $(ui_rname "$(($1 - 1))")"; fi
       printf '   %sDone so far:%s%s%s\n' "$D" "$GR" "$_d" "$R"
     fi

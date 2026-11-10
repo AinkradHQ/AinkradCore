@@ -36,6 +36,8 @@ STAGING_DIR=https://acme-staging-v02.api.letsencrypt.org/directory
 DEMO='' HARDEN_REQ='' HARDEN_WARN='' HARDEN_STATE='' FW_CHOICE=yes MODE=install GUIDED=0 CONFIG='' DRY=0 PURGE=0 CHECK_BACKUP=no CLI_BINARY='' STAGE=''
 
 say() { printf '%s\n' "$*"; }
+# info TEXT: a detail line; in the guided install a dim note in the live UI, else a plain indented line
+info() { if [ "$GUIDED" = 1 ]; then ui_note "$(printf '%s' "$*" | sed 's/^ *//')"; else say "  $*"; fi; }
 step() { if [ "$GUIDED" = 1 ]; then guided_step "$*"; else printf '\n== %s\n' "$*"; fi; }
 die() {
   if [ "$GUIDED" = 1 ] && [ "$UI_N" != 0 ]; then
@@ -51,7 +53,9 @@ run_label() {
     systemctl) case $2 in
       daemon-reload) echo "Telling systemd about the new service files" ;; enable) echo "Enabling the services at boot" ;;
       restart | start) echo "Starting ${3:-the service}" ;; *) echo "systemctl $2 ${3:-}" ;; esac ;;
-    useradd) echo "Creating the service account" ;; install) echo "Installing files" ;;
+    useradd) echo "Creating the service account" ;;
+    install) case $* in *ainkradctl*) echo "Installing the ainkradctl command" ;; *backup*) echo "Installing the backup service and timer" ;; *ainkrad-runner*) echo "Installing the runner" ;; *) echo "Installing files" ;; esac ;;
+    rm) echo "Removing leftovers of optional modules" ;;
     runuser) case $* in *" setting set "*) echo "Turning on the encrypted secrets store" ;; *" init "*) echo "Creating the Core's home, keys and database" ;; *) echo "Running as the service user" ;; esac ;;
     *) echo "Running $1" ;;
   esac
@@ -174,7 +178,7 @@ checks() { # DNS -> this host's public IP; :443 (and :80) free
   addrs=$(getent ahosts "$A_HOSTNAME" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true) # pipefail: an unresolved name must reach the warning below, not kill the script
   pub=${A_PUBLIC_IP:-$(curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS4 --max-time 5 https://checkip.amazonaws.com 2>/dev/null || true)}
   pub=$(clean_ip "$pub")
-  say "  DNS $A_HOSTNAME -> ${addrs:-nothing}; this host's public IPv4: ${pub:-unknown}"
+  info "DNS $A_HOSTNAME -> ${addrs:-nothing}; this host's public IPv4: ${pub:-unknown}"
   if [ -z "$addrs" ]; then warn "$A_HOSTNAME does not resolve: add an A record for this host"; problems=1
   elif [ -n "$pub" ] && ! printf ' %s ' "$addrs" | grep -q " $pub "; then
     warn "$A_HOSTNAME does not point at $pub: ACME will fail until it does"; problems=1
@@ -186,9 +190,9 @@ checks() { # DNS -> this host's public IP; :443 (and :80) free
     who=$(ss -Hltnp "sport = :$p" 2>/dev/null || true)
     if [ -n "$who" ] && ! printf '%s' "$who" | grep -q ainkrad-core; then
       warn ":$p is in use: $(printf '%s' "$who" | head -n1)"; problems=1
-    else say "  :$p free (or already the Core's)"; fi
+    else info ":$p free (or already the Core's)"; fi
   done
-  say "  Reachability of :443/:80 from the internet cannot be tested from here: ACME issuance below proves it."
+  info "Reachability of :443/:80 from the internet cannot be tested from here: the certificate order below proves it."
   [ "$problems" = 0 ] && return 0
   [ "$DRY" = 1 ] && { warn "checks failed (dry run continues)"; return 0; }
   [ -z "$CONFIG" ] && yes_no "Continue anyway? (the certificate will fail until DNS is right)" && return 0
@@ -211,7 +215,7 @@ stage_binaries() {
   # shellcheck disable=SC2016 # the string is eval'd at exit, when $STAGE is known
   if [ "$GUIDED" = 1 ]; then ui_clean_add 'rm -rf "$STAGE"'; else trap 'rm -rf "$STAGE"' EXIT; fi
   for n in ainkrad-core-server ainkradctl ainkrad-runner ainkrad-ptyhost; do
-    if [ -f "$src/$n" ]; then cp "$src/$n" "$STAGE/$n"; chmod 0755 "$STAGE/$n"; say "  $n sha256 $(sha "$STAGE/$n")"
+    if [ -f "$src/$n" ]; then cp "$src/$n" "$STAGE/$n"; chmod 0755 "$STAGE/$n"; info "$n sha256 $(sha "$STAGE/$n")"
     elif [ "$n" = ainkrad-core-server ] && [ "$DRY" = 0 ]; then die "no $n in $src"
     else warn "$n: not in $src (skipped; every signed release ships it, so a release installed with scripts/release/install.sh has it)"; fi
   done
@@ -319,7 +323,7 @@ AINKRAD_BACKUP_SECRET_KEY=$A_BACKUP_SECRET_KEY" "$(printf '%s\n' "$body" | sed "
 AINKRAD_BACKUP_SECRET_KEY=$(mask "$A_BACKUP_SECRET_KEY")" ;;
     keep) [ "$DRY" = 1 ] || [ -s "$ETC/backup.env" ] || die "BACKUP=keep but there is no $ETC/backup.env"
       say "  $ETC/backup.env kept as it is (not read, not printed)" ;;
-    local) say "  no bucket: encrypted snapshots stay in $CORE_HOME/backups only" ;;
+    local) info "no bucket: encrypted snapshots stay in $CORE_HOME/backups only" ;;
   esac
   [ "$DRY" = 1 ] || ! command -v systemd-analyze >/dev/null || systemd-analyze calendar "$A_BACKUP_SCHEDULE" >/dev/null ||
     die "BACKUP_SCHEDULE '$A_BACKUP_SCHEDULE' is not a systemd calendar expression"
@@ -348,7 +352,7 @@ start_core() {
   [ -z "$tm" ] || run systemctl restart ainkrad-backup.timer
   [ "$DRY" = 1 ] && return 0
   if [ "$GUIDED" = 1 ]; then
-    cert_wait || { journalctl -u ainkrad-core -n 20 --no-pager >&2; die "the Core did not become healthy within 4 minutes: check that $A_HOSTNAME points at this machine and that your cloud firewall allows inbound TCP 443 (the Core log is above)"; }
+    cert_wait || { ui_warn "The Core's own log says:"; journalctl -u ainkrad-core -n 12 --no-pager 2>&1 | cut -c1-"$((UI_W - 6))" | sed 's/^/     /' >&2; die "the Core did not become healthy within 4 minutes: check that $A_HOSTNAME points at this machine and that your cloud firewall allows inbound TCP 443 (the Core log is above)"; }
     ui_ok "The certificate was issued and the Core answers over HTTPS"
     return 0
   fi
@@ -547,7 +551,10 @@ main() {
   # No answers file and no --wizard: the guided install is the default.
   if [ -n "$CONFIG" ] || [ "$GUIDED" = -1 ]; then GUIDED=0; else GUIDED=1; fi
   if [ "$GUIDED" = 1 ]; then
-    ui_init; ui_box_init; ui_traps; guided_banner; guided_answers; apply_harden_req; check_answers || die "invalid answers"
+    ui_init; ui_box_init; ui_traps
+    if [ "${AINKRAD_FROM_GET:-}" = 1 ]; then UI_STATE="The Core programs are in /usr/local/bin; nothing else is set up yet."; fi
+    guided_banner; guided_answers; apply_harden_req
+    check_answers || die "an answer is not valid (see the line just above this card); fix it and run again"
   elif [ -n "$CONFIG" ]; then
     parse_answers "$CONFIG" || die "fix the answers file above"
     [ -z "$CLI_BINARY" ] || A_BINARY_DIR=$CLI_BINARY
@@ -562,9 +569,13 @@ main() {
   if [ "$GUIDED" = 1 ]; then guided_backup_key; else review; fi
   [ -n "$CONFIG" ] || [ "$DRY" = 1 ] || [ "$GUIDED" = 1 ] || yes_no "Install with these answers?" || die "aborted, nothing changed"
   [ "$DRY" = 0 ] || say "(dry run: the commands below are printed, not run)"
+  UI_STATE="The Core programs are in /usr/local/bin; nothing else is set up yet."
   checks
   stage_binaries
   harden
+  local rm_cmd="sudo $0 --uninstall --purge"
+  [ "${AINKRAD_FROM_GET:-}" != 1 ] || rm_cmd="${AINKRAD_RERUN:-sudo sh get.sh} -s -- --uninstall --purge"
+  UI_STATE="Setting up: the service account, the Core's home or its unit may exist. Running the installer again is safe; to remove everything: $rm_cmd"
   install_core
   install_citadel
   install_backup
