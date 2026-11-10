@@ -9,6 +9,7 @@ pub mod cli;
 pub mod connections;
 pub mod gateway;
 pub mod health;
+pub mod host;
 pub mod hub;
 pub mod jobs;
 pub mod live;

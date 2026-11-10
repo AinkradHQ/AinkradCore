@@ -886,6 +886,10 @@
           "device.renamed",
           "device.revoked",
           "device.scopes_changed",
+          "host.action_result",
+          "host.helper_refused",
+          "host.logs_read",
+          "host.restart_requested",
           "identity.rotation.announced",
           "identity.rotation.started",
           "identity.rotation.switched",
@@ -2212,6 +2216,140 @@
         ],
         "type": "object"
       },
+      "HostBinary": {
+        "description": "A program installed on the host, as the helper's manifest and checks say.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "sha256_12": {
+            "description": "The first 12 hex characters of the file's SHA-256.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`ok`, `differs` (not the file the manifest lists) or `unsafe` (a link, or writable).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "HostStatus": {
+        "description": "The Core machine as the host helper reports it.",
+        "properties": {
+          "bin_dir_safe": {
+            "description": "`/usr/local/bin` is root-owned and not group or other writable.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "binaries": {
+            "items": {
+              "$ref": "#/components/schemas/HostBinary"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "helper": {
+            "description": "`present` (it answered), `absent` (no socket: not installed) or `error` (it did not answer\nwell: stopped, busy, too slow, refused).",
+            "type": "string"
+          },
+          "helper_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host_id": {
+            "description": "The host's random id, set at install; an app pins it at first sight.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "manifest": {
+            "description": "`ok`, `absent` or `invalid`: the state of the root-written manifest of installed programs.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "units": {
+            "$ref": "#/components/schemas/HostUnits"
+          }
+        },
+        "required": [
+          "helper"
+        ],
+        "type": "object"
+      },
+      "HostUnit": {
+        "description": "A systemd unit.",
+        "properties": {
+          "restarts": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "since": {
+            "description": "When it entered its state, as systemd prints it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "systemd's `ActiveState`: `active`, `inactive`, `failed`, `activating`…",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sub": {
+            "description": "systemd's `SubState`: `running`, `dead`…",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "HostUnits": {
+        "properties": {
+          "backup_timer": {
+            "$ref": "#/components/schemas/HostUnit"
+          },
+          "core": {
+            "$ref": "#/components/schemas/HostUnit"
+          },
+          "runner": {
+            "$ref": "#/components/schemas/HostUnit",
+            "description": "Absent when no local runner is installed."
+          }
+        },
+        "type": "object"
+      },
       "InviteCreated": {
         "properties": {
           "link": {
@@ -2512,6 +2650,51 @@
           "key",
           "locked_until",
           "strikes"
+        ],
+        "type": "object"
+      },
+      "LogLine": {
+        "description": "A page of a service's log, redacted by the helper, newest entries at the end.",
+        "properties": {
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "level": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "LogPage": {
+        "properties": {
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/LogLine"
+            },
+            "type": "array"
+          },
+          "next_before": {
+            "description": "Pass as `before` for the next older page; absent on the last.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "lines"
         ],
         "type": "object"
       },
@@ -3668,6 +3851,31 @@
         },
         "required": [
           "value"
+        ],
+        "type": "object"
+      },
+      "RestartBody": {
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "description": "`core` or `runner` (the local runner).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object"
+      },
+      "Restarted": {
+        "properties": {
+          "request_id": {
+            "description": "The id the restart is audited under (`host.restart_requested`, `host.action_result`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id"
         ],
         "type": "object"
       },
@@ -4909,7 +5117,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.48.0"
+    "version": "1.49.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -11423,6 +11631,355 @@
           "settings"
         ],
         "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/system/host": {
+      "get": {
+        "operationId": "getHostStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostStatus"
+                }
+              }
+            },
+            "description": "The Core machine: the programs installed, their state against the root-written manifest, and the Core, runner and backup units. `helper` says whether the host helper answered (`absent`: not installed here; `error`: it is stopped, busy or failing); the rest is then missing. Needs `admin`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "system"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/system/logs/backup": {
+      "get": {
+        "operationId": "getBackupLogs",
+        "parameters": [
+          {
+            "description": "1 to 500, default 200.",
+            "in": "query",
+            "name": "lines",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A cursor from `next_before`: `[A-Za-z0-9=;_]`, 1 to 256 characters, not starting with `-`.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogPage"
+                }
+              }
+            },
+            "description": "A page of the backup log, redacted by the host helper (audited as `host.logs_read`, the unit and the line count only). Needs `admin` and a step-up: these logs can hold values no redactor can recognise. 400 for `lines` outside 1 to 500 or a bad cursor; 503 `host_helper_unavailable` or `host_helper_busy`; 429 with `Retry-After`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "system"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/system/logs/core": {
+      "get": {
+        "operationId": "getCoreLogs",
+        "parameters": [
+          {
+            "description": "1 to 500, default 200.",
+            "in": "query",
+            "name": "lines",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A cursor from `next_before`: `[A-Za-z0-9=;_]`, 1 to 256 characters, not starting with `-`.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogPage"
+                }
+              }
+            },
+            "description": "A page of the core log, redacted by the host helper (audited as `host.logs_read`, the unit and the line count only). Needs `admin`. 400 for `lines` outside 1 to 500 or a bad cursor; 503 `host_helper_unavailable` or `host_helper_busy`; 429 with `Retry-After`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "system"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/system/logs/helper": {
+      "get": {
+        "operationId": "getHelperLogs",
+        "parameters": [
+          {
+            "description": "1 to 500, default 200.",
+            "in": "query",
+            "name": "lines",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A cursor from `next_before`: `[A-Za-z0-9=;_]`, 1 to 256 characters, not starting with `-`.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogPage"
+                }
+              }
+            },
+            "description": "A page of the helper log, redacted by the host helper (audited as `host.logs_read`, the unit and the line count only). Needs `admin`. 400 for `lines` outside 1 to 500 or a bad cursor; 503 `host_helper_unavailable` or `host_helper_busy`; 429 with `Retry-After`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "system"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/system/logs/runner": {
+      "get": {
+        "operationId": "getRunnerLogs",
+        "parameters": [
+          {
+            "description": "1 to 500, default 200.",
+            "in": "query",
+            "name": "lines",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A cursor from `next_before`: `[A-Za-z0-9=;_]`, 1 to 256 characters, not starting with `-`.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogPage"
+                }
+              }
+            },
+            "description": "A page of the runner log, redacted by the host helper (audited as `host.logs_read`, the unit and the line count only). Needs `admin` and a step-up: these logs can hold values no redactor can recognise. 400 for `lines` outside 1 to 500 or a bad cursor; 503 `host_helper_unavailable` or `host_helper_busy`; 429 with `Retry-After`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "system"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/system/restart": {
+      "post": {
+        "operationId": "restartHostService",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestartBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Restarted"
+                }
+              }
+            },
+            "description": "The restart is accepted (audited first as `host.restart_requested`, then `host.action_result`). A Core restart answers before the Core goes down; clients reconnect. A 429 or any failure holds the same restart back for a while (`Retry-After` on a 429). Do not retry a 504 on your own: a retry is a new request the helper cannot tell from the first. Needs `admin` and a step-up. 400 for a body other than `{\"target\": \"core\" | \"runner\"}`; 409 `not_installed` (no local runner); 429 with `Retry-After` (the helper's limits); 503 `host_helper_unavailable`, `host_helper_busy` or `host_state_unavailable`; 504 `host_helper_timeout`; 502 `host_helper_failed`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "system"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
       }
     },
     "/api/v1/terminals": {

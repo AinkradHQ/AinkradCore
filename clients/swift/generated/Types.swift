@@ -358,6 +358,24 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/settings/{scope}/{key}/history`.
     /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/{key}/history/get(settingHistory)`.
     func settingHistory(_ input: Operations.SettingHistory.Input) async throws -> Operations.SettingHistory.Output
+    /// - Remark: HTTP `GET /api/v1/system/host`.
+    /// - Remark: Generated from `#/paths//api/v1/system/host/get(getHostStatus)`.
+    func getHostStatus(_ input: Operations.GetHostStatus.Input) async throws -> Operations.GetHostStatus.Output
+    /// - Remark: HTTP `GET /api/v1/system/logs/backup`.
+    /// - Remark: Generated from `#/paths//api/v1/system/logs/backup/get(getBackupLogs)`.
+    func getBackupLogs(_ input: Operations.GetBackupLogs.Input) async throws -> Operations.GetBackupLogs.Output
+    /// - Remark: HTTP `GET /api/v1/system/logs/core`.
+    /// - Remark: Generated from `#/paths//api/v1/system/logs/core/get(getCoreLogs)`.
+    func getCoreLogs(_ input: Operations.GetCoreLogs.Input) async throws -> Operations.GetCoreLogs.Output
+    /// - Remark: HTTP `GET /api/v1/system/logs/helper`.
+    /// - Remark: Generated from `#/paths//api/v1/system/logs/helper/get(getHelperLogs)`.
+    func getHelperLogs(_ input: Operations.GetHelperLogs.Input) async throws -> Operations.GetHelperLogs.Output
+    /// - Remark: HTTP `GET /api/v1/system/logs/runner`.
+    /// - Remark: Generated from `#/paths//api/v1/system/logs/runner/get(getRunnerLogs)`.
+    func getRunnerLogs(_ input: Operations.GetRunnerLogs.Input) async throws -> Operations.GetRunnerLogs.Output
+    /// - Remark: HTTP `POST /api/v1/system/restart`.
+    /// - Remark: Generated from `#/paths//api/v1/system/restart/post(restartHostService)`.
+    func restartHostService(_ input: Operations.RestartHostService.Input) async throws -> Operations.RestartHostService.Output
     /// - Remark: HTTP `GET /api/v1/terminals`.
     /// - Remark: Generated from `#/paths//api/v1/terminals/get(listTerminals)`.
     func listTerminals(_ input: Operations.ListTerminals.Input) async throws -> Operations.ListTerminals.Output
@@ -1616,6 +1634,66 @@ extension APIProtocol {
         try await settingHistory(Operations.SettingHistory.Input(
             path: path,
             headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/system/host`.
+    /// - Remark: Generated from `#/paths//api/v1/system/host/get(getHostStatus)`.
+    public func getHostStatus(headers: Operations.GetHostStatus.Input.Headers = .init()) async throws -> Operations.GetHostStatus.Output {
+        try await getHostStatus(Operations.GetHostStatus.Input(headers: headers))
+    }
+    /// - Remark: HTTP `GET /api/v1/system/logs/backup`.
+    /// - Remark: Generated from `#/paths//api/v1/system/logs/backup/get(getBackupLogs)`.
+    public func getBackupLogs(
+        query: Operations.GetBackupLogs.Input.Query = .init(),
+        headers: Operations.GetBackupLogs.Input.Headers = .init()
+    ) async throws -> Operations.GetBackupLogs.Output {
+        try await getBackupLogs(Operations.GetBackupLogs.Input(
+            query: query,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/system/logs/core`.
+    /// - Remark: Generated from `#/paths//api/v1/system/logs/core/get(getCoreLogs)`.
+    public func getCoreLogs(
+        query: Operations.GetCoreLogs.Input.Query = .init(),
+        headers: Operations.GetCoreLogs.Input.Headers = .init()
+    ) async throws -> Operations.GetCoreLogs.Output {
+        try await getCoreLogs(Operations.GetCoreLogs.Input(
+            query: query,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/system/logs/helper`.
+    /// - Remark: Generated from `#/paths//api/v1/system/logs/helper/get(getHelperLogs)`.
+    public func getHelperLogs(
+        query: Operations.GetHelperLogs.Input.Query = .init(),
+        headers: Operations.GetHelperLogs.Input.Headers = .init()
+    ) async throws -> Operations.GetHelperLogs.Output {
+        try await getHelperLogs(Operations.GetHelperLogs.Input(
+            query: query,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/system/logs/runner`.
+    /// - Remark: Generated from `#/paths//api/v1/system/logs/runner/get(getRunnerLogs)`.
+    public func getRunnerLogs(
+        query: Operations.GetRunnerLogs.Input.Query = .init(),
+        headers: Operations.GetRunnerLogs.Input.Headers = .init()
+    ) async throws -> Operations.GetRunnerLogs.Output {
+        try await getRunnerLogs(Operations.GetRunnerLogs.Input(
+            query: query,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/system/restart`.
+    /// - Remark: Generated from `#/paths//api/v1/system/restart/post(restartHostService)`.
+    public func restartHostService(
+        headers: Operations.RestartHostService.Input.Headers = .init(),
+        body: Operations.RestartHostService.Input.Body
+    ) async throws -> Operations.RestartHostService.Output {
+        try await restartHostService(Operations.RestartHostService.Input(
+            headers: headers,
+            body: body
         ))
     }
     /// - Remark: HTTP `GET /api/v1/terminals`.

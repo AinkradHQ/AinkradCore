@@ -31,6 +31,7 @@ pub mod secrets;
 pub mod sessions;
 pub mod settings;
 pub mod stepup;
+pub mod system;
 pub mod terminals;
 
 /// Why a command failed; each kind has its own exit code (`code`).

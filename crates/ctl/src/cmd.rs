@@ -15,7 +15,7 @@ use crate::pair::{Credential, Pairing};
 use crate::stepup::{self, Passphrase};
 use crate::{
     EXIT_CODES, Error, acct, acct_help, agents, budgets, chains, connections, devices, events,
-    pair, pools, runners, secrets, settings, terminals,
+    pair, pools, runners, secrets, settings, system, terminals,
 };
 
 pub const USAGE: &str =
@@ -56,6 +56,15 @@ pub const USAGE: &str =
   run noop <runner-id>
       Sends the runner the no-op command through the Core and prints `ok <ms> ms`
       (scope agent; no step-up; audited as runner.command).
+  system show  |  restart core|runner*  |  logs core|helper|runner*|backup* [-n <1..500>] [--before <cursor>]
+      The Core machine through its host helper (scope admin): show prints the programs
+      installed (version, hash, ok|differs|unsafe) and the Core, runner and backup units; restart
+      queues a restart (the helper limits them: a refusal says how long to wait); logs prints a
+      page of a service's log, redacted, and the cursor for the next older page. The runner and
+      backup logs need a step-up, like restart. Log text is shown with control characters
+      as `?`. Do not retry a timed-out (504) restart on your own: it may be running, and a new
+      request is not recognised as a repeat. Without the helper, show says `absent` and the
+      others are refused (503).
   secret ls
   secret set <name>* [--runners <runner-id>,...] [--delivery env|file|askpass]
   secret rotate <name>* [--runners ...] [--delivery ...]  |  secret rm <name>*
@@ -144,7 +153,8 @@ signed or sent before the Core signs a fresh nonce with that key (POST /handshak
 admin socket answers to the Core's own host name).
 ";
 
-const VALUED: [&str; 34] = [
+const VALUED: [&str; 35] = [
+    "--before",
     "--socket",
     "--url",
     "--host",
@@ -378,6 +388,9 @@ pub async fn run(args: &[String], out: &mut impl Write) -> Result<(), Error> {
         ["lockouts", rest @ ..] => devices::lockouts(&mut a.client()?, rest, json, out).await,
         ["runner", rest @ ..] => runners::runner(&mut a.client()?, rest, json, out).await,
         ["run", rest @ ..] => runners::run(&mut a.client()?, rest, json, out).await,
+        ["system", rest @ ..] => {
+            system::system(&mut a.client()?, rest, a.value("--before"), json, out).await
+        }
         ["secret", rest @ ..] => {
             let runners = a.value("--runners").map(|r| {
                 r.split(',')
