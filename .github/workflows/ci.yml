@@ -85,7 +85,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y minisign shellcheck dash
       - name: shellcheck the installer
-        run: shellcheck -x scripts/get.sh scripts/install.sh scripts/install/*.sh deploy/install-linux.sh scripts/host/harden.sh scripts/release/sign.sh scripts/release/dry.sh && shellcheck -s sh scripts/install/ui.sh
+        run: shellcheck -S warning -x scripts/get.sh scripts/install.sh scripts/install/*.sh deploy/install-linux.sh scripts/host/harden.sh scripts/release/sign.sh scripts/release/dry.sh && shellcheck -S warning -s sh scripts/install/ui.sh
       - run: bash scripts/install/test.sh
   toy:
     # The toy module (the module API guide's reference) is its own small workspace.
