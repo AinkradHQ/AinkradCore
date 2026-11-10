@@ -17,6 +17,7 @@
 //! root-side code; the wire format is the one in `crates/host/src/wire.rs`.
 
 use std::collections::HashMap;
+#[cfg(target_os = "linux")]
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -75,6 +76,7 @@ pub struct Client {
     path: PathBuf,
     gate: Mutex<()>,
     /// The uid the socket's server must have (`SO_PEERCRED`): root in production.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     expect_uid: u32,
     /// Replaces [`CALL`] and [`LOGS`] (tests).
     deadline: Option<Duration>,
@@ -181,7 +183,9 @@ impl Client {
                 Failure::Unavailable
             }
         })?;
-        // The kernel's record of who serves the socket: only root may.
+        // The kernel's record of who serves the socket: only root may. Linux only: the helper exists nowhere else, and
+        // `peer_uid` is unsupported elsewhere (the macOS CI still runs the tests against a fake helper).
+        #[cfg(target_os = "linux")]
         match ainkrad_sys::peer_uid(stream.as_fd()) {
             Ok(uid) if uid == self.expect_uid => {}
             _ => return Err(Failure::Unavailable),
