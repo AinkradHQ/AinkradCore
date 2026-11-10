@@ -734,7 +734,9 @@ async fn log_text_and_status_strings_are_plain_and_a_bad_cursor_is_dropped() {
     assert_eq!(b["units"]["core"]["state"], "act?[2J");
 }
 
-/// The socket must be served by root in production: a server of another uid is not the helper.
+/// The socket must be served by root in production: a server of another uid is not the helper. Linux only: the check
+/// (`SO_PEERCRED`) exists only there, and so does the helper.
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_socket_served_by_the_wrong_user_is_refused() {
     let mut fx = fast(fx().await).await;
