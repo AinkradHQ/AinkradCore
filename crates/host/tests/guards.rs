@@ -3,14 +3,19 @@ use std::path::Path;
 
 fn sources() -> Vec<(String, String)> {
     let mut out = Vec::new();
-    let mut stack = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut stack = vec![root.clone()];
     while let Some(d) = stack.pop() {
         for e in std::fs::read_dir(d).unwrap() {
             let p = e.unwrap().path();
             if p.is_dir() {
                 stack.push(p);
             } else if p.extension().is_some_and(|x| x == "rs") {
-                let name = p.file_name().unwrap().to_string_lossy().into_owned();
+                let name = p
+                    .strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
                 out.push((name, std::fs::read_to_string(&p).unwrap()));
             }
         }
@@ -18,19 +23,99 @@ fn sources() -> Vec<(String, String)> {
     out
 }
 
-/// Production code only: no comments, nothing below `#[cfg(test)]`.
+/// `src` with comments blanked (and, unless `keep_strings`, string and char literals too), byte for
+/// byte the same length, newlines kept. So an offset found in the blanked text is valid in `src`.
+fn blank(src: &str, keep_strings: bool) -> String {
+    let b = src.as_bytes();
+    let mut out = b.to_vec();
+    let mut i = 0;
+    let wipe = |out: &mut Vec<u8>, from: usize, to: usize| {
+        for c in &mut out[from..to] {
+            if *c != b'\n' {
+                *c = b' ';
+            }
+        }
+    };
+    while i < b.len() {
+        if b[i..].starts_with(b"//") {
+            let end = src[i..].find('\n').map_or(b.len(), |e| i + e);
+            wipe(&mut out, i, end);
+            i = end;
+        } else if b[i..].starts_with(b"/*") {
+            let end = src[i..].find("*/").map_or(b.len(), |e| i + e + 2);
+            wipe(&mut out, i, end);
+            i = end;
+        } else if b[i] == b'"' || (b[i] == b'r' && matches!(b.get(i + 1), Some(b'"' | b'#'))) {
+            // A plain or raw string: find its end.
+            let hashes = b[i..].iter().skip(1).take_while(|c| **c == b'#').count();
+            let raw = b[i] == b'r';
+            let open = i + if raw { 1 + hashes } else { 0 };
+            if b.get(open) != Some(&b'"') {
+                i += 1;
+                continue;
+            }
+            let mut j = open + 1;
+            while j < b.len() {
+                if !raw && b[j] == b'\\' {
+                    j += 2;
+                } else if b[j] == b'"'
+                    && (!raw || b[j + 1..].iter().take_while(|c| **c == b'#').count() >= hashes)
+                {
+                    j += 1 + if raw { hashes } else { 0 };
+                    break;
+                } else {
+                    j += 1;
+                }
+            }
+            let j = j.min(b.len());
+            if !keep_strings {
+                wipe(&mut out, i, j);
+            }
+            i = j;
+        } else if b[i] == b'\''
+            && (b.get(i + 2) == Some(&b'\'')
+                || (b.get(i + 1) == Some(&b'\\') && b.get(i + 3) == Some(&b'\'')))
+        {
+            // A char literal (`'x'`, `'\n'`), not a lifetime.
+            let end = if b[i + 1] == b'\\' { i + 4 } else { i + 3 };
+            if !keep_strings {
+                wipe(&mut out, i, end);
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Production code only: comments blanked, and nothing from the first real `#[cfg(test)]` on. The
+/// marker is looked for with strings and comments blanked, so one inside either cuts nothing.
 fn production(src: &str) -> String {
-    let at = src
-        .find("#[cfg(test)]")
-        .into_iter()
-        .chain(src.find("#[cfg(all(test"))
-        .min();
-    let body = &src[..at.unwrap_or(src.len())];
-    let code: Vec<&str> = body
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
-        .collect();
-    code.join("\n")
+    let bare = blank(src, false);
+    let at = ["#[cfg(test)]", "#[cfg(all(test"]
+        .iter()
+        .filter_map(|m| bare.find(m))
+        .min()
+        .unwrap_or(src.len());
+    blank(src, true)[..at].to_owned()
+}
+
+#[test]
+fn production_cuts_at_the_real_test_module_only() {
+    // A marker inside a string or a comment is not the cut.
+    let src = "fn a() { let m = \"#[cfg(test)]\"; } // #[cfg(test)]\n/* #[cfg(test)] */ fn b() { unsafe { } }\n#[cfg(test)]\nmod tests { unsafe { } }\n";
+    let p = production(src);
+    assert!(p.contains("fn b()") && p.contains("unsafe"), "{p}");
+    assert!(!p.contains("mod tests"), "{p}");
+    assert!(!p.contains("// #[cfg"), "comments are blanked");
+    // The strings stay in the production text (other guards look for them).
+    assert!(production("const X: &str = \"/usr/bin/systemctl\";").contains("/usr/bin/systemctl"));
+    // Raw strings, escapes and lifetimes do not derail it.
+    let tricky = "fn f<'a>(x: &'a str) { let _ = r#\"a \"#[cfg(test)]\" b\"#; let _ = '\"'; let _ = \"q\\\"#[cfg(test)]\"; unsafe { } }\n#[cfg(test)]\nmod t {}\n";
+    let p = production(tricky);
+    assert!(p.contains("unsafe") && !p.contains("mod t"), "{p}");
+    assert_eq!(blank(tricky, false).len(), tricky.len());
 }
 
 #[test]
@@ -77,8 +162,16 @@ fn no_unsafe_no_network_no_async_and_small_files() {
         "arg(\"-c\")",
     ];
     for (name, src) in sources() {
-        // Test files (`tests.rs`) name the banned words on purpose.
-        if name != "tests.rs" {
+        // A `tests.rs` is a test-only module: prove it is declared under `#[cfg(test)]` in its
+        // parent (so it can never ship), instead of exempting it by file name.
+        if name.ends_with("tests.rs") {
+            let parent = name.trim_end_matches("/tests.rs").to_owned() + ".rs";
+            let decl = sources().into_iter().find(|(n, _)| *n == parent).unwrap().1;
+            assert!(
+                blank(&decl, false).contains("#[cfg(test)]\nmod tests;"),
+                "{name} is not cfg(test) in {parent}"
+            );
+        } else {
             let code = production(&src);
             for banned in banned_words {
                 assert!(!code.contains(banned), "{name}: {banned}");

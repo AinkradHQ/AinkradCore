@@ -134,19 +134,25 @@ fn journal(ctx: &Ctx, unit: &str, l: &Logs) -> Result<Vec<Raw>, Code> {
     Ok(raws)
 }
 
+/// The `helper` unit: `actions.log` and `mutations.log`. A cursor is `h<time><a|m><seq>`.
 fn helper(ctx: &Ctx, l: &Logs) -> Result<Vec<Raw>, Code> {
+    let key = |at: u64, mutation: bool, seq: u64| (at, mutation, seq);
     let before = match l.before.as_deref() {
-        None => u64::MAX,
-        Some(c) => c
-            .strip_prefix('s')
-            .and_then(|n| n.parse().ok())
-            .ok_or(Code::BadRequest)?,
+        None => None,
+        Some(c) => {
+            let rest = c.strip_prefix('h').ok_or(Code::BadRequest)?;
+            let split = rest.find(['a', 'm']).ok_or(Code::BadRequest)?;
+            let (at, tail) = rest.split_at(split);
+            let at: u64 = at.parse().map_err(|_| Code::BadRequest)?;
+            let seq: u64 = tail[1..].parse().map_err(|_| Code::BadRequest)?;
+            Some(key(at, tail.starts_with('m'), seq))
+        }
     };
     Ok(actlog::read_all(&ctx.state_dir)
         .into_iter()
-        .filter(|e| e.seq < before)
+        .filter(|e| before.is_none_or(|b| key(e.at, e.mutation, e.seq) < b))
         .map(|e| Raw {
-            cursor: format!("s{}", e.seq),
+            cursor: format!("h{}{}{}", e.at, if e.mutation { 'm' } else { 'a' }, e.seq),
             at_us: e.at.saturating_mul(1_000_000),
             level: if matches!(e.result.as_str(), "ok" | "accepted") {
                 "info"
@@ -165,7 +171,10 @@ pub fn logs(ctx: &Ctx, l: &Logs) -> Result<Value, Code> {
     };
     // Redact first, over everything fetched (the lookahead entry included, so a PEM block that
     // opened just before the page is still seen), then cut.
-    let mut texts: Vec<String> = raws.iter().map(|r| r.text.clone()).collect();
+    let mut texts: Vec<String> = raws
+        .iter()
+        .map(|r| redact::pre_cut(r.text.clone()))
+        .collect();
     redact::pem_across(&mut texts);
     // Newest `lines`, plus whether anything older was fetched.
     let paged_journal = l.before.is_some() && l.unit != Unit::Helper;

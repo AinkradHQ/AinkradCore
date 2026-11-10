@@ -54,3 +54,18 @@ pub fn open_lock(dir: &Path, name: &str) -> io::Result<File> {
         .custom_flags(libc::O_NOFOLLOW)
         .open(dir.join(name))
 }
+
+/// Whether the state directory is what the helper assumes: a real directory (not a symlink) owned
+/// by `owner_uid` (root) with no group or other access, under a parent owned by `owner_uid` that
+/// nobody else can write to. If uid `ainkrad` could replace the directory or an ancestor, none of
+/// the fail-closed state would mean anything, so mutations refuse and `status` says so.
+pub fn dir_safe(dir: &Path, owner_uid: u32) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let own = std::fs::symlink_metadata(dir)
+        .is_ok_and(|m| m.is_dir() && m.uid() == owner_uid && m.mode() & 0o077 == 0);
+    let parent = dir
+        .parent()
+        .and_then(|p| std::fs::symlink_metadata(p).ok())
+        .is_some_and(|m| m.is_dir() && m.uid() == owner_uid && m.mode() & 0o022 == 0);
+    own && parent
+}

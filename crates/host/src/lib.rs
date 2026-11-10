@@ -10,6 +10,10 @@
 //! 3. one line, at most 4 KiB, parsed into a typed action with unknown fields refused;
 //! 4. limits, lock, act, log, answer.
 //!
+//! A helper killed between answering `restart_*` and running `systemctl` leaves a repeat of that
+//! id answering `accepted` with no `failed` line (the answer is written first, on purpose, so it
+//! reaches the client even when the restart tears the Core down). Repeats of a request are silent.
+//!
 //! No network, no tokio, no shell, no installed binary is ever run: the only processes are
 //! `systemctl` and `journalctl`, with fixed argv and an empty environment (`exec.rs`).
 
@@ -165,22 +169,32 @@ impl Trail<'_> {
             fields,
             durable: result == "accepted",
         };
-        if matches!(result, "accepted" | "failed" | "deduped") {
-            // The journal keeps root actions even if the files cannot.
-            eprintln!(
-                "ainkrad-host: {} {} {} {}",
-                line.now, line.result, line.action, line.fields
-            );
-        }
-        match result {
-            "deduped" => Ok(()),
+        // Files first: the root-action record is the one that must exist. A repeat of a request
+        // that was never recorded must not read "accepted".
+        let written = match result {
+            // A repeat does nothing, so it leaves nothing: no file, no journal line.
+            "deduped" => return Ok(()),
             "accepted" | "failed" => {
-                // The root-action record must be written; the shared log is a convenience.
+                let kept = actlog::append_to(&self.ctx.state_dir, actlog::MUTATIONS, &line);
+                // The shared log is a convenience.
                 let _ = actlog::append(&self.ctx.state_dir, &line);
-                actlog::append_to(&self.ctx.state_dir, actlog::MUTATIONS, &line)
+                kept
             }
             _ => actlog::append(&self.ctx.state_dir, &line),
+        };
+        if matches!(result, "accepted" | "failed") {
+            // The journal keeps root actions even if the files cannot. Never `eprintln!`: it
+            // panics when stderr is closed (EPIPE), which would kill the helper mid-action.
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "ainkrad-host: {} {} {} {}",
+                line.now,
+                line.result,
+                line.action,
+                line.fields
+            );
         }
+        written
     }
 }
 
@@ -267,7 +281,7 @@ fn handle(ctx: &Ctx, trail: &Trail, req: &Request, stream: &mut UnixStream) {
 
 /// Read rate limits (`status` 120/min, `logs` 60/min) in `reads.json`. Reads must work when the
 /// state is bad, so a file that cannot be read or written never refuses anything. The read-modify-
-/// write runs under a blocking lock of its own (`reads.lock`, held for microseconds), so parallel
+/// write runs under a blocking lock of its own (`reads.lock`, held across two fsyncs, with no timeout of its own; it relies on the unit's `RuntimeMaxSec=30`), so parallel
 /// instances neither lose counts nor share a temp file mid-write.
 fn read_limit(ctx: &Ctx, action: &str) -> Result<(), u64> {
     const FILE: &str = "reads.json";
@@ -303,6 +317,9 @@ fn read_limit(ctx: &Ctx, action: &str) -> Result<(), u64> {
 fn mutate(ctx: &Ctx, trail: &Trail, req: &Request, stream: &mut UnixStream) {
     let name = req.action.name();
     let say = |stream: &mut UnixStream, b: Vec<u8>| respond(stream, b);
+    if !state::dir_safe(&ctx.state_dir, ctx.owner_uid) {
+        return say(stream, refuse(trail, req, Code::StateUnavailable, None));
+    }
     let Ok(lock) = state::open_lock(&ctx.state_dir, LOCK) else {
         return say(stream, refuse(trail, req, Code::StateUnavailable, None));
     };
@@ -350,8 +367,16 @@ fn mutate(ctx: &Ctx, trail: &Trail, req: &Request, stream: &mut UnixStream) {
         .log("accepted", name, Some(&req.id), Some(&req.actor), "")
         .is_err()
     {
-        // Counted but not run: a repeat of this id must not claim it was accepted.
+        // Counted but not run: a repeat of this id must not claim it was accepted, and the
+        // journal and shared log (if they work) say why.
         limits.mark_failed(&req.id);
+        let _ = trail.log(
+            "failed",
+            name,
+            Some(&req.id),
+            Some(&req.actor),
+            " code=state_unavailable",
+        );
         let _ = limits::save(&ctx.state_dir, &limits);
         return say(
             stream,

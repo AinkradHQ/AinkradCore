@@ -141,7 +141,15 @@ fn spaces_around_the_separator_escaped_quotes_and_host_words() {
         one("dial postgres://app:s3cret@db:5432/x and https://example.org/p"),
         "dial postgres://app:[redacted:url_password]@db:5432/x and https://example.org/p"
     );
-    assert_eq!(one("see http://host:8080/a@b"), "see http://host:8080/a@b");
+    // A port followed by a stray `@` is read as user:password (the over-masking side).
+    assert_eq!(
+        one("see http://host:8080/a@b"),
+        "see http://host:[redacted:url_password]@b"
+    );
+    assert_eq!(
+        one("see http://host:8080/a and https://example.org"),
+        "see http://host:8080/a and https://example.org"
+    );
 }
 
 #[test]
@@ -153,10 +161,11 @@ fn the_shared_name_pass_is_not_changed_by_the_host_words() {
 }
 
 #[test]
-fn an_end_without_a_begin_masks_back_to_the_start_of_the_page() {
+fn an_end_without_a_begin_masks_the_body_lines_before_it_and_stops_at_ordinary_text() {
     let mut page: Vec<String> = [
-        "tail of a body",
-        "more body",
+        "an ordinary line",
+        "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcw",
+        "ggSjAgEAAoIBAQC7VJTUt9Us8cKj",
         "-----END RSA PRIVATE KEY-----",
         "later",
         "-----BEGIN X-----",
@@ -166,7 +175,13 @@ fn an_end_without_a_begin_masks_back_to_the_start_of_the_page() {
     .to_vec();
     pem_across(&mut page);
     let out: Vec<&str> = page.iter().map(String::as_str).collect();
-    assert_eq!(out, [PEM, PEM, PEM, "later", PEM, PEM]);
+    assert_eq!(out, ["an ordinary line", PEM, PEM, PEM, "later", PEM, PEM]);
+    // A lone END line a client printed hides nothing else on the page.
+    let mut page: Vec<String> = ["a", "b is fine", "-----END X-----"]
+        .map(String::from)
+        .to_vec();
+    pem_across(&mut page);
+    assert_eq!(page, ["a", "b is fine", PEM]);
 }
 
 #[test]
@@ -209,4 +224,97 @@ fn long_prefixed_and_base64url_runs_are_masked() {
         one("/usr/lib/x86_64-linux-gnu/some/dir/file.so loaded"),
         "/usr/lib/x86_64-linux-gnu/some/dir/file.so loaded"
     );
+}
+
+#[test]
+fn backslash_runs_cost_linear_time() {
+    use std::time::{Duration, Instant};
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let run = "\\".repeat(1 << 20);
+        let t = Instant::now();
+        let names = (
+            names_text(&format!("password:\"{run}")),
+            names_text(&format!("password:\\\"{run}")),
+            names_text(&format!("password:\"{run}\" tail")),
+        );
+        let names_took = t.elapsed();
+        let t = Instant::now();
+        let whole = one(&format!("password:\"{run}"));
+        let _ = tx.send((names_took, names, t.elapsed(), whole));
+    });
+    let (names_took, names, whole_took, whole) = rx
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the redactor must not go quadratic on a run of backslashes");
+    // The key=value pass alone is linear: well under a second even unoptimised.
+    assert!(names_took < Duration::from_secs(1), "{names_took:?}");
+    // The whole pipeline (shapes, runs, names) loosely: the quadratic version takes minutes.
+    assert!(whole_took < Duration::from_secs(20), "{whole_took:?}");
+    assert_eq!(names.0, "password:[redacted:password]");
+    assert_eq!(names.1, "password:[redacted:password]");
+    assert_eq!(names.2, "password:[redacted:password] tail");
+    assert_eq!(whole, "password:[redacted:password]");
+}
+
+#[test]
+fn an_even_backslash_run_before_a_quote_closes_the_string_and_an_odd_one_does_not() {
+    // Two backslashes then a quote: an escaped backslash, then the closing quote.
+    assert_eq!(
+        one("password:\"a\\\\\" tail"),
+        "password:[redacted:password] tail"
+    );
+    // One backslash then a quote: the quote is escaped, the string goes on.
+    assert_eq!(
+        one("password:\"a\\\" tail\" end"),
+        "password:[redacted:password] end"
+    );
+}
+
+#[test]
+fn a_long_key_is_still_a_key() {
+    let long = format!("SOME_{}_TOKEN", "VERY_".repeat(14));
+    let out = one(&format!("{long}=secretvalue"));
+    assert!(!out.contains("secretvalue"), "{out}");
+    let out = one(&format!("{}client_secret=hunter2value", "a/".repeat(40)));
+    assert!(!out.contains("hunter2value"), "{out}");
+    let b64 = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj";
+    assert_eq!(
+        one(&format!("{b64}==")),
+        PEM,
+        "real padding is still masked"
+    );
+}
+
+#[test]
+fn passwords_with_odd_characters_and_scheme_less_credentials() {
+    for pw in ["a/b", "a?b", "a#b", "a b", "a\"b", "p@ss"] {
+        let out = one(&format!("dial postgres://app:{pw}@db:5432/x ok"));
+        assert_eq!(
+            out, "dial postgres://app:[redacted:url_password]@db:5432/x ok",
+            "{pw}"
+        );
+    }
+    assert_eq!(
+        one("connect admin:hunter2@db.internal failed"),
+        "connect admin:[redacted:url_password]@db.internal failed"
+    );
+    assert_eq!(
+        one("mail bob@example.org and 12:30 ok"),
+        "mail bob@example.org and 12:30 ok"
+    );
+}
+
+#[test]
+fn an_over_long_entry_is_cut_before_redaction_and_the_cut_is_marked() {
+    let secret = format!("sk-ant-api03-{}", "Q".repeat(40));
+    let line = format!("{} {secret}", "word ".repeat(PRE_CUT / 5 - 8));
+    assert!(line.len() > PRE_CUT - 40 && line.len() < PRE_CUT + 100);
+    let cut = pre_cut(format!("{line} {}", "x ".repeat(PRE_CUT)));
+    assert!(cut.len() <= PRE_CUT + 20 && cut.ends_with("[redacted:cut]"));
+    assert!(!one(&cut).contains("QQQQ"));
+    assert_eq!(pre_cut("short".into()), "short");
+    // A token cut in half leaves nothing of itself behind: the cut backs up to whitespace.
+    let tok = format!("{} {}", "a ".repeat(PRE_CUT / 2 - 10), "T".repeat(2000));
+    let cut = pre_cut(tok);
+    assert!(!cut.contains("TTT"), "the front of the token is gone too");
 }

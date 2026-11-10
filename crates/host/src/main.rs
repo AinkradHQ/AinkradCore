@@ -9,7 +9,11 @@ use std::process::ExitCode;
 
 #[cfg(not(target_os = "linux"))]
 fn main() -> ExitCode {
-    eprintln!("ainkrad-host: Linux only (needs SO_PEERCRED and systemd)");
+    use std::io::Write;
+    let _ = writeln!(
+        std::io::stderr(),
+        "ainkrad-host: Linux only (needs SO_PEERCRED and systemd)"
+    );
     ExitCode::FAILURE
 }
 

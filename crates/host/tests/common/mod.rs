@@ -148,6 +148,8 @@ pub fn mkdir(p: &Path, mode: u32) {
 impl Fx {
     pub fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
+        // The helper wants the state directory's parent closed to others, as /var/lib is.
+        mkdir(dir.path(), 0o700);
         mkdir(&dir.path().join("state"), 0o700);
         mkdir(&dir.path().join("bin"), 0o755);
         Self::over(dir)

@@ -90,17 +90,18 @@ pub fn append_to(dir: &Path, name: &str, line: &Line) -> io::Result<()> {
     Ok(())
 }
 
-/// One parsed line, oldest first across the rotation.
+/// One parsed line.
 pub struct Entry {
     pub seq: u64,
     pub at: u64,
     pub result: String,
     pub text: String,
+    /// `false` for `actions.log`, `true` for `mutations.log`.
+    pub mutation: bool,
 }
 
-pub fn read_all(dir: &Path) -> Vec<Entry> {
-    let mut out = Vec::new();
-    for name in [PREVIOUS, FILE] {
+fn read_files(dir: &Path, names: [&str; 2], mutation: bool, out: &mut Vec<Entry>) {
+    for name in names {
         let Ok(bytes) = state::read_capped(&dir.join(name), MAX_BYTES * 2) else {
             continue;
         };
@@ -119,8 +120,25 @@ pub fn read_all(dir: &Path) -> Vec<Entry> {
                 at,
                 result: result.to_owned(),
                 text: text.to_owned(),
+                mutation,
             });
         }
     }
-    out
+}
+
+/// Every line of both logs and their previous generations, oldest first by `(time, log, seq)`. A
+/// root-action line that is in both logs is listed once (from `mutations.log`, which a flood of
+/// refusals cannot rotate away).
+pub fn read_all(dir: &Path) -> Vec<Entry> {
+    let (mut shared, mut kept) = (Vec::new(), Vec::new());
+    read_files(dir, [PREVIOUS, FILE], false, &mut shared);
+    read_files(dir, ["mutations.log.1", MUTATIONS], true, &mut kept);
+    let have: std::collections::HashSet<(u64, String, String)> = kept
+        .iter()
+        .map(|e| (e.at, e.result.clone(), e.text.clone()))
+        .collect();
+    shared.retain(|e| !have.contains(&(e.at, e.result.clone(), e.text.clone())));
+    shared.extend(kept);
+    shared.sort_by_key(|e| (e.at, e.mutation, e.seq));
+    shared
 }

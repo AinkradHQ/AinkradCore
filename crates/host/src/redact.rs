@@ -103,20 +103,18 @@ fn value_span(s: &str, from: usize, to_eol: bool) -> (usize, usize) {
         let mut i = p + 1 + usize::from(escaped);
         while i < b.len() {
             if b[i] == b'\\' {
-                // A run of backslashes: before the quote, exactly one closes an escaped string
-                // (`\"`); more is an escaped backslash or quote inside it.
+                // One step over the whole run of backslashes (a run is never recounted). Before
+                // a quote: odd means the quote is escaped, even means the quote is not. In an
+                // escaped string (`\"`) exactly one backslash is the closing `\"`.
                 let run = b[i..].iter().take_while(|c| **c == b'\\').count();
-                let quote = b.get(i + run) == Some(&q);
-                if escaped && quote && run == 1 {
-                    return (p, i + 2);
-                }
-                i += if quote {
-                    run + 1
-                } else if escaped {
-                    run
+                if b.get(i + run) == Some(&q) {
+                    if (escaped && run == 1) || (!escaped && run % 2 == 0) {
+                        return (p, i + run + 1);
+                    }
+                    i += run + 1;
                 } else {
-                    2.min(run + 1)
-                };
+                    i += run;
+                }
             } else if !escaped && b[i] == q {
                 return (p, i + 1);
             } else {
@@ -158,26 +156,90 @@ pub fn names_text(s: &str) -> String {
     out
 }
 
-/// `scheme://user:password@host`: the password goes.
+fn user_byte(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'~' | b'%' | b'-' | b'+')
+}
+
+/// How far a password is searched for (bytes after the colon).
+const CRED_REACH: usize = 256;
+
+/// `scheme://user:password@host`: the password goes, whatever it holds (`/`, `?`, `#`, spaces,
+/// quotes): it runs to the last `@` within [`CRED_REACH`] bytes on the same line, so a stray `@`
+/// later in the line can over-mask, which is the safe side. Also `user:password@host` without a
+/// scheme, as one whitespace-free token (a password with a space is only caught after `://`).
 pub fn url_creds(s: &str) -> String {
-    let (mut out, mut rest) = (String::with_capacity(s.len()), s);
-    while let Some(at) = rest.find("://") {
-        let after = at + 3;
-        out.push_str(&rest[..after]);
-        rest = &rest[after..];
-        let stop = rest
-            .find(|c: char| c == '/' || c == '?' || c == '#' || c.is_whitespace() || c == '"')
-            .unwrap_or(rest.len());
-        if let Some(a) = rest[..stop].rfind('@')
-            && let Some(colon) = rest[..a].find(':')
-        {
-            out.push_str(&rest[..=colon]);
-            out.push_str("[redacted:url_password]");
-            rest = &rest[a..];
+    let b = s.as_bytes();
+    let (mut out, mut copied, mut i) = (String::with_capacity(s.len()), 0, 0);
+    while i < b.len() {
+        // The start of a `user:` candidate: after `://`, or at the start of a token.
+        let after_scheme = b[i..].starts_with(b"://");
+        let start = if after_scheme { i + 3 } else { i };
+        let token_start = after_scheme
+            || i == 0
+            || b[i - 1].is_ascii_whitespace()
+            || matches!(b[i - 1], b'"' | b'\'' | b'(' | b'<' | b'=');
+        if token_start && user_byte(b.get(start).copied().unwrap_or(0)) {
+            let user = b[start..].iter().take_while(|c| user_byte(**c)).count();
+            let colon = start + user;
+            // `scheme://…` is handled at the `://`, not as a user named after the scheme.
+            if b.get(colon) == Some(&b':') && !s[colon + 1..].starts_with("//") {
+                let line_end = s[colon..].find('\n').map_or(b.len(), |e| colon + e);
+                let mut reach = line_end.min(colon + 1 + CRED_REACH);
+                while !s.is_char_boundary(reach) {
+                    reach -= 1;
+                }
+                let window = &s[colon + 1..reach];
+                // Scheme-less: the token ends at whitespace or a quote.
+                let window = if after_scheme {
+                    window
+                } else {
+                    &window[..window
+                        .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+                        .unwrap_or(window.len())]
+                };
+                if let Some(at) = window.rfind('@')
+                    && at > 0
+                    && !window[..at].starts_with("[redacted")
+                {
+                    out.push_str(&s[copied..=colon]);
+                    out.push_str("[redacted:url_password]");
+                    copied = colon + 1 + at;
+                    i = copied;
+                    continue;
+                }
+            }
         }
+        i += if after_scheme { 3 } else { 1 };
     }
-    out.push_str(rest);
+    out.push_str(&s[copied..]);
     out
+}
+
+/// One entry is cut to this many bytes before anything is redacted, so the redaction work is
+/// bounded however long a line the Core prints.
+pub const PRE_CUT: usize = 64 * 1024;
+
+/// Cuts an over-long entry to [`PRE_CUT`] bytes and masks whatever was cut off. The cut backs up to
+/// the last whitespace (or at most 512 bytes), so it never leaves the front of a token whose tail
+/// is gone; the marker stands for the cut part.
+pub fn pre_cut(mut s: String) -> String {
+    if s.len() <= PRE_CUT {
+        return s;
+    }
+    let mut n = PRE_CUT;
+    while !s.is_char_boundary(n) {
+        n -= 1;
+    }
+    let floor = n.saturating_sub(512);
+    n = s[floor..n]
+        .rfind(char::is_whitespace)
+        .map_or(floor, |w| floor + w);
+    while !s.is_char_boundary(n) {
+        n -= 1;
+    }
+    s.truncate(n);
+    s.push_str("[redacted:cut]");
+    s
 }
 
 fn strings(v: &mut Value, f: &impl Fn(&str) -> String) {
@@ -230,22 +292,29 @@ pub fn mask_runs(s: &str) -> String {
 /// masked structurally (names, then shapes), then by text inside its strings.
 pub fn one(text: &str) -> String {
     let r = Redactor::new();
-    let text_pass = |t: &str| names_text(&url_creds(&mask_runs(&r.text(t))));
+    let text_pass = |t: &str| mask_runs(&url_creds(&names_text(&r.text(t))));
     if text.trim_start().starts_with('{')
         && let Ok(mut v) = serde_json::from_str::<Value>(text)
     {
         names::mask(&mut v);
         r.json(&mut v);
-        strings(&mut v, &|t| names_text(&url_creds(&mask_runs(t))));
+        strings(&mut v, &|t| mask_runs(&url_creds(&names_text(t))));
         return v.to_string();
     }
     text_pass(text)
 }
 
+/// A line that could be a base64 body line: no spaces, base64 characters only, at least 8 long.
+fn body_like(t: &str) -> bool {
+    t.len() >= 8
+        && t.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'=' | b'_' | b'-'))
+}
+
 /// A `BEGIN … KEY` line opens a masking state that continues across entries to the matching
 /// `END` line. With no `END` in the page, everything to the end of the page is masked. The
 /// reverse holds too: an `END` with no `BEGIN` before it means the block began before this page,
-/// so every entry from the start of the page through that `END` is masked. The last `BEGIN` and
+/// so that entry and the run of body-like entries just before it are masked (not the whole page). The last `BEGIN` and
 /// last `END` in an entry decide whether it leaves a block open, so an entry that closes one block
 /// and opens another keeps masking.
 pub fn pem_across(texts: &mut [String]) {
@@ -264,7 +333,13 @@ pub fn pem_across(texts: &mut [String]) {
         } else if let Some(e0) = e
             && b.is_none_or(|b0| e0 < b0)
         {
-            texts[..=i].iter_mut().for_each(|t| *t = PEM.to_owned());
+            // The block began before this page: mask this entry and the run of base64-looking
+            // entries just before it (the body lines), and stop at the first ordinary line, so
+            // an `END` line a client can print cannot hide the whole page.
+            texts[i] = PEM.to_owned();
+            for t in texts[..i].iter_mut().rev().take_while(|t| body_like(t)) {
+                *t = PEM.to_owned();
+            }
             inside = lb.is_some() && open_after;
         } else if let Some(b0) = b
             && open_after

@@ -218,3 +218,130 @@ fn the_owner_uid_check_works_without_root() {
     let m = std::fs::metadata(fx.bin()).unwrap();
     assert_eq!(m.permissions().mode() & 0o022, 0);
 }
+
+/// A closed stderr (EPIPE) must not panic the helper, and a restart that did run must be recorded.
+/// The scenario runs in a child test process whose stderr is a pipe with no reader.
+#[test]
+fn a_closed_stderr_never_panics_or_leaves_a_false_accepted() {
+    if std::env::var("HOST_STDERR_CLOSED").is_ok() {
+        let fx = Fx::new();
+        let id = fx.id();
+        assert_eq!(fx.send(&fx.line(&id, "restart_core", "{}"))["ok"], true);
+        assert_eq!(fx.fake.restarts(), 1);
+        let kept = std::fs::read_to_string(fx.state().join("mutations.log")).unwrap();
+        assert!(
+            kept.contains(" accepted restart_core ") && kept.contains(&id),
+            "{kept}"
+        );
+        // And when the record cannot be written, a repeat must not read "accepted" either.
+        std::fs::remove_file(fx.state().join("mutations.log")).unwrap();
+        std::fs::create_dir(fx.state().join("mutations.log")).unwrap();
+        fx.at(120);
+        let id2 = fx.id();
+        assert_eq!(
+            fx.send(&fx.line(&id2, "restart_core", "{}"))["code"],
+            "state_unavailable"
+        );
+        assert_eq!(
+            fx.send(&fx.line(&id2, "restart_core", "{}"))["code"],
+            "failed"
+        );
+        assert_eq!(fx.fake.restarts(), 1);
+        return;
+    }
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "a_closed_stderr_never_panics_or_leaves_a_false_accepted",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("HOST_STDERR_CLOSED", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(writer)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+/// The in-app `helper` view lists root-action records from `mutations.log`, even when the shared
+/// log has lost them, and a line that is in both logs is listed once.
+#[test]
+fn the_helper_view_shows_mutations_log_and_lists_a_shared_line_once() {
+    let fx = Fx::new();
+    let line = format!(
+        "1 {T0} accepted restart_core peer=1 id={} claimed_by_core=d_x#1\n",
+        fx.id()
+    );
+    std::fs::write(fx.state().join("mutations.log"), &line).unwrap();
+    let v = fx.call("logs", r#"{"unit":"helper"}"#);
+    assert_eq!(texts(&v).len(), 1, "{v}");
+    assert!(texts(&v)[0].starts_with("accepted restart_core "));
+    std::fs::write(fx.state().join("actions.log"), line.replacen("1 ", "7 ", 1)).unwrap();
+    assert_eq!(texts(&fx.call("logs", r#"{"unit":"helper"}"#)).len(), 1);
+    // Paging uses its own cursor format.
+    let v = fx.call("logs", r#"{"unit":"helper","lines":1}"#);
+    assert!(v["result"].get("next_before").is_none());
+}
+
+/// A state directory that is not root-only (or sits under a writable parent) refuses mutations,
+/// and `status` says so.
+#[test]
+fn an_unsafe_state_directory_refuses_mutations_and_is_reported() {
+    let fx = Fx::new();
+    assert_eq!(fx.call("status", "{}")["result"]["state_dir_safe"], true);
+    let st = std::fs::Permissions::from_mode;
+    std::fs::set_permissions(fx.state(), st(0o750)).unwrap();
+    assert_eq!(fx.code("restart_core", "{}"), "state_unavailable");
+    assert_eq!(fx.call("status", "{}")["result"]["state_dir_safe"], false);
+    std::fs::set_permissions(fx.state(), st(0o700)).unwrap();
+    std::fs::set_permissions(fx.dir.path(), st(0o777)).unwrap();
+    assert_eq!(fx.code("restart_core", "{}"), "state_unavailable");
+    std::fs::set_permissions(fx.dir.path(), st(0o700)).unwrap();
+    // Owned by someone else than the owner uid.
+    let mut other = Fx::new();
+    other.ctx.owner_uid = ainkrad_sys::getuid() + 1;
+    assert_eq!(other.code("restart_core", "{}"), "state_unavailable");
+    assert_eq!(fx.fake.restarts() + other.fake.restarts(), 0);
+    assert_eq!(fx.call("restart_core", "{}")["ok"], true, "safe again");
+}
+
+/// Repeats of a request leave no trace: no growth of any log.
+#[test]
+fn repeats_are_silent() {
+    let fx = Fx::new();
+    let id = fx.id();
+    fx.send(&fx.line(&id, "restart_core", "{}"));
+    let size = || {
+        std::fs::metadata(fx.state().join("mutations.log"))
+            .unwrap()
+            .len()
+    };
+    let before = (size(), fx.log().len());
+    for _ in 0..50 {
+        assert_eq!(fx.send(&fx.line(&id, "restart_core", "{}"))["ok"], true);
+    }
+    assert_eq!((size(), fx.log().len()), before);
+}
+
+/// One enormous line is cut before redaction, so it costs bounded time, and what was cut is masked.
+#[test]
+fn an_enormous_log_line_is_cut_before_it_is_redacted() {
+    let fx = Fx::new();
+    let huge = format!("password:\"{}", "\\".repeat(2 << 20));
+    let more = format!("{} sk-ant-api03-{}", "word ".repeat(30_000), "Z".repeat(40));
+    put(&fx, vec![json!(huge), json!(more)]);
+    let started = std::time::Instant::now();
+    let v = fx.call("logs", r#"{"unit":"core"}"#);
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    let t = texts(&v);
+    assert_eq!(t[0], "password:[redacted:password]");
+    assert!(!t[1].contains("ZZZZ"));
+}

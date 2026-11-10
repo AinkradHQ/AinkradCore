@@ -235,7 +235,8 @@ pub fn status(ctx: &Ctx) -> Result<Value, Code> {
         });
     Ok(
         json!({"helper_version": env!("CARGO_PKG_VERSION"), "host_id": host_id, "manifest": manifest,
-              "bin_dir_safe": dir_safe, "binaries": binaries, "units": units}),
+              "bin_dir_safe": dir_safe,
+              "state_dir_safe": state::dir_safe(&ctx.state_dir, ctx.owner_uid), "binaries": binaries, "units": units}),
     )
 }
 
