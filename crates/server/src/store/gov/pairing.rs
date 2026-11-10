@@ -264,8 +264,11 @@ pub struct Claim<'a> {
 }
 
 /// Spends the pairing, inserts the device as `pending` with what the pairing bound, and audits
-/// `pairing.claimed`, in one transaction: all of it or none. `false` when the pairing is no
-/// longer live at `now` (or, for a bootstrap, a device appeared meanwhile).
+/// `pairing.claimed`, in one transaction: all of it or none. An invite is its own approval: the
+/// device is inserted `active`, the pairing becomes `approved`, and the one audit row is
+/// `pairing.approved`; its creator must still stand behind it (active, not revoked, holding its
+/// scopes), else the invite is burned. `false` when the pairing is no longer live at `now`, for
+/// a bootstrap when a device appeared meanwhile, or when an invite's creator no longer stands.
 pub async fn claim_pairing(pool: &SqlitePool, c: &Claim<'_>, now: i64) -> Result<bool, Error> {
     let mut tx = begin_write(pool).await?;
     // An invite enrols with no approver, so its creator is checked here, in the claim's
@@ -568,12 +571,14 @@ async fn creator_stands(conn: &mut SqliteConnection, p: &Pairing) -> Result<bool
     Ok(status == "active" && revoked.is_none() && p.scopes.iter().all(|s| held.contains(s)))
 }
 
-/// Burns every live pairing (the global wrong-claim budget ran out, §7.4), audited as one
-/// `pairing.burned` row naming them all; returns their ids.
+/// Burns every live pairing but the invites (the global wrong-claim budget ran out, §7.4),
+/// audited as one `pairing.burned` row naming them all; returns their ids. An invite's 128-bit
+/// secret is not guessable, and the burn would only let anyone kill the owner's link.
 pub async fn burn_pairings(pool: &SqlitePool) -> Result<Vec<String>, Error> {
     let mut tx = begin_write(pool).await?;
     let burned: Vec<String> = sqlx::query_scalar(
-        "UPDATE core_pairings SET status = 'burned' WHERE status = 'live' RETURNING id",
+        "UPDATE core_pairings SET status = 'burned' WHERE status = 'live' AND invite = 0 \
+         RETURNING id",
     )
     .fetch_all(&mut *tx)
     .await?;

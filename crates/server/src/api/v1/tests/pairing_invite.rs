@@ -180,34 +180,46 @@ async fn claim_code(fx: &Fx, code: &str, peer: &str) -> (StatusCode, Value) {
     .await
 }
 
-/// A used, wrong or second claim is the one `pairing_failed`, and 20 of them from 20 addresses
-/// spend the global budget and burn every live invite.
+/// A used, wrong or second claim is the one `pairing_failed`. Twenty wrong claims from 20
+/// addresses burn the normal pairings but leave a live invite (its 128-bit secret is not
+/// guessable, and the burn would let anyone kill the owner's link): its secret still claims it.
 #[tokio::test]
-async fn used_and_wrong_claims_are_refused_and_spend_the_wrong_claim_budget() {
+async fn wrong_claims_burn_normal_pairings_but_never_an_invite() {
     let fx = fx().await;
     let (_, used) = invite(&fx, &fx.dev, &["read"]).await;
     let (_, live) = invite(&fx, &fx.dev, &["read"]).await;
+    let body = json!({"name": "New", "kind": "device", "scopes": ["read"]});
+    let (_, normal) = send(
+        &fx.app,
+        req(Method::POST, "/api/v1/pairings", Some(&fx.dev), Some(body)),
+    )
+    .await;
     let secret = used["secret"].as_str().unwrap();
     assert_eq!(
         claim(&fx, &newcomer(&fx), secret, "10.9.0.1").await.0,
         StatusCode::ACCEPTED
     );
     let wrong = crate::auth::crypto::b64(&[9u8; 16]);
-    // 19 more wrong claims leave the live invite alone ...
     let (s, _) = claim(&fx, &newcomer(&fx), secret, "10.9.1.0").await;
     assert_eq!(s, StatusCode::UNAUTHORIZED, "second claim of a used invite");
-    for i in 1..19 {
+    for i in 1..20 {
         let (s, b) = claim(&fx, &newcomer(&fx), &wrong, &format!("10.9.1.{i}")).await;
         assert_eq!(
             (s, b["code"].as_str()),
             (StatusCode::UNAUTHORIZED, Some("pairing_failed"))
         );
     }
+    assert_eq!(
+        pairing_status(&fx, normal["pairing_id"].as_str().unwrap()).await,
+        "burned",
+        "the budget burns a normal pairing"
+    );
     let live_id = live["pairing_id"].as_str().unwrap();
-    assert_eq!(pairing_status(&fx, live_id).await, "live");
-    // ... the 20th burns it.
-    claim(&fx, &newcomer(&fx), &wrong, "10.9.2.1").await;
-    assert_eq!(pairing_status(&fx, live_id).await, "burned");
+    assert_eq!(
+        pairing_status(&fx, live_id).await,
+        "live",
+        "but not an invite"
+    );
     let (s, _) = claim(
         &fx,
         &newcomer(&fx),
@@ -215,7 +227,28 @@ async fn used_and_wrong_claims_are_refused_and_spend_the_wrong_claim_budget() {
         "10.9.3.1",
     )
     .await;
-    assert_eq!(s, StatusCode::UNAUTHORIZED, "a burned invite is dead");
+    assert_eq!(s, StatusCode::ACCEPTED, "its secret still claims it");
+}
+
+/// The 0031 down migration ends live invites first: without the flag they would be plain
+/// pairings that never expire. Applying it again leaves them burned.
+#[tokio::test]
+async fn the_down_migration_burns_live_invites() {
+    use crate::store::migrate::{CORE, CORE_MIGRATIONS, migrate_core, undo};
+    let fx = fx().await;
+    let (_, made) = invite(&fx, &fx.dev, &["read"]).await;
+    let id = made["pairing_id"].as_str().unwrap();
+    undo(&fx.app.pool, CORE, CORE_MIGRATIONS, 30).await.unwrap();
+    let status = || async {
+        sqlx::query_scalar::<_, String>("SELECT status FROM core_pairings WHERE id = ?")
+            .bind(id)
+            .fetch_one(&fx.app.pool)
+            .await
+            .unwrap()
+    };
+    assert_eq!(status().await, "burned");
+    migrate_core(&fx.app.pool).await.unwrap();
+    assert_eq!(status().await, "burned");
 }
 
 /// A rejected (withdrawn) invite is dead.

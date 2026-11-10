@@ -409,3 +409,32 @@ async fn recover_burns_every_live_invite() {
     let p = gov::get_pairing(&h.pool, &made.id).await.unwrap().unwrap();
     assert_eq!(p.status, "burned");
 }
+
+/// `recover` burns the host's own unclaimed invite too (no creator device to revoke).
+#[tokio::test]
+async fn recover_burns_a_host_invite() {
+    let h = host("recover-host-invite").await;
+    let db = h.db.to_str().unwrap();
+    let scopes: Vec<String> = gov::SCOPES.iter().map(|s| (*s).to_owned()).collect();
+    let made = gov::create_pairing(
+        &h.pool,
+        &gov::NewPairing {
+            kind: "device",
+            name: "first owner",
+            scopes: &scopes,
+            created_by: None,
+            bootstrap: true,
+            recovery: false,
+            invite: true,
+        },
+        ainkrad_core::audit::AuditActor::System,
+        SystemClock.unix(),
+    )
+    .await
+    .unwrap();
+    let confirm = format!("{}\n", hostname());
+    let (_, ok) = run(&h, &["recover", db], &confirm, "y\n").await;
+    assert!(ok);
+    let p = gov::get_pairing(&h.pool, &made.id).await.unwrap().unwrap();
+    assert_eq!(p.status, "burned");
+}
