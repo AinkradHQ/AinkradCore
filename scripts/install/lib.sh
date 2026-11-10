@@ -97,6 +97,12 @@ ip = ipaddress.ip_address(sys.argv[1])
 sys.exit(0 if any(ip in ipaddress.ip_network(c, strict=False) for c in sys.argv[2].split(",")) else 1)' "$1" "$2" 2>/dev/null
 }
 
+# An address looked up from a third party, made safe to print: only IPv4/IPv6 literal characters, a literal or nothing.
+clean_ip() {
+  local ip; ip=$(printf '%s' "$1" | tr -cd '0-9a-fA-F:.' | head -c 45)
+  if valid_ipv4 "$ip" || { case $ip in *:*) match "$ip" '^[0-9a-fA-F:.]+$' ;; *) false ;; esac; }; then printf '%s' "$ip"; fi
+}
+
 # "abcd...wxyz" for review screens: never more than the first and last 2 characters.
 mask() { local n=${#1}; if [ "$n" -le 8 ]; then printf '********'; else printf '%s****%s' "${1:0:2}" "${1:$((n - 2))}"; fi; }
 

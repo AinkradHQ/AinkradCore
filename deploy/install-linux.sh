@@ -2,23 +2,55 @@
 # Installs the ainkrad-runner systemd unit (E1-12.3; protocol v2 since E1-14.5; terminals and pairing E2-15).
 # Idempotent; does not start unless --start or --pair. Works on the Core's own host and on a remote Linux host.
 #   install-linux.sh [--binary PATH] [--ptyhost PATH] [--pty] [--ca PEM]
-#                    [--pair https://<core> --code <CODE>] [--start] [--prefix DIR] [--dry-run]
+#                    [--exec] [--root] [--pair https://<core> --code <CODE>] [--start] [--prefix DIR] [--dry-run]
 # --pty      offer terminals (--enable-pty); needs ainkrad-ptyhost (--ptyhost, default: beside --binary). The shell
 #            runs as the unprivileged ainkrad-runner user inside the unit's sandbox. Off unless asked.
 # --ca       a PEM the runner trusts instead of the system roots (a test Core's CA only).
 # --pair     pair as the service user now (waits for the approver; compare the SAS it prints), then start.
-# exec.run stays OFF: add --enable-exec to RUNNER_ARGS in /etc/ainkrad-runner/runner.env yourself if wanted.
+# --exec     turn exec.run on (--enable-exec). WARNING: opt-in only; a compromised Core can then run any program as
+#            the runner's user (as root with --root). The guided installer never passes it.
+# --root     WARNING: opt-in only, never the default. Runs the unit as root with no unit sandbox (drop-in
+#            ainkrad-runner.service.d/authority.conf). A compromised Core is then root on this host, root terminals
+#            can overwrite /usr/local/bin and /etc/systemd/system, and agent sessions are refused at uid 0. The
+#            guided installer never passes it. A re-run without it removes that one file.
 # --prefix installs under DIR (a throwaway root, for tests): no user creation, no systemctl.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-binary="$HERE/../target/release/ainkrad-runner" ptyhost='' pty=0 ca='' pair='' code='' prefix='' start=0 dry=0
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+binary="$HERE/../target/release/ainkrad-runner" ptyhost='' pty=0 ca='' pair='' code='' prefix='' start=0 dry=0 exec_on=0 root=0
+run() { printf '+ %s\n' "$*"; [ "$dry" = 1 ] || "$@"; }
+WAS_ACTIVE=1
+# Demoting a root runner: its terminal hosts (ptyhosts, started as root; KillMode=process keeps them alive across a restart)
+# must end too. The unprivileged runner cannot adopt them (a ptyhost serves only its own uid, and the runner's state dir
+# must belong to its user), and root shells should not outlive the demotion. `kill --kill-whom=all` also SIGTERMs the
+# runner itself, which Restart=on-failure treats as a clean exit and does not restart: so whether it was running is noted
+# first and runner_restart_if_needed starts it again. Reads the globals old_root root prefix dry set below.
+runner_demote_kill() {
+  { [ "$old_root" = 1 ] && [ "$root" = 0 ] && { [ -z "$prefix" ] || [ "$dry" = 1 ]; }; } || return 0
+  if [ "$dry" != 1 ]; then if systemctl is-active --quiet ainkrad-runner.service; then WAS_ACTIVE=1; else WAS_ACTIVE=0; fi; fi
+  echo "demoting the runner from root: ending its terminal hosts (they run as root and cannot be adopted by the unprivileged runner)"
+  run systemctl kill --kill-whom=all ainkrad-runner.service || true
+}
+# A runner that is already running keeps its old user and flags until restarted: pick the change up now (also for a dry run
+# with --prefix, so it can be seen and tested). After a demotion the runner is restarted (not try-restarted: the kill
+# stopped it) when it was running before.
+runner_restart_if_needed() {
+  { [ "$start" != 1 ] && [ -z "$pair" ] && { [ -z "$prefix" ] || [ "$dry" = 1 ]; }; } || return 0
+  if [ "$old_root" = 1 ] && [ "$root" = 0 ]; then
+    if [ "$WAS_ACTIVE" = 1 ]; then run systemctl restart ainkrad-runner.service; fi
+  elif [ "$old_root" != "$root" ] || [ "$old_args" != "$args" ]; then
+    run systemctl try-restart ainkrad-runner.service
+  fi
+}
+[ "${AINKRAD_INSTALL_SOURCE_ONLY:-}" != 1 ] || [ "${BASH_SOURCE[0]}" = "$0" ] || return 0
+usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 while [ $# -gt 0 ]; do
   case $1 in
     --binary) binary=${2:?}; shift 2 ;;
     --ptyhost) ptyhost=${2:?}; shift 2 ;;
     --pty) pty=1; shift ;;
+    --exec) exec_on=1; shift ;;
+    --root) root=1; shift ;;
     --ca) ca=${2:?}; shift 2 ;;
     --pair) pair=${2:?}; shift 2 ;;
     --code) code=${2:?}; shift 2 ;;
@@ -28,7 +60,6 @@ while [ $# -gt 0 ]; do
     *) usage ;;
   esac
 done
-run() { printf '+ %s\n' "$*"; [ "$dry" = 1 ] || "$@"; }
 [ "$dry" = 1 ] || [ "$(id -u)" = 0 ] || [ -n "$prefix" ] || { echo "run as root (or --prefix/--dry-run)" >&2; exit 1; }
 [ "$dry" = 1 ] || [ -x "$binary" ] || { echo "no runner binary at $binary (cargo build --release -p ainkrad-runner, or --binary)" >&2; exit 1; }
 [ -z "$pair" ] || [ -n "$code" ] || { echo "--pair needs --code" >&2; exit 2; }
@@ -57,14 +88,48 @@ run install -m 0644 "$HERE/systemd/ainkrad-runner.service" "$prefix/etc/systemd/
 # runner.env: RUNNER_ARGS from these flags, replaced on every run (so a re-run without --pty turns terminals off).
 args=''
 [ "$pty" = 1 ] && args="--enable-pty"
+[ "$exec_on" = 1 ] && args="${args:+$args }--enable-exec"
 [ -z "$ca" ] || args="${args:+$args }--ca $ca"
 if [ -n "$prefix" ]; then run install -d "$prefix/etc/ainkrad-runner"; fi
+dropin="$prefix/etc/systemd/system/ainkrad-runner.service.d"
 envfile="$prefix/etc/ainkrad-runner/runner.env"
+# What is installed now, to know after the rewrite whether a running runner must be restarted to pick the change up.
+old_args=$(sed -n 's/^RUNNER_ARGS=//p' "$envfile" 2>/dev/null | tail -n1 || true)
+old_root=0; [ ! -e "$dropin/authority.conf" ] || old_root=1
+if [ "$root" = 1 ]; then
+  run install -d "$dropin"
+  printf '+ write %s/authority.conf\n' "$dropin"
+  if [ "$dry" = 0 ]; then cat >"$dropin/authority.conf" <<'CONF'
+# Written by deploy/install-linux.sh --root: the runner is the app's hands on this machine, so it runs as root with
+# every capability and no filesystem sandbox. Agent sessions are sandboxed by the runner itself (bubblewrap).
+[Service]
+User=root
+Group=root
+NoNewPrivileges=no
+CapabilityBoundingSet=
+CapabilityBoundingSet=~
+AmbientCapabilities=
+ProtectSystem=no
+ProtectHome=no
+PrivateDevices=no
+DevicePolicy=auto
+ProtectKernelTunables=no
+ProtectKernelModules=no
+ProtectKernelLogs=no
+ProtectControlGroups=no
+ProtectClock=no
+ProtectHostname=no
+RestrictNamespaces=no
+SystemCallFilter=
+CONF
+  fi
+else run rm -f "$dropin/authority.conf"; fi
 printf '+ write %s: RUNNER_ARGS=%s\n' "$envfile" "$args"
 if [ "$dry" = 0 ]; then
   printf '# Written by deploy/install-linux.sh. exec.run is off unless --enable-exec is added here.\nRUNNER_ARGS=%s\n' "$args" >"$envfile"
   chmod 0640 "$envfile"; [ -n "$prefix" ] || chown root:ainkrad-runner "$envfile"
 fi
+runner_demote_kill
 if [ -z "$prefix" ]; then
   run systemctl daemon-reload
   if [ -n "$pair" ]; then
@@ -83,3 +148,4 @@ if [ -z "$prefix" ]; then
     echo "installed, not started. Pair it (see the unit's header), then: systemctl enable --now ainkrad-runner"
   fi
 fi
+runner_restart_if_needed
