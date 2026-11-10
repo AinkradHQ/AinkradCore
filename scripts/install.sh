@@ -6,6 +6,7 @@
 #   sudo scripts/install.sh --wizard             the classic question-by-question wizard
 #   sudo scripts/install.sh --config <answers>   unattended (see deploy/install.answers.example)
 #   scripts/install.sh --config <answers> --dry-run   print every action, change nothing (no root needed)
+#   --demo shows the whole screen flow with fake delays and changes NOTHING on this machine; it always exits 3 (never a success).
 #   --harden (or AINKRAD_HARDEN=yes; only yes|no are accepted) also runs scripts/host/harden.sh: key-only SSH where safe, a firewall
 #        that rejects every inbound port but ssh/80/443, unattended updates, no swap/core dumps. EXPERIMENTAL and OFF by default.
 #   sudo scripts/install.sh --check [--backup local|bucket]   self-test an existing install
@@ -21,20 +22,49 @@
 set -euo pipefail
 umask 077
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# Run by get.sh the roadmap is 8 steps (it passes 0/8 and its clock); standalone this installer shows its own steps 5-8 as 1-4.
+: "${AINKRAD_STEP_BASE:=4}" "${AINKRAD_STEP_TOTAL:=4}"; export AINKRAD_STEP_BASE AINKRAD_STEP_TOTAL
 # shellcheck source=scripts/install/lib.sh
 . "$ROOT/scripts/install/lib.sh"
+# shellcheck source=scripts/install/ui.sh
+. "$ROOT/scripts/install/ui.sh"
 # shellcheck source=scripts/install/guided.sh
 . "$ROOT/scripts/install/guided.sh"
 
 CORE_HOME=/var/lib/ainkrad/core ETC=/etc/ainkrad BIN=/usr/local/bin UNITS=/etc/systemd/system
 STAGING_DIR=https://acme-staging-v02.api.letsencrypt.org/directory
-HARDEN_REQ='' HARDEN_WARN='' HARDEN_STATE='' FW_CHOICE=yes MODE=install GUIDED=0 CONFIG='' DRY=0 PURGE=0 CHECK_BACKUP=no CLI_BINARY='' STAGE=''
+DEMO='' HARDEN_REQ='' HARDEN_WARN='' HARDEN_STATE='' FW_CHOICE=yes MODE=install GUIDED=0 CONFIG='' DRY=0 PURGE=0 CHECK_BACKUP=no CLI_BINARY='' STAGE=''
 
 say() { printf '%s\n' "$*"; }
+# info TEXT: a detail line; in the guided install a dim note in the live UI, else a plain indented line
+info() { if [ "$GUIDED" = 1 ]; then ui_note "$(printf '%s' "$*" | sed 's/^ *//')"; else say "  $*"; fi; }
 step() { if [ "$GUIDED" = 1 ]; then guided_step "$*"; else printf '\n== %s\n' "$*"; fi; }
-die() { printf 'install: %s\n' "$*" >&2; exit 1; }
+die() {
+  if [ "$GUIDED" = 1 ] && [ "$UI_N" != 0 ]; then
+    UI_RERUN=${AINKRAD_RERUN:-"sudo $0"}; ui_stopped "$*" "fix the cause, then run the command below; it is safe to run again (it keeps what is already done)"
+  fi
+  printf 'install: %s\n' "$*" >&2; exit 1
+}
 warn() { printf 'install: WARNING: %s\n' "$*" >&2; }
-run() { trace "$@"; [ "$DRY" = 1 ] || "$@"; }
+# In the guided install a command runs in the background with its output in the log and a spinner naming it; RUN_PLAIN=1 keeps
+# the old direct output (hardening prints a report).
+run_label() {
+  case $1 in
+    systemctl) case $2 in
+      daemon-reload) echo "Telling systemd about the new service files" ;; enable) echo "Enabling the services at boot" ;;
+      restart | start) echo "Starting ${3:-the service}" ;; *) echo "systemctl $2 ${3:-}" ;; esac ;;
+    useradd) echo "Creating the service account" ;;
+    install) case $* in *ainkradctl*) echo "Installing the ainkradctl command" ;; *backup*) echo "Installing the backup service and timer" ;; *ainkrad-runner*) echo "Installing the runner" ;; *) echo "Installing files" ;; esac ;;
+    rm) echo "Removing leftovers of optional modules" ;;
+    runuser) case $* in *" setting set "*) echo "Turning on the encrypted secrets store" ;; *" init "*) echo "Creating the Core's home, keys and database" ;; *) echo "Running as the service user" ;; esac ;;
+    *) echo "Running $1" ;;
+  esac
+}
+run() {
+  if [ "$GUIDED" = 1 ] && [ "$DRY" = 0 ] && [ "${RUN_PLAIN:-0}" != 1 ]; then
+    ui_run "$(run_label "$@")" "$@" || die "$(run_label "$@") failed"
+  else trace "$@"; [ "$DRY" = 1 ] || "$@"; fi
+}
 # write_file PATH MODE OWNER:GROUP CONTENT [SHOWN]: atomically, via a temp file beside it; SHOWN replaces
 # CONTENT in the dry-run listing (secrets masked). printf is a builtin: CONTENT never reaches an argv.
 write_file() {
@@ -47,26 +77,48 @@ write_file() {
 }
 env_get() { [ -r "$ETC/core.env" ] && sed -n "s/^$1=//p" "$ETC/core.env" | tail -n1 || true; }
 sha() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
-yes_no() { local a; read -r -p "$1 [y/N] " a </dev/tty; case $a in y | Y | yes) true ;; *) false ;; esac; }
+# tty_foreground: 0 when this process can read the terminal without being stopped by SIGTTIN, i.e. it is in the terminal's
+# foreground process group. (Started through `curl | sudo sh` it is not: sudo's pty does not hand the terminal over when its own
+# stdin is a pipe, and the first read would stop the installer silently.) Unknown = allowed; no terminal = reading fails by itself.
+tty_foreground() {
+  local pg tp
+  pg=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ') tp=$(ps -o tpgid= -p $$ 2>/dev/null | tr -d ' ')
+  case $pg$tp in '' | *[!0-9]*) return 0 ;; esac
+  [ "$tp" = 0 ] || [ "$pg" = "$tp" ]
+}
+need_terminal() { # before every read from /dev/tty: never leave the user at a silent prompt
+  tty_foreground || die "this installer does not have the terminal (it was probably started with 'curl ... | sudo sh'): a question here would hang. Run it as: sudo sh -c \"\$(curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh)\"  (or, from a checkout, sudo scripts/install.sh): both keep the terminal attached."
+}
+yes_no() { local a; need_terminal; read -r -p "$1 [y/N] " a </dev/tty; case $a in y | Y | yes) true ;; *) false ;; esac; }
 
 # ask KEY "one-line explanation" [secret]: loops until the validator accepts; keeps A_KEY (or the default).
+# ui_read PROMPT VAR [secret]: read one answer from the terminal (tests replace this)
+ui_read() { need_terminal; if [ -n "${3:-}" ]; then read -r -s -p "$1" "$2" </dev/tty; echo; else read -r -p "$1" "$2" </dev/tty; fi; }
+# ask KEY "plain label" [secret]: every question is a card (Question n of N, label, example, default), then it waits.
+# loops until the validator accepts; keeps A_KEY (or the default).
 ask() {
-  local key=$1 why=$2 secret=${3:-} cur def v rc
+  local key=$1 why=$2 secret=${3:-} cur def v rc shown
   eval "cur=\${A_$key:-}"; def=${cur:-$(default_of "$key")}
-  printf '\n%s\n' "$why"
+  UI_Q_N=$((${UI_Q_N:-0} + 1))
+  ui_card "$UI_Q_N" "${UI_Q_TOTAL:-0}" "$why" "$(ui_example "$key")" "${def:-none}"
   while :; do
-    if [ -n "$secret" ]; then
-      read -r -s -p "$key${cur:+ [keep current]}: " v </dev/tty; echo
-    else read -r -p "$key${def:+ [$def]}: " v </dev/tty; fi
+    if [ -n "$secret" ]; then ui_read " > $key${cur:+ [keep current]}: " v secret
+    else ui_read " > $key${def:+ [$def]}: " v; fi
     v=${v:-$def}
     case $key in BINARY_DIR) [ "$v" = build ] && { A_BUILD=yes; return; } ;; esac
     if [ -z "$v" ]; then case $key in PUBLIC_IP | ALLOW_ORIGINS | SSH_FROM | BACKUP_PREFIX | RUNNER_PAIR_CODE) printf -v "A_$key" ''; return ;; esac; fi
     rc=0; "$(validator_of "$key")" "$v" || rc=$?
-    [ "$rc" = 0 ] && { printf -v "A_$key" '%s' "$v"; return; }
+    if [ "$rc" = 0 ]; then
+      printf -v "A_$key" '%s' "$v"
+      shown=$v; [ -z "$secret" ] || shown='(hidden)'
+      ui_ok "$key = $shown"
+      [ "$GUIDED" != 1 ] || ui_after_answer "$key" "$v"
+      return
+    fi
     if [ "$rc" = 2 ] && [ "$key" = BACKUP_RECIPIENT ]; then
       say "  That is an age SECRET key (AGE-SECRET-KEY-...). It must never be on this host: paste the public"
       say "  key (age1...) printed next to it. If the secret was exposed here, make a new identity."
-    else say "  Not valid, try again."; fi
+    else say "  $(ui_invalid "$key")"; fi
   done
 }
 
@@ -138,7 +190,7 @@ checks() { # DNS -> this host's public IP; :443 (and :80) free
   addrs=$(getent ahosts "$A_HOSTNAME" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true) # pipefail: an unresolved name must reach the warning below, not kill the script
   pub=${A_PUBLIC_IP:-$(curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS4 --max-time 5 https://checkip.amazonaws.com 2>/dev/null || true)}
   pub=$(clean_ip "$pub")
-  say "  DNS $A_HOSTNAME -> ${addrs:-nothing}; this host's public IPv4: ${pub:-unknown}"
+  info "DNS $A_HOSTNAME -> ${addrs:-nothing}; this host's public IPv4: ${pub:-unknown}"
   if [ -z "$addrs" ]; then warn "$A_HOSTNAME does not resolve: add an A record for this host"; problems=1
   elif [ -n "$pub" ] && ! printf ' %s ' "$addrs" | grep -q " $pub "; then
     warn "$A_HOSTNAME does not point at $pub: ACME will fail until it does"; problems=1
@@ -150,9 +202,9 @@ checks() { # DNS -> this host's public IP; :443 (and :80) free
     who=$(ss -Hltnp "sport = :$p" 2>/dev/null || true)
     if [ -n "$who" ] && ! printf '%s' "$who" | grep -q ainkrad-core; then
       warn ":$p is in use: $(printf '%s' "$who" | head -n1)"; problems=1
-    else say "  :$p free (or already the Core's)"; fi
+    else info ":$p free (or already the Core's)"; fi
   done
-  say "  Reachability of :443/:80 from the internet cannot be tested from here: ACME issuance below proves it."
+  info "Reachability of :443/:80 from the internet cannot be tested from here: the certificate order below proves it."
   [ "$problems" = 0 ] && return 0
   [ "$DRY" = 1 ] && { warn "checks failed (dry run continues)"; return 0; }
   [ -z "$CONFIG" ] && yes_no "Continue anyway? (the certificate will fail until DNS is right)" && return 0
@@ -171,9 +223,11 @@ stage_binaries() {
       citadel_src=$ROOT/modules/citadel/target/release
     fi
   else src=$A_BINARY_DIR; fi
-  STAGE=$(mktemp -d); trap 'rm -rf "$STAGE"' EXIT
+  STAGE=$(mktemp -d)
+  # shellcheck disable=SC2016 # the string is eval'd at exit, when $STAGE is known
+  if [ "$GUIDED" = 1 ]; then ui_clean_add 'rm -rf "$STAGE"'; else trap 'rm -rf "$STAGE"' EXIT; fi
   for n in ainkrad-core-server ainkradctl ainkrad-runner ainkrad-ptyhost; do
-    if [ -f "$src/$n" ]; then cp "$src/$n" "$STAGE/$n"; chmod 0755 "$STAGE/$n"; say "  $n sha256 $(sha "$STAGE/$n")"
+    if [ -f "$src/$n" ]; then cp "$src/$n" "$STAGE/$n"; chmod 0755 "$STAGE/$n"; info "$n sha256 $(sha "$STAGE/$n")"
     elif [ "$n" = ainkrad-core-server ] && [ "$DRY" = 0 ]; then die "no $n in $src"
     else warn "$n: not in $src (skipped; every signed release ships it, so a release installed with scripts/release/install.sh has it)"; fi
   done
@@ -208,7 +262,7 @@ harden() {
   firewall_decide # what will stop being reachable, BEFORE any consent below
   [ -n "$CONFIG" ] || [ "$DRY" = 1 ] || [ "$GUIDED" = 1 ] || yes_no "Apply it now?" || { say "  skipped"; return 0; }
   HARDEN_WARN=$STAGE/harden.warn HARDEN_STATE=$STAGE/harden.state
-  run env AINKRAD_SSH_FROM="$A_SSH_FROM" AINKRAD_FIREWALL="$FW_CHOICE" AINKRAD_NOTICE_SHOWN=1 \
+  RUN_PLAIN=1 run env AINKRAD_SSH_FROM="$A_SSH_FROM" AINKRAD_FIREWALL="$FW_CHOICE" AINKRAD_NOTICE_SHOWN=1 \
     AINKRAD_HARDEN_WARN="$HARDEN_WARN" AINKRAD_HARDEN_STATE="$HARDEN_STATE" bash "$ROOT/scripts/host/harden.sh"
 }
 
@@ -216,12 +270,18 @@ install_core() {
   step "Core: user, binary, unit, home"
   local out prev_env tls=$CORE_HOME/tls dry=()
   [ "$DRY" = 1 ] && dry=(--dry-run)
-  out=$(bash "$ROOT/deploy/install-core-linux.sh" --binary "$STAGE/ainkrad-core-server" ${dry[@]+"${dry[@]}"} | tee -a "$([ "$GUIDED$DRY" = 10 ] && echo /dev/null || echo /dev/stderr)") # -a: on Linux a plain tee reopens a redirected stderr file and truncates it
+  if [ "$GUIDED$DRY" = 10 ]; then
+    out=''
+    ui_run "Creating the service account, the Core's home (keys, database) and its service" bash "$ROOT/deploy/install-core-linux.sh" --binary "$STAGE/ainkrad-core-server" ||
+      die "creating the Core's home failed"
+  else
+    out=$(bash "$ROOT/deploy/install-core-linux.sh" --binary "$STAGE/ainkrad-core-server" ${dry[@]+"${dry[@]}"} | tee -a /dev/stderr) # -a: on Linux a plain tee reopens a redirected stderr file and truncates it
+  fi
   # The signer's fingerprint, base64url(SHA-256(SPKI)) as `init` prints it, from the key itself (so a re-run has it).
   SIGNER=''
   [ "$DRY" = 1 ] || SIGNER=$(openssl pkey -inform DER -in "$CORE_HOME/keys/backup-signing.p8" -pubout -outform DER |
     openssl dgst -sha256 -binary | base64 | tr '+/' '-_' | tr -d '=')
-  printf '%s\n' "$out" | grep -qxF "$SIGNER" || [ "$DRY" = 1 ] || say "  (home kept; signer fingerprint derived from its key)"
+  printf '%s\n' "$out" | grep -qxF "$SIGNER" || [ "$DRY" = 1 ] || [ "$GUIDED" = 1 ] || say "  (home kept; signer fingerprint derived from its key)"
   # The Core keeps one ACME account and certificate in tls/ whatever the directory: a switch between staging
   # and production must start a fresh tls/ (the old one is kept beside it).
   prev_env=$(env_get AINKRAD_ACME_ENV)
@@ -275,7 +335,7 @@ AINKRAD_BACKUP_SECRET_KEY=$A_BACKUP_SECRET_KEY" "$(printf '%s\n' "$body" | sed "
 AINKRAD_BACKUP_SECRET_KEY=$(mask "$A_BACKUP_SECRET_KEY")" ;;
     keep) [ "$DRY" = 1 ] || [ -s "$ETC/backup.env" ] || die "BACKUP=keep but there is no $ETC/backup.env"
       say "  $ETC/backup.env kept as it is (not read, not printed)" ;;
-    local) say "  no bucket: encrypted snapshots stay in $CORE_HOME/backups only" ;;
+    local) info "no bucket: encrypted snapshots stay in $CORE_HOME/backups only" ;;
   esac
   [ "$DRY" = 1 ] || ! command -v systemd-analyze >/dev/null || systemd-analyze calendar "$A_BACKUP_SCHEDULE" >/dev/null ||
     die "BACKUP_SCHEDULE '$A_BACKUP_SCHEDULE' is not a systemd calendar expression"
@@ -303,6 +363,11 @@ start_core() {
   run systemctl restart ainkrad-core.service
   [ -z "$tm" ] || run systemctl restart ainkrad-backup.timer
   [ "$DRY" = 1 ] && return 0
+  if [ "$GUIDED" = 1 ]; then
+    cert_wait || { ui_warn "The Core's own log says:"; journalctl -u ainkrad-core -n 12 --no-pager 2>&1 | ui_clean_lines | cut -c1-"$((UI_W - 6))" | sed 's/^/     /' >&2; die "the Core did not become healthy within 4 minutes: check that $A_HOSTNAME points at this machine and that your cloud firewall allows inbound TCP 443 (the Core log is above)"; }
+    ui_ok "The certificate was issued and the Core answers over HTTPS"
+    return 0
+  fi
   say "  waiting for https://$A_HOSTNAME/healthz (the first certificate can take a minute)..."
   local end=$((SECONDS + 240))
   until health >/dev/null 2>&1; do
@@ -458,6 +523,7 @@ uninstall() {
   fi
   say "  Kept: $ETC/backup.env (the bucket key: remove it yourself when retiring the host), the bucket and every
   object in it, the ainkrad / ainkrad-runner users, the firewall.$([ "$PURGE" = 1 ] || echo " Data kept in $CORE_HOME (--purge removes it).")"
+  run rm -rf "$INSTALLER_SAVED"
   [ "$DRY" = 1 ] || { say "  TCP listeners now:"; ss -Hltn | awk '{print "    " $4}'; }
 }
 
@@ -467,6 +533,7 @@ main() {
       --config) CONFIG=${2:?}; shift 2 ;;
       --binary) CLI_BINARY=${2:?}; shift 2 ;;
       --dry-run) DRY=1; shift ;;
+      --demo) DEMO=1; shift ;;
       --harden) HARDEN_REQ=yes; shift ;;
       --guided) GUIDED=1; shift ;;
       --wizard) GUIDED=-1; shift ;;
@@ -474,12 +541,16 @@ main() {
       --purge) PURGE=1; shift ;;
       --check) MODE=check; shift ;;
       --backup) CHECK_BACKUP=${2:?}; valid_selftest "$CHECK_BACKUP" || die "--backup local|bucket"; shift 2 ;;
-      -h | --help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-      *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+      -h | --help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+      *) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
     esac
   done
   case ${AINKRAD_HARDEN:-} in '' | yes | no) [ -n "$HARDEN_REQ" ] || HARDEN_REQ=${AINKRAD_HARDEN:-} ;; # the --harden flag wins over the variable
  *) die "AINKRAD_HARDEN must be yes or no (got '$AINKRAD_HARDEN')" ;; esac
+  if [ -n "$DEMO" ]; then
+    # shellcheck source=scripts/install/demo.sh
+    . "$ROOT/scripts/install/demo.sh"; demo_main; return 3
+  fi
   case $MODE in
     uninstall) uninstall; return ;;
     check)
@@ -492,7 +563,10 @@ main() {
   # No answers file and no --wizard: the guided install is the default.
   if [ -n "$CONFIG" ] || [ "$GUIDED" = -1 ]; then GUIDED=0; else GUIDED=1; fi
   if [ "$GUIDED" = 1 ]; then
-    ui_init; guided_banner; guided_answers; apply_harden_req; check_answers || die "invalid answers"
+    ui_init; ui_box_init; ui_traps
+    if [ "${AINKRAD_FROM_GET:-}" = 1 ]; then UI_STATE="The Core programs are in /usr/local/bin; nothing else is set up yet."; fi
+    guided_banner; guided_answers; apply_harden_req
+    check_answers || die "an answer is not valid (see the line just above this card); fix it and run again"
   elif [ -n "$CONFIG" ]; then
     parse_answers "$CONFIG" || die "fix the answers file above"
     [ -z "$CLI_BINARY" ] || A_BINARY_DIR=$CLI_BINARY
@@ -507,9 +581,12 @@ main() {
   if [ "$GUIDED" = 1 ]; then guided_backup_key; else review; fi
   [ -n "$CONFIG" ] || [ "$DRY" = 1 ] || [ "$GUIDED" = 1 ] || yes_no "Install with these answers?" || die "aborted, nothing changed"
   [ "$DRY" = 0 ] || say "(dry run: the commands below are printed, not run)"
+  UI_STATE="The Core programs are in /usr/local/bin; nothing else is set up yet."
   checks
   stage_binaries
   harden
+  [ "$GUIDED$DRY" != 10 ] || [ "${AINKRAD_FROM_GET:-}" != 1 ] || save_installer
+  UI_STATE="Setting up: the service account, the Core's home or its unit may exist. Running the installer again is safe; $(removal_hint)"
   install_core
   install_citadel
   install_backup
@@ -523,6 +600,7 @@ main() {
     guided_invite || rc=$?
     guided_summary "$rc"
     [ "$rc" != 0 ] || [ -z "$INVITE" ] || guided_show_invite
+    guided_next_steps "$rc"
     [ "$rc" != 2 ] || rc=0 # no terminal: deliberately no invite, the command to run is printed; the install itself succeeded
     return "$rc"
   fi

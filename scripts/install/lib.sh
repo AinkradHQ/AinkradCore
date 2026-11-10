@@ -32,6 +32,9 @@ valid_hostname() { # a DNS name of two or more labels; not an IP address
 valid_ipv4() {
   match "$1" '^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$'
 }
+valid_ipv6() { # a plain IPv6 literal (hex digits and colons only, at least two colons, no :::): never a glob or a control character
+  match "$1" '^[0-9a-fA-F:]{2,45}$' && case $1 in *:::* | '') false ;; *:*:*) true ;; *) false ;; esac
+}
 valid_port() { match "$1" '^[1-9][0-9]{0,4}$' && [ "$1" -le 65535 ]; }
 valid_https_url() { # https://host[:port][/path], no userinfo, query or spaces
   local rest host port
