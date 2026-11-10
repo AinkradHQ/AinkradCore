@@ -1,4 +1,7 @@
 //! The order on a connection: peer first, then the deadline and the size caps, then the parse.
+// The helper is Linux only (SO_PEERCRED, systemd): on other hosts these tests do not exist.
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use std::io::{Read, Write};

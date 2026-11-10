@@ -1,6 +1,9 @@
 //! Live checks against the real `systemctl` and `journalctl`. They need root and a running systemd,
 //! so they skip themselves anywhere else (`cargo test` stays green for everyone); on a throwaway
 //! host run them as root: `sudo -E cargo test -p ainkrad-host --test root`.
+// The helper is Linux only (SO_PEERCRED, systemd): on other hosts these tests do not exist.
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use common::*;

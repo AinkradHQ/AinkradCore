@@ -18,6 +18,8 @@ const MAX_BYTES: u64 = 256 * 1024;
 /// A repeated request id inside this window returns the stored answer.
 pub const DEDUPE_SECS: u64 = 600;
 const DEDUPE_KEEP: usize = 64;
+/// How far ahead of the clock a stored timestamp may be before it counts as a clock step back.
+pub const SKEW: u64 = 60;
 
 /// `(min seconds between two, window seconds, max inside the window)`.
 pub fn policy(action: &str) -> (u64, u64, usize) {
@@ -50,17 +52,26 @@ impl Limits {
     pub fn dedupe(&self, id: &str, now: u64) -> Option<&Done> {
         self.done
             .iter()
-            .find(|d| d.id == id && now.saturating_sub(d.at.min(now)) < DEDUPE_SECS)
+            .find(|d| d.id == id && d.at <= now + SKEW && now.saturating_sub(d.at) < DEDUPE_SECS)
     }
 
     /// `Err(retry_after)` when `action` may not run now.
+    ///
+    /// Clock choice: a timestamp more than [`SKEW`] seconds ahead of `now` means the clock stepped
+    /// back. Waiting for it would lock restarts out for as long as the step, so such entries are
+    /// dropped: the limit restarts from the new clock. Only root can step the clock, and the cost
+    /// is at most one extra burst of restarts. A little skew (up to `SKEW`) counts as "now".
     pub fn check(&self, action: &str, now: u64) -> Result<(), u64> {
         let (gap, window, max) = policy(action);
-        // A timestamp from the future (the clock stepped back) counts as now.
         let times: Vec<u64> = self
             .restarts
             .get(action)
-            .map(|t| t.iter().map(|t| (*t).min(now)).collect())
+            .map(|t| {
+                t.iter()
+                    .filter(|t| **t <= now + SKEW)
+                    .map(|t| (*t).min(now))
+                    .collect()
+            })
             .unwrap_or_default();
         let mut wait = 0;
         if let Some(last) = times.iter().max() {
@@ -74,17 +85,20 @@ impl Limits {
         if wait > 0 { Err(wait) } else { Ok(()) }
     }
 
-    /// Records an accepted restart, and forgets what no window or dedupe can still see.
+    /// Records an accepted restart, and forgets what no window or dedupe can still see (and any
+    /// entry from the future, see [`Limits::check`]). The caller calls `mark_failed` if the record
+    /// cannot be logged or the restart fails.
     pub fn record(&mut self, id: &str, action: &str, now: u64) {
         self.v = 1;
+        for times in self.restarts.values_mut() {
+            times.retain(|t| *t <= now + SKEW && now.saturating_sub(*t) < 600);
+        }
         self.restarts
             .entry(action.to_owned())
             .or_default()
             .push(now);
-        for times in self.restarts.values_mut() {
-            times.retain(|t| now.saturating_sub(*t) < 600);
-        }
-        self.done.retain(|d| now.saturating_sub(d.at) < DEDUPE_SECS);
+        self.done
+            .retain(|d| d.at <= now + SKEW && now.saturating_sub(d.at) < DEDUPE_SECS);
         self.done.push(Done {
             id: id.to_owned(),
             action: action.to_owned(),

@@ -149,6 +149,7 @@ fn bin_dir_safe(ctx: &Ctx) -> bool {
 /// One unit's `systemctl show`: `None` when systemctl cannot be run at all.
 fn unit(ctx: &Ctx, name: &str) -> Option<BTreeMap<String, String>> {
     let args = [
+        "--no-ask-password".to_owned(),
         "show".to_owned(),
         "-p".to_owned(),
         "ActiveState,SubState,ActiveEnterTimestamp,NRestarts,LoadState".to_owned(),

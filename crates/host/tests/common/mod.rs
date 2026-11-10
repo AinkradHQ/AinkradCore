@@ -47,7 +47,7 @@ impl Fake {
     pub fn restarts(&self) -> usize {
         self.argv()
             .iter()
-            .filter(|a| a.get(1).map(String::as_str) == Some("restart"))
+            .filter(|a| a.get(2).map(String::as_str) == Some("restart"))
             .count()
     }
     pub fn clear(&self) {
@@ -79,7 +79,9 @@ impl Exec for Shared {
             })
         };
         match (prog, args.first().map(String::as_str)) {
-            (SYSTEMCTL, Some("show")) => {
+            (SYSTEMCTL, Some("--no-ask-password"))
+                if args.get(1).map(String::as_str) == Some("show") =>
+            {
                 let unit = args.last().unwrap();
                 let load = f
                     .loaded
@@ -177,6 +179,10 @@ impl Fx {
             fake,
             clock,
         }
+    }
+
+    pub fn clear_reads(&self) {
+        let _ = std::fs::remove_file(self.state().join("reads.json"));
     }
 
     pub fn state(&self) -> PathBuf {

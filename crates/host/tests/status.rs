@@ -1,4 +1,7 @@
 //! `status`: versions from the manifest, files checked and hashed but never run.
+// The helper is Linux only (SO_PEERCRED, systemd): on other hosts these tests do not exist.
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use std::os::unix::fs::PermissionsExt;
@@ -68,15 +71,16 @@ fn versions_come_from_the_manifest_and_nothing_installed_is_run() {
     for (prog, args) in calls.iter() {
         assert_eq!(prog, "/usr/bin/systemctl");
         assert_eq!(
-            &args[..3],
+            &args[..4],
             [
+                "--no-ask-password",
                 "show",
                 "-p",
                 "ActiveState,SubState,ActiveEnterTimestamp,NRestarts,LoadState"
             ]
         );
     }
-    let units: Vec<&str> = calls.iter().map(|(_, a)| a[3].as_str()).collect();
+    let units: Vec<&str> = calls.iter().map(|(_, a)| a[4].as_str()).collect();
     assert_eq!(
         units,
         [

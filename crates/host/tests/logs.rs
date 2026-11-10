@@ -1,4 +1,7 @@
 //! `logs`: fixed argv, the cursor, paging, and redaction of what comes back.
+// The helper is Linux only (SO_PEERCRED, systemd): on other hosts these tests do not exist.
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use ainkrad_proto::redact::PLANTED;
@@ -34,6 +37,7 @@ fn the_argv_is_fixed_and_the_cursor_is_one_element() {
             "-o",
             "json",
             "--no-pager",
+            "--output-fields=MESSAGE,PRIORITY",
             "-n",
             "201"
         ])
@@ -46,6 +50,7 @@ fn the_argv_is_fixed_and_the_cursor_is_one_element() {
             "-o",
             "json",
             "--no-pager",
+            "--output-fields=MESSAGE,PRIORITY",
             "-n",
             "6"
         ])
@@ -58,6 +63,7 @@ fn the_argv_is_fixed_and_the_cursor_is_one_element() {
             "-o",
             "json",
             "--no-pager",
+            "--output-fields=MESSAGE,PRIORITY",
             "-n",
             "501",
             "-r",
@@ -266,7 +272,7 @@ fn the_answer_stays_under_the_wire_cap_and_pages_on() {
     put(
         &fx,
         (0..500)
-            .map(|i| json!(format!("{i}:{}", "w".repeat(3000))))
+            .map(|i| json!(format!("{i}:{}", "w ".repeat(1500))))
             .collect(),
     );
     let v = fx.call("logs", r#"{"unit":"core","lines":500}"#);

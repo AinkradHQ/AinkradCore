@@ -1,9 +1,17 @@
 //! Restart actions: rate limits, dedupe, the lock, fail-closed state, and the log.
+// The helper is Linux only (SO_PEERCRED, systemd): on other hosts these tests do not exist.
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use common::*;
 
-const CORE: [&str; 3] = ["--no-block", "restart", "ainkrad-core.service"];
+const CORE: [&str; 4] = [
+    "--no-block",
+    "--no-ask-password",
+    "restart",
+    "ainkrad-core.service",
+];
 
 #[test]
 fn restart_core_runs_one_fixed_argv_and_answers_accepted() {
@@ -77,9 +85,14 @@ fn restart_runner_needs_the_runner_installed_and_allows_six_per_ten_minutes() {
     );
     assert!(
         fx.fake.argv().contains(
-            &["--no-block", "restart", "ainkrad-runner.service"]
-                .map(String::from)
-                .to_vec()
+            &[
+                "--no-block",
+                "--no-ask-password",
+                "restart",
+                "ainkrad-runner.service"
+            ]
+            .map(String::from)
+            .to_vec()
         )
     );
 }
@@ -93,7 +106,8 @@ fn a_repeated_id_returns_the_stored_result_and_does_nothing_again() {
     let second = fx.send(&fx.line(&id, "restart_core", "{}"));
     assert_eq!(first, second);
     assert_eq!(fx.fake.restarts(), 1);
-    assert!(fx.log().contains(" deduped restart_core "));
+    // A deduped repeat goes to the journal only, so a flood of repeats cannot fill a file.
+    assert!(!fx.log().contains(" deduped "));
     // The same id for another action is not a repeat.
     let other = fx.send(&fx.line(&id, "restart_runner", "{}"));
     assert_eq!(other["code"], "bad_request");
@@ -110,7 +124,7 @@ fn reads_are_never_deduped() {
     for _ in 0..2 {
         assert_eq!(fx.send(&fx.line(&id, "status", "{}"))["ok"], true);
     }
-    let shows = fx.fake.argv().iter().filter(|a| a[0] == "show").count();
+    let shows = fx.fake.argv().iter().filter(|a| a[1] == "show").count();
     assert_eq!(shows, 6, "three units, twice");
 }
 
@@ -119,9 +133,11 @@ fn a_failed_systemctl_is_failed_and_a_repeat_says_so() {
     let fx = Fx::new();
     *fx.fake.restart_fails.lock().unwrap() = true;
     let id = fx.id();
+    // The answer is written before systemctl runs, so the first call says accepted (F8) and the
+    // failure shows up in the log and on a repeat.
     assert_eq!(
-        fx.send(&fx.line(&id, "restart_core", "{}"))["code"],
-        "failed"
+        fx.send(&fx.line(&id, "restart_core", "{}"))["result"]["accepted"],
+        true
     );
     assert_eq!(
         fx.send(&fx.line(&id, "restart_core", "{}"))["code"],
@@ -193,12 +209,26 @@ fn an_unwritable_limits_file_or_log_fails_closed_before_anything_runs() {
     assert_eq!(fx.call("status", "{}")["ok"], true, "reads still work");
     std::fs::remove_dir(fx.state().join("limits.json.tmp")).unwrap();
 
-    // No unlogged root action: an actions.log that cannot be appended refuses a restart.
-    let _ = std::fs::remove_file(fx.state().join("actions.log"));
-    std::fs::create_dir(fx.state().join("actions.log")).unwrap();
-    let v = fx.call("restart_core", "{}");
+    // No unlogged root action: a root-action log that cannot be appended refuses a restart, and
+    // the limits record of that id must not read "accepted" afterwards (F5).
+    std::fs::create_dir(fx.state().join("mutations.log")).unwrap();
+    let id = fx.id();
+    let v = fx.send(&fx.line(&id, "restart_core", "{}"));
     assert_eq!(v["code"], "state_unavailable");
     assert_eq!(fx.fake.restarts(), 0);
+    let again = fx.send(&fx.line(&id, "restart_core", "{}"));
+    assert_eq!(
+        again["code"], "failed",
+        "a repeat must not claim it was accepted: {again}"
+    );
+    assert_eq!(fx.fake.restarts(), 0);
+    // The shared actions.log is a convenience: it failing alone does not refuse a restart.
+    std::fs::remove_dir(fx.state().join("mutations.log")).unwrap();
+    fx.at(120);
+    let _ = std::fs::remove_file(fx.state().join("actions.log"));
+    std::fs::create_dir(fx.state().join("actions.log")).unwrap();
+    assert_eq!(fx.call("restart_core", "{}")["ok"], true);
+    assert_eq!(fx.fake.restarts(), 1);
 }
 
 #[test]

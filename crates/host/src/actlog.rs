@@ -1,6 +1,10 @@
 //! `actions.log`: every mutating action and every refusal, never a successful read. Capped at
 //! 1 MiB, then rotated to `actions.log.1` (the current file and one previous generation).
 //!
+//! Refusals can be produced in bulk by uid `ainkrad`, so they could rotate a real record away.
+//! The records of root actions (`accepted`, `failed`) therefore also go to `mutations.log`, which
+//! only a rate-limited restart can write, and to stderr (the journal) from `lib.rs`.
+//!
 //! A line is `<seq> <unix-seconds> <result> <action> <fields>`. Only validated values go in:
 //! registry action names, ULIDs, device ids, numbers and codes. Request text is never copied, so
 //! a client cannot forge or inject a line.
@@ -14,6 +18,8 @@ use crate::state;
 
 pub const FILE: &str = "actions.log";
 pub const PREVIOUS: &str = "actions.log.1";
+/// Root actions only; refusals cannot rotate it.
+pub const MUTATIONS: &str = "mutations.log";
 pub const MAX_BYTES: u64 = 1024 * 1024;
 const LOCK: &str = "actions.lock";
 
@@ -51,11 +57,17 @@ fn last_seq(path: &Path) -> Option<u64> {
 /// its own (`actions.lock`), so concurrent instances neither repeat a sequence number nor race
 /// the rotation. An error means the line was not written.
 pub fn append(dir: &Path, line: &Line) -> io::Result<()> {
+    append_to(dir, FILE, line)
+}
+
+/// [`append`] to the log called `name` (rotated to `name.1`).
+pub fn append_to(dir: &Path, name: &str, line: &Line) -> io::Result<()> {
     let lock = state::open_lock(dir, LOCK)?;
     lock.lock()?;
-    let path = dir.join(FILE);
+    let path = dir.join(name);
+    let previous = dir.join(format!("{name}.1"));
     let seq = last_seq(&path)
-        .or_else(|| last_seq(&dir.join(PREVIOUS)))
+        .or_else(|| last_seq(&previous))
         .map_or(1, |s| s + 1);
     let text = format!(
         "{seq} {} {} {} {}\n",
@@ -63,7 +75,7 @@ pub fn append(dir: &Path, line: &Line) -> io::Result<()> {
     );
     let size = std::fs::symlink_metadata(&path).map_or(0, |m| m.len());
     if size > 0 && size + text.len() as u64 > MAX_BYTES {
-        std::fs::rename(&path, dir.join(PREVIOUS))?;
+        std::fs::rename(&path, &previous)?;
     }
     let mut f = OpenOptions::new()
         .append(true)

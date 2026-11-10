@@ -101,3 +101,112 @@ fn redaction_happens_before_the_cut() {
     assert_eq!(cap("é".repeat(5), 3), "é…", "on a character boundary");
     assert_eq!(cap("short".into(), 10), "short");
 }
+
+#[test]
+fn spaces_around_the_separator_escaped_quotes_and_host_words() {
+    assert_eq!(
+        one("password = hunter2 next"),
+        "password = [redacted:password] next"
+    );
+    assert_eq!(
+        one("x \"token\" : \"abc def\" y"),
+        "x \"token\" : [redacted:token] y"
+    );
+    assert_eq!(one("secret\t=\tvalue"), "secret\t=\t[redacted:secret]");
+    // JSON that was itself put inside a string: escaped quotes around key and value.
+    assert_eq!(
+        one(r#"body={\"token\":\"ab\\\"c\",\"n\":1}"#),
+        r#"body={\"token\":[redacted:token],\"n\":1}"#
+    );
+    // A quoted value with an escaped quote inside.
+    assert_eq!(
+        one(r#"password:"a\"b" ok"#),
+        r#"password:[redacted:password] ok"#
+    );
+    // Host-only words (the shared pass is unchanged).
+    assert_eq!(
+        one("pwd=abc123 pass: xyz"),
+        "pwd=[redacted:pwd] pass: [redacted:pass]"
+    );
+    assert_eq!(
+        one("Cookie: sid=1; other=2 trailing\nnext"),
+        "Cookie: [redacted:Cookie]\nnext"
+    );
+    assert_eq!(
+        one("Set-Cookie: a=b; Path=/"),
+        "Set-Cookie: [redacted:Set-Cookie]"
+    );
+    assert_eq!(one("bypass=1 compass: n"), "bypass=1 compass: n");
+    assert_eq!(
+        one("dial postgres://app:s3cret@db:5432/x and https://example.org/p"),
+        "dial postgres://app:[redacted:url_password]@db:5432/x and https://example.org/p"
+    );
+    assert_eq!(one("see http://host:8080/a@b"), "see http://host:8080/a@b");
+}
+
+#[test]
+fn the_shared_name_pass_is_not_changed_by_the_host_words() {
+    use ainkrad_proto::redact::names::secret_name;
+    for w in ["cookie", "pass", "pwd", "passphrase"] {
+        assert!(!secret_name(w), "{w} stays a host-only word");
+    }
+}
+
+#[test]
+fn an_end_without_a_begin_masks_back_to_the_start_of_the_page() {
+    let mut page: Vec<String> = [
+        "tail of a body",
+        "more body",
+        "-----END RSA PRIVATE KEY-----",
+        "later",
+        "-----BEGIN X-----",
+        "y",
+    ]
+    .map(String::from)
+    .to_vec();
+    pem_across(&mut page);
+    let out: Vec<&str> = page.iter().map(String::as_str).collect();
+    assert_eq!(out, [PEM, PEM, PEM, "later", PEM, PEM]);
+}
+
+#[test]
+fn the_last_begin_and_end_decide_and_a_second_block_in_one_entry_keeps_masking() {
+    let mut page: Vec<String> = [
+        "-----BEGIN A-----x-----END A----- mid -----BEGIN B-----",
+        "body of b",
+        "-----END B----- after",
+        "plain",
+    ]
+    .map(String::from)
+    .to_vec();
+    pem_across(&mut page);
+    assert_eq!(page[1], PEM, "B is still open");
+    assert_eq!(page[2], PEM);
+    assert_eq!(page[3], "plain");
+    // END before BEGIN in one entry: the first block closes, the second opens.
+    let mut page = vec![
+        "-----END A----- z -----BEGIN B-----".to_owned(),
+        "x".to_owned(),
+    ];
+    pem_across(&mut page);
+    assert_eq!(page, [PEM, PEM]);
+}
+
+#[test]
+fn long_prefixed_and_base64url_runs_are_masked() {
+    let std64 = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj";
+    let url = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us-cKj_";
+    let long = format!("{std64}{std64}{std64}");
+    assert_eq!(one(&format!("app[12]: {std64}")), format!("app[12]: {PEM}"));
+    assert_eq!(one(url), PEM);
+    assert_eq!(one(&long), PEM);
+    assert_eq!(one(&format!("{std64}==")), PEM);
+    assert_eq!(
+        one("--------------------------------------------------------------------"),
+        "-".repeat(68)
+    );
+    assert_eq!(
+        one("/usr/lib/x86_64-linux-gnu/some/dir/file.so loaded"),
+        "/usr/lib/x86_64-linux-gnu/some/dir/file.so loaded"
+    );
+}
