@@ -97,13 +97,21 @@ guided_backup_key() {
 guided_invite() {
   local out
   INVITE=''
-  [ "$DRY" = 0 ] || { say "  (dry run) would run: $BIN/ainkrad-core-server pairing-invite $CORE_HOME/core.db owner"; return 0; }
-  out=$(runuser -u ainkrad -- bash -c "set -a; . $ETC/core.env; set +a; exec $BIN/ainkrad-core-server pairing-invite $CORE_HOME/core.db owner" 2>/dev/null) || out=''
+  [ "$DRY" = 0 ] || { say "  (dry run) would run: $BIN/ainkrad-core-server pairing-invite $CORE_HOME/core.db $A_HOSTNAME owner"; return 0; }
+  # <host> is required (the Core does not store its public host); the Core listens on 443 here, so no :port. stderr is
+  # folded in to classify a refusal; only the line that is the link is ever kept.
+  # No core.env here: the command needs only the db and the host (and sourcing that file as shell breaks on its flags).
+  out=$(runuser -u ainkrad -- "$BIN/ainkrad-core-server" pairing-invite "$CORE_HOME/core.db" "$A_HOSTNAME" owner 2>&1) || out="REFUSED:$out"
   case $out in
-    ainkrad://connect\?*host=*fp=*secret=*) INVITE=$(printf '%s\n' "$out" | grep -m1 '^ainkrad://connect?') ;;
-    *) printf '   %s! the installed ainkrad-core-server has no working pairing-invite command%s\n' "$YL" "$R" >&2
-       say "     The Core is installed and running, but this release cannot make the connect link yet. Install a release that has"
-       say "     'pairing-invite', then run:  sudo -u ainkrad $BIN/ainkrad-core-server pairing-invite $CORE_HOME/core.db owner"
+    *ainkrad://connect\?*host=*fp=*secret=*) INVITE=$(printf '%s\n' "$out" | grep -m1 '^ainkrad://connect?') ;;
+    REFUSED:*[Dd]evice*)
+      printf '   %s! this Core already has a paired device, so it will not make a first-owner link%s\n' "$YL" "$R" >&2
+      say "     The Core is installed and running. Add more devices from the Mac app that owns it; to start over on this machine,"
+      say "     run this installer with --uninstall --purge first."
+      return 1 ;;
+    *) printf '   %s! the installed ainkrad-core-server could not make the connect link%s\n' "$YL" "$R" >&2
+       say "     The Core is installed and running. This release may predate 'pairing-invite'. With a newer one, run:"
+       say "       sudo -u ainkrad $BIN/ainkrad-core-server pairing-invite $CORE_HOME/core.db $A_HOSTNAME owner"
        return 1 ;;
   esac
 }
