@@ -91,7 +91,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-core"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "ainkrad-core-fuzz"
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-core-server"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "age",
  "ainkrad-core",
@@ -142,7 +142,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-proto"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "schemars",
  "serde",
@@ -151,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-term"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "vt100",
 ]
