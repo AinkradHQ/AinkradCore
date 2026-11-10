@@ -39,6 +39,7 @@ pub(super) async fn paired(
         created_by: None,
         bootstrap: false,
         recovery: false,
+        invite: false,
     };
     let now =
         ainkrad_core_server::scheduler::Clock::unix(&ainkrad_core_server::scheduler::SystemClock);

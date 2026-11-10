@@ -19,6 +19,11 @@ use crate::store::{audit, begin_write};
 pub const PAIRING_SECS: i64 = 300;
 /// Live pairings at once.
 pub const MAX_LIVE: i64 = 3;
+/// Live invites at once (they have no expiry, so they are counted apart from `MAX_LIVE`).
+pub const MAX_INVITES: i64 = 10;
+/// An invite's `expires_at`: ISO strings compare as text, so it is after every `now` and the
+/// scheduler's sweep (`expires_at <= now`) never reaches it.
+pub const NEVER: &str = "9999-12-31T23:59:59.999Z";
 
 /// A pairing row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +38,9 @@ pub struct Pairing {
     pub bootstrap: bool,
     /// The host's `recover` (§12): like a bootstrap, but whatever devices exist.
     pub recovery: bool,
+    /// An invite: claimable over the network by the QR secret only, no expiry, enrolled
+    /// active at the claim (§7.3). The host's invite is also a `bootstrap`.
+    pub invite: bool,
     pub created_at: String,
     pub expires_at: String,
     /// `live`, `claimed`, `approved`, `rejected`, `expired` or `burned`.
@@ -51,6 +59,7 @@ fn pairing(row: SqliteRow) -> Result<Pairing, Error> {
         created_by: row.try_get("created_by")?,
         bootstrap: row.try_get::<i64, _>("bootstrap")? == 1,
         recovery: row.try_get::<i64, _>("bootstrap")? == 2,
+        invite: row.try_get::<i64, _>("invite")? == 1,
         created_at: row.try_get("created_at")?,
         expires_at: row.try_get("expires_at")?,
         status: row.try_get("status")?,
@@ -59,8 +68,8 @@ fn pairing(row: SqliteRow) -> Result<Pairing, Error> {
     })
 }
 
-const COLUMNS: &str = "id, kind, name, scopes, created_by, bootstrap, created_at, expires_at, \
-                       status, device_id, sas";
+const COLUMNS: &str = "id, kind, name, scopes, created_by, bootstrap, invite, created_at, \
+                       expires_at, status, device_id, sas";
 
 /// Appends `action` about a pairing; the entity is its device's row when it has one.
 async fn append(
@@ -124,6 +133,9 @@ pub struct NewPairing<'a> {
     pub bootstrap: bool,
     /// A `recover` pairing (§12): host-socket only, whatever devices exist.
     pub recovery: bool,
+    /// An invite (§7.3). The host's is also a `bootstrap` (set both): refused once a device
+    /// exists, and a new one burns the host's unclaimed one.
+    pub invite: bool,
 }
 
 /// A created pairing: its credentials, shown once and kept only as hashes.
@@ -134,6 +146,7 @@ pub struct Created {
     pub code: String,
     /// The QR secret, base64url.
     pub secret: String,
+    /// Unix seconds; 0 for an invite, which never expires.
     pub expires: i64,
 }
 
@@ -148,14 +161,33 @@ pub async fn create_pairing(
     let refuse = |why: &str| Err(Error::InvalidArgument(why.to_owned()));
     let mut tx = begin_write(pool).await?;
     let (now_at, expires) = (iso_of_unix(now), now + PAIRING_SECS);
+    if p.invite && p.recovery {
+        return refuse("a recovery is not an invite");
+    }
+    if p.invite && p.bootstrap {
+        // The host's invite is bootstrap-class: never next to a device (checked below), and a
+        // new one kills the unclaimed old one, so only the newest link works.
+        let old: Vec<String> = sqlx::query_scalar(
+            "UPDATE core_pairings SET status = 'burned' \
+             WHERE invite = 1 AND bootstrap = 1 AND status = 'live' RETURNING id",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        if !old.is_empty() {
+            let details = json!({"pairings": old, "reason": "replaced by a new host invite"});
+            append(&mut tx, AuditActor::System, "pairing.burned", None, details).await?;
+        }
+    }
     let live: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM core_pairings WHERE status = 'live' AND expires_at > ?",
+        "SELECT count(*) FROM core_pairings WHERE status = 'live' AND expires_at > ? \
+         AND invite = ?",
     )
     .bind(&now_at)
+    .bind(i64::from(p.invite))
     .fetch_one(&mut *tx)
     .await?;
-    if live >= MAX_LIVE {
-        return refuse("three pairings are live already");
+    if live >= if p.invite { MAX_INVITES } else { MAX_LIVE } {
+        return refuse("too many pairings are live already");
     }
     if p.bootstrap && any_device(&mut tx).await? {
         return refuse("a device exists: bootstrap is for the first one only");
@@ -163,7 +195,7 @@ pub async fn create_pairing(
     let (id, code, (secret_bytes, secret)) = (random_id("p_"), new_code(), new_secret());
     sqlx::query(
         "INSERT INTO core_pairings (id, code_hash, secret_hash, kind, name, scopes, created_by, \
-         bootstrap, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         bootstrap, invite, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(code_hash(&code).to_vec())
@@ -177,20 +209,25 @@ pub async fn create_pairing(
         (true, false) => 1,
         (false, false) => 0,
     })
+    .bind(i64::from(p.invite))
     .bind(&now_at)
-    .bind(iso_of_unix(expires))
+    .bind(if p.invite {
+        NEVER.to_owned()
+    } else {
+        iso_of_unix(expires)
+    })
     .execute(&mut *tx)
     .await?;
     let details = json!({"pairing": id, "kind": p.kind, "name": p.name.trim(),
         "scopes": p.scopes, "by_device": p.created_by, "bootstrap": p.bootstrap,
-        "recovery": p.recovery});
+        "recovery": p.recovery, "invite": p.invite});
     append(&mut tx, actor, "pairing.created", None, details).await?;
     tx.commit().await?;
     Ok(Created {
         id,
         code,
         secret,
-        expires,
+        expires: if p.invite { 0 } else { expires },
     })
 }
 
@@ -227,10 +264,21 @@ pub struct Claim<'a> {
 }
 
 /// Spends the pairing, inserts the device as `pending` with what the pairing bound, and audits
-/// `pairing.claimed`, in one transaction: all of it or none. `false` when the pairing is no
-/// longer live at `now` (or, for a bootstrap, a device appeared meanwhile).
+/// `pairing.claimed`, in one transaction: all of it or none. An invite is its own approval: the
+/// device is inserted `active`, the pairing becomes `approved`, and the one audit row is
+/// `pairing.approved`; its creator must still stand behind it (active, not revoked, holding its
+/// scopes), else the invite is burned. `false` when the pairing is no longer live at `now`, for
+/// a bootstrap when a device appeared meanwhile, or when an invite's creator no longer stands.
 pub async fn claim_pairing(pool: &SqlitePool, c: &Claim<'_>, now: i64) -> Result<bool, Error> {
     let mut tx = begin_write(pool).await?;
+    // An invite enrols with no approver, so its creator is checked here, in the claim's
+    // transaction: one that was revoked, locked or narrowed since burns the invite.
+    if c.pairing.invite && !creator_stands(&mut tx, c.pairing).await? {
+        let id = Some(c.pairing.created_by.as_deref().unwrap_or_default());
+        burn_invites(&mut tx, id, "its creator no longer stands behind it").await?;
+        tx.commit().await?;
+        return Ok(false);
+    }
     let spent = sqlx::query(
         "UPDATE core_pairings SET status = 'claimed' \
          WHERE id = ? AND status = 'live' AND expires_at > ?",
@@ -253,7 +301,13 @@ pub async fn claim_pairing(pool: &SqlitePool, c: &Claim<'_>, now: i64) -> Result
         key_storage: c.key_storage,
         scopes: &c.pairing.scopes,
     };
-    insert_device(&mut tx, &new, "pending").await?;
+    // An invite is its own approval: the secret was the proof of presence (§7.3).
+    let status = if c.pairing.invite {
+        "active"
+    } else {
+        "pending"
+    };
+    insert_device(&mut tx, &new, status).await?;
     // A passkey pairing is claimed with its credential, anything else without one.
     match (&c.passkey, c.pairing.kind == "passkey") {
         (Some(cred), true) => super::insert_credential(&mut tx, c.device_id, cred).await?,
@@ -266,10 +320,27 @@ pub async fn claim_pairing(pool: &SqlitePool, c: &Claim<'_>, now: i64) -> Result
         .bind(&c.pairing.id)
         .execute(&mut *tx)
         .await?;
-    let details = json!({"pairing": c.pairing.id, "device": c.device_id,
+    let mut details = json!({"pairing": c.pairing.id, "device": c.device_id,
         "platform": c.platform, "key_storage": c.key_storage});
     let d = Some(c.device_id);
-    append(&mut tx, AuditActor::System, "pairing.claimed", d, details).await?;
+    let action = if c.pairing.invite {
+        // The enrolment's one row (§17.32); it carries no credential.
+        details["scopes"] = json!(c.pairing.scopes);
+        details["invite"] = json!(true);
+        details["by_device"] = json!(c.pairing.created_by);
+        decide(
+            &mut tx,
+            &c.pairing.id,
+            "approved",
+            c.pairing.created_by.as_deref(),
+            now,
+        )
+        .await?;
+        "pairing.approved"
+    } else {
+        "pairing.claimed"
+    };
+    append(&mut tx, AuditActor::System, action, d, details).await?;
     tx.commit().await?;
     Ok(true)
 }
@@ -454,12 +525,60 @@ pub async fn expire_pairings(pool: &SqlitePool, now: &str) -> Result<u64, Error>
     Ok(due.len() as u64)
 }
 
-/// Burns every live pairing (the global wrong-claim budget ran out, §7.4), audited as one
-/// `pairing.burned` row naming them all; returns their ids.
+/// Burns the live invites of `creator` (all of them for `None`), audited as one
+/// `pairing.burned` row naming them: an invite outlives nothing that vouched for it.
+pub(crate) async fn burn_invites(
+    conn: &mut SqliteConnection,
+    creator: Option<&str>,
+    reason: &str,
+) -> Result<(), Error> {
+    let burned: Vec<String> = sqlx::query_scalar(
+        "UPDATE core_pairings SET status = 'burned' \
+         WHERE invite = 1 AND status = 'live' AND (?1 IS NULL OR created_by = ?1) RETURNING id",
+    )
+    .bind(creator)
+    .fetch_all(&mut *conn)
+    .await?;
+    if burned.is_empty() {
+        return Ok(());
+    }
+    let details = json!({"pairings": burned, "reason": reason, "creator": creator});
+    append(conn, AuditActor::System, "pairing.burned", None, details).await
+}
+
+/// Burns every live invite (the host's `recover`, whatever devices it keeps).
+pub async fn burn_all_invites(pool: &SqlitePool, reason: &str) -> Result<(), Error> {
+    let mut tx = begin_write(pool).await?;
+    burn_invites(&mut tx, None, reason).await?;
+    tx.commit().await
+}
+
+/// Whether the device that made an invite still stands behind it: active, not revoked, and
+/// holding every scope the invite grants (what `approve_pairing` asks of an approver).
+async fn creator_stands(conn: &mut SqliteConnection, p: &Pairing) -> Result<bool, Error> {
+    let Some(id) = &p.created_by else {
+        return Ok(true);
+    };
+    let row: Option<(String, Option<String>, String)> =
+        sqlx::query_as("SELECT status, revoked_at, scopes FROM core_devices WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&mut *conn)
+            .await?;
+    let Some((status, revoked, scopes)) = row else {
+        return Ok(false);
+    };
+    let held: Vec<String> = serde_json::from_str(&scopes).unwrap_or_default();
+    Ok(status == "active" && revoked.is_none() && p.scopes.iter().all(|s| held.contains(s)))
+}
+
+/// Burns every live pairing but the invites (the global wrong-claim budget ran out, §7.4),
+/// audited as one `pairing.burned` row naming them all; returns their ids. An invite's 128-bit
+/// secret is not guessable, and the burn would only let anyone kill the owner's link.
 pub async fn burn_pairings(pool: &SqlitePool) -> Result<Vec<String>, Error> {
     let mut tx = begin_write(pool).await?;
     let burned: Vec<String> = sqlx::query_scalar(
-        "UPDATE core_pairings SET status = 'burned' WHERE status = 'live' RETURNING id",
+        "UPDATE core_pairings SET status = 'burned' WHERE status = 'live' AND invite = 0 \
+         RETURNING id",
     )
     .fetch_all(&mut *tx)
     .await?;

@@ -95,6 +95,7 @@ src/Ainkrad.Client/Model/EventActorUser.cs
 src/Ainkrad.Client/Model/Handshake.cs
 src/Ainkrad.Client/Model/HandshakeBody.cs
 src/Ainkrad.Client/Model/HandshakeProof.cs
+src/Ainkrad.Client/Model/InviteCreated.cs
 src/Ainkrad.Client/Model/KindAuthMethod.cs
 src/Ainkrad.Client/Model/KindCapability.cs
 src/Ainkrad.Client/Model/KindLimit.cs
@@ -116,6 +117,7 @@ src/Ainkrad.Client/Model/NewChain.cs
 src/Ainkrad.Client/Model/NewChainEntry.cs
 src/Ainkrad.Client/Model/NewConnection.cs
 src/Ainkrad.Client/Model/NewConnectionCredential.cs
+src/Ainkrad.Client/Model/NewInviteBody.cs
 src/Ainkrad.Client/Model/NewLease.cs
 src/Ainkrad.Client/Model/NewLogin.cs
 src/Ainkrad.Client/Model/NewPairingBody.cs

@@ -173,6 +173,8 @@ pub(crate) async fn revoke_in(
         .await?;
     let details = json!({"device": id, "by_device": by_device});
     audit_device(conn, seq, "device.revoked", by, details).await?;
+    // The invites it made die with it (a claim would enrol with no one left to vouch for it).
+    super::pairing::burn_invites(conn, Some(id), "its creator was revoked").await?;
     Ok(true)
 }
 

@@ -15,7 +15,7 @@ use super::types::{Timestamp, ts};
 use super::{ApiError, ApiResult, BY, Caller};
 use crate::api::App;
 use crate::auth::crypto::is_id;
-use crate::auth::pairing::{qr, show_code};
+use crate::auth::pairing::{invite_link, qr, show_code};
 use crate::scheduler::iso_of_unix;
 use crate::store::gov::{self, Decider, Decision, NewPairing, SCOPES};
 
@@ -28,6 +28,25 @@ pub struct NewPairingBody {
     pub kind: String,
     /// What it may do: within the approver's own scopes; a runner gets exactly `runner`.
     pub scopes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NewInviteBody {
+    /// What to call the device that claims it.
+    pub name: String,
+    /// What it may do: within the creator's own scopes.
+    pub scopes: Vec<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct InviteCreated {
+    /// `p_…`: reject it to withdraw the invite.
+    pub pairing_id: Option<String>,
+    /// The QR secret, base64url: shown once.
+    pub secret: Option<String>,
+    /// `ainkrad://connect?host=…&fp=<core_fp>&secret=…`, for a QR code: shown once.
+    pub link: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -157,6 +176,7 @@ pub async fn create(
         created_by: Some(&me.device.id),
         bootstrap: false,
         recovery: false,
+        invite: false,
     };
     let created = gov::create_pairing(&app.pool, &new, BY, app.clock.unix())
         .await
@@ -174,6 +194,58 @@ pub async fn create(
             created.expires,
         )),
         expires_at: Some(ts(&iso_of_unix(created.expires))),
+    }))
+}
+
+#[utoipa::path(post, path = "/api/v1/pairings/invites", operation_id = "createInvite",
+    tag = "pairing", request_body = NewInviteBody,
+    responses((status = 200, description = "An invite: one device claims it over the network \
+        with the link's secret alone and is active at once with these scopes, with no SAS or \
+        approval. It never expires; reject it to withdraw it. The secret and link are shown only \
+        now (audited as `pairing.created`, without them). Needs `admin` and a step-up; the scopes \
+        are within the caller's (403 otherwise); 409 with ten live already", body = InviteCreated)))]
+pub async fn create_invite(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Json(b): Json<NewInviteBody>,
+) -> ApiResult<InviteCreated> {
+    let mut scopes = b.scopes;
+    scopes.sort();
+    scopes.dedup();
+    if b.name.trim().is_empty() || b.name.len() > 100 {
+        return Err(ApiError::bad_request(
+            "a device needs a name, at most 100 bytes",
+        ));
+    }
+    if scopes.is_empty() || scopes.iter().any(|s| !SCOPES.contains(&s.as_str())) {
+        return Err(ApiError::bad_request("name at least one known scope"));
+    }
+    if scopes.iter().any(|s| !me.device.scopes.contains(s)) {
+        return Err(forbidden_scope());
+    }
+    let new = NewPairing {
+        kind: "device",
+        name: &b.name,
+        scopes: &scopes,
+        created_by: Some(&me.device.id),
+        bootstrap: false,
+        recovery: false,
+        invite: true,
+    };
+    let created = gov::create_pairing(&app.pool, &new, BY, app.clock.unix())
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::InvalidArgument(why) => ApiError::conflict(why),
+            e => e.into(),
+        })?;
+    Ok(Json(InviteCreated {
+        pairing_id: Some(created.id),
+        link: Some(invite_link(
+            &app.host,
+            &app.auth.identity.fp,
+            &created.secret,
+        )),
+        secret: Some(created.secret),
     }))
 }
 

@@ -141,7 +141,9 @@
 ///    `connection.app_set` audit action.
 /// 47: connection tools in a sandbox (C4b): `ConnTool.input_schema` (optional, the JSON Schema of a tool's
 ///    arguments) in the runner schema; no operation changes.
-pub const API_MINOR: u32 = 47;
+/// 48: invite pairings: `createInvite` (`POST /pairings/invites`, `admin`, destructive). A device claims an
+///    invite at `/pair/claim` over the network by the QR secret alone and is active at once.
+pub const API_MINOR: u32 = 48;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

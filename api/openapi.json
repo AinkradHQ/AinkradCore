@@ -1194,7 +1194,7 @@
             ]
           },
           "device_id": {
-            "description": "The new device, `d_…`, pending until approved.",
+            "description": "The new device, `d_…`, pending until approved; for an invite it is active already.",
             "type": [
               "string",
               "null"
@@ -1208,7 +1208,7 @@
             ]
           },
           "sas": {
-            "description": "Show this; the approver compares it with theirs. The first 16 upper-case Crockford\ncharacters of SHA-256(`AINKRAD-SAS-V1` ‖ core_spki ‖ routine_spki ‖ pairing id as\nUTF-8), as `XXXX-XXXX-XXXX-XXXX`.",
+            "description": "Show this; the approver compares it with theirs. The first 16 upper-case Crockford\ncharacters of SHA-256(`AINKRAD-SAS-V1` ‖ core_spki ‖ routine_spki ‖ pairing id as\nUTF-8), as `XXXX-XXXX-XXXX-XXXX`. Meaningless for an invite: nothing waits on a match.",
             "type": [
               "string",
               "null"
@@ -2212,6 +2212,32 @@
         ],
         "type": "object"
       },
+      "InviteCreated": {
+        "properties": {
+          "link": {
+            "description": "`ainkrad://connect?host=…&fp=<core_fp>&secret=…`, for a QR code: shown once.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pairing_id": {
+            "description": "`p_…`: reject it to withdraw the invite.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "secret": {
+            "description": "The QR secret, base64url: shown once.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "KindAuthMethod": {
         "description": "One way to sign in to a kind, easiest first.",
         "properties": {
@@ -2783,6 +2809,27 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "NewInviteBody": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "What to call the device that claims it.",
+            "type": "string"
+          },
+          "scopes": {
+            "description": "What it may do: within the creator's own scopes.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "scopes"
+        ],
         "type": "object"
       },
       "NewLease": {
@@ -4862,7 +4909,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.47.0"
+    "version": "1.48.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -9707,6 +9754,59 @@
         "x-ainkrad-scope": "admin"
       }
     },
+    "/api/v1/pairings/invites": {
+      "post": {
+        "operationId": "createInvite",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewInviteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteCreated"
+                }
+              }
+            },
+            "description": "An invite: one device claims it over the network with the link's secret alone and is active at once with these scopes, with no SAS or approval. It never expires; reject it to withdraw it. The secret and link are shown only now (audited as `pairing.created`, without them). Needs `admin` and a step-up; the scopes are within the caller's (403 otherwise); 409 with ten live already"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "pairing"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/api/v1/pairings/{id}": {
       "get": {
         "operationId": "getPairing",
@@ -12060,7 +12160,7 @@
                 }
               }
             },
-            "description": "Claimed: the device is pending until the approver matches the SAS. 401 `pairing_failed` for a wrong, used, expired or burned credential; 400 for keys or proofs that do not hold (the pairing is not spent)"
+            "description": "Claimed: the device is pending until the approver matches the SAS; an invite is claimed by its secret alone and the device is active at once (`sas` means nothing then). 401 `pairing_failed` for a wrong, used, expired or burned credential; 400 for keys or proofs that do not hold (the pairing is not spent)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

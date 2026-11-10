@@ -1032,6 +1032,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/pairings/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/pairings/{id}": {
         parameters: {
             query?: never;
@@ -2036,7 +2052,7 @@ export interface components {
         Claimed: {
             /** @description The Core identity SPKI, base64url: its fingerprint must equal the QR's `c`. */
             core_spki?: string | null;
-            /** @description The new device, `d_…`, pending until approved. */
+            /** @description The new device, `d_…`, pending until approved; for an invite it is active already. */
             device_id?: string | null;
             /**
              * @description The pairing, `p_…`: with `core_spki` and its own key the device computes the SAS
@@ -2046,7 +2062,7 @@ export interface components {
             /**
              * @description Show this; the approver compares it with theirs. The first 16 upper-case Crockford
              *     characters of SHA-256(`AINKRAD-SAS-V1` ‖ core_spki ‖ routine_spki ‖ pairing id as
-             *     UTF-8), as `XXXX-XXXX-XXXX-XXXX`.
+             *     UTF-8), as `XXXX-XXXX-XXXX-XXXX`. Meaningless for an invite: nothing waits on a match.
              */
             sas?: string | null;
         };
@@ -2418,6 +2434,14 @@ export interface components {
             server_version?: string | null;
             supported_minors?: number[] | null;
         };
+        InviteCreated: {
+            /** @description `ainkrad://connect?host=…&fp=<core_fp>&secret=…`, for a QR code: shown once. */
+            link?: string | null;
+            /** @description `p_…`: reject it to withdraw the invite. */
+            pairing_id?: string | null;
+            /** @description The QR secret, base64url: shown once. */
+            secret?: string | null;
+        };
         /** @description One way to sign in to a kind, easiest first. */
         KindAuthMethod: {
             /** @description Shown under "Advanced", not as the first choice. */
@@ -2660,6 +2684,12 @@ export interface components {
             installation_id?: number | null;
             site?: string | null;
             token?: string | null;
+        };
+        NewInviteBody: {
+            /** @description What to call the device that claims it. */
+            name: string;
+            /** @description What it may do: within the creator's own scopes. */
+            scopes: string[];
         };
         /** @description A lease to grant. */
         NewLease: {
@@ -6194,6 +6224,37 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    createInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewInviteBody"];
+            };
+        };
+        responses: {
+            /** @description An invite: one device claims it over the network with the link's secret alone and is active at once with these scopes, with no SAS or approval. It never expires; reject it to withdraw it. The secret and link are shown only now (audited as `pairing.created`, without them). Needs `admin` and a step-up; the scopes are within the caller's (403 otherwise); 409 with ten live already */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteCreated"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     getPairing: {
         parameters: {
             query?: never;
@@ -7516,7 +7577,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Claimed: the device is pending until the approver matches the SAS. 401 `pairing_failed` for a wrong, used, expired or burned credential; 400 for keys or proofs that do not hold (the pairing is not spent) */
+            /** @description Claimed: the device is pending until the approver matches the SAS; an invite is claimed by its secret alone and the device is active at once (`sas` means nothing then). 401 `pairing_failed` for a wrong, used, expired or burned credential; 400 for keys or proofs that do not hold (the pairing is not spent) */
             202: {
                 headers: {
                     [name: string]: unknown;

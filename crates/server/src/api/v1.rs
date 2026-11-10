@@ -159,6 +159,7 @@ pub fn router(app: App) -> Router {
         )
         .route("/api/v1/devices/{id}/scopes", put(devices::set_scopes))
         .route("/api/v1/pairings", post(pairing::create))
+        .route("/api/v1/pairings/invites", post(pairing::create_invite))
         .route("/api/v1/pairings/{id}", get(pairing::get))
         .route("/api/v1/pairings/{id}/approve", post(pairing::approve))
         .route("/api/v1/pairings/{id}/reject", post(pairing::reject))
