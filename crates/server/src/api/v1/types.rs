@@ -143,7 +143,10 @@
 ///    arguments) in the runner schema; no operation changes.
 /// 48: invite pairings: `createInvite` (`POST /pairings/invites`, `admin`, destructive). A device claims an
 ///    invite at `/pair/claim` over the network by the QR secret alone and is active at once.
-pub const API_MINOR: u32 = 48;
+/// 49: the Core machine (host-helper slice 1): `getHostStatus`, `restartHostService`, `getCoreLogs`,
+///    `getHelperLogs`, `getRunnerLogs` and `getBackupLogs` (`GET/POST /api/v1/system/...`, all `admin`; the
+///    restart and the runner and backup logs destructive); the `host.*` audit actions; the query name `lines`.
+pub const API_MINOR: u32 = 49;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

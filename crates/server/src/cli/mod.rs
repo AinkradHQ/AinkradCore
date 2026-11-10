@@ -39,6 +39,7 @@ const USAGE: &str = "usage:
                  --apns-topic <bundle-id>] [--log-format text|json]
   ainkrad-core-server iroh-id <db>
   ainkrad-core-server openapi
+  ainkrad-core-server host-call status
   ainkrad-core-server backup <db> <dest>
   ainkrad-core-server restore [--force] <src> <db>
   ainkrad-core-server --help
@@ -157,6 +158,7 @@ pub async fn run(available: Vec<Arc<dyn Module>>) -> ExitCode {
             .await
             .map_err(Into::into),
         ["iroh-id", db] => iroh_id(Path::new(db)),
+        ["host-call", "status"] => host_call_status().await,
         ["openapi"] => {
             print!("{}", ainkrad_core_server::api::v1::spec::json());
             return ExitCode::SUCCESS;
@@ -578,6 +580,26 @@ fn iroh_id(db: &Path) -> Result_ {
 #[cfg(not(feature = "iroh"))]
 fn iroh_id(_: &Path) -> Result_ {
     Err("this build has no iroh support (built without the `iroh` feature)".into())
+}
+
+/// `host-call status`: asks the root host helper for its status, as the installer's `--check` does.
+async fn host_call_status() -> Result_ {
+    let actor = ainkrad_core_server::host::Actor {
+        device: "d_cli".to_owned(),
+        audit_seq: 0,
+    };
+    let id = ainkrad_core_server::host::request_id();
+    let client = ainkrad_core_server::host::Client::default();
+    match client
+        .call(&id, "status", serde_json::json!({}), &actor)
+        .await
+    {
+        Ok(v) => {
+            println!("{v}");
+            Ok(())
+        }
+        Err(f) => Err(format!("host helper: {f:?}").into()),
+    }
 }
 
 /// SIGTERM (systemd's stop) or Ctrl-C.

@@ -58,6 +58,13 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/devices", "admin"),
     ("DELETE", "/api/v1/devices/{id}", "admin"),
     ("GET", "/api/v1/audit", "admin"),
+    // The Core machine (host-helper plan §4): all `admin`; see DESTRUCTIVE for the step-up ones.
+    ("GET", "/api/v1/system/host", "admin"),
+    ("POST", "/api/v1/system/restart", "admin"),
+    ("GET", "/api/v1/system/logs/core", "admin"),
+    ("GET", "/api/v1/system/logs/helper", "admin"),
+    ("GET", "/api/v1/system/logs/runner", "admin"),
+    ("GET", "/api/v1/system/logs/backup", "admin"),
     ("GET", "/api/v1/metrics", "admin"),
     ("POST", "/api/v1/pairings", "admin"),
     ("POST", "/api/v1/pairings/invites", "admin"),
@@ -201,6 +208,11 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("PUT", "/api/v1/settings/{scope}/{key}"),
     ("DELETE", "/api/v1/settings/{scope}/{key}"),
     ("POST", "/api/v1/auth/lockouts/clear"),
+    // The Core machine: a restart drops every session, and the runner and backup logs can hold
+    // values no redactor recognises (D4). The Core and helper logs are not here.
+    ("POST", "/api/v1/system/restart"),
+    ("GET", "/api/v1/system/logs/runner"),
+    ("GET", "/api/v1/system/logs/backup"),
     // Secrets (E2-07): every write, and a lease, the only way a value leaves the Core.
     ("POST", "/api/v1/secrets"),
     ("PUT", "/api/v1/secrets/{id}"),

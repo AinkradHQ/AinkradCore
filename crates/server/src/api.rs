@@ -86,6 +86,8 @@ pub struct App {
     pub conn_flows: Arc<crate::connections::flows::Flows>,
     /// How often connections may be tested through the API (C5).
     pub conn_pace: Arc<crate::connections::pace::Pace>,
+    /// The root host helper's socket (`crate::host`), for `/api/v1/system`.
+    pub host_helper: Arc<crate::host::Client>,
 }
 
 /// Resolves once serve is stopping (`App::closing`).
@@ -126,6 +128,7 @@ impl App {
             conn_apps: Arc::default(),
             conn_flows: Arc::default(),
             conn_pace: Arc::default(),
+            host_helper: Arc::default(),
         }
     }
 }

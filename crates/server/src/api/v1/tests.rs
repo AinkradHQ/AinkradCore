@@ -106,6 +106,7 @@ mod sessions;
 mod settings;
 mod signed;
 mod stepup;
+mod system;
 mod token;
 mod usage_meter;
 mod wake;

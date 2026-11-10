@@ -50,6 +50,7 @@ pub mod session;
 mod settings;
 pub mod spec;
 mod stepup;
+mod system;
 mod terminals;
 pub mod ticket;
 mod trace;
@@ -57,7 +58,7 @@ pub use terminals::{
     Rooms, reconcile as reconcile_terminals, sweep as sweep_terminals,
     sweep_loop as terminal_sweep_loop,
 };
-pub use trace::{ApiError, ApiResult};
+pub use trace::{ApiError, ApiResult, error_id};
 pub mod types;
 pub mod websession;
 
@@ -68,7 +69,7 @@ pub const BY: AuditActor = AuditActor::User(ADMIN);
 /// Query parameter names any `/api/v1` route may take; nothing else is let through.
 pub const QUERY: &[&str] = &[
     "after", "limit", "before", "kind", "target", "actor", "session", "account", "subject",
-    "company", "run",
+    "company", "run", "lines",
 ];
 
 /// A page of a list: the cursor to continue after (its meaning is per route) and how many.
@@ -190,6 +191,12 @@ pub fn router(app: App) -> Router {
         )
         .route("/api/v1/terminals/{id}/signal", post(terminals::signal))
         .route("/api/v1/terminals/{id}/ws", get(terminals::attach))
+        .route("/api/v1/system/host", get(system::host))
+        .route("/api/v1/system/restart", post(system::restart))
+        .route("/api/v1/system/logs/core", get(system::logs_core))
+        .route("/api/v1/system/logs/helper", get(system::logs_helper))
+        .route("/api/v1/system/logs/runner", get(system::logs_runner))
+        .route("/api/v1/system/logs/backup", get(system::logs_backup))
         .route("/api/v1/me", get(me::me))
         .route("/api/v1/auth/step-up/challenge", post(stepup::challenge))
         .route("/api/v1/auth/step-up", post(stepup::step_up))
