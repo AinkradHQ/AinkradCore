@@ -17,10 +17,12 @@ for t in $targets; do
   for b in ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost; do cp "dist/.build/$t/$b" "$out/$b-$ver-$t"; done
 done
 # The installer bundle scripts/get.sh runs after it has verified it against the signed sums, and get.sh itself (the
-# one-line install fetches it from the release: .../releases/latest/download/get.sh; it carries the pinned key).
+# one-line install fetches it from the release: .../releases/latest/download/get.sh; it carries the pinned key and is in the signed sums).
 git archive --format=tar.gz --prefix="ainkrad-core-installer-$ver/" -o "$out/ainkrad-core-installer-$ver.tar.gz" HEAD \
   scripts/install.sh scripts/install scripts/host scripts/release/install.sh deploy/install-core-linux.sh deploy/install-linux.sh deploy/systemd
-cp scripts/get.sh "$out/get.sh"
+# From the same commit as the bundle, stamped with this version as the floor against downgrades; signed with the sums.
+git show HEAD:scripts/get.sh | sed "s/^MIN_VERSION=[0-9.]*/MIN_VERSION=$ver/" > "$out/get.sh"; chmod 755 "$out/get.sh"
+grep -q "^MIN_VERSION=$ver " "$out/get.sh" || { echo "release-dry: get.sh was not stamped with $ver" >&2; exit 1; }
 case " $targets " in *" macos-arm64 "*) $here/macos.sh "$out"/*-macos-arm64 ;; esac
 # A throwaway key: the real one is offline and Ahmed's (custody plan, E1-15.2). Generated per dry run, never kept.
 key=$(mktemp -d)/dry.key

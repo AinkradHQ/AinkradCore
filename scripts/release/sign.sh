@@ -7,9 +7,9 @@ set -euo pipefail
 d=${1:?dist dir}; key=${2:?secret key}
 cd "$d"
 ver=$(basename "$PWD")
-# Everything that ships: binaries and the installer bundle (scripts/get.sh runs it) only (no keys, sums, signatures or the SBOM directory).
+# Everything that ships: binaries, the installer bundle and get.sh (which runs it) only (no keys, sums, signatures or the SBOM directory).
 shopt -s nullglob
-files=(ainkrad-core-server-* ainkrad-runner-* ainkradctl-* ainkrad-ptyhost-* ainkrad-core-installer-*)
+files=(ainkrad-core-server-* ainkrad-runner-* ainkradctl-* ainkrad-ptyhost-* ainkrad-core-installer-* get.sh)
 [ ${#files[@]} -gt 0 ] || { echo "no artefacts in $d" >&2; exit 1; }
 rm -f SHA256SUMS SHA256SUMS.minisig
 shasum -a 256 "${files[@]}" | LC_ALL=C sort -k2 > SHA256SUMS

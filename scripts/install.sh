@@ -290,9 +290,11 @@ ExecStart=$BIN/ainkrad-core-server backup --config $CORE_HOME/config.toml --loca
 start_core() {
   step "Start"
   run systemctl daemon-reload
-  run systemctl enable ainkrad-core.service ainkrad-backup.timer
+  local tm=ainkrad-backup.timer
+  [ -n "$A_BACKUP_RECIPIENT" ] || tm='' # no age recipient (guided, no terminal): the timer would only fail every day
+  run systemctl enable ainkrad-core.service $tm
   run systemctl restart ainkrad-core.service
-  run systemctl restart ainkrad-backup.timer
+  [ -z "$tm" ] || run systemctl restart ainkrad-backup.timer
   [ "$DRY" = 1 ] && return 0
   say "  waiting for https://$A_HOSTNAME/healthz (the first certificate can take a minute)..."
   local end=$((SECONDS + 240))
@@ -377,7 +379,9 @@ selftest() { # PASS/FAIL lines; returns 1 on any FAIL
   cert=$(openssl s_client -connect 127.0.0.1:443 -servername "$A_HOSTNAME" </dev/null 2>/dev/null | openssl x509 -noout -issuer -enddate 2>/dev/null | tr '\n' ' ')
   [ -n "$cert" ] && [ -s "$CORE_HOME/tls/cert.pem" ] && t PASS "certificate in $CORE_HOME/tls: $cert" || t FAIL "no certificate served"
   case $cert in *STAGING*) say "        (staging: not trusted by browsers; switch with ACME_ENV=production)" ;; esac
-  systemctl is-enabled ainkrad-backup.timer >/dev/null 2>&1 && t PASS "backup timer: $(systemctl show -p NextElapseUSecRealtime --value ainkrad-backup.timer)" || t FAIL "ainkrad-backup.timer not enabled"
+  if [ -z "$(env_get AINKRAD_BACKUP_RECIPIENT)" ]; then say "        backups: off (no age recipient set)"
+  elif systemctl is-enabled ainkrad-backup.timer >/dev/null 2>&1; then t PASS "backup timer: $(systemctl show -p NextElapseUSecRealtime --value ainkrad-backup.timer)"
+  else t FAIL "ainkrad-backup.timer not enabled"; fi
   runner_selftest
   citadel_selftest
   case ${1:-no} in
@@ -506,9 +510,10 @@ main() {
   if [ "$GUIDED" = 1 ]; then
     local rc=0
     step "First device"
-    guided_invite || rc=1
+    guided_invite || rc=$?
     guided_summary "$rc"
     [ "$rc" != 0 ] || [ -z "$INVITE" ] || guided_show_invite
+    [ "$rc" != 2 ] || rc=0 # no terminal: deliberately no invite, the command to run is printed; the install itself succeeded
     return "$rc"
   fi
   bootstrap

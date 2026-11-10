@@ -68,6 +68,10 @@ args=''
 [ -z "$ca" ] || args="${args:+$args }--ca $ca"
 if [ -n "$prefix" ]; then run install -d "$prefix/etc/ainkrad-runner"; fi
 dropin="$prefix/etc/systemd/system/ainkrad-runner.service.d"
+envfile="$prefix/etc/ainkrad-runner/runner.env"
+# What is installed now, to know after the rewrite whether a running runner must be restarted to pick the change up.
+old_args=$(sed -n 's/^RUNNER_ARGS=//p' "$envfile" 2>/dev/null | tail -n1 || true)
+old_root=0; [ ! -e "$dropin/authority.conf" ] || old_root=1
 if [ "$root" = 1 ]; then
   run install -d "$dropin"
   printf '+ write %s/authority.conf\n' "$dropin"
@@ -96,7 +100,6 @@ SystemCallFilter=
 CONF
   fi
 else run rm -f "$dropin/authority.conf"; fi
-envfile="$prefix/etc/ainkrad-runner/runner.env"
 printf '+ write %s: RUNNER_ARGS=%s\n' "$envfile" "$args"
 if [ "$dry" = 0 ]; then
   printf '# Written by deploy/install-linux.sh. exec.run is off unless --enable-exec is added here.\nRUNNER_ARGS=%s\n' "$args" >"$envfile"
@@ -118,5 +121,7 @@ if [ -z "$prefix" ]; then
     run systemctl restart ainkrad-runner.service
   else
     echo "installed, not started. Pair it (see the unit's header), then: systemctl enable --now ainkrad-runner"
+    # A runner that is already running keeps its old user and flags until restarted: demote (or change) it now.
+    if [ "$old_root" != "$root" ] || [ "$old_args" != "$args" ]; then run systemctl try-restart ainkrad-runner.service; fi
   fi
 fi
