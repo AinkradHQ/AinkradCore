@@ -314,7 +314,6 @@ extras() {
   step "Runner on this host (terminals $([ "$A_RUNNER_PTY" = yes ] && echo ON || echo off); exec.run OFF)"
   [ -f "$STAGE/ainkrad-runner" ] || { warn "no ainkrad-runner binary: runner skipped"; return 0; }
   local a=(--binary "$STAGE/ainkrad-runner") code=${A_RUNNER_PAIR_CODE:-}
-  [ "$GUIDED" = 0 ] || a+=(--exec --root) # full authority on this host: root, exec.run on; agent sessions stay in bubblewrap
   [ "$DRY" = 1 ] && a+=(--dry-run)
   if [ "$A_RUNNER_PTY" = yes ]; then
     [ -f "$STAGE/ainkrad-ptyhost" ] || die "RUNNER_PTY=yes but no ainkrad-ptyhost binary beside the others"

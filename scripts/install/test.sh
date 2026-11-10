@@ -179,10 +179,15 @@ fi
 
 # Guided mode (the default): given the two answers up front it asks nothing, shows all ten steps in order, uses the plain
 # fallback without a TTY, defaults to local backups and root-capable runner, and never prints an invite in a dry run.
-mkdir -p "$t/gb"
+mkdir -p "$t/gb"; for n in ainkrad-core-server ainkradctl ainkrad-runner ainkrad-ptyhost; do printf '#!/bin/sh\n' >"$t/gb/$n"; done # stubs, so the runner step is reached
 AINKRAD_HOSTNAME=core.example.com AINKRAD_ACME_EMAIL=ops@example.com bash "$HERE/../install.sh" --dry-run --binary "$t/gb" >"$t/gout" 2>&1 </dev/null
 for want in 'step 1 of 10' 'step 10 of 10' 'Using core.example.com' 'no bucket: encrypted snapshots' 'Ainkrad Core is ready'; do
   grep -q -- "$want" "$t/gout" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: guided dry run lacks '$want'" >&2; }
+done
+# The guided path must never make a root or exec-enabled runner (a compromised Core would be root on the host).
+grep -q 'RUNNER_ARGS=--enable-pty$' "$t/gout" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: guided runner args are not exactly --enable-pty" >&2; }
+for bad in --root --exec --enable-exec User=root 'write .*authority.conf'; do
+  grep -qE -- "$bad" "$t/gout" && { fail=$((fail + 1)); echo "FAIL: guided dry run emitted '$bad'" >&2; } || pass=$((pass + 1))
 done
 grep -q $'\033' "$t/gout" && { fail=$((fail + 1)); echo "FAIL: guided output has colour codes without a TTY" >&2; } || pass=$((pass + 1))
 grep -q 'secret=' "$t/gout" && { fail=$((fail + 1)); echo "FAIL: guided dry run printed an invite" >&2; } || pass=$((pass + 1))

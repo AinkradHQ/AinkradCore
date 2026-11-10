@@ -41,7 +41,7 @@ guided_step() {
     Backups*) n=5 t="Setting up backups" w="Encrypted snapshots of the Core every day, kept on this machine (a bucket can be added later)." ;;
     Start*) n=6 t="Starting the Core" w="Enables the service at boot and waits for its first HTTPS certificate (up to a minute or two)." ;;
     "Real credentials"*) n=7 t="Letting the Core hold provider keys" w="Turns on the encrypted secrets store so the app can keep provider and connection keys." ;;
-    Runner*) n=8 t="Giving the Core hands on this machine" w="The runner lets the app run commands and terminals here as root; agent sessions stay in a bubblewrap sandbox." ;;
+    Runner*) n=8 t="Installing the runner" w="The runner is the unprivileged ainkrad-runner user: terminals and agent sessions on, exec.run off. Not started until paired." ;;
     Self-test*) n=9 t="Checking that everything works" w="Service, HTTPS, certificate and backup timer." ;;
     "First device"*) n=10 t="Creating your connection link" w="A one-time link and code that make the Mac app the owner of this Core." ;;
     *) return 0 ;;
@@ -146,7 +146,7 @@ guided_summary() { # guided_summary INVITE_RC
     "Updates     automatic security updates; reboots stay manual" \
     "Backups     daily, encrypted, in $CORE_HOME/backups" \
     "Runner      $runner" \
-    "Agents      sandboxed (bubblewrap); updates signature-checked"
+    "            unprivileged user; terminals on, exec.run off"
   if [ -n "$BACKUP_IDENTITY" ]; then
     say "
  Backup key (decrypts the backups; shown once, never stored here; keep it OFF this machine, e.g. in a password manager):

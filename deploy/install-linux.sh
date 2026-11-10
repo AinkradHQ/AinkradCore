@@ -7,16 +7,18 @@
 #            runs as the unprivileged ainkrad-runner user inside the unit's sandbox. Off unless asked.
 # --ca       a PEM the runner trusts instead of the system roots (a test Core's CA only).
 # --pair     pair as the service user now (waits for the approver; compare the SAS it prints), then start.
-# --exec     turn exec.run on (--enable-exec): the Core can run any program as the runner's user. Off unless asked.
-# --root     full authority on this host (the guided installer): run the unit as root, without the unit's sandbox
-#            (a drop-in, ainkrad-runner.service.d/authority.conf). Agent sessions stay inside their own bubblewrap
-#            sandbox. Without it a re-run removes the drop-in.
+# --exec     turn exec.run on (--enable-exec). WARNING: opt-in only; a compromised Core can then run any program as
+#            the runner's user (as root with --root). The guided installer never passes it.
+# --root     WARNING: opt-in only, never the default. Runs the unit as root with no unit sandbox (drop-in
+#            ainkrad-runner.service.d/authority.conf). A compromised Core is then root on this host, root terminals
+#            can overwrite /usr/local/bin and /etc/systemd/system, and agent sessions are refused at uid 0. The
+#            guided installer never passes it. A re-run without it removes that one file.
 # --prefix installs under DIR (a throwaway root, for tests): no user creation, no systemctl.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 binary="$HERE/../target/release/ainkrad-runner" ptyhost='' pty=0 ca='' pair='' code='' prefix='' start=0 dry=0 exec_on=0 root=0
-usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 while [ $# -gt 0 ]; do
   case $1 in
     --binary) binary=${2:?}; shift 2 ;;
@@ -93,7 +95,7 @@ RestrictNamespaces=no
 SystemCallFilter=
 CONF
   fi
-else run rm -rf "$dropin"; fi
+else run rm -f "$dropin/authority.conf"; fi
 envfile="$prefix/etc/ainkrad-runner/runner.env"
 printf '+ write %s: RUNNER_ARGS=%s\n' "$envfile" "$args"
 if [ "$dry" = 0 ]; then
