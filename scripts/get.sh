@@ -2,16 +2,19 @@
 # shellcheck disable=SC2034,SC1003,SC2016 # the UI variables are read by the functions below; the clean-up string is eval'd later
 # Ainkrad Core: one command to set up a Core on a Linux machine (Debian or Ubuntu, x86_64 or arm64).
 #
-#   curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh | sudo sh
+#   sudo sh -c "$(curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh)"
+#
+# NOT `curl ... | sudo sh`: piped into sudo the script cannot read your answers (sudo does not hand the terminal to a command
+# whose stdin is a pipe, so the first question stops it with SIGTTIN). It refuses to run that way and prints the command above.
 #
 # Optional, to skip the two questions (the Mac app can put them in the command):
-#   ... | sudo AINKRAD_HOSTNAME=core.example.com AINKRAD_ACME_EMAIL=you@example.com sh
+#   sudo AINKRAD_HOSTNAME=core.example.com AINKRAD_ACME_EMAIL=you@example.com sh -c "$(curl -fsSL URL)"
 #
 # What it does, in order: checks the machine, installs what the Core needs (curl, minisign, bubblewrap, qrencode) with apt, downloads the signed release, VERIFIES the minisign signature over SHA256SUMS against the
 # release key pinned below (any mismatch stops everything; nothing of the release is installed), checks every file
 # against the signed sums, installs the Core and runs the guided installer.
 # Host hardening (SSH config, firewall, unattended updates, no swap) is OPT-IN and experimental: the default install does not
-# touch SSH or the firewall and installs no firewall tooling. `... | sudo sh -s -- --harden` (or AINKRAD_HARDEN=yes) turns it on.
+# touch SSH or the firewall and installs no firewall tooling. `sudo sh -c "$(curl -fsSL URL)" sh --harden` (or AINKRAD_HARDEN=yes) turns it on.
 # The one-time connect link and the backup key are shown on the terminal only (/dev/tty), never on stdout, so a
 # captured stdout (cloud-init, CI, `> log`, tee) does not keep them. With no terminal they are not created at all
 # and the command to run later is printed. They are not in a log or a file of ours; a terminal's own scrollback or
@@ -30,7 +33,7 @@
 # Version floor: a signed release older than MIN_VERSION (the version this get.sh was built from) is refused, so a newer
 # get.sh cannot be pointed at an older signed release. That does NOT stop a replay of an OLD get.sh together with its own
 # old signed sums: the floor lives in the file being run. The command the Mac app shows therefore carries
-#   ... | sudo AINKRAD_MIN_VERSION=<current version> sh
+#   sudo AINKRAD_MIN_VERSION=<current version> sh -c "$(curl -fsSL URL)"
 # and the HIGHER of the two floors applies. The verify-first path below has the same limit: check the version yourself.
 #
 # The whole script is one function called on the LAST line, so a download cut short runs nothing.
@@ -38,8 +41,8 @@
 # --- ui-core begin ---
 ui_defaults() { # every variable the UI uses; called by ui_init (the only top-level code in this block is function definitions)
   UI_N=0 UI_TITLE='' UI_TEXTFN='' UI_DL='' UI_FANCY=0 UI_UTF=0 UI_W=80 UI_T0='' UI_CLEAN='' UI_LOG='' UI_LOGDIR='' UI_JOBS='' UI_JOB='' UI_RUNS=0
-  UI_HINT=0 UI_CURSOR=1 UI_STATE=${UI_STATE:-'Nothing has been changed on this machine yet.'} UI_RERUN=${AINKRAD_RERUN:-'run the same command again'}
-  UI_DEMO=${UI_DEMO:-0}
+  UI_HINT=0 UI_CURSOR=1 UI_STATE='Nothing has been changed on this machine yet.' UI_RERUN=${AINKRAD_RERUN:-'run the same command again'}
+  UI_DEMO=0 # set by --demo AFTER ui_init, never read from the environment
   # numbers from the environment are plain digits or they are ignored (they reach shell arithmetic)
   case ${AINKRAD_STEP_BASE:-0} in '' | *[!0-9]*) UI_BASE=0 ;; *) UI_BASE=${AINKRAD_STEP_BASE:-0} ;; esac
   case ${AINKRAD_STEP_TOTAL:-8} in '' | *[!0-9]* | 0) UI_TOTAL=8 ;; *) UI_TOTAL=${AINKRAD_STEP_TOTAL:-8} ;; esac
@@ -50,11 +53,19 @@ ui_defaults() { # every variable the UI uses; called by ui_init (the only top-le
 ui_now() { date +%s; }
 ui_ts() { date +%H:%M:%S; }
 ui_sleep() { sleep "$1"; }
-ui_clean() { # stdin -> stdout, one stream: C0 controls, DEL, C1 controls (the 8-bit CSI too) dropped; for EVERY external string
-  LC_ALL=C sed "s/$(printf '\302')[$(printf '\200')-$(printf '\237')]//g" | LC_ALL=C tr -d '\000-\037\177\233'
+ui_clean() { # stdin -> stdout, one stream: C0 controls, DEL, C1 controls dropped; for EVERY external string
+  if [ "$UI_UTF" = 1 ]; then # C1 controls are the two-byte sequences C2 80..9F; a bare byte 9B is a continuation byte of real text
+    LC_ALL=C sed "s/$(printf '\302')[$(printf '\200')-$(printf '\237')]//g" | LC_ALL=C tr -d '\000-\037\177'
+  else
+    LC_ALL=C sed "s/$(printf '\302')[$(printf '\200')-$(printf '\237')]//g" | LC_ALL=C tr -d '\000-\037\177\233'
+  fi
 }
 ui_clean_lines() { # the same for several lines (newline and tab kept)
-  LC_ALL=C sed "s/$(printf '\302')[$(printf '\200')-$(printf '\237')]//g" | LC_ALL=C tr -d '\000-\010\013-\037\177\233'
+  if [ "$UI_UTF" = 1 ]; then
+    LC_ALL=C sed "s/$(printf '\302')[$(printf '\200')-$(printf '\237')]//g" | LC_ALL=C tr -d '\000-\010\013-\037\177'
+  else
+    LC_ALL=C sed "s/$(printf '\302')[$(printf '\200')-$(printf '\237')]//g" | LC_ALL=C tr -d '\000-\010\013-\037\177\233'
+  fi
 }
 ui_init() {
   ui_defaults
@@ -290,7 +301,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     _fl=${RERUN_FLOOR:-${AINKRAD_MIN_VERSION:-}}
     case $_fl in '' | 0 | 0.0.0 | *[!0-9.]*) ;; *) _env="$_env AINKRAD_MIN_VERSION=$_fl" ;; esac
     for _a in "$@"; do if _q=$(shq "$_a"); then _args="$_args $_q"; fi; done
-    echo "curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh | sudo$_env sh${_args:+ -s --$_args}"
+    echo "sudo$_env sh -c \"\$(curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh)\"${_args:+ sh$_args}"
   }
   UI_RERUN=$(rerun_cmd "$@")
   W=''
@@ -303,7 +314,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   if [ "$demo" = 1 ]; then
     # A demo of the first four steps: nothing is downloaded, installed or changed (only harmless sleeps). The questions and the
     # end screens: scripts/install.sh --demo from a checkout. It exits 3 so that no script can mistake it for an install.
-    UI_DEMO=1; UI_RERUN='curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh | sudo sh'
+    UI_DEMO=1; UI_RERUN='sudo sh -c "$(curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh)" sh --demo'
     ui_roadmap
     ui_step 1 "$(ui_rname 1)" "Needs Linux with systemd, root, and Debian or Ubuntu (apt)."
     ui_run "Looking at this machine (demo)" sleep 1
@@ -316,6 +327,14 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     ui_note "DEMO finished: nothing was downloaded, installed or changed. For the questions and the last screens run: scripts/install.sh --demo (from a checkout)."
     [ -z "$UI_LOGDIR" ] || rm -rf "$UI_LOGDIR"
     exit 3
+  fi
+  # Piped into sudo (curl ... | sudo sh) a script cannot read the terminal: sudo's pty does not make it the foreground process
+  # group when sudo's own stdin is a pipe, so the first question would stop it with SIGTTIN and leave a silent prompt.
+  # A real root shell may pipe; only the sudo + pipe + terminal combination is refused, before anything is changed.
+  if ! [ -t 0 ] && { [ -n "${SUDO_USER:-}" ] || [ -n "${SUDO_COMMAND:-}" ]; } && ( : </dev/tty ) 2>/dev/null; then
+    printf '\n %s%s Cannot start: this command was piped into sudo.%s\n' "$RD" "$XG" "$R" >&2
+    printf '   A piped script cannot ask you questions through sudo (the terminal is not handed to it), so it would hang at the\n   first question. Nothing was changed. Run this instead:\n\n     %s\n\n' "$UI_RERUN" >&2
+    exit 2
   fi
   harden=0
   case ${AINKRAD_HARDEN:-} in '' | no) ;; yes) harden=1 ;; *) die "AINKRAD_HARDEN must be yes or no (got '$AINKRAD_HARDEN')" ;; esac
@@ -330,7 +349,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   if [ "${AINKRAD_GET_VERIFY_ONLY:-}" != 1 ]; then
     ui_step 1 "Check this machine" "Needs Linux with systemd, root, and Debian or Ubuntu (apt)."
     [ "$(uname -s)" = Linux ] || die "this is $(uname -s); Core installs on Linux only"
-    [ "$(id -u)" = 0 ] || die "run it as root: ... | sudo sh"
+    [ "$(id -u)" = 0 ] || die "run it as root: sudo sh -c \"\$(curl -fsSL ...)\" (see the command printed below)"
     [ -d /run/systemd/system ] || die "systemd is not running here (a container without systemd?)"
     command -v apt-get >/dev/null || die "apt-get not found: only Debian and Ubuntu are supported by this installer"
     ui_ok "This is Linux $(uname -m) with systemd and apt, and you are root: supported"

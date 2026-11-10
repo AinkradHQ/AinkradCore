@@ -55,7 +55,7 @@ guided_banner() {
   [ "${AINKRAD_FROM_GET:-}" = 1 ] || ui_roadmap
 }
 
-# A terminal to ask on, even when stdin is a pipe (curl ... | sudo sh).
+# A terminal to ask on, even when stdin is a pipe (a pipe into sudo is refused by get.sh: the terminal is not handed over).
 have_tty() { ( : </dev/tty ) 2>/dev/null; }
 
 # Fill every answer with its guided default; ask only for what cannot be defaulted.
@@ -131,7 +131,7 @@ removal_hint() { # what to run to take the Core off again, and what that keeps
   local cmd
   if [ -x "$INSTALLER_SAVED/scripts/install.sh" ]; then cmd="sudo $INSTALLER_SAVED/scripts/install.sh --uninstall --purge"
   elif [ "${AINKRAD_FROM_GET:-}" != 1 ]; then cmd="sudo $0 --uninstall --purge"
-  else cmd="run the one-line command again with: sh -s -- --uninstall --purge (it checks the download first)"; fi
+  else cmd="sudo sh -c \"\$(curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh)\" sh --uninstall --purge (it checks the download first)"; fi
   echo "to remove the Core and its data run: $cmd. That keeps the ainkrad service users, /etc/ainkrad/backup.env and the backup bucket, installed apt packages, and SSH and firewall settings."
 }
 

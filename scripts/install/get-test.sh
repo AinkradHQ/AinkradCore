@@ -235,5 +235,10 @@ grep -qE "^ *pkgs='[^']*(iptables|ufw)" "$GET" && bad "get.sh installs firewall 
 out=$(cd "$t/empty" && AINKRAD_HARDEN=maybe sh "$GET" 2>&1); rc=$?
 { [ "$rc" != 0 ] && grep -q 'must be yes or no' <<<"$out" && ! grep -q 'Checking this machine' <<<"$out"; } && ok || bad "get.sh accepted AINKRAD_HARDEN=maybe or ran on ($rc)"
 
+# --- install-linux.sh: --binary at the FINAL path must not die at `install X X` ("are the same file") ---
+fp="$t/finalprefix"; mkdir -p "$fp/usr/local/bin"; printf '#!/bin/sh\necho runner\n' >"$fp/usr/local/bin/ainkrad-runner"; printf '#!/bin/sh\necho pty\n' >"$fp/usr/local/bin/ainkrad-ptyhost"; chmod 755 "$fp/usr/local/bin/"*
+o=$(bash "$ROOT/deploy/install-linux.sh" --prefix "$fp" --binary "$fp/usr/local/bin/ainkrad-runner" --ptyhost "$fp/usr/local/bin/ainkrad-ptyhost" --pty 2>&1 </dev/null); rc=$?
+{ [ "$rc" = 0 ] && ! grep -q 'same file' <<<"$o" && [ -x "$fp/usr/local/bin/ainkrad-runner" ] && [ "$("$fp/usr/local/bin/ainkrad-runner")" = runner ] && [ -f "$fp/etc/systemd/system/ainkrad-runner.service" ]; } && ok || bad "install-linux.sh with --binary at the final path failed or left a half install (rc=$rc): $o"
+
 echo "get/guided tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]

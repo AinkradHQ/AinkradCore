@@ -10,8 +10,8 @@
 # --- ui-core begin ---
 ui_defaults() { # every variable the UI uses; called by ui_init (the only top-level code in this block is function definitions)
   UI_N=0 UI_TITLE='' UI_TEXTFN='' UI_DL='' UI_FANCY=0 UI_UTF=0 UI_W=80 UI_T0='' UI_CLEAN='' UI_LOG='' UI_LOGDIR='' UI_JOBS='' UI_JOB='' UI_RUNS=0
-  UI_HINT=0 UI_CURSOR=1 UI_STATE=${UI_STATE:-'Nothing has been changed on this machine yet.'} UI_RERUN=${AINKRAD_RERUN:-'run the same command again'}
-  UI_DEMO=${UI_DEMO:-0}
+  UI_HINT=0 UI_CURSOR=1 UI_STATE='Nothing has been changed on this machine yet.' UI_RERUN=${AINKRAD_RERUN:-'run the same command again'}
+  UI_DEMO=0 # set by --demo AFTER ui_init, never read from the environment
   # numbers from the environment are plain digits or they are ignored (they reach shell arithmetic)
   case ${AINKRAD_STEP_BASE:-0} in '' | *[!0-9]*) UI_BASE=0 ;; *) UI_BASE=${AINKRAD_STEP_BASE:-0} ;; esac
   case ${AINKRAD_STEP_TOTAL:-8} in '' | *[!0-9]* | 0) UI_TOTAL=8 ;; *) UI_TOTAL=${AINKRAD_STEP_TOTAL:-8} ;; esac
@@ -22,11 +22,19 @@ ui_defaults() { # every variable the UI uses; called by ui_init (the only top-le
 ui_now() { date +%s; }
 ui_ts() { date +%H:%M:%S; }
 ui_sleep() { sleep "$1"; }
-ui_clean() { # stdin -> stdout, one stream: C0 controls, DEL, C1 controls (the 8-bit CSI too) dropped; for EVERY external string
-  LC_ALL=C sed "s/$(printf '\302')[$(printf '\200')-$(printf '\237')]//g" | LC_ALL=C tr -d '\000-\037\177\233'
+ui_clean() { # stdin -> stdout, one stream: C0 controls, DEL, C1 controls dropped; for EVERY external string
+  if [ "$UI_UTF" = 1 ]; then # C1 controls are the two-byte sequences C2 80..9F; a bare byte 9B is a continuation byte of real text
+    LC_ALL=C sed "s/$(printf '\302')[$(printf '\200')-$(printf '\237')]//g" | LC_ALL=C tr -d '\000-\037\177'
+  else
+    LC_ALL=C sed "s/$(printf '\302')[$(printf '\200')-$(printf '\237')]//g" | LC_ALL=C tr -d '\000-\037\177\233'
+  fi
 }
 ui_clean_lines() { # the same for several lines (newline and tab kept)
-  LC_ALL=C sed "s/$(printf '\302')[$(printf '\200')-$(printf '\237')]//g" | LC_ALL=C tr -d '\000-\010\013-\037\177\233'
+  if [ "$UI_UTF" = 1 ]; then
+    LC_ALL=C sed "s/$(printf '\302')[$(printf '\200')-$(printf '\237')]//g" | LC_ALL=C tr -d '\000-\010\013-\037\177'
+  else
+    LC_ALL=C sed "s/$(printf '\302')[$(printf '\200')-$(printf '\237')]//g" | LC_ALL=C tr -d '\000-\010\013-\037\177\233'
+  fi
 }
 ui_init() {
   ui_defaults

@@ -77,11 +77,23 @@ write_file() {
 }
 env_get() { [ -r "$ETC/core.env" ] && sed -n "s/^$1=//p" "$ETC/core.env" | tail -n1 || true; }
 sha() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
-yes_no() { local a; read -r -p "$1 [y/N] " a </dev/tty; case $a in y | Y | yes) true ;; *) false ;; esac; }
+# tty_foreground: 0 when this process can read the terminal without being stopped by SIGTTIN, i.e. it is in the terminal's
+# foreground process group. (Started through `curl | sudo sh` it is not: sudo's pty does not hand the terminal over when its own
+# stdin is a pipe, and the first read would stop the installer silently.) Unknown = allowed; no terminal = reading fails by itself.
+tty_foreground() {
+  local pg tp
+  pg=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ') tp=$(ps -o tpgid= -p $$ 2>/dev/null | tr -d ' ')
+  case $pg$tp in '' | *[!0-9]*) return 0 ;; esac
+  [ "$tp" = 0 ] || [ "$pg" = "$tp" ]
+}
+need_terminal() { # before every read from /dev/tty: never leave the user at a silent prompt
+  tty_foreground || die "this installer does not have the terminal (it was probably started with 'curl ... | sudo sh'): a question here would hang. Run it as: sudo sh -c \"\$(curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh)\"  (or, from a checkout, sudo scripts/install.sh): both keep the terminal attached."
+}
+yes_no() { local a; need_terminal; read -r -p "$1 [y/N] " a </dev/tty; case $a in y | Y | yes) true ;; *) false ;; esac; }
 
 # ask KEY "one-line explanation" [secret]: loops until the validator accepts; keeps A_KEY (or the default).
 # ui_read PROMPT VAR [secret]: read one answer from the terminal (tests replace this)
-ui_read() { if [ -n "${3:-}" ]; then read -r -s -p "$1" "$2" </dev/tty; echo; else read -r -p "$1" "$2" </dev/tty; fi; }
+ui_read() { need_terminal; if [ -n "${3:-}" ]; then read -r -s -p "$1" "$2" </dev/tty; echo; else read -r -p "$1" "$2" </dev/tty; fi; }
 # ask KEY "plain label" [secret]: every question is a card (Question n of N, label, example, default), then it waits.
 # loops until the validator accepts; keeps A_KEY (or the default).
 ask() {

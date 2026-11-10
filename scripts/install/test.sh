@@ -211,6 +211,7 @@ done
 grep -q $'\033' "$t/gout" && { fail=$((fail + 1)); echo "FAIL: guided output has colour codes without a TTY" >&2; } || pass=$((pass + 1))
 
 bash "$HERE/get-test.sh" || fail=$((fail + 1)) # get.sh verify-first, secrets to the terminal only, argv
+bash "$HERE/pty-test.sh" || fail=$((fail + 1)) # the curl|sudo sh hang: refusal, the foreground check, real ptys
 bash "$HERE/ui-test.sh" || fail=$((fail + 1)) # the live UI: spinner, heartbeat, cards, DNS feedback, cursor restore
 bash "$HERE/harden-test.sh" || fail=$((fail + 1)) # harden.sh guards and firewall, summary, runner restart sequence
 # (no `grep secret=` on the guided dry run: it can never print one; the secret rules are tested for real, with a pty and without a terminal, in get-test.sh) # get.sh verify-first, secrets to the terminal only, SSH guard, runner argv
