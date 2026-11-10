@@ -1,8 +1,14 @@
-//! `logs`: the journal of one fixed unit through `journalctl`, or `actions.log` for `helper`.
+//! `logs`: the journal of one fixed unit through `journalctl`, or, for `helper`, the helper's own
+//! records: `actions.log` (refusals and root actions) and `mutations.log` (root actions only), merged.
 //!
-//! Fixed argv: `journalctl -u <fixed unit> -o json --no-pager -n <N+1>`, plus, when paging,
+//! Fixed argv: `journalctl -u <fixed unit> -o json --no-pager --output-fields=MESSAGE,PRIORITY -n <N+1>`
+//! (the cursor and timestamp fields are always printed), plus, when paging,
 //! `-r` and `--cursor=<C>` as **one** argv element. A cursor is validated at parse
 //! (`^[A-Za-z0-9=;_]{1,256}$`, so never a leading `-`).
+//!
+//! A log line is attacker-influenced text (anything the Core prints). It is redacted and cut, but
+//! control characters are not removed: **a client must strip or escape control characters
+//! (escape sequences, `\r`, backspace) before showing a line in a terminal.**
 //!
 //! Paging: the first page is the newest N entries (the extra one fetched only to know there are
 //! older ones). "Older" asks `-r --cursor=<oldest seen>`, which returns that entry first and then
@@ -73,9 +79,17 @@ pub fn rfc3339(us: u64) -> String {
 }
 
 fn journal(ctx: &Ctx, unit: &str, l: &Logs) -> Result<Vec<Raw>, Code> {
-    let mut args: Vec<String> = ["-u", unit, "-o", "json", "--no-pager", "-n"]
-        .map(String::from)
-        .into();
+    let mut args: Vec<String> = [
+        "-u",
+        unit,
+        "-o",
+        "json",
+        "--no-pager",
+        "--output-fields=MESSAGE,PRIORITY",
+        "-n",
+    ]
+    .map(String::from)
+    .into();
     args.push((l.lines + 1).to_string());
     if let Some(c) = &l.before {
         args.push("-r".into());
@@ -121,19 +135,25 @@ fn journal(ctx: &Ctx, unit: &str, l: &Logs) -> Result<Vec<Raw>, Code> {
     Ok(raws)
 }
 
+/// The `helper` unit: `actions.log` and `mutations.log`. A cursor is `h<time><a|m><seq>`.
 fn helper(ctx: &Ctx, l: &Logs) -> Result<Vec<Raw>, Code> {
+    let key = |at: u64, mutation: bool, seq: u64| (at, mutation, seq);
     let before = match l.before.as_deref() {
-        None => u64::MAX,
-        Some(c) => c
-            .strip_prefix('s')
-            .and_then(|n| n.parse().ok())
-            .ok_or(Code::BadRequest)?,
+        None => None,
+        Some(c) => {
+            let rest = c.strip_prefix('h').ok_or(Code::BadRequest)?;
+            let split = rest.find(['a', 'm']).ok_or(Code::BadRequest)?;
+            let (at, tail) = rest.split_at(split);
+            let at: u64 = at.parse().map_err(|_| Code::BadRequest)?;
+            let seq: u64 = tail[1..].parse().map_err(|_| Code::BadRequest)?;
+            Some(key(at, tail.starts_with('m'), seq))
+        }
     };
     Ok(actlog::read_all(&ctx.state_dir)
         .into_iter()
-        .filter(|e| e.seq < before)
+        .filter(|e| before.is_none_or(|b| key(e.at, e.mutation, e.seq) < b))
         .map(|e| Raw {
-            cursor: format!("s{}", e.seq),
+            cursor: format!("h{}{}{}", e.at, if e.mutation { 'm' } else { 'a' }, e.seq),
             at_us: e.at.saturating_mul(1_000_000),
             level: if matches!(e.result.as_str(), "ok" | "accepted") {
                 "info"
@@ -150,21 +170,28 @@ pub fn logs(ctx: &Ctx, l: &Logs) -> Result<Value, Code> {
         Some(unit) => journal(ctx, unit, l)?,
         None => helper(ctx, l)?,
     };
+    // Redact first, over everything fetched (the lookahead entry included, so a PEM block that
+    // opened just before the page is still seen), then cut.
+    let mut texts: Vec<String> = raws
+        .iter()
+        .map(|r| redact::pre_cut(r.text.clone()))
+        .collect();
+    redact::pem_across(&mut texts);
     // Newest `lines`, plus whether anything older was fetched.
     let paged_journal = l.before.is_some() && l.unit != Unit::Helper;
     let mut more = false;
     if raws.len() > l.lines {
         more = !paged_journal;
-        raws.drain(..raws.len() - l.lines);
+        let extra = raws.len() - l.lines;
+        raws.drain(..extra);
+        texts.drain(..extra);
     }
-    // Redact first (the PEM state runs oldest to newest), cut after.
-    let mut texts: Vec<String> = raws.iter().map(|r| r.text.clone()).collect();
-    redact::pem_across(&mut texts);
     let mut used = 0;
     let mut kept = Vec::new();
     for (r, t) in raws.iter().zip(texts).rev() {
         let text = redact::cap(redact::one(&t), redact::LINE_CAP);
-        used += text.len() + 64;
+        // The size on the wire: quotes double, control bytes become six, and the keys.
+        used += serde_json::to_string(&text).map_or(text.len() * 6, |s| s.len()) + 64;
         if used > BUDGET {
             more = true;
             break;

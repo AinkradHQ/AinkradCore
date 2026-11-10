@@ -81,21 +81,27 @@ PrivateDevices=yes
 # /dev/pts (terminals) stays usable: PrivateDevices gives a private devpts, DevicePolicy=closed allows it.
 DevicePolicy=closed
 ProtectProc=invisible
-ProcSubset=pid
-ProtectKernelTunables=yes
+# Relaxed for bubblewrap (agent sessions, terminals): it mounts a fresh /proc inside its user namespace, and the
+# kernel refuses that when this unit's /proc is trimmed or has read-only overmounts. So these are NOT set, each
+# measured alone on Ubuntu 26.04: ProcSubset=pid (bwrap also reads /proc/sys/kernel/overflowuid), and
+# ProtectKernelTunables, ProtectKernelLogs, ProtectHostname (they overmount /proc/sys and /proc/kmsg).
+# What still holds: an unprivileged user with no capabilities (so /proc/sys, /sys, the hostname and the kernel
+# log are not writable or readable to it anyway), NoNewPrivileges, ProtectKernelModules, ProtectControlGroups,
+# ProtectClock, and ProtectProc=invisible (other users' processes stay hidden).
 ProtectKernelModules=yes
-ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
-ProtectHostname=yes
 
 # --- Privileges ---
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
-# Relaxed: PrivateUsers is not set. The harnesses (codex, claude) may build their own user
-# namespaces; revisit when E2 pins which sandboxes are used.
-RestrictNamespaces=yes
+# Relaxed: PrivateUsers is not set. Agent sessions and terminals run in bubblewrap (harness sandbox.rs, runner
+# termbox.rs); `RestrictNamespaces=yes` makes it fail with "No permissions to create a new namespace". An
+# allow-list, not `no`: user (unprivileged userns) plus the mnt/pid/ipc/uts/cgroup/net its `--unshare-*` flags
+# make. Its capabilities exist only inside its own user namespace; the empty CapabilityBoundingSet and
+# NoNewPrivileges still bind the unit itself.
+RestrictNamespaces=user mnt pid ipc uts cgroup net
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
@@ -103,10 +109,13 @@ RemoveIPC=yes
 
 # --- Network: the runner dials out over WSS and harnesses/git reach the internet.
 # Relaxed on purpose: no IPAddressDeny, no PrivateNetwork. Only socket families are limited.
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# AF_NETLINK: bwrap --unshare-net brings the new namespace's loopback up over a NETLINK_ROUTE socket.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 
 # --- Exec: harnesses and git are child processes. ---
-SystemCallFilter=@system-service
+# bwrap builds its root with mount, pivot_root and umount2 (not in @system-service). Without CAP_SYS_ADMIN they
+# fail on the host, so they only work inside the bwrap user namespace.
+SystemCallFilter=@system-service mount pivot_root umount2
 SystemCallErrorNumber=EPERM
 SystemCallArchitectures=native
 # Relaxed on purpose: MemoryDenyWriteExecute is NOT set. The runner itself is plain Rust and

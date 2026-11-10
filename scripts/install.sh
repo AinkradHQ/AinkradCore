@@ -2,9 +2,12 @@
 # Guided installer for the Ainkrad Core on a Linux + systemd host (E1-16.x). Nothing about your environment lives
 # in the repo: the wizard asks for it (or reads an answers file) and writes /etc/ainkrad/core.env (settings) and
 # /etc/ainkrad/backup.env (bucket credentials, root:ainkrad 0640). Idempotent: re-run it to change an answer.
-#   sudo scripts/install.sh                      interactive wizard
+#   sudo scripts/install.sh                      guided install (default): asks only the DNS name and ACME email
+#   sudo scripts/install.sh --wizard             the classic question-by-question wizard
 #   sudo scripts/install.sh --config <answers>   unattended (see deploy/install.answers.example)
 #   scripts/install.sh --config <answers> --dry-run   print every action, change nothing (no root needed)
+#   --harden (or AINKRAD_HARDEN=yes; only yes|no are accepted) also runs scripts/host/harden.sh: key-only SSH where safe, a firewall
+#        that rejects every inbound port but ssh/80/443, unattended updates, no swap/core dumps. EXPERIMENTAL and OFF by default.
 #   sudo scripts/install.sh --check [--backup local|bucket]   self-test an existing install
 #   sudo scripts/install.sh --uninstall [--purge]   stop, disable, remove units and binaries; --purge also deletes
 #        the Core's data after you type its host name. Never touches backup.env or the bucket.
@@ -20,21 +23,23 @@ umask 077
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=scripts/install/lib.sh
 . "$ROOT/scripts/install/lib.sh"
+# shellcheck source=scripts/install/guided.sh
+. "$ROOT/scripts/install/guided.sh"
 
 CORE_HOME=/var/lib/ainkrad/core ETC=/etc/ainkrad BIN=/usr/local/bin UNITS=/etc/systemd/system
 STAGING_DIR=https://acme-staging-v02.api.letsencrypt.org/directory
-MODE=install CONFIG='' DRY=0 PURGE=0 CHECK_BACKUP=no CLI_BINARY='' STAGE=''
+HARDEN_REQ='' HARDEN_WARN='' HARDEN_STATE='' FW_CHOICE=yes MODE=install GUIDED=0 CONFIG='' DRY=0 PURGE=0 CHECK_BACKUP=no CLI_BINARY='' STAGE=''
 
 say() { printf '%s\n' "$*"; }
-step() { printf '\n== %s\n' "$*"; }
+step() { if [ "$GUIDED" = 1 ]; then guided_step "$*"; else printf '\n== %s\n' "$*"; fi; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
 warn() { printf 'install: WARNING: %s\n' "$*" >&2; }
-run() { printf '+ %s\n' "$*"; [ "$DRY" = 1 ] || "$@"; }
+run() { trace "$@"; [ "$DRY" = 1 ] || "$@"; }
 # write_file PATH MODE OWNER:GROUP CONTENT [SHOWN]: atomically, via a temp file beside it; SHOWN replaces
 # CONTENT in the dry-run listing (secrets masked). printf is a builtin: CONTENT never reaches an argv.
 write_file() {
   local path=$1 mode=$2 owner=$3 content=$4 shown=${5:-$4} tmp
-  printf '+ write %s (%s %s)\n' "$path" "$owner" "$mode"
+  trace "write $path ($owner $mode)"
   if [ "$DRY" = 1 ]; then printf '%s\n' "$shown" | sed 's/^/    /'; return; fi
   tmp=$(mktemp "$(dirname "$path")/.$(basename "$path").XXXXXX")
   printf '%s\n' "$content" >"$tmp"
@@ -132,7 +137,7 @@ checks() { # DNS -> this host's public IP; :443 (and :80) free
   if ! command -v getent >/dev/null; then warn "no getent here: DNS not checked"; return 0; fi
   addrs=$(getent ahosts "$A_HOSTNAME" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true) # pipefail: an unresolved name must reach the warning below, not kill the script
   pub=${A_PUBLIC_IP:-$(curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS4 --max-time 5 https://checkip.amazonaws.com 2>/dev/null || true)}
-  pub=$(printf '%s' "$pub" | tr -d '[:space:]')
+  pub=$(clean_ip "$pub")
   say "  DNS $A_HOSTNAME -> ${addrs:-nothing}; this host's public IPv4: ${pub:-unknown}"
   if [ -z "$addrs" ]; then warn "$A_HOSTNAME does not resolve: add an A record for this host"; problems=1
   elif [ -n "$pub" ] && ! printf ' %s ' "$addrs" | grep -q " $pub "; then
@@ -150,7 +155,7 @@ checks() { # DNS -> this host's public IP; :443 (and :80) free
   say "  Reachability of :443/:80 from the internet cannot be tested from here: ACME issuance below proves it."
   [ "$problems" = 0 ] && return 0
   [ "$DRY" = 1 ] && { warn "checks failed (dry run continues)"; return 0; }
-  [ -z "$CONFIG" ] && yes_no "Continue anyway?" && return 0
+  [ -z "$CONFIG" ] && yes_no "Continue anyway? (the certificate will fail until DNS is right)" && return 0
   die "checks failed"
 }
 
@@ -187,26 +192,31 @@ stage_binaries() {
   fi
 }
 
+apply_harden_req() { [ -z "$HARDEN_REQ" ] || A_HARDEN=$HARDEN_REQ; }
+
 harden() {
-  [ "$A_HARDEN" = yes ] || return 0
+  if [ "$A_HARDEN" != yes ]; then step "Host hardening skipped"; [ "$GUIDED" = 1 ] || say "  Host hardening skipped (opt-in): SSH config and firewall untouched. Use --harden to apply it (experimental)."; return 0; fi
   step "Host hardening (scripts/host/harden.sh)"
   grep -E '^# [0-9]\.' "$ROOT/scripts/host/harden.sh" | sed 's/^# /  /'
   if [ -n "$A_SSH_FROM" ]; then
     local peers p
-    peers=$(ss -Htn state established '( sport = :22 )' 2>/dev/null | awk '{print $4}' | sed -E 's/^\[?(.*)\]?:[0-9]+$/\1/; s/^::ffff://; s/\]$//' | sort -u || true)
+    peers=$(AINKRAD_HARDEN_SOURCE_ONLY=1 bash -c '. "$1"; ssh_peers' _ "$ROOT/scripts/host/harden.sh" 2>/dev/null || true) # on every sshd port
     [ -n "$peers$DRY" ] || die "SSH_FROM: cannot see your SSH session's address; refusing to restrict SSH blind"
     for p in $peers; do ip_in_cidrs "$p" "$A_SSH_FROM" || die "SSH_FROM $A_SSH_FROM would lock out the open SSH session from $p"; done
     say "  SSH will be admitted only from $A_SSH_FROM (current sessions: ${peers:-none seen}). Your cloud firewall may need the same."
   fi
-  [ -n "$CONFIG" ] || [ "$DRY" = 1 ] || yes_no "Apply it now?" || { say "  skipped"; return 0; }
-  run env AINKRAD_SSH_FROM="$A_SSH_FROM" bash "$ROOT/scripts/host/harden.sh"
+  firewall_decide # what will stop being reachable, BEFORE any consent below
+  [ -n "$CONFIG" ] || [ "$DRY" = 1 ] || [ "$GUIDED" = 1 ] || yes_no "Apply it now?" || { say "  skipped"; return 0; }
+  HARDEN_WARN=$STAGE/harden.warn HARDEN_STATE=$STAGE/harden.state
+  run env AINKRAD_SSH_FROM="$A_SSH_FROM" AINKRAD_FIREWALL="$FW_CHOICE" AINKRAD_NOTICE_SHOWN=1 \
+    AINKRAD_HARDEN_WARN="$HARDEN_WARN" AINKRAD_HARDEN_STATE="$HARDEN_STATE" bash "$ROOT/scripts/host/harden.sh"
 }
 
 install_core() {
   step "Core: user, binary, unit, home"
   local out prev_env tls=$CORE_HOME/tls dry=()
   [ "$DRY" = 1 ] && dry=(--dry-run)
-  out=$(bash "$ROOT/deploy/install-core-linux.sh" --binary "$STAGE/ainkrad-core-server" ${dry[@]+"${dry[@]}"} | tee /dev/stderr)
+  out=$(bash "$ROOT/deploy/install-core-linux.sh" --binary "$STAGE/ainkrad-core-server" ${dry[@]+"${dry[@]}"} | tee -a "$([ "$GUIDED$DRY" = 10 ] && echo /dev/null || echo /dev/stderr)") # -a: on Linux a plain tee reopens a redirected stderr file and truncates it
   # The signer's fingerprint, base64url(SHA-256(SPKI)) as `init` prints it, from the key itself (so a re-run has it).
   SIGNER=''
   [ "$DRY" = 1 ] || SIGNER=$(openssl pkey -inform DER -in "$CORE_HOME/keys/backup-signing.p8" -pubout -outform DER |
@@ -287,14 +297,16 @@ ExecStart=$BIN/ainkrad-core-server backup --config $CORE_HOME/config.toml --loca
 start_core() {
   step "Start"
   run systemctl daemon-reload
-  run systemctl enable ainkrad-core.service ainkrad-backup.timer
+  local tm=ainkrad-backup.timer
+  [ -n "$A_BACKUP_RECIPIENT" ] || tm='' # no age recipient (guided, no terminal): the timer would only fail every day
+  run systemctl enable ainkrad-core.service $tm
   run systemctl restart ainkrad-core.service
-  run systemctl restart ainkrad-backup.timer
+  [ -z "$tm" ] || run systemctl restart ainkrad-backup.timer
   [ "$DRY" = 1 ] && return 0
   say "  waiting for https://$A_HOSTNAME/healthz (the first certificate can take a minute)..."
   local end=$((SECONDS + 240))
   until health >/dev/null 2>&1; do
-    [ "$SECONDS" -lt "$end" ] || { journalctl -u ainkrad-core -n 20 --no-pager >&2; die "the Core did not become healthy"; }
+    [ "$SECONDS" -lt "$end" ] || { journalctl -u ainkrad-core -n 20 --no-pager >&2; die "the Core did not become healthy: check that $A_HOSTNAME points at this machine and that your cloud firewall allows inbound 443 (the log is above)"; }
     sleep 3
   done
   say "  healthy"
@@ -374,7 +386,9 @@ selftest() { # PASS/FAIL lines; returns 1 on any FAIL
   cert=$(openssl s_client -connect 127.0.0.1:443 -servername "$A_HOSTNAME" </dev/null 2>/dev/null | openssl x509 -noout -issuer -enddate 2>/dev/null | tr '\n' ' ')
   [ -n "$cert" ] && [ -s "$CORE_HOME/tls/cert.pem" ] && t PASS "certificate in $CORE_HOME/tls: $cert" || t FAIL "no certificate served"
   case $cert in *STAGING*) say "        (staging: not trusted by browsers; switch with ACME_ENV=production)" ;; esac
-  systemctl is-enabled ainkrad-backup.timer >/dev/null 2>&1 && t PASS "backup timer: $(systemctl show -p NextElapseUSecRealtime --value ainkrad-backup.timer)" || t FAIL "ainkrad-backup.timer not enabled"
+  if [ -z "$(env_get AINKRAD_BACKUP_RECIPIENT)" ]; then say "        backups: off (no age recipient set)"
+  elif systemctl is-enabled ainkrad-backup.timer >/dev/null 2>&1; then t PASS "backup timer: $(systemctl show -p NextElapseUSecRealtime --value ainkrad-backup.timer)"
+  else t FAIL "ainkrad-backup.timer not enabled"; fi
   runner_selftest
   citadel_selftest
   case ${1:-no} in
@@ -429,7 +443,7 @@ uninstall() {
   # KillMode=process: stopping the runner leaves its terminal hosts running on purpose; removing it ends them.
   run systemctl kill --kill-whom=all ainkrad-runner.service 2>/dev/null || true
   run rm -rf "$UNITS/ainkrad-core.service" "$UNITS/ainkrad-runner.service" "$UNITS/ainkrad-backup.service" \
-    "$UNITS/ainkrad-backup.timer" "$UNITS/ainkrad-backup.timer.d" "$UNITS/ainkrad-backup.service.d" "$UNITS/ainkrad-core.service.d"
+    "$UNITS/ainkrad-backup.timer" "$UNITS/ainkrad-backup.timer.d" "$UNITS/ainkrad-backup.service.d" "$UNITS/ainkrad-core.service.d" "$UNITS/ainkrad-runner.service.d"
   run systemctl daemon-reload
   run systemctl reset-failed 2>/dev/null || true
   run rm -f "$BIN/ainkrad-core-server" "$BIN/ainkradctl" "$BIN/ainkrad-runner" "$BIN/ainkrad-ptyhost" "$BIN/ainkrad-core-citadel"
@@ -453,14 +467,19 @@ main() {
       --config) CONFIG=${2:?}; shift 2 ;;
       --binary) CLI_BINARY=${2:?}; shift 2 ;;
       --dry-run) DRY=1; shift ;;
+      --harden) HARDEN_REQ=yes; shift ;;
+      --guided) GUIDED=1; shift ;;
+      --wizard) GUIDED=-1; shift ;;
       --uninstall) MODE=uninstall; shift ;;
       --purge) PURGE=1; shift ;;
       --check) MODE=check; shift ;;
       --backup) CHECK_BACKUP=${2:?}; valid_selftest "$CHECK_BACKUP" || die "--backup local|bucket"; shift 2 ;;
-      -h | --help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-      *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+      -h | --help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+      *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
     esac
   done
+  case ${AINKRAD_HARDEN:-} in '' | yes | no) [ -n "$HARDEN_REQ" ] || HARDEN_REQ=${AINKRAD_HARDEN:-} ;; # the --harden flag wins over the variable
+ *) die "AINKRAD_HARDEN must be yes or no (got '$AINKRAD_HARDEN')" ;; esac
   case $MODE in
     uninstall) uninstall; return ;;
     check)
@@ -470,19 +489,23 @@ main() {
       selftest "$CHECK_BACKUP"; return ;;
   esac
   preflight
-  if [ -n "$CONFIG" ]; then
+  # No answers file and no --wizard: the guided install is the default.
+  if [ -n "$CONFIG" ] || [ "$GUIDED" = -1 ]; then GUIDED=0; else GUIDED=1; fi
+  if [ "$GUIDED" = 1 ]; then
+    ui_init; guided_banner; guided_answers; apply_harden_req; check_answers || die "invalid answers"
+  elif [ -n "$CONFIG" ]; then
     parse_answers "$CONFIG" || die "fix the answers file above"
     [ -z "$CLI_BINARY" ] || A_BINARY_DIR=$CLI_BINARY
     local missing; missing=$(missing_keys)
     [ -z "$missing" ] || die "missing in $CONFIG: $(echo "$missing" | tr '\n' ',' | sed 's/,$//; s/,/, /g')"
-    check_answers || die "fix the answers above"
+    apply_harden_req; check_answers || die "fix the answers above"
   else
     [ -z "$CLI_BINARY" ] || A_BINARY_DIR=$CLI_BINARY
-    wizard; check_answers || die "invalid answers"
+    wizard; apply_harden_req; check_answers || die "invalid answers"
   fi
   A_HOSTNAME=$(lower "$A_HOSTNAME")
-  review
-  [ -n "$CONFIG" ] || [ "$DRY" = 1 ] || yes_no "Install with these answers?" || die "aborted, nothing changed"
+  if [ "$GUIDED" = 1 ]; then guided_backup_key; else review; fi
+  [ -n "$CONFIG" ] || [ "$DRY" = 1 ] || [ "$GUIDED" = 1 ] || yes_no "Install with these answers?" || die "aborted, nothing changed"
   [ "$DRY" = 0 ] || say "(dry run: the commands below are printed, not run)"
   checks
   stage_binaries
@@ -494,6 +517,15 @@ main() {
   real_credentials
   extras
   [ "$DRY" = 1 ] || selftest "$A_SELFTEST_BACKUP" || warn "self-test failed: see above"
+  if [ "$GUIDED" = 1 ]; then
+    local rc=0
+    step "First device"
+    guided_invite || rc=$?
+    guided_summary "$rc"
+    [ "$rc" != 0 ] || [ -z "$INVITE" ] || guided_show_invite
+    [ "$rc" != 2 ] || rc=0 # no terminal: deliberately no invite, the command to run is printed; the install itself succeeded
+    return "$rc"
+  fi
   bootstrap
   summary
 }

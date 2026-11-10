@@ -10,6 +10,10 @@
 //! 3. one line, at most 4 KiB, parsed into a typed action with unknown fields refused;
 //! 4. limits, lock, act, log, answer.
 //!
+//! A helper killed between answering `restart_*` and running `systemctl` leaves a repeat of that
+//! id answering `accepted` with no `failed` line (the answer is written first, on purpose, so it
+//! reaches the client even when the restart tears the Core down). Repeats of a request are silent.
+//!
 //! No network, no tokio, no shell, no installed binary is ever run: the only processes are
 //! `systemctl` and `journalctl`, with fixed argv and an empty environment (`exec.rs`).
 
@@ -158,16 +162,39 @@ impl Trail<'_> {
             None => fields.push_str(" claimed_by_core=-"),
         }
         fields.push_str(extra);
-        actlog::append(
-            &self.ctx.state_dir,
-            &actlog::Line {
-                now: (self.ctx.now)(),
-                result,
-                action,
-                fields,
-                durable: result == "accepted",
-            },
-        )
+        let line = actlog::Line {
+            now: (self.ctx.now)(),
+            result,
+            action,
+            fields,
+            durable: result == "accepted",
+        };
+        // Files first: the root-action record is the one that must exist. A repeat of a request
+        // that was never recorded must not read "accepted".
+        let written = match result {
+            // A repeat does nothing, so it leaves nothing: no file, no journal line.
+            "deduped" => return Ok(()),
+            "accepted" | "failed" => {
+                let kept = actlog::append_to(&self.ctx.state_dir, actlog::MUTATIONS, &line);
+                // The shared log is a convenience.
+                let _ = actlog::append(&self.ctx.state_dir, &line);
+                kept
+            }
+            _ => actlog::append(&self.ctx.state_dir, &line),
+        };
+        if matches!(result, "accepted" | "failed") {
+            // The journal keeps root actions even if the files cannot. Never `eprintln!`: it
+            // panics when stderr is closed (EPIPE), which would kill the helper mid-action.
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "ainkrad-host: {} {} {} {}",
+                line.now,
+                line.result,
+                line.action,
+                line.fields
+            );
+        }
+        written
     }
 }
 
@@ -212,8 +239,7 @@ pub fn serve(ctx: &Ctx, mut stream: UnixStream) -> usize {
             respond(&mut stream, wire::err(r.id.as_deref(), r.code, None));
         }
         Ok(req) => {
-            let answer = handle(ctx, &trail, &req);
-            respond(&mut stream, answer);
+            handle(ctx, &trail, &req, &mut stream);
         }
     }
     read
@@ -232,38 +258,47 @@ fn refuse(trail: &Trail, req: &Request, code: Code, retry_after: Option<u64>) ->
     wire::err(Some(&req.id), code, retry_after)
 }
 
-fn handle(ctx: &Ctx, trail: &Trail, req: &Request) -> Vec<u8> {
+fn handle(ctx: &Ctx, trail: &Trail, req: &Request, stream: &mut UnixStream) {
     if req.action.mutating() {
-        return mutate(ctx, trail, req);
+        return mutate(ctx, trail, req, stream);
     }
     if let Err(wait) = read_limit(ctx, req.action.name()) {
-        return refuse(trail, req, Code::RateLimited, Some(wait));
+        return respond(stream, refuse(trail, req, Code::RateLimited, Some(wait)));
     }
     let result = match &req.action {
         Action::Status => status::status(ctx),
         Action::Logs(l) => logs::logs(ctx, l),
         _ => Err(Code::UnknownAction),
     };
-    match result {
-        Ok(v) => wire::ok(&req.id, v), // a read that worked is not logged
-        Err(code) => refuse(trail, req, code, None),
-    }
+    respond(
+        stream,
+        match result {
+            Ok(v) => wire::ok(&req.id, v), // a read that worked is not logged
+            Err(code) => refuse(trail, req, code, None),
+        },
+    );
 }
 
-/// Best-effort read rate limits (`status` 120/min, `logs` 60/min) in `reads.json`. Reads must work
-/// when the state is bad, so this file failing never refuses anything. ponytail: instances do not
-/// share a lock here, so a race can only loosen the limit; add one if reads ever need a hard cap.
+/// Read rate limits (`status` 120/min, `logs` 60/min) in `reads.json`. Reads must work when the
+/// state is bad, so a file that cannot be read or written never refuses anything. The read-modify-
+/// write runs under a blocking lock of its own (`reads.lock`, held across two fsyncs, with no timeout of its own; it relies on the unit's `RuntimeMaxSec=30`), so parallel
+/// instances neither lose counts nor share a temp file mid-write.
 fn read_limit(ctx: &Ctx, action: &str) -> Result<(), u64> {
     const FILE: &str = "reads.json";
     let max = if action == "status" { 120 } else { 60 };
     let now = (ctx.now)();
+    let lock = state::open_lock(&ctx.state_dir, "reads.lock").ok();
+    if let Some(l) = &lock {
+        let _ = l.lock();
+    }
     let mut seen: std::collections::BTreeMap<String, Vec<u64>> =
         state::read_capped(&ctx.state_dir.join(FILE), 64 * 1024)
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
     let times = seen.entry(action.to_owned()).or_default();
-    times.retain(|t| now.saturating_sub((*t).min(now)) < 60);
+    // Entries from a clock that has since stepped back are dropped, not waited for.
+    times.retain(|t| *t <= now && now - *t < 60);
     if times.len() >= max {
         return Err(times
             .iter()
@@ -275,61 +310,91 @@ fn read_limit(ctx: &Ctx, action: &str) -> Result<(), u64> {
     Ok(())
 }
 
-/// `restart_core` and `restart_runner`: lock, fail-closed limits, dedupe, rate limit, log, act.
-fn mutate(ctx: &Ctx, trail: &Trail, req: &Request) -> Vec<u8> {
+/// `restart_core` and `restart_runner`: lock, fail-closed limits, dedupe, rate limit, log, then
+/// **answer, then act**: `{"accepted":true}` is written before `systemctl` is run, so the answer
+/// reaches the client even when the restart tears the Core down. If systemctl then fails, the
+/// failure is logged and a repeat of the same id answers `failed`.
+fn mutate(ctx: &Ctx, trail: &Trail, req: &Request, stream: &mut UnixStream) {
     let name = req.action.name();
+    let say = |stream: &mut UnixStream, b: Vec<u8>| respond(stream, b);
+    if !state::ensure_dir(&ctx.state_dir, ctx.owner_uid) {
+        return say(stream, refuse(trail, req, Code::StateUnavailable, None));
+    }
     let Ok(lock) = state::open_lock(&ctx.state_dir, LOCK) else {
-        return refuse(trail, req, Code::StateUnavailable, None);
+        return say(stream, refuse(trail, req, Code::StateUnavailable, None));
     };
     match lock.try_lock() {
         Ok(()) => {}
-        Err(TryLockError::WouldBlock) => return refuse(trail, req, Code::Busy, None),
-        Err(TryLockError::Error(_)) => return refuse(trail, req, Code::StateUnavailable, None),
+        Err(TryLockError::WouldBlock) => return say(stream, refuse(trail, req, Code::Busy, None)),
+        Err(TryLockError::Error(_)) => {
+            return say(stream, refuse(trail, req, Code::StateUnavailable, None));
+        }
     }
     let now = (ctx.now)();
     let Ok(mut limits) = limits::load(&ctx.state_dir) else {
-        return refuse(trail, req, Code::StateUnavailable, None);
+        return say(stream, refuse(trail, req, Code::StateUnavailable, None));
     };
     if let Some(done) = limits.dedupe(&req.id, now) {
         if done.action != name {
-            return refuse(trail, req, Code::BadRequest, None);
+            return say(stream, refuse(trail, req, Code::BadRequest, None));
         }
         let _ = trail.log("deduped", name, Some(&req.id), Some(&req.actor), "");
-        return if done.accepted {
-            wire::ok(&req.id, json!({"accepted": true}))
-        } else {
-            wire::err(Some(&req.id), Code::Failed, None)
-        };
+        return say(
+            stream,
+            if done.accepted {
+                wire::ok(&req.id, json!({"accepted": true}))
+            } else {
+                wire::err(Some(&req.id), Code::Failed, None)
+            },
+        );
     }
     if name == "restart_runner" {
         match status::runner_installed(ctx) {
             Some(true) => {}
-            Some(false) => return refuse(trail, req, Code::NotInstalled, None),
-            None => return refuse(trail, req, Code::Failed, None),
+            Some(false) => return say(stream, refuse(trail, req, Code::NotInstalled, None)),
+            None => return say(stream, refuse(trail, req, Code::Failed, None)),
         }
     }
     if let Err(wait) = limits.check(name, now) {
-        return refuse(trail, req, Code::RateLimited, Some(wait));
+        return say(stream, refuse(trail, req, Code::RateLimited, Some(wait)));
     }
     // Counted and logged before it runs: no unlogged root action, and a failed write is a refusal.
     limits.record(&req.id, name, now);
     if limits::save(&ctx.state_dir, &limits).is_err() {
-        return refuse(trail, req, Code::StateUnavailable, None);
+        return say(stream, refuse(trail, req, Code::StateUnavailable, None));
     }
     if trail
         .log("accepted", name, Some(&req.id), Some(&req.actor), "")
         .is_err()
     {
-        return wire::err(Some(&req.id), Code::StateUnavailable, None);
+        // Counted but not run: a repeat of this id must not claim it was accepted, and the
+        // journal and shared log (if they work) say why.
+        limits.mark_failed(&req.id);
+        let _ = trail.log(
+            "failed",
+            name,
+            Some(&req.id),
+            Some(&req.actor),
+            " code=state_unavailable",
+        );
+        let _ = limits::save(&ctx.state_dir, &limits);
+        return say(
+            stream,
+            wire::err(Some(&req.id), Code::StateUnavailable, None),
+        );
     }
+    // Only now may a repeat read "accepted". If this save fails the action still runs and a repeat
+    // answers `failed`: the wrong direction, but the safe one.
+    limits.mark_accepted(&req.id);
+    let _ = limits::save(&ctx.state_dir, &limits);
+    say(stream, wire::ok(&req.id, json!({"accepted": true})));
     let unit = if name == "restart_core" {
         "ainkrad-core.service"
     } else {
         "ainkrad-runner.service"
     };
-    let args = ["--no-block", "restart", unit].map(String::from);
-    let started = ctx.exec.run(SYSTEMCTL, &args, 4096).is_ok_and(|o| o.ok);
-    if !started {
+    let args = ["--no-block", "--no-ask-password", "restart", unit].map(String::from);
+    if !ctx.exec.run(SYSTEMCTL, &args, 4096).is_ok_and(|o| o.ok) {
         limits.mark_failed(&req.id);
         let _ = limits::save(&ctx.state_dir, &limits);
         let _ = trail.log(
@@ -339,7 +404,5 @@ fn mutate(ctx: &Ctx, trail: &Trail, req: &Request) -> Vec<u8> {
             Some(&req.actor),
             " code=failed",
         );
-        return wire::err(Some(&req.id), Code::Failed, None);
     }
-    wire::ok(&req.id, json!({"accepted": true}))
 }

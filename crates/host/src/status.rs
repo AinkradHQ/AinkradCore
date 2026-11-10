@@ -149,6 +149,7 @@ fn bin_dir_safe(ctx: &Ctx) -> bool {
 /// One unit's `systemctl show`: `None` when systemctl cannot be run at all.
 fn unit(ctx: &Ctx, name: &str) -> Option<BTreeMap<String, String>> {
     let args = [
+        "--no-ask-password".to_owned(),
         "show".to_owned(),
         "-p".to_owned(),
         "ActiveState,SubState,ActiveEnterTimestamp,NRestarts,LoadState".to_owned(),
@@ -234,7 +235,8 @@ pub fn status(ctx: &Ctx) -> Result<Value, Code> {
         });
     Ok(
         json!({"helper_version": env!("CARGO_PKG_VERSION"), "host_id": host_id, "manifest": manifest,
-              "bin_dir_safe": dir_safe, "binaries": binaries, "units": units}),
+              "bin_dir_safe": dir_safe,
+              "state_dir_safe": state::dir_safe(&ctx.state_dir, ctx.owner_uid), "binaries": binaries, "units": units}),
     )
 }
 
