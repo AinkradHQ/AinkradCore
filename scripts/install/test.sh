@@ -159,6 +159,25 @@ U=$D/systemd/ainkrad-runner.service
 grep -qx 'KillMode=process' "$U" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: unit lacks KillMode=process" >&2; }
 grep -v '^#' "$U" | grep -q -- '--enable-' && { fail=$((fail + 1)); echo "FAIL: the unit enables a driver" >&2; } || pass=$((pass + 1))
 grep -qx 'Environment=MALLOC_ARENA_MAX=1' "$U" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: unit lacks MALLOC_ARENA_MAX=1" >&2; }
+# bubblewrap (agent sessions, terminals) needs these; `RestrictNamespaces=yes`, ProcSubset=pid and the /proc overmounting
+# Protect* lines make it fail on a real host (H0b), so they must not come back.
+grep -qx 'RestrictNamespaces=user mnt pid ipc uts cgroup net' "$U" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: unit lacks the bwrap namespace allow-list" >&2; }
+grep -Eiq '^(ProcSubset=pid|ProtectKernelTunables=yes|ProtectKernelLogs=yes|ProtectHostname=yes|RestrictNamespaces[[:space:]]*=[[:space:]]*(yes|true|1|on))[[:space:]]*$' "$U" && { fail=$((fail + 1)); echo "FAIL: the unit blocks bwrap again" >&2; } || pass=$((pass + 1))
+# The last RestrictAddressFamilies line wins in systemd: it must be an allow-list holding AF_NETLINK (no `~` deny-list).
+af=$(grep '^RestrictAddressFamilies=' "$U" | tail -n1)
+{ [ -n "$af" ] && [ "${af#RestrictAddressFamilies=\~}" = "$af" ] && printf '%s' "$af" | grep -qw AF_NETLINK; } && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: last RestrictAddressFamilies lacks AF_NETLINK or is a deny-list" >&2; }
+grep -E '^SystemCallFilter=' "$U" | grep -qE 'mount pivot_root umount2' && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: unit lacks the mount syscalls bwrap needs" >&2; }
+grep -Eq '^SystemCallFilter=~.*\b(mount|pivot_root|umount2)\b' "$U" && { fail=$((fail + 1)); echo "FAIL: a SystemCallFilter deny-list blocks bwrap's mount syscalls" >&2; } || pass=$((pass + 1))
+# Live (Linux, root, systemd only; skipped elsewhere): the unit's own hardening lines as properties of a transient unit
+# running bwrap with the agent sandbox's arguments. Mutation check: the same run with RestrictNamespaces=yes must fail.
+if [ "$(uname -s)" = Linux ] && [ "$(id -u)" = 0 ] && [ -x /usr/bin/bwrap ] && [ -d /run/systemd/system ] && command -v systemd-run >/dev/null; then
+  props=()
+  while IFS= read -r l; do props+=(-p "$l"); done < <(sed -n '/^\[Service\]/,/^\[Install\]/p' "$U" | grep -E '^(Protect|PrivateTmp|PrivateDevices|DevicePolicy|ProcSubset|NoNewPrivileges|CapabilityBoundingSet|AmbientCapabilities|Restrict|LockPersonality|SystemCall)')
+  bw=(/usr/bin/bwrap --die-with-parent --unshare-user --unshare-pid --unshare-ipc --unshare-uts --proc /proc --dev /dev --tmpfs /dev/shm --dir /tmp --new-session --cap-drop ALL --disable-userns --unshare-cgroup-try --ro-bind /usr /usr --ro-bind /bin /bin --ro-bind /lib /lib --ro-bind /lib64 /lib64 --unshare-net /bin/true)
+  [ -e /lib64 ] || unset 'bw[-3]' 'bw[-4]' 'bw[-5]'
+  systemd-run -q --wait --pipe --collect --uid=nobody "${props[@]}" "${bw[@]}" >"$t/live.out" 2>&1 && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: bwrap does not start under the unit's hardening: $(head -c 200 "$t/live.out")" >&2; }
+  systemd-run -q --wait --pipe --collect --uid=nobody "${props[@]}" -p RestrictNamespaces=yes "${bw[@]}" >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: live mutation check: RestrictNamespaces=yes did not break bwrap" >&2; } || pass=$((pass + 1))
+else echo "SKIP: live bwrap-under-unit check (needs Linux, root, systemd, /usr/bin/bwrap)"; fi
 P=$D/launchd/io.ainkrad.runner.plist
 grep -A1 '<key>AbandonProcessGroup</key>' "$P" | grep -q '<true/>' && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: plist lacks AbandonProcessGroup" >&2; }
 sed '/<!--/,/-->/d' "$P" | grep -q -- '--enable-' && { fail=$((fail + 1)); echo "FAIL: the plist enables a driver" >&2; } || pass=$((pass + 1))

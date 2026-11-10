@@ -278,6 +278,9 @@ pub fn wrap_net(
                 "--die-with-parent",
                 "--cap-drop",
                 "ALL",
+                // No nested user namespace: with the runner unit allowing `user`, a shell could
+                // otherwise `unshare -Urn` and reach nf_tables/overlayfs (as the agent sandbox does).
+                "--disable-userns",
             ]
             .map(str::to_owned),
         );
@@ -523,6 +526,7 @@ mod tests {
             "--die-with-parent",
             "--cap-drop",
             "ALL",
+            "--disable-userns",
         ];
         assert_eq!(a[..fixed.len()], fixed);
         assert_eq!(a[a.len() - 5..], ["--chdir", "/", "--", "/bin/sh", "-i"]);
