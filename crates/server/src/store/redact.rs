@@ -12,67 +12,12 @@
 use ainkrad_proto::redact::Redactor;
 use serde_json::Value;
 
-const SECRET_WORDS: &[&str] = &[
-    "secret",
-    "secrets",
-    "token",
-    "password",
-    "passwd",
-    "credential",
-    "credentials",
-    "authorization",
-    "apikey",
-];
-
-/// The lowercase words of a key: `apiKey` and `api_key` are both `api`, `key`.
-fn words(key: &str) -> Vec<String> {
-    let mut out = vec![String::new()];
-    let mut prev_lower = false;
-    for c in key.chars() {
-        if !c.is_alphanumeric() {
-            out.push(String::new());
-            prev_lower = false;
-            continue;
-        }
-        if c.is_uppercase() && prev_lower {
-            out.push(String::new());
-        }
-        prev_lower = c.is_lowercase() || c.is_ascii_digit();
-        out.last_mut()
-            .expect("never empty")
-            .extend(c.to_lowercase());
-    }
-    out.retain(|w| !w.is_empty());
-    out
-}
-
-/// Whether a value under `key` is a secret by its name.
-pub(crate) fn secret_name(key: &str) -> bool {
-    let words = words(key);
-    words.iter().any(|w| SECRET_WORDS.contains(&w.as_str()))
-        || (words.len() > 1 && words.last().is_some_and(|w| w == "key"))
-}
+pub(crate) use ainkrad_proto::redact::names::secret_name;
 
 /// Masks `value` in place (both passes).
 pub fn json(value: &mut Value) {
-    mask_names(value);
+    ainkrad_proto::redact::names::mask(value);
     Redactor::new().json(value);
-}
-
-fn mask_names(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            for (key, v) in map.iter_mut() {
-                if secret_name(key) && !v.is_null() {
-                    *v = Value::String(format!("[redacted:{key}]"));
-                } else {
-                    mask_names(v);
-                }
-            }
-        }
-        Value::Array(items) => items.iter_mut().for_each(mask_names),
-        _ => {}
-    }
 }
 
 /// `text` (JSON) with its secrets masked; unchanged when it is not JSON (the store's own check

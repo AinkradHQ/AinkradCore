@@ -1,0 +1,31 @@
+[package]
+name = "ainkrad-host"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Root-side host helper (slice 1): one socket-activated process per connection. No tokio, no
+# network, no sqlx. `unsafe_code` is forbidden here; the one peer-credential wrapper lives in
+# `ainkrad-sys`.
+[lints]
+workspace = true
+
+[lib]
+name = "ainkrad_host"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ainkrad-host"
+path = "src/main.rs"
+
+[dependencies]
+ainkrad-proto = { path = "../proto" }
+ainkrad-sys = { path = "../sys" }
+# O_NOFOLLOW and friends: constants only, no unsafe here.
+libc = "0.2.191"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.10.9"
+
+[dev-dependencies]
+tempfile = "3.27.0"
