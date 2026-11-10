@@ -6,7 +6,7 @@
 #   sudo scripts/install.sh --wizard             the classic question-by-question wizard
 #   sudo scripts/install.sh --config <answers>   unattended (see deploy/install.answers.example)
 #   scripts/install.sh --config <answers> --dry-run   print every action, change nothing (no root needed)
-#   --demo (or AINKRAD_INSTALL_DEMO=1) shows the whole screen flow with fake delays and changes NOTHING on this machine.
+#   --demo shows the whole screen flow with fake delays and changes NOTHING on this machine; it always exits 3 (never a success).
 #   --harden (or AINKRAD_HARDEN=yes; only yes|no are accepted) also runs scripts/host/harden.sh: key-only SSH where safe, a firewall
 #        that rejects every inbound port but ssh/80/443, unattended updates, no swap/core dumps. EXPERIMENTAL and OFF by default.
 #   sudo scripts/install.sh --check [--backup local|bucket]   self-test an existing install
@@ -352,7 +352,7 @@ start_core() {
   [ -z "$tm" ] || run systemctl restart ainkrad-backup.timer
   [ "$DRY" = 1 ] && return 0
   if [ "$GUIDED" = 1 ]; then
-    cert_wait || { ui_warn "The Core's own log says:"; journalctl -u ainkrad-core -n 12 --no-pager 2>&1 | cut -c1-"$((UI_W - 6))" | sed 's/^/     /' >&2; die "the Core did not become healthy within 4 minutes: check that $A_HOSTNAME points at this machine and that your cloud firewall allows inbound TCP 443 (the Core log is above)"; }
+    cert_wait || { ui_warn "The Core's own log says:"; journalctl -u ainkrad-core -n 12 --no-pager 2>&1 | ui_clean_lines | cut -c1-"$((UI_W - 6))" | sed 's/^/     /' >&2; die "the Core did not become healthy within 4 minutes: check that $A_HOSTNAME points at this machine and that your cloud firewall allows inbound TCP 443 (the Core log is above)"; }
     ui_ok "The certificate was issued and the Core answers over HTTPS"
     return 0
   fi
@@ -511,6 +511,7 @@ uninstall() {
   fi
   say "  Kept: $ETC/backup.env (the bucket key: remove it yourself when retiring the host), the bucket and every
   object in it, the ainkrad / ainkrad-runner users, the firewall.$([ "$PURGE" = 1 ] || echo " Data kept in $CORE_HOME (--purge removes it).")"
+  run rm -rf "$INSTALLER_SAVED"
   [ "$DRY" = 1 ] || { say "  TCP listeners now:"; ss -Hltn | awk '{print "    " $4}'; }
 }
 
@@ -534,10 +535,9 @@ main() {
   done
   case ${AINKRAD_HARDEN:-} in '' | yes | no) [ -n "$HARDEN_REQ" ] || HARDEN_REQ=${AINKRAD_HARDEN:-} ;; # the --harden flag wins over the variable
  *) die "AINKRAD_HARDEN must be yes or no (got '$AINKRAD_HARDEN')" ;; esac
-  [ -n "$DEMO" ] || [ "${AINKRAD_INSTALL_DEMO:-}" != 1 ] || DEMO=1
   if [ -n "$DEMO" ]; then
     # shellcheck source=scripts/install/demo.sh
-    . "$ROOT/scripts/install/demo.sh"; demo_main; return
+    . "$ROOT/scripts/install/demo.sh"; demo_main; return 3
   fi
   case $MODE in
     uninstall) uninstall; return ;;
@@ -573,9 +573,8 @@ main() {
   checks
   stage_binaries
   harden
-  local rm_cmd="sudo $0 --uninstall --purge"
-  [ "${AINKRAD_FROM_GET:-}" != 1 ] || rm_cmd="${AINKRAD_RERUN:-sudo sh get.sh} -s -- --uninstall --purge"
-  UI_STATE="Setting up: the service account, the Core's home or its unit may exist. Running the installer again is safe; to remove everything: $rm_cmd"
+  [ "$GUIDED$DRY" != 10 ] || [ "${AINKRAD_FROM_GET:-}" != 1 ] || save_installer
+  UI_STATE="Setting up: the service account, the Core's home or its unit may exist. Running the installer again is safe; $(removal_hint)"
   install_core
   install_citadel
   install_backup

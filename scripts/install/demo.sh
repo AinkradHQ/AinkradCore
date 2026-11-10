@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# scripts/install.sh --demo (or AINKRAD_INSTALL_DEMO=1): the whole screen flow with fake delays and NO change to this machine,
+# scripts/install.sh --demo (the flag only; an environment variable does nothing): the whole screen flow with fake delays and NO change to this machine,
 # for tests and for showing the installer. AINKRAD_DEMO_SPEED scales the delays (default 1 = about 40 s; 0.05 for tests);
 # AINKRAD_DEMO_CLOCK runs the on-screen clock faster during the certificate wait so the 60 s / 120 s certificate hints appear (default 12).
 # shellcheck disable=SC2034
@@ -14,8 +14,9 @@ demo_typed() { # KEY LABEL ANSWER: the card, then the "typed" answer
   demo_nap 1; printf ' > %s: %s\n' "$1" "$3"; ui_ok "$1 = $3"
 }
 demo_main() {
-  GUIDED=1 DRY=1 UI_BASE=0 UI_TOTAL=8 A_HARDEN=no A_HOSTNAME=core.example.com A_ACME_ENV=production A_BACKUP_RECIPIENT=demo
+  GUIDED=1 DRY=1 UI_DEMO=1 A_HARDEN=no A_HOSTNAME=core.example.com A_ACME_ENV=production A_BACKUP_RECIPIENT=demo
   ui_init; ui_box_init; ui_traps
+  UI_BASE=0 UI_TOTAL=8
   DEMO_BASE=$(date +%s) DEMO_REAL0=$DEMO_BASE DEMO_K=1
   ui_now() { echo $((DEMO_BASE + ($(date +%s) - DEMO_REAL0) * DEMO_K)); }
   UI_T0=$(ui_now); UI_RERUN='sudo scripts/install.sh --demo'
@@ -64,5 +65,5 @@ demo_main() {
   if tty_ok; then guided_show_invite; else ui_note "(demo: the link card is shown on a terminal only, never on stdout)"; fi
   guided_summary 0
   guided_next_steps 0
-  ui_note "DEMO finished: nothing was changed."
+  ui_note "DEMO finished: nothing was installed or changed, and this run exits 3 so it can never pass for an install."
 }

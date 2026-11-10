@@ -120,16 +120,33 @@ guided_backup_key() {
   age_recipient "$A_BACKUP_RECIPIENT" || die "backup-keygen gave no usable recipient"
 }
 
+# Where get.sh's bundle is kept so the Core can be removed later without downloading anything again.
+INSTALLER_SAVED=${AINKRAD_SAVED_INSTALLER:-/usr/local/lib/ainkrad-installer}
+save_installer() { # the signed, already verified bundle (get.sh checked it); root-owned
+  # shellcheck disable=SC2016 # the script text is for the inner sh
+  ui_run "Keeping the installer in $INSTALLER_SAVED (for a later removal or re-run)" \
+    sh -c 'rm -rf "$1" && mkdir -p "$1" && cp -R "$2/scripts" "$2/deploy" "$1/" && chmod -R go-w "$1"' _ "$INSTALLER_SAVED" "$ROOT" || true
+}
+removal_hint() { # what to run to take the Core off again, and what that keeps
+  local cmd
+  if [ -x "$INSTALLER_SAVED/scripts/install.sh" ]; then cmd="sudo $INSTALLER_SAVED/scripts/install.sh --uninstall --purge"
+  elif [ "${AINKRAD_FROM_GET:-}" != 1 ]; then cmd="sudo $0 --uninstall --purge"
+  else cmd="run the one-line command again with: sh -s -- --uninstall --purge (it checks the download first)"; fi
+  echo "to remove the Core and its data run: $cmd. That keeps the ainkrad service users, /etc/ainkrad/backup.env and the backup bucket, installed apt packages, and SSH and firewall settings."
+}
+
 # The certificate wait: the longest silent part. A background poller, a 4-minute watchdog, the spinner in front.
 cert_wait() {
   local pid wd rc=0
   ( until health >/dev/null 2>&1; do sleep 2; done ) & pid=$!
   ( sleep 240; kill "$pid" 2>/dev/null ) >/dev/null 2>&1 & wd=$!
+  UI_JOBS="$pid $wd" UI_JOB="waiting for the certificate (the Core is installed and may be running)"
   UI_HINT=0
   ui_note "Usually 20-60 s; it needs port 443 reachable and the DNS record pointing here."
   ui_wait "$pid" "Requesting the certificate" "" ui_cert_text
   wait "$pid" 2>/dev/null || rc=$?
   kill "$wd" 2>/dev/null; wait "$wd" 2>/dev/null || true
+  UI_JOBS='' UI_JOB=''
   return "$rc"
 }
 guided_next_steps() { # guided_next_steps INVITE_RC
@@ -150,10 +167,10 @@ ui_card() {
 dns_probe() { # NAME OUTFILE: "A ip" / "AAAA ip" lines (dig when there is one, else getent); never fails
   { if command -v dig >/dev/null; then
       dig +short +time=3 +tries=1 A "$1" 2>/dev/null | grep -E '^[0-9.]+$' | sed 's/^/A /' || true
-      dig +short +time=3 +tries=1 AAAA "$1" 2>/dev/null | grep ':' | sed 's/^/AAAA /' || true
+      dig +short +time=3 +tries=1 AAAA "$1" 2>/dev/null | grep -E '^[0-9a-fA-F:]+$' | sed 's/^/AAAA /' || true
     else
-      getent ahostsv4 "$1" 2>/dev/null | awk '{print "A " $1}' | sort -u || true
-      getent ahostsv6 "$1" 2>/dev/null | awk '{print "AAAA " $1}' | sort -u || true
+      getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' | sort -u | sed 's/^/A /' || true
+      getent ahostsv6 "$1" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9a-fA-F:]+$' | sort -u | sed 's/^/AAAA /' || true
     fi; } >"$2"
 }
 pub_probe() { # OUTFILE: this machine's public IPv4 from a third party (api.ipify.org); never fails
@@ -162,7 +179,8 @@ pub_probe() { # OUTFILE: this machine's public IPv4 from a third party (api.ipif
 # ui_check_dns NAME: A record against this machine's public address, then the AAAA record; says plainly what to fix.
 ui_check_dns() {
   local name=$1 pub a aaaa x here f
-  ui_logopen; f=$UI_LOGDIR/dns
+  ui_logopen || { ui_warn "cannot create a log directory, so the DNS check is skipped"; return 0; }
+  f=$UI_LOGDIR/dns
   UI_QUIET=1 ui_run "Looking up this machine's public address (a request to api.ipify.org)" pub_probe "$f.pub" || true
   pub=$(clean_ip "$(cat "$f.pub" 2>/dev/null || true)")
   UI_QUIET=1 ui_run "Checking that $name points at ${pub:-this machine}" dns_probe "$name" "$f.dns" || true
@@ -175,7 +193,8 @@ ui_check_dns() {
   else
     ui_warn "$name points at $a, but this machine is $pub. Fix: change the A record to $pub (or run this installer on $a). Let's Encrypt would validate the wrong machine. Not blocking now; I ask again before installing."
   fi
-  for x in $aaaa; do
+  printf '%s\n' "$aaaa" | tr ' ' '\n' | while IFS= read -r x; do
+    valid_ipv6 "$x" || continue # only a real IPv6 literal gets this far (no globs, no control characters)
     here=0; ip -6 addr 2>/dev/null | grep -q " $x/" && here=1
     [ "$here" = 1 ] || ui_warn "$name also has an IPv6 (AAAA) record $x that is not on this machine. Let's Encrypt tries IPv6 first when it exists. Fix: remove the AAAA record, or point it at this machine."
   done

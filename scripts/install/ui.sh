@@ -8,24 +8,37 @@
 # shellcheck disable=SC2034,SC1003
 
 # --- ui-core begin ---
-UI_N=0 UI_BASE=${AINKRAD_STEP_BASE:-0} UI_TOTAL=${AINKRAD_STEP_TOTAL:-8} UI_TEXTFN='' UI_DL='' UI_TITLE='' UI_FANCY=0 UI_UTF=0 UI_W=80 UI_T0='' UI_CLEAN='' UI_LOG='' UI_LOGDIR=''
-UI_HINT=0 UI_CURSOR=1 UI_STATE='Nothing has been changed on this machine yet.' UI_RERUN=${AINKRAD_RERUN:-'run the same command again'}
-B='' D='' R='' GR='' RD='' YL='' CY='' OKG='+' XG='x' FULL='#' EMPTY='-' DOT='-' SPIN='| / - \'
+ui_defaults() { # every variable the UI uses; called by ui_init (the only top-level code in this block is function definitions)
+  UI_N=0 UI_TITLE='' UI_TEXTFN='' UI_DL='' UI_FANCY=0 UI_UTF=0 UI_W=80 UI_T0='' UI_CLEAN='' UI_LOG='' UI_LOGDIR='' UI_JOBS='' UI_JOB='' UI_RUNS=0
+  UI_HINT=0 UI_CURSOR=1 UI_STATE=${UI_STATE:-'Nothing has been changed on this machine yet.'} UI_RERUN=${AINKRAD_RERUN:-'run the same command again'}
+  UI_DEMO=${UI_DEMO:-0}
+  # numbers from the environment are plain digits or they are ignored (they reach shell arithmetic)
+  case ${AINKRAD_STEP_BASE:-0} in '' | *[!0-9]*) UI_BASE=0 ;; *) UI_BASE=${AINKRAD_STEP_BASE:-0} ;; esac
+  case ${AINKRAD_STEP_TOTAL:-8} in '' | *[!0-9]* | 0) UI_TOTAL=8 ;; *) UI_TOTAL=${AINKRAD_STEP_TOTAL:-8} ;; esac
+  case ${AINKRAD_T0:-} in '' | *[!0-9]*) UI_T0='' ;; *) UI_T0=${AINKRAD_T0:-} ;; esac
+  [ "$UI_TOTAL" -le 99 ] && [ "$UI_BASE" -le 99 ] || { UI_BASE=0 UI_TOTAL=8; }
+  B='' D='' R='' GR='' RD='' YL='' CY='' OKG='+' XG='x' FULL='#' EMPTY='-' DOT='-' SPIN='| / - \'
+}
 ui_now() { date +%s; }
 ui_ts() { date +%H:%M:%S; }
 ui_sleep() { sleep "$1"; }
+ui_clean() { # stdin -> stdout, one stream: C0 controls, DEL, C1 controls (the 8-bit CSI too) dropped; for EVERY external string
+  LC_ALL=C sed "s/$(printf '\302')[$(printf '\200')-$(printf '\237')]//g" | LC_ALL=C tr -d '\000-\037\177\233'
+}
+ui_clean_lines() { # the same for several lines (newline and tab kept)
+  LC_ALL=C sed "s/$(printf '\302')[$(printf '\200')-$(printf '\237')]//g" | LC_ALL=C tr -d '\000-\010\013-\037\177\233'
+}
 ui_init() {
-  UI_FANCY=0
+  ui_defaults
   if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then UI_FANCY=1; fi
-  UI_UTF=0
   case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in *[Uu][Tt][Ff]-8* | *[Uu][Tt][Ff]8*) UI_UTF=1 ;; esac
   UI_W=${COLUMNS:-0}
   case $UI_W in '' | *[!0-9]*) UI_W=0 ;; esac
   [ "$UI_W" -gt 0 ] || UI_W=$(tput cols 2>/dev/null || echo 80)
   case $UI_W in '' | *[!0-9]*) UI_W=80 ;; esac
   [ "$UI_W" -ge 40 ] || UI_W=40
-  [ -n "$UI_T0" ] || UI_T0=${AINKRAD_T0:-$(ui_now)}
-  B='' D='' R='' GR='' RD='' YL='' CY='' OKG='+' XG='x' FULL='#' EMPTY='-' DOT='-' SPIN='| / - \'
+  [ "$UI_W" -le 300 ] || UI_W=300
+  [ -n "$UI_T0" ] || UI_T0=$(ui_now)
   if [ "$UI_FANCY" = 1 ]; then
     B=$(printf '\033[1m') D=$(printf '\033[2m') R=$(printf '\033[0m') GR=$(printf '\033[32m')
     RD=$(printf '\033[31m') YL=$(printf '\033[33m') CY=$(printf '\033[36m')
@@ -34,9 +47,9 @@ ui_init() {
 }
 ui_el_s() { echo $(($(ui_now) - UI_T0)); }
 ui_el() { _e=$(ui_el_s); printf '%02d:%02d' $((_e / 60)) $((_e % 60)); }
-ui_fit() { # ui_fit TEXT [MAX]: one line, control characters dropped, cut to MAX (default: the width minus room for the glyph)
+ui_fit() { # ui_fit TEXT [MAX]: one line, controls dropped, cut to MAX (default: the width minus room for the glyph)
   _max=${2:-$((UI_W - 8))}
-  printf '%s' "$1" | tr -d '\000-\037' | cut -c1-"$_max"
+  printf '%s' "$1" | ui_clean | cut -c1-"$_max"
 }
 ui_frame() { # ui_frame I: the I-th spinner glyph
   _n=0; for _g in $SPIN; do _n=$((_n + 1)); done
@@ -49,8 +62,25 @@ ui_cursor() { # ui_cursor hide|show: only on a real terminal
 }
 ui_clean_add() { UI_CLEAN="$UI_CLEAN
 $1"; }
-ui_exit() { # the EXIT trap: the cursor is always back, then the registered clean-ups
+ui_kill_tree() { # ui_kill_tree PID SIGNAL: the process and every descendant, deepest first (a job started with & ignores SIGINT)
+  for _k in $(ps -A -o pid= -o ppid= 2>/dev/null | awk -v p="$1" '$2 == p { print $1 }'); do ui_kill_tree "$_k" "$2"; done
+  kill -s "$2" "$1" 2>/dev/null || true
+}
+ui_kill_jobs() { # stop the background job(s) of the current wait and wait for them: TERM, 3 s grace, KILL
+  [ -n "$UI_JOBS" ] || return 0
+  for _j in $UI_JOBS; do ui_kill_tree "$_j" TERM; done
+  _g=0
+  while [ "$_g" -lt 30 ]; do
+    _alive=0; for _j in $UI_JOBS; do if kill -0 "$_j" 2>/dev/null; then _alive=1; fi; done
+    [ "$_alive" = 1 ] || break
+    sleep 0.1; _g=$((_g + 1))
+  done
+  for _j in $UI_JOBS; do ui_kill_tree "$_j" KILL; wait "$_j" 2>/dev/null || true; done
+  UI_JOBS=''
+}
+ui_exit() { # the EXIT trap: any job is gone, the cursor is back, then the registered clean-ups
   _rc=$?
+  ui_kill_jobs
   ui_cursor show
   if [ "$_rc" = 0 ] && [ -n "$UI_LOGDIR" ]; then rm -rf "$UI_LOGDIR"; fi # the log stays after a failure
   _list=$UI_CLEAN; UI_CLEAN=''
@@ -60,10 +90,14 @@ ui_exit() { # the EXIT trap: the cursor is always back, then the registered clea
   IFS=$_old
   return "$_rc"
 }
-ui_int() { # INT/TERM: a clean line, and what state the machine is in
+ui_int() { # INT/TERM: stop the job and its children FIRST, then say honestly what state things are in
+  _had=$UI_JOB
+  ui_kill_jobs
   ui_cursor show
   [ "$UI_FANCY" != 1 ] || printf '\r\033[K'
-  printf '\n %s! Interrupted at step %s of %s (%s).%s\n   State: %s\n   To continue: %s\n' "$YL" "$UI_N" "$UI_TOTAL" "$UI_TITLE" "$R" "$UI_STATE" "$UI_RERUN"
+  printf '\n %s! Interrupted at step %s of %s (%s).%s\n' "$YL" "$UI_N" "$UI_TOTAL" "$UI_TITLE" "$R"
+  [ -z "$_had" ] || printf '   Stopped while: %s. That step may be partly done.\n' "$(printf '%s' "$_had" | ui_clean)"
+  printf '   State: %s\n   To continue: %s\n' "$(printf '%s' "$UI_STATE" | ui_clean)" "$UI_RERUN"
   exit "$1"
 }
 ui_traps() { trap ui_exit EXIT; trap 'ui_int 130' INT; trap 'ui_int 143' TERM; }
@@ -79,6 +113,7 @@ ui_short() { # short names for the "Done so far" line
   esac
 }
 ui_roadmap() {
+  [ "$UI_DEMO" != 1 ] || printf '\n %s*** DEMO: nothing real happens on this machine ***%s\n' "$YL" "$R"
   printf '\n %sAinkrad Core setup%s\n %sHere is what will happen (about 5 minutes):%s\n' "$B" "$R" "$D" "$R"
   _i=$((UI_BASE + 1))
   while [ "$_i" -le $((UI_BASE + UI_TOTAL)) ]; do printf '   %s  %s\n' "$((_i - UI_BASE))" "$(ui_rname "$_i")"; _i=$((_i + 1)); done
@@ -89,9 +124,9 @@ ui_bar() { # ui_bar N TOTAL: [#####-----]
   printf '[%s]' "$_s"
 }
 ui_step() { # ui_step N "Title" "why": the persistent header (N is the roadmap number; UI_BASE is subtracted for display)
-  UI_N=$1 UI_TITLE=$2; _n=$(($1 - UI_BASE))
+  UI_N=$1 UI_TITLE=$2; _n=$(($1 - UI_BASE)); _dm=''; [ "$UI_DEMO" != 1 ] || _dm='DEMO · '
   if [ "$UI_FANCY" = 1 ]; then
-    printf '\n %s%s%s step %s of %s %s·%s %s%s%s %s·%s %s elapsed\n' "$CY" "$(ui_bar "$_n" "$UI_TOTAL")" "$R" "$_n" "$UI_TOTAL" "$D" "$R" "$B" "$2" "$R" "$D" "$R" "$(ui_el)"
+    printf '\n %s%s%s %sstep %s of %s %s·%s %s%s%s %s·%s %s elapsed\n' "$CY" "$(ui_bar "$_n" "$UI_TOTAL")" "$R" "$_dm" "$_n" "$UI_TOTAL" "$D" "$R" "$B" "$2" "$R" "$D" "$R" "$(ui_el)"
     [ -z "${3:-}" ] || printf '   %s%s%s\n' "$D" "$3" "$R"
     if [ "$_n" -gt 1 ]; then
       _d=''; _i=$((UI_BASE + 1)); while [ "$_i" -lt "$1" ]; do _d="$_d $OKG $(ui_short "$_i") "; _i=$((_i + 1)); done
@@ -99,27 +134,30 @@ ui_step() { # ui_step N "Title" "why": the persistent header (N is the roadmap n
       printf '   %sDone so far:%s%s%s\n' "$D" "$GR" "$_d" "$R"
     fi
   else
-    printf '[%s] step %s/%s: %s%s\n' "$(ui_ts)" "$_n" "$UI_TOTAL" "$2" "${3:+ - $3}"
+    printf '[%s] %sstep %s/%s: %s%s\n' "$(ui_ts)" "${_dm:+DEMO }" "$_n" "$UI_TOTAL" "$2" "${3:+ - $3}"
   fi
 }
 ui_ok() { # a finished thing, in plain words
-  if [ "$UI_FANCY" = 1 ]; then printf '\r\033[K   %s%s%s %s\n' "$GR" "$OKG" "$R" "$1"; else printf '[%s]   ok: %s\n' "$(ui_ts)" "$1"; fi
+  _x=$(printf '%s' "$1" | ui_clean)
+  if [ "$UI_FANCY" = 1 ]; then printf '\r\033[K   %s%s%s %s\n' "$GR" "$OKG" "$R" "$_x"; else printf '[%s]   ok: %s\n' "$(ui_ts)" "$_x"; fi
 }
-ui_note() { if [ "$UI_FANCY" = 1 ]; then printf '   %s%s%s\n' "$D" "$1" "$R"; else printf '[%s]   %s\n' "$(ui_ts)" "$1"; fi; }
-ui_warn() { if [ "$UI_FANCY" = 1 ]; then printf '   %s!%s %s\n' "$YL" "$R" "$1"; else printf '[%s]   WARNING: %s\n' "$(ui_ts)" "$1"; fi; }
+ui_note() { _x=$(printf '%s' "$1" | ui_clean); if [ "$UI_FANCY" = 1 ]; then printf '   %s%s%s\n' "$D" "$_x" "$R"; else printf '[%s]   %s\n' "$(ui_ts)" "$_x"; fi; }
+ui_warn() { _x=$(printf '%s' "$1" | ui_clean); if [ "$UI_FANCY" = 1 ]; then printf '   %s!%s %s\n' "$YL" "$R" "$_x"; else printf '[%s]   WARNING: %s\n' "$(ui_ts)" "$_x"; fi; }
 ui_hb_due() { # ui_hb_due LAST NOW: plain mode prints a heartbeat at least every 10 s
   [ $(($2 - $1)) -ge 10 ]
 }
-ui_logopen() { # a root-only log for the output of long commands (never for anything secret)
+ui_logopen() { # a root-only log for the output of long commands (never for anything secret); fails when there is no place for it
   [ -n "$UI_LOG" ] && return 0
   _old=$(umask); umask 077
-  UI_LOGDIR=${UI_LOGDIR:-$(mktemp -d "${TMPDIR:-/tmp}/ainkrad-install.XXXXXX")}
-  UI_LOG=$UI_LOGDIR/install.log; : >"$UI_LOG"
+  [ -n "$UI_LOGDIR" ] || UI_LOGDIR=$(mktemp -d "${TMPDIR:-/tmp}/ainkrad-install.XXXXXX" 2>/dev/null) || UI_LOGDIR=''
   umask "$_old"
+  if [ -z "$UI_LOGDIR" ] || [ ! -d "$UI_LOGDIR" ]; then UI_LOGDIR=''; return 1; fi
+  UI_LOG=$UI_LOGDIR/install.log
+  : >"$UI_LOG" || { UI_LOG=''; return 1; }
 }
 ui_lastline() { # the last line of a log, dimmed material for the spinner
   [ -s "$1" ] || return 0
-  tail -n 1 "$1" 2>/dev/null | tr -d '\000-\037' | sed 's/^ *//'
+  tail -n 1 "$1" 2>/dev/null | ui_clean | sed 's/^ *//'
 }
 ui_wait() { # ui_wait PID "what is happening" [LOG] [TEXTFN]: until the process ends
   _pid=$1 _msg=$2 _log=${3:-} _fn=${4:-}
@@ -136,10 +174,10 @@ ui_wait() { # ui_wait PID "what is happening" [LOG] [TEXTFN]: until the process 
       printf '\r\033[K   %s%s%s %s%s' "$CY" "$(ui_frame "$_i")" "$R" "$_t2" "${_ll:+ $D$_ll$R}"
       _i=$((_i + 1)); ui_sleep 0.1
     else
-      if ui_hb_due "$_last" "$_now"; then printf '[%s]   still working: %s (%ss)\n' "$(ui_ts)" "$_t" "$_s"; _last=$_now; fi
+      if ui_hb_due "$_last" "$_now"; then printf '[%s]   still working: %s (%ss)\n' "$(ui_ts)" "$(printf '%s' "$_t" | ui_clean)" "$_s"; _last=$_now; fi
       ui_sleep 1
     fi
-    [ -z "$_fn" ] || ui_hints "$_s"
+    [ "$_fn" != ui_cert_text ] || ui_hints "$_s" # the DNS / port 443 checklist belongs to the certificate wait only
   done
   [ "$UI_FANCY" != 1 ] || printf '\r\033[K'
   ui_cursor show
@@ -147,7 +185,7 @@ ui_wait() { # ui_wait PID "what is happening" [LOG] [TEXTFN]: until the process 
 ui_cert_text() { # the heartbeat of the Let's Encrypt order, by seconds waited
   if [ "$1" -lt 60 ]; then echo "Requesting the certificate from Let's Encrypt... ${1}s"
   elif [ "$1" -lt 120 ]; then echo "Still waiting for Let's Encrypt... ${1}s (slower than usual)"
-  else echo "Let's Encrypt is taking very long... ${1}s (see the checklist above; Ctrl-C is safe)"; fi
+  else echo "Let's Encrypt is taking very long... ${1}s (see the checklist above; Ctrl-C stops the wait, run the command again to continue)"; fi
 }
 ui_hints() { # printed once at 60 s and once at 120 s of a certificate wait
   if [ "$1" -ge 120 ] && [ "$UI_HINT" -lt 2 ]; then UI_HINT=2; ui_hint_text 2
@@ -163,20 +201,22 @@ ui_hint_text() {
 }
 ui_run() { # ui_run "what is happening" command...: in the background, output to the log, a spinner in front
   _m=$1; shift
-  ui_logopen
-  UI_RUNS=$((${UI_RUNS:-0} + 1)); _rl=$UI_LOGDIR/run.$UI_RUNS; : >"$_rl"
+  ui_logopen || { ui_warn "cannot create a log directory in ${TMPDIR:-/tmp}, so I will not run: $_m"; return 1; }
+  UI_RUNS=$((UI_RUNS + 1)); _rl=$UI_LOGDIR/run.$UI_RUNS; : >"$_rl"
   ( "$@" ) >"$_rl" 2>&1 </dev/null &
   _p=$!
+  UI_JOBS=$_p UI_JOB=$_m
   _t0=$(ui_now)
-  [ "$UI_FANCY" = 1 ] || printf '[%s]   %s ...\n' "$(ui_ts)" "$_m" # plain mode has no spinner: say what starts
+  [ "$UI_FANCY" = 1 ] || printf '[%s]   %s ...\n' "$(ui_ts)" "$(printf '%s' "$_m" | ui_clean)" # plain mode has no spinner: say what starts
   ui_wait "$_p" "$_m" "$_rl" "$UI_TEXTFN"
   UI_TEXTFN=''
   _rc=0; wait "$_p" || _rc=$?
+  UI_JOBS='' UI_JOB=''
   { printf '== %s\n' "$_m"; cat "$_rl"; } >>"$UI_LOG" 2>/dev/null
   if [ "$_rc" = 0 ]; then [ "${UI_QUIET:-0}" = 1 ] || ui_ok "$_m ($(($(ui_now) - _t0))s)"
   else
     ui_warn "$_m: failed (exit $_rc). Last lines of its output (all of it: $UI_LOG):"
-    tail -n 12 "$_rl" 2>/dev/null | tr -d '\000-\010\013-\037' | cut -c1-"$((UI_W - 8))" | sed 's/^/        /'
+    tail -n 12 "$_rl" 2>/dev/null | ui_clean_lines | cut -c1-"$((UI_W - 8))" | sed 's/^/        /'
   fi
   rm -f "$_rl"
   return "$_rc"
@@ -187,12 +227,14 @@ ui_dl_text() { # the heartbeat of a download: the size so far of the file being 
   echo "Downloading $(basename "$UI_DL")... $((_b / 1024)) KB so far (${1}s)"
 }
 ui_stopped() { # ui_stopped "what failed" ["what to do"]: the red card, then exit 1
+  ui_kill_jobs
   ui_cursor show
   [ "$UI_FANCY" != 1 ] || printf '\r\033[K'
   printf '\n %s%s%s Stopped at step %s of %s (%s)%s\n' "$RD" "$B" "$XG" "$UI_N" "$UI_TOTAL" "$UI_TITLE" "$R" >&2
-  printf '   What failed: %s\n   What to do:  %s\n   Re-run:      %s\n' "$1" "${2:-fix the cause above, then run the command below}" "$UI_RERUN" >&2
+  printf '   What failed: %s\n   What to do:  %s\n   Re-run:      %s\n' "$(printf '%s' "$1" | ui_clean)" "${2:-fix the cause above, then run the command below}" "$UI_RERUN" >&2
   [ -z "$UI_LOG" ] || printf '   Log:         %s\n' "$UI_LOG" >&2
-  printf '   State:       %s\n' "$UI_STATE" >&2
+  printf '   State:       %s\n' "$(printf '%s' "$UI_STATE" | ui_clean)" >&2
   exit 1
 }
 # --- ui-core end ---
+ui_defaults # install.sh sources this file; get.sh calls ui_init from main
