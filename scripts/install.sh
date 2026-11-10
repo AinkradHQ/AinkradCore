@@ -26,7 +26,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 CORE_HOME=/var/lib/ainkrad/core ETC=/etc/ainkrad BIN=/usr/local/bin UNITS=/etc/systemd/system
 STAGING_DIR=https://acme-staging-v02.api.letsencrypt.org/directory
-HARDEN_WARN='' MODE=install GUIDED=0 CONFIG='' DRY=0 PURGE=0 CHECK_BACKUP=no CLI_BINARY='' STAGE=''
+HARDEN_WARN='' HARDEN_STATE='' FW_CHOICE=yes MODE=install GUIDED=0 CONFIG='' DRY=0 PURGE=0 CHECK_BACKUP=no CLI_BINARY='' STAGE=''
 
 say() { printf '%s\n' "$*"; }
 step() { if [ "$GUIDED" = 1 ]; then guided_step "$*"; else printf '\n== %s\n' "$*"; fi; }
@@ -202,8 +202,10 @@ harden() {
     say "  SSH will be admitted only from $A_SSH_FROM (current sessions: ${peers:-none seen}). Your cloud firewall may need the same."
   fi
   [ -n "$CONFIG" ] || [ "$DRY" = 1 ] || [ "$GUIDED" = 1 ] || yes_no "Apply it now?" || { say "  skipped"; return 0; }
-  HARDEN_WARN=$STAGE/harden.warn
-  run env AINKRAD_SSH_FROM="$A_SSH_FROM" AINKRAD_HARDEN_WARN="$HARDEN_WARN" bash "$ROOT/scripts/host/harden.sh"
+  HARDEN_WARN=$STAGE/harden.warn HARDEN_STATE=$STAGE/harden.state
+  firewall_decide
+  run env AINKRAD_SSH_FROM="$A_SSH_FROM" AINKRAD_FIREWALL="$FW_CHOICE" AINKRAD_NOTICE_SHOWN=1 \
+    AINKRAD_HARDEN_WARN="$HARDEN_WARN" AINKRAD_HARDEN_STATE="$HARDEN_STATE" bash "$ROOT/scripts/host/harden.sh"
 }
 
 install_core() {

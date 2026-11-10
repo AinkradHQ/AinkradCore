@@ -191,7 +191,9 @@ for bad in --root --exec --enable-exec User=root 'write .*authority.conf'; do
 done
 grep -q $'\033' "$t/gout" && { fail=$((fail + 1)); echo "FAIL: guided output has colour codes without a TTY" >&2; } || pass=$((pass + 1))
 
-bash "$HERE/get-test.sh" || fail=$((fail + 1)) # get.sh verify-first, secrets to the terminal only, SSH guard, runner argv
+bash "$HERE/get-test.sh" || fail=$((fail + 1)) # get.sh verify-first, secrets to the terminal only, argv
+bash "$HERE/harden-test.sh" || fail=$((fail + 1)) # harden.sh guards and firewall, summary, runner restart sequence
+# (no `grep secret=` on the guided dry run: it can never print one; the secret rules are tested for real, with a pty and without a terminal, in get-test.sh) # get.sh verify-first, secrets to the terminal only, SSH guard, runner argv
 
 echo "install tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]

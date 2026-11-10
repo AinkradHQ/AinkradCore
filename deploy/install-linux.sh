@@ -18,6 +18,31 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 binary="$HERE/../target/release/ainkrad-runner" ptyhost='' pty=0 ca='' pair='' code='' prefix='' start=0 dry=0 exec_on=0 root=0
+run() { printf '+ %s\n' "$*"; [ "$dry" = 1 ] || "$@"; }
+WAS_ACTIVE=1
+# Demoting a root runner: its terminal hosts (ptyhosts, started as root; KillMode=process keeps them alive across a restart)
+# must end too. The unprivileged runner cannot adopt them (a ptyhost serves only its own uid, and the runner's state dir
+# must belong to its user), and root shells should not outlive the demotion. `kill --kill-whom=all` also SIGTERMs the
+# runner itself, which Restart=on-failure treats as a clean exit and does not restart: so whether it was running is noted
+# first and runner_restart_if_needed starts it again. Reads the globals old_root root prefix dry set below.
+runner_demote_kill() {
+  { [ "$old_root" = 1 ] && [ "$root" = 0 ] && { [ -z "$prefix" ] || [ "$dry" = 1 ]; }; } || return 0
+  if [ "$dry" != 1 ]; then if systemctl is-active --quiet ainkrad-runner.service; then WAS_ACTIVE=1; else WAS_ACTIVE=0; fi; fi
+  echo "demoting the runner from root: ending its terminal hosts (they run as root and cannot be adopted by the unprivileged runner)"
+  run systemctl kill --kill-whom=all ainkrad-runner.service || true
+}
+# A runner that is already running keeps its old user and flags until restarted: pick the change up now (also for a dry run
+# with --prefix, so it can be seen and tested). After a demotion the runner is restarted (not try-restarted: the kill
+# stopped it) when it was running before.
+runner_restart_if_needed() {
+  { [ "$start" != 1 ] && [ -z "$pair" ] && { [ -z "$prefix" ] || [ "$dry" = 1 ]; }; } || return 0
+  if [ "$old_root" = 1 ] && [ "$root" = 0 ]; then
+    if [ "$WAS_ACTIVE" = 1 ]; then run systemctl restart ainkrad-runner.service; fi
+  elif [ "$old_root" != "$root" ] || [ "$old_args" != "$args" ]; then
+    run systemctl try-restart ainkrad-runner.service
+  fi
+}
+[ "${AINKRAD_INSTALL_SOURCE_ONLY:-}" != 1 ] || [ "${BASH_SOURCE[0]}" = "$0" ] || return 0
 usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 while [ $# -gt 0 ]; do
   case $1 in
@@ -35,7 +60,6 @@ while [ $# -gt 0 ]; do
     *) usage ;;
   esac
 done
-run() { printf '+ %s\n' "$*"; [ "$dry" = 1 ] || "$@"; }
 [ "$dry" = 1 ] || [ "$(id -u)" = 0 ] || [ -n "$prefix" ] || { echo "run as root (or --prefix/--dry-run)" >&2; exit 1; }
 [ "$dry" = 1 ] || [ -x "$binary" ] || { echo "no runner binary at $binary (cargo build --release -p ainkrad-runner, or --binary)" >&2; exit 1; }
 [ -z "$pair" ] || [ -n "$code" ] || { echo "--pair needs --code" >&2; exit 2; }
@@ -105,13 +129,7 @@ if [ "$dry" = 0 ]; then
   printf '# Written by deploy/install-linux.sh. exec.run is off unless --enable-exec is added here.\nRUNNER_ARGS=%s\n' "$args" >"$envfile"
   chmod 0640 "$envfile"; [ -n "$prefix" ] || chown root:ainkrad-runner "$envfile"
 fi
-# Demoting a root runner: its terminal hosts (ptyhosts, started as root; KillMode=process keeps them alive across a restart)
-# must end too. The unprivileged runner cannot adopt them (a ptyhost serves only its own uid, and the runner's state dir
-# must belong to its user), and root shells should not outlive the demotion. Before any restart below.
-if [ "$old_root" = 1 ] && [ "$root" = 0 ] && { [ -z "$prefix" ] || [ "$dry" = 1 ]; }; then
-  echo "demoting the runner from root: ending its terminal hosts (they run as root and cannot be adopted by the unprivileged runner)"
-  run systemctl kill --kill-whom=all ainkrad-runner.service || true
-fi
+runner_demote_kill
 if [ -z "$prefix" ]; then
   run systemctl daemon-reload
   if [ -n "$pair" ]; then
@@ -130,9 +148,4 @@ if [ -z "$prefix" ]; then
     echo "installed, not started. Pair it (see the unit's header), then: systemctl enable --now ainkrad-runner"
   fi
 fi
-# A runner that is already running keeps its old user and flags until restarted: pick the change up now (also for a dry run
-# with --prefix, so it can be seen and tested).
-if [ "$start" != 1 ] && [ -z "$pair" ] && { [ -z "$prefix" ] || [ "$dry" = 1 ]; } &&
-  { [ "$old_root" != "$root" ] || [ "$old_args" != "$args" ]; }; then
-  run systemctl try-restart ainkrad-runner.service
-fi
+runner_restart_if_needed

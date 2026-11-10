@@ -161,15 +161,41 @@ box() { # box LINE...: a rounded box, ASCII content only (padding counts bytes)
   printf ' %s%s%s\n' "$U_BL" "$(repeat "$U_H" "$w")" "$U_BR"
 }
 
+# The firewall rejects everything inbound except ssh/80/443 (TCP and UDP, IPv4 and IPv6): say so BEFORE it is applied, on every
+# path, naming the other services that are listening now. Sets FW_CHOICE (yes|no). AINKRAD_FIREWALL=no skips the step. In
+# guided mode, when other services are listening, ask y/N (default no; with no terminal the answer is no).
+firewall_decide() {
+  local listeners notice h=$ROOT/scripts/host/harden.sh
+  FW_CHOICE=${AINKRAD_FIREWALL:-yes}
+  if [ "$FW_CHOICE" = no ]; then say "  Firewall step skipped (AINKRAD_FIREWALL=no): ports are left as they are."; return 0; fi
+  notice=$(AINKRAD_HARDEN_SOURCE_ONLY=1 bash -c '. "$1"; firewall_notice' _ "$h" 2>/dev/null || true)
+  [ -z "$notice" ] || printf '%s\n' "$notice"
+  listeners=$(AINKRAD_HARDEN_SOURCE_ONLY=1 bash -c '. "$1"; other_listeners' _ "$h" 2>/dev/null || true)
+  if [ -n "$listeners" ] && [ "$GUIDED" = 1 ] && [ "$DRY" = 0 ]; then
+    if have_tty && yes_no "  Reject those services anyway and apply the firewall?"; then FW_CHOICE=yes
+    else FW_CHOICE=no; say "  Firewall step skipped so those services keep working. Open them yourself or re-run and answer y."; fi
+  fi
+}
+
 # What the host really has now, read back (not what we meant to do).
 fw_state() {
   if [ "$A_HARDEN" != yes ]; then echo "not changed (hardening off)"; return; fi
-  local v6='' how
-  if command -v ufw >/dev/null && grep -q '^Status: active' <<<"$(ufw status 2>/dev/null)"; then echo "ufw: ssh, 80, 443 allowed, rest denied"; return; fi
+  local v6='' how st rf=/etc/iptables/rules.v4
+  [ "${AINKRAD_INSTALL_TEST:-}" != 1 ] || rf=${AINKRAD_RULES_V4:-$rf}
+  st=$(cat "${HARDEN_STATE:-/nonexistent}" 2>/dev/null || true)
+  case $st in
+    *firewall=skipped*) echo "not changed (step skipped, see below)"; return ;;
+    *firewall=failed*) echo "NOT applied completely (see below)"; return ;;
+  esac
+  if command -v ufw >/dev/null && grep -q '^Status: active' <<<"$(ufw status 2>/dev/null)"; then
+    case $st in *ipv6=unfiltered*) echo "ufw: ssh/80/443 in, rest denied; IPv6 open" ;; *) echo "ufw: ssh/80/443 in, rest denied" ;; esac
+    return
+  fi
   if grep -q AINKRAD_IN <<<"$(iptables -S INPUT 2>/dev/null)"; then
     grep -q AINKRAD_IN <<<"$(ip6tables -S INPUT 2>/dev/null)" && v6=' +IPv6'
-    how='until next reboot'; grep -qs AINKRAD_IN "${AINKRAD_RULES_V4:-/etc/iptables/rules.v4}" && how='saved for reboot'
-    echo "ssh/80/443 only (IPv4$v6), $how"
+    how='until next reboot'; grep -qs AINKRAD_IN "$rf" && how='saved for reboot'
+    case $st in *ipv6=unfiltered*) v6=''; how="$how; IPv6 open" ;; esac
+    echo "ssh/80/443 (IPv4$v6), $how"
   else echo "NOT applied (see below)"; fi
 }
 ssh_state() {

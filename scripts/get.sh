@@ -105,6 +105,8 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   case $ver in '' | "$comment" | *[!0-9.]*) die "the signed release has no version in its trusted comment ('$comment')" ;; esac
   case ${AINKRAD_MIN_VERSION:-0} in '' | *[!0-9.]*) die "AINKRAD_MIN_VERSION must look like 1.2.3" ;; esac
   floor=$(printf '%s\n%s\n' "$MIN_VERSION" "${AINKRAD_MIN_VERSION:-0}" | sort -V | tail -n1)
+  if [ "$floor" = "$MIN_VERSION" ]; then ok "version floor $floor (from this get.sh's build)"; else ok "version floor $floor (from AINKRAD_MIN_VERSION)"; fi
+  [ -n "${AINKRAD_MIN_VERSION:-}" ] || say "   (AINKRAD_MIN_VERSION is not set: the command shown by the Mac app is meant to carry it)"
   [ "$(printf '%s\n%s\n' "$floor" "$ver" | sort -V | head -n1)" = "$floor" ] ||
     die "the signed release is $ver, older than $floor (the build's floor or AINKRAD_MIN_VERSION): refused (no downgrade)"
   files=$(awk -v t="-$TARGET" 'substr($2, length($2) - length(t) + 1) == t || $2 ~ /^ainkrad-core-installer-.*\.tar\.gz$/ { print $2 }' "$W/SHA256SUMS")
