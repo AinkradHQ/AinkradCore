@@ -32,9 +32,18 @@ pub const ACTION_RESULT: &str = "host.action_result";
 pub const LOGS_READ: &str = "host.logs_read";
 pub const HELPER_REFUSED: &str = "host.helper_refused";
 
-/// `serde_json` text as a short, bounded string.
+/// `s` cut to `max` characters, every control character (an escape sequence, a newline) but a tab
+/// replaced by `?`: text from a log or a unit goes to terminals and UIs.
+fn plain(s: &str, max: usize) -> String {
+    s.chars()
+        .take(max)
+        .map(|c| if c.is_control() && c != '\t' { '?' } else { c })
+        .collect()
+}
+
+/// A JSON string as short, plain text.
 fn short(v: &Value) -> Option<String> {
-    v.as_str().map(|s| s.chars().take(128).collect())
+    v.as_str().map(|s| plain(s, 128))
 }
 
 /// A program installed on the host, as the helper's manifest and checks say.
@@ -295,7 +304,9 @@ pub struct Restarted {
     tag = "system", request_body = RestartBody,
     responses((status = 202, description = "The restart is accepted (audited first as \
         `host.restart_requested`, then `host.action_result`). A Core restart answers before the \
-        Core goes down; clients reconnect. Needs `admin` and a step-up. 400 for a body other \
+        Core goes down; clients reconnect. A 429 or any failure holds the same restart back for a \
+        while (`Retry-After` on a 429). Do not retry a 504 on your own: a retry is a new request \
+        the helper cannot tell from the first. Needs `admin` and a step-up. 400 for a body other \
         than `{\"target\": \"core\" | \"runner\"}`; 409 `not_installed` (no local runner); 429 \
         with `Retry-After` (the helper's limits); 503 `host_helper_unavailable`, \
         `host_helper_busy` or `host_state_unavailable`; 504 `host_helper_timeout`; 502 \
@@ -320,6 +331,13 @@ pub async fn restart(
             );
         }
     };
+    // The helper refused this lately (or failed): answer from memory, with no new audit row per
+    // call. The first refusal in a window is audited, the rest are counted (`refusals`).
+    let now = u64::try_from(app.clock.unix()).unwrap_or(0);
+    if let Some(f) = app.host_helper.blocked(action, now) {
+        refused(&app, &me, action, &f).await;
+        return Err(fail(f));
+    }
     let id = request_id();
     // The row first: a helper that refuses, or a Core that goes down, leaves the request behind.
     let row = audit(
@@ -339,6 +357,27 @@ pub async fn restart(
         Ok(_) => "accepted".to_owned(),
         Err(f) => outcome(f),
     };
+    // Hold the action back so a loop of requests cannot grow the audit log: the helper's wait, or
+    // its 60 s minimum between two Core restarts, else a short back-off after any failure.
+    match &result {
+        Ok(_) if action == "restart_core" => {
+            let why = Failure::Refused {
+                code: "rate_limited".into(),
+                retry_after: Some(60),
+            };
+            app.host_helper.block(action, now, 60, why);
+        }
+        Err(f) => {
+            let secs = match f {
+                Failure::Refused { code, retry_after } if code == "rate_limited" => {
+                    retry_after.unwrap_or(60).clamp(1, 3600)
+                }
+                _ => 10,
+            };
+            app.host_helper.block(action, now, secs, f.clone());
+        }
+        Ok(_) => {}
+    }
     let details = json!({"request_id": id, "action": action, "code": code});
     if let Err(e) = audit(&app, &me, ACTION_RESULT, details).await {
         tracing::error!(error = %e, request_id = id, "auditing a host action result failed");
@@ -411,7 +450,18 @@ async fn logs(
         .call(&request_id(), "logs", params, &actor)
         .await
     {
-        Ok(r) => serde_json::from_value::<LogPage>(r).map_err(|_| fail(Failure::Garbled))?,
+        Ok(r) => {
+            let mut page =
+                serde_json::from_value::<LogPage>(r).map_err(|_| fail(Failure::Garbled))?;
+            // What the helper sends is plain, bounded text and a cursor the next request could send.
+            for l in &mut page.lines {
+                l.at = l.at.as_deref().map(|s| plain(s, 40));
+                l.level = l.level.as_deref().map(|s| plain(s, 16));
+                l.text = l.text.as_deref().map(|s| plain(s, 4096));
+            }
+            page.next_before = page.next_before.filter(|c| valid_cursor(c));
+            page
+        }
         Err(f) => {
             refused(&app, &me, "logs", &f).await;
             return Err(fail(f));

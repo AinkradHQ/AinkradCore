@@ -16,6 +16,8 @@
 //! own socket). This module shares no code with the helper crate, so the Core links none of its
 //! root-side code; the wire format is the one in `crates/host/src/wire.rs`.
 
+use std::collections::HashMap;
+use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -72,21 +74,73 @@ pub enum Failure {
 pub struct Client {
     path: PathBuf,
     gate: Mutex<()>,
+    /// The uid the socket's server must have (`SO_PEERCRED`): root in production.
+    expect_uid: u32,
+    /// Replaces [`CALL`] and [`LOGS`] (tests).
+    deadline: Option<Duration>,
+    /// Actions the helper just refused or failed, until when: `(unix seconds, why)`. A caller
+    /// that keeps asking meanwhile is answered from here and costs the helper (and the audit
+    /// log) nothing.
+    backoff: std::sync::Mutex<HashMap<String, (u64, Failure)>>,
 }
 
 impl Default for Client {
+    /// The real helper: [`SOCKET`], served by root.
     fn default() -> Self {
-        Self::at(SOCKET)
+        Self::build(SOCKET.into(), 0)
     }
 }
 
 impl Client {
-    /// A client of `path`: [`SOCKET`] in production, a fake helper's socket in tests.
-    pub fn at(path: impl Into<PathBuf>) -> Self {
+    fn build(path: PathBuf, expect_uid: u32) -> Self {
         Self {
-            path: path.into(),
+            path,
             gate: Mutex::new(()),
+            expect_uid,
+            deadline: None,
+            backoff: std::sync::Mutex::default(),
         }
+    }
+
+    /// A client of `path` whose server runs as this process's user: a fake helper's socket in tests.
+    pub fn at(path: impl Into<PathBuf>) -> Self {
+        Self::build(path.into(), ainkrad_sys::getuid())
+    }
+
+    /// Requires the socket's server to run as `uid`.
+    pub fn expecting_uid(mut self, uid: u32) -> Self {
+        self.expect_uid = uid;
+        self
+    }
+
+    /// Cuts every exchange at `d` (tests; production uses [`CALL`] and [`LOGS`]).
+    pub fn with_deadline(mut self, d: Duration) -> Self {
+        self.deadline = Some(d);
+        self
+    }
+
+    /// Why `action` is held back at `now`, if it is: the failure it ended with, a rate limit
+    /// with the wait that is left.
+    pub fn blocked(&self, action: &str, now: u64) -> Option<Failure> {
+        let mut held = self.backoff.lock().unwrap_or_else(|e| e.into_inner());
+        let (until, why) = held.get(action)?.clone();
+        if now >= until {
+            held.remove(action);
+            return None;
+        }
+        Some(match why {
+            Failure::Refused { code, .. } if code == "rate_limited" => Failure::Refused {
+                code,
+                retry_after: Some(until - now),
+            },
+            other => other,
+        })
+    }
+
+    /// Holds `action` back for `secs` with `why`.
+    pub fn block(&self, action: &str, now: u64, secs: u64, why: Failure) {
+        let mut held = self.backoff.lock().unwrap_or_else(|e| e.into_inner());
+        held.insert(action.to_owned(), (now + secs, why));
     }
 
     pub fn path(&self) -> &Path {
@@ -111,7 +165,9 @@ impl Client {
         let _turn = tokio::time::timeout(QUEUE, self.gate.lock())
             .await
             .map_err(|_| Failure::Busy)?;
-        let deadline = if action == "logs" { LOGS } else { CALL };
+        let deadline = self
+            .deadline
+            .unwrap_or(if action == "logs" { LOGS } else { CALL });
         tokio::time::timeout(deadline, self.exchange(id, &line))
             .await
             .map_err(|_| Failure::Timeout)?
@@ -125,6 +181,11 @@ impl Client {
                 Failure::Unavailable
             }
         })?;
+        // The kernel's record of who serves the socket: only root may.
+        match ainkrad_sys::peer_uid(stream.as_fd()) {
+            Ok(uid) if uid == self.expect_uid => {}
+            _ => return Err(Failure::Unavailable),
+        }
         // A connection systemd refuses is closed at once: the write may already fail.
         stream.write_all(request).await.map_err(closed)?;
         let mut reader = BufReader::new((&mut stream).take(MAX_RESPONSE));

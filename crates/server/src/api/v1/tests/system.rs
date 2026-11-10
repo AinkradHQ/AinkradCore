@@ -19,6 +19,10 @@ enum Mode {
     Ok,
     /// Refuses with a code (and `retry_after`).
     Refuse(&'static str, Option<u64>),
+    /// Answers every action with this result.
+    Result(Value),
+    /// Answers with these bytes, whatever was asked.
+    Raw(Vec<u8>),
     /// Closes the connection without reading or writing (systemd past `MaxConnections`).
     Close,
     /// Reads the request, then says nothing for `secs`.
@@ -81,6 +85,11 @@ async fn fake(fx: &mut Fx, mode: Mode) -> Seen {
                             v["retry_after"] = json!(a);
                         }
                         v
+                    }
+                    Mode::Result(result) => json!({"v": 1, "id": id, "ok": true, "result": result}),
+                    Mode::Raw(bytes) => {
+                        let _ = s.write_all(&bytes).await;
+                        return;
                     }
                     Mode::Hang(secs) => {
                         tokio::time::sleep(Duration::from_secs(secs)).await;
@@ -538,4 +547,165 @@ async fn read_refusals_are_audited_once_per_window() {
     }
     assert_eq!(rows(&fx, "host.helper_refused").await.len(), 1);
     assert!(rows(&fx, "host.logs_read").await.is_empty());
+}
+
+/// The helper answers with something that is not one good line for this request: wrong id, wrong
+/// version, a line over 512 KiB, not JSON, no `ok`. 502, never a hang or a panic.
+#[tokio::test]
+async fn a_garbled_helper_answer_is_502() {
+    let good = |id: &str, v: u32| format!("{{\"v\":{v},\"id\":\"{id}\",\"ok\":true,\"result\":{{}}}}\n");
+    let mut huge = vec![b'a'; 600 * 1024];
+    huge.push(b'\n');
+    for (what, bytes) in [
+        ("wrong id", good("01ARZ3NDEKTSV4RRFFQ69G5FAV", 1).into_bytes()),
+        ("wrong version", good("whatever", 2).into_bytes()),
+        ("not json", b"hello\n".to_vec()),
+        ("no newline", b"{\"v\":1}".to_vec()),
+        ("over 512 KiB", huge),
+        ("no ok", b"{\"v\":1,\"id\":\"x\"}\n".to_vec()),
+    ] {
+        let mut fx = fast(fx().await).await;
+        fake(&mut fx, Mode::Raw(bytes)).await;
+        let (s, b) = restart(&fx, &fx.dev, json!({"target": "runner"})).await;
+        assert_eq!((s, b["code"].as_str()), (StatusCode::BAD_GATEWAY, Some("host_helper_failed")), "{what}");
+        let (s, b) = get(&fx, &fx.dev, &logs_uri("core")).await;
+        assert_eq!((s, b["code"].as_str()), (StatusCode::BAD_GATEWAY, Some("host_helper_failed")), "{what} logs");
+    }
+}
+
+/// A helper that reads the request and never answers is cut at the deadline: 504.
+#[tokio::test]
+async fn a_helper_that_never_answers_is_504() {
+    let mut fx = fast(fx().await).await;
+    fake(&mut fx, Mode::Hang(5)).await;
+    fx.app.host_helper = Arc::new(Client::at(fx.dir.join("host.sock")).with_deadline(Duration::from_millis(300)));
+    let t = std::time::Instant::now();
+    let (s, b) = restart(&fx, &fx.dev, json!({"target": "core"})).await;
+    assert_eq!((s, b["code"].as_str()), (StatusCode::GATEWAY_TIMEOUT, Some("host_helper_timeout")));
+    assert!(t.elapsed() < Duration::from_secs(3));
+    assert_eq!(rows(&fx, "host.action_result").await[0].1["code"], "timeout");
+}
+
+/// A restart whose request row cannot be written never reaches the helper; logs whose audit row
+/// cannot be written are not handed out.
+#[tokio::test]
+async fn an_audit_write_failure_is_500_and_the_helper_is_never_asked() {
+    let mut fx = fast(fx().await).await;
+    let seen = fake(&mut fx, Mode::Ok).await;
+    sqlx::query(
+        "CREATE TRIGGER no_restart_rows BEFORE INSERT ON audit_events \
+         WHEN NEW.action = 'host.restart_requested' BEGIN SELECT RAISE(ABORT, 'no'); END",
+    )
+    .execute(&fx.app.pool)
+    .await
+    .unwrap();
+    let (s, b) = restart(&fx, &fx.dev, json!({"target": "core"})).await;
+    assert_eq!((s, b["code"].as_str()), (StatusCode::INTERNAL_SERVER_ERROR, Some("internal")));
+    assert!(calls(&seen).is_empty(), "the helper was asked: {:?}", calls(&seen));
+    sqlx::query(
+        "CREATE TRIGGER no_log_rows BEFORE INSERT ON audit_events \
+         WHEN NEW.action = 'host.logs_read' BEGIN SELECT RAISE(ABORT, 'no'); END",
+    )
+    .execute(&fx.app.pool)
+    .await
+    .unwrap();
+    let (s, b) = get(&fx, &fx.dev, &logs_uri("core")).await;
+    assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(b.get("lines").is_none(), "{b}");
+}
+
+/// A loop of restarts against a refusing helper (or an absent one) adds a bounded number of audit
+/// rows: the helper's wait is remembered, repeats are answered 429 with the wait that is left and
+/// counted, not audited. Once the wait is over the helper is asked again.
+#[tokio::test]
+async fn fifty_refused_restarts_add_at_most_one_refusal_row() {
+    let mut fx = fast(fx().await).await;
+    let seen = fake(&mut fx, Mode::Refuse("rate_limited", Some(40))).await;
+    for i in 0..50 {
+        let r = router(fx.app.clone())
+            .oneshot(req(
+                Method::POST,
+                "/api/v1/system/restart",
+                Some(&fx.dev),
+                Some(json!({"target": "core"})),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::TOO_MANY_REQUESTS, "{i}");
+        if i == 1 {
+            assert_eq!(r.headers()[header::RETRY_AFTER], "40");
+        }
+    }
+    assert_eq!(calls(&seen).len(), 1, "the helper was asked once");
+    assert_eq!(rows(&fx, "host.restart_requested").await.len(), 1);
+    assert_eq!(rows(&fx, "host.action_result").await.len(), 1);
+    assert!(rows(&fx, "host.helper_refused").await.len() <= 1);
+    // The wait runs down with the clock, then the helper is asked again.
+    fx.clock.advance(20);
+    let r = router(fx.app.clone())
+        .oneshot(req(Method::POST, "/api/v1/system/restart", Some(&fx.dev), Some(json!({"target": "core"}))))
+        .await
+        .unwrap();
+    assert_eq!(r.headers()[header::RETRY_AFTER], "20");
+    fx.clock.advance(21);
+    restart(&fx, &fx.dev, json!({"target": "core"})).await;
+    assert_eq!(calls(&seen).len(), 2);
+    // Another target is not held back by this one.
+    restart(&fx, &fx.dev, json!({"target": "runner"})).await;
+    assert_eq!(calls(&seen).len(), 3);
+
+    // An absent helper is held back the same way.
+    let mut fx = fast(self::fx().await).await;
+    fx.app.host_helper = Arc::new(Client::at(fx.dir.join("none.sock")));
+    for _ in 0..50 {
+        let (s, _) = restart(&fx, &fx.dev, json!({"target": "runner"})).await;
+        assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+    }
+    assert_eq!(rows(&fx, "host.restart_requested").await.len(), 1);
+    assert!(rows(&fx, "host.helper_refused").await.len() <= 1);
+}
+
+/// An accepted Core restart holds the next one back for the helper's 60 s minimum gap.
+#[tokio::test]
+async fn an_accepted_core_restart_holds_the_next_for_the_helpers_gap() {
+    let mut fx = fast(fx().await).await;
+    let seen = fake(&mut fx, Mode::Ok).await;
+    assert_eq!(restart(&fx, &fx.dev, json!({"target": "core"})).await.0, StatusCode::ACCEPTED);
+    let (s, _) = restart(&fx, &fx.dev, json!({"target": "core"})).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(calls(&seen).len(), 1);
+}
+
+/// What the helper sends is shown as plain text: control characters become `?`, a cursor that
+/// could not be sent back is dropped, and unit strings are cleaned.
+#[tokio::test]
+async fn log_text_and_status_strings_are_plain_and_a_bad_cursor_is_dropped() {
+    let mut fx = fast(fx().await).await;
+    let evil = "red\u{1b}[31m\u{1b}]0;pwned\u{7}\nline2\tok";
+    fake(
+        &mut fx,
+        Mode::Result(json!({"lines": [{"at": "t\u{1b}", "level": "i\u{7}", "text": evil}],
+            "next_before": "-r", "units": {"core": {"active": "act\u{1b}[2J"}}})),
+    )
+    .await;
+    let (s, b) = get(&fx, &fx.dev, &logs_uri("core")).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    let text = b["lines"][0]["text"].as_str().unwrap();
+    assert_eq!(text, "red?[31m?]0;pwned??line2\tok");
+    assert!(!b.to_string().contains("\\u001b"), "{b}");
+    assert!(b["next_before"].is_null(), "{b}");
+    let (_, b) = get(&fx, &fx.dev, "/api/v1/system/host").await;
+    assert_eq!(b["units"]["core"]["state"], "act?[2J");
+}
+
+/// The socket must be served by root in production: a server of another uid is not the helper.
+#[tokio::test]
+async fn a_socket_served_by_the_wrong_user_is_refused() {
+    let mut fx = fast(fx().await).await;
+    let seen = fake(&mut fx, Mode::Ok).await;
+    let other = ainkrad_sys::getuid() + 1;
+    fx.app.host_helper = Arc::new(Client::at(fx.dir.join("host.sock")).expecting_uid(other));
+    let (s, b) = restart(&fx, &fx.dev, json!({"target": "runner"})).await;
+    assert_eq!((s, b["code"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("host_helper_unavailable")));
+    assert!(calls(&seen).is_empty());
 }

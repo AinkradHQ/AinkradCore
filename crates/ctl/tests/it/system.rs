@@ -37,6 +37,14 @@ fn core(method: &str, path: &str, body: &str) -> (u16, String) {
         ("GET", "/api/v1/system/logs/runner") if !ELEVATED.load(Ordering::SeqCst) => {
             refusal(403, "step_up_required", "elevate first")
         }
+        // Text a hostile service could log: an escape sequence, an OSC title, a bell.
+        ("GET", "/api/v1/system/logs/backup") => (
+            200,
+            json!({"lines": [{"at": "2026-11-10T10:00:00.000Z", "level": "info\u{1b}[1m",
+                              "text": "ok\u{1b}[2J\u{1b}]0;pwned\u{7}done\r"}],
+                   "next_before": "s=a\u{1b}[31m"})
+            .to_string(),
+        ),
         ("GET", p) if p.starts_with("/api/v1/system/logs/") => (
             200,
             json!({"lines": [{"at": "2026-11-10T10:00:00.000Z", "level": "info", "text": "started"}],
@@ -166,4 +174,18 @@ fn wrong_usage_sends_nothing() {
         assert!(stdout(&o).is_empty(), "{w:?}");
     }
     assert_eq!(fake.requests().len(), 0, "nor a handshake");
+}
+
+/// A log line or a unit name cannot drive the terminal: no escape, bell or carriage return is
+/// printed, in text, level and the next-page cursor.
+#[test]
+fn control_characters_in_the_cores_answer_are_never_printed() {
+    let (_fake, ks) = device("sys-ctrl", core, false);
+    let o = run_ctl(&ks, &["system", "logs", "backup"]);
+    assert!(o.status.success(), "{o:?}");
+    let text = stdout(&o);
+    assert!(!text.contains(['\u{1b}', '\u{7}', '\r']), "{text:?}");
+    assert!(text.contains("ok?[2J?]0;pwned?done?"), "{text:?}");
+    assert!(text.contains("info?[1m"), "{text:?}");
+    assert!(text.contains("older: --before s=a?[31m"), "{text:?}");
 }

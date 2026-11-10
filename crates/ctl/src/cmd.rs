@@ -61,7 +61,9 @@ pub const USAGE: &str =
       installed (version, hash, ok|differs|unsafe) and the Core, runner and backup units; restart
       queues a restart (the helper limits them: a refusal says how long to wait); logs prints a
       page of a service's log, redacted, and the cursor for the next older page. The runner and
-      backup logs need a step-up, like restart. Without the helper, show says `absent` and the
+      backup logs need a step-up, like restart. Log text is shown with control characters
+      as `?`. Do not retry a timed-out (504) restart on your own: it may be running, and a new
+      request is not recognised as a repeat. Without the helper, show says `absent` and the
       others are refused (503).
   secret ls
   secret set <name>* [--runners <runner-id>,...] [--delivery env|file|askpass]

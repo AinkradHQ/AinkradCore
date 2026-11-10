@@ -13,6 +13,8 @@ sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio
 ainkrad-core = { path = "../core" }
 # Secret shapes for redaction at append (E1-10.2).
 ainkrad-proto = { path = "../proto" }
+# The audited peer-credential wrapper: the host helper socket must be served by root.
+ainkrad-sys = { path = "../sys" }
 # The hardened HTTP client (vetted, pinned addresses; no redirect) for the connection adapters.
 ainkrad-providers = { path = "../providers" }
 getrandom = "0.4.3"

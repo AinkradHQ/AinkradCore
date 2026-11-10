@@ -11,6 +11,19 @@ use crate::Error;
 use crate::client::{Client, parse};
 use crate::devices::s;
 
+/// `text` with every control character but a tab shown as `?`: a log line or a unit name must
+/// not be able to drive the terminal (an escape sequence moves the cursor, retitles the window).
+fn clean(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() && c != '\t' { '?' } else { c })
+        .collect()
+}
+
+/// A JSON string, cleaned (`-` when it is not one).
+fn t(v: &Value) -> String {
+    clean(s(v))
+}
+
 const USAGE: &str = "system show | restart core|runner | logs core|helper|runner|backup [-n <1..500>] [--before <cursor>]";
 
 fn print(out: &mut impl Write, text: impl std::fmt::Display) -> Result<(), Error> {
@@ -19,21 +32,21 @@ fn print(out: &mut impl Write, text: impl std::fmt::Display) -> Result<(), Error
 
 /// `name  version  sha256_12  state` per program, then one line per unit.
 fn show(v: &Value, out: &mut impl Write) -> Result<(), Error> {
-    print(out, format_args!("helper\t{}", s(&v["helper"])))?;
+    print(out, format_args!("helper\t{}", t(&v["helper"])))?;
     if v["helper"] != "present" {
         return Ok(());
     }
-    print(out, format_args!("host_id\t{}", s(&v["host_id"])))?;
-    print(out, format_args!("manifest\t{}", s(&v["manifest"])))?;
+    print(out, format_args!("host_id\t{}", t(&v["host_id"])))?;
+    print(out, format_args!("manifest\t{}", t(&v["manifest"])))?;
     for b in v["binaries"].as_array().into_iter().flatten() {
         print(
             out,
             format_args!(
                 "{}\t{}\t{}\t{}",
-                s(&b["name"]),
-                s(&b["version"]),
-                s(&b["sha256_12"]),
-                s(&b["state"])
+                t(&b["name"]),
+                t(&b["version"]),
+                t(&b["sha256_12"]),
+                t(&b["state"])
             ),
         )?;
     }
@@ -47,10 +60,11 @@ fn show(v: &Value, out: &mut impl Write) -> Result<(), Error> {
         print(
             out,
             format_args!(
-                "{name}\t{}/{}\tsince {}\trestarts {restarts}",
-                s(&u["state"]),
-                s(&u["sub"]),
-                s(&u["since"])
+                "{}\t{}/{}\tsince {}\trestarts {restarts}",
+                clean(name),
+                t(&u["state"]),
+                t(&u["sub"]),
+                t(&u["since"])
             ),
         )?;
     }
@@ -114,7 +128,7 @@ pub async fn system(
             let v: Value = parse(&res)?;
             match json {
                 true => print(out, v),
-                false => print(out, format_args!("accepted {}", s(&v["request_id"]))),
+                false => print(out, format_args!("accepted {}", t(&v["request_id"]))),
             }
         }
         [
@@ -147,11 +161,11 @@ pub async fn system(
             for l in v["lines"].as_array().into_iter().flatten() {
                 print(
                     out,
-                    format_args!("{} {} {}", s(&l["at"]), s(&l["level"]), s(&l["text"])),
+                    format_args!("{} {} {}", t(&l["at"]), t(&l["level"]), t(&l["text"])),
                 )?;
             }
             if let Some(next) = v["next_before"].as_str() {
-                print(out, format_args!("older: --before {next}"))?;
+                print(out, format_args!("older: --before {}", clean(next)))?;
             }
             Ok(())
         }
@@ -162,6 +176,19 @@ pub async fn system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn show_never_prints_a_control_character() {
+        let v = json!({"helper": "present", "host_id": "h\u{1b}[31m", "manifest": "ok\u{7}",
+            "binaries": [{"name": "a\u{1b}]0;x\u{7}", "version": "1\r", "sha256_12": "x", "state": "ok"}],
+            "units": {"co\u{1b}re": {"state": "act\u{1b}[2J", "sub": "r", "since": "t\n", "restarts": 0}}});
+        let mut out = Vec::new();
+        show(&v, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(!text.contains(['\u{1b}', '\u{7}', '\r']), "{text:?}");
+        assert_eq!(text.lines().count(), 5, "{text:?}");
+        assert!(text.contains("co?re\tact?[2J/r\tsince t?\trestarts 0"), "{text:?}");
+    }
 
     #[test]
     fn a_cursor_is_escaped_for_the_query_and_never_starts_with_a_dash() {
