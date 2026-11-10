@@ -296,7 +296,7 @@ fn passwords_with_odd_characters_and_scheme_less_credentials() {
     }
     // An empty user, and a user with characters outside the plain set.
     for url in [
-        "redis://:secret@cache.internal:6379/0",
+        "redis://:secret@cache.example.net:6379/0",
         "postgres://my$user:secret@db:5432/x",
         "amqp://:pw@h",
     ] {
@@ -308,6 +308,12 @@ fn passwords_with_odd_characters_and_scheme_less_credentials() {
             "{out}"
         );
     }
+    // The JSON-escaped scheme separator, with an undotted host.
+    let out = one(r#"dsn="postgres:\/\/u:secret@db:5432" ok"#);
+    assert!(
+        !out.contains("secret") && out.contains("[redacted:url_password]@db"),
+        "{out}"
+    );
     // Not credentials: left alone.
     for fine in [
         "send mailto:bob@x now",
@@ -315,12 +321,14 @@ fn passwords_with_odd_characters_and_scheme_less_credentials() {
         "http://h:8080/path then mail someone@corp",
         "see https://example.org/a?b=c@d",
         "ratio 3:4 at noon",
+        // A port is not a password: no masking up to a later address.
+        "redis://192.0.2.10:6379 opened by admin@example.com",
     ] {
         assert_eq!(one(fine), fine);
     }
     assert_eq!(
-        one("connect admin:hunter2@db.internal failed"),
-        "connect admin:[redacted:url_password]@db.internal failed"
+        one("connect admin:hunter2@db.example.net failed"),
+        "connect admin:[redacted:url_password]@db.example.net failed"
     );
     assert_eq!(
         one("mail bob@example.org and 12:30 ok"),
@@ -412,7 +420,7 @@ fn the_url_pass_is_bounded_per_candidate() {
     std::thread::spawn(move || {
         let page = 480 * 1024;
         let mut took = Vec::new();
-        for unit in ["x:y ", "://", "a:b@ ", "a:b ", "u:p@h.io ", ":@"] {
+        for unit in ["x:y ", "://", "a:b@ ", "a:b ", "u:p@h.example ", ":@"] {
             let text = unit.repeat(page / unit.len());
             let t = Instant::now();
             let out = url_creds(&text);

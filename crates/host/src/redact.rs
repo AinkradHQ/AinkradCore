@@ -189,7 +189,16 @@ fn scheme_creds(s: &str, start: usize) -> Option<(usize, usize)> {
         .unwrap_or(w.len())];
     let at = match token.rfind('@') {
         Some(at) => at,
-        None if token.contains(':') && !token.contains(['/', '?', '#']) => w.rfind('@')?,
+        // Everything after the colon being digits means a port (`redis://192.0.2.10:6379 …`), not a
+        // password with a space in it: no look past the token.
+        None if token.contains(':')
+            && !token.contains(['/', '?', '#'])
+            && !token
+                .split_once(':')
+                .is_some_and(|(_, after)| after.bytes().all(|c| c.is_ascii_digit())) =>
+        {
+            w.rfind('@')?
+        }
         None => return None,
     };
     let colon = w[..at].find(':')?;
@@ -198,14 +207,19 @@ fn scheme_creds(s: &str, start: usize) -> Option<(usize, usize)> {
         .then_some((start + colon, start + at))
 }
 
-/// Without a scheme: one token `user:password@host.tld` (a dot in the host, and no space in the
+/// Without a scheme: one token `user:password@host.example` (a dot in the host, and no space in the
 /// password). `mailto:bob@x` and `ERROR:foo@bar` have no dotted host and are left alone;
-/// `ERROR:foo@bar.com` is masked, which is the trade-off for catching `admin:hunter2@db.internal`.
+/// `ERROR:foo@example.com` is masked, which is the trade-off for catching
+/// `admin:hunter2@db.example.net`.
 fn bare_creds(s: &str, start: usize) -> Option<(usize, usize)> {
     let b = s.as_bytes();
     let user = b[start..].iter().take_while(|c| user_byte(**c)).count();
     let colon = start + user;
-    if user == 0 || b.get(colon) != Some(&b':') || b[colon + 1..].starts_with(b"//") {
+    if user == 0
+        || b.get(colon) != Some(&b':')
+        || b[colon + 1..].starts_with(b"//")
+        || b[colon + 1..].starts_with(b"\\/\\/")
+    {
         return None;
     }
     let w = window(s, colon + 1);
@@ -226,15 +240,23 @@ fn bare_creds(s: &str, start: usize) -> Option<(usize, usize)> {
     .then_some((colon, colon + 1 + at))
 }
 
-/// `scheme://user:password@host`, and `user:password@host.tld` without a scheme: the password goes.
+/// `scheme://user:password@host`, and `user:password@host.example` without a scheme: the password goes.
 /// See [`scheme_creds`] and [`bare_creds`] for what counts and the over-masking trade-offs.
 pub fn url_creds(s: &str) -> String {
     let b = s.as_bytes();
     let (mut out, mut copied, mut i) = (String::with_capacity(s.len()), 0, 0);
     while i < b.len() {
-        let after_scheme = b[i..].starts_with(b"://");
+        // `://`, or the JSON-escaped `:\/\/` a logged string holds.
+        let sep = if b[i..].starts_with(b"://") {
+            3
+        } else if b[i..].starts_with(b":\\/\\/") {
+            5
+        } else {
+            0
+        };
+        let after_scheme = sep > 0;
         let found = if after_scheme {
-            scheme_creds(s, i + 3)
+            scheme_creds(s, i + sep)
         } else if i == 0
             || b[i - 1].is_ascii_whitespace()
             || matches!(b[i - 1], b'"' | b'\'' | b'(' | b'<' | b'=')
@@ -249,7 +271,7 @@ pub fn url_creds(s: &str) -> String {
             (copied, i) = (at, at);
             continue;
         }
-        i += if after_scheme { 3 } else { 1 };
+        i += if after_scheme { sep } else { 1 };
     }
     out.push_str(&s[copied..]);
     out
