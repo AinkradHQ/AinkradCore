@@ -20,6 +20,7 @@ src/main/kotlin/ainkrad/client/apis/PairingApi.kt
 src/main/kotlin/ainkrad/client/apis/RunnersApi.kt
 src/main/kotlin/ainkrad/client/apis/SecretsApi.kt
 src/main/kotlin/ainkrad/client/apis/SettingsApi.kt
+src/main/kotlin/ainkrad/client/apis/SystemApi.kt
 src/main/kotlin/ainkrad/client/apis/TerminalsApi.kt
 src/main/kotlin/ainkrad/client/auth/ApiKeyAuth.kt
 src/main/kotlin/ainkrad/client/auth/Authentication.kt
@@ -87,6 +88,10 @@ src/main/kotlin/ainkrad/client/models/EventActorUser.kt
 src/main/kotlin/ainkrad/client/models/Handshake.kt
 src/main/kotlin/ainkrad/client/models/HandshakeBody.kt
 src/main/kotlin/ainkrad/client/models/HandshakeProof.kt
+src/main/kotlin/ainkrad/client/models/HostBinary.kt
+src/main/kotlin/ainkrad/client/models/HostStatus.kt
+src/main/kotlin/ainkrad/client/models/HostUnit.kt
+src/main/kotlin/ainkrad/client/models/HostUnits.kt
 src/main/kotlin/ainkrad/client/models/InviteCreated.kt
 src/main/kotlin/ainkrad/client/models/KindAuthMethod.kt
 src/main/kotlin/ainkrad/client/models/KindCapability.kt
@@ -99,6 +104,8 @@ src/main/kotlin/ainkrad/client/models/LimitCleared.kt
 src/main/kotlin/ainkrad/client/models/LimitSet.kt
 src/main/kotlin/ainkrad/client/models/LimitStanding.kt
 src/main/kotlin/ainkrad/client/models/Lockout.kt
+src/main/kotlin/ainkrad/client/models/LogLine.kt
+src/main/kotlin/ainkrad/client/models/LogPage.kt
 src/main/kotlin/ainkrad/client/models/LoginCode.kt
 src/main/kotlin/ainkrad/client/models/Me.kt
 src/main/kotlin/ainkrad/client/models/ModelPrice.kt
@@ -136,6 +143,8 @@ src/main/kotlin/ainkrad/client/models/RaiseBudget.kt
 src/main/kotlin/ainkrad/client/models/RedeemLease.kt
 src/main/kotlin/ainkrad/client/models/Rename.kt
 src/main/kotlin/ainkrad/client/models/ReplaceKey.kt
+src/main/kotlin/ainkrad/client/models/RestartBody.kt
+src/main/kotlin/ainkrad/client/models/Restarted.kt
 src/main/kotlin/ainkrad/client/models/RotateSecret.kt
 src/main/kotlin/ainkrad/client/models/Runner.kt
 src/main/kotlin/ainkrad/client/models/RunnerDriver.kt

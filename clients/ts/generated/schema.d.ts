@@ -1384,6 +1384,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/host": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getHostStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/logs/backup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getBackupLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/logs/core": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getCoreLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/logs/helper": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getHelperLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/logs/runner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRunnerLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["restartHostService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/terminals": {
         parameters: {
             query?: never;
@@ -2434,6 +2530,49 @@ export interface components {
             server_version?: string | null;
             supported_minors?: number[] | null;
         };
+        /** @description A program installed on the host, as the helper's manifest and checks say. */
+        HostBinary: {
+            name: string;
+            /** @description The first 12 hex characters of the file's SHA-256. */
+            sha256_12?: string | null;
+            /** @description `ok`, `differs` (not the file the manifest lists) or `unsafe` (a link, or writable). */
+            state?: string | null;
+            version?: string | null;
+        };
+        /** @description The Core machine as the host helper reports it. */
+        HostStatus: {
+            /** @description `/usr/local/bin` is root-owned and not group or other writable. */
+            bin_dir_safe?: boolean | null;
+            binaries?: components["schemas"]["HostBinary"][] | null;
+            /**
+             * @description `present` (it answered), `absent` (no socket: not installed) or `error` (it did not answer
+             *     well: stopped, busy, too slow, refused).
+             */
+            helper: string;
+            helper_version?: string | null;
+            /** @description The host's random id, set at install; an app pins it at first sight. */
+            host_id?: string | null;
+            /** @description `ok`, `absent` or `invalid`: the state of the root-written manifest of installed programs. */
+            manifest?: string | null;
+            units?: components["schemas"]["HostUnits"];
+        };
+        /** @description A systemd unit. */
+        HostUnit: {
+            /** Format: int64 */
+            restarts?: number | null;
+            /** @description When it entered its state, as systemd prints it. */
+            since?: string | null;
+            /** @description systemd's `ActiveState`: `active`, `inactive`, `failed`, `activating`… */
+            state?: string | null;
+            /** @description systemd's `SubState`: `running`, `dead`… */
+            sub?: string | null;
+        };
+        HostUnits: {
+            backup_timer?: components["schemas"]["HostUnit"];
+            core?: components["schemas"]["HostUnit"];
+            /** @description Absent when no local runner is installed. */
+            runner?: components["schemas"]["HostUnit"];
+        };
         InviteCreated: {
             /** @description `ainkrad://connect?host=…&fp=<core_fp>&secret=…`, for a QR code: shown once. */
             link?: string | null;
@@ -2556,6 +2695,17 @@ export interface components {
              * @description Locks in a row; each doubles the next.
              */
             strikes: number;
+        };
+        /** @description A page of a service's log, redacted by the helper, newest entries at the end. */
+        LogLine: {
+            at?: string | null;
+            level?: string | null;
+            text?: string | null;
+        };
+        LogPage: {
+            lines: components["schemas"]["LogLine"][];
+            /** @description Pass as `before` for the next older page; absent on the last. */
+            next_before?: string | null;
         };
         /** @description The approval code the user pasted. No `Debug`: it is a one-time secret. */
         LoginCode: {
@@ -3005,6 +3155,14 @@ export interface components {
         ReplaceKey: {
             runners?: string[] | null;
             value: string;
+        };
+        RestartBody: {
+            /** @description `core` or `runner` (the local runner). */
+            target: string;
+        };
+        Restarted: {
+            /** @description The id the restart is audited under (`host.restart_requested`, `host.action_result`). */
+            request_id: string;
         };
         /** @description A rotation: the new value, and optionally a new scope or delivery. No `Debug`. */
         RotateSecret: {
@@ -7157,6 +7315,192 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SettingChange"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getHostStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Core machine: the programs installed, their state against the root-written manifest, and the Core, runner and backup units. `helper` says whether the host helper answered (`absent`: not installed here; `error`: it is stopped, busy or failing); the rest is then missing. Needs `admin` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostStatus"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getBackupLogs: {
+        parameters: {
+            query?: {
+                /** @description 1 to 500, default 200. */
+                lines?: number;
+                /** @description A cursor from `next_before`: `[A-Za-z0-9=;_]`, 1 to 256 characters, not starting with `-`. */
+                before?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the backup log, redacted by the host helper (audited as `host.logs_read`, the unit and the line count only). Needs `admin` and a step-up: these logs can hold values no redactor can recognise. 400 for `lines` outside 1 to 500 or a bad cursor; 503 `host_helper_unavailable` or `host_helper_busy`; 429 with `Retry-After` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getCoreLogs: {
+        parameters: {
+            query?: {
+                /** @description 1 to 500, default 200. */
+                lines?: number;
+                /** @description A cursor from `next_before`: `[A-Za-z0-9=;_]`, 1 to 256 characters, not starting with `-`. */
+                before?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the core log, redacted by the host helper (audited as `host.logs_read`, the unit and the line count only). Needs `admin`. 400 for `lines` outside 1 to 500 or a bad cursor; 503 `host_helper_unavailable` or `host_helper_busy`; 429 with `Retry-After` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getHelperLogs: {
+        parameters: {
+            query?: {
+                /** @description 1 to 500, default 200. */
+                lines?: number;
+                /** @description A cursor from `next_before`: `[A-Za-z0-9=;_]`, 1 to 256 characters, not starting with `-`. */
+                before?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the helper log, redacted by the host helper (audited as `host.logs_read`, the unit and the line count only). Needs `admin`. 400 for `lines` outside 1 to 500 or a bad cursor; 503 `host_helper_unavailable` or `host_helper_busy`; 429 with `Retry-After` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getRunnerLogs: {
+        parameters: {
+            query?: {
+                /** @description 1 to 500, default 200. */
+                lines?: number;
+                /** @description A cursor from `next_before`: `[A-Za-z0-9=;_]`, 1 to 256 characters, not starting with `-`. */
+                before?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the runner log, redacted by the host helper (audited as `host.logs_read`, the unit and the line count only). Needs `admin` and a step-up: these logs can hold values no redactor can recognise. 400 for `lines` outside 1 to 500 or a bad cursor; 503 `host_helper_unavailable` or `host_helper_busy`; 429 with `Retry-After` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    restartHostService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestartBody"];
+            };
+        };
+        responses: {
+            /** @description The restart is accepted (audited first as `host.restart_requested`, then `host.action_result`). A Core restart answers before the Core goes down; clients reconnect. Needs `admin` and a step-up. 400 for a body other than `{"target": "core" | "runner"}`; 409 `not_installed` (no local runner); 429 with `Retry-After` (the helper's limits); 503 `host_helper_unavailable`, `host_helper_busy` or `host_state_unavailable`; 504 `host_helper_timeout`; 502 `host_helper_failed` */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Restarted"];
                 };
             };
             400: components["responses"]["BadRequest"];

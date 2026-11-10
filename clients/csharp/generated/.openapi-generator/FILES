@@ -20,6 +20,7 @@ src/Ainkrad.Client/Api/PairingApi.cs
 src/Ainkrad.Client/Api/RunnersApi.cs
 src/Ainkrad.Client/Api/SecretsApi.cs
 src/Ainkrad.Client/Api/SettingsApi.cs
+src/Ainkrad.Client/Api/SystemApi.cs
 src/Ainkrad.Client/Api/TerminalsApi.cs
 src/Ainkrad.Client/Client/ApiClient.cs
 src/Ainkrad.Client/Client/ApiException.cs
@@ -95,6 +96,10 @@ src/Ainkrad.Client/Model/EventActorUser.cs
 src/Ainkrad.Client/Model/Handshake.cs
 src/Ainkrad.Client/Model/HandshakeBody.cs
 src/Ainkrad.Client/Model/HandshakeProof.cs
+src/Ainkrad.Client/Model/HostBinary.cs
+src/Ainkrad.Client/Model/HostStatus.cs
+src/Ainkrad.Client/Model/HostUnit.cs
+src/Ainkrad.Client/Model/HostUnits.cs
 src/Ainkrad.Client/Model/InviteCreated.cs
 src/Ainkrad.Client/Model/KindAuthMethod.cs
 src/Ainkrad.Client/Model/KindCapability.cs
@@ -107,6 +112,8 @@ src/Ainkrad.Client/Model/LimitCleared.cs
 src/Ainkrad.Client/Model/LimitSet.cs
 src/Ainkrad.Client/Model/LimitStanding.cs
 src/Ainkrad.Client/Model/Lockout.cs
+src/Ainkrad.Client/Model/LogLine.cs
+src/Ainkrad.Client/Model/LogPage.cs
 src/Ainkrad.Client/Model/LoginCode.cs
 src/Ainkrad.Client/Model/Me.cs
 src/Ainkrad.Client/Model/ModelPrice.cs
@@ -144,6 +151,8 @@ src/Ainkrad.Client/Model/RaiseBudget.cs
 src/Ainkrad.Client/Model/RedeemLease.cs
 src/Ainkrad.Client/Model/Rename.cs
 src/Ainkrad.Client/Model/ReplaceKey.cs
+src/Ainkrad.Client/Model/RestartBody.cs
+src/Ainkrad.Client/Model/Restarted.cs
 src/Ainkrad.Client/Model/RotateSecret.cs
 src/Ainkrad.Client/Model/Runner.cs
 src/Ainkrad.Client/Model/RunnerDriver.cs
