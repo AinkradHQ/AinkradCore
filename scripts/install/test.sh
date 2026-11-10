@@ -196,11 +196,11 @@ if [ "$(uname -s)" = Darwin ]; then
   grep -q 'NOT RUN: notarisation' "$t/out8" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: ad hoc package did not say notarisation is not run" >&2; }
 fi
 
-# Guided mode (the default): given the two answers up front it asks nothing, shows all ten steps in order, uses the plain
+# Guided mode (the default): given the two answers up front it asks nothing, shows the four standalone steps in order, uses the plain
 # fallback without a TTY, defaults to local backups and the unprivileged runner, and never prints an invite in a dry run.
 mkdir -p "$t/gb"; for n in ainkrad-core-server ainkradctl ainkrad-runner ainkrad-ptyhost; do printf '#!/bin/sh\n' >"$t/gb/$n"; done # stubs, so the runner step is reached
 AINKRAD_HOSTNAME=core.example.com AINKRAD_ACME_EMAIL=ops@example.com bash "$HERE/../install.sh" --dry-run --binary "$t/gb" >"$t/gout" 2>&1 </dev/null
-for want in 'step 1 of 10' 'step 10 of 10' 'Using core.example.com' 'no bucket: encrypted snapshots' 'Ainkrad Core is ready'; do
+for want in 'step 1/4: Your 2 answers' 'step 4/4: Your connect link' 'HOSTNAME = core.example.com (given up front)' 'no bucket: encrypted snapshots' 'Ainkrad Core is ready'; do
   grep -q -- "$want" "$t/gout" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: guided dry run lacks '$want'" >&2; }
 done
 # The guided path must never make a root or exec-enabled runner (a compromised Core would be root on the host).
@@ -211,6 +211,7 @@ done
 grep -q $'\033' "$t/gout" && { fail=$((fail + 1)); echo "FAIL: guided output has colour codes without a TTY" >&2; } || pass=$((pass + 1))
 
 bash "$HERE/get-test.sh" || fail=$((fail + 1)) # get.sh verify-first, secrets to the terminal only, argv
+bash "$HERE/ui-test.sh" || fail=$((fail + 1)) # the live UI: spinner, heartbeat, cards, DNS feedback, cursor restore
 bash "$HERE/harden-test.sh" || fail=$((fail + 1)) # harden.sh guards and firewall, summary, runner restart sequence
 # (no `grep secret=` on the guided dry run: it can never print one; the secret rules are tested for real, with a pty and without a terminal, in get-test.sh) # get.sh verify-first, secrets to the terminal only, SSH guard, runner argv
 

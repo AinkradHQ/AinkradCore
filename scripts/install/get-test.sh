@@ -40,7 +40,7 @@ import re, sys
 s = open(sys.argv[1]).read(); pub = open(sys.argv[2]).read().strip().split("\n")
 s = s.replace("KEY_ID=FB3618BCFCA5393E", "KEY_ID=" + pub[0].split()[-1])
 s = re.sub(r"KEY_FILE='.*?'\n", lambda m: "KEY_FILE='" + pub[0] + "\n" + pub[1] + "'\n", s, count=1, flags=re.S)
-s = re.sub(r"^MIN_VERSION=[0-9.]*", "MIN_VERSION=" + sys.argv[4], s, flags=re.M)
+s = re.sub(r"^( *)MIN_VERSION=[0-9.]*", lambda m: m.group(1) + "MIN_VERSION=" + sys.argv[4], s, flags=re.M)
 open(sys.argv[3], "w").write(s)
 PY
   }
@@ -79,20 +79,38 @@ else
   echo "get-test: minisign not installed: verify-first checks NOT RUN" >&2
 fi
 
-# --- a truncated get.sh executes nothing (cut at many points, including inside the last line) ---
-mkdir "$t/empty"; len=$(wc -c <"$GET" | tr -d ' ')
-cuts="1 2 3 7 $((len - 2)) $((len - 3)) $((len - 8)) $((len - 12)) $((len - 15))"
-off=60; while [ "$off" -lt "$len" ]; do cuts="$cuts $off"; off=$((off + 61)); done
+# --- a truncated get.sh executes nothing: cut at EVERY byte of its first 60 lines, and at a spread of points after that ---
+# "Nothing executed" means: none of the shimmed tools (apt-get, curl, minisign, tar, dpkg, systemctl, mktemp) was called, no file
+# appeared, and no screen of the installer was printed (the banner, a step line, the failure card).
+mkdir -p "$t/empty" "$t/trshim"; : >"$t/trviol"
+for f in apt-get curl minisign tar dpkg systemctl mktemp sudo bash; do printf '#!/bin/sh\necho "SHIM %s $*" >>"%s"\nexit 99\n' "$f" "$t/trviol" >"$t/trshim/$f"; chmod +x "$t/trshim/$f"; done
+len=$(wc -c <"$GET" | tr -d ' ')
+first60=$(head -n 60 "$GET" | wc -c | tr -d ' ')
+cuts=""; c=1; while [ "$c" -le "$first60" ]; do cuts="$cuts $c"; c=$((c + 1)); done
+off=$((first60 + 97)); while [ "$off" -lt "$len" ]; do cuts="$cuts $off"; off=$((off + 211)); done
+cuts="$cuts $((len - 2)) $((len - 3)) $((len - 8)) $((len - 12)) $((len - 15))"
 trunc_bad=0
-shells="sh"; command -v dash >/dev/null && shells="sh dash"
 for c in $cuts; do
   head -c "$c" "$GET" >"$t/cut.sh"
-  for sh in $shells; do
-    ( cd "$t/empty" && NO_COLOR=1 AINKRAD_RELEASE_URL=/nonexistent "$sh" "$t/cut.sh" ) >"$t/cout" 2>&1 </dev/null
-    if grep -qE 'Ainkrad Core|\[[0-9]/4\]|Stopped:' "$t/cout" || [ -n "$(ls -A "$t/empty")" ]; then trunc_bad=1; bad "get.sh cut at byte $c of $len ran something under $sh"; fi
-  done
+  ( cd "$t/empty" && PATH="$t/trshim:$PATH" NO_COLOR=1 AINKRAD_RELEASE_URL=/nonexistent sh "$t/cut.sh" ) >"$t/cout" 2>&1 </dev/null
+  if grep -qE 'Ainkrad Core setup|Here is what will happen|step [0-9]/[0-9]|Stopped at step|Check this machine' "$t/cout" || [ -s "$t/trviol" ] || [ -n "$(ls -A "$t/empty")" ]; then
+    trunc_bad=1; bad "get.sh cut at byte $c of $len ran something: $(head -c 300 "$t/cout") $(head -c 200 "$t/trviol")"; : >"$t/trviol"; break
+  fi
 done
+# dash too, on a coarser spread (every 7th byte of the first 60 lines)
+if command -v dash >/dev/null && [ "$trunc_bad" = 0 ]; then
+  c=3; while [ "$c" -le "$first60" ]; do
+    head -c "$c" "$GET" >"$t/cut.sh"
+    ( cd "$t/empty" && PATH="$t/trshim:$PATH" NO_COLOR=1 AINKRAD_RELEASE_URL=/nonexistent dash "$t/cut.sh" ) >"$t/cout" 2>&1 </dev/null
+    if grep -qE 'Ainkrad Core setup|Here is what will happen|step [0-9]/[0-9]|Stopped at step' "$t/cout" || [ -s "$t/trviol" ] || [ -n "$(ls -A "$t/empty")" ]; then trunc_bad=1; bad "get.sh cut at byte $c ran something under dash"; break; fi
+    c=$((c + 7))
+  done
+fi
 [ "$trunc_bad" = 0 ] && ok
+# the complete file does run (so the sentinels above can fire): with the shims it reaches its first screen and stops at the machine check
+( cd "$t/empty" && PATH="$t/trshim:$PATH" NO_COLOR=1 AINKRAD_RELEASE_URL=/nonexistent sh "$GET" ) >"$t/cout" 2>&1 </dev/null
+grep -q 'Here is what will happen' "$t/cout" && ok || bad "the complete get.sh printed no roadmap: the truncation sentinels would prove nothing"
+: >"$t/trviol"
 
 # --- secrets go to the terminal only; no terminal means no invite and no backup key at all ---
 R=age1$(printf 'q%.0s' $(seq 58))

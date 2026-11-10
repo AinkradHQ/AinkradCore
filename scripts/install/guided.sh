@@ -8,53 +8,51 @@
 #   AINKRAD_HOSTNAME, AINKRAD_ACME_EMAIL  answer those two questions up front (no TTY is then needed)
 #   AINKRAD_ACME_ENV=staging              a test certificate instead of a production one
 
-GUIDED_TOTAL=10 INVITE='' BACKUP_IDENTITY=''
+INVITE='' BACKUP_IDENTITY=''
 
-ui_init() {
-  B='' D='' R='' GR='' RD='' YL='' CY=''
-  if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
-    B=$'\033[1m' D=$'\033[2m' R=$'\033[0m' GR=$'\033[32m' RD=$'\033[31m' YL=$'\033[33m' CY=$'\033[36m'
-  fi
-  case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
-    *[Uu][Tt][Ff]-8* | *[Uu][Tt][Ff]8*) U_OK='✔' U_GO='▸' U_DOT='·' U_FULL='█' U_EMPTY='░' U_H='─' U_V='│' U_TL='╭' U_TR='╮' U_BL='╰' U_BR='╯' QR_T=UTF8 ;;
-    *) U_OK='+' U_GO='>' U_DOT='-' U_FULL='#' U_EMPTY='.' U_H='-' U_V='|' U_TL='+' U_TR='+' U_BL='+' U_BR='+' QR_T=ASCII ;;
-  esac
+# The symbols for the summary box (the colours and the live UI are in ui.sh: ui_init).
+ui_box_init() {
+  U_H='-' U_V='|' U_TL='+' U_TR='+' U_BL='+' U_BR='+' QR_T=ASCII
+  if [ "$UI_FANCY" = 1 ] && [ "$UI_UTF" = 1 ]; then U_H='─' U_V='│' U_TL='╭' U_TR='╮' U_BL='╰' U_BR='╯' QR_T=UTF8; fi
 }
 repeat() { local i out=''; for ((i = 0; i < $2; i++)); do out="$out$1"; done; printf '%s' "$out"; }
 
-# trace CMD...: one dim line per action in guided mode (the full "+ cmd" in a dry run / the classic wizard).
+# trace CMD...: a dim line per action (the full "+ cmd" in a dry run / the classic wizard).
 trace() {
-  if [ "$GUIDED" = 1 ] && [ "$DRY" = 0 ]; then
-    local s="$*"; [ ${#s} -le 76 ] || s="${s:0:73}..."
-    printf '   %s%s %s%s\n' "$D" "$U_DOT" "$s" "$R"
+  if [ "$GUIDED" = 1 ] && [ "$DRY" = 0 ]; then ui_note "$(printf '%s' "$*" | cut -c1-76)"
   else printf '+ %s\n' "$*"; fi
 }
 
-# guided_step TITLE: the title install.sh passes to step() picks the number, plain title and why. Unlisted: silent.
+# guided_step TITLE: install.sh's step() titles map to the roadmap (6 set up, 7 start + certificate, 8 link) and a sub-heading.
 guided_step() {
-  local n t w
+  local n sub
   case $1 in
-    Checks*) n=1 t="Checking this machine" w="The DNS name must point here and ports 80/443 must be free, or no certificate can be issued." ;;
-    Binaries*) n=2 t="Checking the Core programs" w="Confirms they run on this CPU and shows their SHA-256 (the release signature was already verified)." ;;
-    "Host hardening skipped"*) n=3 t="Host hardening: skipped (opt-in)" w="SSH config and firewall are untouched. Use your provider's firewall; --harden applies it (experimental)." ;;
-    "Host hardening"*) n=3 t="Securing the machine (experimental, opt-in)" w="Firewall to SSH, 80 and 443, key-only SSH where that is safe, no core dumps or swap, automatic security updates." ;;
-    "Core: user"*) n=4 t="Installing the Core" w="Creates a service account, the Core's home with its keys and database, and its systemd service." ;;
-    Backups*) n=5 t="Setting up backups" w="Encrypted snapshots of the Core every day, kept on this machine (a bucket can be added later)." ;;
-    Start*) n=6 t="Starting the Core" w="Enables the service at boot and waits for its first HTTPS certificate (up to a minute or two)." ;;
-    "Real credentials"*) n=7 t="Letting the Core hold provider keys" w="Turns on the encrypted secrets store so the app can keep provider and connection keys." ;;
-    Runner*) n=8 t="Installing the runner" w="The runner is the unprivileged ainkrad-runner user: terminals and agent sessions on, exec.run off. Not started until paired." ;;
-    Self-test*) n=9 t="Checking that everything works" w="Service, HTTPS, certificate and backup timer." ;;
-    "First device"*) n=10 t="Creating your connection link" w="A one-time link and code that make the Mac app the owner of this Core." ;;
+    Checks*) n=6 sub="Checking DNS and the ports" ;;
+    Binaries*) n=6 sub="Checking the Core programs run on this CPU" ;;
+    "Host hardening skipped"*) n=6 sub="Host hardening: skipped (opt-in). SSH config and firewall are untouched; use your provider's firewall, --harden applies it (experimental)" ;;
+    "Host hardening"*) n=6 sub="Host hardening (experimental, opt-in): firewall, key-only SSH where safe, no swap or core dumps, security updates" ;;
+    "Core: user"*) n=6 sub="Creating the service account, the Core's home with its keys and database, and its systemd service" ;;
+    Backups*) n=6 sub="Setting up daily encrypted backups on this machine" ;;
+    Start*) n=7 sub="Starting the Core and getting its HTTPS certificate" ;;
+    "Real credentials"*) n=7 sub="Turning on the encrypted secrets store" ;;
+    Runner*) n=7 sub="Installing the runner (unprivileged user; terminals on, exec.run off; not started until paired)" ;;
+    Self-test*) n=7 sub="Checking that everything works" ;;
+    "First device"*) n=8 sub="Creating your one-time connect link" ;;
     *) return 0 ;;
   esac
-  local fill=$((n * 20 / GUIDED_TOTAL))
-  printf '\n %s%s%s%s  step %s of %s\n %s%s%s %s%s%s\n   %s%s%s\n' "$CY" "$(repeat "$U_FULL" "$fill")" "$D" "$(repeat "$U_EMPTY" $((20 - fill)))" "$n" "$GUIDED_TOTAL" \
-    "$R$B" "$U_GO" "$R" "$B" "$t" "$R" "$D" "$w" "$R"
+  if [ "$UI_N" != "$n" ]; then
+    case $n in
+      6) ui_step 6 "$(ui_rname 6)" "Creates the service account, the Core's keys and database, its systemd service and daily backups." ;;
+      7) ui_step 7 "$(ui_rname 7)" "Starts the Core, waits for its first HTTPS certificate and checks that it works." ;;
+      8) ui_step 8 "$(ui_rname 8)" "A one-time link and code that make the Mac app the owner of this Core." ;;
+    esac
+  fi
+  ui_note "> $sub"
 }
-ok_line() { printf '   %s%s%s %s\n' "$GR" "$U_OK" "$R" "$*"; }
+ok_line() { ui_ok "$*"; }
 
 guided_banner() {
-  printf '\n%s Ainkrad Core setup%s\n %sThis installs the Ainkrad Core on this machine and gives you a link to connect the Mac app.\n It needs about five minutes and asks two questions at most. Ctrl-C stops it safely.%s\n' "$B" "$R" "$D" "$R"
+  [ "${AINKRAD_FROM_GET:-}" = 1 ] || ui_roadmap
 }
 
 # A terminal to ask on, even when stdin is a pipe (curl ... | sudo sh).
@@ -70,13 +68,24 @@ guided_answers() {
   A_BOOTSTRAP=later A_SELFTEST_BACKUP=no
   [ -n "$A_HOSTNAME" ] && ! valid_hostname "$A_HOSTNAME" && { warn "AINKRAD_HOSTNAME '$A_HOSTNAME' is not a DNS name"; A_HOSTNAME=''; }
   [ -n "$A_ACME_CONTACT" ] && ! valid_email "$A_ACME_CONTACT" && { warn "AINKRAD_ACME_EMAIL is not a valid email"; A_ACME_CONTACT=''; }
-  if [ -z "$A_HOSTNAME" ] || [ -z "$A_ACME_CONTACT" ]; then
+  ui_step 5 "$(ui_rname 5)" "Only the public DNS name and an email are needed; everything else has a sensible default."
+  UI_Q_N=0 UI_Q_TOTAL=0
+  local pre_host='' pre_mail=''
+  [ -z "$A_HOSTNAME" ] || pre_host=1
+  [ -z "$A_ACME_CONTACT" ] || pre_mail=1
+  [ -n "$A_HOSTNAME" ] || UI_Q_TOTAL=$((UI_Q_TOTAL + 1))
+  [ -n "$A_ACME_CONTACT" ] || UI_Q_TOTAL=$((UI_Q_TOTAL + 1))
+  if [ "$UI_Q_TOTAL" -gt 0 ]; then
     have_tty || die "no terminal to ask on: set AINKRAD_HOSTNAME=<dns name> and AINKRAD_ACME_EMAIL=<email> and run again"
-    pub=$(clean_ip "$(curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || true)")
-    printf '\n%s The Core is served over HTTPS with a free Let'"'"'s Encrypt certificate, so it needs a public DNS name that points at\n this machine%s (an A record%s; the address was looked up at api.ipify.org).%s Core does not support an IP-only or self-signed setup yet. No name? Any free dynamic-DNS\n name works: create it first, then come back.%s\n' "$B" "${pub:+ ($pub)}" "$R$D" "$R$D" "$R"
-    [ -n "$A_HOSTNAME" ] || ask HOSTNAME "DNS name for this Core, for example core.yourdomain.com"
-    [ -n "$A_ACME_CONTACT" ] || ask ACME_CONTACT "Email for the certificate account (expiry notices only)."
-  else ok_line "Using $A_HOSTNAME and $A_ACME_CONTACT (given up front)"; fi
+    ui_note "The Core is served over HTTPS with a free Let's Encrypt certificate, so it needs a public DNS name that points at this machine."
+    ui_note "There is no IP-only or self-signed mode yet. No name? Any free dynamic-DNS name works: create it first, then answer."
+    [ -n "$A_HOSTNAME" ] || ask HOSTNAME "Public DNS name of this Core"
+    [ -n "$A_ACME_CONTACT" ] || ask ACME_CONTACT "Email for the Let's Encrypt account (expiry notices only)"
+  fi
+  if [ -n "$pre_host" ]; then ui_ok "HOSTNAME = $A_HOSTNAME (given up front)"; ui_after_answer HOSTNAME "$A_HOSTNAME"; fi
+  if [ -n "$pre_mail" ]; then ui_ok "ACME_CONTACT = $A_ACME_CONTACT (given up front)"; fi
+  if [ "$A_ACME_ENV" = staging ]; then ui_note "Certificate: staging (a test certificate: not trusted by browsers, no rate limits). Production is the default."
+  else ui_note "Certificate: production Let's Encrypt (trusted by browsers). AINKRAD_ACME_ENV=staging asks for a test certificate instead (not trusted, no rate limits)."; fi
   for k in $KEYS; do eval "v=\${A_$k:-}"; [ -n "$v" ] || printf -v "A_$k" '%s' "$(default_of "$k")"; done
 }
 
@@ -109,6 +118,105 @@ guided_backup_key() {
   BACKUP_IDENTITY=$(printf '%s\n' "$out" | grep -m1 '^AGE-SECRET-KEY-' || true)
   [ -n "$BACKUP_IDENTITY" ] || die "backup-keygen printed no identity (empty or unexpected output)"
   age_recipient "$A_BACKUP_RECIPIENT" || die "backup-keygen gave no usable recipient"
+}
+
+# Where get.sh's bundle is kept so the Core can be removed later without downloading anything again.
+INSTALLER_SAVED=${AINKRAD_SAVED_INSTALLER:-/usr/local/lib/ainkrad-installer}
+save_installer() { # the signed, already verified bundle (get.sh checked it); root-owned
+  # shellcheck disable=SC2016 # the script text is for the inner sh
+  ui_run "Keeping the installer in $INSTALLER_SAVED (for a later removal or re-run)" \
+    sh -c 'rm -rf "$1" && mkdir -p "$1" && cp -R "$2/scripts" "$2/deploy" "$1/" && chmod -R go-w "$1"' _ "$INSTALLER_SAVED" "$ROOT" || true
+}
+removal_hint() { # what to run to take the Core off again, and what that keeps
+  local cmd
+  if [ -x "$INSTALLER_SAVED/scripts/install.sh" ]; then cmd="sudo $INSTALLER_SAVED/scripts/install.sh --uninstall --purge"
+  elif [ "${AINKRAD_FROM_GET:-}" != 1 ]; then cmd="sudo $0 --uninstall --purge"
+  else cmd="run the one-line command again with: sh -s -- --uninstall --purge (it checks the download first)"; fi
+  echo "to remove the Core and its data run: $cmd. That keeps the ainkrad service users, /etc/ainkrad/backup.env and the backup bucket, installed apt packages, and SSH and firewall settings."
+}
+
+# The certificate wait: the longest silent part. A background poller, a 4-minute watchdog, the spinner in front.
+cert_wait() {
+  local pid wd rc=0
+  ( until health >/dev/null 2>&1; do sleep 2; done ) & pid=$!
+  ( sleep 240; kill "$pid" 2>/dev/null ) >/dev/null 2>&1 & wd=$!
+  UI_JOBS="$pid $wd" UI_JOB="waiting for the certificate (the Core is installed and may be running)"
+  UI_HINT=0
+  ui_note "Usually 20-60 s; it needs port 443 reachable and the DNS record pointing here."
+  ui_wait "$pid" "Requesting the certificate" "" ui_cert_text
+  wait "$pid" 2>/dev/null || rc=$?
+  kill "$wd" 2>/dev/null; wait "$wd" 2>/dev/null || true
+  UI_JOBS='' UI_JOB=''
+  return "$rc"
+}
+guided_next_steps() { # guided_next_steps INVITE_RC
+  printf '\n %sWhat to do next%s\n' "$B" "$R"
+  if [ "$1" = 0 ]; then
+    printf '   1. Open the Mac app and choose "Use an existing Core".\n   2. Paste the link above (or scan the QR). You are then the owner of this Core.\n'
+  else
+    printf '   1. Make the connect link as printed above (on a terminal on this machine).\n   2. Open the Mac app, choose "Use an existing Core" and paste that link.\n'
+  fi
+}
+
+# ui_card N TOTAL "label" "example" "default": the card every question is printed in (TOTAL 0 = unknown)
+ui_card() {
+  printf '\n %s%sQuestion %s%s%s\n   %s\n   Example:  %s\n   Default:  [%s]\n %sWaiting for your answer...%s\n' "$B" "$CY" "$1" "$([ "$2" = 0 ] || echo " of $2")" "$R" "$3" "$4" "$5" "$D" "$R"
+}
+
+# --- live checks right after an answer is accepted ---
+dns_probe() { # NAME OUTFILE: "A ip" / "AAAA ip" lines (dig when there is one, else getent); never fails
+  { if command -v dig >/dev/null; then
+      dig +short +time=3 +tries=1 A "$1" 2>/dev/null | grep -E '^[0-9.]+$' | sed 's/^/A /' || true
+      dig +short +time=3 +tries=1 AAAA "$1" 2>/dev/null | grep -E '^[0-9a-fA-F:]+$' | sed 's/^/AAAA /' || true
+    else
+      getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' | sort -u | sed 's/^/A /' || true
+      getent ahostsv6 "$1" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9a-fA-F:]+$' | sort -u | sed 's/^/AAAA /' || true
+    fi; } >"$2"
+}
+pub_probe() { # OUTFILE: this machine's public IPv4 from a third party (api.ipify.org); never fails
+  { curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS4 --max-time 5 https://checkip.amazonaws.com 2>/dev/null || true; } >"$1"
+}
+# ui_check_dns NAME: A record against this machine's public address, then the AAAA record; says plainly what to fix.
+ui_check_dns() {
+  local name=$1 pub a aaaa x here f
+  ui_logopen || { ui_warn "cannot create a log directory, so the DNS check is skipped"; return 0; }
+  f=$UI_LOGDIR/dns
+  UI_QUIET=1 ui_run "Looking up this machine's public address (a request to api.ipify.org)" pub_probe "$f.pub" || true
+  pub=$(clean_ip "$(cat "$f.pub" 2>/dev/null || true)")
+  UI_QUIET=1 ui_run "Checking that $name points at ${pub:-this machine}" dns_probe "$name" "$f.dns" || true
+  a=$(sed -n 's/^A //p' "$f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'); aaaa=$(sed -n 's/^AAAA //p' "$f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+  if [ -z "$a" ]; then
+    ui_warn "$name has no DNS A record yet. Fix: at your DNS provider add an A record  $name -> ${pub:-<this machine public IP>}  (TTL 300), then wait a minute. Let's Encrypt cannot issue the certificate until it exists. Not blocking now; I ask again before installing."
+  elif [ -z "$pub" ]; then
+    ui_warn "$name points at $a, but this machine's public address could not be looked up, so I cannot compare. Make sure that is this machine."
+  elif printf ' %s ' "$a" | grep -q " $pub "; then ui_ok "$name points at $pub: this machine. Good."
+  else
+    ui_warn "$name points at $a, but this machine is $pub. Fix: change the A record to $pub (or run this installer on $a). Let's Encrypt would validate the wrong machine. Not blocking now; I ask again before installing."
+  fi
+  printf '%s\n' "$aaaa" | tr ' ' '\n' | while IFS= read -r x; do
+    valid_ipv6 "$x" || continue # only a real IPv6 literal gets this far (no globs, no control characters)
+    here=0; ip -6 addr 2>/dev/null | grep -q " $x/" && here=1
+    [ "$here" = 1 ] || ui_warn "$name also has an IPv6 (AAAA) record $x that is not on this machine. Let's Encrypt tries IPv6 first when it exists. Fix: remove the AAAA record, or point it at this machine."
+  done
+}
+ui_after_answer() { # KEY VALUE
+  case $1 in
+    HOSTNAME) ui_check_dns "$2" ;;
+    ACME_CONTACT) ui_note "Let's Encrypt only uses it for expiry and account notices. $2 looks like an email." ;;
+  esac
+}
+ui_example() { # KEY: one example answer
+  case $1 in
+    HOSTNAME) echo "core.yourdomain.com" ;; ACME_CONTACT) echo "you@example.com" ;; BACKUP_RECIPIENT) echo "age1... (the PUBLIC key)" ;;
+    BINARY_DIR) echo "/usr/local/bin" ;; PUBLIC_IP) echo "203.0.113.7" ;; *) echo "(see the text above)" ;;
+  esac
+}
+ui_invalid() { # KEY: why the answer was not accepted, in plain words
+  case $1 in
+    HOSTNAME) echo "That is not a DNS name. It needs letters, digits, hyphens and at least one dot, for example core.yourdomain.com (an IP address does not work)." ;;
+    ACME_CONTACT) echo "That does not look like an email address (name@example.com)." ;;
+    *) echo "That is not a valid answer for $1. Try again." ;;
+  esac
 }
 
 # The Core's invite: `ainkrad-core-server pairing-invite <db> <host> [name]` prints the link (Core fingerprint + a
