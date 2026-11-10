@@ -80,10 +80,13 @@ if [ -z "$prefix" ]; then
   run install -d -m 0700 -o ainkrad-runner -g ainkrad-runner /var/lib/ainkrad-runner
 fi
 run install -d "$prefix/usr/local/bin" "$prefix/etc/systemd/system"
-run install -m 0755 "$binary" "$prefix/usr/local/bin/ainkrad-runner"
+# install_bin SRC DEST: copy and set 0755; when SRC already IS DEST (--binary pointing at the final path) `install` would die with
+# "are the same file" under set -e, leaving a half-installed runner: only the mode is set then.
+install_bin() { if [ "$1" -ef "$2" ]; then run chmod 0755 "$2"; else run install -m 0755 "$1" "$2"; fi; }
+install_bin "$binary" "$prefix/usr/local/bin/ainkrad-runner"
 # Beside the runner, where it looks first. Installed whenever it is at hand, so enabling pty later needs no re-install.
 [ -n "$ptyhost" ] || [ ! -x "$(dirname "$binary")/ainkrad-ptyhost" ] || ptyhost=$(dirname "$binary")/ainkrad-ptyhost
-[ -z "$ptyhost" ] || run install -m 0755 "$ptyhost" "$prefix/usr/local/bin/ainkrad-ptyhost"
+[ -z "$ptyhost" ] || install_bin "$ptyhost" "$prefix/usr/local/bin/ainkrad-ptyhost"
 run install -m 0644 "$HERE/systemd/ainkrad-runner.service" "$prefix/etc/systemd/system/ainkrad-runner.service"
 # runner.env: RUNNER_ARGS from these flags, replaced on every run (so a re-run without --pty turns terminals off).
 args=''

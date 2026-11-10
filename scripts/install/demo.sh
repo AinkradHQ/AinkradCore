@@ -14,8 +14,9 @@ demo_typed() { # KEY LABEL ANSWER: the card, then the "typed" answer
   demo_nap 1; printf ' > %s: %s\n' "$1" "$3"; ui_ok "$1 = $3"
 }
 demo_main() {
-  GUIDED=1 DRY=1 UI_DEMO=1 A_HARDEN=no A_HOSTNAME=core.example.com A_ACME_ENV=production A_BACKUP_RECIPIENT=demo
+  GUIDED=1 DRY=1 A_HARDEN=no A_HOSTNAME=core.example.com A_ACME_ENV=production A_BACKUP_RECIPIENT=demo
   ui_init; ui_box_init; ui_traps
+  UI_DEMO=1 # after ui_init: never taken from the environment
   UI_BASE=0 UI_TOTAL=8
   DEMO_BASE=$(date +%s) DEMO_REAL0=$DEMO_BASE DEMO_K=1
   ui_now() { echo $((DEMO_BASE + ($(date +%s) - DEMO_REAL0) * DEMO_K)); }

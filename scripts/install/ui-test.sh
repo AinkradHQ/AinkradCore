@@ -67,7 +67,7 @@ for w in 'ui_run "Installing the prerequisite packages with apt' 'UI_TEXTFN=ui_d
 done
 mkdir -p "$t/empty2"
 g=$( cd "$t/empty2" && AINKRAD_RELEASE_URL=/nonexistent AINKRAD_GET_VERIFY_ONLY=1 NO_COLOR=1 sh "$ROOT/scripts/get.sh" 2>&1 </dev/null )
-{ grep -q '\] step 3/8: Download and verify' <<<"$g" && grep -q 'Downloading SHA256SUMS \.\.\.' <<<"$g" && grep -q 'Stopped at step 3 of 8 (Download and verify)' <<<"$g" && grep -q "Re-run:      curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh | sudo AINKRAD_RELEASE_URL='/nonexistent' sh" <<<"$g"; } && ok || bad "get.sh in plain mode: no step line, no 'what is happening' line or no failure card with the re-run command: $g"
+{ grep -q '\] step 3/8: Download and verify' <<<"$g" && grep -q 'Downloading SHA256SUMS \.\.\.' <<<"$g" && grep -q 'Stopped at step 3 of 8 (Download and verify)' <<<"$g" && grep -qF "Re-run:      sudo AINKRAD_RELEASE_URL='/nonexistent' sh -c \"\$(curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh)\"" <<<"$g"; } && ok || bad "get.sh in plain mode: no step line, no 'what is happening' line or no failure card with the re-run command: $g"
 grep -q $'\033' <<<"$g" && bad "get.sh printed an escape code in plain mode" || ok
 
 # --- the failure card ---
@@ -306,7 +306,7 @@ o=$( cd "$t/gd/cwd" && PATH="$t/gd/shim:$PATH" TMPDIR="$t/gd/tmp" NO_COLOR=1 sh 
 
 # --- (3) the Re-run line is the real invocation ---
 rr=$( cd "$t/empty2" && AINKRAD_RELEASE_URL="/no'pe" AINKRAD_HOSTNAME=core.example.com AINKRAD_ACME_EMAIL=ops@example.com AINKRAD_MIN_VERSION=1.2.3 AINKRAD_HARDEN=yes AINKRAD_ACME_ENV=$'a\001b' NO_COLOR=1 sh "$ROOT/scripts/get.sh" --harden 2>&1 </dev/null | sed -n 's/^   Re-run:      //p' )
-want="curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh | sudo AINKRAD_HOSTNAME='core.example.com' AINKRAD_ACME_EMAIL='ops@example.com' AINKRAD_HARDEN='yes' AINKRAD_RELEASE_URL='/no'\\''pe' AINKRAD_MIN_VERSION=1.2.3 sh -s -- '--harden'"
+want="sudo AINKRAD_HOSTNAME='core.example.com' AINKRAD_ACME_EMAIL='ops@example.com' AINKRAD_HARDEN='yes' AINKRAD_RELEASE_URL='/no'\\''pe' AINKRAD_MIN_VERSION=1.2.3 sh -c \"\$(curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh)\" sh '--harden'"
 [ "$rr" = "$want" ] && ok || bad "the Re-run line is not the real invocation (quoting, flags, floor, unsafe value omitted): got [$rr] want [$want]"
 rr=$( cd "$t/empty2" && AINKRAD_RELEASE_URL=/nonexistent AINKRAD_MIN_VERSION='1;touch /tmp/pwned-ainkrad' NO_COLOR=1 sh "$ROOT/scripts/get.sh" 2>&1 </dev/null | sed -n 's/^   Re-run:      //p' )
 case $rr in *pwned*) bad "an unsafe AINKRAD_MIN_VERSION reached the Re-run line: $rr" ;; *) ok ;; esac
@@ -328,10 +328,13 @@ r=$( AINKRAD_STEP_TOTAL='4' AINKRAD_STEP_BASE='4' bash -c '. "$1"; ui_init; echo
 bad_str=$(printf 'a\033[31mred\033[0m b\177c d\233e f\302\233g h\302\200i \342\200\246 end')
 hexof() { od -An -tx1 | tr '\n' ' ' | tr -s ' ' | sed 's/^/ /; s/$/ /'; } # bytes as " 61 1b 5b " so that a byte is matched whole
 for fn in ui_ok ui_note ui_warn; do
-  out=$( . "$ROOT/scripts/install/ui.sh"; ui_init; "$fn" "$bad_str" | hexof )
+  out=$( . "$ROOT/scripts/install/ui.sh"; ui_init; UI_UTF=0; "$fn" "$bad_str" | hexof ) # a bare 9B is stripped in ASCII mode; in UTF-8 mode it is part of real text
   case $out in *" 1b "* | *" 7f "* | *" 9b "* | *" c2 80 "* | *" c2 67 "*) bad "$fn let a control character through: $out" ;; *) ok ;; esac
 done
 out=$( . "$ROOT/scripts/install/ui.sh"; ui_init; printf '%s' "$bad_str" | ui_clean | hexof )
+u8=$( . "$ROOT/scripts/install/ui.sh"; ui_init; UI_UTF=1; printf 'a \342\200\233 b \302\233 c' | ui_clean | hexof )
+case $u8 in *" e2 80 9b "*) ok ;; *) bad "ui_clean garbled a UTF-8 character containing byte 9B in UTF-8 mode: $u8" ;; esac
+case $u8 in *" c2 9b "*) bad "ui_clean kept the C1 CSI (C2 9B) in UTF-8 mode: $u8" ;; *) ok ;; esac
 case $out in *" e2 80 a6 "*) ok ;; *) bad "ui_clean corrupted a legitimate UTF-8 character (the ellipsis): $out" ;; esac
 printf 'apt says \033[2J\033[1;1Hgotcha\n' >"$t/log1"
 out=$( . "$ROOT/scripts/install/ui.sh"; ui_init; ui_lastline "$t/log1" | hexof ); case $out in *" 1b "*) bad "ui_lastline let an escape code through" ;; *) ok ;; esac
@@ -357,6 +360,12 @@ out=$( . "$ROOT/scripts/install/ui.sh"; ui_init
   ui_now() { n=$(cat "$t/clk"); n=$((n + 30)); echo $n >"$t/clk"; echo $n; }; ui_sleep() { sleep 0.05; }
   UI_HINT=0; sleep 1 & p=$!; ui_wait "$p" "cert" "" ui_cert_text; wait $p 2>/dev/null )
 grep -q 'Over a minute' <<<"$out" && ok || bad "the certificate checklist was not printed during the certificate wait"
+
+# --- UI_DEMO and UI_STATE are never read from the environment ---
+r=$( UI_DEMO=1 UI_STATE='evil state' bash -c '. "$1"; ui_init; echo "$UI_DEMO|$UI_STATE"' _ "$ROOT/scripts/install/ui.sh" )
+[ "$r" = "0|Nothing has been changed on this machine yet." ] && ok || bad "UI_DEMO / UI_STATE came from the environment: $r"
+r=$( UI_DEMO=1 AINKRAD_HOSTNAME=core.example.com AINKRAD_ACME_EMAIL=ops@example.com NO_COLOR=1 bash "$ROOT/scripts/install.sh" --dry-run --binary "$t/dd" 2>&1 </dev/null )
+grep -qi 'DEMO' <<<"$r" && bad "UI_DEMO from the environment turned a real run into a demo" || ok
 
 # --- (9) no log directory, no run ---
 rm -f "$t/ran"
