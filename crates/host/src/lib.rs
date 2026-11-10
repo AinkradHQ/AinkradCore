@@ -317,7 +317,7 @@ fn read_limit(ctx: &Ctx, action: &str) -> Result<(), u64> {
 fn mutate(ctx: &Ctx, trail: &Trail, req: &Request, stream: &mut UnixStream) {
     let name = req.action.name();
     let say = |stream: &mut UnixStream, b: Vec<u8>| respond(stream, b);
-    if !state::dir_safe(&ctx.state_dir, ctx.owner_uid) {
+    if !state::ensure_dir(&ctx.state_dir, ctx.owner_uid) {
         return say(stream, refuse(trail, req, Code::StateUnavailable, None));
     }
     let Ok(lock) = state::open_lock(&ctx.state_dir, LOCK) else {
@@ -383,6 +383,10 @@ fn mutate(ctx: &Ctx, trail: &Trail, req: &Request, stream: &mut UnixStream) {
             wire::err(Some(&req.id), Code::StateUnavailable, None),
         );
     }
+    // Only now may a repeat read "accepted". If this save fails the action still runs and a repeat
+    // answers `failed`: the wrong direction, but the safe one.
+    limits.mark_accepted(&req.id);
+    let _ = limits::save(&ctx.state_dir, &limits);
     say(stream, wire::ok(&req.id, json!({"accepted": true})));
     let unit = if name == "restart_core" {
         "ainkrad-core.service"

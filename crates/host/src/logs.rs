@@ -1,4 +1,5 @@
-//! `logs`: the journal of one fixed unit through `journalctl`, or `actions.log` for `helper`.
+//! `logs`: the journal of one fixed unit through `journalctl`, or, for `helper`, the helper's own
+//! records: `actions.log` (refusals and root actions) and `mutations.log` (root actions only), merged.
 //!
 //! Fixed argv: `journalctl -u <fixed unit> -o json --no-pager --output-fields=MESSAGE,PRIORITY -n <N+1>`
 //! (the cursor and timestamp fields are always printed), plus, when paging,

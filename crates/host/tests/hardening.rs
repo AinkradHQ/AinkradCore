@@ -291,26 +291,52 @@ fn the_helper_view_shows_mutations_log_and_lists_a_shared_line_once() {
     assert!(v["result"].get("next_before").is_none());
 }
 
-/// A state directory that is not root-only (or sits under a writable parent) refuses mutations,
-/// and `status` says so.
+/// A state directory that is ours but too open is tightened to 0700 by the helper; one that is not
+/// ours, is a symlink, or sits under a writable parent refuses mutations, and `status` says so.
 #[test]
-fn an_unsafe_state_directory_refuses_mutations_and_is_reported() {
+fn the_state_directory_is_tightened_or_refused_and_reported() {
+    use std::os::unix::fs::MetadataExt;
     let fx = Fx::new();
-    assert_eq!(fx.call("status", "{}")["result"]["state_dir_safe"], true);
     let st = std::fs::Permissions::from_mode;
-    std::fs::set_permissions(fx.state(), st(0o750)).unwrap();
-    assert_eq!(fx.code("restart_core", "{}"), "state_unavailable");
-    assert_eq!(fx.call("status", "{}")["result"]["state_dir_safe"], false);
-    std::fs::set_permissions(fx.state(), st(0o700)).unwrap();
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().mode() & 0o777;
+    assert_eq!(fx.call("status", "{}")["result"]["state_dir_safe"], true);
+    // systemd StateDirectory= and `install -d` make 0755: the first mutation fixes it.
+    std::fs::set_permissions(fx.state(), st(0o755)).unwrap();
+    assert_eq!(
+        fx.call("status", "{}")["result"]["state_dir_safe"],
+        false,
+        "status only reports"
+    );
+    assert_eq!(mode(&fx.state()), 0o755);
+    assert_eq!(fx.call("restart_core", "{}")["ok"], true);
+    assert_eq!(mode(&fx.state()), 0o700);
+    // A writable parent is refused, and nothing is changed.
+    std::fs::set_permissions(fx.state(), st(0o755)).unwrap();
     std::fs::set_permissions(fx.dir.path(), st(0o777)).unwrap();
+    fx.at(200);
     assert_eq!(fx.code("restart_core", "{}"), "state_unavailable");
+    assert_eq!(mode(&fx.state()), 0o755, "an unsafe parent: no chmod");
     std::fs::set_permissions(fx.dir.path(), st(0o700)).unwrap();
-    // Owned by someone else than the owner uid.
+    // Not owned by the owner uid: refused, never chmod'd or chown'd.
     let mut other = Fx::new();
+    std::fs::set_permissions(other.state(), st(0o755)).unwrap();
     other.ctx.owner_uid = ainkrad_sys::getuid() + 1;
     assert_eq!(other.code("restart_core", "{}"), "state_unavailable");
-    assert_eq!(fx.fake.restarts() + other.fake.restarts(), 0);
-    assert_eq!(fx.call("restart_core", "{}")["ok"], true, "safe again");
+    assert_eq!(mode(&other.state()), 0o755);
+    // A symlink in its place is never followed.
+    let real = fx.dir.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    std::fs::set_permissions(&real, st(0o755)).unwrap();
+    let link = fx.dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let mut via = Fx::new();
+    via.ctx.state_dir = link;
+    assert_eq!(via.code("restart_core", "{}"), "state_unavailable");
+    assert_eq!(mode(&real), 0o755);
+    assert_eq!(
+        fx.fake.restarts() + other.fake.restarts() + via.fake.restarts(),
+        1
+    );
 }
 
 /// Repeats of a request leave no trace: no growth of any log.
@@ -342,6 +368,35 @@ fn an_enormous_log_line_is_cut_before_it_is_redacted() {
     let v = fx.call("logs", r#"{"unit":"core"}"#);
     assert!(started.elapsed() < std::time::Duration::from_secs(20));
     let t = texts(&v);
-    assert_eq!(t[0], "password:[redacted:password]");
+    assert_eq!(
+        t[0], "[redacted:cut]",
+        "one 2 MiB token has no safe cut and is dropped whole"
+    );
     assert!(!t[1].contains("ZZZZ"));
+}
+
+/// Long entries of multibyte characters must not panic the `logs` request (every request for the
+/// unit would), and a PEM header split by the cut must not leave its body.
+#[test]
+fn long_multibyte_and_cut_pem_entries_do_not_break_logs() {
+    let fx = Fx::new();
+    let header = "-----BEGIN PRIVATE KEY-----";
+    put(
+        &fx,
+        vec![
+            json!("€".repeat(22_000)),
+            json!("😀".repeat(17_000)),
+            json!("漢字 ".repeat(30_000)),
+            json!(format!("{} {}", "word ".repeat(100), "€😀".repeat(40_000))),
+            json!(format!(
+                "{} {header} {}",
+                "a ".repeat(32_700),
+                "zqbody ".repeat(2000)
+            )),
+            json!("tail"),
+        ],
+    );
+    let t = texts(&fx.call("logs", r#"{"unit":"core","lines":10}"#));
+    assert_eq!(t.len(), 6);
+    assert!(t.iter().all(|l| !l.contains("zqbody")), "{t:?}");
 }

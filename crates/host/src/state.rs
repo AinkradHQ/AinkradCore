@@ -57,8 +57,9 @@ pub fn open_lock(dir: &Path, name: &str) -> io::Result<File> {
 
 /// Whether the state directory is what the helper assumes: a real directory (not a symlink) owned
 /// by `owner_uid` (root) with no group or other access, under a parent owned by `owner_uid` that
-/// nobody else can write to. If uid `ainkrad` could replace the directory or an ancestor, none of
-/// the fail-closed state would mean anything, so mutations refuse and `status` says so.
+/// nobody else can write to. If uid `ainkrad` could replace the directory or its parent, none of the
+/// fail-closed state would mean anything, so mutations refuse and `status` says so. Only the parent
+/// is checked, not further up: `/var/lib` and above are root's on any host this runs on.
 pub fn dir_safe(dir: &Path, owner_uid: u32) -> bool {
     use std::os::unix::fs::MetadataExt;
     let own = std::fs::symlink_metadata(dir)
@@ -68,4 +69,25 @@ pub fn dir_safe(dir: &Path, owner_uid: u32) -> bool {
         .and_then(|p| std::fs::symlink_metadata(p).ok())
         .is_some_and(|m| m.is_dir() && m.uid() == owner_uid && m.mode() & 0o022 == 0);
     own && parent
+}
+
+/// [`dir_safe`], after tightening a state directory that is ours but too open. systemd's
+/// `StateDirectory=` and `install -d` both make `0755`, so a helper that only refused would refuse
+/// on every fresh install. It chmods to `0700` only a real directory (never a symlink) owned by
+/// `owner_uid` under a safe parent; it never creates, never chowns, and fails closed otherwise.
+pub fn ensure_dir(dir: &Path, owner_uid: u32) -> bool {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let parent_ok = dir
+        .parent()
+        .and_then(|p| std::fs::symlink_metadata(p).ok())
+        .is_some_and(|m| m.is_dir() && m.uid() == owner_uid && m.mode() & 0o022 == 0);
+    if parent_ok
+        && let Ok(m) = std::fs::symlink_metadata(dir)
+        && m.is_dir()
+        && m.uid() == owner_uid
+        && m.mode() & 0o077 != 0
+    {
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    dir_safe(dir, owner_uid)
 }

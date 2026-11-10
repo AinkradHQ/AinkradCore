@@ -160,54 +160,94 @@ fn user_byte(c: u8) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'~' | b'%' | b'-' | b'+')
 }
 
-/// How far a password is searched for (bytes after the colon).
+/// How far a password is searched for (bytes after the `://` or the user). Every search is bounded
+/// by this, so the pass costs at most `CRED_REACH` per candidate however long the line is.
 const CRED_REACH: usize = 256;
 
-/// `scheme://user:password@host`: the password goes, whatever it holds (`/`, `?`, `#`, spaces,
-/// quotes): it runs to the last `@` within [`CRED_REACH`] bytes on the same line, so a stray `@`
-/// later in the line can over-mask, which is the safe side. Also `user:password@host` without a
-/// scheme, as one whitespace-free token (a password with a space is only caught after `://`).
+/// The text after `from`, at most [`CRED_REACH`] bytes, up to the end of the line, on a char boundary.
+fn window(s: &str, from: usize) -> &str {
+    let mut end = s.len().min(from + CRED_REACH);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    let w = &s[from..end];
+    &w[..w.find('\n').unwrap_or(w.len())]
+}
+
+/// After `scheme://`: `(offset of the colon, offset of the '@')` of a `user:password@` prefix, with
+/// the user possibly empty (`redis://:secret@host`) and made of any characters but the delimiters.
+///
+/// The password may hold anything (`/ ? #`, spaces, quotes, more `@`): it runs to the last `@` of
+/// the first token (up to whitespace or a quote). If that token has no `@` but still looks like
+/// userinfo (a colon, no `/ ? #` yet), the search goes on past whitespace and quotes to the last
+/// `@` of the window. So `http://h:8080/path … someone@corp` (a `/` before the first space) is left
+/// alone, and `http://h:8080/a@b` is still read as user:password (over-masking, the safe side).
+fn scheme_creds(s: &str, start: usize) -> Option<(usize, usize)> {
+    let w = window(s, start);
+    let token = &w[..w
+        .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+        .unwrap_or(w.len())];
+    let at = match token.rfind('@') {
+        Some(at) => at,
+        None if token.contains(':') && !token.contains(['/', '?', '#']) => w.rfind('@')?,
+        None => return None,
+    };
+    let colon = w[..at].find(':')?;
+    let user = &w[..colon];
+    (!user.contains(['/', '?', '#', '@', ' ', '\t', '"', '\'']))
+        .then_some((start + colon, start + at))
+}
+
+/// Without a scheme: one token `user:password@host.tld` (a dot in the host, and no space in the
+/// password). `mailto:bob@x` and `ERROR:foo@bar` have no dotted host and are left alone;
+/// `ERROR:foo@bar.com` is masked, which is the trade-off for catching `admin:hunter2@db.internal`.
+fn bare_creds(s: &str, start: usize) -> Option<(usize, usize)> {
+    let b = s.as_bytes();
+    let user = b[start..].iter().take_while(|c| user_byte(**c)).count();
+    let colon = start + user;
+    if user == 0 || b.get(colon) != Some(&b':') || b[colon + 1..].starts_with(b"//") {
+        return None;
+    }
+    let w = window(s, colon + 1);
+    let token = &w[..w
+        .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '<')
+        .unwrap_or(w.len())];
+    let at = token.rfind('@')?;
+    let host = &token[at + 1..];
+    let host_len = host
+        .bytes()
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-'))
+        .count();
+    let host = &host[..host_len];
+    (at > 0
+        && host.contains('.')
+        && host.ends_with(|c: char| c.is_ascii_alphanumeric())
+        && !token[..at].starts_with("[redacted"))
+    .then_some((colon, colon + 1 + at))
+}
+
+/// `scheme://user:password@host`, and `user:password@host.tld` without a scheme: the password goes.
+/// See [`scheme_creds`] and [`bare_creds`] for what counts and the over-masking trade-offs.
 pub fn url_creds(s: &str) -> String {
     let b = s.as_bytes();
     let (mut out, mut copied, mut i) = (String::with_capacity(s.len()), 0, 0);
     while i < b.len() {
-        // The start of a `user:` candidate: after `://`, or at the start of a token.
         let after_scheme = b[i..].starts_with(b"://");
-        let start = if after_scheme { i + 3 } else { i };
-        let token_start = after_scheme
-            || i == 0
+        let found = if after_scheme {
+            scheme_creds(s, i + 3)
+        } else if i == 0
             || b[i - 1].is_ascii_whitespace()
-            || matches!(b[i - 1], b'"' | b'\'' | b'(' | b'<' | b'=');
-        if token_start && user_byte(b.get(start).copied().unwrap_or(0)) {
-            let user = b[start..].iter().take_while(|c| user_byte(**c)).count();
-            let colon = start + user;
-            // `scheme://…` is handled at the `://`, not as a user named after the scheme.
-            if b.get(colon) == Some(&b':') && !s[colon + 1..].starts_with("//") {
-                let line_end = s[colon..].find('\n').map_or(b.len(), |e| colon + e);
-                let mut reach = line_end.min(colon + 1 + CRED_REACH);
-                while !s.is_char_boundary(reach) {
-                    reach -= 1;
-                }
-                let window = &s[colon + 1..reach];
-                // Scheme-less: the token ends at whitespace or a quote.
-                let window = if after_scheme {
-                    window
-                } else {
-                    &window[..window
-                        .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
-                        .unwrap_or(window.len())]
-                };
-                if let Some(at) = window.rfind('@')
-                    && at > 0
-                    && !window[..at].starts_with("[redacted")
-                {
-                    out.push_str(&s[copied..=colon]);
-                    out.push_str("[redacted:url_password]");
-                    copied = colon + 1 + at;
-                    i = copied;
-                    continue;
-                }
-            }
+            || matches!(b[i - 1], b'"' | b'\'' | b'(' | b'<' | b'=')
+        {
+            bare_creds(s, i)
+        } else {
+            None
+        };
+        if let Some((colon, at)) = found {
+            out.push_str(&s[copied..=colon]);
+            out.push_str("[redacted:url_password]");
+            (copied, i) = (at, at);
+            continue;
         }
         i += if after_scheme { 3 } else { 1 };
     }
@@ -219,9 +259,12 @@ pub fn url_creds(s: &str) -> String {
 /// bounded however long a line the Core prints.
 pub const PRE_CUT: usize = 64 * 1024;
 
-/// Cuts an over-long entry to [`PRE_CUT`] bytes and masks whatever was cut off. The cut backs up to
-/// the last whitespace (or at most 512 bytes), so it never leaves the front of a token whose tail
-/// is gone; the marker stands for the cut part.
+/// Cuts an over-long entry to [`PRE_CUT`] bytes and masks whatever was cut off.
+///
+/// The cut backs up to the last whitespace anywhere in the kept part, so the front of a token whose
+/// tail was cut is dropped with it; an entry over 64 KiB with no whitespace at all is reduced to
+/// the marker. A `-----BEGIN ` header split by the cut is dropped too, and one that is whole but has
+/// lost its `END` is masked to the end by [`pem_across`]. The marker stands for the cut part.
 pub fn pre_cut(mut s: String) -> String {
     if s.len() <= PRE_CUT {
         return s;
@@ -230,14 +273,14 @@ pub fn pre_cut(mut s: String) -> String {
     while !s.is_char_boundary(n) {
         n -= 1;
     }
-    let floor = n.saturating_sub(512);
-    n = s[floor..n]
-        .rfind(char::is_whitespace)
-        .map_or(floor, |w| floor + w);
-    while !s.is_char_boundary(n) {
-        n -= 1;
-    }
+    n = s[..n].rfind(char::is_whitespace).unwrap_or(0);
     s.truncate(n);
+    for k in (5..PEM_BEGIN.len()).rev() {
+        if s.ends_with(&PEM_BEGIN[..k]) {
+            s.truncate(s.len() - k);
+            break;
+        }
+    }
     s.push_str("[redacted:cut]");
     s
 }

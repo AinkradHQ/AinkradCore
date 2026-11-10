@@ -294,6 +294,30 @@ fn passwords_with_odd_characters_and_scheme_less_credentials() {
             "{pw}"
         );
     }
+    // An empty user, and a user with characters outside the plain set.
+    for url in [
+        "redis://:secret@cache.internal:6379/0",
+        "postgres://my$user:secret@db:5432/x",
+        "amqp://:pw@h",
+    ] {
+        let out = one(&format!("conn {url} ok"));
+        assert!(
+            out.contains("[redacted:url_password]@")
+                && !out.contains("secret")
+                && !out.contains(":pw@"),
+            "{out}"
+        );
+    }
+    // Not credentials: left alone.
+    for fine in [
+        "send mailto:bob@x now",
+        "ERROR:foo@bar happened",
+        "http://h:8080/path then mail someone@corp",
+        "see https://example.org/a?b=c@d",
+        "ratio 3:4 at noon",
+    ] {
+        assert_eq!(one(fine), fine);
+    }
     assert_eq!(
         one("connect admin:hunter2@db.internal failed"),
         "connect admin:[redacted:url_password]@db.internal failed"
@@ -317,4 +341,89 @@ fn an_over_long_entry_is_cut_before_redaction_and_the_cut_is_marked() {
     let tok = format!("{} {}", "a ".repeat(PRE_CUT / 2 - 10), "T".repeat(2000));
     let cut = pre_cut(tok);
     assert!(!cut.contains("TTT"), "the front of the token is gone too");
+}
+
+#[test]
+fn pre_cut_never_slices_inside_a_character() {
+    for unit in ["€", "😀", "漢", "é", "a€😀"] {
+        for extra in [0, 1, 2, 3, 511, 513] {
+            let line = unit.repeat(PRE_CUT / unit.len() + extra + 10);
+            assert!(line.len() > PRE_CUT);
+            let out = pre_cut(line);
+            assert_eq!(
+                out, "[redacted:cut]",
+                "{unit} {extra}: one long token has no safe cut"
+            );
+        }
+    }
+    // Words of multibyte characters: cut at a space, the tail is the marker.
+    for unit in ["€€€€ ", "😀😀 ", "漢字漢 "] {
+        let out = pre_cut(unit.repeat(PRE_CUT / unit.len() + 100));
+        assert!(out.ends_with(" [redacted:cut]") || out.ends_with("[redacted:cut]"));
+        assert!(out.len() <= PRE_CUT + 20);
+    }
+    // A mixed line: ASCII words, then a long unbroken multibyte run.
+    let mixed = format!("{} {}", "word ".repeat(100), "€😀".repeat(PRE_CUT));
+    let out = pre_cut(mixed);
+    assert!(
+        out.starts_with("word ") && out.ends_with("[redacted:cut]") && !out.contains('€'),
+        "{}",
+        out.len()
+    );
+}
+
+#[test]
+fn pre_cut_drops_a_header_split_by_the_cut_and_pem_across_masks_a_whole_one() {
+    let header = "-----BEGIN PRIVATE KEY-----";
+    for offset in 0..header.len() + 2 {
+        let head = "a ".repeat((PRE_CUT - offset) / 2);
+        let pad = " ".repeat((PRE_CUT - offset) - head.len());
+        let mut page = vec![pre_cut(format!(
+            "{head}{pad}{header} zq zq zq {}",
+            "zq ".repeat(100)
+        ))];
+        pem_across(&mut page);
+        let cut = &page[0];
+        assert!(
+            !cut.contains("BEG") && !cut.contains("-----") && !cut.contains("zq"),
+            "{offset}: ...{}",
+            &cut[cut.len().saturating_sub(40)..]
+        );
+    }
+    // A whole header whose END was cut off: masked to the end of the entry.
+    let line = format!(
+        "{} {header} {}",
+        "w ".repeat(10),
+        "zqbody ".repeat(PRE_CUT / 7 + 50)
+    );
+    let mut page = vec![pre_cut(line)];
+    pem_across(&mut page);
+    assert!(
+        !page[0].contains("zqbody") && page[0].ends_with(PEM),
+        "{}",
+        page[0]
+    );
+}
+
+#[test]
+fn the_url_pass_is_bounded_per_candidate() {
+    use std::time::{Duration, Instant};
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let page = 480 * 1024;
+        let mut took = Vec::new();
+        for unit in ["x:y ", "://", "a:b@ ", "a:b ", "u:p@h.io ", ":@"] {
+            let text = unit.repeat(page / unit.len());
+            let t = Instant::now();
+            let out = url_creds(&text);
+            took.push((unit, t.elapsed(), out.len()));
+        }
+        let _ = tx.send(took);
+    });
+    let took = rx
+        .recv_timeout(Duration::from_secs(120))
+        .expect("url_creds must be linear in the entry");
+    for (unit, t, _) in took {
+        assert!(t < Duration::from_secs(10), "{unit:?}: {t:?}");
+    }
 }

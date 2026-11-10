@@ -86,8 +86,10 @@ impl Limits {
     }
 
     /// Records an accepted restart, and forgets what no window or dedupe can still see (and any
-    /// entry from the future, see [`Limits::check`]). The caller calls `mark_failed` if the record
-    /// cannot be logged or the restart fails.
+    /// entry from the future, see [`Limits::check`]). The dedupe record starts as **not accepted**: a
+    /// crash or a failed write anywhere before the caller has logged the action and called
+    /// `mark_accepted` leaves a repeat answering `failed`, never an `accepted` for a restart that
+    /// did not run.
     pub fn record(&mut self, id: &str, action: &str, now: u64) {
         self.v = 1;
         for times in self.restarts.values_mut() {
@@ -103,10 +105,16 @@ impl Limits {
             id: id.to_owned(),
             action: action.to_owned(),
             at: now,
-            accepted: true,
+            accepted: false,
         });
         let excess = self.done.len().saturating_sub(DEDUPE_KEEP);
         self.done.drain(..excess);
+    }
+
+    pub fn mark_accepted(&mut self, id: &str) {
+        for d in self.done.iter_mut().filter(|d| d.id == id) {
+            d.accepted = true;
+        }
     }
 
     pub fn mark_failed(&mut self, id: &str) {
@@ -133,4 +141,23 @@ pub fn save(dir: &Path, limits: &Limits) -> io::Result<()> {
         FILE,
         &serde_json::to_vec(limits).map_err(io::Error::other)?,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_record_is_not_accepted_until_it_is_marked() {
+        let mut l = Limits::default();
+        l.record("id1", "restart_core", 1000);
+        assert!(
+            !l.dedupe("id1", 1001).unwrap().accepted,
+            "a crash here must not read accepted"
+        );
+        l.mark_accepted("id1");
+        assert!(l.dedupe("id1", 1001).unwrap().accepted);
+        l.mark_failed("id1");
+        assert!(!l.dedupe("id1", 1001).unwrap().accepted);
+    }
 }
