@@ -159,6 +159,11 @@ U=$D/systemd/ainkrad-runner.service
 grep -qx 'KillMode=process' "$U" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: unit lacks KillMode=process" >&2; }
 grep -v '^#' "$U" | grep -q -- '--enable-' && { fail=$((fail + 1)); echo "FAIL: the unit enables a driver" >&2; } || pass=$((pass + 1))
 grep -qx 'Environment=MALLOC_ARENA_MAX=1' "$U" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: unit lacks MALLOC_ARENA_MAX=1" >&2; }
+# bubblewrap (agent sessions, terminals) needs these; `RestrictNamespaces=yes`, ProcSubset=pid and the /proc overmounting
+# Protect* lines make it fail on a real host (H0b), so they must not come back.
+grep -qx 'RestrictNamespaces=user mnt pid ipc uts cgroup net' "$U" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: unit lacks the bwrap namespace allow-list" >&2; }
+grep -Eq '^(ProcSubset=pid|ProtectKernelTunables=yes|ProtectKernelLogs=yes|ProtectHostname=yes|RestrictNamespaces=(yes|true|1))$' "$U" && { fail=$((fail + 1)); echo "FAIL: the unit blocks bwrap again" >&2; } || pass=$((pass + 1))
+grep -E '^(RestrictAddressFamilies|SystemCallFilter)=' "$U" | grep -q 'AF_NETLINK' && grep -qE '^SystemCallFilter=.*mount pivot_root umount2' "$U" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: unit lacks AF_NETLINK or the mount syscalls bwrap needs" >&2; }
 P=$D/launchd/io.ainkrad.runner.plist
 grep -A1 '<key>AbandonProcessGroup</key>' "$P" | grep -q '<true/>' && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: plist lacks AbandonProcessGroup" >&2; }
 sed '/<!--/,/-->/d' "$P" | grep -q -- '--enable-' && { fail=$((fail + 1)); echo "FAIL: the plist enables a driver" >&2; } || pass=$((pass + 1))
