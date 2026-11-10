@@ -10,7 +10,7 @@ use ainkrad_core_server::api::{App, router};
 use ainkrad_core_server::auth::Identity;
 use ainkrad_core_server::auth::testing::TestDevice;
 use ainkrad_core_server::gateway::Local;
-use ainkrad_core_server::scheduler::SystemClock;
+use ainkrad_core_server::scheduler::{Clock, SystemClock};
 use ainkrad_core_server::store::{self, gov};
 use axum::body::{Body, to_bytes};
 use axum::http::Request;
@@ -307,4 +307,134 @@ async fn the_host_verbs_never_create_a_database() {
         assert!(!missing.exists(), "{verb} created the database");
         assert!(!h.dir.join("missing.db-wal").exists());
     }
+}
+
+/// `pairing-invite` prints one link and nothing else sensitive; its secret claims once, from the
+/// network (no host-socket peer), and enrols the owner with every scope at once; it is then
+/// refused, and its secret is in no audit row.
+#[tokio::test]
+async fn pairing_invite_prints_one_link_that_enrols_the_first_owner() {
+    let h = host("invite").await;
+    let db = h.db.to_str().unwrap();
+    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_ainkrad-core-server"))
+        .args(["pairing-invite", db, "core.test", "Mac"])
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let link = String::from_utf8(out.stdout).unwrap();
+    let link = link.trim();
+    let fp = &h.identity.fp;
+    let prefix = format!("ainkrad://connect?host=core.test&fp={fp}&secret=");
+    let secret = link.strip_prefix(prefix.as_str()).expect(link);
+    assert_eq!(secret.len(), 22, "one line: the link, nothing else");
+
+    let dev = TestDevice::new(fp, Arc::new(SystemClock));
+    let claim = |dev: &TestDevice| {
+        let r = Request::post("/pair/claim")
+            .header("host", "localhost")
+            .header("content-type", "application/json")
+            .body(Body::from(dev.claim_body(None, Some(secret)).to_string()))
+            .unwrap();
+        router(h.app.clone()).oneshot(r)
+    };
+    let res = claim(&dev).await.unwrap();
+    assert_eq!(res.status(), 202, "claimed without the host's socket");
+    let got: serde_json::Value =
+        serde_json::from_slice(&to_bytes(res.into_body(), 1 << 16).await.unwrap()).unwrap();
+    let (st, scopes, revoked) = status(&h, got["device_id"].as_str().unwrap()).await;
+    assert_eq!(
+        (st.as_str(), scopes, revoked),
+        ("active", gov::SCOPES.map(str::to_owned).to_vec(), false)
+    );
+    let second = claim(&TestDevice::new(fp, Arc::new(SystemClock)))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), 401, "single use");
+
+    let again = tokio::process::Command::new(env!("CARGO_BIN_EXE_ainkrad-core-server"))
+        .args(["pairing-invite", db, "core.test"])
+        .output()
+        .await
+        .unwrap();
+    assert!(!again.status.success());
+    assert!(String::from_utf8_lossy(&again.stderr).contains("a device exists"));
+    let rows: String =
+        sqlx::query_scalar("SELECT group_concat(action || details, ' ') FROM audit_events")
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+    assert!(!rows.contains(secret), "the secret is in an audit row");
+}
+
+/// `recover` burns every live invite, those of devices it keeps included.
+#[tokio::test]
+async fn recover_burns_every_live_invite() {
+    let h = host("recover-invites").await;
+    let db = h.db.to_str().unwrap();
+    let admin = TestDevice::enroll(
+        &h.pool,
+        "admin",
+        "device",
+        &["admin"],
+        &h.identity.fp,
+        Arc::new(SystemClock),
+    )
+    .await;
+    let scopes = vec!["admin".to_owned()];
+    let made = gov::create_pairing(
+        &h.pool,
+        &gov::NewPairing {
+            kind: "device",
+            name: "phone",
+            scopes: &scopes,
+            created_by: Some(&admin.id),
+            bootstrap: false,
+            recovery: false,
+            invite: true,
+        },
+        ainkrad_core::audit::AuditActor::System,
+        SystemClock.unix(),
+    )
+    .await
+    .unwrap();
+    let confirm = format!("{}\n", hostname());
+    let (_, ok) = run(&h, &["recover", db, "--keep-devices"], &confirm, "y\n").await;
+    assert!(ok);
+    assert!(!status(&h, &admin.id).await.2, "the admin is kept");
+    let p = gov::get_pairing(&h.pool, &made.id).await.unwrap().unwrap();
+    assert_eq!(p.status, "burned");
+}
+
+/// `recover` burns the host's own unclaimed invite too (no creator device to revoke).
+#[tokio::test]
+async fn recover_burns_a_host_invite() {
+    let h = host("recover-host-invite").await;
+    let db = h.db.to_str().unwrap();
+    let scopes: Vec<String> = gov::SCOPES.iter().map(|s| (*s).to_owned()).collect();
+    let made = gov::create_pairing(
+        &h.pool,
+        &gov::NewPairing {
+            kind: "device",
+            name: "first owner",
+            scopes: &scopes,
+            created_by: None,
+            bootstrap: true,
+            recovery: false,
+            invite: true,
+        },
+        ainkrad_core::audit::AuditActor::System,
+        SystemClock.unix(),
+    )
+    .await
+    .unwrap();
+    let confirm = format!("{}\n", hostname());
+    let (_, ok) = run(&h, &["recover", db], &confirm, "y\n").await;
+    assert!(ok);
+    let p = gov::get_pairing(&h.pool, &made.id).await.unwrap().unwrap();
+    assert_eq!(p.status, "burned");
 }

@@ -88,6 +88,7 @@ mod neg_rng;
 mod neg_walk;
 mod pairing;
 mod pairing_abuse;
+mod pairing_invite;
 mod passkeys;
 mod pools;
 mod preauth;

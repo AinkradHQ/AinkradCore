@@ -5,7 +5,8 @@
 //! A wrong, used, expired or burned credential is the one `pairing_failed`, counted against the
 //! address (§11) and the global wrong-claim budget (20 in 5 minutes burn every live pairing,
 //! §7.4), and audited. A bootstrap pairing is claimable only over this server's Unix socket by
-//! its own user (§7.3).
+//! its own user, unless it is an invite, which the QR secret alone claims from anywhere and
+//! which enrols the device active at once (§7.3).
 
 use axum::Json;
 use axum::extract::{Request, State};
@@ -64,7 +65,7 @@ pub struct ClaimBody {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Claimed {
-    /// The new device, `d_…`, pending until approved.
+    /// The new device, `d_…`, pending until approved; for an invite it is active already.
     pub device_id: Option<String>,
     /// The Core identity SPKI, base64url: its fingerprint must equal the QR's `c`.
     pub core_spki: Option<String>,
@@ -73,7 +74,7 @@ pub struct Claimed {
     pub pairing_id: Option<String>,
     /// Show this; the approver compares it with theirs. The first 16 upper-case Crockford
     /// characters of SHA-256(`AINKRAD-SAS-V1` ‖ core_spki ‖ routine_spki ‖ pairing id as
-    /// UTF-8), as `XXXX-XXXX-XXXX-XXXX`.
+    /// UTF-8), as `XXXX-XXXX-XXXX-XXXX`. Meaningless for an invite: nothing waits on a match.
     pub sas: Option<String>,
 }
 
@@ -116,7 +117,8 @@ pub(super) fn bad(why: &str) -> Response {
 #[utoipa::path(post, path = "/pair/claim", operation_id = "claimPairing", tag = "pairing",
     request_body = ClaimBody, security(()),
     responses((status = 202, description = "Claimed: the device is pending until the approver \
-        matches the SAS. 401 `pairing_failed` for a wrong, used, expired or burned credential; \
+        matches the SAS; an invite is claimed by its secret alone and the device is active at \
+        once (`sas` means nothing then). 401 `pairing_failed` for a wrong, used, expired or burned credential; \
         400 for keys or proofs that do not hold (the pairing is not spent)", body = Claimed)))]
 pub async fn claim(State(app): State<App>, req: Request) -> Response {
     budgeted(&app, req, What::Claim).await
@@ -255,8 +257,13 @@ pub(super) async fn live_pairing(
     if (pairing.kind == "passkey") != passkey {
         return Err("a passkey pairing on the device path, or the other way round");
     }
+    // An invite is claimed by its QR secret alone, never by the short code (§7.3).
+    if pairing.invite && by_code {
+        return Err("an invite claimed by its typed code");
+    }
     let local = parts.extensions.get::<Local>().is_some_and(|l| l.same_user);
-    if (pairing.bootstrap || pairing.recovery) && !local {
+    // An invite is the one bootstrap-class pairing that may come from the network.
+    if ((pairing.bootstrap && !pairing.invite) || pairing.recovery) && !local {
         return Err("bootstrap claimed from outside the host's socket");
     }
     Ok(Ok((pairing, hash)))

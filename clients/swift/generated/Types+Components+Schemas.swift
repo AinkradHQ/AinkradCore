@@ -1437,7 +1437,7 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Claimed/core_spki`.
             public var coreSpki: Swift.String?
-            /// The new device, `d_…`, pending until approved.
+            /// The new device, `d_…`, pending until approved; for an invite it is active already.
             ///
             /// - Remark: Generated from `#/components/schemas/Claimed/device_id`.
             public var deviceId: Swift.String?
@@ -1448,7 +1448,7 @@ extension Components {
             public var pairingId: Swift.String?
             /// Show this; the approver compares it with theirs. The first 16 upper-case Crockford
             /// characters of SHA-256(`AINKRAD-SAS-V1` ‖ core_spki ‖ routine_spki ‖ pairing id as
-            /// UTF-8), as `XXXX-XXXX-XXXX-XXXX`.
+            /// UTF-8), as `XXXX-XXXX-XXXX-XXXX`. Meaningless for an invite: nothing waits on a match.
             ///
             /// - Remark: Generated from `#/components/schemas/Claimed/sas`.
             public var sas: Swift.String?
@@ -1456,7 +1456,7 @@ extension Components {
             ///
             /// - Parameters:
             ///   - coreSpki: The Core identity SPKI, base64url: its fingerprint must equal the QR's `c`.
-            ///   - deviceId: The new device, `d_…`, pending until approved.
+            ///   - deviceId: The new device, `d_…`, pending until approved; for an invite it is active already.
             ///   - pairingId: The pairing, `p_…`: with `core_spki` and its own key the device computes the SAS
             ///   - sas: Show this; the approver compares it with theirs. The first 16 upper-case Crockford
             public init(
@@ -2780,6 +2780,41 @@ extension Components {
                 case supportedMinors = "supported_minors"
             }
         }
+        /// - Remark: Generated from `#/components/schemas/InviteCreated`.
+        public struct InviteCreated: Codable, Hashable, Sendable {
+            /// `ainkrad://connect?host=…&fp=<core_fp>&secret=…`, for a QR code: shown once.
+            ///
+            /// - Remark: Generated from `#/components/schemas/InviteCreated/link`.
+            public var link: Swift.String?
+            /// `p_…`: reject it to withdraw the invite.
+            ///
+            /// - Remark: Generated from `#/components/schemas/InviteCreated/pairing_id`.
+            public var pairingId: Swift.String?
+            /// The QR secret, base64url: shown once.
+            ///
+            /// - Remark: Generated from `#/components/schemas/InviteCreated/secret`.
+            public var secret: Swift.String?
+            /// Creates a new `InviteCreated`.
+            ///
+            /// - Parameters:
+            ///   - link: `ainkrad://connect?host=…&fp=<core_fp>&secret=…`, for a QR code: shown once.
+            ///   - pairingId: `p_…`: reject it to withdraw the invite.
+            ///   - secret: The QR secret, base64url: shown once.
+            public init(
+                link: Swift.String? = nil,
+                pairingId: Swift.String? = nil,
+                secret: Swift.String? = nil
+            ) {
+                self.link = link
+                self.pairingId = pairingId
+                self.secret = secret
+            }
+            public enum CodingKeys: String, CodingKey {
+                case link
+                case pairingId = "pairing_id"
+                case secret
+            }
+        }
         /// One way to sign in to a kind, easiest first.
         ///
         /// - Remark: Generated from `#/components/schemas/KindAuthMethod`.
@@ -3593,6 +3628,48 @@ extension Components {
                 case installationId = "installation_id"
                 case site
                 case token
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/NewInviteBody`.
+        public struct NewInviteBody: Codable, Hashable, Sendable {
+            /// What to call the device that claims it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewInviteBody/name`.
+            public var name: Swift.String
+            /// What it may do: within the creator's own scopes.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewInviteBody/scopes`.
+            public var scopes: [Swift.String]
+            /// Creates a new `NewInviteBody`.
+            ///
+            /// - Parameters:
+            ///   - name: What to call the device that claims it.
+            ///   - scopes: What it may do: within the creator's own scopes.
+            public init(
+                name: Swift.String,
+                scopes: [Swift.String]
+            ) {
+                self.name = name
+                self.scopes = scopes
+            }
+            public enum CodingKeys: String, CodingKey {
+                case name
+                case scopes
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.name = try container.decode(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                self.scopes = try container.decode(
+                    [Swift.String].self,
+                    forKey: .scopes
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "name",
+                    "scopes"
+                ])
             }
         }
         /// A lease to grant.

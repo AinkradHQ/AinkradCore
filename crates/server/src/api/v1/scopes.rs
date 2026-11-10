@@ -60,6 +60,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/audit", "admin"),
     ("GET", "/api/v1/metrics", "admin"),
     ("POST", "/api/v1/pairings", "admin"),
+    ("POST", "/api/v1/pairings/invites", "admin"),
     ("GET", "/api/v1/pairings/{id}", "admin"),
     ("POST", "/api/v1/pairings/{id}/approve", "admin"),
     ("POST", "/api/v1/pairings/{id}/reject", "admin"),
@@ -193,6 +194,8 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("PATCH", "/api/v1/devices/{id}"),
     ("PUT", "/api/v1/devices/{id}/scopes"),
     ("POST", "/api/v1/pairings"),
+    // It hands out a credential that enrols a device with no second approval.
+    ("POST", "/api/v1/pairings/invites"),
     ("POST", "/api/v1/pairings/{id}/approve"),
     ("POST", "/api/v1/pairings/{id}/reject"),
     ("PUT", "/api/v1/settings/{scope}/{key}"),
