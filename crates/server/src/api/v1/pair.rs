@@ -65,7 +65,7 @@ pub struct ClaimBody {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Claimed {
-    /// The new device, `d_…`, pending until approved.
+    /// The new device, `d_…`, pending until approved; for an invite it is active already.
     pub device_id: Option<String>,
     /// The Core identity SPKI, base64url: its fingerprint must equal the QR's `c`.
     pub core_spki: Option<String>,
@@ -74,7 +74,7 @@ pub struct Claimed {
     pub pairing_id: Option<String>,
     /// Show this; the approver compares it with theirs. The first 16 upper-case Crockford
     /// characters of SHA-256(`AINKRAD-SAS-V1` ‖ core_spki ‖ routine_spki ‖ pairing id as
-    /// UTF-8), as `XXXX-XXXX-XXXX-XXXX`.
+    /// UTF-8), as `XXXX-XXXX-XXXX-XXXX`. Meaningless for an invite: nothing waits on a match.
     pub sas: Option<String>,
 }
 
@@ -117,7 +117,8 @@ pub(super) fn bad(why: &str) -> Response {
 #[utoipa::path(post, path = "/pair/claim", operation_id = "claimPairing", tag = "pairing",
     request_body = ClaimBody, security(()),
     responses((status = 202, description = "Claimed: the device is pending until the approver \
-        matches the SAS. 401 `pairing_failed` for a wrong, used, expired or burned credential; \
+        matches the SAS; an invite is claimed by its secret alone and the device is active at \
+        once (`sas` means nothing then). 401 `pairing_failed` for a wrong, used, expired or burned credential; \
         400 for keys or proofs that do not hold (the pairing is not spent)", body = Claimed)))]
 pub async fn claim(State(app): State<App>, req: Request) -> Response {
     budgeted(&app, req, What::Claim).await

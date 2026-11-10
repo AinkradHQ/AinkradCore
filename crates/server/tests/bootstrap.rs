@@ -10,7 +10,7 @@ use ainkrad_core_server::api::{App, router};
 use ainkrad_core_server::auth::Identity;
 use ainkrad_core_server::auth::testing::TestDevice;
 use ainkrad_core_server::gateway::Local;
-use ainkrad_core_server::scheduler::SystemClock;
+use ainkrad_core_server::scheduler::{Clock, SystemClock};
 use ainkrad_core_server::store::{self, gov};
 use axum::body::{Body, to_bytes};
 use axum::http::Request;
@@ -369,4 +369,43 @@ async fn pairing_invite_prints_one_link_that_enrols_the_first_owner() {
             .await
             .unwrap();
     assert!(!rows.contains(secret), "the secret is in an audit row");
+}
+
+/// `recover` burns every live invite, those of devices it keeps included.
+#[tokio::test]
+async fn recover_burns_every_live_invite() {
+    let h = host("recover-invites").await;
+    let db = h.db.to_str().unwrap();
+    let admin = TestDevice::enroll(
+        &h.pool,
+        "admin",
+        "device",
+        &["admin"],
+        &h.identity.fp,
+        Arc::new(SystemClock),
+    )
+    .await;
+    let scopes = vec!["admin".to_owned()];
+    let made = gov::create_pairing(
+        &h.pool,
+        &gov::NewPairing {
+            kind: "device",
+            name: "phone",
+            scopes: &scopes,
+            created_by: Some(&admin.id),
+            bootstrap: false,
+            recovery: false,
+            invite: true,
+        },
+        ainkrad_core::audit::AuditActor::System,
+        SystemClock.unix(),
+    )
+    .await
+    .unwrap();
+    let confirm = format!("{}\n", hostname());
+    let (_, ok) = run(&h, &["recover", db, "--keep-devices"], &confirm, "y\n").await;
+    assert!(ok);
+    assert!(!status(&h, &admin.id).await.2, "the admin is kept");
+    let p = gov::get_pairing(&h.pool, &made.id).await.unwrap().unwrap();
+    assert_eq!(p.status, "burned");
 }

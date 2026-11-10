@@ -19,6 +19,8 @@ import ainkrad.client.models.ApproveBody
 import ainkrad.client.models.ClaimBody
 import ainkrad.client.models.Claimed
 import ainkrad.client.models.ErrorBody
+import ainkrad.client.models.InviteCreated
+import ainkrad.client.models.NewInviteBody
 import ainkrad.client.models.NewPairingBody
 import ainkrad.client.models.PairStatus
 import ainkrad.client.models.PairingCreated
@@ -131,6 +133,39 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.POST,
             "/pair/passkey/claim",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/pairings/invites
+        * 
+        * 
+         * @param newInviteBody  
+         * @return InviteCreated
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun createInvite(newInviteBody: NewInviteBody): HttpResponse<InviteCreated> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = newInviteBody
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/pairings/invites",
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

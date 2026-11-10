@@ -87,6 +87,7 @@ src/main/kotlin/ainkrad/client/models/EventActorUser.kt
 src/main/kotlin/ainkrad/client/models/Handshake.kt
 src/main/kotlin/ainkrad/client/models/HandshakeBody.kt
 src/main/kotlin/ainkrad/client/models/HandshakeProof.kt
+src/main/kotlin/ainkrad/client/models/InviteCreated.kt
 src/main/kotlin/ainkrad/client/models/KindAuthMethod.kt
 src/main/kotlin/ainkrad/client/models/KindCapability.kt
 src/main/kotlin/ainkrad/client/models/KindLimit.kt
@@ -108,6 +109,7 @@ src/main/kotlin/ainkrad/client/models/NewChain.kt
 src/main/kotlin/ainkrad/client/models/NewChainEntry.kt
 src/main/kotlin/ainkrad/client/models/NewConnection.kt
 src/main/kotlin/ainkrad/client/models/NewConnectionCredential.kt
+src/main/kotlin/ainkrad/client/models/NewInviteBody.kt
 src/main/kotlin/ainkrad/client/models/NewLease.kt
 src/main/kotlin/ainkrad/client/models/NewLogin.kt
 src/main/kotlin/ainkrad/client/models/NewPairingBody.kt

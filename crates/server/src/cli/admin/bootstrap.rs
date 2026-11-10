@@ -141,6 +141,8 @@ pub async fn recover(db: &Path, name: &str, keep_devices: bool, revoke_runners: 
             eprintln!("revoked {} ({})", d.id, d.name);
         }
     }
+    // Invites made by devices it keeps die too: the old trust is gone (spec §12).
+    gov::burn_all_invites(&pool, "recover").await?;
     enrol(&pool, db, name, true).await
 }
 

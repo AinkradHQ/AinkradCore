@@ -265,6 +265,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/pairings`.
     /// - Remark: Generated from `#/paths//api/v1/pairings/post(createPairing)`.
     func createPairing(_ input: Operations.CreatePairing.Input) async throws -> Operations.CreatePairing.Output
+    /// - Remark: HTTP `POST /api/v1/pairings/invites`.
+    /// - Remark: Generated from `#/paths//api/v1/pairings/invites/post(createInvite)`.
+    func createInvite(_ input: Operations.CreateInvite.Input) async throws -> Operations.CreateInvite.Output
     /// - Remark: HTTP `GET /api/v1/pairings/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/pairings/{id}/get(getPairing)`.
     func getPairing(_ input: Operations.GetPairing.Input) async throws -> Operations.GetPairing.Output
@@ -1304,6 +1307,17 @@ extension APIProtocol {
         body: Operations.CreatePairing.Input.Body
     ) async throws -> Operations.CreatePairing.Output {
         try await createPairing(Operations.CreatePairing.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/pairings/invites`.
+    /// - Remark: Generated from `#/paths//api/v1/pairings/invites/post(createInvite)`.
+    public func createInvite(
+        headers: Operations.CreateInvite.Input.Headers = .init(),
+        body: Operations.CreateInvite.Input.Body
+    ) async throws -> Operations.CreateInvite.Output {
+        try await createInvite(Operations.CreateInvite.Input(
             headers: headers,
             body: body
         ))

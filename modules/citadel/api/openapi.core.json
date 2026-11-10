@@ -2916,7 +2916,7 @@
             ]
           },
           "device_id": {
-            "description": "The new device, `d_…`, pending until approved.",
+            "description": "The new device, `d_…`, pending until approved; for an invite it is active already.",
             "type": [
               "string",
               "null"
@@ -2930,7 +2930,7 @@
             ]
           },
           "sas": {
-            "description": "Show this; the approver compares it with theirs. The first 16 upper-case Crockford\ncharacters of SHA-256(`AINKRAD-SAS-V1` ‖ core_spki ‖ routine_spki ‖ pairing id as\nUTF-8), as `XXXX-XXXX-XXXX-XXXX`.",
+            "description": "Show this; the approver compares it with theirs. The first 16 upper-case Crockford\ncharacters of SHA-256(`AINKRAD-SAS-V1` ‖ core_spki ‖ routine_spki ‖ pairing id as\nUTF-8), as `XXXX-XXXX-XXXX-XXXX`. Meaningless for an invite: nothing waits on a match.",
             "type": [
               "string",
               "null"
@@ -29728,7 +29728,7 @@
                 }
               }
             },
-            "description": "Claimed: the device is pending until the approver matches the SAS. 401 `pairing_failed` for a wrong, used, expired or burned credential; 400 for keys or proofs that do not hold (the pairing is not spent)"
+            "description": "Claimed: the device is pending until the approver matches the SAS; an invite is claimed by its secret alone and the device is active at once (`sas` means nothing then). 401 `pairing_failed` for a wrong, used, expired or burned credential; 400 for keys or proofs that do not hold (the pairing is not spent)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

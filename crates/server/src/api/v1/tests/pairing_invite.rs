@@ -377,3 +377,86 @@ async fn the_secret_is_in_no_audit_row_table_or_log() {
         assert!(!text.contains(&secret), "the secret is in the {what}");
     }
 }
+
+fn revoke_by_hand() -> &'static str {
+    "UPDATE core_devices SET revoked_at = '2026-10-22T10:00:00.000Z' WHERE id = ?"
+}
+
+/// Revoking the creator burns its live invites at once (not only at the next claim), audited.
+#[tokio::test]
+async fn revoking_the_creator_burns_its_live_invites() {
+    let fx = fx().await;
+    let admin = fx.enroll("admin", &["admin", "read"]).await;
+    let (_, mine) = invite(&fx, &admin, &["read"]).await;
+    let (_, other) = invite(&fx, &fx.dev, &["read"]).await;
+    let by = ainkrad_core::audit::AuditActor::System;
+    gov::revoke_device(&fx.app.pool, &admin.id, by, None, NOW)
+        .await
+        .unwrap();
+    assert_eq!(
+        pairing_status(&fx, mine["pairing_id"].as_str().unwrap()).await,
+        "burned"
+    );
+    assert_eq!(
+        pairing_status(&fx, other["pairing_id"].as_str().unwrap()).await,
+        "live"
+    );
+    assert_eq!(
+        count(
+            &fx,
+            "SELECT count(*) FROM audit_events WHERE action = 'pairing.burned'"
+        )
+        .await,
+        1
+    );
+    let (s, _) = claim(
+        &fx,
+        &newcomer(&fx),
+        mine["secret"].as_str().unwrap(),
+        "10.9.8.1",
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
+
+/// The claim re-checks the creator: revoked or narrowed behind the invite's back (no burn ran)
+/// refuses the claim, enrols nothing and burns the invite.
+#[tokio::test]
+async fn a_claim_refuses_an_invite_whose_creator_no_longer_stands_behind_it() {
+    let fx = fx().await;
+    let before = count(&fx, "SELECT count(*) FROM core_devices").await;
+    for case in ["revoked", "narrowed", "locked"] {
+        let admin = fx.enroll(case, &["admin", "read", "terminal"]).await;
+        let (_, made) = invite(&fx, &admin, &["read", "terminal"]).await;
+        match case {
+            "revoked" => sqlx::query(revoke_by_hand()).bind(&admin.id),
+            "narrowed" => {
+                sqlx::query("UPDATE core_devices SET scopes = '[\"admin\",\"read\"]' WHERE id = ?")
+                    .bind(&admin.id)
+            }
+            _ => sqlx::query("UPDATE core_devices SET status = 'locked' WHERE id = ?")
+                .bind(&admin.id),
+        }
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+        let (s, _) = claim(
+            &fx,
+            &newcomer(&fx),
+            made["secret"].as_str().unwrap(),
+            "10.9.9.1",
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED, "{case}");
+        assert_eq!(
+            pairing_status(&fx, made["pairing_id"].as_str().unwrap()).await,
+            "burned",
+            "{case}"
+        );
+    }
+    assert_eq!(
+        count(&fx, "SELECT count(*) FROM core_devices").await,
+        before + 3,
+        "no claimant enrolled"
+    );
+}
