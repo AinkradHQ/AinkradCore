@@ -6,6 +6,7 @@
 #   sudo scripts/install.sh --wizard             the classic question-by-question wizard
 #   sudo scripts/install.sh --config <answers>   unattended (see deploy/install.answers.example)
 #   scripts/install.sh --config <answers> --dry-run   print every action, change nothing (no root needed)
+#   --no-local-runner  skip the built-in runner (terminals and agents on this machine); the default is to set one up and start it.
 #   --demo shows the whole screen flow with fake delays and changes NOTHING on this machine; it always exits 3 (never a success).
 #   --harden (or AINKRAD_HARDEN=yes; only yes|no are accepted) also runs scripts/host/harden.sh: key-only SSH where safe, a firewall
 #        that rejects every inbound port but ssh/80/443, unattended updates, no swap/core dumps. EXPERIMENTAL and OFF by default.
@@ -28,16 +29,21 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 . "$ROOT/scripts/install/lib.sh"
 # shellcheck source=scripts/install/ui.sh
 . "$ROOT/scripts/install/ui.sh"
+# shellcheck source=scripts/install/precheck.sh
+. "$ROOT/scripts/install/precheck.sh"
 # shellcheck source=scripts/install/guided.sh
 . "$ROOT/scripts/install/guided.sh"
 
 CORE_HOME=/var/lib/ainkrad/core ETC=/etc/ainkrad BIN=/usr/local/bin UNITS=/etc/systemd/system
 STAGING_DIR=https://acme-staging-v02.api.letsencrypt.org/directory
+NO_LOCAL_RUNNER=0 NODE_VERSION=22.22.1 CLAUDE_VERSION=2.1.318 RUNNER_STATE=/var/lib/ainkrad-runner/core
+NODE_SHA_X64=9a6bc82f9b491279147219f6a18add1e18424dce90d41d2a5fcd69d4924ba3aa NODE_SHA_ARM64=0f3550d58d45e5d3cf7103d9e3f69937f09fe82fb5dd474c66a5d816fa58c9ee
 DEMO='' HARDEN_REQ='' HARDEN_WARN='' HARDEN_STATE='' FW_CHOICE=yes MODE=install GUIDED=0 CONFIG='' DRY=0 PURGE=0 CHECK_BACKUP=no CLI_BINARY='' STAGE=''
 
-say() { printf '%s\n' "$*"; }
-# info TEXT: a detail line; in the guided install a dim note in the live UI, else a plain indented line
-info() { if [ "$GUIDED" = 1 ]; then ui_note "$(printf '%s' "$*" | sed 's/^ *//')"; else say "  $*"; fi; }
+# say: a line that stays on the screen (in the guided install above the live progress line, so the two live lines stay at the bottom)
+say() { if [ "$GUIDED" = 1 ]; then ui_emit "$*"; else printf '%s\n' "$*"; fi; }
+# info TEXT: a detail line; in the guided install it is the live line (replaced by the next one), else a plain indented line
+info() { if [ "$GUIDED" = 1 ]; then ui_status "$(printf '%s' "$*" | sed 's/^ *//')"; else say "  $*"; fi; }
 step() { if [ "$GUIDED" = 1 ]; then guided_step "$*"; else printf '\n== %s\n' "$*"; fi; }
 die() {
   if [ "$GUIDED" = 1 ] && [ "$UI_N" != 0 ]; then
@@ -45,7 +51,7 @@ die() {
   fi
   printf 'install: %s\n' "$*" >&2; exit 1
 }
-warn() { printf 'install: WARNING: %s\n' "$*" >&2; }
+warn() { if [ "$GUIDED" = 1 ]; then ui_warn "$*"; else printf 'install: WARNING: %s\n' "$*" >&2; fi; }
 # In the guided install a command runs in the background with its output in the log and a spinner naming it; RUN_PLAIN=1 keeps
 # the old direct output (hardening prints a report).
 run_label() {
@@ -100,10 +106,14 @@ ask() {
   local key=$1 why=$2 secret=${3:-} cur def v rc shown
   eval "cur=\${A_$key:-}"; def=${cur:-$(default_of "$key")}
   UI_Q_N=$((${UI_Q_N:-0} + 1))
-  ui_card "$UI_Q_N" "${UI_Q_TOTAL:-0}" "$why" "$(ui_example "$key")" "${def:-none}"
+  ui_card "$UI_Q_N" "${UI_Q_TOTAL:-0}" "$why" "$(ui_example "$key")" "$([ -n "$secret" ] || printf '%s' "$def")"
   while :; do
-    if [ -n "$secret" ]; then ui_read " > $key${cur:+ [keep current]}: " v secret
+    if [ "$GUIDED" = 1 ]; then # a plain question: no variable name, a pointer for the prompt
+      if [ -n "$secret" ]; then ui_read " $(ui_prompt)${cur:+ [keep current] }" v secret
+      else ui_read " $(ui_prompt)${def:+[$def] }" v; fi
+    elif [ -n "$secret" ]; then ui_read " > $key${cur:+ [keep current]}: " v secret
     else ui_read " > $key${def:+ [$def]}: " v; fi
+    ui_after_read
     v=${v:-$def}
     case $key in BINARY_DIR) [ "$v" = build ] && { A_BUILD=yes; return; } ;; esac
     if [ -z "$v" ]; then case $key in PUBLIC_IP | ALLOW_ORIGINS | SSH_FROM | BACKUP_PREFIX | RUNNER_PAIR_CODE) printf -v "A_$key" ''; return ;; esac; fi
@@ -111,8 +121,7 @@ ask() {
     if [ "$rc" = 0 ]; then
       printf -v "A_$key" '%s' "$v"
       shown=$v; [ -z "$secret" ] || shown='(hidden)'
-      ui_ok "$key = $shown"
-      [ "$GUIDED" != 1 ] || ui_after_answer "$key" "$v"
+      if [ "$GUIDED" = 1 ]; then ui_after_answer "$key" "$v"; else ui_ok "$key = $shown"; fi
       return
     fi
     if [ "$rc" = 2 ] && [ "$key" = BACKUP_RECIPIENT ]; then
@@ -183,32 +192,26 @@ preflight() {
   [ "$DRY" = 1 ] || [ "$(id -u)" = 0 ] || die "run as root (sudo), or with --dry-run"
 }
 
-checks() { # DNS -> this host's public IP; :443 (and :80) free
+checks() { # ports and the host firewall first (before anything is installed), then DNS -> this host's public IP; any problem stops
   step "Checks"
-  local problems=0 addrs pub p who
+  local bad='' addrs pub a ports=443
+  [ "$A_ACME_CHALLENGE" = http-01 ] && ports="443 80"
+  if ! pc_checks "$ports"; then
+    if [ "$DRY" = 1 ]; then warn "$PC_WHAT (dry run continues)"; else die "$PC_WHAT. What to do: $PC_TODO"; fi
+  fi
   if ! command -v getent >/dev/null; then warn "no getent here: DNS not checked"; return 0; fi
-  addrs=$(getent ahosts "$A_HOSTNAME" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true) # pipefail: an unresolved name must reach the warning below, not kill the script
+  addrs=$(getent ahosts "$A_HOSTNAME" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true) # pipefail: an unresolved name must reach the message below, not kill the script
   pub=${A_PUBLIC_IP:-$(curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS4 --max-time 5 https://checkip.amazonaws.com 2>/dev/null || true)}
   pub=$(clean_ip "$pub")
   info "DNS $A_HOSTNAME -> ${addrs:-nothing}; this host's public IPv4: ${pub:-unknown}"
-  if [ -z "$addrs" ]; then warn "$A_HOSTNAME does not resolve: add an A record for this host"; problems=1
-  elif [ -n "$pub" ] && ! printf ' %s ' "$addrs" | grep -q " $pub "; then
-    warn "$A_HOSTNAME does not point at $pub: ACME will fail until it does"; problems=1
-  fi
+  if [ -z "$addrs" ]; then bad="$A_HOSTNAME does not resolve: add an A record for this host"
+  elif [ -n "$pub" ] && ! printf ' %s ' "$addrs" | grep -q " $pub "; then bad="$A_HOSTNAME does not point at $pub (this machine): the certificate cannot be issued until it does"; fi
   for a in $addrs; do
-    case $a in *:*) ip -6 addr 2>/dev/null | grep -q " $a/" || { warn "AAAA $a is not on this host: remove it or ACME may validate the wrong machine"; problems=1; } ;; esac
+    case $a in *:*) ip -6 addr 2>/dev/null | grep -q " $a/" || bad="${bad:+$bad; }AAAA $a is not on this host: remove it or the certificate may be validated against the wrong machine" ;; esac
   done
-  for p in 443 $([ "$A_ACME_CHALLENGE" = http-01 ] && echo 80); do
-    who=$(ss -Hltnp "sport = :$p" 2>/dev/null || true)
-    if [ -n "$who" ] && ! printf '%s' "$who" | grep -q ainkrad-core; then
-      warn ":$p is in use: $(printf '%s' "$who" | head -n1)"; problems=1
-    else info ":$p free (or already the Core's)"; fi
-  done
-  info "Reachability of :443/:80 from the internet cannot be tested from here: the certificate order below proves it."
-  [ "$problems" = 0 ] && return 0
-  [ "$DRY" = 1 ] && { warn "checks failed (dry run continues)"; return 0; }
-  [ -z "$CONFIG" ] && yes_no "Continue anyway? (the certificate will fail until DNS is right)" && return 0
-  die "checks failed"
+  [ -z "$bad" ] && return 0
+  [ "$DRY" = 1 ] && { warn "$bad (dry run continues)"; return 0; }
+  die "$bad"
 }
 
 stage_binaries() {
@@ -364,7 +367,7 @@ start_core() {
   [ -z "$tm" ] || run systemctl restart ainkrad-backup.timer
   [ "$DRY" = 1 ] && return 0
   if [ "$GUIDED" = 1 ]; then
-    cert_wait || { ui_warn "The Core's own log says:"; journalctl -u ainkrad-core -n 12 --no-pager 2>&1 | ui_clean_lines | cut -c1-"$((UI_W - 6))" | sed 's/^/     /' >&2; die "the Core did not become healthy within 4 minutes: check that $A_HOSTNAME points at this machine and that your cloud firewall allows inbound TCP 443 (the Core log is above)"; }
+    cert_wait || { ui_warn "The Core's own log says:"; ui_emit "$(journalctl -u ainkrad-core -n 12 --no-pager 2>&1 | ui_clean_lines | cut -c1-"$((UI_W - 6))" | sed 's/^/     /')"; die "the Core did not become healthy within 4 minutes: check that $A_HOSTNAME points at this machine and that your cloud firewall allows inbound TCP 443 (the Core log is above)"; }
     ui_ok "The certificate was issued and the Core answers over HTTPS"
     return 0
   fi
@@ -382,11 +385,81 @@ health() { # healthz on this host, by name (no hairpin NAT); a staging certifica
   curl -fsS --max-time 5 ${k[@]+"${k[@]}"} --resolve "$A_HOSTNAME:443:127.0.0.1" "https://$A_HOSTNAME/healthz"
 }
 
+# The tools agents need on the built-in runner (N8, N39): Node 22 (pinned, checksum-verified tarball) and Claude Code at the pinned
+# version with auto-update off. They live under /usr/local, which the agent sandbox binds read-only.
+install_agent_tools() { local t rc=0; t=$(mktemp -d); install_agent_tools_in "$t" || rc=$?; rm -rf "$t"; return "$rc"; }
+install_agent_tools_in() {
+  umask 022
+  local t=$1 arch sha node=/usr/local/lib/ainkrad-node
+  case $(uname -m) in x86_64 | amd64) arch=x64 sha=$NODE_SHA_X64 ;; aarch64 | arm64) arch=arm64 sha=$NODE_SHA_ARM64 ;; *) echo "no Node build for $(uname -m)" >&2; return 1 ;; esac
+  curl -fsSL --proto '=https' --tlsv1.3 -o "$t/node.tar.xz" "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-$arch.tar.xz" || return 1
+  [ "$(sha "$t/node.tar.xz")" = "$sha" ] || { echo "the Node download does not match the checksum pinned in this installer" >&2; return 1; }
+  rm -rf "$node" && mkdir -p "$node" && tar -xJf "$t/node.tar.xz" -C "$node" --strip-components=1 || return 1
+  ln -sf "$node/bin/node" /usr/local/bin/node
+  PATH="$node/bin:$PATH" npm install -g --prefix "$node" --no-audit --no-fund "@anthropic-ai/claude-code@$CLAUDE_VERSION" || return 1
+  ln -sf "$node/bin/claude" /usr/local/bin/claude
+  mkdir -p /etc/claude-code
+  printf '%s\n' '{"env":{"DISABLE_AUTOUPDATER":"1"}}' >/etc/claude-code/managed-settings.json
+  chmod 0644 /etc/claude-code/managed-settings.json
+  HOME=$t "$node/bin/node" --version | grep -q "^v22\." || { echo "Node 22 did not install" >&2; return 1; }
+  HOME=$t /usr/local/bin/claude --version | grep -q "^$CLAUDE_VERSION" || { echo "claude $CLAUDE_VERSION did not install" >&2; return 1; }
+}
+# Enrols this Core's own runner without a code (the Core makes the device itself, scope runner only) and puts its key and
+# enrolment where the unprivileged runner user reads them. Runs as root; the Core command runs as the database's owner.
+enrol_local_runner() {
+  local out=$CORE_HOME/runner-enrol
+  [ ! -e "$RUNNER_STATE/enrolment.json" ] || return 0
+  if [ ! -s "$out/device.p8" ] || [ ! -s "$out/enrolment.json" ]; then
+    rm -rf "$out"
+    runuser -u ainkrad -- "$BIN/ainkrad-core-server" runner-enroll-local "$CORE_HOME/core.db" "$out" "https://$A_HOSTNAME" >/dev/null || return 1
+  fi
+  install -d -m 0700 -o ainkrad-runner -g ainkrad-runner "$RUNNER_STATE" &&
+    install -m 0600 -o ainkrad-runner -g ainkrad-runner "$out/device.p8" "$RUNNER_STATE/device.p8" &&
+    install -m 0600 -o ainkrad-runner -g ainkrad-runner "$out/enrolment.json" "$RUNNER_STATE/enrolment.json" &&
+    rm -rf "$out"
+}
+runner_online() { # the Core has seen this runner connect (its device was used); up to 60 s
+  local i
+  for i in $(seq 30); do
+    runuser -u ainkrad -- "$BIN/ainkrad-core-server" device list "$CORE_HOME/core.db" 2>/dev/null |
+      awk -F'\t' '$2 == "runner" && $4 == "active" && $7 != "last used never" { f = 1 } END { exit !f }' && return 0
+    sleep 2
+  done
+  return 1
+}
+# N8: the Core's own runner, on by default: terminals and agents, as the unprivileged ainkrad-runner user in its sandbox.
+local_runner() {
+  local a=(--binary "$STAGE/ainkrad-runner" --ptyhost "$STAGE/ainkrad-ptyhost" --pty --agents)
+  if [ "$A_ACME_ENV" = staging ]; then
+    warn "the Core serves a staging certificate that a runner does not trust, so the built-in runner is not set up. Re-run with a production certificate."
+    return 0
+  fi
+  if [ "$DRY" = 1 ]; then
+    trace "install Node $NODE_VERSION and claude-code@$CLAUDE_VERSION (DISABLE_AUTOUPDATER=1 in /etc/claude-code/managed-settings.json)"
+    trace "ainkrad-core-server runner-enroll-local $CORE_HOME/core.db <dir> https://$A_HOSTNAME"
+    bash "$ROOT/deploy/install-linux.sh" "${a[@]}" --dry-run; return 0
+  fi
+  if ! ui_run "Installing Node $NODE_VERSION and Claude Code $CLAUDE_VERSION for agents" install_agent_tools; then
+    warn "the agent tools did not install (see above); the runner is set up with terminals only"; a=(--binary "$STAGE/ainkrad-runner" --ptyhost "$STAGE/ainkrad-ptyhost" --pty)
+  fi
+  ui_run "Installing the runner service (unprivileged user, sandboxed)" bash "$ROOT/deploy/install-linux.sh" "${a[@]}" || { warn "the runner did not install; see the log"; return 0; }
+  if ! ui_run "Enrolling this Core's own runner (no code needed)" enrol_local_runner; then
+    warn "the runner could not be enrolled (an older ainkrad-core-server?). Pair it by hand: ainkradctl device add <name> --kind runner, then deploy/install-linux.sh --pair"; return 0
+  fi
+  ui_run "Starting the runner" bash "$ROOT/deploy/install-linux.sh" "${a[@]}" --start || { warn "the runner did not start; see the log"; return 0; }
+  if UI_QUIET=1 ui_run "Waiting for the runner to show online" runner_online; then ui_keep "The built-in runner is online (terminals and agents on)"
+  else warn "the runner started but the Core has not seen it connect yet: check 'journalctl -u ainkrad-runner -n 30'. It must be able to reach https://$A_HOSTNAME from this machine."; fi
+}
+
 extras() {
   if [ -f "$STAGE/ainkradctl" ]; then step "ainkradctl"; run install -m 0755 "$STAGE/ainkradctl" "$BIN/ainkradctl"; fi
-  [ "$A_RUNNER" = yes ] || return 0
+  [ "$A_RUNNER" = yes ] || { [ "$GUIDED" != 1 ] || ui_note "No built-in runner (--no-local-runner): the app shows No runner until you add one. Nothing runs on this machine for agents or terminals."; return 0; }
   step "Runner on this host (terminals $([ "$A_RUNNER_PTY" = yes ] && echo ON || echo off); exec.run OFF)"
   [ -f "$STAGE/ainkrad-runner" ] || { warn "no ainkrad-runner binary: runner skipped"; return 0; }
+  if [ "$GUIDED" = 1 ] && [ -z "${A_RUNNER_PAIR_CODE:-}" ]; then
+    [ -f "$STAGE/ainkrad-ptyhost" ] || { warn "no ainkrad-ptyhost binary: the built-in runner is skipped"; return 0; }
+    local_runner; return 0
+  fi
   local a=(--binary "$STAGE/ainkrad-runner") code=${A_RUNNER_PAIR_CODE:-}
   [ "$DRY" = 1 ] && a+=(--dry-run)
   if [ "$A_RUNNER_PTY" = yes ]; then
@@ -445,7 +518,10 @@ citadel_selftest() {
 selftest() { # PASS/FAIL lines; returns 1 on any FAIL
   step "Self-test"
   local fail=0 out cert
-  t() { printf '  %-5s %s\n' "$1" "$2"; [ "$1" = PASS ] || fail=1; }
+  t() { # PASS lines are the live line in the guided install (FAIL stays on the screen)
+    [ "$1" = PASS ] || fail=1
+    if [ "$GUIDED" != 1 ]; then printf '  %-5s %s\n' "$1" "$2"; elif [ "$1" = PASS ]; then ui_status "$2"; else ui_warn "$1 $2"; fi
+  }
   [ "$(systemctl is-active ainkrad-core 2>/dev/null)" = active ] && t PASS "ainkrad-core.service active" || t FAIL "ainkrad-core.service not active"
   out=$(health 2>&1) && t PASS "healthz over TLS: $(printf '%s' "$out" | head -c 160)" || t FAIL "healthz: $out"
   cert=$(openssl s_client -connect 127.0.0.1:443 -servername "$A_HOSTNAME" </dev/null 2>/dev/null | openssl x509 -noout -issuer -enddate 2>/dev/null | tr '\n' ' ')
@@ -516,9 +592,9 @@ uninstall() {
     name=$(env_get AINKRAD_HOSTNAME); name=${name:-purge}
     say "  --purge deletes $CORE_HOME (database, keys, certificates), the runner's state and $ETC/core.env. Type '$name' to confirm:"
     local typed=${AINKRAD_PURGE_CONFIRM:-}
-    [ -n "$typed" ] || { [ -t 0 ] && read -r typed </dev/tty; } || true
+    [ -n "$typed" ] || { [ -t 0 ] && need_terminal && read -r typed </dev/tty; } || true
     if [ "$typed" = "$name" ]; then
-      run rm -rf "$CORE_HOME" /var/lib/ainkrad-runner /var/lib/ainkrad-runner-work /etc/ainkrad-runner "$ETC/core.env"
+      run rm -rf "$CORE_HOME" /var/lib/ainkrad-runner /var/lib/ainkrad-runner-work /var/lib/akrw /etc/ainkrad-runner "$ETC/core.env"
     else say "  not confirmed: data kept"; fi
   fi
   say "  Kept: $ETC/backup.env (the bucket key: remove it yourself when retiring the host), the bucket and every
@@ -535,14 +611,15 @@ main() {
       --dry-run) DRY=1; shift ;;
       --demo) DEMO=1; shift ;;
       --harden) HARDEN_REQ=yes; shift ;;
+      --no-local-runner) NO_LOCAL_RUNNER=1; shift ;;
       --guided) GUIDED=1; shift ;;
       --wizard) GUIDED=-1; shift ;;
       --uninstall) MODE=uninstall; shift ;;
       --purge) PURGE=1; shift ;;
       --check) MODE=check; shift ;;
       --backup) CHECK_BACKUP=${2:?}; valid_selftest "$CHECK_BACKUP" || die "--backup local|bucket"; shift 2 ;;
-      -h | --help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-      *) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+      -h | --help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+      *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
     esac
   done
   case ${AINKRAD_HARDEN:-} in '' | yes | no) [ -n "$HARDEN_REQ" ] || HARDEN_REQ=${AINKRAD_HARDEN:-} ;; # the --harden flag wins over the variable
@@ -563,7 +640,7 @@ main() {
   # No answers file and no --wizard: the guided install is the default.
   if [ -n "$CONFIG" ] || [ "$GUIDED" = -1 ]; then GUIDED=0; else GUIDED=1; fi
   if [ "$GUIDED" = 1 ]; then
-    ui_init; ui_box_init; ui_traps
+    ui_init; ui_box_init; ui_traps; ui_tty_init
     if [ "${AINKRAD_FROM_GET:-}" = 1 ]; then UI_STATE="The Core programs are in /usr/local/bin; nothing else is set up yet."; fi
     guided_banner; guided_answers; apply_harden_req
     check_answers || die "an answer is not valid (see the line just above this card); fix it and run again"
@@ -578,6 +655,7 @@ main() {
     wizard; apply_harden_req; check_answers || die "invalid answers"
   fi
   A_HOSTNAME=$(lower "$A_HOSTNAME")
+  if [ "$NO_LOCAL_RUNNER" = 1 ]; then A_RUNNER=no A_RUNNER_PTY=no A_RUNNER_PAIR_CODE=''; fi
   if [ "$GUIDED" = 1 ]; then guided_backup_key; else review; fi
   [ -n "$CONFIG" ] || [ "$DRY" = 1 ] || [ "$GUIDED" = 1 ] || yes_no "Install with these answers?" || die "aborted, nothing changed"
   [ "$DRY" = 0 ] || say "(dry run: the commands below are printed, not run)"
@@ -597,6 +675,7 @@ main() {
   if [ "$GUIDED" = 1 ]; then
     local rc=0
     step "First device"
+    ui_live_end
     guided_invite || rc=$?
     guided_summary "$rc"
     [ "$rc" != 0 ] || [ -z "$INVITE" ] || guided_show_invite

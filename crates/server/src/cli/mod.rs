@@ -172,6 +172,9 @@ pub async fn run(available: Vec<Arc<dyn Module>>) -> ExitCode {
         ["pairing-invite", db, host, name] => {
             admin::bootstrap::invite(Path::new(db), host, name).await
         }
+        ["runner-enroll-local", db, out, url] => {
+            admin::runner_local::enrol_local(Path::new(db), Path::new(out), url).await
+        }
         ["recover", db, rest @ ..] => {
             let flag = |f: &str| rest.contains(&f);
             let names: Vec<&&str> = rest.iter().filter(|a| !a.starts_with("--")).collect();

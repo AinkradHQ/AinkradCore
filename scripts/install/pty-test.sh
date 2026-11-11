@@ -93,9 +93,11 @@ r=$(run fg 40 '{"steps":[]}' "${cmd2[@]}")
 { [ "$(field rc <<<"$r")" = 3 ] && ! field out <<<"$r" | grep -q 'piped into sudo'; } && ok || bad "the sudo sh -c \"\$(...)\" form was refused or misbehaved: $(head -c 400 <<<"$r")"
 
 # 3. the installer asked a question in a normal foreground pty: the typed answer is READ and Ctrl-C ends it within 5 s
-r=$(run fg 60 '{"steps":[{"wait":"Waiting for your answer","send":"core.example.com\\n","delay":0.5},{"wait":"HOSTNAME = core.example.com","send":"\\x03","delay":2.0}]}' sh "$t/run-installer.sh")
+r=$(run fg 60 '{"steps":[{"wait":"Question 1 of 2","send":"core.example.com\\n","delay":1.0},{"wait":"points at 203.0.113.7: this machine","send":"\\x03","delay":2.0}]}' sh "$t/run-installer.sh")
 field out <<<"$r" | grep -q 'Question 1 of 2' && ok || bad "the foreground installer showed no Question 1 of 2: $(field out <<<"$r" | tail -c 300)"
-field out <<<"$r" | grep -q 'HOSTNAME = core.example.com' && ok || bad "the typed answer was not read (no HOSTNAME line): $(field out <<<"$r" | tail -c 300)"
+field out <<<"$r" | grep -q 'core.example.com points at 203.0.113.7: this machine' && ok || bad "the typed answer was not read (no DNS result for it): $(field out <<<"$r" | tail -c 300)"
+{ ! field out <<<"$r" | grep -q 'HOSTNAME' && ! field out <<<"$r" | grep -q 'Waiting for your answer'; } && ok || bad "the question still shows the variable name or the waiting line"
+field out <<<"$r" | grep -q '╭' && field out <<<"$r" | grep -q '╯' && ok || bad "the question is not drawn as a rounded box in a UTF-8 terminal"
 { [ "$(field rc <<<"$r")" != TIMEOUT ] && lt "$(field dur <<<"$r")" 40; } && ok || bad "Ctrl-C did not end the installer: $(head -c 200 <<<"$r")"
 sleep 0.5; [ -z "$(survivors)" ] && ok || bad "a process survived Ctrl-C: $(survivors)"
 
@@ -115,6 +117,16 @@ if [ -n "$SUDO" ]; then
 else
   echo "pty-test: no passwordless sudo here: the real-sudo checks were NOT RUN (the process-group condition was used instead)" >&2
 fi
+
+# 6. flow control is off while the installer runs (a stray Ctrl-S must not look like a freeze) and comes back at exit
+r=$(run fg 20 '{"steps":[]}' bash -c '. "'"$ROOT"'/scripts/install/ui.sh"; ui_init; ui_traps; ui_tty_init; echo "IN:$(stty -a </dev/tty | grep -o -e "-\{0,1\}ixon" | head -1)"; ui_exit; echo "OUT:$(stty -a </dev/tty | grep -o -e "-\{0,1\}ixon" | head -1)"')
+field out <<<"$r" | grep -q 'IN:-ixon' && ok || bad "stty -ixon was not set while the installer runs: $(field out <<<"$r" | tail -c 200)"
+field out <<<"$r" | grep -q 'OUT:ixon' && ok || bad "the terminal's flow control was not restored at exit: $(field out <<<"$r" | tail -c 200)"
+
+# 7. the foreground guard runs before EVERY read from the terminal, not only the first (static: a read without it fails the test)
+reads=$(grep -c '</dev/tty' "$ROOT/scripts/install.sh"); guarded=$(grep '</dev/tty' "$ROOT/scripts/install.sh" | grep -c 'need_terminal')
+unguarded=$(awk '/read .*<\/dev\/tty/ && !/need_terminal/ { print FILENAME": "FNR": "$0 }' "$ROOT/scripts/install.sh" | grep -v 'ui_read()' | grep -v 'yes_no()' | grep -v 'uninstall' | head -3)
+{ grep -q '^ui_read() { need_terminal' "$ROOT/scripts/install.sh" && grep -q '^yes_no() { local a; need_terminal' "$ROOT/scripts/install.sh" && [ -z "$unguarded" ]; } && ok || bad "a read from the terminal is not preceded by need_terminal ($reads reads, $guarded guarded): $unguarded"
 
 echo "pty tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]

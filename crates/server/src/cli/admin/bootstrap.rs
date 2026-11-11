@@ -32,6 +32,7 @@ pub const USAGE: &str = "Devices (E1-07):
   ainkrad-core-server bootstrap <db> [<name>]
   ainkrad-core-server recover <db> [--keep-devices] [--revoke-runners] [<name>]
   ainkrad-core-server pairing-invite <db> <host> [<name>]
+  ainkrad-core-server runner-enroll-local <db> <out-dir> <url>
 bootstrap pairs the first device, and only the first: it prints a one-time code, good for 5
 minutes and only over the server's Unix socket (core.sock, or admin.sock beside a TCP or public
 listener) from this user, then the claimant's SAS, and approves it when you type y. A declined
@@ -45,6 +46,9 @@ device exists, but it prints one link, ainkrad://connect?host=<host>&fp=<core fp
 its secret alone: that device is the owner with every scope at once, with no SAS. The secret is
 shown here and nowhere else (not logged, not audited, not stored); running it again burns the
 previous link.
+runner-enroll-local (the installer's built-in runner) enrols a runner device with the runner scope only, with
+no code and no SAS, and writes its device.p8 and enrolment.json (0600) to <out-dir>. It runs as the database's owner
+on the Core's own machine and is refused when <out-dir> already holds a key.
 For a remote Core, relay the socket over SSH as that user with scripts/install/admin-relay.sh
 (a plain `ssh -L` connects as your login user and is refused), then point the new device at the
 local end: ainkradctl --socket <local socket> --host <the Core's host name> pair <code> --core-fp <fp>.";

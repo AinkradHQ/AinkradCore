@@ -7,10 +7,13 @@
 # NOT `curl ... | sudo sh`: piped into sudo the script cannot read your answers (sudo does not hand the terminal to a command
 # whose stdin is a pipe, so the first question stops it with SIGTTIN). It refuses to run that way and prints the command above.
 #
+# The Core also gets a built-in runner on this machine (terminals and agents, unprivileged user, sandboxed). `sh get.sh --no-local-runner`
+# (after the `sh` in the command above) skips it: then no work runs on the Core machine until you add a runner elsewhere.
+#
 # Optional, to skip the two questions (the Mac app can put them in the command):
 #   sudo AINKRAD_HOSTNAME=core.example.com AINKRAD_ACME_EMAIL=you@example.com sh -c "$(curl -fsSL URL)"
 #
-# What it does, in order: checks the machine, installs what the Core needs (curl, minisign, bubblewrap, qrencode) with apt, downloads the signed release, VERIFIES the minisign signature over SHA256SUMS against the
+# What it does, in order: checks the machine (root, systemd, apt, port 443 free and not blocked by the firewall), installs what the Core and its runner need (curl, minisign, bubblewrap, qrencode, git, unzip, jq, ripgrep, build-essential) with apt, downloads the signed release, VERIFIES the minisign signature over SHA256SUMS against the
 # release key pinned below (any mismatch stops everything; nothing of the release is installed), checks every file
 # against the signed sums, installs the Core and runs the guided installer.
 # Host hardening (SSH config, firewall, unattended updates, no swap) is OPT-IN and experimental: the default install does not
@@ -41,14 +44,15 @@
 # --- ui-core begin ---
 ui_defaults() { # every variable the UI uses; called by ui_init (the only top-level code in this block is function definitions)
   UI_N=0 UI_TITLE='' UI_TEXTFN='' UI_DL='' UI_FANCY=0 UI_UTF=0 UI_W=80 UI_T0='' UI_CLEAN='' UI_LOG='' UI_LOGDIR='' UI_JOBS='' UI_JOB='' UI_RUNS=0
-  UI_HINT=0 UI_CURSOR=1 UI_STATE='Nothing has been changed on this machine yet.' UI_RERUN=${AINKRAD_RERUN:-'run the same command again'}
+  UI_HINT=0 UI_CURSOR=1 UI_LIVE=0 UI_LAST_EL='' UI_STTY='' UI_STATE='Nothing has been changed on this machine yet.' UI_RERUN=${AINKRAD_RERUN:-'run the same command again'}
   UI_DEMO=0 # set by --demo AFTER ui_init, never read from the environment
+  UI_LIVE_ENV=0; [ "${AINKRAD_UI_LIVE:-}" != 1 ] || UI_LIVE_ENV=1 # a progress line already sits right above the cursor (set by get.sh for install.sh)
   # numbers from the environment are plain digits or they are ignored (they reach shell arithmetic)
   case ${AINKRAD_STEP_BASE:-0} in '' | *[!0-9]*) UI_BASE=0 ;; *) UI_BASE=${AINKRAD_STEP_BASE:-0} ;; esac
   case ${AINKRAD_STEP_TOTAL:-8} in '' | *[!0-9]* | 0) UI_TOTAL=8 ;; *) UI_TOTAL=${AINKRAD_STEP_TOTAL:-8} ;; esac
   case ${AINKRAD_T0:-} in '' | *[!0-9]*) UI_T0='' ;; *) UI_T0=${AINKRAD_T0:-} ;; esac
   [ "$UI_TOTAL" -le 99 ] && [ "$UI_BASE" -le 99 ] || { UI_BASE=0 UI_TOTAL=8; }
-  B='' D='' R='' GR='' RD='' YL='' CY='' OKG='+' XG='x' FULL='#' EMPTY='-' DOT='-' SPIN='| / - \'
+  B='' D='' R='' GR='' RD='' YL='' CY='' BL='' OKG='+' XG='x' FULL='#' EMPTY='-' DOT='-' SPIN='| / - \'
 }
 ui_now() { date +%s; }
 ui_ts() { date +%H:%M:%S; }
@@ -79,8 +83,9 @@ ui_init() {
   [ "$UI_W" -le 300 ] || UI_W=300
   [ -n "$UI_T0" ] || UI_T0=$(ui_now)
   if [ "$UI_FANCY" = 1 ]; then
+    UI_LIVE=$UI_LIVE_ENV
     B=$(printf '\033[1m') D=$(printf '\033[2m') R=$(printf '\033[0m') GR=$(printf '\033[32m')
-    RD=$(printf '\033[31m') YL=$(printf '\033[33m') CY=$(printf '\033[36m')
+    RD=$(printf '\033[31m') YL=$(printf '\033[33m') CY=$(printf '\033[36m') BL=$(printf '\033[94m')
     if [ "$UI_UTF" = 1 ]; then OKG='✓' XG='✗' FULL='█' EMPTY='░' DOT='·' SPIN='⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏'; fi
   fi
 }
@@ -98,6 +103,18 @@ ui_frame() { # ui_frame I: the I-th spinner glyph
 ui_cursor() { # ui_cursor hide|show: only on a real terminal
   [ "$UI_FANCY" = 1 ] || return 0
   if [ "$1" = hide ]; then printf '\033[?25l'; UI_CURSOR=0; else printf '\033[?25h'; UI_CURSOR=1; fi
+}
+ui_tty_fg() { # 0 when this process may read the terminal without being stopped by SIGTTIN (it is in the foreground group); unknown = yes
+  _pg=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' '); _tp=$(ps -o tpgid= -p $$ 2>/dev/null | tr -d ' ')
+  case $_pg$_tp in '' | *[!0-9]*) return 0 ;; esac
+  [ "$_tp" = 0 ] || [ "$_pg" = "$_tp" ]
+}
+# shellcheck disable=SC2016 # the string is eval'd at exit, when $UI_STTY is known
+ui_tty_init() { # flow control off: a stray Ctrl-S must not freeze the screen and look like a hang; the old settings come back at exit
+  { ( : </dev/tty ) 2>/dev/null && ui_tty_fg; } || return 0
+  _s=$(stty -g </dev/tty 2>/dev/null) || return 0
+  stty -ixon </dev/tty 2>/dev/null || return 0
+  UI_STTY=$_s; ui_clean_add 'stty "$UI_STTY" </dev/tty 2>/dev/null'
 }
 ui_clean_add() { UI_CLEAN="$UI_CLEAN
 $1"; }
@@ -162,26 +179,46 @@ ui_bar() { # ui_bar N TOTAL: [#####-----]
   while [ "$_j" -lt "$_w" ]; do if [ "$_j" -lt "$_f" ]; then _s="$_s$FULL"; else _s="$_s$EMPTY"; fi; _j=$((_j + 1)); done
   printf '[%s]' "$_s"
 }
-ui_step() { # ui_step N "Title" "why": the persistent header (N is the roadmap number; UI_BASE is subtracted for display)
+ui_barline() { # the progress line: bar, step N of M, the title, the elapsed time; always shorter than the terminal is wide
+  _n=$((UI_N - UI_BASE)); _dm=''; [ "$UI_DEMO" != 1 ] || _dm='DEMO · '
+  if [ "$UI_W" -lt 60 ]; then printf ' %s%s%s %sstep %s of %s %s·%s %s' "$CY" "$(ui_bar "$_n" "$UI_TOTAL")" "$R" "$_dm" "$_n" "$UI_TOTAL" "$D" "$R" "$(ui_el)"; return 0; fi
+  _tt=$(printf '%s' "$UI_TITLE" | ui_clean | cut -c1-"$((UI_W - 52))")
+  printf ' %s%s%s %sstep %s of %s %s·%s %s%s%s %s·%s %s' "$CY" "$(ui_bar "$_n" "$UI_TOTAL")" "$R" "$_dm" "$_n" "$UI_TOTAL" "$D" "$R" "$B" "$_tt" "$R" "$D" "$R" "$(ui_el)"
+}
+ui_live_bar() { # redraw the progress line in place; the cursor is on the line below it and ends there again
+  printf '\r\033[K\033[1A\r\033[K%s\n' "$(ui_barline)"
+}
+ui_emit() { # ui_emit TEXT: a line that stays on the screen, put above the live progress line (plain output when there is none)
+  if [ "$UI_FANCY" = 1 ] && [ "$UI_LIVE" = 1 ]; then printf '\r\033[K\033[1A\r\033[K%s\n%s\n' "$1" "$(ui_barline)"; else printf '%s\n' "$1"; fi
+}
+ui_status() { # ui_status TEXT: the live line (it is replaced by the next one); a plain note line in plain mode
+  _x=$(printf '%s' "$1" | ui_clean)
+  if [ "$UI_FANCY" = 1 ] && [ "$UI_LIVE" = 1 ]; then printf '\r\033[K   %s%s%s' "$D" "$(printf '%s' "$_x" | cut -c1-"$((UI_W - 6))")" "$R"
+  else ui_note "$1"; fi
+}
+ui_live_end() { # the last screens print freely: the progress line stays as it is, the live line below it is cleared
+  if [ "$UI_FANCY" = 1 ] && [ "$UI_LIVE" = 1 ]; then printf '\r\033[K'; UI_LIVE=0; fi
+}
+ui_step() { # ui_step N "Title" "why": fancy = the progress line is redrawn in place (the why text is not shown); plain = one line
   UI_N=$1 UI_TITLE=$2; _n=$(($1 - UI_BASE)); _dm=''; [ "$UI_DEMO" != 1 ] || _dm='DEMO · '
   if [ "$UI_FANCY" = 1 ]; then
-    printf '\n %s%s%s %sstep %s of %s %s·%s %s%s%s %s·%s %s elapsed\n' "$CY" "$(ui_bar "$_n" "$UI_TOTAL")" "$R" "$_dm" "$_n" "$UI_TOTAL" "$D" "$R" "$B" "$2" "$R" "$D" "$R" "$(ui_el)"
-    [ -z "${3:-}" ] || printf '   %s%s%s\n' "$D" "$3" "$R"
-    if [ "$_n" -gt 1 ]; then
-      _d=''; _i=$((UI_BASE + 1)); while [ "$_i" -lt "$1" ]; do _d="$_d $OKG $(ui_short "$_i") "; _i=$((_i + 1)); done
-      if [ "${#_d}" -gt $((UI_W - 20)) ]; then _d=" $OKG $((_n - 1)) steps done, latest: $(ui_rname "$(($1 - 1))")"; fi
-      printf '   %sDone so far:%s%s%s\n' "$D" "$GR" "$_d" "$R"
-    fi
+    if [ "$UI_LIVE" = 1 ]; then ui_live_bar; else printf '\n%s\n' "$(ui_barline)"; UI_LIVE=1; fi
   else
     printf '[%s] %sstep %s/%s: %s%s\n' "$(ui_ts)" "${_dm:+DEMO }" "$_n" "$UI_TOTAL" "$2" "${3:+ - $3}"
   fi
 }
-ui_ok() { # a finished thing, in plain words
+ui_ok() { # a finished thing: the live line while it runs on a terminal (not kept), a line in plain mode
   _x=$(printf '%s' "$1" | ui_clean)
-  if [ "$UI_FANCY" = 1 ]; then printf '\r\033[K   %s%s%s %s\n' "$GR" "$OKG" "$R" "$_x"; else printf '[%s]   ok: %s\n' "$(ui_ts)" "$_x"; fi
+  if [ "$UI_FANCY" = 1 ] && [ "$UI_LIVE" = 1 ]; then printf '\r\033[K   %s%s%s %s' "$GR" "$OKG" "$R" "$(printf '%s' "$_x" | cut -c1-"$((UI_W - 8))")"
+  elif [ "$UI_FANCY" = 1 ]; then printf '\r\033[K   %s%s%s %s\n' "$GR" "$OKG" "$R" "$_x"
+  else printf '[%s]   ok: %s\n' "$(ui_ts)" "$_x"; fi
 }
-ui_note() { _x=$(printf '%s' "$1" | ui_clean); if [ "$UI_FANCY" = 1 ]; then printf '   %s%s%s\n' "$D" "$_x" "$R"; else printf '[%s]   %s\n' "$(ui_ts)" "$_x"; fi; }
-ui_warn() { _x=$(printf '%s' "$1" | ui_clean); if [ "$UI_FANCY" = 1 ]; then printf '   %s!%s %s\n' "$YL" "$R" "$_x"; else printf '[%s]   WARNING: %s\n' "$(ui_ts)" "$_x"; fi; }
+ui_keep() { # a result that stays on the screen
+  _x=$(printf '%s' "$1" | ui_clean)
+  if [ "$UI_FANCY" = 1 ]; then ui_emit "   $GR$OKG$R $_x"; else ui_ok "$1"; fi
+}
+ui_note() { _x=$(printf '%s' "$1" | ui_clean); if [ "$UI_FANCY" = 1 ]; then ui_emit "   $D$_x$R"; else printf '[%s]   %s\n' "$(ui_ts)" "$_x"; fi; }
+ui_warn() { _x=$(printf '%s' "$1" | ui_clean); if [ "$UI_FANCY" = 1 ]; then ui_emit "   $YL!$R $_x"; else printf '[%s]   WARNING: %s\n' "$(ui_ts)" "$_x"; fi; }
 ui_hb_due() { # ui_hb_due LAST NOW: plain mode prints a heartbeat at least every 10 s
   [ $(($2 - $1)) -ge 10 ]
 }
@@ -211,6 +248,7 @@ ui_wait() { # ui_wait PID "what is happening" [LOG] [TEXTFN]: until the process 
       _room=$((UI_W - 9 - ${#_t2}))
       if [ -n "$_log" ] && [ "$_room" -ge 10 ]; then _ll=$(ui_lastline "$_log" | cut -c1-"$_room"); fi
       printf '\r\033[K   %s%s%s %s%s' "$CY" "$(ui_frame "$_i")" "$R" "$_t2" "${_ll:+ $D$_ll$R}"
+      if [ "$UI_LIVE" = 1 ] && [ "$_s" != "$UI_LAST_EL" ]; then UI_LAST_EL=$_s; ui_live_bar; printf '   %s%s%s %s' "$CY" "$(ui_frame "$_i")" "$R" "$_t2"; fi # the clock on the progress line
       _i=$((_i + 1)); ui_sleep 0.1
     else
       if ui_hb_due "$_last" "$_now"; then printf '[%s]   still working: %s (%ss)\n' "$(ui_ts)" "$(printf '%s' "$_t" | ui_clean)" "$_s"; _last=$_now; fi
@@ -231,7 +269,6 @@ ui_hints() { # printed once at 60 s and once at 120 s of a certificate wait
   elif [ "$1" -ge 60 ] && [ "$UI_HINT" -lt 1 ]; then UI_HINT=1; ui_hint_text 1; fi
 }
 ui_hint_text() {
-  [ "$UI_FANCY" != 1 ] || printf '\r\033[K'
   if [ "$1" = 1 ]; then
     ui_warn "Over a minute. Check: (1) the DNS A record of the name is this machine's public address, (2) inbound TCP 443 is open in your provider's firewall."
   else
@@ -255,14 +292,15 @@ ui_run() { # ui_run "what is happening" command...: in the background, output to
   if [ "$_rc" = 0 ]; then [ "${UI_QUIET:-0}" = 1 ] || ui_ok "$_m ($(($(ui_now) - _t0))s)"
   else
     ui_warn "$_m: failed (exit $_rc). Last lines of its output (all of it: $UI_LOG):"
-    tail -n 12 "$_rl" 2>/dev/null | ui_clean_lines | cut -c1-"$((UI_W - 8))" | sed 's/^/        /'
+    _tl=$(tail -n 12 "$_rl" 2>/dev/null | ui_clean_lines | cut -c1-"$((UI_W - 8))" | sed 's/^/        /')
+    [ -z "$_tl" ] || ui_emit "$_tl"
   fi
   rm -f "$_rl"
   return "$_rc"
 }
-ui_dl_text() { # the heartbeat of a download: the size so far of the file being written ($UI_DL)
-  _b=$(wc -c <"$UI_DL" 2>/dev/null | tr -d ' ' || echo 0)
-  case $_b in '' | *[!0-9]*) _b=0 ;; esac
+ui_dl_text() { # the heartbeat of a download: the size so far of the file being written ($UI_DL), which curl may not have made yet
+  _b=$({ wc -c <"$UI_DL"; } 2>/dev/null | tr -d ' ')
+  case $_b in '' | *[!0-9]*) echo "Starting the download of $(basename "$UI_DL")... (${1}s)"; return 0 ;; esac
   echo "Downloading $(basename "$UI_DL")... $((_b / 1024)) KB so far (${1}s)"
 }
 ui_stopped() { # ui_stopped "what failed" ["what to do"]: the red card, then exit 1
@@ -276,6 +314,106 @@ ui_stopped() { # ui_stopped "what failed" ["what to do"]: the red card, then exi
   exit 1
 }
 # --- ui-core end ---
+# --- precheck begin ---
+pc_listener() { # pc_listener PORT: the first line about whatever listens on PORT, unless it is the Core itself; nothing when free
+  command -v ss >/dev/null 2>&1 || return 0
+  _w=$(ss -Hltnp "sport = :$1" 2>/dev/null || true)
+  [ -n "$_w" ] || return 0
+  if printf '%s\n' "$_w" | grep -q ainkrad-core; then return 0; fi
+  printf '%s\n' "$_w" | head -n 1
+}
+pc_ipt_verdict() { # pc_ipt_verdict PORT: walks `iptables -S INPUT` in order. Prints open | N (a REJECT/DROP rule at position N) | policy | nothing
+  iptables -S INPUT 2>/dev/null | awk -v port="$1" '
+    /^-P INPUT/ { pol = $3 }
+    /^-A INPUT/ {
+      n++
+      if ($0 !~ / -j (ACCEPT|REJECT|DROP)/) next
+      if ($0 ~ / -i lo/ || $0 ~ / -s / || $0 ~ / -d / || $0 ~ / -p (icmp|udp|ipv6-icmp|esp|ah|gre)/) next
+      if ($0 ~ /(ESTABLISHED|RELATED)/ && $0 !~ /NEW/) next
+      hit = 1
+      for (i = 1; i < NF; i++) if ($i == "--dport" || $i == "--dports") {
+        hit = 0; m = split($(i + 1), parts, ",")
+        for (k = 1; k <= m; k++) { r = split(parts[k], ab, ":"); lo = ab[1] + 0; hi = (r > 1 ? ab[2] : ab[1]) + 0; if (port + 0 >= lo && port + 0 <= hi) hit = 1 }
+      }
+      if (!hit) next
+      if ($0 ~ / -j ACCEPT/) { print "open"; done = 1; exit }
+      print n; done = 1; exit
+    }
+    END { if (!done && pol == "DROP") print "policy" }'
+}
+pc_nft_verdict() { # pc_nft_verdict PORT: "FAMILY TABLE CHAIN" of an input chain that turns PORT away, nothing when open or unknown
+  nft list ruleset 2>/dev/null | awk -v port="$1" '
+    /^table / { fam = $2; tab = $3 }
+    /^[ \t]*chain / { ch = $2; inin = 0 }
+    /hook input/ { inin = 1; where = fam " " tab " " ch; if ($0 ~ /policy drop/) pol = 1 }
+    inin && /dport/ && $0 ~ ("[ {,]" port "[ },]") && /accept/ { ok = 1 }
+    inin && /(reject|drop)/ && !/dport/ && !/saddr/ && !/iif/ && !/ct state/ { rej = 1 }
+    END { if ((pol || rej) && !ok && where != "") print where }'
+}
+pc_fw_check() { # pc_fw_check PORT: 0 when this host's firewall lets PORT in (or none can be read); else 1 with PC_FW_WHY and PC_FW_FIX set
+  PC_FW_WHY='' PC_FW_FIX=''
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+    if ufw status 2>/dev/null | grep -Eq "^$1(/tcp)?[[:space:]].*ALLOW"; then return 0; fi
+    PC_FW_WHY="ufw is active and has no rule that allows inbound TCP $1"
+    PC_FW_FIX="ufw allow $1/tcp"
+    return 1
+  fi
+  if command -v iptables >/dev/null 2>&1 && iptables -S INPUT >/dev/null 2>&1; then
+    _v=$(pc_ipt_verdict "$1")
+    case $_v in
+      '' | open) return 0 ;;
+      policy) PC_FW_WHY="the iptables INPUT policy is DROP and no rule accepts TCP $1"; PC_FW_FIX="iptables -A INPUT -p tcp -m state --state NEW --dport $1 -j ACCEPT" ;;
+      *) PC_FW_WHY="iptables rule $_v in the INPUT chain rejects inbound TCP $1 (on Oracle Cloud images this is the stock REJECT rule that lets only SSH in)"
+         PC_FW_FIX="iptables -I INPUT $_v -p tcp -m state --state NEW --dport $1 -j ACCEPT" ;;
+    esac
+    return 1
+  fi
+  if command -v nft >/dev/null 2>&1; then
+    _v=$(pc_nft_verdict "$1")
+    [ -n "$_v" ] || return 0
+    # shellcheck disable=SC2086 # three plain words: family table chain
+    set -- "$1" $_v
+    PC_FW_WHY="the nftables input chain $4 turns inbound TCP $1 away"
+    PC_FW_FIX="nft insert rule $2 $3 $4 tcp dport $1 accept"
+    return 1
+  fi
+  return 0
+}
+pc_confirm() { # pc_confirm "question": y/N on the terminal; no terminal, or one this process does not own, is a no
+  ( : </dev/tty ) 2>/dev/null || return 1
+  ui_tty_fg || return 1
+  [ "$UI_FANCY" != 1 ] || printf '\r\033[K'
+  printf '%s [y/N] ' "$1" >/dev/tty
+  _a=''; read -r _a </dev/tty || true
+  [ "$UI_FANCY" != 1 ] || [ "$UI_LIVE" != 1 ] || printf '\033[1A\r\033[K'
+  case $_a in y | Y | yes) return 0 ;; *) return 1 ;; esac
+}
+pc_open() { # pc_open FIXCOMMAND: runs it (it came from pc_fw_check, never from outside) and saves it for the next boot when it can
+  sh -c "$1" || return 1
+  case $1 in iptables*) if command -v netfilter-persistent >/dev/null 2>&1; then netfilter-persistent save >/dev/null 2>&1 || true; fi ;; esac
+}
+pc_checks() { # pc_checks "443 80": 0 when all is well; else 1 with PC_WHAT (what failed) and PC_TODO (what to do) set
+  for _p in $1; do
+    _u=$(pc_listener "$_p")
+    if [ -n "$_u" ]; then
+      PC_WHAT="port $_p is already in use by another program: $_u"
+      PC_TODO="stop that program (or move it to another port), then run the command again. Nothing was installed."
+      return 1
+    fi
+    if ! pc_fw_check "$_p"; then
+      ui_warn "Port $_p: $PC_FW_WHY."
+      if pc_confirm "   Open it now with:  $PC_FW_FIX  ?"; then
+        pc_open "$PC_FW_FIX" && pc_fw_check "$_p" && { ui_ok "Port $_p is open in this machine's firewall"; continue; }
+        ui_warn "That did not open port $_p."
+      fi
+      PC_WHAT="this machine's firewall turns inbound TCP $_p away: $PC_FW_WHY"
+      PC_TODO="open it with this command: $PC_FW_FIX   (run the installer again afterwards; if this is a cloud server, also open inbound TCP $_p in the provider's firewall: Oracle Security List, Azure Network Security Group, AWS Security Group). Nothing was installed."
+      return 1
+    fi
+    ui_ok "Port $_p is free and this machine's firewall lets it in"
+  done
+}
+# --- precheck end ---
 
 main() {
   set -eu
@@ -307,6 +445,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   W=''
   ui_clean_add '[ -z "$W" ] || rm -rf "$W"'
   ui_traps
+  ui_tty_init
   say() { printf '%s\n' "$*"; }
   die() { ui_stopped "$*"; }
   demo=0
@@ -353,12 +492,15 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     [ -d /run/systemd/system ] || die "systemd is not running here (a container without systemd?)"
     command -v apt-get >/dev/null || die "apt-get not found: only Debian and Ubuntu are supported by this installer"
     ui_ok "This is Linux $(uname -m) with systemd and apt, and you are root: supported"
+    # Everything this machine can tell about itself comes BEFORE anything is installed (N6): a busy or closed port 443 stops here.
+    ui_status "Checking that port 443 is free and that this machine's firewall lets it in"
+    pc_checks 443 || ui_stopped "$PC_WHAT" "$PC_TODO"
 
-    pkgs='ca-certificates curl minisign bubblewrap qrencode openssl iproute2' persist=''
+    pkgs='ca-certificates curl minisign bubblewrap qrencode openssl iproute2 git unzip jq ripgrep build-essential xz-utils' persist=''
     # Firewall tooling only when hardening was asked for. iptables-persistent clashes with ufw: with ufw installed nothing is
     # added that could remove it; APT::Get::Remove=false makes apt refuse any removal instead of doing it.
     if [ "$harden" = 1 ]; then pkgs="$pkgs iptables"; dpkg -s ufw >/dev/null 2>&1 || persist=iptables-persistent; fi
-    ui_step 2 "Install prerequisites" "curl, minisign (checks the release signature), bubblewrap (agent sandbox), qrencode (QR code)$([ "$harden" = 1 ] && echo ', iptables (firewall, --harden)')."
+    ui_step 2 "Install prerequisites" "curl, minisign (checks the release signature), bubblewrap (agent sandbox), qrencode (QR code), and the base tools git, unzip, jq, ripgrep, build-essential (xz-utils unpacks Node)$([ "$harden" = 1 ] && echo ', iptables (firewall, --harden)')."
     export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
     UI_STATE="Nothing of the Core is installed. Some apt packages may be partly installed; if apt complains, run: sudo dpkg --configure -a"
     # shellcheck disable=SC2086 # $pkgs and $persist are plain package names
@@ -423,6 +565,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   # While the child runs, a Ctrl-C or TERM only marks this shell: the child prints the one honest card, this shell stays silent.
   rc=0 got=0
   export AINKRAD_FROM_GET=1 AINKRAD_STEP_BASE=0 AINKRAD_STEP_TOTAL=8 AINKRAD_T0="$UI_T0" AINKRAD_RERUN="$UI_RERUN"
+  if [ "$UI_FANCY" = 1 ] && [ "$UI_LIVE" = 1 ]; then printf '\r\033[K'; export AINKRAD_UI_LIVE=1; UI_LIVE=0; fi # install.sh carries on from this progress line
   trap 'got=130' INT; trap 'got=143' TERM
   if ( : </dev/tty ) 2>/dev/null; then bash "$INST/scripts/install.sh" --binary /usr/local/bin "$@" </dev/tty || rc=$?
   else bash "$INST/scripts/install.sh" --binary /usr/local/bin "$@" </dev/null || rc=$?; fi

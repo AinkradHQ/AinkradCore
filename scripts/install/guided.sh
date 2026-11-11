@@ -35,7 +35,7 @@ guided_step() {
     Backups*) n=6 sub="Setting up daily encrypted backups on this machine" ;;
     Start*) n=7 sub="Starting the Core and getting its HTTPS certificate" ;;
     "Real credentials"*) n=7 sub="Turning on the encrypted secrets store" ;;
-    Runner*) n=7 sub="Installing the runner (unprivileged user; terminals on, exec.run off; not started until paired)" ;;
+    Runner*) n=7 sub="Setting up this Core's own runner (unprivileged user, sandboxed; terminals and agents on, exec.run off)" ;;
     Self-test*) n=7 sub="Checking that everything works" ;;
     "First device"*) n=8 sub="Creating your one-time connect link" ;;
     *) return 0 ;;
@@ -47,7 +47,7 @@ guided_step() {
       8) ui_step 8 "$(ui_rname 8)" "A one-time link and code that make the Mac app the owner of this Core." ;;
     esac
   fi
-  ui_note "> $sub"
+  ui_status "$sub"
 }
 ok_line() { ui_ok "$*"; }
 
@@ -65,6 +65,7 @@ guided_answers() {
   A_HOSTNAME=${A_HOSTNAME:-${AINKRAD_HOSTNAME:-}} A_ACME_CONTACT=${A_ACME_CONTACT:-${AINKRAD_ACME_EMAIL:-}}
   A_ACME_ENV=${AINKRAD_ACME_ENV:-production}
   A_BACKUP=local A_BACKUP_RECIPIENT=${A_BACKUP_RECIPIENT:-} A_RUNNER=yes A_RUNNER_PTY=yes A_HARDEN=no A_REAL_CREDENTIALS=yes
+  [ "${NO_LOCAL_RUNNER:-0}" != 1 ] || { A_RUNNER=no A_RUNNER_PTY=no; }
   A_BOOTSTRAP=later A_SELFTEST_BACKUP=no
   [ -n "$A_HOSTNAME" ] && ! valid_hostname "$A_HOSTNAME" && { warn "AINKRAD_HOSTNAME '$A_HOSTNAME' is not a DNS name"; A_HOSTNAME=''; }
   [ -n "$A_ACME_CONTACT" ] && ! valid_email "$A_ACME_CONTACT" && { warn "AINKRAD_ACME_EMAIL is not a valid email"; A_ACME_CONTACT=''; }
@@ -79,8 +80,8 @@ guided_answers() {
     have_tty || die "no terminal to ask on: set AINKRAD_HOSTNAME=<dns name> and AINKRAD_ACME_EMAIL=<email> and run again"
     ui_note "The Core is served over HTTPS with a free Let's Encrypt certificate, so it needs a public DNS name that points at this machine."
     ui_note "There is no IP-only or self-signed mode yet. No name? Any free dynamic-DNS name works: create it first, then answer."
-    [ -n "$A_HOSTNAME" ] || ask HOSTNAME "Public DNS name of this Core"
-    [ -n "$A_ACME_CONTACT" ] || ask ACME_CONTACT "Email for the Let's Encrypt account (expiry notices only)"
+    [ -n "$A_HOSTNAME" ] || ask HOSTNAME "What is the public DNS name of this Core?"
+    [ -n "$A_ACME_CONTACT" ] || ask ACME_CONTACT "What email should Let's Encrypt use for expiry notices?"
   fi
   if [ -n "$pre_host" ]; then ui_ok "HOSTNAME = $A_HOSTNAME (given up front)"; ui_after_answer HOSTNAME "$A_HOSTNAME"; fi
   if [ -n "$pre_mail" ]; then ui_ok "ACME_CONTACT = $A_ACME_CONTACT (given up front)"; fi
@@ -158,10 +159,38 @@ guided_next_steps() { # guided_next_steps INVITE_RC
   fi
 }
 
-# ui_card N TOTAL "label" "example" "default": the card every question is printed in (TOTAL 0 = unknown)
+# ui_card N TOTAL "question" "example" "default": the card every question is printed in (TOTAL 0 = unknown). A plain question (no
+# variable name); Example and Default only when there is one. On a UTF-8 terminal it is a rounded box in blue, else plain text.
 ui_card() {
-  printf '\n %s%sQuestion %s%s%s\n   %s\n   Example:  %s\n   Default:  [%s]\n %sWaiting for your answer...%s\n' "$B" "$CY" "$1" "$([ "$2" = 0 ] || echo " of $2")" "$R" "$3" "$4" "$5" "$D" "$R"
+  local head w line body='' n pad
+  head="Question $1"; [ "$2" = 0 ] || head="$head of $2"
+  if [ "$UI_FANCY" = 1 ] && [ "$UI_UTF" = 1 ]; then
+    w=$((UI_W - 6)); [ "$w" -le 58 ] || w=58
+    body=$(printf '%s\n' "$3" | fold -s -w "$w"); [ -z "$4" ] || body="$body
+Example: $4"; [ -z "$5" ] || body="$body
+Default: $5"
+    n=$((w - ${#head} - 1)); [ "$n" -ge 1 ] || n=1
+    local out; out=$(printf '\n %s╭─ %s%s%s %s╮%s' "$BL" "$B" "$head" "$R$BL" "$(repeat ─ "$n")" "$R")
+    while IFS= read -r line; do
+      pad=$((w - ${#line})); [ "$pad" -ge 0 ] || pad=0
+      out="$out
+ ${BL}│${R} $line$(repeat ' ' "$pad") ${BL}│${R}"
+    done <<<"$body"
+    out="$out
+ ${BL}╰$(repeat ─ $((w + 2)))╯${R}"
+    ui_emit "$out"
+  else
+    body=" $head
+   $3"; [ -z "$4" ] || body="$body
+   Example:  $4"; [ -z "$5" ] || body="$body
+   Default:  $5"
+    ui_emit "
+$body"
+  fi
 }
+# ui_prompt: the pointer in front of the answer; ui_after_read: the terminal echoed the Return, so the cursor is one line below the live line
+ui_prompt() { if [ "$UI_FANCY" = 1 ] && [ "$UI_UTF" = 1 ]; then printf '› '; else printf '> '; fi; }
+ui_after_read() { if [ "$UI_FANCY" = 1 ] && [ "$UI_LIVE" = 1 ]; then printf '\033[1A\r\033[K'; fi; }
 
 # --- live checks right after an answer is accepted ---
 dns_probe() { # NAME OUTFILE: "A ip" / "AAAA ip" lines (dig when there is one, else getent); never fails
@@ -176,9 +205,13 @@ dns_probe() { # NAME OUTFILE: "A ip" / "AAAA ip" lines (dig when there is one, e
 pub_probe() { # OUTFILE: this machine's public IPv4 from a third party (api.ipify.org); never fails
   { curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS4 --max-time 5 https://checkip.amazonaws.com 2>/dev/null || true; } >"$1"
 }
-# ui_check_dns NAME: A record against this machine's public address, then the AAAA record; says plainly what to fix.
+# ui_check_dns NAME: A record against this machine's public address, then the AAAA record. A name that does not point at this
+# machine STOPS the install here (the red card), before anything of the Core is set up; a dry run only warns.
+ui_dns_fail() { # ui_dns_fail "what failed" "what to do"
+  if [ "${DRY:-0}" = 1 ]; then ui_warn "$1 (dry run continues)"; else ui_stopped "$1" "$2"; fi
+}
 ui_check_dns() {
-  local name=$1 pub a aaaa x here f
+  local name=$1 pub a aaaa x here f bad6=''
   ui_logopen || { ui_warn "cannot create a log directory, so the DNS check is skipped"; return 0; }
   f=$UI_LOGDIR/dns
   UI_QUIET=1 ui_run "Looking up this machine's public address (a request to api.ipify.org)" pub_probe "$f.pub" || true
@@ -186,29 +219,30 @@ ui_check_dns() {
   UI_QUIET=1 ui_run "Checking that $name points at ${pub:-this machine}" dns_probe "$name" "$f.dns" || true
   a=$(sed -n 's/^A //p' "$f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'); aaaa=$(sed -n 's/^AAAA //p' "$f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
   if [ -z "$a" ]; then
-    ui_warn "$name has no DNS A record yet. Fix: at your DNS provider add an A record  $name -> ${pub:-<this machine public IP>}  (TTL 300), then wait a minute. Let's Encrypt cannot issue the certificate until it exists. Not blocking now; I ask again before installing."
+    ui_dns_fail "$name has no DNS A record yet, so Let's Encrypt cannot issue the certificate" "at your DNS provider add an A record  $name -> ${pub:-<this machine public IP>}  (TTL 300), wait a minute, then run the command again. Nothing of the Core was set up."
   elif [ -z "$pub" ]; then
     ui_warn "$name points at $a, but this machine's public address could not be looked up, so I cannot compare. Make sure that is this machine."
-  elif printf ' %s ' "$a" | grep -q " $pub "; then ui_ok "$name points at $pub: this machine. Good."
+  elif printf ' %s ' "$a" | grep -q " $pub "; then ui_keep "$name points at $pub: this machine"
   else
-    ui_warn "$name points at $a, but this machine is $pub. Fix: change the A record to $pub (or run this installer on $a). Let's Encrypt would validate the wrong machine. Not blocking now; I ask again before installing."
+    ui_dns_fail "$name points at $a, but this machine is $pub, so Let's Encrypt would validate the wrong machine" "change the A record to $pub (or run this installer on $a), wait a minute, then run the command again. Nothing of the Core was set up."
   fi
-  printf '%s\n' "$aaaa" | tr ' ' '\n' | while IFS= read -r x; do
+  for x in $aaaa; do
     valid_ipv6 "$x" || continue # only a real IPv6 literal gets this far (no globs, no control characters)
     here=0; ip -6 addr 2>/dev/null | grep -q " $x/" && here=1
-    [ "$here" = 1 ] || ui_warn "$name also has an IPv6 (AAAA) record $x that is not on this machine. Let's Encrypt tries IPv6 first when it exists. Fix: remove the AAAA record, or point it at this machine."
+    [ "$here" = 1 ] || bad6="${bad6:+$bad6 }$x"
   done
+  [ -z "$bad6" ] || ui_dns_fail "$name also has an IPv6 (AAAA) record ($bad6) that is not on this machine, and Let's Encrypt tries IPv6 first" "remove the AAAA record, or point it at this machine, then run the command again. Nothing of the Core was set up."
 }
 ui_after_answer() { # KEY VALUE
   case $1 in
     HOSTNAME) ui_check_dns "$2" ;;
-    ACME_CONTACT) ui_note "Let's Encrypt only uses it for expiry and account notices. $2 looks like an email." ;;
+    ACME_CONTACT) ui_status "Let's Encrypt only uses $2 for expiry and account notices." ;;
   esac
 }
 ui_example() { # KEY: one example answer
   case $1 in
     HOSTNAME) echo "core.yourdomain.com" ;; ACME_CONTACT) echo "you@example.com" ;; BACKUP_RECIPIENT) echo "age1... (the PUBLIC key)" ;;
-    BINARY_DIR) echo "/usr/local/bin" ;; PUBLIC_IP) echo "203.0.113.7" ;; *) echo "(see the text above)" ;;
+    BINARY_DIR) echo "/usr/local/bin" ;; PUBLIC_IP) echo "203.0.113.7" ;; *) echo "" ;;
   esac
 }
 ui_invalid() { # KEY: why the answer was not accepted, in plain words
@@ -315,7 +349,9 @@ ssh_state() {
 
 guided_summary() { # guided_summary INVITE_RC
   local runner=installed fw='(dry run)' sshs='(dry run)' rows=()
-  [ -e /var/lib/ainkrad-runner/core/enrolment.json ] || runner="installed, waiting to be paired from the app"
+  if [ "${A_RUNNER:-yes}" != yes ]; then runner="none (--no-local-runner)"
+  elif [ -e /var/lib/ainkrad-runner/core/enrolment.json ]; then runner="built in, enrolled (terminals and agents)"
+  else runner="installed, waiting to be paired from the app"; fi
   rows+=("Address     https://$A_HOSTNAME")
   rows+=("Certificate $([ "$A_ACME_ENV" = staging ] && echo 'STAGING (test, not trusted by browsers)' || echo "Let's Encrypt, renews by itself")")
   if [ "$A_HARDEN" = yes ]; then
@@ -325,7 +361,8 @@ guided_summary() { # guided_summary INVITE_RC
     rows+=("Hardening   NOT applied (opt-in): SSH, firewall untouched")
   fi
   rows+=("Backups     $([ -n "$A_BACKUP_RECIPIENT" ] && echo "daily, encrypted, in $CORE_HOME/backups" || echo 'OFF (no key; re-run from a terminal)')")
-  rows+=("Runner      $runner" "            unprivileged user; terminals on, exec.run off")
+  rows+=("Runner      $runner")
+  [ "${A_RUNNER:-yes}" != yes ] || rows+=("            unprivileged user, sandboxed; exec.run off")
   printf '\n'
   box "Ainkrad Core is $([ "$1" = 0 ] && echo 'ready' || echo 'running, but has no connect link yet')" "" "${rows[@]}"
   if [ "$A_HARDEN" != yes ]; then
