@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use ainkrad_proto::runner::{Isolation, Outcome, Policy};
+use ainkrad_proto::runner::{Outcome, Policy};
 use ainkrad_proto::v2::{
     AgentStart, AgentState, ErrorCode, PlanCheck, PlanChecked, SUBSCRIPTION_HARNESS,
     SUBSCRIPTION_VAR, SecretGrant, StreamError,
@@ -29,9 +29,6 @@ impl AgentDriver {
             result: result.to_owned(),
             latency_ms: u64::try_from(at.elapsed().as_millis()).unwrap_or(u64::MAX),
         };
-        if !self.sandbox.tier().satisfies(Isolation::Process) {
-            return Ok(done("sandbox_unavailable"));
-        }
         if !self.sandbox.capabilities().contains(&"egress-filter") {
             return Ok(done("egress_not_proven"));
         }
@@ -47,7 +44,6 @@ impl AgentDriver {
             prompt: Some("ok".to_owned()),
             workspace: None,
             policy: Policy {
-                min_isolation: Some(Isolation::Process),
                 wall_secs: Some(u32::try_from(WAIT.as_secs()).unwrap_or(90)),
                 ..Policy::default()
             },
@@ -62,6 +58,8 @@ impl AgentDriver {
         match self.start(start) {
             Ok(_) => {}
             Err(e) if e.code == ErrorCode::Busy => return Ok(done("runner_busy")),
+            // `wall_secs` asks for isolation, so a runner with no sandbox refuses the start.
+            Err(e) if e.message.contains("isolation") => return Ok(done("sandbox_unavailable")),
             Err(e) => return Err(refuse(e.code, e.message)),
         }
         let end = Instant::now() + WAIT;

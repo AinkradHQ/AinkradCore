@@ -297,7 +297,7 @@ async fn a_plan_check_needs_the_sandbox_and_a_proven_egress_filter() {
         })
         .await
         .unwrap();
-    assert_eq!(got.result, "sandbox_unavailable");
+    assert_eq!(got.result, "egress_not_proven");
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
         0,
