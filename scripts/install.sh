@@ -560,13 +560,13 @@ uninstall() {
   [ "$DRY" = 1 ] || [ "$(id -u)" = 0 ] || die "run as root (sudo), or with --dry-run"
   step "Uninstall"
   local u name
-  for u in ainkrad-backup.timer ainkrad-backup.service ainkrad-runner.service ainkrad-core.service; do
+  for u in ainkrad-backup.timer ainkrad-backup.service ainkrad-runner-tools.socket ainkrad-runner.service ainkrad-core.service; do
     run systemctl disable --now "$u" 2>/dev/null || true
   done
   # KillMode=process: stopping the runner leaves its terminal hosts running on purpose; removing it ends them.
   run systemctl kill --kill-whom=all ainkrad-runner.service 2>/dev/null || true
   run rm -rf "$UNITS/ainkrad-core.service" "$UNITS/ainkrad-runner.service" "$UNITS/ainkrad-backup.service" \
-    "$UNITS/ainkrad-backup.timer" "$UNITS/ainkrad-backup.timer.d" "$UNITS/ainkrad-backup.service.d" "$UNITS/ainkrad-core.service.d" "$UNITS/ainkrad-runner.service.d"
+    "$UNITS/ainkrad-backup.timer" "$UNITS/ainkrad-backup.timer.d" "$UNITS/ainkrad-backup.service.d" "$UNITS/ainkrad-core.service.d" "$UNITS/ainkrad-runner.service.d" "$UNITS/ainkrad-runner-tools.socket" "$UNITS/ainkrad-runner-tools@.service"
   run systemctl daemon-reload
   run systemctl reset-failed 2>/dev/null || true
   run rm -f "$BIN/ainkrad-core-server" "$BIN/ainkradctl" "$BIN/ainkrad-runner" "$BIN/ainkrad-ptyhost" "$BIN/ainkrad-core-citadel"

@@ -17,6 +17,10 @@
 #                                  sandbox below (read-only system, no capabilities, no home, no /dev).
 #                   --enable-exec  `exec.run`: the Core can run any program as this user (bounded in time and
 #                                  output, empty environment). Turn it on only where that is wanted.
+#                 The App can change terminals, agents and the agent capacity (PUT /api/v1/runners/{id}/policy): the Core
+#                 sends `runner.policy`, the runner saves it in /var/lib/ainkrad-runner/core/policy.json, which overrides
+#                 --enable-pty and --enable-agents from then on, and exits with status 75 so Restart=on-failure starts it again.
+#                 Installing a tool from the App goes through ainkrad-runner-tools.socket (a separate root unit, see there).
 #                 A shell can do anything the user and the sandbox allow, so enable pty only on a host
 #                 whose Core you trust as you trust a login there.
 #   HOME          /var/lib/ainkrad-runner

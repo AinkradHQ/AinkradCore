@@ -1,0 +1,27 @@
+# One tool install, as root, for one connection to ainkrad-runner-tools.socket (the connected socket is standard input).
+# `ainkrad-runner tools-helper` reads one line naming a tool from the fixed list, installs it from the pinned manifest
+# compiled into the binary (Node, Claude Code and Codex by checksum; git, Python, Go, Rust and Docker from the distro's
+# package manager) and answers progress lines. It runs no shell and no program the code does not name.
+#
+# Hardening is deliberately light: the install writes /usr/local, /etc/claude-code and, through apt or dnf, /usr and /var,
+# and package scripts need ordinary root. What is kept: no home, a private /tmp, no kernel or cgroup writes, a time limit.
+[Unit]
+Description=Ainkrad runner tool installer
+Documentation=https://github.com/AinkradHQ/AinkradCore
+After=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/ainkrad-runner tools-helper
+StandardInput=socket
+StandardOutput=journal
+StandardError=journal
+RuntimeMaxSec=2400
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+LockPersonality=yes
+RestrictRealtime=yes

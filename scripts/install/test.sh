@@ -172,6 +172,13 @@ U=$D/systemd/ainkrad-runner.service
 grep -qx 'KillMode=process' "$U" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: unit lacks KillMode=process" >&2; }
 grep -v '^#' "$U" | grep -q -- '--enable-' && { fail=$((fail + 1)); echo "FAIL: the unit enables a driver" >&2; } || pass=$((pass + 1))
 grep -qx 'Environment=MALLOC_ARENA_MAX=1' "$U" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: unit lacks MALLOC_ARENA_MAX=1" >&2; }
+# The root-side tool installer (App one-click install): only root and the runner's group reach the socket, one install at
+# a time, and the helper unit starts the runner binary's own `tools-helper` (no shell); the runner install plans both units.
+T=$D/systemd/ainkrad-runner-tools.socket TS=$D/systemd/ainkrad-runner-tools@.service
+{ grep -qx 'SocketGroup=ainkrad-runner' "$T" && grep -qx 'SocketMode=0660' "$T" && grep -qx 'Accept=yes' "$T" && grep -qx 'MaxConnections=1' "$T" &&
+  grep -qx 'ExecStart=/usr/local/bin/ainkrad-runner tools-helper' "$TS" && grep -qx 'StandardInput=socket' "$TS"; } && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: the tool installer socket/unit is not locked down" >&2; }
+bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --dry-run >"$t/out-tools" 2>&1 &&
+  grep -q 'ainkrad-runner-tools.socket' "$t/out-tools" && grep -q 'enable --now ainkrad-runner-tools.socket' "$t/out-tools" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: install-linux.sh does not plan the tool installer" >&2; }
 # bubblewrap (agent sessions, terminals) needs these; `RestrictNamespaces=yes`, ProcSubset=pid and the /proc overmounting
 # Protect* lines make it fail on a real host (H0b), so they must not come back.
 grep -qx 'RestrictNamespaces=user mnt pid ipc uts cgroup net' "$U" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: unit lacks the bwrap namespace allow-list" >&2; }
