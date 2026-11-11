@@ -32,6 +32,7 @@ pub mod kinds;
 pub mod logins;
 pub mod migrate;
 pub mod modsettings;
+pub mod placement;
 pub mod pools;
 pub mod prices;
 pub mod provider_rules;

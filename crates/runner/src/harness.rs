@@ -285,8 +285,25 @@ impl HarnessExecutor {
                 .expect("agent workspaces")
                 .get(&(job.context_ref.clone(), job.run))
                 .cloned()
-                .unwrap_or_else(|| self.work_root.join(format!("run-{}", job.run))),
-            _ => self.work_root.join(format!("run-{}", job.run)),
+                .unwrap_or_else(|| self.scratch(job)),
+            _ => self.scratch(job),
+        }
+    }
+
+    /// The scratch dir of a job with no workspace. An agent session (no issue, no agent, a
+    /// session id) has ONE for its whole life, `session-<id>`, reused by every run (start, wake,
+    /// resume), so its files stay and the harness finds its own session by the same cwd (Claude
+    /// Code keys `--resume` on it). Any other job gets `run-<id>`.
+    fn scratch(&self, job: &Job) -> PathBuf {
+        let id = &job.context_ref;
+        let safe = !id.is_empty()
+            && id.len() <= 64
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+        match job.issue.is_none() && job.agent == 0 && safe {
+            true => self.work_root.join(format!("session-{id}")),
+            false => self.work_root.join(format!("run-{}", job.run)),
         }
     }
 }

@@ -196,7 +196,9 @@ fn owns_secrets(s: &Session, me: &Caller) -> Result<(), ApiError> {
         `limit_reached`, 400 when the runner is not in a secret's scope). With `chain` or \
         `agent` (admin only, else 403): the session starts with no account and the allocator \
         picks one from the chain (`waiting` while every account cools); 404 for no such chain, \
-        400 for a harness, a model or an `acct.*` secret beside a chain. A chain create \
+        400 for a harness, a model or an `acct.*` secret beside a chain. 409 `no_account` for a \
+        plain create of claude, codex or agy that names no `acct.*` secret and no credential \
+        variable of its own (it would answer \"Not logged in\"). A chain create \
         passes a plain create's checks for the harness of every entry, and the runner must be \
         online with room for at least one entry (else its refusal, 409 or 503), all before \
         any row; an entry the runner cannot serve is skipped at the pick", body = AgentSession)))]
@@ -245,6 +247,9 @@ pub async fn create(
             }
         })?;
         agents::admit_holding(&app, &b.runner, &b.harness, &policy, &secrets).await?;
+        if let Some(e) = sched::no_account(&new) {
+            return Err(e);
+        }
         store::create(&app.pool, &new, BY, &app.clock.now()).await?
     };
     access::apply(&app, &s.id, &access).await?;

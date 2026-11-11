@@ -19,6 +19,7 @@ use super::types::{Timestamp, opt_ts, ts};
 use super::{ApiError, ApiResult, BY, Caller};
 use crate::api::App;
 use crate::ops::secretbox::SecretBox;
+use crate::store::placement::Placement;
 use crate::store::providers::{Definition, Model};
 use crate::store::secrets::Error as StoreError;
 use crate::store::{account_keys, accounts as acc, pools as pl, providers as prov};
@@ -194,17 +195,29 @@ pub async fn create(
         runners: b.runners.as_deref().unwrap_or_default(),
         cap: b.cap,
     };
-    let a = acc::create(
+    let user = crate::store::chains::user_of(&app.pool, &me.device.id).await?;
+    let place = Placement {
+        user,
+        pool: b.pool,
+        chain: b.chain,
+        position: b.position.map(|p| p as usize),
+        monthly_usd_micros: b.monthly_limit_usd_micros,
+    };
+    let (a, (pool, chain)) = acc::create_placed(
         &app.pool,
         sealer(&app)?,
         &new,
+        "key",
         &me.device.id,
         BY,
         &app.clock.now(),
+        &place,
     )
     .await
     .map_err(err)?;
-    Ok(Json(a.into()))
+    let mut d = AccountDetail::from(a);
+    (d.pool, d.chain) = (Some(pool), chain);
+    Ok(Json(d))
 }
 
 #[utoipa::path(put, path = "/api/v1/accounts/{id}/secret", operation_id = "replaceAccountSecret",

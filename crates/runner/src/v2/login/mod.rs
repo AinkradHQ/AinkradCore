@@ -59,7 +59,7 @@ use zeroize::Zeroizing;
 /// The `claude` versions whose `setup-token` output this driver was written against. Any other
 /// is refused with a clear result (the CLI changes; a guess could type a code into the wrong
 /// prompt). Seeded from `claude --version` on the build machine (2026-11-05).
-pub const PINNED: &[&str] = &["2.1.318"];
+pub const PINNED: &[&str] = &[ainkrad_harness::claude::VERSION];
 
 /// The sign-in's whole life (the Core's login expires at the same time).
 pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);

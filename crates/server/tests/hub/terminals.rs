@@ -438,6 +438,13 @@ async fn signals_do_not_leak_streams_and_signal_and_close_are_gated() {
             "{m} without step-up: {s} {b}"
         );
     }
+    // N21: INT, TSTP and CONT pass the step-up check (the cold device then meets the ownership 404).
+    for sg in ["INT", "TSTP", "CONT"] {
+        let (s, b) = fx
+            .call(&cold, "POST", &sig, Some(json!({"signal": sg})))
+            .await;
+        assert_eq!(s, 404, "{sg} without step-up: {s} {b}");
+    }
     assert_eq!(
         fx.status(o, &id).await,
         "running",

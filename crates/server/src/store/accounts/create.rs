@@ -8,6 +8,7 @@ use super::{
     Account, DEFAULT_CAP, NewAccount, audit, check_cap, find, refused, tail_of, valid_label,
 };
 use crate::ops::secretbox::SecretBox;
+use crate::store::placement::Placement;
 use crate::store::secrets::{self, Error, NewValue};
 
 /// Stores an account and its key together. `owner` is the storing device; `actor` is audited.
@@ -33,6 +34,49 @@ pub async fn create_by(
     actor: AuditActor,
     now: &str,
 ) -> Result<Account, Error> {
+    create_inner(pool, sealer, new, method, owner, actor, now, None)
+        .await
+        .map(|(a, _)| a)
+}
+
+/// [`create_by`], and in the same transaction the account goes into its pool and the pool into a
+/// chain (`placement`). Returns the account, its pool and the chain that took the pool.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_placed(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    new: &NewAccount<'_>,
+    method: &str,
+    owner: &str,
+    actor: AuditActor,
+    now: &str,
+    placement: &Placement,
+) -> Result<(Account, (i64, Option<i64>)), Error> {
+    let (a, placed) = create_inner(
+        pool,
+        sealer,
+        new,
+        method,
+        owner,
+        actor,
+        now,
+        Some(placement),
+    )
+    .await?;
+    Ok((a, placed.expect("a placement was asked for")))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_inner(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    new: &NewAccount<'_>,
+    method: &str,
+    owner: &str,
+    actor: AuditActor,
+    now: &str,
+    placement: Option<&Placement>,
+) -> Result<(Account, Option<(i64, Option<i64>)>), Error> {
     if !valid_label(new.label) {
         return refused("bad_request", "a label is [a-z][a-z0-9._-]{0,63}");
     }
@@ -102,6 +146,10 @@ pub async fn create_by(
     )
     .await?;
     let a = find(&mut tx, id).await?;
+    let placed = match placement {
+        Some(p) => Some(crate::store::placement::place(&mut tx, &a, p, owner, actor, now).await?),
+        None => None,
+    };
     tx.commit().await?;
-    Ok(a)
+    Ok((a, placed))
 }

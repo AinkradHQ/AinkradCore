@@ -470,3 +470,24 @@ fn a_run_without_token_caps_counts_every_token_against_its_token_cap() {
     };
     assert_eq!(split.caps(DEFAULT_TOKEN_CAP), split.token_caps.unwrap());
 }
+
+/// N34: an agent session's runs (start, wake, resume) share one work folder; other jobs keep
+/// `run-<id>`.
+#[test]
+fn an_agent_sessions_runs_share_one_work_folder() {
+    let ex = HarnessExecutor::new(PathBuf::from("/work"), PathBuf::from("/config"));
+    let mut a = job("claude");
+    (a.context_ref, a.run, a.agent, a.issue) = ("as_abc".to_owned(), 1, 0, None);
+    let mut b = a.clone();
+    b.run = 2;
+    assert_eq!(ex.cwd(&a), PathBuf::from("/work/session-as_abc"));
+    assert_eq!(ex.cwd(&a), ex.cwd(&b));
+    let mut other = a.clone();
+    other.context_ref = String::new();
+    assert_eq!(ex.cwd(&other), PathBuf::from("/work/run-1"));
+    other.context_ref = "../x".to_owned();
+    assert_eq!(ex.cwd(&other), PathBuf::from("/work/run-1"));
+    other.context_ref = "as_abc".to_owned();
+    other.agent = 3;
+    assert_eq!(ex.cwd(&other), PathBuf::from("/work/run-1"));
+}

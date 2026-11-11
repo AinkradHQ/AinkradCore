@@ -146,7 +146,7 @@
 /// 49: the Core machine (host-helper slice 1): `getHostStatus`, `restartHostService`, `getCoreLogs`,
 ///    `getHelperLogs`, `getRunnerLogs` and `getBackupLogs` (`GET/POST /api/v1/system/...`, all `admin`; the
 ///    restart and the runner and backup logs destructive); the `host.*` audit actions; the query name `lines`.
-pub const API_MINOR: u32 = 49;
+pub const API_MINOR: u32 = 50;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

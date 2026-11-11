@@ -29,7 +29,7 @@ use super::secrets::{self, Error, NewValue};
 use crate::ops::secretbox::SecretBox;
 
 mod create;
-pub use create::{create, create_by};
+pub use create::{create, create_by, create_placed};
 
 /// The cap a new API-key account starts with.
 pub const DEFAULT_CAP: i64 = 4;

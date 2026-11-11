@@ -276,6 +276,7 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/terminals"),
     ("GET", "/api/v1/terminals/{id}/ws"),
     // Signalling or closing one acts on a live shell, so it needs the same step-up.
+    // The gate lets INT, TSTP and CONT through without one (Ctrl-C, Ctrl-Z, fg: `gate::plain_signal`).
     ("POST", "/api/v1/terminals/{id}/signal"),
     ("DELETE", "/api/v1/terminals/{id}"),
     // Agent sessions (E2-08): starting one, telling it what to do and resuming it run code on

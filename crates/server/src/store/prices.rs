@@ -1,6 +1,7 @@
 //! Prices (KAN-449; design `2026-11-02-ai-provider-accounts` §7, §12 decision 2): what a million tokens
 //! of a provider's model cost, in millionths of a dollar, and when the price was read. There is no
-//! built-in rate card: a price nobody set is unknown, and a cost event that needs it is `unpriced`.
+//! built-in rate card but the release's list prices of the known models ([`SHIPPED`], N35 K1): a
+//! price nobody set (and no shipped one) is unknown, and a cost event that needs it is `unpriced`.
 //!
 //! A price is versioned, never edited: a new price is a new row and an event keeps the rates that
 //! priced it (`core_cost_events.rate_*`), so a later price never re-prices history. The newest row of
@@ -18,6 +19,28 @@ use super::secrets::Error;
 
 /// A price above this many micro-dollars per million tokens is a typo, not a price.
 pub const MAX_PRICE: i64 = 1_000_000_000;
+
+/// The provider list prices this release ships, as `(provider, model, input, output, cache read)`
+/// in micro-dollars per million tokens. A price someone set (`set`) always wins over these. Read
+/// 2026-11-11; OpenAI and Gemini have none until a list is recorded.
+pub const SHIPPED: &[(&str, &str, i64, i64, i64)] = &[
+    (
+        "anthropic",
+        "claude-opus-5-5",
+        4_000_000,
+        20_000_000,
+        200_000,
+    ),
+    (
+        "anthropic",
+        "claude-sonnet-5-5",
+        2_000_000,
+        10_000_000,
+        100_000,
+    ),
+    ("anthropic", "claude-haiku-5-5", 100_000, 500_000, 10_000),
+];
+const SHIPPED_AT: &str = "2026-11-11T00:00:00Z";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Price {
@@ -192,8 +215,32 @@ pub async fn set(
     Ok(p)
 }
 
-/// The newest price of every provider and model, by provider then model.
+/// The newest price of every provider and model, by provider then model: the set ones, then the
+/// shipped ones no one has set (version 0).
 pub async fn list(pool: &SqlitePool) -> Result<Vec<Price>, sqlx::Error> {
+    let mut all = booked(pool).await?;
+    for &(provider, model, i, o, c) in SHIPPED {
+        if !all
+            .iter()
+            .any(|p| p.provider == provider && p.model == model)
+        {
+            all.push(Price {
+                provider: provider.to_owned(),
+                model: model.to_owned(),
+                version: 0,
+                input_per_mtok_micro: i,
+                output_per_mtok_micro: o,
+                cache_per_mtok_micro: c,
+                priced_at: SHIPPED_AT.to_owned(),
+                created_at: String::new(),
+            });
+        }
+    }
+    all.sort_by(|a, b| (&a.provider, &a.model).cmp(&(&b.provider, &b.model)));
+    Ok(all)
+}
+
+async fn booked(pool: &SqlitePool) -> Result<Vec<Price>, sqlx::Error> {
     let sql = format!(
         "SELECT {COLUMNS} FROM core_prices p WHERE version = (SELECT max(version) FROM core_prices q \
          WHERE q.provider = p.provider AND q.model = p.model) ORDER BY provider, model"
@@ -226,6 +273,17 @@ pub async fn rates_in(
             output: r.try_get("output_per_mtok_micro")?,
             cache: r.try_get("cache_per_mtok_micro")?,
             priced_at: r.try_get("priced_at")?,
+        }));
+    }
+    if let Some(&(_, _, input, output, cache)) = SHIPPED
+        .iter()
+        .find(|(p, m, ..)| *p == provider && *m == model)
+    {
+        return Ok(Some(Rates {
+            input,
+            output,
+            cache,
+            priced_at: SHIPPED_AT.to_owned(),
         }));
     }
     // A user definition's own list, read as of its newest version; a built-in has none.

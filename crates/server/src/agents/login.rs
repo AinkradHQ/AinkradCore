@@ -383,7 +383,10 @@ async fn store(app: &App, l: &Login, token: Zeroizing<String>) {
         runners: &runners,
         cap: None,
     };
-    let made = accounts::create_by(
+    let user = crate::store::chains::user_of(&app.pool, &l.device)
+        .await
+        .unwrap_or(1);
+    let made = accounts::create_placed(
         &app.pool,
         sealer,
         &new,
@@ -391,8 +394,13 @@ async fn store(app: &App, l: &Login, token: Zeroizing<String>) {
         &l.device,
         BY,
         &app.clock.now(),
+        &crate::store::placement::Placement {
+            user,
+            ..Default::default()
+        },
     )
-    .await;
+    .await
+    .map(|(a, _)| a);
     drop(token);
     match made {
         Ok(a) => {

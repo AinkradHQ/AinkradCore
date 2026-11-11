@@ -27,6 +27,10 @@ import kotlinx.serialization.Contextual
  * @param provider 
  * @param `value` The API key; written, never read back.
  * @param cap Default 4; 0 is no cap.
+ * @param chain An existing chain to put the pool in; default: the user's default chain (made if missing).
+ * @param monthlyLimitUsdMicros The monthly dollar limit in micro-dollars; default 20000000 ($20); 0 is no limit.
+ * @param pool An existing pool of the provider to join; default: the provider's default pool (made if missing).
+ * @param position 0-based seat of the pool in the chain; default: last.
  * @param runners Runner device ids it may be leased to; default none.
  */
 @Serializable
@@ -46,6 +50,22 @@ data class NewProviderAccount (
     /* Default 4; 0 is no cap. */
     @SerialName(value = "cap")
     val cap: kotlin.Long? = null,
+
+    /* An existing chain to put the pool in; default: the user's default chain (made if missing). */
+    @SerialName(value = "chain")
+    val chain: kotlin.Long? = null,
+
+    /* The monthly dollar limit in micro-dollars; default 20000000 ($20); 0 is no limit. */
+    @SerialName(value = "monthly_limit_usd_micros")
+    val monthlyLimitUsdMicros: kotlin.Long? = null,
+
+    /* An existing pool of the provider to join; default: the provider's default pool (made if missing). */
+    @SerialName(value = "pool")
+    val pool: kotlin.Long? = null,
+
+    /* 0-based seat of the pool in the chain; default: last. */
+    @SerialName(value = "position")
+    val position: kotlin.Int? = null,
 
     /* Runner device ids it may be leased to; default none. */
     @SerialName(value = "runners")

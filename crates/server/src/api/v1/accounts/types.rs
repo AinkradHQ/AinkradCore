@@ -152,6 +152,12 @@ pub struct AccountDetail {
     pub account: ProviderAccount,
     /// Runner device ids, explicit (never a wildcard).
     pub runners: Vec<String>,
+    /// The pool the account joined (set by `createAccount`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool: Option<i64>,
+    /// The chain that holds the pool (set by `createAccount`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chain: Option<i64>,
 }
 
 impl From<acc::Account> for AccountDetail {
@@ -160,6 +166,8 @@ impl From<acc::Account> for AccountDetail {
         Self {
             account: a.into(),
             runners,
+            pool: None,
+            chain: None,
         }
     }
 }
@@ -176,6 +184,14 @@ pub struct NewProviderAccount {
     pub runners: Option<Vec<String>>,
     /// Default 4; 0 is no cap.
     pub cap: Option<i64>,
+    /// An existing pool of the provider to join; default: the provider's default pool (made if missing).
+    pub pool: Option<i64>,
+    /// An existing chain to put the pool in; default: the user's default chain (made if missing).
+    pub chain: Option<i64>,
+    /// 0-based seat of the pool in the chain; default: last.
+    pub position: Option<u32>,
+    /// The monthly dollar limit in micro-dollars; default 20000000 ($20); 0 is no limit.
+    pub monthly_limit_usd_micros: Option<i64>,
 }
 
 /// A replacement key, and optionally a new runner scope. No `Debug`.

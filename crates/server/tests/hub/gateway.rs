@@ -252,13 +252,15 @@ pub(super) async fn started(w: &mut W, ceiling_tokens: u64) {
     assert_eq!(g.upstream.base_path, "");
     assert_eq!(g.upstream.wire, Wire::AnthropicMessages);
     assert_eq!(g.upstream.auth, GatewayAuth::XApiKey);
-    assert_eq!(g.models, ["claude-x"]);
+    // The set price, beside the release's shipped list prices (N35 K1).
+    assert!(g.models.iter().any(|m| m == "claude-x"));
+    let x = g
+        .prices
+        .iter()
+        .find(|p| p.model == "claude-x")
+        .expect("price");
     assert_eq!(
-        (
-            g.prices[0].input,
-            g.prices[0].output,
-            g.prices[0].cache_read
-        ),
+        (x.input, x.output, x.cache_read),
         (3_000_000, 15_000_000, 300_000)
     );
     assert_eq!(g.ceiling.tokens, ceiling_tokens);

@@ -1711,6 +1711,16 @@ export interface components {
         /** @description What an `admin` write answers: the account and the runners its key may be leased to. */
         AccountDetail: {
             account: components["schemas"]["ProviderAccount"];
+            /**
+             * Format: int64
+             * @description The chain that holds the pool (set by `createAccount`).
+             */
+            chain?: number | null;
+            /**
+             * Format: int64
+             * @description The pool the account joined (set by `createAccount`).
+             */
+            pool?: number | null;
             /** @description Runner device ids, explicit (never a wildcard). */
             runners: string[];
         };
@@ -2880,7 +2890,27 @@ export interface components {
              * @description Default 4; 0 is no cap.
              */
             cap?: number | null;
+            /**
+             * Format: int64
+             * @description An existing chain to put the pool in; default: the user's default chain (made if missing).
+             */
+            chain?: number | null;
             label: string;
+            /**
+             * Format: int64
+             * @description The monthly dollar limit in micro-dollars; default 20000000 ($20); 0 is no limit.
+             */
+            monthly_limit_usd_micros?: number | null;
+            /**
+             * Format: int64
+             * @description An existing pool of the provider to join; default: the provider's default pool (made if missing).
+             */
+            pool?: number | null;
+            /**
+             * Format: int32
+             * @description 0-based seat of the pool in the chain; default: last.
+             */
+            position?: number | null;
             provider: string;
             /** @description Runner device ids it may be leased to; default none. */
             runners?: string[] | null;
@@ -4390,7 +4420,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Started on the runner (`running`), or `starting` while the runner is away (audited as `agent.created`). 409 `runner_offline` or `unsupported_command` (no agent driver), 503 `runner_busy` (its capacity or the harness's slot is full), the secrets broker's refusals (`secrets_disabled`, `limit_reached`, 400 when the runner is not in a secret's scope). With `chain` or `agent` (admin only, else 403): the session starts with no account and the allocator picks one from the chain (`waiting` while every account cools); 404 for no such chain, 400 for a harness, a model or an `acct.*` secret beside a chain. A chain create passes a plain create's checks for the harness of every entry, and the runner must be online with room for at least one entry (else its refusal, 409 or 503), all before any row; an entry the runner cannot serve is skipped at the pick */
+            /** @description Started on the runner (`running`), or `starting` while the runner is away (audited as `agent.created`). 409 `runner_offline` or `unsupported_command` (no agent driver), 503 `runner_busy` (its capacity or the harness's slot is full), the secrets broker's refusals (`secrets_disabled`, `limit_reached`, 400 when the runner is not in a secret's scope). With `chain` or `agent` (admin only, else 403): the session starts with no account and the allocator picks one from the chain (`waiting` while every account cools); 404 for no such chain, 400 for a harness, a model or an `acct.*` secret beside a chain. 409 `no_account` for a plain create of claude, codex or agy that names no `acct.*` secret and no credential variable of its own (it would answer "Not logged in"). A chain create passes a plain create's checks for the harness of every entry, and the runner must be online with room for at least one entry (else its refusal, 409 or 503), all before any row; an entry the runner cannot serve is skipped at the pick */
             200: {
                 headers: {
                     [name: string]: unknown;
