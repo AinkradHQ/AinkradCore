@@ -28,6 +28,9 @@ import kotlinx.serialization.Contextual
  * @param name 
  * @param `value` 
  * @param version 
+ * @param fileMode 
+ * @param fileName 
+ * @param kind `text`, `multiline`, `file` (the value is base64: decode it, write it as `file_name` with `file_mode`) or `env_bundle` (the value is `NAME=value` lines).
  */
 @Serializable
 
@@ -47,7 +50,17 @@ data class LeasedSecret (
     val `value`: kotlin.String,
 
     @SerialName(value = "version")
-    val version: kotlin.Long
+    val version: kotlin.Long,
+
+    @SerialName(value = "file_mode")
+    val fileMode: kotlin.String? = null,
+
+    @SerialName(value = "file_name")
+    val fileName: kotlin.String? = null,
+
+    /* `text`, `multiline`, `file` (the value is base64: decode it, write it as `file_name` with `file_mode`) or `env_bundle` (the value is `NAME=value` lines). */
+    @SerialName(value = "kind")
+    val kind: kotlin.String? = null
 
 ) {
 

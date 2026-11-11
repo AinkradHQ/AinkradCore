@@ -6,6 +6,44 @@ public import struct Foundation.Date
 extension Components {
     /// Types generated from the `#/components/schemas` section of the OpenAPI document.
     public enum Schemas {
+        /// What `POST /accounts/{id}/check` answers.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AccountChecked`.
+        public struct AccountChecked: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AccountChecked/latency_ms`.
+            public var latencyMs: Swift.Int64?
+            /// `ok`, or why not. A Claude plan: `token_expired`, `limit_reached`, `no_runner` (none that
+            /// may hold the token is online), `runner_outdated`, `runner_busy`, `runner_failed`,
+            /// `egress_not_proven`, `sandbox_unavailable`, `unreachable`, `timeout` or `failed`. An
+            /// API-key account: the key test's class (`ok`, `auth_failed`, ...) or `no_runner`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountChecked/result`.
+            public var result: Swift.String
+            /// The runner device that made the check; absent when none was asked.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountChecked/runner`.
+            public var runner: Swift.String?
+            /// Creates a new `AccountChecked`.
+            ///
+            /// - Parameters:
+            ///   - latencyMs:
+            ///   - result: `ok`, or why not. A Claude plan: `token_expired`, `limit_reached`, `no_runner` (none that
+            ///   - runner: The runner device that made the check; absent when none was asked.
+            public init(
+                latencyMs: Swift.Int64? = nil,
+                result: Swift.String,
+                runner: Swift.String? = nil
+            ) {
+                self.latencyMs = latencyMs
+                self.result = result
+                self.runner = runner
+            }
+            public enum CodingKeys: String, CodingKey {
+                case latencyMs = "latency_ms"
+                case result
+                case runner
+            }
+        }
         /// What an `admin` write answers: the account and the runners its key may be leased to.
         ///
         /// - Remark: Generated from `#/components/schemas/AccountDetail`.
@@ -1332,6 +1370,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ClaimBody/code`.
             public var code: Swift.String?
+            /// What to call this device: 1 to 64 characters of plain text, no control characters. It
+            /// becomes the device's name in place of the pairing's (an invite's is `owner`).
+            ///
+            /// - Remark: Generated from `#/components/schemas/ClaimBody/device_name`.
+            public var deviceName: Swift.String?
             /// `secure_enclave`, `strongbox`, `tee`, `tpm` or `software`: a claim.
             ///
             /// - Remark: Generated from `#/components/schemas/ClaimBody/key_storage`.
@@ -1365,6 +1408,7 @@ extension Components {
             ///
             /// - Parameters:
             ///   - code: The typed code (`ABCDE-FGHJK`, any case); or `secret`.
+            ///   - deviceName: What to call this device: 1 to 64 characters of plain text, no control characters. It
             ///   - keyStorage: `secure_enclave`, `strongbox`, `tee`, `tpm` or `software`: a claim.
             ///   - platform:
             ///   - pop: The routine key's ES256 signature (raw r||s, base64url) over the UTF-8 string
@@ -1374,6 +1418,7 @@ extension Components {
             ///   - stepupSpki: The step-up key, where the device has one.
             public init(
                 code: Swift.String? = nil,
+                deviceName: Swift.String? = nil,
                 keyStorage: Swift.String? = nil,
                 platform: Swift.String? = nil,
                 pop: Swift.String,
@@ -1383,6 +1428,7 @@ extension Components {
                 stepupSpki: Swift.String? = nil
             ) {
                 self.code = code
+                self.deviceName = deviceName
                 self.keyStorage = keyStorage
                 self.platform = platform
                 self.pop = pop
@@ -1393,6 +1439,7 @@ extension Components {
             }
             public enum CodingKeys: String, CodingKey {
                 case code
+                case deviceName = "device_name"
                 case keyStorage = "key_storage"
                 case platform
                 case pop
@@ -1406,6 +1453,10 @@ extension Components {
                 self.code = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .code
+                )
+                self.deviceName = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .deviceName
                 )
                 self.keyStorage = try container.decodeIfPresent(
                     Swift.String.self,
@@ -1437,6 +1488,7 @@ extension Components {
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "code",
+                    "device_name",
                     "key_storage",
                     "platform",
                     "pop",
@@ -2694,6 +2746,56 @@ extension Components {
                 case userId = "user_id"
             }
         }
+        /// One lease of a group's grant: hand `lease` to the runner. No `Debug`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/GroupLease`.
+        public struct GroupLease: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/GroupLease/expires_at`.
+            public var expiresAt: Components.Schemas.Timestamp
+            /// - Remark: Generated from `#/components/schemas/GroupLease/lease`.
+            public var lease: Swift.String
+            /// The member's name.
+            ///
+            /// - Remark: Generated from `#/components/schemas/GroupLease/secret`.
+            public var secret: Swift.String
+            /// Creates a new `GroupLease`.
+            ///
+            /// - Parameters:
+            ///   - expiresAt:
+            ///   - lease:
+            ///   - secret: The member's name.
+            public init(
+                expiresAt: Components.Schemas.Timestamp,
+                lease: Swift.String,
+                secret: Swift.String
+            ) {
+                self.expiresAt = expiresAt
+                self.lease = lease
+                self.secret = secret
+            }
+            public enum CodingKeys: String, CodingKey {
+                case expiresAt = "expires_at"
+                case lease
+                case secret
+            }
+        }
+        /// The leases a group lent, one per member the runner may have. No `Debug`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/GroupLeaseGrant`.
+        public struct GroupLeaseGrant: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/GroupLeaseGrant/leases`.
+            public var leases: [Components.Schemas.GroupLease]
+            /// Creates a new `GroupLeaseGrant`.
+            ///
+            /// - Parameters:
+            ///   - leases:
+            public init(leases: [Components.Schemas.GroupLease]) {
+                self.leases = leases
+            }
+            public enum CodingKeys: String, CodingKey {
+                case leases
+            }
+        }
         /// What the server is and speaks, for anyone.
         ///
         /// - Remark: Generated from `#/components/schemas/Handshake`.
@@ -3355,6 +3457,15 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/LeasedSecret/expires_at`.
             public var expiresAt: Components.Schemas.Timestamp
+            /// - Remark: Generated from `#/components/schemas/LeasedSecret/file_mode`.
+            public var fileMode: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/LeasedSecret/file_name`.
+            public var fileName: Swift.String?
+            /// `text`, `multiline`, `file` (the value is base64: decode it, write it as `file_name`
+            /// with `file_mode`) or `env_bundle` (the value is `NAME=value` lines).
+            ///
+            /// - Remark: Generated from `#/components/schemas/LeasedSecret/kind`.
+            public var kind: Swift.String?
             /// - Remark: Generated from `#/components/schemas/LeasedSecret/name`.
             public var name: Swift.String
             /// - Remark: Generated from `#/components/schemas/LeasedSecret/value`.
@@ -3366,18 +3477,27 @@ extension Components {
             /// - Parameters:
             ///   - delivery:
             ///   - expiresAt: Drop it by then, or at the session's end.
+            ///   - fileMode:
+            ///   - fileName:
+            ///   - kind: `text`, `multiline`, `file` (the value is base64: decode it, write it as `file_name`
             ///   - name:
             ///   - value:
             ///   - version:
             public init(
                 delivery: Swift.String,
                 expiresAt: Components.Schemas.Timestamp,
+                fileMode: Swift.String? = nil,
+                fileName: Swift.String? = nil,
+                kind: Swift.String? = nil,
                 name: Swift.String,
                 value: Swift.String,
                 version: Swift.Int64
             ) {
                 self.delivery = delivery
                 self.expiresAt = expiresAt
+                self.fileMode = fileMode
+                self.fileName = fileName
+                self.kind = kind
                 self.name = name
                 self.value = value
                 self.version = version
@@ -3385,6 +3505,9 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case delivery
                 case expiresAt = "expires_at"
+                case fileMode = "file_mode"
+                case fileName = "file_name"
+                case kind
                 case name
                 case value
                 case version
@@ -3995,6 +4118,33 @@ extension Components {
                 case token
             }
         }
+        /// - Remark: Generated from `#/components/schemas/NewGroupLease`.
+        public struct NewGroupLease: Codable, Hashable, Sendable {
+            /// The runner's device id, `d_…`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewGroupLease/runner`.
+            public var runner: Swift.String
+            /// Each lease's lifetime; default and most `secrets.lease_secs`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewGroupLease/ttl_secs`.
+            public var ttlSecs: Swift.Int64?
+            /// Creates a new `NewGroupLease`.
+            ///
+            /// - Parameters:
+            ///   - runner: The runner's device id, `d_…`.
+            ///   - ttlSecs: Each lease's lifetime; default and most `secrets.lease_secs`.
+            public init(
+                runner: Swift.String,
+                ttlSecs: Swift.Int64? = nil
+            ) {
+                self.runner = runner
+                self.ttlSecs = ttlSecs
+            }
+            public enum CodingKeys: String, CodingKey {
+                case runner
+                case ttlSecs = "ttl_secs"
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/NewInviteBody`.
         public struct NewInviteBody: Codable, Hashable, Sendable {
             /// `device` (the default) or `runner`: a runner invite is single use, lasts 15 minutes, is
@@ -4307,13 +4457,34 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/NewSecret/delivery`.
             public var delivery: Swift.String?
+            /// One line, at most 200 characters.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewSecret/description`.
+            public var description: Swift.String?
+            /// Kind `file`: an octal mode the owner can read, `0400` to `0777`; default `0600`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewSecret/file_mode`.
+            public var fileMode: Swift.String?
+            /// Required for kind `file`: `[A-Za-z0-9._-]{1,64}`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewSecret/file_name`.
+            public var fileName: Swift.String?
+            /// The name of a group made with `createSecretGroup`; one level.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewSecret/group`.
+            public var group: Swift.String?
+            /// `text` (the default), `multiline`, `file` or `env_bundle` (`NAME=value` lines).
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewSecret/kind`.
+            public var kind: Swift.String?
             /// - Remark: Generated from `#/components/schemas/NewSecret/name`.
             public var name: Swift.String
-            /// Runner device ids it may be leased to; default none.
+            /// Runner device ids it may be leased to; default none (a group's runners then apply).
             ///
             /// - Remark: Generated from `#/components/schemas/NewSecret/runners`.
             public var runners: [Swift.String]?
-            /// UTF-8 text, at most `secrets.max_bytes`; written, never read back.
+            /// UTF-8 text, at most `secrets.max_bytes`; for kind `file` the file's bytes in standard
+            /// base64 (at most 1 MiB decoded); written, never read back.
             ///
             /// - Remark: Generated from `#/components/schemas/NewSecret/value`.
             public var value: Swift.String
@@ -4321,25 +4492,78 @@ extension Components {
             ///
             /// - Parameters:
             ///   - delivery: `env` (the default), `file` or `askpass`.
+            ///   - description: One line, at most 200 characters.
+            ///   - fileMode: Kind `file`: an octal mode the owner can read, `0400` to `0777`; default `0600`.
+            ///   - fileName: Required for kind `file`: `[A-Za-z0-9._-]{1,64}`.
+            ///   - group: The name of a group made with `createSecretGroup`; one level.
+            ///   - kind: `text` (the default), `multiline`, `file` or `env_bundle` (`NAME=value` lines).
             ///   - name:
-            ///   - runners: Runner device ids it may be leased to; default none.
-            ///   - value: UTF-8 text, at most `secrets.max_bytes`; written, never read back.
+            ///   - runners: Runner device ids it may be leased to; default none (a group's runners then apply).
+            ///   - value: UTF-8 text, at most `secrets.max_bytes`; for kind `file` the file's bytes in standard
             public init(
                 delivery: Swift.String? = nil,
+                description: Swift.String? = nil,
+                fileMode: Swift.String? = nil,
+                fileName: Swift.String? = nil,
+                group: Swift.String? = nil,
+                kind: Swift.String? = nil,
                 name: Swift.String,
                 runners: [Swift.String]? = nil,
                 value: Swift.String
             ) {
                 self.delivery = delivery
+                self.description = description
+                self.fileMode = fileMode
+                self.fileName = fileName
+                self.group = group
+                self.kind = kind
                 self.name = name
                 self.runners = runners
                 self.value = value
             }
             public enum CodingKeys: String, CodingKey {
                 case delivery
+                case description
+                case fileMode = "file_mode"
+                case fileName = "file_name"
+                case group
+                case kind
                 case name
                 case runners
                 case value
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/NewSecretGroup`.
+        public struct NewSecretGroup: Codable, Hashable, Sendable {
+            /// One line, at most 200 characters; default empty.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewSecretGroup/description`.
+            public var description: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/NewSecretGroup/name`.
+            public var name: Swift.String
+            /// Active runner device ids; default none.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewSecretGroup/runners`.
+            public var runners: [Swift.String]?
+            /// Creates a new `NewSecretGroup`.
+            ///
+            /// - Parameters:
+            ///   - description: One line, at most 200 characters; default empty.
+            ///   - name:
+            ///   - runners: Active runner device ids; default none.
+            public init(
+                description: Swift.String? = nil,
+                name: Swift.String,
+                runners: [Swift.String]? = nil
+            ) {
+                self.description = description
+                self.name = name
+                self.runners = runners
+            }
+            public enum CodingKeys: String, CodingKey {
+                case description
+                case name
+                case runners
             }
         }
         /// - Remark: Generated from `#/components/schemas/NewTerminal`.
@@ -5420,6 +5644,20 @@ extension Components {
         public struct RotateSecret: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/RotateSecret/delivery`.
             public var delivery: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RotateSecret/description`.
+            public var description: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RotateSecret/file_mode`.
+            public var fileMode: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RotateSecret/file_name`.
+            public var fileName: Swift.String?
+            /// An empty string leaves the group.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RotateSecret/group`.
+            public var group: Swift.String?
+            /// Omitted keeps the kind; the other fields are those of `createSecret`, omitted keeps them.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RotateSecret/kind`.
+            public var kind: Swift.String?
             /// - Remark: Generated from `#/components/schemas/RotateSecret/runners`.
             public var runners: [Swift.String]?
             /// - Remark: Generated from `#/components/schemas/RotateSecret/value`.
@@ -5428,19 +5666,39 @@ extension Components {
             ///
             /// - Parameters:
             ///   - delivery:
+            ///   - description:
+            ///   - fileMode:
+            ///   - fileName:
+            ///   - group: An empty string leaves the group.
+            ///   - kind: Omitted keeps the kind; the other fields are those of `createSecret`, omitted keeps them.
             ///   - runners:
             ///   - value:
             public init(
                 delivery: Swift.String? = nil,
+                description: Swift.String? = nil,
+                fileMode: Swift.String? = nil,
+                fileName: Swift.String? = nil,
+                group: Swift.String? = nil,
+                kind: Swift.String? = nil,
                 runners: [Swift.String]? = nil,
                 value: Swift.String
             ) {
                 self.delivery = delivery
+                self.description = description
+                self.fileMode = fileMode
+                self.fileName = fileName
+                self.group = group
+                self.kind = kind
                 self.runners = runners
                 self.value = value
             }
             public enum CodingKeys: String, CodingKey {
                 case delivery
+                case description
+                case fileMode = "file_mode"
+                case fileName = "file_name"
+                case group
+                case kind
                 case runners
                 case value
             }
@@ -5998,6 +6256,78 @@ extension Components {
                 case deleted
             }
         }
+        /// - Remark: Generated from `#/components/schemas/SecretGroupDeleted`.
+        public struct SecretGroupDeleted: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SecretGroupDeleted/deleted`.
+            public var deleted: Swift.Bool
+            /// Creates a new `SecretGroupDeleted`.
+            ///
+            /// - Parameters:
+            ///   - deleted:
+            public init(deleted: Swift.Bool) {
+                self.deleted = deleted
+            }
+            public enum CodingKeys: String, CodingKey {
+                case deleted
+            }
+        }
+        /// A group, never a value.
+        ///
+        /// - Remark: Generated from `#/components/schemas/SecretGroupInfo`.
+        public struct SecretGroupInfo: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SecretGroupInfo/created_at`.
+            public var createdAt: Components.Schemas.Timestamp
+            /// One line: what the group is for.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretGroupInfo/description`.
+            public var description: Swift.String
+            /// The names of its secrets.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretGroupInfo/members`.
+            public var members: [Swift.String]
+            /// `[a-z][a-z0-9_.-]{0,63}`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretGroupInfo/name`.
+            public var name: Swift.String
+            /// The runner devices its members may be leased to unless they list their own.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretGroupInfo/runners`.
+            public var runners: [Swift.String]
+            /// - Remark: Generated from `#/components/schemas/SecretGroupInfo/updated_at`.
+            public var updatedAt: Components.Schemas.Timestamp
+            /// Creates a new `SecretGroupInfo`.
+            ///
+            /// - Parameters:
+            ///   - createdAt:
+            ///   - description: One line: what the group is for.
+            ///   - members: The names of its secrets.
+            ///   - name: `[a-z][a-z0-9_.-]{0,63}`.
+            ///   - runners: The runner devices its members may be leased to unless they list their own.
+            ///   - updatedAt:
+            public init(
+                createdAt: Components.Schemas.Timestamp,
+                description: Swift.String,
+                members: [Swift.String],
+                name: Swift.String,
+                runners: [Swift.String],
+                updatedAt: Components.Schemas.Timestamp
+            ) {
+                self.createdAt = createdAt
+                self.description = description
+                self.members = members
+                self.name = name
+                self.runners = runners
+                self.updatedAt = updatedAt
+            }
+            public enum CodingKeys: String, CodingKey {
+                case createdAt = "created_at"
+                case description
+                case members
+                case name
+                case runners
+                case updatedAt = "updated_at"
+            }
+        }
         /// A secret, never its value.
         ///
         /// - Remark: Generated from `#/components/schemas/SecretInfo`.
@@ -6008,10 +6338,36 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/SecretInfo/delivery`.
             public var delivery: Swift.String
+            /// One line: what it is for.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretInfo/description`.
+            public var description: Swift.String?
+            /// The runners a lease may go to: its own, else its group's.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretInfo/effective_runners`.
+            public var effectiveRunners: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/SecretInfo/file_mode`.
+            public var fileMode: Swift.String?
+            /// A `file` secret's name on the runner, and its octal mode (`0600`).
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretInfo/file_name`.
+            public var fileName: Swift.String?
+            /// The group it belongs to (`/api/v1/secret-groups`); none for no group.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretInfo/group`.
+            public var group: Swift.String?
             /// The master key it is sealed under.
             ///
             /// - Remark: Generated from `#/components/schemas/SecretInfo/key_id`.
             public var keyId: Swift.String
+            /// `text`, `multiline`, `file` or `env_bundle`. `size` is a file's decoded length.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretInfo/kind`.
+            public var kind: Swift.String?
+            /// When a runner last redeemed it; none before the first redemption.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretInfo/last_used_at`.
+            public var lastUsedAt: Components.Schemas.Timestamp?
             /// `[a-z][a-z0-9_.-]{0,63}`.
             ///
             /// - Remark: Generated from `#/components/schemas/SecretInfo/name`.
@@ -6030,6 +6386,10 @@ extension Components {
             public var size: Swift.Int64
             /// - Remark: Generated from `#/components/schemas/SecretInfo/updated_at`.
             public var updatedAt: Components.Schemas.Timestamp
+            /// How many redemptions.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SecretInfo/use_count`.
+            public var useCount: Swift.Int64?
             /// 1 when stored, one more per rotation.
             ///
             /// - Remark: Generated from `#/components/schemas/SecretInfo/version`.
@@ -6039,43 +6399,75 @@ extension Components {
             /// - Parameters:
             ///   - createdAt:
             ///   - delivery: How a runner hands it to a session: `env`, `file` or `askpass`.
+            ///   - description: One line: what it is for.
+            ///   - effectiveRunners: The runners a lease may go to: its own, else its group's.
+            ///   - fileMode:
+            ///   - fileName: A `file` secret's name on the runner, and its octal mode (`0600`).
+            ///   - group: The group it belongs to (`/api/v1/secret-groups`); none for no group.
             ///   - keyId: The master key it is sealed under.
+            ///   - kind: `text`, `multiline`, `file` or `env_bundle`. `size` is a file's decoded length.
+            ///   - lastUsedAt: When a runner last redeemed it; none before the first redemption.
             ///   - name: `[a-z][a-z0-9_.-]{0,63}`.
             ///   - owner: The device that stored it, `d_…`.
             ///   - runners: The runner devices it may be leased to (its scope); empty: none.
             ///   - size: The value's length in bytes.
             ///   - updatedAt:
+            ///   - useCount: How many redemptions.
             ///   - version: 1 when stored, one more per rotation.
             public init(
                 createdAt: Components.Schemas.Timestamp,
                 delivery: Swift.String,
+                description: Swift.String? = nil,
+                effectiveRunners: [Swift.String]? = nil,
+                fileMode: Swift.String? = nil,
+                fileName: Swift.String? = nil,
+                group: Swift.String? = nil,
                 keyId: Swift.String,
+                kind: Swift.String? = nil,
+                lastUsedAt: Components.Schemas.Timestamp? = nil,
                 name: Swift.String,
                 owner: Swift.String,
                 runners: [Swift.String],
                 size: Swift.Int64,
                 updatedAt: Components.Schemas.Timestamp,
+                useCount: Swift.Int64? = nil,
                 version: Swift.Int64
             ) {
                 self.createdAt = createdAt
                 self.delivery = delivery
+                self.description = description
+                self.effectiveRunners = effectiveRunners
+                self.fileMode = fileMode
+                self.fileName = fileName
+                self.group = group
                 self.keyId = keyId
+                self.kind = kind
+                self.lastUsedAt = lastUsedAt
                 self.name = name
                 self.owner = owner
                 self.runners = runners
                 self.size = size
                 self.updatedAt = updatedAt
+                self.useCount = useCount
                 self.version = version
             }
             public enum CodingKeys: String, CodingKey {
                 case createdAt = "created_at"
                 case delivery
+                case description
+                case effectiveRunners = "effective_runners"
+                case fileMode = "file_mode"
+                case fileName = "file_name"
+                case group
                 case keyId = "key_id"
+                case kind
+                case lastUsedAt = "last_used_at"
                 case name
                 case owner
                 case runners
                 case size
                 case updatedAt = "updated_at"
+                case useCount = "use_count"
                 case version
             }
         }
@@ -7347,6 +7739,31 @@ extension Components {
                 case disabled
                 case label
                 case name
+            }
+        }
+        /// What changes; an omitted field is kept.
+        ///
+        /// - Remark: Generated from `#/components/schemas/UpdateSecretGroup`.
+        public struct UpdateSecretGroup: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UpdateSecretGroup/description`.
+            public var description: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/UpdateSecretGroup/runners`.
+            public var runners: [Swift.String]?
+            /// Creates a new `UpdateSecretGroup`.
+            ///
+            /// - Parameters:
+            ///   - description:
+            ///   - runners:
+            public init(
+                description: Swift.String? = nil,
+                runners: [Swift.String]? = nil
+            ) {
+                self.description = description
+                self.runners = runners
+            }
+            public enum CodingKeys: String, CodingKey {
+                case description
+                case runners
             }
         }
         /// - Remark: Generated from `#/components/schemas/UsageByCompany`.

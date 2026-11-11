@@ -40,6 +40,7 @@ src/Ainkrad.Client/Client/RequestOptions.cs
 src/Ainkrad.Client/Client/RetryConfiguration.cs
 src/Ainkrad.Client/Client/WebRequestPathBuilder.cs
 src/Ainkrad.Client/Model/AbstractOpenAPISchema.cs
+src/Ainkrad.Client/Model/AccountChecked.cs
 src/Ainkrad.Client/Model/AccountDetail.cs
 src/Ainkrad.Client/Model/AccountHealth.cs
 src/Ainkrad.Client/Model/AccountLogin.cs
@@ -94,6 +95,8 @@ src/Ainkrad.Client/Model/Event.cs
 src/Ainkrad.Client/Model/EventActor.cs
 src/Ainkrad.Client/Model/EventActorSystem.cs
 src/Ainkrad.Client/Model/EventActorUser.cs
+src/Ainkrad.Client/Model/GroupLease.cs
+src/Ainkrad.Client/Model/GroupLeaseGrant.cs
 src/Ainkrad.Client/Model/Handshake.cs
 src/Ainkrad.Client/Model/HandshakeBody.cs
 src/Ainkrad.Client/Model/HandshakeProof.cs
@@ -126,6 +129,7 @@ src/Ainkrad.Client/Model/NewChain.cs
 src/Ainkrad.Client/Model/NewChainEntry.cs
 src/Ainkrad.Client/Model/NewConnection.cs
 src/Ainkrad.Client/Model/NewConnectionCredential.cs
+src/Ainkrad.Client/Model/NewGroupLease.cs
 src/Ainkrad.Client/Model/NewInviteBody.cs
 src/Ainkrad.Client/Model/NewLease.cs
 src/Ainkrad.Client/Model/NewLogin.cs
@@ -133,6 +137,7 @@ src/Ainkrad.Client/Model/NewPairingBody.cs
 src/Ainkrad.Client/Model/NewPool.cs
 src/Ainkrad.Client/Model/NewProviderAccount.cs
 src/Ainkrad.Client/Model/NewSecret.cs
+src/Ainkrad.Client/Model/NewSecretGroup.cs
 src/Ainkrad.Client/Model/NewTerminal.cs
 src/Ainkrad.Client/Model/NoopResult.cs
 src/Ainkrad.Client/Model/PageEvent.cs
@@ -166,6 +171,8 @@ src/Ainkrad.Client/Model/RunnerPolicyBody.cs
 src/Ainkrad.Client/Model/RunnerRunsAs.cs
 src/Ainkrad.Client/Model/RunnerSlots.cs
 src/Ainkrad.Client/Model/SecretDeleted.cs
+src/Ainkrad.Client/Model/SecretGroupDeleted.cs
+src/Ainkrad.Client/Model/SecretGroupInfo.cs
 src/Ainkrad.Client/Model/SecretInfo.cs
 src/Ainkrad.Client/Model/SessionGrant.cs
 src/Ainkrad.Client/Model/SessionLimits.cs
@@ -193,6 +200,7 @@ src/Ainkrad.Client/Model/TerminalSize.cs
 src/Ainkrad.Client/Model/TerminalStatus.cs
 src/Ainkrad.Client/Model/ToolOperation.cs
 src/Ainkrad.Client/Model/UpdateConnection.cs
+src/Ainkrad.Client/Model/UpdateSecretGroup.cs
 src/Ainkrad.Client/Model/UsageByCompany.cs
 src/Ainkrad.Client/Model/UsageWindow.cs
 src/Ainkrad.Client/Model/Versions.cs

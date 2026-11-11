@@ -15,6 +15,7 @@
 
 package ainkrad.client.apis
 
+import ainkrad.client.models.AccountChecked
 import ainkrad.client.models.AccountDetail
 import ainkrad.client.models.AccountLogin
 import ainkrad.client.models.AccountTested
@@ -140,6 +141,40 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.DELETE,
             "/api/v1/accounts/logins/{id}".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/accounts/{id}/check
+        * 
+        * 
+         * @param id The account&#39;s id 
+         * @return AccountChecked
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun checkAccount(id: kotlin.String): HttpResponse<AccountChecked> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/accounts/{id}/check".replace("{" + "id" + "}", "$id"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

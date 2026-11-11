@@ -73,6 +73,34 @@
       }
     },
     "schemas": {
+      "AccountChecked": {
+        "description": "What `POST /accounts/{id}/check` answers.",
+        "properties": {
+          "latency_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "result": {
+            "description": "`ok`, or why not. A Claude plan: `token_expired`, `limit_reached`, `no_runner` (none that\nmay hold the token is online), `runner_outdated`, `runner_busy`, `runner_failed`,\n`egress_not_proven`, `sandbox_unavailable`, `unreachable`, `timeout` or `failed`. An\nAPI-key account: the key test's class (`ok`, `auth_failed`, ...) or `no_runner`.",
+            "type": "string"
+          },
+          "runner": {
+            "description": "The runner device that made the check; absent when none was asked.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object"
+      },
       "AccountDetail": {
         "description": "What an `admin` write answers: the account and the runners its key may be leased to.",
         "properties": {
@@ -944,6 +972,9 @@
           "secret.redeemed",
           "secret.rotated",
           "secret.used",
+          "secret_group.created",
+          "secret_group.deleted",
+          "secret_group.updated",
           "setting.reset",
           "setting.set",
           "terminal.attached",
@@ -1152,6 +1183,13 @@
         "properties": {
           "code": {
             "description": "The typed code (`ABCDE-FGHJK`, any case); or `secret`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "device_name": {
+            "description": "What to call this device: 1 to 64 characters of plain text, no control characters. It\nbecomes the device's name in place of the pairing's (an invite's is `owner`).",
             "type": [
               "string",
               "null"
@@ -2152,6 +2190,42 @@
         ],
         "type": "object"
       },
+      "GroupLease": {
+        "description": "One lease of a group's grant: hand `lease` to the runner. No `Debug`.",
+        "properties": {
+          "expires_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "lease": {
+            "type": "string"
+          },
+          "secret": {
+            "description": "The member's name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "secret",
+          "lease",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "GroupLeaseGrant": {
+        "description": "The leases a group lent, one per member the runner may have. No `Debug`.",
+        "properties": {
+          "leases": {
+            "items": {
+              "$ref": "#/components/schemas/GroupLease"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "leases"
+        ],
+        "type": "object"
+      },
       "Handshake": {
         "description": "What the server is and speaks, for anyone.",
         "properties": {
@@ -2627,6 +2701,25 @@
             "$ref": "#/components/schemas/Timestamp",
             "description": "Drop it by then, or at the session's end."
           },
+          "file_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "`text`, `multiline`, `file` (the value is base64: decode it, write it as `file_name`\nwith `file_mode`) or `env_bundle` (the value is `NAME=value` lines).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -3092,6 +3185,26 @@
         },
         "type": "object"
       },
+      "NewGroupLease": {
+        "properties": {
+          "runner": {
+            "description": "The runner's device id, `d_…`.",
+            "type": "string"
+          },
+          "ttl_secs": {
+            "description": "Each lease's lifetime; default and most `secrets.lease_secs`.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "runner"
+        ],
+        "type": "object"
+      },
       "NewInviteBody": {
         "additionalProperties": false,
         "properties": {
@@ -3290,11 +3403,46 @@
               "null"
             ]
           },
+          "description": {
+            "description": "One line, at most 200 characters.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file_mode": {
+            "description": "Kind `file`: an octal mode the owner can read, `0400` to `0777`; default `0600`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file_name": {
+            "description": "Required for kind `file`: `[A-Za-z0-9._-]{1,64}`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "group": {
+            "description": "The name of a group made with `createSecretGroup`; one level.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "`text` (the default), `multiline`, `file` or `env_bundle` (`NAME=value` lines).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "type": "string"
           },
           "runners": {
-            "description": "Runner device ids it may be leased to; default none.",
+            "description": "Runner device ids it may be leased to; default none (a group's runners then apply).",
             "items": {
               "type": "string"
             },
@@ -3304,13 +3452,41 @@
             ]
           },
           "value": {
-            "description": "UTF-8 text, at most `secrets.max_bytes`; written, never read back.",
+            "description": "UTF-8 text, at most `secrets.max_bytes`; for kind `file` the file's bytes in standard\nbase64 (at most 1 MiB decoded); written, never read back.",
             "type": "string"
           }
         },
         "required": [
           "name",
           "value"
+        ],
+        "type": "object"
+      },
+      "NewSecretGroup": {
+        "properties": {
+          "description": {
+            "description": "One line, at most 200 characters; default empty.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "runners": {
+            "description": "Active runner device ids; default none.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name"
         ],
         "type": "object"
       },
@@ -4058,6 +4234,38 @@
               "null"
             ]
           },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "group": {
+            "description": "An empty string leaves the group.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "Omitted keeps the kind; the other fields are those of `createSecret`, omitted keeps them.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "runners": {
             "items": {
               "type": "string"
@@ -4467,6 +4675,59 @@
         ],
         "type": "object"
       },
+      "SecretGroupDeleted": {
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "type": "object"
+      },
+      "SecretGroupInfo": {
+        "description": "A group, never a value.",
+        "properties": {
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "description": {
+            "description": "One line: what the group is for.",
+            "type": "string"
+          },
+          "members": {
+            "description": "The names of its secrets.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "description": "`[a-z][a-z0-9_.-]{0,63}`.",
+            "type": "string"
+          },
+          "runners": {
+            "description": "The runner devices its members may be leased to unless they list their own.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "runners",
+          "members",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "SecretInfo": {
         "description": "A secret, never its value.",
         "properties": {
@@ -4477,9 +4738,57 @@
             "description": "How a runner hands it to a session: `env`, `file` or `askpass`.",
             "type": "string"
           },
+          "description": {
+            "description": "One line: what it is for.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effective_runners": {
+            "description": "The runners a lease may go to: its own, else its group's.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "file_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file_name": {
+            "description": "A `file` secret's name on the runner, and its octal mode (`0600`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "group": {
+            "description": "The group it belongs to (`/api/v1/secret-groups`); none for no group.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "key_id": {
             "description": "The master key it is sealed under.",
             "type": "string"
+          },
+          "kind": {
+            "description": "`text`, `multiline`, `file` or `env_bundle`. `size` is a file's decoded length.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_used_at": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When a runner last redeemed it; none before the first redemption."
           },
           "name": {
             "description": "`[a-z][a-z0-9_.-]{0,63}`.",
@@ -4503,6 +4812,14 @@
           },
           "updated_at": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "use_count": {
+            "description": "How many redemptions.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "version": {
             "description": "1 when stored, one more per rotation.",
@@ -5367,6 +5684,27 @@
         },
         "type": "object"
       },
+      "UpdateSecretGroup": {
+        "description": "What changes; an omitted field is kept.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runners": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "UsageByCompany": {
         "properties": {
           "company": {
@@ -5562,7 +5900,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.53.0"
+    "version": "1.54.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -6305,6 +6643,59 @@
           "accounts"
         ],
         "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/accounts/{id}/check": {
+      "post": {
+        "operationId": "checkAccount",
+        "parameters": [
+          {
+            "description": "The account's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountChecked"
+                }
+              }
+            },
+            "description": "Whether the account works. A Claude plan account: the token is leased to a runner that offers `subscription-env` and `plan-check`, which runs `claude -p` with a one-word prompt in its sandbox; it answers `ok` or the reason (`token_expired`, `no_runner`, `egress_not_proven`, ...). It uses a little of the plan's quota, never money. Any other account keeps its key test (`testAccount`'s answer, with `no_runner` as a result). Stored on the account and audited as `account.tested`. 429 when the account was checked within a minute or a check is running"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
         "x-ainkrad-scope": "admin"
       }
     },
@@ -11620,6 +12011,282 @@
           "runners"
         ],
         "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/secret-groups": {
+      "get": {
+        "operationId": "listSecretGroups",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SecretGroupInfo"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Every group, by name, with its members"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "secrets"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "post": {
+        "operationId": "createSecretGroup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewSecretGroup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretGroupInfo"
+                }
+              }
+            },
+            "description": "Made (audited as `secret_group.created`). 409 `conflict` for a name in use; 400 for a runner that is not active"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "secrets"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/secret-groups/{id}": {
+      "delete": {
+        "operationId": "deleteSecretGroup",
+        "parameters": [
+          {
+            "description": "The group's name",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretGroupDeleted"
+                }
+              }
+            },
+            "description": "Deleted (audited as `secret_group.deleted`). 409 `conflict` while it has secrets"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "secrets"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      },
+      "put": {
+        "operationId": "updateSecretGroup",
+        "parameters": [
+          {
+            "description": "The group's name",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSecretGroup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretGroupInfo"
+                }
+              }
+            },
+            "description": "Changed (audited as `secret_group.updated`)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "secrets"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/secret-groups/{id}/leases": {
+      "post": {
+        "operationId": "leaseSecretGroup",
+        "parameters": [
+          {
+            "description": "The group's name",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewGroupLease"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupLeaseGrant"
+                }
+              }
+            },
+            "description": "One lease for each member the runner may have (its own runners, else the group's), each as `leaseSecret` grants it (audited as `secret.leased`). 400 when the runner may have none; the refusals of `leaseSecret`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "secrets"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
       }
     },
     "/api/v1/secret-leases/redeem": {

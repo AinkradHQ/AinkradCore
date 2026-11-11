@@ -633,6 +633,19 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/PlanCheck",
+          "properties": {
+            "op": {
+              "const": "plan.check",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An op from a newer Core: answered `unsupported_command`. Never sent.",
           "properties": {
             "op": {
@@ -1879,6 +1892,37 @@
         }
       ]
     },
+    "PlanCheck": {
+      "description": "Core to runner: redeem `lease` (a subscription token, env), run `claude -p` with a one-word\nprompt in the sandbox, and answer what happened.",
+      "properties": {
+        "lease": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "lease"
+      ],
+      "type": "object"
+    },
+    "PlanChecked": {
+      "description": "Runner to Core: how the check ended. Never the CLI's text.",
+      "properties": {
+        "latency_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "result": {
+          "description": "`ok`, or why not: `token_expired`, `limit_reached`, `egress_not_proven`,\n`sandbox_unavailable`, `runner_busy`, `unreachable`, `timeout` or `failed`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "result",
+        "latency_ms"
+      ],
+      "type": "object"
+    },
     "PlanLimit": {
       "description": "The latest plan-limit event of a session, overwritten by each newer one (no sequence number).",
       "properties": {
@@ -2388,6 +2432,20 @@
           "properties": {
             "op": {
               "const": "tools.status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/PlanChecked",
+          "description": "The answer to `plan.check`.",
+          "properties": {
+            "op": {
+              "const": "plan.check",
               "type": "string"
             }
           },

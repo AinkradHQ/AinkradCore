@@ -26,6 +26,7 @@ import kotlinx.serialization.Contextual
  * @param pop The routine key's ES256 signature (raw r||s, base64url) over the UTF-8 string `AINKRAD-PAIR-V1` LF `<core_fp>` LF `<base64url of the credential hash>` LF `<fp(routine)>` LF `<fp(stepup) or ->`, no trailing newline; fp is base64url SHA-256 of the SPKI.
  * @param routineSpki The routine key: a P-256 SubjectPublicKeyInfo, base64url.
  * @param code The typed code (`ABCDE-FGHJK`, any case); or `secret`.
+ * @param deviceName What to call this device: 1 to 64 characters of plain text, no control characters. It becomes the device's name in place of the pairing's (an invite's is `owner`).
  * @param keyStorage `secure_enclave`, `strongbox`, `tee`, `tpm` or `software`: a claim.
  * @param platform 
  * @param popStepup The step-up key over the same string, with `stepup_spki`.
@@ -47,6 +48,10 @@ data class ClaimBody (
     /* The typed code (`ABCDE-FGHJK`, any case); or `secret`. */
     @SerialName(value = "code")
     val code: kotlin.String? = null,
+
+    /* What to call this device: 1 to 64 characters of plain text, no control characters. It becomes the device's name in place of the pairing's (an invite's is `owner`). */
+    @SerialName(value = "device_name")
+    val deviceName: kotlin.String? = null,
 
     /* `secure_enclave`, `strongbox`, `tee`, `tpm` or `software`: a claim. */
     @SerialName(value = "key_storage")

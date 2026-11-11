@@ -148,6 +148,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/{id}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["checkAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/{id}/limits": {
         parameters: {
             query?: never;
@@ -1320,6 +1336,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/secret-groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listSecretGroups"];
+        put?: never;
+        post: operations["createSecretGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/secret-groups/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["updateSecretGroup"];
+        post?: never;
+        delete: operations["deleteSecretGroup"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/secret-groups/{id}/leases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["leaseSecretGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/secret-leases/redeem": {
         parameters: {
             query?: never;
@@ -1772,6 +1836,20 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description What `POST /accounts/{id}/check` answers. */
+        AccountChecked: {
+            /** Format: int64 */
+            latency_ms?: number | null;
+            /**
+             * @description `ok`, or why not. A Claude plan: `token_expired`, `limit_reached`, `no_runner` (none that
+             *     may hold the token is online), `runner_outdated`, `runner_busy`, `runner_failed`,
+             *     `egress_not_proven`, `sandbox_unavailable`, `unreachable`, `timeout` or `failed`. An
+             *     API-key account: the key test's class (`ok`, `auth_failed`, ...) or `no_runner`.
+             */
+            result: string;
+            /** @description The runner device that made the check; absent when none was asked. */
+            runner?: string | null;
+        };
         /** @description What an `admin` write answers: the account and the runners its key may be leased to. */
         AccountDetail: {
             account: components["schemas"]["ProviderAccount"];
@@ -2200,6 +2278,11 @@ export interface components {
         ClaimBody: {
             /** @description The typed code (`ABCDE-FGHJK`, any case); or `secret`. */
             code?: string | null;
+            /**
+             * @description What to call this device: 1 to 64 characters of plain text, no control characters. It
+             *     becomes the device's name in place of the pairing's (an invite's is `owner`).
+             */
+            device_name?: string | null;
             /** @description `secure_enclave`, `strongbox`, `tee`, `tpm` or `software`: a claim. */
             key_storage?: string | null;
             platform?: string | null;
@@ -2576,6 +2659,17 @@ export interface components {
             /** Format: int64 */
             user_id: number;
         };
+        /** @description One lease of a group's grant: hand `lease` to the runner. No `Debug`. */
+        GroupLease: {
+            expires_at: components["schemas"]["Timestamp"];
+            lease: string;
+            /** @description The member's name. */
+            secret: string;
+        };
+        /** @description The leases a group lent, one per member the runner may have. No `Debug`. */
+        GroupLeaseGrant: {
+            leases: components["schemas"]["GroupLease"][];
+        };
         /** @description What the server is and speaks, for anyone. */
         Handshake: {
             /** @description `v1`. */
@@ -2766,6 +2860,13 @@ export interface components {
             delivery: string;
             /** @description Drop it by then, or at the session's end. */
             expires_at: components["schemas"]["Timestamp"];
+            file_mode?: string | null;
+            file_name?: string | null;
+            /**
+             * @description `text`, `multiline`, `file` (the value is base64: decode it, write it as `file_name`
+             *     with `file_mode`) or `env_bundle` (the value is `NAME=value` lines).
+             */
+            kind?: string | null;
             name: string;
             value: string;
             /** Format: int64 */
@@ -2949,6 +3050,15 @@ export interface components {
             site?: string | null;
             token?: string | null;
         };
+        NewGroupLease: {
+            /** @description The runner's device id, `d_…`. */
+            runner: string;
+            /**
+             * Format: int64
+             * @description Each lease's lifetime; default and most `secrets.lease_secs`.
+             */
+            ttl_secs?: number | null;
+        };
         NewInviteBody: {
             /**
              * @description `device` (the default) or `runner`: a runner invite is single use, lasts 15 minutes, is
@@ -3033,11 +3143,31 @@ export interface components {
         NewSecret: {
             /** @description `env` (the default), `file` or `askpass`. */
             delivery?: string | null;
+            /** @description One line, at most 200 characters. */
+            description?: string | null;
+            /** @description Kind `file`: an octal mode the owner can read, `0400` to `0777`; default `0600`. */
+            file_mode?: string | null;
+            /** @description Required for kind `file`: `[A-Za-z0-9._-]{1,64}`. */
+            file_name?: string | null;
+            /** @description The name of a group made with `createSecretGroup`; one level. */
+            group?: string | null;
+            /** @description `text` (the default), `multiline`, `file` or `env_bundle` (`NAME=value` lines). */
+            kind?: string | null;
             name: string;
-            /** @description Runner device ids it may be leased to; default none. */
+            /** @description Runner device ids it may be leased to; default none (a group's runners then apply). */
             runners?: string[] | null;
-            /** @description UTF-8 text, at most `secrets.max_bytes`; written, never read back. */
+            /**
+             * @description UTF-8 text, at most `secrets.max_bytes`; for kind `file` the file's bytes in standard
+             *     base64 (at most 1 MiB decoded); written, never read back.
+             */
             value: string;
+        };
+        NewSecretGroup: {
+            /** @description One line, at most 200 characters; default empty. */
+            description?: string | null;
+            name: string;
+            /** @description Active runner device ids; default none. */
+            runners?: string[] | null;
         };
         NewTerminal: {
             args?: string[] | null;
@@ -3330,6 +3460,13 @@ export interface components {
         /** @description A rotation: the new value, and optionally a new scope or delivery. No `Debug`. */
         RotateSecret: {
             delivery?: string | null;
+            description?: string | null;
+            file_mode?: string | null;
+            file_name?: string | null;
+            /** @description An empty string leaves the group. */
+            group?: string | null;
+            /** @description Omitted keeps the kind; the other fields are those of `createSecret`, omitted keeps them. */
+            kind?: string | null;
             runners?: string[] | null;
             value: string;
         };
@@ -3504,13 +3641,42 @@ export interface components {
         SecretDeleted: {
             deleted: boolean;
         };
+        SecretGroupDeleted: {
+            deleted: boolean;
+        };
+        /** @description A group, never a value. */
+        SecretGroupInfo: {
+            created_at: components["schemas"]["Timestamp"];
+            /** @description One line: what the group is for. */
+            description: string;
+            /** @description The names of its secrets. */
+            members: string[];
+            /** @description `[a-z][a-z0-9_.-]{0,63}`. */
+            name: string;
+            /** @description The runner devices its members may be leased to unless they list their own. */
+            runners: string[];
+            updated_at: components["schemas"]["Timestamp"];
+        };
         /** @description A secret, never its value. */
         SecretInfo: {
             created_at: components["schemas"]["Timestamp"];
             /** @description How a runner hands it to a session: `env`, `file` or `askpass`. */
             delivery: string;
+            /** @description One line: what it is for. */
+            description?: string | null;
+            /** @description The runners a lease may go to: its own, else its group's. */
+            effective_runners?: string[] | null;
+            file_mode?: string | null;
+            /** @description A `file` secret's name on the runner, and its octal mode (`0600`). */
+            file_name?: string | null;
+            /** @description The group it belongs to (`/api/v1/secret-groups`); none for no group. */
+            group?: string | null;
             /** @description The master key it is sealed under. */
             key_id: string;
+            /** @description `text`, `multiline`, `file` or `env_bundle`. `size` is a file's decoded length. */
+            kind?: string | null;
+            /** @description When a runner last redeemed it; none before the first redemption. */
+            last_used_at?: components["schemas"]["Timestamp"];
             /** @description `[a-z][a-z0-9_.-]{0,63}`. */
             name: string;
             /** @description The device that stored it, `d_…`. */
@@ -3523,6 +3689,11 @@ export interface components {
              */
             size: number;
             updated_at: components["schemas"]["Timestamp"];
+            /**
+             * Format: int64
+             * @description How many redemptions.
+             */
+            use_count?: number | null;
             /**
              * Format: int64
              * @description 1 when stored, one more per rotation.
@@ -3847,6 +4018,11 @@ export interface components {
             disabled?: boolean | null;
             label?: string | null;
             name?: string | null;
+        };
+        /** @description What changes; an omitted field is kept. */
+        UpdateSecretGroup: {
+            description?: string | null;
+            runners?: string[] | null;
         };
         UsageByCompany: {
             company: string;
@@ -4409,6 +4585,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderAccount"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    checkAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The account's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether the account works. A Claude plan account: the token is leased to a runner that offers `subscription-env` and `plan-check`, which runs `claude -p` with a one-word prompt in its sandbox; it answers `ok` or the reason (`token_expired`, `no_runner`, `egress_not_proven`, ...). It uses a little of the plan's quota, never money. Any other account keeps its key test (`testAccount`'s answer, with `no_runner` as a result). Stored on the account and audited as `account.tested`. 429 when the account was checked within a minute or a check is running */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountChecked"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -7349,6 +7555,162 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ToolOperation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listSecretGroups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every group, by name, with its members */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretGroupInfo"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createSecretGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewSecretGroup"];
+            };
+        };
+        responses: {
+            /** @description Made (audited as `secret_group.created`). 409 `conflict` for a name in use; 400 for a runner that is not active */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretGroupInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateSecretGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The group's name */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSecretGroup"];
+            };
+        };
+        responses: {
+            /** @description Changed (audited as `secret_group.updated`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretGroupInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteSecretGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The group's name */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted (audited as `secret_group.deleted`). 409 `conflict` while it has secrets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretGroupDeleted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    leaseSecretGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The group's name */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewGroupLease"];
+            };
+        };
+        responses: {
+            /** @description One lease for each member the runner may have (its own runners, else the group's), each as `leaseSecret` grants it (audited as `secret.leased`). 400 when the runner may have none; the refusals of `leaseSecret` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GroupLeaseGrant"];
                 };
             };
             400: components["responses"]["BadRequest"];

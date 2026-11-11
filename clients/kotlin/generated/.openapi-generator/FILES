@@ -32,6 +32,7 @@ src/main/kotlin/ainkrad/client/infrastructure/ApiClient.kt
 src/main/kotlin/ainkrad/client/infrastructure/HttpResponse.kt
 src/main/kotlin/ainkrad/client/infrastructure/RequestConfig.kt
 src/main/kotlin/ainkrad/client/infrastructure/RequestMethod.kt
+src/main/kotlin/ainkrad/client/models/AccountChecked.kt
 src/main/kotlin/ainkrad/client/models/AccountDetail.kt
 src/main/kotlin/ainkrad/client/models/AccountHealth.kt
 src/main/kotlin/ainkrad/client/models/AccountLogin.kt
@@ -86,6 +87,8 @@ src/main/kotlin/ainkrad/client/models/Event.kt
 src/main/kotlin/ainkrad/client/models/EventActor.kt
 src/main/kotlin/ainkrad/client/models/EventActorSystem.kt
 src/main/kotlin/ainkrad/client/models/EventActorUser.kt
+src/main/kotlin/ainkrad/client/models/GroupLease.kt
+src/main/kotlin/ainkrad/client/models/GroupLeaseGrant.kt
 src/main/kotlin/ainkrad/client/models/Handshake.kt
 src/main/kotlin/ainkrad/client/models/HandshakeBody.kt
 src/main/kotlin/ainkrad/client/models/HandshakeProof.kt
@@ -118,6 +121,7 @@ src/main/kotlin/ainkrad/client/models/NewChain.kt
 src/main/kotlin/ainkrad/client/models/NewChainEntry.kt
 src/main/kotlin/ainkrad/client/models/NewConnection.kt
 src/main/kotlin/ainkrad/client/models/NewConnectionCredential.kt
+src/main/kotlin/ainkrad/client/models/NewGroupLease.kt
 src/main/kotlin/ainkrad/client/models/NewInviteBody.kt
 src/main/kotlin/ainkrad/client/models/NewLease.kt
 src/main/kotlin/ainkrad/client/models/NewLogin.kt
@@ -125,6 +129,7 @@ src/main/kotlin/ainkrad/client/models/NewPairingBody.kt
 src/main/kotlin/ainkrad/client/models/NewPool.kt
 src/main/kotlin/ainkrad/client/models/NewProviderAccount.kt
 src/main/kotlin/ainkrad/client/models/NewSecret.kt
+src/main/kotlin/ainkrad/client/models/NewSecretGroup.kt
 src/main/kotlin/ainkrad/client/models/NewTerminal.kt
 src/main/kotlin/ainkrad/client/models/NoopResult.kt
 src/main/kotlin/ainkrad/client/models/PageEvent.kt
@@ -158,6 +163,8 @@ src/main/kotlin/ainkrad/client/models/RunnerPolicyBody.kt
 src/main/kotlin/ainkrad/client/models/RunnerRunsAs.kt
 src/main/kotlin/ainkrad/client/models/RunnerSlots.kt
 src/main/kotlin/ainkrad/client/models/SecretDeleted.kt
+src/main/kotlin/ainkrad/client/models/SecretGroupDeleted.kt
+src/main/kotlin/ainkrad/client/models/SecretGroupInfo.kt
 src/main/kotlin/ainkrad/client/models/SecretInfo.kt
 src/main/kotlin/ainkrad/client/models/SessionGrant.kt
 src/main/kotlin/ainkrad/client/models/SessionLimits.kt
@@ -185,6 +192,7 @@ src/main/kotlin/ainkrad/client/models/TerminalSize.kt
 src/main/kotlin/ainkrad/client/models/TerminalStatus.kt
 src/main/kotlin/ainkrad/client/models/ToolOperation.kt
 src/main/kotlin/ainkrad/client/models/UpdateConnection.kt
+src/main/kotlin/ainkrad/client/models/UpdateSecretGroup.kt
 src/main/kotlin/ainkrad/client/models/UsageByCompany.kt
 src/main/kotlin/ainkrad/client/models/UsageWindow.kt
 src/main/kotlin/ainkrad/client/models/Versions.kt
