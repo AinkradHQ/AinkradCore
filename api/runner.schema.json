@@ -594,6 +594,45 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/RunnerPolicy",
+          "properties": {
+            "op": {
+              "const": "runner.policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ToolsInstall",
+          "properties": {
+            "op": {
+              "const": "tools.install",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ToolsStatusReq",
+          "properties": {
+            "op": {
+              "const": "tools.status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An op from a newer Core: answered `unsupported_command`. Never sent.",
           "properties": {
             "op": {
@@ -1987,6 +2026,23 @@
       ],
       "type": "object"
     },
+    "PolicyApplied": {
+      "description": "The answer to `runner.policy`: the policy was saved and the runner is restarting.",
+      "properties": {
+        "policy": {
+          "$ref": "#/$defs/RunnerPolicy"
+        },
+        "restarting": {
+          "description": "The runner restarts a moment after this answer; it reconnects with the new policy.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "policy",
+        "restarting"
+      ],
+      "type": "object"
+    },
     "PtyAttach": {
       "description": "`pty.attach`: reach a running terminal and resume its output at `seq`.",
       "properties": {
@@ -2313,6 +2369,34 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/PolicyApplied",
+          "description": "The answer to `runner.policy`.",
+          "properties": {
+            "op": {
+              "const": "runner.policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ToolsStatus",
+          "description": "The answer to `tools.install` and `tools.status`.",
+          "properties": {
+            "op": {
+              "const": "tools.status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An op from a newer runner. Never sent.",
           "properties": {
             "op": {
@@ -2508,6 +2592,17 @@
             "null"
           ]
         },
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunnerPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the runner offers now (terminals, agents, agent capacity). Absent from a runner\nthat predates the runner policy."
+        },
         "root": {
           "description": "That user is root (uid 0).",
           "type": [
@@ -2519,7 +2614,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Agent harnesses found on this host, name to version (`claude` to `2.1.318`); empty when\nagents are off.",
+          "description": "Tools found on this host, name to version (`claude` to `2.1.318`, `git`, `node`, `python`,\n`go`, `rust`, `docker`, `codex`), probed at every connection.",
           "type": "object"
         },
         "user": {
@@ -2718,6 +2813,31 @@
         "disk_evict_percent",
         "workspace_idle_secs",
         "warm_idle_secs"
+      ],
+      "type": "object"
+    },
+    "RunnerPolicy": {
+      "description": "What a runner offers. The same shape is the command, the answer and the runner's report of\nwhat is active (`RunnerFacts::policy`).",
+      "properties": {
+        "agent_capacity": {
+          "description": "How many agent sessions run at once, 1 to [`MAX_AGENT_CAPACITY`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "agents": {
+          "description": "Agent sessions are offered.",
+          "type": "boolean"
+        },
+        "terminals": {
+          "description": "Terminals (`pty`) are offered.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "terminals",
+        "agents",
+        "agent_capacity"
       ],
       "type": "object"
     },
@@ -3017,6 +3137,20 @@
       ],
       "type": "object"
     },
+    "Tool": {
+      "description": "A tool the runner host can install. A fixed list: the runner and its root helper refuse any\nother name.",
+      "enum": [
+        "claude",
+        "codex",
+        "node",
+        "git",
+        "python",
+        "go",
+        "rust",
+        "docker"
+      ],
+      "type": "string"
+    },
     "ToolBatch": {
       "description": "Runner to Core: the calls after `ToolsPoll::after`.",
       "properties": {
@@ -3063,6 +3197,14 @@
       ],
       "type": "object"
     },
+    "ToolOpState": {
+      "enum": [
+        "running",
+        "done",
+        "failed"
+      ],
+      "type": "string"
+    },
     "ToolResult": {
       "description": "Core to runner: how call `id` ended. Either `result`, or a plain `code` and a fixed `message`.",
       "properties": {
@@ -3090,6 +3232,22 @@
       "required": [
         "id",
         "ok"
+      ],
+      "type": "object"
+    },
+    "ToolsInstall": {
+      "description": "Core to runner: install `tool`. `operation` is the Core's id for the operation (`tools.status`\nnames it); not `op`, which is the command's tag on the wire.",
+      "properties": {
+        "operation": {
+          "type": "string"
+        },
+        "tool": {
+          "$ref": "#/$defs/Tool"
+        }
+      },
+      "required": [
+        "operation",
+        "tool"
       ],
       "type": "object"
     },
@@ -3134,6 +3292,65 @@
       "required": [
         "session",
         "after"
+      ],
+      "type": "object"
+    },
+    "ToolsStatus": {
+      "description": "The answer to `tools.install` and `tools.status`.",
+      "properties": {
+        "operation": {
+          "type": "string"
+        },
+        "percent": {
+          "description": "0 to 100.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "description": "Why it failed (`state` `failed`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/ToolOpState"
+        },
+        "step": {
+          "description": "What it is doing, a short sentence: `Downloading Node 22.22.1`.",
+          "type": "string"
+        },
+        "tool": {
+          "$ref": "#/$defs/Tool"
+        },
+        "tools": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "When `done`: the tools the runner found on its host after the install (what `RunnerFacts::tools` holds).",
+          "type": "object"
+        }
+      },
+      "required": [
+        "operation",
+        "tool",
+        "state",
+        "percent",
+        "step"
+      ],
+      "type": "object"
+    },
+    "ToolsStatusReq": {
+      "description": "Core to runner: how is operation `op`?",
+      "properties": {
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation"
       ],
       "type": "object"
     },

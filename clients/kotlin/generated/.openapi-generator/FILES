@@ -93,6 +93,7 @@ src/main/kotlin/ainkrad/client/models/HostBinary.kt
 src/main/kotlin/ainkrad/client/models/HostStatus.kt
 src/main/kotlin/ainkrad/client/models/HostUnit.kt
 src/main/kotlin/ainkrad/client/models/HostUnits.kt
+src/main/kotlin/ainkrad/client/models/InstallToolBody.kt
 src/main/kotlin/ainkrad/client/models/InviteCreated.kt
 src/main/kotlin/ainkrad/client/models/KindAuthMethod.kt
 src/main/kotlin/ainkrad/client/models/KindCapability.kt
@@ -134,6 +135,7 @@ src/main/kotlin/ainkrad/client/models/PasskeyClaimBody.kt
 src/main/kotlin/ainkrad/client/models/PasskeyOptionsBody.kt
 src/main/kotlin/ainkrad/client/models/PasskeyRegistrationOptions.kt
 src/main/kotlin/ainkrad/client/models/PastRetention.kt
+src/main/kotlin/ainkrad/client/models/PolicyResult.kt
 src/main/kotlin/ainkrad/client/models/Pool.kt
 src/main/kotlin/ainkrad/client/models/PriceBookEntry.kt
 src/main/kotlin/ainkrad/client/models/Provider.kt
@@ -152,6 +154,7 @@ src/main/kotlin/ainkrad/client/models/RunnerAccounts.kt
 src/main/kotlin/ainkrad/client/models/RunnerDriver.kt
 src/main/kotlin/ainkrad/client/models/RunnerHostLoad.kt
 src/main/kotlin/ainkrad/client/models/RunnerIsolation.kt
+src/main/kotlin/ainkrad/client/models/RunnerPolicyBody.kt
 src/main/kotlin/ainkrad/client/models/RunnerRunsAs.kt
 src/main/kotlin/ainkrad/client/models/RunnerSlots.kt
 src/main/kotlin/ainkrad/client/models/SecretDeleted.kt
@@ -180,6 +183,7 @@ src/main/kotlin/ainkrad/client/models/Terminal.kt
 src/main/kotlin/ainkrad/client/models/TerminalSignal.kt
 src/main/kotlin/ainkrad/client/models/TerminalSize.kt
 src/main/kotlin/ainkrad/client/models/TerminalStatus.kt
+src/main/kotlin/ainkrad/client/models/ToolOperation.kt
 src/main/kotlin/ainkrad/client/models/UpdateConnection.kt
 src/main/kotlin/ainkrad/client/models/UsageByCompany.kt
 src/main/kotlin/ainkrad/client/models/UsageWindow.kt

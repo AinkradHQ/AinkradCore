@@ -1,0 +1,18 @@
+# The one door to the root-side tool installer (see crates/runner/src/toolhelper.rs). The runner is an unprivileged,
+# sandboxed user and stays one: it asks this socket to install one tool from a fixed list, and the helper
+# (ainkrad-runner-tools@.service, started per connection) does it as root. Only root and the ainkrad-runner group can
+# connect (the helper also checks the peer's uid), one install at a time. Installed and enabled by deploy/install-linux.sh.
+[Unit]
+Description=Ainkrad runner tool installer (socket)
+Documentation=https://github.com/AinkradHQ/AinkradCore
+
+[Socket]
+ListenStream=/run/ainkrad-runner-tools.sock
+SocketUser=root
+SocketGroup=ainkrad-runner
+SocketMode=0660
+Accept=yes
+MaxConnections=1
+
+[Install]
+WantedBy=sockets.target

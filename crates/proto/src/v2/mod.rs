@@ -41,6 +41,7 @@ use serde_json::Value;
 mod agent;
 mod auth;
 mod command;
+mod control;
 mod gateway;
 mod login;
 mod plan_limit;
@@ -50,6 +51,7 @@ mod tools;
 pub use agent::*;
 pub use auth::*;
 pub use command::*;
+pub use control::*;
 pub use gateway::*;
 pub use login::*;
 pub use plan_limit::*;
@@ -150,10 +152,14 @@ pub struct RunnerFacts {
     /// That user is root (uid 0).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<bool>,
-    /// Agent harnesses found on this host, name to version (`claude` to `2.1.318`); empty when
-    /// agents are off.
+    /// Tools found on this host, name to version (`claude` to `2.1.318`, `git`, `node`, `python`,
+    /// `go`, `rust`, `docker`, `codex`), probed at every connection.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub tools: std::collections::BTreeMap<String, String>,
+    /// What the runner offers now (terminals, agents, agent capacity). Absent from a runner
+    /// that predates the runner policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<RunnerPolicy>,
 }
 
 /// The state of `/dev/kvm` on a runner, for the microvm tier (E8a-09).

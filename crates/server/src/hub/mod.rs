@@ -349,6 +349,13 @@ impl Hub {
         Elevated(())
     }
 
+    /// Mint the capability of a runner-control route (`PUT /runners/{id}/policy`, `POST
+    /// /runners/{id}/tools`: `DESTRUCTIVE`, so the gate verified `admin` and a step-up).
+    pub(crate) fn admin_elevation(&self, caller: &crate::api::v1::Caller) -> Elevated {
+        debug_assert!(caller.device.scopes.iter().any(|s| s == "admin"));
+        Elevated(())
+    }
+
     /// Mint the terminal capability after the API gate has verified route scope and step-up
     /// (`POST /terminals`, its `ws`, `signal` and `DELETE`, all `DESTRUCTIVE`).
     pub(crate) fn terminal_elevation(&self, caller: &crate::api::v1::Caller) -> Elevated {
@@ -556,6 +563,16 @@ impl Hub {
         all.iter()
             .map(|(id, r)| (id.clone(), (r.hello.facts.as_deref().cloned(), r.since)))
             .collect()
+    }
+
+    /// Merges freshly probed `tools` into what `runner` reported about its host, so the API shows
+    /// an install at once; the runner's next hello replaces it with its own probe.
+    pub fn merge_tools(&self, runner: &str, tools: &std::collections::BTreeMap<String, String>) {
+        let mut all = self.runners.lock().unwrap();
+        if let Some(r) = all.get_mut(runner) {
+            let facts = r.hello.facts.get_or_insert_with(Default::default);
+            facts.tools.extend(tools.clone());
+        }
     }
 
     /// Makes `out` the live connection of `device` (named `name`); an older one is told to

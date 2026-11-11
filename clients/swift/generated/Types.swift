@@ -325,6 +325,15 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/runners/{id}/noop`.
     /// - Remark: Generated from `#/paths//api/v1/runners/{id}/noop/post(runNoop)`.
     func runNoop(_ input: Operations.RunNoop.Input) async throws -> Operations.RunNoop.Output
+    /// - Remark: HTTP `PUT /api/v1/runners/{id}/policy`.
+    /// - Remark: Generated from `#/paths//api/v1/runners/{id}/policy/put(setRunnerPolicy)`.
+    func setRunnerPolicy(_ input: Operations.SetRunnerPolicy.Input) async throws -> Operations.SetRunnerPolicy.Output
+    /// - Remark: HTTP `POST /api/v1/runners/{id}/tools`.
+    /// - Remark: Generated from `#/paths//api/v1/runners/{id}/tools/post(installRunnerTool)`.
+    func installRunnerTool(_ input: Operations.InstallRunnerTool.Input) async throws -> Operations.InstallRunnerTool.Output
+    /// - Remark: HTTP `GET /api/v1/runners/{id}/tools/operations/{op}`.
+    /// - Remark: Generated from `#/paths//api/v1/runners/{id}/tools/operations/{op}/get(getRunnerToolOperation)`.
+    func getRunnerToolOperation(_ input: Operations.GetRunnerToolOperation.Input) async throws -> Operations.GetRunnerToolOperation.Output
     /// - Remark: HTTP `POST /api/v1/secret-leases/redeem`.
     /// - Remark: Generated from `#/paths//api/v1/secret-leases/redeem/post(redeemSecretLease)`.
     func redeemSecretLease(_ input: Operations.RedeemSecretLease.Input) async throws -> Operations.RedeemSecretLease.Output
@@ -1514,6 +1523,43 @@ extension APIProtocol {
         headers: Operations.RunNoop.Input.Headers = .init()
     ) async throws -> Operations.RunNoop.Output {
         try await runNoop(Operations.RunNoop.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `PUT /api/v1/runners/{id}/policy`.
+    /// - Remark: Generated from `#/paths//api/v1/runners/{id}/policy/put(setRunnerPolicy)`.
+    public func setRunnerPolicy(
+        path: Operations.SetRunnerPolicy.Input.Path,
+        headers: Operations.SetRunnerPolicy.Input.Headers = .init(),
+        body: Operations.SetRunnerPolicy.Input.Body
+    ) async throws -> Operations.SetRunnerPolicy.Output {
+        try await setRunnerPolicy(Operations.SetRunnerPolicy.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/runners/{id}/tools`.
+    /// - Remark: Generated from `#/paths//api/v1/runners/{id}/tools/post(installRunnerTool)`.
+    public func installRunnerTool(
+        path: Operations.InstallRunnerTool.Input.Path,
+        headers: Operations.InstallRunnerTool.Input.Headers = .init(),
+        body: Operations.InstallRunnerTool.Input.Body
+    ) async throws -> Operations.InstallRunnerTool.Output {
+        try await installRunnerTool(Operations.InstallRunnerTool.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/runners/{id}/tools/operations/{op}`.
+    /// - Remark: Generated from `#/paths//api/v1/runners/{id}/tools/operations/{op}/get(getRunnerToolOperation)`.
+    public func getRunnerToolOperation(
+        path: Operations.GetRunnerToolOperation.Input.Path,
+        headers: Operations.GetRunnerToolOperation.Input.Headers = .init()
+    ) async throws -> Operations.GetRunnerToolOperation.Output {
+        try await getRunnerToolOperation(Operations.GetRunnerToolOperation.Input(
             path: path,
             headers: headers
         ))

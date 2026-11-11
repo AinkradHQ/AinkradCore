@@ -115,6 +115,8 @@ pub struct Session {
     /// Agent sessions (`--enable-agents`), if offered.
     agent: Option<Arc<AgentDriver>>,
     pub(super) login: Option<Arc<super::login::LoginDriver>>, // KAN-441 L2, set with `agent`
+    /// The runner policy and tool installs, when this runner serves them.
+    control: Option<Arc<super::control::Control>>,
     /// Where wall time comes from: a monotonic clock stands still while the machine sleeps.
     clock: Clock,
     boot: String,
@@ -132,6 +134,7 @@ impl Session {
             pty: None,
             agent: None,
             login: None,
+            control: None,
             clock: Arc::new(SystemTime::now),
             boot: format!("b_{}", key::b64(&key::random::<16>())),
             core_boot: None,
@@ -151,6 +154,12 @@ impl Session {
     /// Offers the `pty` driver too (when its config enables it).
     pub fn with_pty(mut self, pty: Arc<PtyDriver>) -> Self {
         self.pty = Some(pty);
+        self
+    }
+
+    /// Offers the `control` driver too (the runner policy and tool installs).
+    pub fn with_control(mut self, control: Arc<super::control::Control>) -> Self {
+        self.control = Some(control);
         self
     }
 
@@ -190,20 +199,29 @@ impl Session {
             None => (None, Vec::new()),
         };
         let agent_info = super::login::advertise(self.agent.as_ref(), self.login.as_ref()).await;
+        let versions = self
+            .agent
+            .as_ref()
+            .map(|a| a.versions().clone())
+            .unwrap_or_default();
+        let active = self.control.as_ref().map(|c| c.active);
+        // Probing the host's tools runs a few short programs: off the async threads.
+        let facts = tokio::task::spawn_blocking(move || super::facts::gather(&versions, active))
+            .await
+            .unwrap_or_default();
         let hello = RunnerHello {
             drivers: std::iter::once(self.exec.info())
                 .chain(pty_info)
                 .chain(agent_info)
+                .chain(
+                    self.control
+                        .as_ref()
+                        .map(|_| super::control::Control::info()),
+                )
                 .collect(),
             boot: Some(self.boot.clone()),
             isolation: self.agent.as_ref().map(|a| a.isolation()),
-            facts: Some(Box::new(super::facts::gather(
-                &self
-                    .agent
-                    .as_ref()
-                    .map(|a| a.versions().clone())
-                    .unwrap_or_default(),
-            ))),
+            facts: Some(Box::new(facts)),
             streams: held,
             terminals,
             load: host_load().map(|l| HostLoad {
@@ -439,6 +457,9 @@ impl Session {
             | Command::AgentLimit(_)
             | Command::AgentTools(_)
             | Command::GatewayTest(_) => self.start_agent(stream, command),
+            Command::RunnerPolicy(_) | Command::ToolsInstall(_) | Command::ToolsStatus(_) => {
+                self.start_control(stream, command)
+            }
             // The sign-in driver's, or (an op of a newer Core) `unsupported_command`.
             Command::LoginStart(_)
             | Command::LoginCode(_)
@@ -501,6 +522,35 @@ impl Session {
                 )
                 .await;
             let _ = done.send((stream, last));
+        });
+        None
+    }
+}
+
+impl Session {
+    /// A `runner.policy`, `tools.install` or `tools.status` command.
+    fn start_control(&self, stream: u64, command: Command) -> Option<Body> {
+        let Some(control) = self.control.as_ref() else {
+            return Some(Body::Error(StreamError::new(
+                ErrorCode::UnsupportedCommand,
+                "this runner does not serve runner control",
+            )));
+        };
+        let (control, done) = (Arc::clone(control), self.done_tx.clone());
+        tokio::spawn(async move {
+            let answer = match command {
+                Command::RunnerPolicy(p) => control.set_policy(p).await.map(Reply::RunnerPolicy),
+                Command::ToolsInstall(r) => control.install_tool(r).map(Reply::ToolsStatus),
+                Command::ToolsStatus(r) => {
+                    control.tools.status(&r.operation).map(Reply::ToolsStatus)
+                }
+                _ => return,
+            };
+            let body = match answer {
+                Ok(reply) => Body::Result(reply),
+                Err(e) => Body::Error(e),
+            };
+            let _ = done.send((stream, body));
         });
         None
     }

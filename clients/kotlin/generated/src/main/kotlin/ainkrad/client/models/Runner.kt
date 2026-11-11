@@ -19,6 +19,7 @@ import ainkrad.client.models.RunnerAccounts
 import ainkrad.client.models.RunnerDriver
 import ainkrad.client.models.RunnerHostLoad
 import ainkrad.client.models.RunnerIsolation
+import ainkrad.client.models.RunnerPolicyBody
 import ainkrad.client.models.RunnerRunsAs
 import ainkrad.client.models.RunnerSlots
 
@@ -45,10 +46,11 @@ import kotlinx.serialization.Contextual
  * @param online Connected to this Core now.
  * @param os `linux` or `macos`, once connected.
  * @param osPretty The system as a person names it, `Ubuntu 26.04`, as the runner reported it.
+ * @param policy What the runner offers now: terminals, agents, agent capacity (`PUT /runners/{id}/policy` sets it). Absent until a runner of this version connected.
  * @param runsAs The user the runner process runs as, and whether that is root.
  * @param sandbox `process` when the runner offers a process sandbox for agents, else `none`; absent when it did not report (agents off).
  * @param slots Sessions and terminals running now, and how many it takes.
- * @param tools Agent harnesses it found, name to version (`claude` to `2.1.318`); empty when agents are off.
+ * @param tools Tools it found on its host, name to version (`claude` to `2.1.318`, `git`, `node`, `python`, `go`, `rust`, `docker`, `codex`); a tool that is not installed is not listed.
  * @param updateAvailable This Core's own version is newer than the runner's `version`. Absent until it connected.
  * @param version Its `ainkrad-runner` version, once connected.
  */
@@ -119,6 +121,10 @@ data class Runner (
     @SerialName(value = "os_pretty")
     val osPretty: kotlin.String? = null,
 
+    /* What the runner offers now: terminals, agents, agent capacity (`PUT /runners/{id}/policy` sets it). Absent until a runner of this version connected. */
+    @SerialName(value = "policy")
+    val policy: RunnerPolicyBody? = null,
+
     /* The user the runner process runs as, and whether that is root. */
     @SerialName(value = "runs_as")
     val runsAs: RunnerRunsAs? = null,
@@ -131,7 +137,7 @@ data class Runner (
     @SerialName(value = "slots")
     val slots: RunnerSlots? = null,
 
-    /* Agent harnesses it found, name to version (`claude` to `2.1.318`); empty when agents are off. */
+    /* Tools it found on its host, name to version (`claude` to `2.1.318`, `git`, `node`, `python`, `go`, `rust`, `docker`, `codex`); a tool that is not installed is not listed. */
     @SerialName(value = "tools")
     val tools: kotlin.collections.Map<kotlin.String, kotlin.String>? = null,
 

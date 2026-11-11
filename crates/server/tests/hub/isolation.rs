@@ -101,6 +101,7 @@ async fn runner(core: &Core, name: &str, tier: u8) -> Live {
         pty: None,
         agents: Some(Arc::clone(&agents)),
         login: None,
+        control: None,
         tls: None,
         backoff: Backoff {
             min: Duration::from_millis(50),

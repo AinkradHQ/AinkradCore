@@ -1,0 +1,31 @@
+{
+  "manifest": 1,
+  "node": {
+    "version": "22.22.1",
+    "url": "https://nodejs.org/dist/v{version}/node-v{version}-linux-{arch}.tar.xz",
+    "sha256": {
+      "x64": "9a6bc82f9b491279147219f6a18add1e18424dce90d41d2a5fcd69d4924ba3aa",
+      "arm64": "0f3550d58d45e5d3cf7103d9e3f69937f09fe82fb5dd474c66a5d816fa58c9ee"
+    }
+  },
+  "claude": {
+    "package": "@anthropic-ai/claude-code",
+    "version": "2.1.318",
+    "url": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.318.tgz",
+    "integrity": "sha512-OTJgLxcvWefv8IdTsq5n90Z2IxEhLwKqHUBhwZYE4odXzKA/Tb6p2Zb5Iy9Vq7JIVcNZzn9cPxW5sb42wLF95Q==",
+    "managed_settings": {"env": {"DISABLE_AUTOUPDATER": "1"}}
+  },
+  "codex": {
+    "package": "@openai/codex",
+    "version": "0.167.1",
+    "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.167.1.tgz",
+    "integrity": "sha512-39uApTRT9bkhE8tMXTIfZxaZ27oi7hPqWoF2Coyp+iQFAD3NVHgH838IYVUfJaX85leMSP2s4JOmVw0mMSCN5Q=="
+  },
+  "distro": {
+    "git": {"bin": "git", "apt": ["git"], "dnf": ["git"]},
+    "python": {"bin": "python3", "apt": ["python3", "python3-venv", "python3-pip"], "dnf": ["python3", "python3-pip"]},
+    "go": {"bin": "go", "apt": ["golang-go"], "dnf": ["golang"]},
+    "rust": {"bin": "rustc", "apt": ["rustc", "cargo"], "dnf": ["rust", "cargo"]},
+    "docker": {"bin": "docker", "apt": ["docker.io"], "dnf": ["moby-engine"]}
+  }
+}

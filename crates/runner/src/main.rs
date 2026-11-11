@@ -205,6 +205,8 @@ async fn main() -> ExitCode {
                 .init();
             return ainkrad_runner::v2::cli::connect_main(rest).await;
         }
+        // The root side of one-click tool install (systemd socket activation, see `toolhelper`).
+        ["tools-helper"] => return ainkrad_runner::toolhelper::main(),
         ["mcp-forward", port, sock] => {
             return ainkrad_runner::mcp_bridge::forward_main(port, sock).await;
         }

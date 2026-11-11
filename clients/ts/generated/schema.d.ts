@@ -1272,6 +1272,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runners/{id}/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setRunnerPolicy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runners/{id}/tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["installRunnerTool"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runners/{id}/tools/operations/{op}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRunnerToolOperation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/secret-leases/redeem": {
         parameters: {
             query?: never;
@@ -2626,6 +2674,10 @@ export interface components {
             /** @description Absent when no local runner is installed. */
             runner?: components["schemas"]["HostUnit"];
         };
+        InstallToolBody: {
+            /** @description `claude`, `codex`, `node`, `git`, `python`, `go`, `rust` or `docker`. */
+            tool: string;
+        };
         InviteCreated: {
             /** @description A runner invite's end (15 minutes); absent for a device invite, which never expires. */
             expires_at?: components["schemas"]["Timestamp"];
@@ -3088,6 +3140,16 @@ export interface components {
             floor: number;
             message: string;
         };
+        /** @description The answer to a policy change. */
+        PolicyResult: {
+            /** @description The policy now saved on the runner. */
+            policy?: components["schemas"]["RunnerPolicyBody"];
+            /**
+             * @description The runner is restarting to apply it: it is offline for a few seconds and then reports the
+             *     new policy in `GET /runners` (`policy`). False when nothing it runs changed.
+             */
+            restarting?: boolean | null;
+        };
         Pool: {
             created_at: components["schemas"]["Timestamp"];
             /** Format: int64 */
@@ -3313,6 +3375,11 @@ export interface components {
             os?: string | null;
             /** @description The system as a person names it, `Ubuntu 26.04`, as the runner reported it. */
             os_pretty?: string | null;
+            /**
+             * @description What the runner offers now: terminals, agents, agent capacity (`PUT /runners/{id}/policy`
+             *     sets it). Absent until a runner of this version connected.
+             */
+            policy?: components["schemas"]["RunnerPolicyBody"];
             /** @description The user the runner process runs as, and whether that is root. */
             runs_as?: components["schemas"]["RunnerRunsAs"];
             /**
@@ -3322,7 +3389,10 @@ export interface components {
             sandbox?: string | null;
             /** @description Sessions and terminals running now, and how many it takes. */
             slots?: components["schemas"]["RunnerSlots"];
-            /** @description Agent harnesses it found, name to version (`claude` to `2.1.318`); empty when agents are off. */
+            /**
+             * @description Tools it found on its host, name to version (`claude` to `2.1.318`, `git`, `node`, `python`,
+             *     `go`, `rust`, `docker`, `codex`); a tool that is not installed is not listed.
+             */
             tools?: {
                 [key: string]: string;
             } | null;
@@ -3381,6 +3451,21 @@ export interface components {
             kvm?: string | null;
             /** @description Tiers offered now, by name: `none`, `process`, `microvm`. */
             tiers?: string[] | null;
+        };
+        /** @description What a runner offers: terminals, agents, and how many agent sessions at once. */
+        RunnerPolicyBody: {
+            /**
+             * Format: int32
+             * @description How many agent sessions run at once, 1 to 8.
+             */
+            agent_capacity: number;
+            /**
+             * @description Agent sessions are offered. Refused (409 `policy_refused`, with the reason) when the
+             *     runner cannot run them: no process sandbox, no proven egress filter, or no agent tool installed.
+             */
+            agents: boolean;
+            /** @description Terminals are offered on the runner. */
+            terminals: boolean;
         };
         /** @description Who the runner process is. */
         RunnerRunsAs: {
@@ -3727,6 +3812,30 @@ export interface components {
          *     client's date parser never meets a second one (E0.4).
          */
         Timestamp: string;
+        /** @description One tool install, from start to its end. */
+        ToolOperation: {
+            /** @description The operation's id, `op_…`. */
+            op?: string | null;
+            /**
+             * Format: int32
+             * @description 0 to 100.
+             */
+            percent?: number | null;
+            /** @description Why it failed (`state` `failed`). */
+            reason?: string | null;
+            /** @description The runner's device id. */
+            runner?: string | null;
+            started_at?: components["schemas"]["Timestamp"];
+            /** @description `running`, `done` or `failed`. */
+            state?: string | null;
+            /** @description What it is doing now, a short sentence. */
+            step?: string | null;
+            tool?: string | null;
+            /** @description When `done`: the tools the runner found after the install, name to version. */
+            tools?: {
+                [key: string]: string;
+            } | null;
+        };
         /** @description What to change about a connection; at least one field. */
         UpdateConnection: {
             /** @description The admin's off switch. */
@@ -7135,6 +7244,106 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NoopResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setRunnerPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The runner's device id, `d_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunnerPolicyBody"];
+            };
+        };
+        responses: {
+            /** @description The runner saved the policy (audited as `runner.policy_set`, and a `runner.policy` event) and restarts itself to apply it when it changes what runs; `GET /runners` then reports it in `policy` once it is back. It interrupts the agent sessions and, when terminals go off, closes the terminals running on that runner. 400 for an `agent_capacity` outside 1 to 8; 409 `policy_refused` (the reason is the message) when `agents` is true and the runner cannot run them, `runner_offline`, `unsupported_command` (a runner without runner control), 502 `runner_failed`, 504 `runner_lost`. Needs `admin` and a step-up */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    installRunnerTool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The runner's device id, `d_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstallToolBody"];
+            };
+        };
+        responses: {
+            /** @description The install started on the runner's host (audited as `runner.tool_install`). Follow it with `runner.tool_install` events (`op`, `runner`, `tool`, `state` `running`/`done`/`failed`, `percent`, `step`, `reason`, and on `done` the `tools` the runner found) or by polling `GET /runners/{id}/tools/operations/{op}`. A tool installs one at a time per runner; the runner reports it in `tools` when done. Linux runners set up by the installer only. 400 for a tool that is not listed; 409 `install_running`, `runner_offline`, `unsupported_command`; 503 `runner_busy`. Needs `admin` and a step-up */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolOperation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getRunnerToolOperation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The runner's device id, `d_…` */
+                id: string;
+                /** @description The operation id, `op_…` */
+                op: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The install's state now. The Core keeps the last 64 operations in memory (a Core restart forgets them: 404) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolOperation"];
                 };
             };
             400: components["responses"]["BadRequest"];

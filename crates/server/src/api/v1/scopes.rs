@@ -82,6 +82,9 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/runners", "read"),
     ("GET", "/api/v1/runners/{id}", "read"),
     ("POST", "/api/v1/runners/{id}/noop", "agent"),
+    ("PUT", "/api/v1/runners/{id}/policy", "admin"),
+    ("POST", "/api/v1/runners/{id}/tools", "admin"),
+    ("GET", "/api/v1/runners/{id}/tools/operations/{op}", "read"),
     ("GET", "/api/v1/accounts", "read"),
     // Before `/accounts/{id}`: the first template that fits a path decides, and `usage` fits `{id}`.
     ("GET", "/api/v1/accounts/usage", "admin"),
@@ -212,6 +215,9 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     // The Core machine: a restart drops every session, and the runner and backup logs can hold
     // values no redactor recognises (D4). The Core and helper logs are not here.
     ("POST", "/api/v1/system/restart"),
+    // A runner's policy decides what runs on that machine, and a tool install runs a root-side installer there.
+    ("PUT", "/api/v1/runners/{id}/policy"),
+    ("POST", "/api/v1/runners/{id}/tools"),
     ("GET", "/api/v1/system/logs/runner"),
     ("GET", "/api/v1/system/logs/backup"),
     // Secrets (E2-07): every write, and a lease, the only way a value leaves the Core.

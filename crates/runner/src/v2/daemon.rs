@@ -65,6 +65,8 @@ pub struct Daemon {
     pub agents: Option<Arc<super::agent::AgentDriver>>,
     /// Subscription sign-in (KAN-441 L2), when the vendor CLI is installed in a pinned version.
     pub login: Option<Arc<super::login::LoginDriver>>,
+    /// The runner policy and tool installs.
+    pub control: Option<Arc<super::control::Control>>,
     pub tls: Option<Arc<rustls::ClientConfig>>,
     pub backoff: Backoff,
 }
@@ -81,6 +83,9 @@ impl Daemon {
             if let Some(login) = &self.login {
                 session.login = Some(Arc::clone(login));
             }
+        }
+        if let Some(control) = &self.control {
+            session = session.with_control(Arc::clone(control));
         }
         let mut delay = self.backoff.min;
         let mut refused = 0;
@@ -159,6 +164,7 @@ pub async fn from_state(
     exec: Arc<ExecDriver>,
     pty: Option<Arc<PtyDriver>>,
     agents: Option<super::agent::AgentDriver>,
+    control: Option<Arc<super::control::Control>>,
     tls: Option<Arc<rustls::ClientConfig>>,
     stop: watch::Receiver<bool>,
 ) -> Result<(), LinkError> {
@@ -197,6 +203,7 @@ pub async fn from_state(
         pty,
         agents,
         login,
+        control,
         tls,
         backoff: Backoff::default(),
     };
@@ -263,6 +270,7 @@ mod tests {
             pty: None,
             agents: None,
             login: None,
+            control: None,
             tls: None,
             backoff: Backoff {
                 min: Duration::from_millis(10),

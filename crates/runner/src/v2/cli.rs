@@ -187,12 +187,15 @@ filter refuses what the policy lists as refused on this host); that is a check o
 shell. The runner refuses to start, never falls back to `host`, when the mode cannot be given. Shells a
 previous runner started with a weaker network than this one requires are closed at start. In a filtered
 or none shell only HTTPS through the proxy works: no DNS, ssh, ping or plain TCP.
+<dir>/policy.json (written by a Core's `runner.policy` command from the App: terminals, agents, agent
+capacity) overrides --enable-pty and --enable-agents when it exists, and the runner then exits with status 75, which its
+supervisor restarts. Agents the policy asks for that cannot start leave the runner up with agents off.
 --enable-agents offers agent sessions (the harnesses on PATH, as this runner's user, each
 in a process sandbox, refused when it cannot run): transcripts in <dir>/agents, delivered secrets in $XDG_RUNTIME_DIR (else
 <dir>/secrets), emptied at start.
 Exit status: 0 stopped (SIGTERM, Ctrl-C); 1 an error that retrying cannot fix (state, URL, TLS);
 2 usage; 6 rejected by the Core: this runner was revoked (close 4001), or the Core refused it
-as an unknown or revoked device (auth_failed) 3 dials in a row; pair it again. Network errors,
+as an unknown or revoked device (auth_failed) 3 dials in a row; pair it again. 75 stopped to apply a new policy (restart it). Network errors,
 5xx and 429 are retried, never an exit.";
 
 /// `connect`'s exit status when the Core rejects this runner (as ctl's for a revoked device).
@@ -232,8 +235,9 @@ fn agents_enabled(args: &[&str]) -> bool {
 
 pub async fn connect_main(args: &[&str]) -> ExitCode {
     let run_enabled = args.contains(&"--enable-exec");
-    let pty_enabled = args.contains(&"--enable-pty");
-    let agents_enabled = agents_enabled(args);
+    let pty_flag = args.contains(&"--enable-pty");
+    let agents_flag = agents_enabled(args);
+    let (pty_enabled, agents_enabled) = (pty_flag, agents_flag);
     let Some(terminal_sandbox) = terminal_sandbox(args) else {
         eprintln!("{CONNECT_USAGE}");
         return ExitCode::from(2);
@@ -285,6 +289,13 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         }
     };
     let state = state_dir(flag(args, "--state"));
+    // The policy a Core set from the App overrides the flags for these three (see `control`).
+    let policy = super::control::load(&state.0);
+    let (pty_enabled, agents_enabled) =
+        policy.map_or((pty_enabled, agents_enabled), |p| (p.terminals, p.agents));
+    let agent_capacity = policy.map_or(2, |p| p.agent_capacity);
+    // Agents a policy asked for must not keep the runner from starting when they cannot run.
+    let agents_may_fail = agents_enabled && !agents_flag;
     let exec = Arc::new(super::ExecDriver::new(
         super::ExecConfig {
             run_enabled,
@@ -293,6 +304,8 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         ainkrad_proto::redact::Redactor::new(),
     ));
     let (stop, stopping) = tokio::sync::watch::channel(false);
+    let stop = Arc::new(stop);
+    let stop_signal = Arc::clone(&stop);
     let mut term = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
         Ok(term) => term,
         Err(e) => {
@@ -305,7 +318,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             _ = tokio::signal::ctrl_c() => {}
             _ = term.recv() => {}
         }
-        stop.send_replace(true);
+        stop_signal.send_replace(true);
     });
     // Held until the runner stops: the proxy terminals reach through their socket dir.
     let _terminal_proxy = if pty_enabled && terminal_network == "filtered" {
@@ -387,17 +400,41 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         eprintln!("ainkrad-runner: WARNING: {m}");
         tracing::warn!("{m}");
     }
-    let agents = match agents_enabled.then(|| agents(&state.0, core_url(&state), tls.clone())) {
+    let agents = match agents_enabled
+        .then(|| agents(&state.0, core_url(&state), tls.clone(), agent_capacity))
+    {
         None => None,
         Some(a) => match a.await {
             Ok(a) => Some(a),
+            Err(e) if agents_may_fail => {
+                eprintln!("ainkrad-runner: agents (from the policy) are off: {e}");
+                tracing::warn!("agents (from the policy) are off: {e}");
+                None
+            }
             Err(e) => {
                 eprintln!("ainkrad-runner: agents: {e}");
                 return ExitCode::FAILURE;
             }
         },
     };
-    match super::daemon::from_state(&state, exec, pty, agents, tls, stopping).await {
+    let restart = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let control = Arc::new(super::control::Control {
+        state: state.0.clone(),
+        active: ainkrad_proto::v2::RunnerPolicy {
+            terminals: pty.is_some(),
+            agents: agents.is_some(),
+            agent_capacity,
+        },
+        tools: super::tools::ToolsDriver::new(super::tools::HELPER_SOCKET),
+        pty: pty.clone(),
+        restart: Arc::clone(&restart),
+        stop,
+    });
+    match super::daemon::from_state(&state, exec, pty, agents, Some(control), tls, stopping).await {
+        Ok(()) if restart.load(std::sync::atomic::Ordering::SeqCst) => {
+            eprintln!("ainkrad-runner: restarting to apply a new policy");
+            ExitCode::from(super::control::EXIT_RESTART)
+        }
         Ok(()) => ExitCode::SUCCESS,
         Err(e @ super::client::LinkError::Rejected(_)) => {
             eprintln!("ainkrad-runner: {e}");
@@ -440,7 +477,7 @@ fn core_url(state: &super::key::State) -> Option<String> {
 /// `AINKRAD_AGENT_NETWORK=filtered` (E8a-01): parses the egress policy and proves the filter works
 /// on this host before any session can use it. Any failure stops the agent driver from starting:
 /// there is no fallback to another network mode. `true` when the filter is on and proven.
-async fn egress_filter(executor: &mut crate::HarnessExecutor) -> Result<bool, String> {
+pub(super) async fn egress_filter(executor: &mut crate::HarnessExecutor) -> Result<bool, String> {
     let mode = std::env::var("AINKRAD_AGENT_NETWORK").unwrap_or_default();
     if mode != "filtered" {
         let stray = ["ALLOW", "HOSTS", "PORTS"]
@@ -518,6 +555,7 @@ async fn agents(
     state: &std::path::Path,
     core_url: Option<String>,
     tls: Option<Arc<rustls::ClientConfig>>,
+    capacity: u32,
 ) -> Result<super::agent::AgentDriver, String> {
     let [secrets, work] = runtime_paths(state);
     let mut executor = crate::HarnessExecutor::new(work, state.join("agents-config"));
@@ -550,6 +588,7 @@ async fn agents(
         .unwrap_or_default();
     executor.check_roots(&home)?;
     let mut config = super::agent::AgentConfig::new(state.join("agents"), secrets.clone());
+    config.capacity = capacity;
     let mut found = std::collections::BTreeMap::new();
     for (name, version) in executor.probe(Duration::from_secs(10)).await {
         found.insert(name.clone(), version.clone());

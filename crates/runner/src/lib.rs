@@ -78,6 +78,7 @@ pub mod mac;
 pub mod mcp_bridge;
 mod messages;
 mod state;
+pub mod toolhelper;
 pub mod v2;
 mod work;
 mod workspace;

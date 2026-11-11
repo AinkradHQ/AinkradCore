@@ -30,7 +30,10 @@ pub(super) fn pretty_from_os_release(text: &str) -> Option<String> {
 }
 
 /// The host's own facts, read once per process; `tools` are the harnesses this runner probed.
-pub fn gather(tools: &BTreeMap<String, String>) -> RunnerFacts {
+pub fn gather(
+    tools: &BTreeMap<String, String>,
+    policy: Option<ainkrad_proto::v2::RunnerPolicy>,
+) -> RunnerFacts {
     static HOST: OnceLock<(Option<String>, Option<String>, Option<bool>)> = OnceLock::new();
     let (os_pretty, user, root) = HOST.get_or_init(|| {
         let os = if cfg!(target_os = "macos") {
@@ -47,7 +50,13 @@ pub fn gather(tools: &BTreeMap<String, String>) -> RunnerFacts {
         os_pretty: os_pretty.clone(),
         user: user.clone(),
         root: *root,
-        tools: tools.clone(),
+        // What the host has installed (probed now), with the harnesses the agent driver proved.
+        tools: {
+            let mut all = super::tools::probe_tools();
+            all.extend(tools.clone());
+            all
+        },
+        policy,
     }
 }
 

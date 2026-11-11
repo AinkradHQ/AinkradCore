@@ -80,6 +80,8 @@
     "runner.connected",
     "runner.degraded",
     "runner.disconnected",
+    "runner.policy",
+    "runner.tool_install",
     "terminal.attached",
     "terminal.closed",
     "terminal.detached",

@@ -151,7 +151,13 @@
 ///    `getCoreHealth` (`GET /core/health`, `read`); `createInvite` takes `kind` (`runner`: 15 minutes, scope
 ///    `runner`) and answers `kind`, `expires_at` and `token`; `ProviderAccount` gains `month_spend_usd_micros`
 ///    and `month_limit_usd_micros`.
-pub const API_MINOR: u32 = 51;
+/// 52: runner control from the App: `setRunnerPolicy` (`PUT /runners/{id}/policy`, `admin`, destructive),
+///    `installRunnerTool` (`POST /runners/{id}/tools`, `admin`, destructive) and `getRunnerToolOperation`
+///    (`GET /runners/{id}/tools/operations/{op}`); `Runner` gains `policy`, and `tools` now lists the
+///    host's tools (git, node, python, go, rust, docker, codex) beside the harnesses; the events
+///    `runner.policy` and `runner.tool_install`; the audit actions `runner.policy_set` and `runner.tool_install`;
+///    the runner protocol gains the `control` driver (`runner.policy`, `tools.install`, `tools.status`).
+pub const API_MINOR: u32 = 52;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

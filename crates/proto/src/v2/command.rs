@@ -49,6 +49,12 @@ pub enum Command {
     // After every older op: the schema-compat gate tells variants by position.
     #[serde(rename = "agent.tools")]
     AgentTools(super::ToolsPoll),
+    #[serde(rename = "runner.policy")]
+    RunnerPolicy(super::RunnerPolicy),
+    #[serde(rename = "tools.install")]
+    ToolsInstall(super::ToolsInstall),
+    #[serde(rename = "tools.status")]
+    ToolsStatus(super::ToolsStatusReq),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -74,6 +80,9 @@ impl Command {
             Self::LoginStart(_) => super::OP_LOGIN_START,
             Self::LoginCode(_) => super::OP_LOGIN_CODE,
             Self::LoginCancel(_) => super::OP_LOGIN_CANCEL,
+            Self::RunnerPolicy(_) => super::OP_RUNNER_POLICY,
+            Self::ToolsInstall(_) => super::OP_TOOLS_INSTALL,
+            Self::ToolsStatus(_) => super::OP_TOOLS_STATUS,
             Self::Unknown => "unknown",
         }
     }
@@ -152,6 +161,12 @@ pub enum Reply {
     /// (After every older op, as `Command`'s.) The answer to `agent.tools`: the calls the harness made.
     #[serde(rename = "agent.tools")]
     AgentTools(super::ToolBatch),
+    /// The answer to `runner.policy`.
+    #[serde(rename = "runner.policy")]
+    RunnerPolicy(super::PolicyApplied),
+    /// The answer to `tools.install` and `tools.status`.
+    #[serde(rename = "tools.status")]
+    ToolsStatus(super::ToolsStatus),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

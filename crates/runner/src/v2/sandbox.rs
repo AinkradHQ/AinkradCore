@@ -200,6 +200,11 @@ impl ProcessSandbox {
         self
     }
 
+    /// Whether the process sandbox can run on this host now (a probe, as the driver's own).
+    pub fn available_here() -> bool {
+        Self::available()
+    }
+
     fn available() -> bool {
         if cfg!(target_os = "macos") {
             return succeeds_within(

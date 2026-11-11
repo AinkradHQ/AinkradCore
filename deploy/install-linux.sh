@@ -100,6 +100,9 @@ install_bin "$binary" "$prefix/usr/local/bin/ainkrad-runner"
 [ -n "$ptyhost" ] || [ ! -x "$(dirname "$binary")/ainkrad-ptyhost" ] || ptyhost=$(dirname "$binary")/ainkrad-ptyhost
 [ -z "$ptyhost" ] || install_bin "$ptyhost" "$prefix/usr/local/bin/ainkrad-ptyhost"
 run install -m 0644 "$HERE/systemd/ainkrad-runner.service" "$prefix/etc/systemd/system/ainkrad-runner.service"
+# The root-side tool installer the App's one-click install uses: a socket only the runner's group can reach, and the unit it starts.
+run install -m 0644 "$HERE/systemd/ainkrad-runner-tools.socket" "$prefix/etc/systemd/system/ainkrad-runner-tools.socket"
+run install -m 0644 "$HERE/systemd/ainkrad-runner-tools@.service" "$prefix/etc/systemd/system/ainkrad-runner-tools@.service"
 # runner.env: RUNNER_ARGS from these flags, replaced on every run (so a re-run without --pty turns terminals off).
 args=''
 [ "$pty" = 1 ] && args="--enable-pty"
@@ -149,6 +152,7 @@ fi
 runner_demote_kill
 if [ -z "$prefix" ]; then
   run systemctl daemon-reload
+  run systemctl enable --now ainkrad-runner-tools.socket
   if [ -n "$pair" ]; then
     # Blocks until the approver confirms the SAS (or the code expires); the Core's identity is pinned here.
     if [ -n "$invite" ]; then pa=(pair "$pair" --invite "$invite" --state /var/lib/ainkrad-runner/core)
