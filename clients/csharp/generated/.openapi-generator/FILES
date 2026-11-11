@@ -101,6 +101,7 @@ src/Ainkrad.Client/Model/HostBinary.cs
 src/Ainkrad.Client/Model/HostStatus.cs
 src/Ainkrad.Client/Model/HostUnit.cs
 src/Ainkrad.Client/Model/HostUnits.cs
+src/Ainkrad.Client/Model/InstallToolBody.cs
 src/Ainkrad.Client/Model/InviteCreated.cs
 src/Ainkrad.Client/Model/KindAuthMethod.cs
 src/Ainkrad.Client/Model/KindCapability.cs
@@ -142,6 +143,7 @@ src/Ainkrad.Client/Model/PasskeyClaimBody.cs
 src/Ainkrad.Client/Model/PasskeyOptionsBody.cs
 src/Ainkrad.Client/Model/PasskeyRegistrationOptions.cs
 src/Ainkrad.Client/Model/PastRetention.cs
+src/Ainkrad.Client/Model/PolicyResult.cs
 src/Ainkrad.Client/Model/Pool.cs
 src/Ainkrad.Client/Model/PriceBookEntry.cs
 src/Ainkrad.Client/Model/Provider.cs
@@ -160,6 +162,7 @@ src/Ainkrad.Client/Model/RunnerAccounts.cs
 src/Ainkrad.Client/Model/RunnerDriver.cs
 src/Ainkrad.Client/Model/RunnerHostLoad.cs
 src/Ainkrad.Client/Model/RunnerIsolation.cs
+src/Ainkrad.Client/Model/RunnerPolicyBody.cs
 src/Ainkrad.Client/Model/RunnerRunsAs.cs
 src/Ainkrad.Client/Model/RunnerSlots.cs
 src/Ainkrad.Client/Model/SecretDeleted.cs
@@ -188,6 +191,7 @@ src/Ainkrad.Client/Model/Terminal.cs
 src/Ainkrad.Client/Model/TerminalSignal.cs
 src/Ainkrad.Client/Model/TerminalSize.cs
 src/Ainkrad.Client/Model/TerminalStatus.cs
+src/Ainkrad.Client/Model/ToolOperation.cs
 src/Ainkrad.Client/Model/UpdateConnection.cs
 src/Ainkrad.Client/Model/UsageByCompany.cs
 src/Ainkrad.Client/Model/UsageWindow.cs

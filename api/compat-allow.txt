@@ -11,3 +11,11 @@
 # removed" lines are gone: the baseline already has the gateway ops in their place.)
 runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/TerminalExit/properties/op
 runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/AgentEvents/properties/op
+
+# Runner control (`runner.policy`, `tools.install`, `tools.status`): the new ops go before the
+# `#[serde(other)]` catch-all, which serde keeps last, so it moves down three places (Command) and
+# two (Reply). The wire is unchanged for every existing op; the positional comparison sees the old
+# catch-all slot as taken by a new op. Delete these two lines in the next change to api/ (the baseline
+# will have the ops then).
+runner.schema.json: variant #16 removed at /$defs/Command/oneOf
+runner.schema.json: variant #15 removed at /$defs/Reply/oneOf

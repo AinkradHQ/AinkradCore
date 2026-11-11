@@ -16,8 +16,12 @@
 package ainkrad.client.apis
 
 import ainkrad.client.models.ErrorBody
+import ainkrad.client.models.InstallToolBody
 import ainkrad.client.models.NoopResult
+import ainkrad.client.models.PolicyResult
 import ainkrad.client.models.Runner
+import ainkrad.client.models.RunnerPolicyBody
+import ainkrad.client.models.ToolOperation
 
 import ainkrad.client.infrastructure.*
 import io.ktor.client.HttpClientConfig
@@ -63,6 +67,75 @@ import io.ktor.http.ParametersBuilder
             )
 
             return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/runners/{id}/tools/operations/{op}
+        * 
+        * 
+         * @param id The runner&#39;s device id, &#x60;d_…&#x60; 
+         * @param op The operation id, &#x60;op_…&#x60; 
+         * @return ToolOperation
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun getRunnerToolOperation(id: kotlin.String, op: kotlin.String): HttpResponse<ToolOperation> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/runners/{id}/tools/operations/{op}".replace("{" + "id" + "}", "$id").replace("{" + "op" + "}", "$op"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/runners/{id}/tools
+        * 
+        * 
+         * @param id The runner&#39;s device id, &#x60;d_…&#x60; 
+         * @param installToolBody  
+         * @return ToolOperation
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun installRunnerTool(id: kotlin.String, installToolBody: InstallToolBody): HttpResponse<ToolOperation> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = installToolBody
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/runners/{id}/tools".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames
@@ -130,6 +203,40 @@ import io.ktor.http.ParametersBuilder
             )
 
             return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * PUT /api/v1/runners/{id}/policy
+        * 
+        * 
+         * @param id The runner&#39;s device id, &#x60;d_…&#x60; 
+         * @param runnerPolicyBody  
+         * @return PolicyResult
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun setRunnerPolicy(id: kotlin.String, runnerPolicyBody: RunnerPolicyBody): HttpResponse<PolicyResult> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = runnerPolicyBody
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.PUT,
+            "/api/v1/runners/{id}/policy".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames

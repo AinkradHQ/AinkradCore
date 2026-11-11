@@ -3037,6 +3037,33 @@ extension Components {
                 case runner
             }
         }
+        /// - Remark: Generated from `#/components/schemas/InstallToolBody`.
+        public struct InstallToolBody: Codable, Hashable, Sendable {
+            /// `claude`, `codex`, `node`, `git`, `python`, `go`, `rust` or `docker`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/InstallToolBody/tool`.
+            public var tool: Swift.String
+            /// Creates a new `InstallToolBody`.
+            ///
+            /// - Parameters:
+            ///   - tool: `claude`, `codex`, `node`, `git`, `python`, `go`, `rust` or `docker`.
+            public init(tool: Swift.String) {
+                self.tool = tool
+            }
+            public enum CodingKeys: String, CodingKey {
+                case tool
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.tool = try container.decode(
+                    Swift.String.self,
+                    forKey: .tool
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "tool"
+                ])
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/InviteCreated`.
         public struct InviteCreated: Codable, Hashable, Sendable {
             /// A runner invite's end (15 minutes); absent for a device invite, which never expires.
@@ -4760,6 +4787,36 @@ extension Components {
                 case message
             }
         }
+        /// The answer to a policy change.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PolicyResult`.
+        public struct PolicyResult: Codable, Hashable, Sendable {
+            /// The policy now saved on the runner.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PolicyResult/policy`.
+            public var policy: Components.Schemas.RunnerPolicyBody?
+            /// The runner is restarting to apply it: it is offline for a few seconds and then reports the
+            /// new policy in `GET /runners` (`policy`). False when nothing it runs changed.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PolicyResult/restarting`.
+            public var restarting: Swift.Bool?
+            /// Creates a new `PolicyResult`.
+            ///
+            /// - Parameters:
+            ///   - policy: The policy now saved on the runner.
+            ///   - restarting: The runner is restarting to apply it: it is offline for a few seconds and then reports the
+            public init(
+                policy: Components.Schemas.RunnerPolicyBody? = nil,
+                restarting: Swift.Bool? = nil
+            ) {
+                self.policy = policy
+                self.restarting = restarting
+            }
+            public enum CodingKeys: String, CodingKey {
+                case policy
+                case restarting
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/Pool`.
         public struct Pool: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/Pool/created_at`.
@@ -5455,6 +5512,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/os_pretty`.
             public var osPretty: Swift.String?
+            /// What the runner offers now: terminals, agents, agent capacity (`PUT /runners/{id}/policy`
+            /// sets it). Absent until a runner of this version connected.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/policy`.
+            public var policy: Components.Schemas.RunnerPolicyBody?
             /// The user the runner process runs as, and whether that is root.
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/runs_as`.
@@ -5468,7 +5530,8 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/slots`.
             public var slots: Components.Schemas.RunnerSlots?
-            /// Agent harnesses it found, name to version (`claude` to `2.1.318`); empty when agents are off.
+            /// Tools it found on its host, name to version (`claude` to `2.1.318`, `git`, `node`, `python`,
+            /// `go`, `rust`, `docker`, `codex`); a tool that is not installed is not listed.
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/tools`.
             public struct ToolsPayload: Codable, Hashable, Sendable {
@@ -5488,7 +5551,8 @@ extension Components {
                     try encoder.encodeAdditionalProperties(additionalProperties)
                 }
             }
-            /// Agent harnesses it found, name to version (`claude` to `2.1.318`); empty when agents are off.
+            /// Tools it found on its host, name to version (`claude` to `2.1.318`, `git`, `node`, `python`,
+            /// `go`, `rust`, `docker`, `codex`); a tool that is not installed is not listed.
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/tools`.
             public var tools: Components.Schemas.Runner.ToolsPayload?
@@ -5519,10 +5583,11 @@ extension Components {
             ///   - online: Connected to this Core now.
             ///   - os: `linux` or `macos`, once connected.
             ///   - osPretty: The system as a person names it, `Ubuntu 26.04`, as the runner reported it.
+            ///   - policy: What the runner offers now: terminals, agents, agent capacity (`PUT /runners/{id}/policy`
             ///   - runsAs: The user the runner process runs as, and whether that is root.
             ///   - sandbox: `process` when the runner offers a process sandbox for agents, else `none`; absent when it
             ///   - slots: Sessions and terminals running now, and how many it takes.
-            ///   - tools: Agent harnesses it found, name to version (`claude` to `2.1.318`); empty when agents are off.
+            ///   - tools: Tools it found on its host, name to version (`claude` to `2.1.318`, `git`, `node`, `python`,
             ///   - updateAvailable: This Core's own version is newer than the runner's `version`. Absent until it connected.
             ///   - version: Its `ainkrad-runner` version, once connected.
             public init(
@@ -5542,6 +5607,7 @@ extension Components {
                 online: Swift.Bool? = nil,
                 os: Swift.String? = nil,
                 osPretty: Swift.String? = nil,
+                policy: Components.Schemas.RunnerPolicyBody? = nil,
                 runsAs: Components.Schemas.RunnerRunsAs? = nil,
                 sandbox: Swift.String? = nil,
                 slots: Components.Schemas.RunnerSlots? = nil,
@@ -5565,6 +5631,7 @@ extension Components {
                 self.online = online
                 self.os = os
                 self.osPretty = osPretty
+                self.policy = policy
                 self.runsAs = runsAs
                 self.sandbox = sandbox
                 self.slots = slots
@@ -5589,6 +5656,7 @@ extension Components {
                 case online
                 case os
                 case osPretty = "os_pretty"
+                case policy
                 case runsAs = "runs_as"
                 case sandbox
                 case slots
@@ -5774,6 +5842,64 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case kvm
                 case tiers
+            }
+        }
+        /// What a runner offers: terminals, agents, and how many agent sessions at once.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunnerPolicyBody`.
+        public struct RunnerPolicyBody: Codable, Hashable, Sendable {
+            /// How many agent sessions run at once, 1 to 8.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerPolicyBody/agent_capacity`.
+            public var agentCapacity: Swift.Int32
+            /// Agent sessions are offered. Refused (409 `policy_refused`, with the reason) when the
+            /// runner cannot run them: no process sandbox, no proven egress filter, or no agent tool installed.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerPolicyBody/agents`.
+            public var agents: Swift.Bool
+            /// Terminals are offered on the runner.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerPolicyBody/terminals`.
+            public var terminals: Swift.Bool
+            /// Creates a new `RunnerPolicyBody`.
+            ///
+            /// - Parameters:
+            ///   - agentCapacity: How many agent sessions run at once, 1 to 8.
+            ///   - agents: Agent sessions are offered. Refused (409 `policy_refused`, with the reason) when the
+            ///   - terminals: Terminals are offered on the runner.
+            public init(
+                agentCapacity: Swift.Int32,
+                agents: Swift.Bool,
+                terminals: Swift.Bool
+            ) {
+                self.agentCapacity = agentCapacity
+                self.agents = agents
+                self.terminals = terminals
+            }
+            public enum CodingKeys: String, CodingKey {
+                case agentCapacity = "agent_capacity"
+                case agents
+                case terminals
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.agentCapacity = try container.decode(
+                    Swift.Int32.self,
+                    forKey: .agentCapacity
+                )
+                self.agents = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .agents
+                )
+                self.terminals = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .terminals
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "agent_capacity",
+                    "agents",
+                    "terminals"
+                ])
             }
         }
         /// Who the runner process is.
@@ -7080,6 +7206,107 @@ extension Components {
         ///
         /// - Remark: Generated from `#/components/schemas/Timestamp`.
         public typealias Timestamp = Foundation.Date
+        /// One tool install, from start to its end.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ToolOperation`.
+        public struct ToolOperation: Codable, Hashable, Sendable {
+            /// The operation's id, `op_…`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ToolOperation/op`.
+            public var op: Swift.String?
+            /// 0 to 100.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ToolOperation/percent`.
+            public var percent: Swift.Int32?
+            /// Why it failed (`state` `failed`).
+            ///
+            /// - Remark: Generated from `#/components/schemas/ToolOperation/reason`.
+            public var reason: Swift.String?
+            /// The runner's device id.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ToolOperation/runner`.
+            public var runner: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/ToolOperation/started_at`.
+            public var startedAt: Components.Schemas.Timestamp?
+            /// `running`, `done` or `failed`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ToolOperation/state`.
+            public var state: Swift.String?
+            /// What it is doing now, a short sentence.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ToolOperation/step`.
+            public var step: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/ToolOperation/tool`.
+            public var tool: Swift.String?
+            /// When `done`: the tools the runner found after the install, name to version.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ToolOperation/tools`.
+            public struct ToolsPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: [String: Swift.String]
+                /// Creates a new `ToolsPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: [String: Swift.String] = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// When `done`: the tools the runner found after the install, name to version.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ToolOperation/tools`.
+            public var tools: Components.Schemas.ToolOperation.ToolsPayload?
+            /// Creates a new `ToolOperation`.
+            ///
+            /// - Parameters:
+            ///   - op: The operation's id, `op_…`.
+            ///   - percent: 0 to 100.
+            ///   - reason: Why it failed (`state` `failed`).
+            ///   - runner: The runner's device id.
+            ///   - startedAt:
+            ///   - state: `running`, `done` or `failed`.
+            ///   - step: What it is doing now, a short sentence.
+            ///   - tool:
+            ///   - tools: When `done`: the tools the runner found after the install, name to version.
+            public init(
+                op: Swift.String? = nil,
+                percent: Swift.Int32? = nil,
+                reason: Swift.String? = nil,
+                runner: Swift.String? = nil,
+                startedAt: Components.Schemas.Timestamp? = nil,
+                state: Swift.String? = nil,
+                step: Swift.String? = nil,
+                tool: Swift.String? = nil,
+                tools: Components.Schemas.ToolOperation.ToolsPayload? = nil
+            ) {
+                self.op = op
+                self.percent = percent
+                self.reason = reason
+                self.runner = runner
+                self.startedAt = startedAt
+                self.state = state
+                self.step = step
+                self.tool = tool
+                self.tools = tools
+            }
+            public enum CodingKeys: String, CodingKey {
+                case op
+                case percent
+                case reason
+                case runner
+                case startedAt = "started_at"
+                case state
+                case step
+                case tool
+                case tools
+            }
+        }
         /// What to change about a connection; at least one field.
         ///
         /// - Remark: Generated from `#/components/schemas/UpdateConnection`.
