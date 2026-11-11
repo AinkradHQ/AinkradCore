@@ -25,7 +25,7 @@ use crate::store::agents::{self as store, Session, SessionSecret};
 use ainkrad_proto::v2::{AgentDecide, AgentSend, AgentStop, Command};
 
 pub(super) mod access;
-mod sched;
+pub(in crate::api::v1) mod sched;
 mod types;
 use sched::{AgentWaiting, create_named, listed, page, shown};
 use types::*;
@@ -247,7 +247,7 @@ pub async fn create(
             }
         })?;
         agents::admit_holding(&app, &b.runner, &b.harness, &policy, &secrets).await?;
-        if let Some(e) = sched::no_account(&new) {
+        if let Some(e) = sched::no_account(&new, sched::own_login(&app, &b.runner, &b.harness)) {
             return Err(e);
         }
         store::create(&app.pool, &new, BY, &app.clock.now()).await?

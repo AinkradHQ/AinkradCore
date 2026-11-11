@@ -156,6 +156,10 @@ pub struct RunnerFacts {
     /// `go`, `rust`, `docker`, `codex`), probed at every connection.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub tools: std::collections::BTreeMap<String, String>,
+    /// Harnesses that hold a login of their own on this host (`claude`, `codex`, ...): the Core
+    /// cannot see it, so a plain session of one of these is not refused as `no_account`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub own_logins: Vec<String>,
     /// What the runner offers now (terminals, agents, agent capacity). Absent from a runner
     /// that predates the runner policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]

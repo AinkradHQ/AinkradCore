@@ -5512,6 +5512,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/os_pretty`.
             public var osPretty: Swift.String?
+            /// Harnesses with a login of their own on its host (`claude`, `codex`, ...); a plain session
+            /// of one is not refused as `no_account`. Absent until a runner of this version connected.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/own_logins`.
+            public var ownLogins: [Swift.String]?
             /// What the runner offers now: terminals, agents, agent capacity (`PUT /runners/{id}/policy`
             /// sets it). Absent until a runner of this version connected.
             ///
@@ -5583,6 +5588,7 @@ extension Components {
             ///   - online: Connected to this Core now.
             ///   - os: `linux` or `macos`, once connected.
             ///   - osPretty: The system as a person names it, `Ubuntu 26.04`, as the runner reported it.
+            ///   - ownLogins: Harnesses with a login of their own on its host (`claude`, `codex`, ...); a plain session
             ///   - policy: What the runner offers now: terminals, agents, agent capacity (`PUT /runners/{id}/policy`
             ///   - runsAs: The user the runner process runs as, and whether that is root.
             ///   - sandbox: `process` when the runner offers a process sandbox for agents, else `none`; absent when it
@@ -5607,6 +5613,7 @@ extension Components {
                 online: Swift.Bool? = nil,
                 os: Swift.String? = nil,
                 osPretty: Swift.String? = nil,
+                ownLogins: [Swift.String]? = nil,
                 policy: Components.Schemas.RunnerPolicyBody? = nil,
                 runsAs: Components.Schemas.RunnerRunsAs? = nil,
                 sandbox: Swift.String? = nil,
@@ -5631,6 +5638,7 @@ extension Components {
                 self.online = online
                 self.os = os
                 self.osPretty = osPretty
+                self.ownLogins = ownLogins
                 self.policy = policy
                 self.runsAs = runsAs
                 self.sandbox = sandbox
@@ -5656,6 +5664,7 @@ extension Components {
                 case online
                 case os
                 case osPretty = "os_pretty"
+                case ownLogins = "own_logins"
                 case policy
                 case runsAs = "runs_as"
                 case sandbox

@@ -46,6 +46,7 @@ import kotlinx.serialization.Contextual
  * @param online Connected to this Core now.
  * @param os `linux` or `macos`, once connected.
  * @param osPretty The system as a person names it, `Ubuntu 26.04`, as the runner reported it.
+ * @param ownLogins Harnesses with a login of their own on its host (`claude`, `codex`, ...); a plain session of one is not refused as `no_account`. Absent until a runner of this version connected.
  * @param policy What the runner offers now: terminals, agents, agent capacity (`PUT /runners/{id}/policy` sets it). Absent until a runner of this version connected.
  * @param runsAs The user the runner process runs as, and whether that is root.
  * @param sandbox `process` when the runner offers a process sandbox for agents, else `none`; absent when it did not report (agents off).
@@ -120,6 +121,10 @@ data class Runner (
     /* The system as a person names it, `Ubuntu 26.04`, as the runner reported it. */
     @SerialName(value = "os_pretty")
     val osPretty: kotlin.String? = null,
+
+    /* Harnesses with a login of their own on its host (`claude`, `codex`, ...); a plain session of one is not refused as `no_account`. Absent until a runner of this version connected. */
+    @SerialName(value = "own_logins")
+    val ownLogins: kotlin.collections.List<kotlin.String>? = null,
 
     /* What the runner offers now: terminals, agents, agent capacity (`PUT /runners/{id}/policy` sets it). Absent until a runner of this version connected. */
     @SerialName(value = "policy")

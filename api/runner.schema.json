@@ -2592,6 +2592,13 @@
             "null"
           ]
         },
+        "own_logins": {
+          "description": "Harnesses that hold a login of their own on this host (`claude`, `codex`, ...): the Core\ncannot see it, so a plain session of one of these is not refused as `no_account`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "policy": {
           "anyOf": [
             {

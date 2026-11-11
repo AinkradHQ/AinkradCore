@@ -204,11 +204,17 @@ impl Session {
             .as_ref()
             .map(|a| a.versions().clone())
             .unwrap_or_default();
+        let own = self
+            .agent
+            .as_ref()
+            .map(|a| a.own_logins())
+            .unwrap_or_default();
         let active = self.control.as_ref().map(|c| c.active);
         // Probing the host's tools runs a few short programs: off the async threads.
-        let facts = tokio::task::spawn_blocking(move || super::facts::gather(&versions, active))
-            .await
-            .unwrap_or_default();
+        let facts =
+            tokio::task::spawn_blocking(move || super::facts::gather(&versions, active, own))
+                .await
+                .unwrap_or_default();
         let hello = RunnerHello {
             drivers: std::iter::once(self.exec.info())
                 .chain(pty_info)

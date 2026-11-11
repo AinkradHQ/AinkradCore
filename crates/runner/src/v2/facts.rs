@@ -33,6 +33,7 @@ pub(super) fn pretty_from_os_release(text: &str) -> Option<String> {
 pub fn gather(
     tools: &BTreeMap<String, String>,
     policy: Option<ainkrad_proto::v2::RunnerPolicy>,
+    own_logins: Vec<String>,
 ) -> RunnerFacts {
     static HOST: OnceLock<(Option<String>, Option<String>, Option<bool>)> = OnceLock::new();
     let (os_pretty, user, root) = HOST.get_or_init(|| {
@@ -56,6 +57,7 @@ pub fn gather(
             all.extend(tools.clone());
             all
         },
+        own_logins,
         policy,
     }
 }
@@ -73,5 +75,23 @@ mod tests {
             Some("Arch")
         );
         assert_eq!(pretty_from_os_release(""), None);
+    }
+
+    #[test]
+    fn a_harness_with_a_login_file_is_an_own_login_and_reaches_the_facts() {
+        let root = std::env::temp_dir().join(format!("own-logins-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("claude")).unwrap();
+        std::fs::create_dir_all(root.join("codex")).unwrap();
+        std::fs::write(root.join("claude/.credentials.json"), "{}").unwrap();
+        let found = crate::state::logins(
+            &root,
+            &root.join("credentials"),
+            ["claude", "codex"].into_iter(),
+        );
+        let own = super::super::agent::own_logins(found);
+        assert_eq!(own, ["claude"]);
+        let facts = gather(&BTreeMap::new(), None, own);
+        assert_eq!(facts.own_logins, ["claude"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

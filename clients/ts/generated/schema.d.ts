@@ -3376,6 +3376,11 @@ export interface components {
             /** @description The system as a person names it, `Ubuntu 26.04`, as the runner reported it. */
             os_pretty?: string | null;
             /**
+             * @description Harnesses with a login of their own on its host (`claude`, `codex`, ...); a plain session
+             *     of one is not refused as `no_account`. Absent until a runner of this version connected.
+             */
+            own_logins?: string[] | null;
+            /**
              * @description What the runner offers now: terminals, agents, agent capacity (`PUT /runners/{id}/policy`
              *     sets it). Absent until a runner of this version connected.
              */

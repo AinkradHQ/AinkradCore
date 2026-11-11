@@ -152,9 +152,19 @@ impl Sandbox for Unconfined {
     }
 }
 
+/// The harnesses whose own config dir holds a login.
+pub(crate) fn own_logins(found: Vec<ainkrad_proto::runner::Login>) -> Vec<String> {
+    found
+        .into_iter()
+        .filter(|l| l.state == "logged_in")
+        .filter_map(|l| l.harness)
+        .collect()
+}
+
 /// [`Executor`] as an object, so the driver is one type whatever drives the harness.
 trait Harness: Send + Sync {
     fn secrets(&self) -> Fut<'_, Vec<(String, String)>>;
+    fn own_logins(&self) -> Vec<String>;
     fn start<'a>(&'a self, job: &'a Job) -> Fut<'a, Result<Option<String>, String>>;
     fn run<'a>(
         &'a self,
@@ -178,6 +188,9 @@ trait Harness: Send + Sync {
 impl<E: Executor> Harness for E {
     fn secrets(&self) -> Fut<'_, Vec<(String, String)>> {
         Box::pin(Executor::secrets(self))
+    }
+    fn own_logins(&self) -> Vec<String> {
+        own_logins(Executor::logins(self))
     }
     fn start<'a>(&'a self, job: &'a Job) -> Fut<'a, Result<Option<String>, String>> {
         Box::pin(Executor::start(self, job))
@@ -337,6 +350,11 @@ impl AgentDriver {
     pub fn with_versions(mut self, versions: BTreeMap<String, String>) -> Self {
         self.versions = versions;
         self
+    }
+
+    /// Harnesses with a login of their own on this host, looked up now.
+    pub fn own_logins(&self) -> Vec<String> {
+        self.harness.own_logins()
     }
 
     pub fn versions(&self) -> &BTreeMap<String, String> {
