@@ -179,7 +179,7 @@ pub(super) async fn create_named(
         None => {
             agents::validate_new(new, admin).map_err(invalid)?;
             agents::admit_holding(app, new.runner, new.harness, new.policy, new.secrets).await?;
-            if let Some(e) = no_account(new) {
+            if let Some(e) = no_account(new, own_login(app, new.runner, new.harness)) {
                 return Err(e);
             }
         }
@@ -259,7 +259,16 @@ impl From<Refusal> for ApiError {
 
 /// N29: a plain session of a harness that signs in with an account, naming no account and no
 /// secret that is the harness's own credential variable, would start and answer "Not logged in".
-pub(super) fn no_account(new: &NewSession<'_>) -> Option<ApiError> {
+/// Whether `runner` reported a login of `harness`'s own in its hello: it serves a plain session
+/// with no account, however little the Core can see of it.
+pub(super) fn own_login(app: &App, runner: &str, harness: &str) -> bool {
+    app.hub.facts().get(runner).is_some_and(|(f, _)| {
+        f.as_ref()
+            .is_some_and(|f| f.own_logins.iter().any(|h| h == harness))
+    })
+}
+
+pub(in crate::api::v1) fn no_account(new: &NewSession<'_>, own_login: bool) -> Option<ApiError> {
     const OWN: [&str; 6] = [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY",
@@ -273,7 +282,7 @@ pub(super) fn no_account(new: &NewSession<'_>) -> Option<ApiError> {
         .secrets
         .iter()
         .any(|s| s.name.starts_with(ACCOUNT_PREFIX) || OWN.contains(&s.var.as_str()));
-    (needs && !holds).then(|| {
+    (needs && !holds && !own_login).then(|| {
         ApiError::new(
             StatusCode::CONFLICT,
             "no_account",

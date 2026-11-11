@@ -88,6 +88,9 @@ pub struct Runner {
     /// Tools it found on its host, name to version (`claude` to `2.1.318`, `git`, `node`, `python`,
     /// `go`, `rust`, `docker`, `codex`); a tool that is not installed is not listed.
     pub tools: Option<std::collections::BTreeMap<String, String>>,
+    /// Harnesses with a login of their own on its host (`claude`, `codex`, ...); a plain session
+    /// of one is not refused as `no_account`. Absent until a runner of this version connected.
+    pub own_logins: Option<Vec<String>>,
     /// The runner `runner-enroll-local` made on the Core's own machine (the installer's).
     pub built_in: Option<bool>,
     /// What the runner offers now: terminals, agents, agent capacity (`PUT /runners/{id}/policy`
@@ -271,6 +274,7 @@ fn of(d: gov::Device, live: Option<&RunnerState>, x: &Extra) -> Runner {
             root: f.root,
         }),
         tools: facts.map(|f| f.tools.clone()),
+        own_logins: facts.map(|f| f.own_logins.clone()),
         connected_since: x
             .since
             .filter(|_| live.is_some_and(|s| s.online))

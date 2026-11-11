@@ -747,3 +747,26 @@ async fn isolation_fields_are_checked_at_the_boundary() {
         (StatusCode::CONFLICT, Some("runner_offline"))
     );
 }
+
+/// N29 and a harness's own login: a plain session naming no account is refused unless the
+/// runner reported a login of that harness's own (the Core cannot see one).
+#[tokio::test]
+async fn a_plain_session_needs_an_account_unless_the_runner_has_its_own_login() {
+    use super::super::agents::sched::no_account;
+    let policy = json!({});
+    let new = |harness| NewSession {
+        runner: "d_x",
+        harness,
+        model: None,
+        prompt: None,
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: "d_y",
+    };
+    let r = no_account(&new("claude"), false).expect("no login: refused");
+    assert_eq!(r.code, "no_account");
+    assert!(no_account(&new("claude"), true).is_none());
+    // A harness that signs in with no account is never asked.
+    assert!(no_account(&new("opencode"), false).is_none());
+}

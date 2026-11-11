@@ -119,6 +119,9 @@ while :; do
 done
 EOF
   chmod 755 "$W/bin/claude"
+  # The stand-in's own login, where the runner looks for claude's (its config dir under the state dir): the runner
+  # reports it in its hello, so the Core does not refuse a plain session as no_account.
+  mkdir -p "$RSTATE/agents-config/claude" && echo '{}' >"$RSTATE/agents-config/claude/.credentials.json"
 }
 
 rig_up() { # Core, device A (admin) and B (terminal+agent), a runner with pty and agents; sets RID
