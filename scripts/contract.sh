@@ -16,4 +16,7 @@ cp "$t"/*.json "$out/"
 if [ "$out" = "api" ]; then
   cargo run -q --manifest-path modules/citadel/Cargo.toml -p citadel-module --example contract > "$t/openapi.core.json"
   cp "$t/openapi.core.json" modules/citadel/api/openapi.core.json
+  # The same for the Brain module (KAN-476): modules/brain/api/openapi.core.json.
+  cargo run -q --manifest-path modules/brain/Cargo.toml -p brain-module --example contract > "$t/brain.core.json"
+  mkdir -p modules/brain/api && cp "$t/brain.core.json" modules/brain/api/openapi.core.json
 fi

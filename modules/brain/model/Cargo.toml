@@ -1,0 +1,15 @@
+[package]
+name = "brain-model"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Pure data and pure logic: no Core crate, no database, no I/O (BM-04 §5.2 rule 1).
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+schemars = "1"
+sha2 = "0.10.9"

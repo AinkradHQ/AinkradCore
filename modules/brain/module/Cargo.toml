@@ -1,0 +1,37 @@
+[package]
+name = "brain-module"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+brain-model = { path = "../model" }
+ainkrad-proto = { path = "../../../crates/proto" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.10.9"
+getrandom = "0.4.3"
+tracing = "0.1"
+axum = "0.8.9"
+utoipa = "6.0.0"
+ainkrad-core = { path = "../../../crates/core" }
+ainkrad-core-server = { path = "../../../crates/server" }
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
+# Q-6: the whole store is encrypted with one key. Feature unification turns the SQLite that sqlx
+# bundles into SQLCipher (OpenSSL vendored, so macOS and Linux build the same). E0-1 proves it.
+libsqlite3-sys = { version = "0.37.0", default-features = false, features = ["bundled-sqlcipher-vendored-openssl"] }
+
+[features]
+# A build that sets leases in seconds (A-3). Never compiled into a release binary.
+test-support = []
+
+[dev-dependencies]
+brain-module = { path = ".", features = ["test-support"] }
+ainkrad-core-server = { path = "../../../crates/server", features = ["test-support"] }
+tower = { version = "0.5.3", features = ["util"] }
+tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }
+tempfile = "3"
+tracing-subscriber = "0.3.23"

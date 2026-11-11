@@ -1,0 +1,16 @@
+# The Brain module (KAN-476, Phase 1 M1): its own workspace like `modules/citadel` and `modules/toy`,
+# `make build-brain` / `make test-brain`. Not part of `make build`/`make test`.
+[workspace]
+resolver = "3"
+members = ["model", "module", "bin"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

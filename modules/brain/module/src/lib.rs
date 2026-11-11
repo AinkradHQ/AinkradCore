@@ -1,0 +1,347 @@
+//! The Brain module (KAN-476, Phase 1 M1): Claude Code sessions to discovered rooms, reviewed by
+//! the user, then stored. Control-plane tables (`brain_*`) live in the Core database and hold ids,
+//! names, policy and rules only; every item's text lives in an encrypted file (`files`).
+//!
+//! Routes (`/modules/brain/v1`): status, import runs, review of proposed rooms, commit, rules and
+//! rooms. See `docs/Plans/2026-11-11-brain-phase1-import-plan.md` §5.
+
+use std::sync::{Arc, Mutex, OnceLock};
+
+use ainkrad_core::audit::NewAuditEvent;
+use ainkrad_core_server::api::App;
+use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY};
+use ainkrad_core_server::module::{Module, ModuleSetting, Zeroizing};
+use ainkrad_core_server::store::{Migration, audit, events};
+use axum::routing::{get, patch, post};
+use axum::{Extension, Json, Router};
+use serde::Serialize;
+use serde_json::Value;
+use sqlx::SqliteConnection;
+use utoipa::{OpenApi, ToSchema};
+
+pub mod cipher;
+pub mod clean;
+mod commit;
+pub mod files;
+mod imports;
+pub mod key;
+mod review;
+pub mod rooms;
+mod rules_api;
+
+pub const MODULE: &str = "brain";
+
+pub static MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    name: "brain_0001",
+    up: include_str!("../migrations/0001_brain_0001.up.sql"),
+    down: include_str!("../migrations/0001_brain_0001.down.sql"),
+}];
+
+/// Employer and client rooms are discovered and reviewed in M1 but committed only after the import
+/// isolation suite and the `room_backup` job exist (plan §12 answer 2). The isolation suite is in;
+/// the backup job (C-10) is not, so this stays false and such proposals wait as `held`.
+pub const ROOM_BACKUP_READY: bool = false;
+
+const DESTRUCTIVE: &[(&str, &str)] = &[
+    ("POST", "/imports/{run}/commit"),
+    ("PATCH", "/rules/{id}"),
+    ("POST", "/rooms/{room}/open"),
+];
+const NON_DESTRUCTIVE: &[(&str, &str)] = &[
+    ("POST", "/imports"),
+    ("POST", "/imports/{run}/items"),
+    ("POST", "/imports/{run}/collected"),
+    ("PATCH", "/imports/{run}/proposals/{p}"),
+    ("POST", "/imports/{run}/proposals/{p}/merge"),
+    ("POST", "/imports/{run}/proposals/{p}/split"),
+    ("POST", "/imports/{run}/proposals/{p}/refuse"),
+    ("PATCH", "/imports/{run}/items"),
+    ("POST", "/rules"),
+];
+const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
+    ("GET", "/status", "read"),
+    ("GET", "/imports/{run}", "read"),
+    ("GET", "/rooms", "read"),
+];
+
+#[derive(Default)]
+struct Inner {
+    app: OnceLock<App>,
+    key: Mutex<Option<Zeroizing<[u8; 32]>>>,
+    rooms: rooms::Rooms,
+}
+
+/// The module. Cheap to clone: handlers reach it as an `Extension`.
+#[derive(Default, Clone)]
+pub struct Brain {
+    inner: Arc<Inner>,
+}
+
+impl Brain {
+    /// A build whose leases last `secs` seconds (A-3). Never compiled into a release binary.
+    #[cfg(feature = "test-support")]
+    pub fn with_lease_secs(secs: i64) -> Self {
+        let b = Self::default();
+        b.inner.rooms.set_lease_override(secs);
+        b
+    }
+
+    /// The brain key, opened once and kept in this process's memory.
+    pub(crate) async fn key(&self, app: &App) -> Result<Zeroizing<[u8; 32]>, ApiError> {
+        self.key_for(app, None).await
+    }
+
+    /// As `key`, making it for `owner` (a device id) when it does not exist yet.
+    pub(crate) async fn key_for(
+        &self,
+        app: &App,
+        owner: Option<&str>,
+    ) -> Result<Zeroizing<[u8; 32]>, ApiError> {
+        if let Some(k) = self
+            .inner
+            .key
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            return Ok(Zeroizing::new(**k));
+        }
+        let k = key::load_or_create(app, owner).await.map_err(|e| match e {
+            key::KeyError::LockedMode0 => ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                "brain_locked",
+                "the brain is locked while secrets.mode is 0",
+            ),
+            key::KeyError::Missing => ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                "brain_key_missing",
+                "no brain key yet: start an import first",
+            ),
+            key::KeyError::Corrupt => ApiError::new(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "brain_key_corrupt",
+                "the brain key did not open",
+            ),
+            key::KeyError::Unavailable => ApiError::new(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "secrets_unavailable",
+                "this Core cannot open the brain key",
+            ),
+        })?;
+        *self.inner.key.lock().unwrap_or_else(|e| e.into_inner()) = Some(Zeroizing::new(*k));
+        Ok(k)
+    }
+
+    pub fn rooms(&self) -> &rooms::Rooms {
+        &self.inner.rooms
+    }
+}
+
+/// An audit row and an event in the caller's transaction: ids, names and counts, never text.
+pub(crate) async fn record(
+    conn: &mut SqliteConnection,
+    action: &str,
+    details: Value,
+    event: Option<(&str, Value)>,
+) -> Result<(), sqlx::Error> {
+    audit::append(
+        conn,
+        &NewAuditEvent {
+            actor: BY,
+            action: action.to_owned(),
+            entity: None,
+            details: details.to_string(),
+        },
+    )
+    .await?;
+    if let Some((kind, payload)) = event {
+        events::append(conn, kind, &payload).await?;
+    }
+    Ok(())
+}
+
+pub(crate) fn code(status: u16, code: &'static str, why: impl Into<String>) -> ApiError {
+    ApiError::new(
+        axum::http::StatusCode::from_u16(status).expect("a status"),
+        code,
+        why,
+    )
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct BrainStatus {
+    pub present: bool,
+    /// `ok`, `locked_mode0`, `missing` or `unavailable`.
+    pub key: String,
+    pub rooms: i64,
+    pub runs: i64,
+}
+
+#[utoipa::path(get, path = "/status", operation_id = "brainStatus", tag = "brain",
+    responses((status = 200, description = "Whether the Brain is here, and its key state", body = BrainStatus)))]
+async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResult<BrainStatus> {
+    let rooms: i64 = sqlx::query_scalar("SELECT count(*) FROM brain_rooms")
+        .fetch_one(&app.pool)
+        .await?;
+    let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM brain_import_runs")
+        .fetch_one(&app.pool)
+        .await?;
+    Ok(Json(BrainStatus {
+        present: true,
+        key: key::state(&app).await.as_str().to_owned(),
+        rooms,
+        runs,
+    }))
+}
+
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        status,
+        imports::start,
+        imports::items,
+        imports::collected,
+        imports::get,
+        review::proposals,
+        review::proposal_items,
+        review::patch_proposal,
+        review::merge,
+        review::split,
+        review::refuse,
+        review::patch_items,
+        commit::commit,
+        rules_api::list,
+        rules_api::create,
+        rules_api::patch,
+        rooms::list,
+        rooms::open
+    ),
+    components(schemas(
+        BrainStatus,
+        imports::StartRun,
+        imports::RunId,
+        imports::Batch,
+        imports::ItemReply,
+        imports::Replies,
+        imports::Collected,
+        imports::RunView,
+        imports::Counts,
+        review::ProposalCard,
+        review::ProposalPatch,
+        review::ItemRow,
+        review::ItemPage,
+        review::MergeInto,
+        review::SplitItems,
+        review::ItemsPatch,
+        review::Changed,
+        review::RoomConfig,
+        commit::CommitResult,
+        commit::RoomMade,
+        rules_api::RuleView,
+        rules_api::NewRule,
+        rules_api::RulePatch,
+        rooms::RoomView,
+        rooms::Opened
+    ))
+)]
+struct Doc;
+
+impl Module for Brain {
+    fn id(&self) -> &'static str {
+        MODULE
+    }
+
+    fn routes(&self) -> Router<App> {
+        Router::new()
+            .route("/status", get(status))
+            .route("/imports", post(imports::start))
+            .route("/imports/{run}", get(imports::get))
+            .route(
+                "/imports/{run}/items",
+                post(imports::items).patch(review::patch_items),
+            )
+            .route("/imports/{run}/collected", post(imports::collected))
+            .route("/imports/{run}/proposals", get(review::proposals))
+            .route(
+                "/imports/{run}/proposals/{p}",
+                patch(review::patch_proposal),
+            )
+            .route(
+                "/imports/{run}/proposals/{p}/items",
+                get(review::proposal_items),
+            )
+            .route("/imports/{run}/proposals/{p}/merge", post(review::merge))
+            .route("/imports/{run}/proposals/{p}/split", post(review::split))
+            .route("/imports/{run}/proposals/{p}/refuse", post(review::refuse))
+            .route("/imports/{run}/commit", post(commit::commit))
+            .route("/rules", get(rules_api::list).post(rules_api::create))
+            .route("/rules/{id}", patch(rules_api::patch))
+            .route("/rooms", get(rooms::list))
+            .route("/rooms/{room}/open", post(rooms::open))
+            .layer(Extension(self.clone()))
+    }
+
+    fn migrations(&self) -> &'static [Migration] {
+        MIGRATIONS
+    }
+
+    fn event_kinds(&self) -> &'static [&'static str] {
+        &["brain.import", "brain.room", "brain.alarm"]
+    }
+
+    /// Ids, names and counts only (Q-15), so a read-only device may see them.
+    fn event_scope(&self, _kind: &str) -> &'static str {
+        "read"
+    }
+
+    fn audit_actions(&self) -> &'static [&'static str] {
+        &[
+            "brain.import.started",
+            "brain.import.discovered",
+            "brain.import.committed",
+            "brain.room.created",
+            "brain.room.opened",
+            "brain.room.refused",
+            "brain.rule.created",
+            "brain.rule.changed",
+        ]
+    }
+
+    fn scope(&self) -> &'static str {
+        "admin"
+    }
+
+    fn route_scopes(&self) -> &'static [(&'static str, &'static str, &'static str)] {
+        ROUTE_SCOPES
+    }
+
+    fn destructive(&self) -> &'static [(&'static str, &'static str)] {
+        DESTRUCTIVE
+    }
+
+    fn non_destructive(&self) -> Option<&'static [(&'static str, &'static str)]> {
+        Some(NON_DESTRUCTIVE)
+    }
+
+    fn openapi(&self) -> Value {
+        serde_json::to_value(Doc::openapi()).expect("the brain contract serialises")
+    }
+
+    fn settings(&self) -> &'static [ModuleSetting] {
+        &[]
+    }
+
+    fn attach(&self, app: &App) {
+        let _ = self.inner.app.set(app.clone());
+    }
+}
+
+pub(crate) fn rand_id(prefix: &str) -> String {
+    let mut b = [0u8; 8];
+    getrandom::fill(&mut b).expect("the system random source");
+    format!(
+        "{prefix}{}",
+        b.iter().map(|x| format!("{x:02x}")).collect::<String>()
+    )
+}
