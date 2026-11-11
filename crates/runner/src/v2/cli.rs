@@ -500,6 +500,11 @@ async fn agents(
 ) -> Result<super::agent::AgentDriver, String> {
     let [secrets, work] = runtime_paths(state);
     let mut executor = crate::HarnessExecutor::new(work, state.join("agents-config"));
+    // Every run of this driver goes through its process sandbox (`ProcessSandbox` below), which
+    // refuses a run it cannot confine and marks the run's environment once it has; the executor
+    // checks that mark at start. So a policy that asks for a sandbox (`sandboxed`, `mode:
+    // sandboxed`) is one this runner can take; leaving this false refused every such run.
+    executor.sandboxed = true;
     // The connection tools the Core lists, shared by the driver (its socket) and the executor (its
     // approvals): one `Tools`.
     let tools = Arc::new(super::agent::tools::Tools::default());

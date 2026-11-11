@@ -218,6 +218,11 @@ pub async fn create(
     let policy = b.policy.unwrap_or_else(|| {
         serde_json::to_value(ainkrad_proto::runner::Policy::default()).expect("a policy serializes")
     });
+    // An account session (an `acct.*` secret, or a chain/agent the allocator draws one from) runs
+    // sandboxed: the Core adds the floor instead of refusing a client that left it out.
+    let draws_account = b.chain.is_some() || b.agent.is_some();
+    let policy =
+        agents::with_account_floor(policy, draws_account || agents::holds_account(&secrets));
     let new = store::NewSession {
         runner: &b.runner,
         harness: &b.harness,
