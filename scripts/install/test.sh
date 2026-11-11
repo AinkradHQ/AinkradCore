@@ -204,7 +204,7 @@ for want in 'step 1/4: Your 2 answers' 'step 4/4: Your connect link' 'HOSTNAME =
   grep -q -- "$want" "$t/gout" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: guided dry run lacks '$want'" >&2; }
 done
 # The guided path must never make a root or exec-enabled runner (a compromised Core would be root on the host).
-grep -q 'RUNNER_ARGS=--enable-pty$' "$t/gout" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: guided runner args are not exactly --enable-pty" >&2; }
+grep -q 'RUNNER_ARGS=--enable-pty --enable-agents ' "$t/gout" && ! grep -qE -- '--enable-exec|--root' "$t/gout" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: guided runner args are not exactly --enable-pty --enable-agents (N8), without exec or root" >&2; }
 for bad in --root --exec --enable-exec User=root 'write .*authority.conf'; do
   grep -qE -- "$bad" "$t/gout" && { fail=$((fail + 1)); echo "FAIL: guided dry run emitted '$bad'" >&2; } || pass=$((pass + 1))
 done
@@ -213,6 +213,7 @@ grep -q $'\033' "$t/gout" && { fail=$((fail + 1)); echo "FAIL: guided output has
 bash "$HERE/get-test.sh" || fail=$((fail + 1)) # get.sh verify-first, secrets to the terminal only, argv
 bash "$HERE/pty-test.sh" || fail=$((fail + 1)) # the curl|sudo sh hang: refusal, the foreground check, real ptys
 bash "$HERE/ui-test.sh" || fail=$((fail + 1)) # the live UI: spinner, heartbeat, cards, DNS feedback, cursor restore
+bash "$HERE/precheck-test.sh" || fail=$((fail + 1)) # checks before installing (ports, host firewall), runner work root length, base tools, built-in runner wiring
 bash "$HERE/harden-test.sh" || fail=$((fail + 1)) # harden.sh guards and firewall, summary, runner restart sequence
 # (no `grep secret=` on the guided dry run: it can never print one; the secret rules are tested for real, with a pty and without a terminal, in get-test.sh) # get.sh verify-first, secrets to the terminal only, SSH guard, runner argv
 

@@ -16,6 +16,8 @@ t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
 # --- get.sh embeds exactly the ui-core of ui.sh (it cannot source anything) ---
 blk() { sed -n '/^# --- ui-core begin ---$/,/^# --- ui-core end ---$/p' "$1"; }
 [ -n "$(blk "$ROOT/scripts/install/ui.sh")" ] && [ "$(blk "$ROOT/scripts/install/ui.sh")" = "$(blk "$ROOT/scripts/get.sh")" ] && ok || bad "the ui-core block in scripts/get.sh differs from scripts/install/ui.sh (copy it over)"
+pblk() { sed -n '/^# --- precheck begin ---$/,/^# --- precheck end ---$/p' "$1"; }
+[ -n "$(pblk "$ROOT/scripts/install/precheck.sh")" ] && [ "$(pblk "$ROOT/scripts/install/precheck.sh")" = "$(pblk "$ROOT/scripts/get.sh")" ] && ok || bad "the precheck block in scripts/get.sh differs from scripts/install/precheck.sh (copy it over)"
 # and it is plain POSIX sh: dash can load it
 if command -v dash >/dev/null; then blk "$ROOT/scripts/install/ui.sh" >"$t/core.sh"; dash -n "$t/core.sh" && ok || bad "ui-core is not valid POSIX sh"; fi
 
@@ -77,26 +79,33 @@ for want in 'Stopped at step 3 of 8 (Download and verify)' 'What failed: cannot 
 done
 
 # --- the DNS verdicts, with stubbed dig / getent / curl / ip ---
-dnsrun() { # NAME WANT A AAAA PUB [ip-6-local]
-  local out
+dnsrun() { # NAME WANT A AAAA PUB [ip-6-local] [WANT-RC]: the verdict text, and whether the install is stopped (rc 1) or goes on (rc 0)
+  local out LOCAL6=${6:-}
   out=$( ( . "$ROOT/scripts/install/ui.sh"; . "$ROOT/scripts/install/lib.sh"; . "$ROOT/scripts/install/guided.sh"
     ui_init; ui_sleep() { :; }
     ANS_A=$3 ANS_AAAA=$4 ANS_PUB=$5
     dig() { if [[ "$*" == *" AAAA "* ]]; then printf '%s' "$ANS_AAAA"; else printf '%s' "$ANS_A"; fi; }
     curl() { printf '%s' "$ANS_PUB"; }
-    ip() { printf '%s\n' "${6:-}"; }
-    ui_check_dns core.example.com ) 2>&1 )
-  grep -qE "$2" <<<"$out" && ok || bad "DNS check: $1 (wanted /$2/): $out"
+    ip() { printf '%s\n' "$LOCAL6"; }
+    ui_check_dns core.example.com ) 2>&1; echo "rc=$?" )
+  grep -Eq "$2" <<<"$out" && ok || bad "DNS check: $1 (wanted /$2/): $out"
+  grep -qx "rc=${7:-0}" <<<"$out" && ok || bad "DNS check: $1 (wanted rc=${7:-0}): $out"
   grep -q $'\033' <<<"$out" && bad "DNS check printed an escape code in plain mode" || ok
 }
-dnsrun "A record matches this machine" 'core.example.com points at 203.0.113.7: this machine. Good.' "203.0.113.7" "" "203.0.113.7"
-dnsrun "A record points elsewhere" 'points at 198.51.100.9, but this machine is 203.0.113.7. Fix: change the A record to 203.0.113.7' "198.51.100.9" "" "203.0.113.7"
-dnsrun "no A record" 'has no DNS A record yet. Fix: at your DNS provider add an A record  core.example.com -> 203.0.113.7' "" "" "203.0.113.7"
-dnsrun "a stray AAAA record" 'AAAA\) record 2001:db8::1 that is not on this machine' "203.0.113.7" "2001:db8::1" "203.0.113.7"
-dnsrun "AAAA that IS on this machine" 'this machine. Good.' "203.0.113.7" "2001:db8::1" "203.0.113.7" "    inet6 2001:db8::1/64 scope global"
+dnsrun "A record matches this machine" 'core.example.com points at 203.0.113.7: this machine' "203.0.113.7" "" "203.0.113.7"
+dnsrun "A record points elsewhere STOPS the install" 'points at 198.51.100.9, but this machine is 203.0.113.7' "198.51.100.9" "" "203.0.113.7" "" 1
+dnsrun "the mismatch card says what to change" 'change the A record to 203.0.113.7' "198.51.100.9" "" "203.0.113.7" "" 1
+dnsrun "no A record STOPS the install" 'has no DNS A record yet' "" "" "203.0.113.7" "" 1
+dnsrun "the no-A card says which record to add" 'add an A record  core.example.com -> 203.0.113.7' "" "" "203.0.113.7" "" 1
+dnsrun "a stray AAAA record STOPS the install" 'AAAA\) record \(2001:db8::1\) that is not on this machine' "203.0.113.7" "2001:db8::1" "203.0.113.7" "" 1
+dnsrun "AAAA that IS on this machine" 'points at 203.0.113.7: this machine' "203.0.113.7" "2001:db8::1" "203.0.113.7" "    inet6 2001:db8::1/64 scope global"
 dnsrun "public address unknown" 'could not be looked up, so I cannot compare' "203.0.113.7" "" ""
-dnsrun "a warning never stops the install" 'Not blocking now' "198.51.100.9" "" "203.0.113.7"
 dnsrun "the third-party lookup is named" 'api.ipify.org' "203.0.113.7" "" "203.0.113.7"
+dnsrun "the red card says nothing was set up" 'Nothing of the Core was set up' "" "" "203.0.113.7" "" 1
+# a dry run only warns
+o=$( ( . "$ROOT/scripts/install/ui.sh"; . "$ROOT/scripts/install/lib.sh"; . "$ROOT/scripts/install/guided.sh"; ui_init; ui_sleep() { :; }; DRY=1
+  dig() { printf '198.51.100.9'; }; curl() { printf '203.0.113.7'; }; ip() { :; }; ui_check_dns core.example.com ) 2>&1; echo "rc=$?" )
+{ grep -q 'dry run continues' <<<"$o" && grep -qx 'rc=0' <<<"$o"; } && ok || bad "a dry run stopped on a DNS mismatch: $o"
 
 # --- no prompt without its card ---
 cardrun() { # KEY: ask with a stubbed reader; the output must have "Question n of N" BEFORE the reader is called
@@ -107,15 +116,19 @@ cardrun() { # KEY: ask with a stubbed reader; the output must have "Question n o
     eval "$(sed -n '/^ui_read() {/p' "$ROOT/scripts/install.sh")" ; eval "$(sed -n '/^ask() {/,/^}/p' "$ROOT/scripts/install.sh")"
     ui_read() { echo "<<READ:$1>>"; eval "$2=\${ANSWER:-}"; }
     UI_Q_N=0 UI_Q_TOTAL=${2:-0}; ANSWER=$3
-    ui_check_dns() { :; }
+    ui_check_dns() { echo "<<DNS:$1>>"; }
     ask "$1" "A plain label" ) 2>&1
 }
 o=$(cardrun HOSTNAME 2 core.example.com)
 q=$(grep -n 'Question 1 of 2' <<<"$o" | head -1 | cut -d: -f1); r=$(grep -n '<<READ:' <<<"$o" | head -1 | cut -d: -f1)
 { [ -n "$q" ] && [ -n "$r" ] && [ "$q" -lt "$r" ]; } && ok || bad "a prompt was read before (or without) its 'Question 1 of 2' card: $o"
-for want in 'A plain label' 'Example:  core.yourdomain.com' 'Default:  \[none\]' 'Waiting for your answer' 'HOSTNAME = core.example.com'; do
+for want in 'A plain label' 'Example:  core.yourdomain.com' '<<DNS:core.example.com>>'; do
   grep -qE -- "$want" <<<"$o" && ok || bad "the question card / echo lacks '$want'"
 done
+for gone in 'Default:' 'none' 'Waiting for your answer' 'HOSTNAME'; do
+  grep -qF -- "$gone" <<<"$o" && bad "the question card still shows '$gone' (a plain question has no variable name, no empty default, no waiting line): $o" || ok
+done
+grep -q '<<READ:.*> *>>' <<<"$o" && ok || bad "the prompt is not a plain pointer: $(grep READ <<<"$o")"
 o=$(cardrun BINARY_DIR 0 /tmp); grep -qE '^ *Question 1$' <<<"$o" && ok || bad "an unknown total should print 'Question n' (got: $(grep Question <<<"$o"))"
 # an answer that is not accepted gets a plain-words reason and the question is asked again, with a fresh read
 reask() { # KEY ANSWER1 ANSWER2
@@ -123,15 +136,15 @@ reask() { # KEY ANSWER1 ANSWER2
     set +u; GUIDED=1 DRY=0; ui_init; say() { printf '%s\n' "$*"; }; default_of() { echo ''; }
     eval "$(sed -n '/^ask() {/,/^}/p' "$ROOT/scripts/install.sh")"
     n=0; ui_read() { n=$((n + 1)); if [ "$n" = 1 ]; then eval "$2=\$ANS1"; else eval "$2=\$ANS2"; fi; echo "<<READ$n>>"; }
-    ANS1=$2 ANS2=$3 UI_Q_N=0 UI_Q_TOTAL=2; ui_check_dns() { :; }
+    ANS1=$2 ANS2=$3 UI_Q_N=0 UI_Q_TOTAL=2; ui_check_dns() { echo "<<DNS:$1>>"; }
     ask "$1" "label" ) 2>&1
 }
 o=$(reask HOSTNAME 203.0.113.4 core.example.com)
-{ grep -q 'That is not a DNS name' <<<"$o" && grep -q '<<READ2>>' <<<"$o" && grep -q 'HOSTNAME = core.example.com' <<<"$o"; } && ok || bad "an invalid hostname was not explained in plain words and re-asked: $o"
+{ grep -q 'That is not a DNS name' <<<"$o" && grep -q '<<READ2>>' <<<"$o" && grep -q '<<DNS:core.example.com>>' <<<"$o"; } && ok || bad "an invalid hostname was not explained in plain words and re-asked: $o"
 o=$(reask ACME_CONTACT not-an-email you@example.com)
-{ grep -q 'does not look like an email' <<<"$o" && grep -q 'ACME_CONTACT = you@example.com' <<<"$o"; } && ok || bad "an invalid email was not explained and re-asked: $o"
+{ grep -q 'does not look like an email' <<<"$o" && grep -q 'Let.s Encrypt only uses you@example.com' <<<"$o"; } && ok || bad "an invalid email was not explained and re-asked: $o"
 # every ui_read call in install.sh is inside ask (so every prompt has a card)
-[ "$(grep -c 'ui_read ' "$ROOT/scripts/install.sh")" -le 4 ] && ok || bad "a prompt outside ask() reads without a card"
+[ "$(grep -c 'ui_read ' "$ROOT/scripts/install.sh")" -le 5 ] && ok || bad "a prompt outside ask() reads without a card"
 n=$(sed -n '/^ask() {/,/^}/p' "$ROOT/scripts/install.sh" | grep -c 'ui_card'); [ "$n" -ge 1 ] && ok || bad "ask() does not print a card"
 
 # --- the cursor is back after Ctrl-C (a real pty), and the screen says what state the host is in ---
@@ -347,7 +360,7 @@ mkdir -p "$t/globdir" && : >"$t/globdir/FILE"
 o=$( cd "$t/globdir" && . "$ROOT/scripts/install/ui.sh"; . "$ROOT/scripts/install/lib.sh"; . "$ROOT/scripts/install/guided.sh"; ui_init; ui_sleep() { :; }
   dig() { if [[ "$*" == *" AAAA "* ]]; then printf '*\n2001:db8::9\n'; else printf '203.0.113.7\n'; fi; }; curl() { printf '203.0.113.7'; }; ip() { :; }
   ui_check_dns core.example.com 2>&1 )
-{ grep -q 'AAAA) record 2001:db8::9' <<<"$o" && ! grep -q 'record FILE' <<<"$o" && ! grep -q 'record \*' <<<"$o"; } && ok || bad "an AAAA answer that is a glob was used or a valid one was dropped: $o"
+{ grep -q 'AAAA) record (2001:db8::9)' <<<"$o" && ! grep -q 'record FILE' <<<"$o" && ! grep -q 'record \*' <<<"$o"; } && ok || bad "an AAAA answer that is a glob was used or a valid one was dropped: $o"
 
 # --- (8) the certificate checklist belongs to the certificate wait only ---
 echo 1000 >"$t/clk"
@@ -372,6 +385,65 @@ rm -f "$t/ran"
 o=$( . "$ROOT/scripts/install/ui.sh"; ui_init; TMPDIR=/nonexistent-dir ui_run "a job" sh -c "touch $t/ran"; echo "rc=$?" 2>&1 )
 { grep -q 'rc=1' <<<"$o" && grep -q 'cannot create a log directory' <<<"$o" && [ ! -e "$t/ran" ]; } && ok || bad "ui_run ran without a log directory (or did not say why): $o"
 [ ! -e /install.log ] && ok || bad "a log was written to /install.log"
+
+
+# --- N1: the download heartbeat never prints "cannot open" while curl has not made the file yet (sh, bash, and get.sh's own copy) ---
+dlrun() { # SHELL SOURCEFILE: a slow fake download into a file that does not exist for the first second
+  local sh=$1 core="$t/core.$1.sh"
+  sed -n '/^# --- ui-core begin ---$/,/^# --- ui-core end ---$/p' "$2" >"$core"
+  NO_COLOR=1 "$sh" -c '. "$1"; ui_init; ui_sleep() { sleep 0.2; }; UI_DL=$2/dl.bin UI_TEXTFN=ui_dl_text; ui_run "Downloading dl.bin" sh -c "sleep 1.2; echo data >\"$2/dl.bin\"; sleep 0.8"; echo END' _ "$core" "$t" 2>&1
+}
+for sh in sh bash; do for src in "$ROOT/scripts/install/ui.sh" "$ROOT/scripts/get.sh"; do
+  rm -f "$t/dl.bin"; o=$(dlrun "$sh" "$src")
+  { grep -q 'END' <<<"$o" && ! grep -qi 'cannot open\|No such file' <<<"$o"; } && ok || bad "$sh with $(basename "$src"): the download heartbeat printed an error: $o"
+done; done
+o=$( . "$ROOT/scripts/install/ui.sh"; ui_init; UI_DL=$t/not-there; ui_dl_text 3 2>&1 )
+grep -q 'Starting the download of not-there' <<<"$o" && ok || bad "no 'Starting the download' text for a file that does not exist yet: $o"
+
+# --- N2/N4: fancy mode = a plan, then ONE progress line and ONE live line redrawn in place; no new line per task ---
+python3 -I - "$ROOT" <<'PY' >"$t/live.out" 2>&1
+import os, pty, sys, select, time, re
+root = sys.argv[1]
+def run(script):
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.environ.update(TERM="xterm-256color", LANG="en_US.UTF-8", COLUMNS="100")
+        os.execvp("bash", ["bash", "-c", '. "%s/scripts/install/ui.sh"; ui_init; ui_sleep() { sleep 0.05; }; %s' % (root, script)])
+    data = b""; t0 = time.time()
+    while time.time() - t0 < 30:
+        r, _, _ = select.select([fd], [], [], 0.3)
+        if r:
+            try: d = os.read(fd, 65536)
+            except OSError: break
+            if not d: break
+            data += d
+    try: os.waitpid(pid, 0)
+    except ChildProcessError: pass
+    return data.decode("utf-8", "replace")
+base = run("ui_roadmap")
+many = run('ui_roadmap; for n in 1 2 3 4 5 6 7 8; do ui_step $n "Step $n" "why $n"; for k in 1 2 3; do ui_run "task $n.$k" sleep 0.1; ui_ok "result $n.$k"; ui_status "note $n.$k"; done; done')
+warn = run('ui_roadmap; ui_step 1 "Step 1" x; ui_warn "a warning"; ui_keep "a kept result"; ui_step 2 "Step 2" x')
+net = lambda o: o.count("\n") - o.count("\x1b[1A")  # lines the screen grew by: newlines minus cursor-ups
+print("EXTRA_LINES", net(many) - net(base))
+print("NO_DONE_SO_FAR", int("Done so far" not in many))
+print("NO_WHY", int("why 3" not in many))
+print("REDRAW", int("\x1b[1A" in many))
+print("LAST_STEP", int("step 8 of 8" in many))
+print("WARN_LINES", net(warn) - net(base))
+print("WARN_KEPT", int("a warning" in warn and "a kept result" in warn))
+PY
+grep -q '^EXTRA_LINES 2$' "$t/live.out" && ok || bad "the fancy UI added lines per step/task (want 2 extra lines: a gap and the progress line below the plan; the live line is the cursor's): $(cat "$t/live.out")"
+for k in NO_DONE_SO_FAR NO_WHY REDRAW LAST_STEP WARN_KEPT; do grep -q "^$k 1$" "$t/live.out" && ok || bad "fancy live UI: $k failed: $(cat "$t/live.out")"; done
+grep -q '^WARN_LINES 4$' "$t/live.out" && ok || bad "a warning and a kept result should each add one line above the progress line (want 4 = 2 + 1 + 1): $(cat "$t/live.out")"
+
+# --- N4: the question card is a rounded box in blue (UTF-8 terminal), every line the same width; plain text otherwise ---
+o=$( . "$ROOT/scripts/install/ui.sh"; . "$ROOT/scripts/install/lib.sh"; . "$ROOT/scripts/install/guided.sh"
+  ui_init; UI_FANCY=1 UI_UTF=1 UI_W=80 BL=$(printf '\033[94m') R=$(printf '\033[0m') B=''; ui_card 1 2 "What is the public DNS name of this Core?" "core.yourdomain.com" "" )
+plain=$(printf '%s' "$o" | sed $'s/\033\\[[0-9;]*m//g')
+{ grep -q '╭' <<<"$plain" && grep -q '╮' <<<"$plain" && grep -q '╰' <<<"$plain" && grep -q '╯' <<<"$plain" && grep -q 'Question 1 of 2' <<<"$plain" && ! grep -q 'Default' <<<"$plain"; } && ok || bad "the question card is not a rounded box without a default line: $plain"
+widths=$(printf '%s\n' "$plain" | grep '[╭│╰]' | python3 -c 'import sys; print(len({len(l.rstrip("\n")) for l in sys.stdin}))')
+[ "$widths" = 1 ] && ok || bad "the lines of the question box have different widths: $plain"
+grep -q $'\033\[94m' <<<"$o" && ok || bad "the question box is not blue"
 
 # --- the pinned top level of get.sh: only function definitions, comments and the last-line call ---
 top=$(awk '/^[a-zA-Z_]+\(\) \{/ { infn = 1 } !infn && !/^[[:space:]]*(#|$)/ { print } /^\}/ { infn = 0 }' "$ROOT/scripts/get.sh" | grep -v '^{ main "\$@"; }$' | head -3)

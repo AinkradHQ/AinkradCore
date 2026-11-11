@@ -2,9 +2,12 @@
 # Installs the ainkrad-runner systemd unit (E1-12.3; protocol v2 since E1-14.5; terminals and pairing E2-15).
 # Idempotent; does not start unless --start or --pair. Works on the Core's own host and on a remote Linux host.
 #   install-linux.sh [--binary PATH] [--ptyhost PATH] [--pty] [--ca PEM]
-#                    [--exec] [--root] [--pair https://<core> --code <CODE>] [--start] [--prefix DIR] [--dry-run]
+#                    [--agents] [--exec] [--root] [--pair https://<core> --code <CODE>] [--start] [--prefix DIR] [--dry-run]
 # --pty      offer terminals (--enable-pty); needs ainkrad-ptyhost (--ptyhost, default: beside --binary). The shell
 #            runs as the unprivileged ainkrad-runner user inside the unit's sandbox. Off unless asked.
+# --agents   offer agent sessions (--enable-agents) with the egress filter on: sessions reach only api.anthropic.com
+#            (AINKRAD_AGENT_NETWORK=filtered, AINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com in runner.env). Needs the harness
+#            (claude) on PATH. Off unless asked.
 # --ca       a PEM the runner trusts instead of the system roots (a test Core's CA only).
 # --pair     pair as the service user now (waits for the approver; compare the SAS it prints), then start.
 # --exec     turn exec.run on (--enable-exec). WARNING: opt-in only; a compromised Core can then run any program as
@@ -17,7 +20,7 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-binary="$HERE/../target/release/ainkrad-runner" ptyhost='' pty=0 ca='' pair='' code='' prefix='' start=0 dry=0 exec_on=0 root=0
+binary="$HERE/../target/release/ainkrad-runner" ptyhost='' pty=0 agents=0 ca='' pair='' code='' prefix='' start=0 dry=0 exec_on=0 root=0
 run() { printf '+ %s\n' "$*"; [ "$dry" = 1 ] || "$@"; }
 WAS_ACTIVE=1
 # Demoting a root runner: its terminal hosts (ptyhosts, started as root; KillMode=process keeps them alive across a restart)
@@ -50,6 +53,7 @@ while [ $# -gt 0 ]; do
     --ptyhost) ptyhost=${2:?}; shift 2 ;;
     --pty) pty=1; shift ;;
     --exec) exec_on=1; shift ;;
+    --agents) agents=1; shift ;;
     --root) root=1; shift ;;
     --ca) ca=${2:?}; shift 2 ;;
     --pair) pair=${2:?}; shift 2 ;;
@@ -71,7 +75,7 @@ if [ "$pty" = 1 ]; then
 fi
 
 if [ -z "$prefix" ]; then
-  # Home is the runner's HOME; its work root is the sibling ainkrad-runner-work (see the unit).
+  # Home is the runner's HOME; its work root is the short /var/lib/akrw (see the unit).
   id ainkrad-runner >/dev/null 2>&1 ||
     run useradd --system --user-group --home-dir /var/lib/ainkrad-runner --no-create-home \
       --shell /usr/sbin/nologin ainkrad-runner
@@ -91,6 +95,7 @@ run install -m 0644 "$HERE/systemd/ainkrad-runner.service" "$prefix/etc/systemd/
 # runner.env: RUNNER_ARGS from these flags, replaced on every run (so a re-run without --pty turns terminals off).
 args=''
 [ "$pty" = 1 ] && args="--enable-pty"
+[ "$agents" = 0 ] || args="${args:+$args }--enable-agents"
 [ "$exec_on" = 1 ] && args="${args:+$args }--enable-exec"
 [ -z "$ca" ] || args="${args:+$args }--ca $ca"
 if [ -n "$prefix" ]; then run install -d "$prefix/etc/ainkrad-runner"; fi
@@ -127,9 +132,10 @@ SystemCallFilter=
 CONF
   fi
 else run rm -f "$dropin/authority.conf"; fi
-printf '+ write %s: RUNNER_ARGS=%s\n' "$envfile" "$args"
+printf '+ write %s: RUNNER_ARGS=%s%s\n' "$envfile" "$args" "$([ "$agents" = 0 ] || echo ' (+ AINKRAD_AGENT_NETWORK=filtered, AINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com)')"
 if [ "$dry" = 0 ]; then
   printf '# Written by deploy/install-linux.sh. exec.run is off unless --enable-exec is added here.\nRUNNER_ARGS=%s\n' "$args" >"$envfile"
+  [ "$agents" = 0 ] || printf 'AINKRAD_AGENT_NETWORK=filtered\nAINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com\n' >>"$envfile"
   chmod 0640 "$envfile"; [ -n "$prefix" ] || chown root:ainkrad-runner "$envfile"
 fi
 runner_demote_kill

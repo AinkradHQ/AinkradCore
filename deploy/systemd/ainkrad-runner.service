@@ -20,7 +20,9 @@
 #                 A shell can do anything the user and the sandbox allow, so enable pty only on a host
 #                 whose Core you trust as you trust a login there.
 #   HOME          /var/lib/ainkrad-runner
-#   work root     /var/lib/ainkrad-runner-work (TMPDIR; a sibling of HOME, not under it)
+#   work root     /var/lib/akrw (TMPDIR; a sibling of HOME, not under it). SHORT on purpose: the gateway and tools self-tests
+#                 build a unix socket path of TMPDIR + 78..79 bytes and a socket path is at most 100 bytes
+#                 (scripts/install/test.sh computes it from this file). The old /var/lib/ainkrad-runner-work made it 106..107.
 # Terminals outlive the runner: each is held by a detached `ainkrad-ptyhost` (its own session; the runner
 # re-adopts them on start, state in /var/lib/ainkrad-runner/core/terminals). So a restart, an upgrade or a crash
 # of the runner must not kill them: KillMode=process stops only the runner. The price: `systemctl stop` leaves the
@@ -44,7 +46,7 @@ User=ainkrad-runner
 Group=ainkrad-runner
 EnvironmentFile=-/etc/ainkrad-runner/runner.env
 Environment=HOME=/var/lib/ainkrad-runner
-Environment=TMPDIR=/var/lib/ainkrad-runner-work
+Environment=TMPDIR=/var/lib/akrw
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 # glibc keeps freed memory in per-thread arenas (~20 threads): one arena cut the runner's RSS creep ~2x in a 1 h run but only ~42% in a 2 h run (KAN-419 audit): it reduces the creep, it does not remove it, so do not rely on it alone for the 24 h soak (KAN-452).
 Environment=MALLOC_ARENA_MAX=1
@@ -65,7 +67,7 @@ RestartSec=5s
 RestartSteps=6
 RestartMaxDelaySec=2min
 
-StateDirectory=ainkrad-runner ainkrad-runner-work
+StateDirectory=ainkrad-runner akrw
 StateDirectoryMode=0700
 ConfigurationDirectory=ainkrad-runner
 ConfigurationDirectoryMode=0750
@@ -74,7 +76,7 @@ UMask=0077
 # --- Filesystem: read-only system, writable only where the runner works ---
 ProtectSystem=strict
 # StateDirectory already makes both writable; spelled out so the work root is explicit.
-ReadWritePaths=/var/lib/ainkrad-runner-work
+ReadWritePaths=/var/lib/akrw
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
