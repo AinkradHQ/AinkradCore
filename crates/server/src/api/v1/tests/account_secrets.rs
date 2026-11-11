@@ -320,15 +320,25 @@ async fn a_session_naming_an_account_secret_must_be_sandboxed_and_keep_it_in_its
     let r = post(both).await;
     assert_eq!(r.0, StatusCode::BAD_REQUEST, "{}", r.1);
     assert!(r.1.to_string().contains("redirect"), "{}", r.1);
-    // KAN-433: no sandbox asked for.
-    for policy in [
-        json!({"mode": "ask"}),
+    // KAN-433: a sandbox explicitly declined is refused.
+    let r = post(session_body(
+        "claude",
+        "ANTHROPIC_API_KEY",
         json!({"mode": "ask", "min_isolation": "none"}),
-    ] {
-        let r = post(session_body("claude", "ANTHROPIC_API_KEY", policy)).await;
-        assert_eq!(r.0, StatusCode::BAD_REQUEST, "{}", r.1);
-        assert!(r.1.to_string().contains("sandboxed"), "{}", r.1);
-    }
+    ))
+    .await;
+    assert_eq!(r.0, StatusCode::BAD_REQUEST, "{}", r.1);
+    assert!(r.1.to_string().contains("sandboxed"), "{}", r.1);
+    // No sandbox asked for at all: the Core adds the `process` floor (N31), so the secret checks
+    // pass and the request stops later, at the runner (not connected), not as a 400.
+    let r = post(session_body(
+        "claude",
+        "ANTHROPIC_API_KEY",
+        json!({"mode": "ask"}),
+    ))
+    .await;
+    assert_ne!(r.0, StatusCode::BAD_REQUEST, "{}", r.1);
+    assert!(!r.1.to_string().contains("sandboxed"), "{}", r.1);
     // Control: the allowed variable and a sandbox pass the checks above and stop later, at the
     // runner (this device id is not connected), not as a 400 about the secret.
     let r = post(session_body("claude", "ANTHROPIC_API_KEY", sandboxed())).await;

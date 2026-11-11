@@ -284,6 +284,31 @@ pub fn account_policy_problem(policy: &ainkrad_proto::runner::Policy) -> Option<
     )
 }
 
+/// `policy` with the account floor applied: a session that holds an account (an `acct.*` secret)
+/// or draws one from a chain gets `min_isolation: process` when its policy asks for no sandbox
+/// tier and leaves `min_isolation` out, so a client need not know the rule
+/// [`account_policy_problem`] enforces. A policy that names a tier, sets `min_isolation` itself
+/// (even `none`: an explicit choice is refused, not overridden), or does not parse is returned
+/// unchanged; the checks after judge it.
+pub fn with_account_floor(policy: serde_json::Value, holds: bool) -> serde_json::Value {
+    if !holds {
+        return policy;
+    }
+    let tiered = serde_json::from_value::<ainkrad_proto::runner::Policy>(policy.clone())
+        .map_or(true, |p| p.required_tier().is_some());
+    match policy {
+        serde_json::Value::Object(mut m)
+            if !tiered
+                && m.get("min_isolation")
+                    .is_none_or(serde_json::Value::is_null) =>
+        {
+            m.insert("min_isolation".into(), "process".into());
+            serde_json::Value::Object(m)
+        }
+        other => other,
+    }
+}
+
 /// Why `runner` may not take a session holding a provider-account secret: real accounts are
 /// placed only on a Linux runner that proved its egress filter (never macOS, whose Seatbelt
 /// cannot filter egress; a runner that never said its OS is refused too).
@@ -1014,5 +1039,35 @@ mod tests {
         }
         assert!(!a.stash("l_more", held("d_a", 100), 0), "full");
         assert!(a.stash("l_more", held("d_a", 300), 200), "the expired went");
+    }
+
+    #[test]
+    fn an_account_session_gets_the_process_floor_and_nothing_else_changes() {
+        let parse = |v: serde_json::Value| {
+            serde_json::from_value::<ainkrad_proto::runner::Policy>(v).unwrap()
+        };
+        let plain = serde_json::to_value(ainkrad_proto::runner::Policy::default()).unwrap();
+        // No account: untouched, and still refused if it later holds one.
+        assert_eq!(with_account_floor(plain.clone(), false), plain);
+        // An account: the floor is added, so the rule it enforces now passes.
+        let floored = with_account_floor(plain.clone(), true);
+        assert!(account_policy_problem(&parse(floored.clone())).is_none());
+        assert_eq!(floored["min_isolation"], "process");
+        // A policy that names a stronger tier keeps it.
+        let mut vm = plain.clone();
+        vm["min_isolation"] = "microvm".into();
+        assert_eq!(with_account_floor(vm.clone(), true), vm);
+        // A legacy sandboxed policy already has a tier: unchanged.
+        let mut legacy = plain;
+        legacy["sandboxed"] = true.into();
+        assert_eq!(with_account_floor(legacy.clone(), true), legacy);
+        // An explicit `none` is the client's choice: unchanged, so the check after refuses it.
+        let none = serde_json::json!({"mode": "ask", "min_isolation": "none"});
+        assert_eq!(with_account_floor(none.clone(), true), none);
+        // Not an object: left for the shape check after.
+        assert_eq!(
+            with_account_floor(serde_json::json!(7), true),
+            serde_json::json!(7)
+        );
     }
 }
