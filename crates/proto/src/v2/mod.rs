@@ -137,6 +137,25 @@ pub struct Heartbeat {
     pub isolation: Option<IsolationCaps>,
 }
 
+/// Facts a runner reports about itself in its hello (display only: the Core decides nothing by
+/// them).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RunnerFacts {
+    /// The system as a person names it, `Ubuntu 26.04` or `macOS 15.1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os_pretty: Option<String>,
+    /// The user the runner process runs as.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    /// That user is root (uid 0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<bool>,
+    /// Agent harnesses found on this host, name to version (`claude` to `2.1.318`); empty when
+    /// agents are off.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub tools: std::collections::BTreeMap<String, String>,
+}
+
 /// The state of `/dev/kvm` on a runner, for the microvm tier (E8a-09).
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
@@ -321,6 +340,10 @@ pub struct RunnerHello {
     /// it that needs one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<IsolationCaps>,
+    /// What the host and the runner process are, for the App's runner page. Absent from a runner
+    /// that does not report it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facts: Option<Box<RunnerFacts>>,
 }
 
 /// Resume by `seq` (E1-11.4): how many of the peer's frames one side received on a stream.

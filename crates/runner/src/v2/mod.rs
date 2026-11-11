@@ -30,6 +30,7 @@ pub mod client;
 pub mod daemon;
 pub mod dial;
 mod exec;
+mod facts;
 pub mod key;
 pub mod login;
 pub mod pair;

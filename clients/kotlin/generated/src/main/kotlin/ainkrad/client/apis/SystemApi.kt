@@ -15,6 +15,7 @@
 
 package ainkrad.client.apis
 
+import ainkrad.client.models.CoreHealth
 import ainkrad.client.models.ErrorBody
 import ainkrad.client.models.HostStatus
 import ainkrad.client.models.LogPage
@@ -62,6 +63,39 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.GET,
             "/api/v1/system/logs/backup",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/core/health
+        * 
+        * 
+         * @return CoreHealth
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun getCoreHealth(): HttpResponse<CoreHealth> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/core/health",
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

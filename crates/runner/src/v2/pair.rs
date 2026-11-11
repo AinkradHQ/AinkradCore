@@ -61,6 +61,25 @@ pub fn parse_qr(payload: &str) -> Option<(String, String, String)> {
     Some((base, c.to_owned(), s.to_owned()))
 }
 
+/// A runner invite, `[<host>/]<core_fp>.<secret>` (the last two are base64url, so neither holds a
+/// dot): the Core's address as `https://host[:port]` when the invite names one, its fingerprint
+/// and the invite's secret.
+pub fn parse_invite(token: &str) -> Option<(Option<String>, String, String)> {
+    let (host, rest) = match token.split_once('/') {
+        Some((h, r)) if !h.is_empty() && !h.contains(['/', '@', '?', '#']) => (Some(h), r),
+        Some(_) => return None,
+        None => (None, token),
+    };
+    let (fp, secret) = rest.split_once('.')?;
+    (fp.len() == 43 && unb64(secret, 22).is_some()).then(|| {
+        (
+            host.map(|h| format!("https://{h}")),
+            fp.to_owned(),
+            secret.to_owned(),
+        )
+    })
+}
+
 /// `n` Crockford characters of `bytes`' 5-bit groups, most significant first.
 fn crockford(bytes: &[u8], n: usize) -> String {
     let mut out = String::with_capacity(n);
@@ -305,6 +324,29 @@ mod tests {
         assert!(parse_qr("ainkrad-pair:v1?h=x&p=port&c=F&s=S").is_none());
         assert!(normal_code("ABCDE-FGHJ").is_none());
         assert!(normal_code("ABCDE-FGHJU").is_none(), "U is not Crockford");
+    }
+
+    #[test]
+    fn an_invite_is_a_fingerprint_and_a_secret() {
+        let fp = "A".repeat(43);
+        let secret = b64(&[7u8; 16]);
+        assert_eq!(
+            parse_invite(&format!("{fp}.{secret}")),
+            Some((None, fp.clone(), secret.clone()))
+        );
+        assert_eq!(
+            parse_invite(&format!("core.example:7700/{fp}.{secret}")),
+            Some((
+                Some("https://core.example:7700".to_owned()),
+                fp.clone(),
+                secret.clone()
+            ))
+        );
+        assert!(parse_invite(&format!("/{fp}.{secret}")).is_none());
+        assert!(parse_invite(&format!("a@b/{fp}.{secret}")).is_none());
+        assert!(parse_invite(&secret).is_none());
+        assert!(parse_invite(&format!("short.{secret}")).is_none());
+        assert!(parse_invite(&format!("{fp}.not a secret")).is_none());
     }
 
     #[test]

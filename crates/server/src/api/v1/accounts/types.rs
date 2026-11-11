@@ -33,6 +33,11 @@ pub struct ProviderAccount {
     /// What the scheduler keeps of its health. Only the reads say it; `state`, `state_reason`
     /// and `state_until` (a cooldown's end) are above.
     pub health: Option<AccountHealth>,
+    /// What the account cost this calendar month (UTC), in millionths of a US dollar, from the
+    /// cost ledger. Only the reads say it, and only to an `admin` device.
+    pub month_spend_usd_micros: Option<i64>,
+    /// The account's monthly dollar budget cap, when one is set; absent when it has none.
+    pub month_limit_usd_micros: Option<i64>,
 }
 
 /// An account's health counters, as the scheduler keeps them.
@@ -98,6 +103,20 @@ impl AccountPlanLimit {
 }
 
 impl ProviderAccount {
+    /// With this month's spend and limit, from [`super::month_spend`]; `None` (not an admin) adds
+    /// nothing.
+    pub(super) fn with_spend(
+        mut self,
+        m: Option<&std::collections::HashMap<i64, (i64, Option<i64>)>>,
+    ) -> Self {
+        if let Some(m) = m {
+            let (spent, limit) = m.get(&self.id).copied().unwrap_or((0, None));
+            self.month_spend_usd_micros = Some(spent);
+            self.month_limit_usd_micros = limit;
+        }
+        self
+    }
+
     /// With its load and health, from [`crate::store::health::statuses`]; an account with no row
     /// there (just made) has none.
     pub(super) fn with_status(mut self, st: Option<&crate::store::health::Status>) -> Self {
@@ -142,6 +161,8 @@ impl From<acc::Account> for ProviderAccount {
             updated_at: ts(&a.updated_at),
             live: None,
             health: None,
+            month_spend_usd_micros: None,
+            month_limit_usd_micros: None,
         }
     }
 }

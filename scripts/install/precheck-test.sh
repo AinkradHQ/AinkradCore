@@ -104,7 +104,7 @@ o=$(run 'pc_checks "443 80"; echo "rc=$?"'); grep -qx 'rc=0' <<<"$o" && ok || ba
 
 # --- get.sh: the machine checks come BEFORE anything is installed; the base tools are in the package list (N39) ---
 gs=$ROOT/scripts/get.sh
-l_chk=$(grep -n '^    pc_checks 443' "$gs" | head -1 | cut -d: -f1);  l_apt=$(grep -n 'ui_run "Installing the prerequisite packages with apt (nothing' "$gs" | head -1 | cut -d: -f1)
+l_chk=$(grep -n 'pc_checks 443 ||' "$gs" | head -1 | cut -d: -f1);  l_apt=$(grep -n 'ui_run "Installing the prerequisite packages with apt (nothing' "$gs" | head -1 | cut -d: -f1)
 { [ -n "$l_chk" ] && [ -n "$l_apt" ] && [ "$l_chk" -lt "$l_apt" ]; } && ok || bad "get.sh does not run pc_checks before the apt step ($l_chk vs $l_apt)"
 for pkg in git curl unzip jq ripgrep build-essential; do grep -q "^    pkgs='.*[ ']${pkg}[ ']" "$gs" && ok || bad "get.sh does not install $pkg with the prerequisites"; done
 grep -q 'ui_stopped "\$PC_WHAT" "\$PC_TODO"' "$gs" && ok || bad "get.sh does not stop with the red card when a check fails"
@@ -133,7 +133,7 @@ bash "$ROOT/deploy/install-linux.sh" --binary "$t/rb" --ptyhost "$t/ph" --pty --
 bash "$ROOT/deploy/install-linux.sh" --binary "$t/rb" --ptyhost "$t/ph" --pty --agents --prefix "$d" >"$t/il3.out" 2>&1
 { grep -qx 'RUNNER_ARGS=--enable-pty --enable-agents' "$d/etc/ainkrad-runner/runner.env" && grep -qx 'AINKRAD_AGENT_NETWORK=filtered' "$d/etc/ainkrad-runner/runner.env" && grep -qx 'AINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com' "$d/etc/ainkrad-runner/runner.env"; } && ok || bad "runner.env with --agents is wrong: $(cat "$d/etc/ainkrad-runner/runner.env" 2>&1)"
 # the installer: on by default for the guided install, off with --no-local-runner; the pinned versions are the ones asked for
-grep -q 'NODE_VERSION=22\.' "$ROOT/scripts/install.sh" && grep -q 'CLAUDE_VERSION=2.1.318' "$ROOT/scripts/install.sh" && ok || bad "install.sh does not pin Node 22 and claude 2.1.318"
+grep -q 'NODE_VERSION=22\.' "$ROOT/scripts/install/agent-tools.sh" && grep -q 'CLAUDE_VERSION=2.1.318' "$ROOT/scripts/install/agent-tools.sh" && ok || bad "agent-tools.sh does not pin Node 22 and claude 2.1.318"
 grep -q 'DISABLE_AUTOUPDATER' "$ROOT/scripts/install.sh" && grep -q '/etc/claude-code/managed-settings.json' "$ROOT/scripts/install.sh" && ok || bad "install.sh does not turn the claude auto-updater off"
 mkdir -p "$t/dd"; for n in ainkrad-core-server ainkradctl ainkrad-runner ainkrad-ptyhost; do printf '#!/bin/sh\n' >"$t/dd/$n"; chmod +x "$t/dd/$n"; done
 run_i() { AINKRAD_HOSTNAME=core.example.com AINKRAD_ACME_EMAIL=ops@example.com NO_COLOR=1 bash "$ROOT/scripts/install.sh" --dry-run --binary "$t/dd" "$@" 2>&1 </dev/null; }

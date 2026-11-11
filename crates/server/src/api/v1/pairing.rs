@@ -35,8 +35,14 @@ pub struct NewPairingBody {
 pub struct NewInviteBody {
     /// What to call the device that claims it.
     pub name: String,
-    /// What it may do: within the creator's own scopes.
+    /// What it may do: within the creator's own scopes. A `runner` invite gets exactly `runner`
+    /// (this may be left out).
+    #[serde(default)]
     pub scopes: Vec<String>,
+    /// `device` (the default) or `runner`: a runner invite is single use, lasts 15 minutes, is
+    /// active at the claim with the `runner` scope, and needs no check code.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -47,6 +53,13 @@ pub struct InviteCreated {
     pub secret: Option<String>,
     /// `ainkrad://connect?host=…&fp=<core_fp>&secret=…`, for a QR code: shown once.
     pub link: Option<String>,
+    /// `device` or `runner`.
+    pub kind: Option<String>,
+    /// A runner invite's end (15 minutes); absent for a device invite, which never expires.
+    pub expires_at: Option<Timestamp>,
+    /// A runner invite only, shown once: `<host>/<core_fp>.<secret>` (`host` as clients address
+    /// the Core), what `ainkrad-runner pair --invite` and `get.sh --runner --invite` take.
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -201,7 +214,9 @@ pub async fn create(
     tag = "pairing", request_body = NewInviteBody,
     responses((status = 200, description = "An invite: one device claims it over the network \
         with the link's secret alone and is active at once with these scopes, with no SAS or \
-        approval. It never expires; reject it to withdraw it. The secret and link are shown only \
+        approval. A device invite never expires; a `runner` invite (`kind`, scope `runner` only) \
+        lasts 15 minutes and comes with a `token` for the runner's command. Reject it to \
+        withdraw it. The secret and link are shown only \
         now (audited as `pairing.created`, without them). Needs `admin` and a step-up; the scopes \
         are within the caller's (403 otherwise); 409 with ten live already", body = InviteCreated)))]
 pub async fn create_invite(
@@ -217,6 +232,19 @@ pub async fn create_invite(
             "a device needs a name, at most 100 bytes",
         ));
     }
+    let kind = match b.kind.as_deref() {
+        None | Some("device") => "device",
+        Some("runner") if scopes.is_empty() || scopes == ["runner"] => {
+            scopes = vec!["runner".to_owned()];
+            "runner"
+        }
+        Some("runner") => {
+            return Err(ApiError::bad_request(
+                "a runner invite gets exactly the runner scope",
+            ));
+        }
+        Some(_) => return Err(ApiError::bad_request("kind is device or runner")),
+    };
     if scopes.is_empty() || scopes.iter().any(|s| !SCOPES.contains(&s.as_str())) {
         return Err(ApiError::bad_request("name at least one known scope"));
     }
@@ -224,7 +252,7 @@ pub async fn create_invite(
         return Err(forbidden_scope());
     }
     let new = NewPairing {
-        kind: "device",
+        kind,
         name: &b.name,
         scopes: &scopes,
         created_by: Some(&me.device.id),
@@ -245,6 +273,10 @@ pub async fn create_invite(
             &app.auth.identity.fp,
             &created.secret,
         )),
+        kind: Some(kind.to_owned()),
+        expires_at: (created.expires > 0).then(|| ts(&iso_of_unix(created.expires))),
+        token: (kind == "runner")
+            .then(|| format!("{}/{}.{}", app.host, app.auth.identity.fp, created.secret)),
         secret: Some(created.secret),
     }))
 }

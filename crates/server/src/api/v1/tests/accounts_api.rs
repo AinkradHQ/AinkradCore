@@ -87,6 +87,8 @@ async fn a_key_is_written_never_read_and_a_phone_sees_neither_secret_name_nor_ru
             "last_used_at",
             "live",
             "masked_tail",
+            "month_limit_usd_micros",
+            "month_spend_usd_micros",
             "provider",
             "session_limits",
             "state",
@@ -347,3 +349,74 @@ async fn an_account_is_replaced_disabled_capped_and_deleted_through_the_routes()
 }
 
 mod pool_routes;
+
+/// The accounts list says what each account cost this calendar month and its monthly dollar cap,
+/// to an admin only; last month's cost and another account's do not count.
+#[tokio::test]
+async fn the_list_gives_an_admin_the_months_spend_and_limit() {
+    let (fx, vm, phone) = setup().await;
+    let a = create(&fx, &vm, "one", V1).await["account"]["id"]
+        .as_i64()
+        .unwrap();
+    let b = create(&fx, &vm, "two", V2).await["account"]["id"]
+        .as_i64()
+        .unwrap();
+    let month = &fx.app.clock.now()[..7];
+    for (n, account, at, usd) in [
+        (1, a, format!("{month}-02T10:00:00.000Z"), 1_500_000),
+        (2, a, format!("{month}-03T10:00:00.000Z"), 500_000),
+        (3, a, "2000-01-01T10:00:00.000Z".to_owned(), 9_000_000),
+        (4, b, format!("{month}-03T10:00:00.000Z"), 7),
+    ] {
+        sqlx::query(
+            "INSERT INTO core_cost_events (session, epoch, account_id, provider, harness, model, \
+             input_tokens, output_tokens, cache_tokens, cost_usd_micros, basis, idempotency_key, \
+             occurred_at, created_at) VALUES ('s', 0, ?, 'anthropic', 'claude', 'm', 1, 1, 0, ?, \
+             'provider_reported', ?, ?, ?)",
+        )
+        .bind(account)
+        .bind(usd)
+        .bind(format!("k{n}"))
+        .bind(at)
+        .bind(fx.app.clock.now())
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO core_budgets (subject_kind, subject_id, period, token_cap, usd_cap_micros, \
+         created_at, updated_at) VALUES ('account', ?, 'month', 0, 50000000, 'x', 'x') \
+         ON CONFLICT (subject_kind, subject_id, period) DO UPDATE SET usd_cap_micros = 50000000",
+    )
+    .bind(a.to_string())
+    .execute(&fx.app.pool)
+    .await
+    .unwrap();
+    let (_, list) = call(&fx, &fx.dev, Method::GET, "/api/v1/accounts", Value::Null).await;
+    let of = |id: i64| {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["id"] == id)
+            .unwrap()
+    };
+    assert_eq!(
+        (
+            of(a)["month_spend_usd_micros"].as_i64(),
+            of(a)["month_limit_usd_micros"].as_i64()
+        ),
+        (Some(2_000_000), Some(50_000_000))
+    );
+    assert_eq!(
+        (
+            of(b)["month_spend_usd_micros"].as_i64(),
+            of(b)["month_limit_usd_micros"].as_i64()
+        ),
+        (Some(7), Some(20_000_000)) // a new account starts with the default month budget
+    );
+    let (_, seen) = call(&fx, &phone, Method::GET, "/api/v1/accounts", Value::Null).await;
+    assert!(
+        seen[0]["month_spend_usd_micros"].is_null(),
+        "a phone does not see spend"
+    );
+}

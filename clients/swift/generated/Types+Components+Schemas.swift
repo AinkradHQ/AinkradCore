@@ -2175,6 +2175,68 @@ extension Components {
                 case session
             }
         }
+        /// What the Core can say about itself. A field it cannot know (no certificate on a loopback
+        /// Core, no backup yet) is absent.
+        ///
+        /// - Remark: Generated from `#/components/schemas/CoreHealth`.
+        public struct CoreHealth: Codable, Hashable, Sendable {
+            /// Whole days until then; negative once it has ended.
+            ///
+            /// - Remark: Generated from `#/components/schemas/CoreHealth/cert_days_left`.
+            public var certDaysLeft: Swift.Int64?
+            /// When the public certificate ends.
+            ///
+            /// - Remark: Generated from `#/components/schemas/CoreHealth/cert_not_after`.
+            public var certNotAfter: Components.Schemas.Timestamp?
+            /// When the newest backup (`<home>/backups/*.age`) was written.
+            ///
+            /// - Remark: Generated from `#/components/schemas/CoreHealth/last_backup_at`.
+            public var lastBackupAt: Components.Schemas.Timestamp?
+            /// That backup's size in bytes.
+            ///
+            /// - Remark: Generated from `#/components/schemas/CoreHealth/last_backup_bytes`.
+            public var lastBackupBytes: Swift.Int64?
+            /// Seconds since this Core process started.
+            ///
+            /// - Remark: Generated from `#/components/schemas/CoreHealth/uptime_secs`.
+            public var uptimeSecs: Swift.Int64
+            /// The server's crate version.
+            ///
+            /// - Remark: Generated from `#/components/schemas/CoreHealth/version`.
+            public var version: Swift.String
+            /// Creates a new `CoreHealth`.
+            ///
+            /// - Parameters:
+            ///   - certDaysLeft: Whole days until then; negative once it has ended.
+            ///   - certNotAfter: When the public certificate ends.
+            ///   - lastBackupAt: When the newest backup (`<home>/backups/*.age`) was written.
+            ///   - lastBackupBytes: That backup's size in bytes.
+            ///   - uptimeSecs: Seconds since this Core process started.
+            ///   - version: The server's crate version.
+            public init(
+                certDaysLeft: Swift.Int64? = nil,
+                certNotAfter: Components.Schemas.Timestamp? = nil,
+                lastBackupAt: Components.Schemas.Timestamp? = nil,
+                lastBackupBytes: Swift.Int64? = nil,
+                uptimeSecs: Swift.Int64,
+                version: Swift.String
+            ) {
+                self.certDaysLeft = certDaysLeft
+                self.certNotAfter = certNotAfter
+                self.lastBackupAt = lastBackupAt
+                self.lastBackupBytes = lastBackupBytes
+                self.uptimeSecs = uptimeSecs
+                self.version = version
+            }
+            public enum CodingKeys: String, CodingKey {
+                case certDaysLeft = "cert_days_left"
+                case certNotAfter = "cert_not_after"
+                case lastBackupAt = "last_backup_at"
+                case lastBackupBytes = "last_backup_bytes"
+                case uptimeSecs = "uptime_secs"
+                case version
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/CostEvent`.
         public struct CostEvent: Codable, Hashable, Sendable {
             /// The Core account the attempt used, if it was one of Core's.
@@ -2977,6 +3039,14 @@ extension Components {
         }
         /// - Remark: Generated from `#/components/schemas/InviteCreated`.
         public struct InviteCreated: Codable, Hashable, Sendable {
+            /// A runner invite's end (15 minutes); absent for a device invite, which never expires.
+            ///
+            /// - Remark: Generated from `#/components/schemas/InviteCreated/expires_at`.
+            public var expiresAt: Components.Schemas.Timestamp?
+            /// `device` or `runner`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/InviteCreated/kind`.
+            public var kind: Swift.String?
             /// `ainkrad://connect?host=…&fp=<core_fp>&secret=…`, for a QR code: shown once.
             ///
             /// - Remark: Generated from `#/components/schemas/InviteCreated/link`.
@@ -2989,25 +3059,42 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/InviteCreated/secret`.
             public var secret: Swift.String?
+            /// A runner invite only, shown once: `<host>/<core_fp>.<secret>` (`host` as clients address
+            /// the Core), what `ainkrad-runner pair --invite` and `get.sh --runner --invite` take.
+            ///
+            /// - Remark: Generated from `#/components/schemas/InviteCreated/token`.
+            public var token: Swift.String?
             /// Creates a new `InviteCreated`.
             ///
             /// - Parameters:
+            ///   - expiresAt: A runner invite's end (15 minutes); absent for a device invite, which never expires.
+            ///   - kind: `device` or `runner`.
             ///   - link: `ainkrad://connect?host=…&fp=<core_fp>&secret=…`, for a QR code: shown once.
             ///   - pairingId: `p_…`: reject it to withdraw the invite.
             ///   - secret: The QR secret, base64url: shown once.
+            ///   - token: A runner invite only, shown once: `<host>/<core_fp>.<secret>` (`host` as clients address
             public init(
+                expiresAt: Components.Schemas.Timestamp? = nil,
+                kind: Swift.String? = nil,
                 link: Swift.String? = nil,
                 pairingId: Swift.String? = nil,
-                secret: Swift.String? = nil
+                secret: Swift.String? = nil,
+                token: Swift.String? = nil
             ) {
+                self.expiresAt = expiresAt
+                self.kind = kind
                 self.link = link
                 self.pairingId = pairingId
                 self.secret = secret
+                self.token = token
             }
             public enum CodingKeys: String, CodingKey {
+                case expiresAt = "expires_at"
+                case kind
                 case link
                 case pairingId = "pairing_id"
                 case secret
+                case token
             }
         }
         /// One way to sign in to a kind, easiest first.
@@ -3883,41 +3970,56 @@ extension Components {
         }
         /// - Remark: Generated from `#/components/schemas/NewInviteBody`.
         public struct NewInviteBody: Codable, Hashable, Sendable {
+            /// `device` (the default) or `runner`: a runner invite is single use, lasts 15 minutes, is
+            /// active at the claim with the `runner` scope, and needs no check code.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewInviteBody/kind`.
+            public var kind: Swift.String?
             /// What to call the device that claims it.
             ///
             /// - Remark: Generated from `#/components/schemas/NewInviteBody/name`.
             public var name: Swift.String
-            /// What it may do: within the creator's own scopes.
+            /// What it may do: within the creator's own scopes. A `runner` invite gets exactly `runner`
+            /// (this may be left out).
             ///
             /// - Remark: Generated from `#/components/schemas/NewInviteBody/scopes`.
-            public var scopes: [Swift.String]
+            public var scopes: [Swift.String]?
             /// Creates a new `NewInviteBody`.
             ///
             /// - Parameters:
+            ///   - kind: `device` (the default) or `runner`: a runner invite is single use, lasts 15 minutes, is
             ///   - name: What to call the device that claims it.
-            ///   - scopes: What it may do: within the creator's own scopes.
+            ///   - scopes: What it may do: within the creator's own scopes. A `runner` invite gets exactly `runner`
             public init(
+                kind: Swift.String? = nil,
                 name: Swift.String,
-                scopes: [Swift.String]
+                scopes: [Swift.String]? = nil
             ) {
+                self.kind = kind
                 self.name = name
                 self.scopes = scopes
             }
             public enum CodingKeys: String, CodingKey {
+                case kind
                 case name
                 case scopes
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .kind
+                )
                 self.name = try container.decode(
                     Swift.String.self,
                     forKey: .name
                 )
-                self.scopes = try container.decode(
+                self.scopes = try container.decodeIfPresent(
                     [Swift.String].self,
                     forKey: .scopes
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
                     "name",
                     "scopes"
                 ])
@@ -4948,6 +5050,15 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ProviderAccount/masked_tail`.
             public var maskedTail: Swift.String
+            /// The account's monthly dollar budget cap, when one is set; absent when it has none.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/month_limit_usd_micros`.
+            public var monthLimitUsdMicros: Swift.Int64?
+            /// What the account cost this calendar month (UTC), in millionths of a US dollar, from the
+            /// cost ledger. Only the reads say it, and only to an `admin` device.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/month_spend_usd_micros`.
+            public var monthSpendUsdMicros: Swift.Int64?
             /// `anthropic`, `openai`, `google` or a user definition's id.
             ///
             /// - Remark: Generated from `#/components/schemas/ProviderAccount/provider`.
@@ -4979,6 +5090,8 @@ extension Components {
             ///   - lastUsedAt:
             ///   - live: Sessions that hold a slot of its cap now (`starting`, `running`, `interrupted`). Only the
             ///   - maskedTail: The key's last four characters; empty for a key too short to show any.
+            ///   - monthLimitUsdMicros: The account's monthly dollar budget cap, when one is set; absent when it has none.
+            ///   - monthSpendUsdMicros: What the account cost this calendar month (UTC), in millionths of a US dollar, from the
             ///   - provider: `anthropic`, `openai`, `google` or a user definition's id.
             ///   - sessionLimits: What one session may spend through this account; absent when only the budgets limit it.
             ///   - state: `active`, `cooling`, `limited`, `unhealthy` or `disabled`.
@@ -4996,6 +5109,8 @@ extension Components {
                 lastUsedAt: Components.Schemas.Timestamp? = nil,
                 live: Swift.Int64? = nil,
                 maskedTail: Swift.String,
+                monthLimitUsdMicros: Swift.Int64? = nil,
+                monthSpendUsdMicros: Swift.Int64? = nil,
                 provider: Swift.String,
                 sessionLimits: Components.Schemas.SessionLimits? = nil,
                 state: Swift.String,
@@ -5013,6 +5128,8 @@ extension Components {
                 self.lastUsedAt = lastUsedAt
                 self.live = live
                 self.maskedTail = maskedTail
+                self.monthLimitUsdMicros = monthLimitUsdMicros
+                self.monthSpendUsdMicros = monthSpendUsdMicros
                 self.provider = provider
                 self.sessionLimits = sessionLimits
                 self.state = state
@@ -5031,6 +5148,8 @@ extension Components {
                 case lastUsedAt = "last_used_at"
                 case live
                 case maskedTail = "masked_tail"
+                case monthLimitUsdMicros = "month_limit_usd_micros"
+                case monthSpendUsdMicros = "month_spend_usd_micros"
                 case provider
                 case sessionLimits = "session_limits"
                 case state
@@ -5273,14 +5392,26 @@ extension Components {
         ///
         /// - Remark: Generated from `#/components/schemas/Runner`.
         public struct Runner: Codable, Hashable, Sendable {
+            /// Whether it can serve the accounts' kinds of key, with the reason when it cannot.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/accounts`.
+            public var accounts: Components.Schemas.RunnerAccounts?
             /// The CPU architecture it reported (`aarch64`, `x86_64`), once connected.
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/arch`.
             public var arch: Swift.String?
+            /// The runner `runner-enroll-local` made on the Core's own machine (the installer's).
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/built_in`.
+            public var builtIn: Swift.Bool?
             /// Commands it takes at once.
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/capacity`.
             public var capacity: Swift.Int32?
+            /// When its current connection began; absent when it is offline.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/connected_since`.
+            public var connectedSince: Components.Schemas.Timestamp?
             /// Connected but silent past two heartbeats.
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/degraded`.
@@ -5316,6 +5447,55 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/online`.
             public var online: Swift.Bool?
+            /// `linux` or `macos`, once connected.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/os`.
+            public var os: Swift.String?
+            /// The system as a person names it, `Ubuntu 26.04`, as the runner reported it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/os_pretty`.
+            public var osPretty: Swift.String?
+            /// The user the runner process runs as, and whether that is root.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/runs_as`.
+            public var runsAs: Components.Schemas.RunnerRunsAs?
+            /// `process` when the runner offers a process sandbox for agents, else `none`; absent when it
+            /// did not report (agents off).
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/sandbox`.
+            public var sandbox: Swift.String?
+            /// Sessions and terminals running now, and how many it takes.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/slots`.
+            public var slots: Components.Schemas.RunnerSlots?
+            /// Agent harnesses it found, name to version (`claude` to `2.1.318`); empty when agents are off.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/tools`.
+            public struct ToolsPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: [String: Swift.String]
+                /// Creates a new `ToolsPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: [String: Swift.String] = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// Agent harnesses it found, name to version (`claude` to `2.1.318`); empty when agents are off.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/tools`.
+            public var tools: Components.Schemas.Runner.ToolsPayload?
+            /// This Core's own version is newer than the runner's `version`. Absent until it connected.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/update_available`.
+            public var updateAvailable: Swift.Bool?
             /// Its `ainkrad-runner` version, once connected.
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/version`.
@@ -5323,8 +5503,11 @@ extension Components {
             /// Creates a new `Runner`.
             ///
             /// - Parameters:
+            ///   - accounts: Whether it can serve the accounts' kinds of key, with the reason when it cannot.
             ///   - arch: The CPU architecture it reported (`aarch64`, `x86_64`), once connected.
+            ///   - builtIn: The runner `runner-enroll-local` made on the Core's own machine (the installer's).
             ///   - capacity: Commands it takes at once.
+            ///   - connectedSince: When its current connection began; absent when it is offline.
             ///   - degraded: Connected but silent past two heartbeats.
             ///   - drivers: What it last advertised (empty until it first connected since the Core started).
             ///   - hostLoad: The host's load as its runner last reported it (E2-15.2), if it has.
@@ -5334,10 +5517,20 @@ extension Components {
             ///   - load: Commands in flight.
             ///   - name:
             ///   - online: Connected to this Core now.
+            ///   - os: `linux` or `macos`, once connected.
+            ///   - osPretty: The system as a person names it, `Ubuntu 26.04`, as the runner reported it.
+            ///   - runsAs: The user the runner process runs as, and whether that is root.
+            ///   - sandbox: `process` when the runner offers a process sandbox for agents, else `none`; absent when it
+            ///   - slots: Sessions and terminals running now, and how many it takes.
+            ///   - tools: Agent harnesses it found, name to version (`claude` to `2.1.318`); empty when agents are off.
+            ///   - updateAvailable: This Core's own version is newer than the runner's `version`. Absent until it connected.
             ///   - version: Its `ainkrad-runner` version, once connected.
             public init(
+                accounts: Components.Schemas.RunnerAccounts? = nil,
                 arch: Swift.String? = nil,
+                builtIn: Swift.Bool? = nil,
                 capacity: Swift.Int32? = nil,
+                connectedSince: Components.Schemas.Timestamp? = nil,
                 degraded: Swift.Bool? = nil,
                 drivers: [Components.Schemas.RunnerDriver]? = nil,
                 hostLoad: Components.Schemas.RunnerHostLoad? = nil,
@@ -5347,10 +5540,20 @@ extension Components {
                 load: Swift.Int32? = nil,
                 name: Swift.String,
                 online: Swift.Bool? = nil,
+                os: Swift.String? = nil,
+                osPretty: Swift.String? = nil,
+                runsAs: Components.Schemas.RunnerRunsAs? = nil,
+                sandbox: Swift.String? = nil,
+                slots: Components.Schemas.RunnerSlots? = nil,
+                tools: Components.Schemas.Runner.ToolsPayload? = nil,
+                updateAvailable: Swift.Bool? = nil,
                 version: Swift.String? = nil
             ) {
+                self.accounts = accounts
                 self.arch = arch
+                self.builtIn = builtIn
                 self.capacity = capacity
+                self.connectedSince = connectedSince
                 self.degraded = degraded
                 self.drivers = drivers
                 self.hostLoad = hostLoad
@@ -5360,11 +5563,21 @@ extension Components {
                 self.load = load
                 self.name = name
                 self.online = online
+                self.os = os
+                self.osPretty = osPretty
+                self.runsAs = runsAs
+                self.sandbox = sandbox
+                self.slots = slots
+                self.tools = tools
+                self.updateAvailable = updateAvailable
                 self.version = version
             }
             public enum CodingKeys: String, CodingKey {
+                case accounts
                 case arch
+                case builtIn = "built_in"
                 case capacity
+                case connectedSince = "connected_since"
                 case degraded
                 case drivers
                 case hostLoad = "host_load"
@@ -5374,7 +5587,70 @@ extension Components {
                 case load
                 case name
                 case online
+                case os
+                case osPretty = "os_pretty"
+                case runsAs = "runs_as"
+                case sandbox
+                case slots
+                case tools
+                case updateAvailable = "update_available"
                 case version
+            }
+        }
+        /// What a runner can do for accounts: each answer, and why not when it is `false`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunnerAccounts`.
+        public struct RunnerAccounts: Codable, Hashable, Sendable {
+            /// Sessions' network is filtered by an allow list.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerAccounts/egress_filter`.
+            public var egressFilter: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/RunnerAccounts/egress_filter_reason`.
+            public var egressFilterReason: Swift.String?
+            /// API-key accounts through the auth gateway.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerAccounts/gateway`.
+            public var gateway: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/RunnerAccounts/gateway_reason`.
+            public var gatewayReason: Swift.String?
+            /// A subscription's token handed to a session as an environment variable (needs the sandbox
+            /// and a proven egress filter).
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerAccounts/subscription_env`.
+            public var subscriptionEnv: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/RunnerAccounts/subscription_env_reason`.
+            public var subscriptionEnvReason: Swift.String?
+            /// Creates a new `RunnerAccounts`.
+            ///
+            /// - Parameters:
+            ///   - egressFilter: Sessions' network is filtered by an allow list.
+            ///   - egressFilterReason:
+            ///   - gateway: API-key accounts through the auth gateway.
+            ///   - gatewayReason:
+            ///   - subscriptionEnv: A subscription's token handed to a session as an environment variable (needs the sandbox
+            ///   - subscriptionEnvReason:
+            public init(
+                egressFilter: Swift.Bool,
+                egressFilterReason: Swift.String? = nil,
+                gateway: Swift.Bool,
+                gatewayReason: Swift.String? = nil,
+                subscriptionEnv: Swift.Bool,
+                subscriptionEnvReason: Swift.String? = nil
+            ) {
+                self.egressFilter = egressFilter
+                self.egressFilterReason = egressFilterReason
+                self.gateway = gateway
+                self.gatewayReason = gatewayReason
+                self.subscriptionEnv = subscriptionEnv
+                self.subscriptionEnvReason = subscriptionEnvReason
+            }
+            public enum CodingKeys: String, CodingKey {
+                case egressFilter = "egress_filter"
+                case egressFilterReason = "egress_filter_reason"
+                case gateway
+                case gatewayReason = "gateway_reason"
+                case subscriptionEnv = "subscription_env"
+                case subscriptionEnvReason = "subscription_env_reason"
             }
         }
         /// A driver a runner offers, as it advertised it.
@@ -5498,6 +5774,76 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case kvm
                 case tiers
+            }
+        }
+        /// Who the runner process is.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunnerRunsAs`.
+        public struct RunnerRunsAs: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RunnerRunsAs/root`.
+            public var root: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/RunnerRunsAs/user`.
+            public var user: Swift.String?
+            /// Creates a new `RunnerRunsAs`.
+            ///
+            /// - Parameters:
+            ///   - root:
+            ///   - user:
+            public init(
+                root: Swift.Bool? = nil,
+                user: Swift.String? = nil
+            ) {
+                self.root = root
+                self.user = user
+            }
+            public enum CodingKeys: String, CodingKey {
+                case root
+                case user
+            }
+        }
+        /// A runner's work, split by kind.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunnerSlots`.
+        public struct RunnerSlots: Codable, Hashable, Sendable {
+            /// How many agent sessions it takes at once; absent when agents are off or it is unknown.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerSlots/agents_capacity`.
+            public var agentsCapacity: Swift.Int32?
+            /// Agent sessions starting, running or interrupted on it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerSlots/agents_used`.
+            public var agentsUsed: Swift.Int32
+            /// How many terminals it takes at once; absent when terminals are off or it is unknown.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerSlots/terminals_capacity`.
+            public var terminalsCapacity: Swift.Int32?
+            /// Terminals created or running on it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerSlots/terminals_used`.
+            public var terminalsUsed: Swift.Int32
+            /// Creates a new `RunnerSlots`.
+            ///
+            /// - Parameters:
+            ///   - agentsCapacity: How many agent sessions it takes at once; absent when agents are off or it is unknown.
+            ///   - agentsUsed: Agent sessions starting, running or interrupted on it.
+            ///   - terminalsCapacity: How many terminals it takes at once; absent when terminals are off or it is unknown.
+            ///   - terminalsUsed: Terminals created or running on it.
+            public init(
+                agentsCapacity: Swift.Int32? = nil,
+                agentsUsed: Swift.Int32,
+                terminalsCapacity: Swift.Int32? = nil,
+                terminalsUsed: Swift.Int32
+            ) {
+                self.agentsCapacity = agentsCapacity
+                self.agentsUsed = agentsUsed
+                self.terminalsCapacity = terminalsCapacity
+                self.terminalsUsed = terminalsUsed
+            }
+            public enum CodingKeys: String, CodingKey {
+                case agentsCapacity = "agents_capacity"
+                case agentsUsed = "agents_used"
+                case terminalsCapacity = "terminals_capacity"
+                case terminalsUsed = "terminals_used"
             }
         }
         /// What a delete answers.

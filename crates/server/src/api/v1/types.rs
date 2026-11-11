@@ -146,7 +146,12 @@
 /// 49: the Core machine (host-helper slice 1): `getHostStatus`, `restartHostService`, `getCoreLogs`,
 ///    `getHelperLogs`, `getRunnerLogs` and `getBackupLogs` (`GET/POST /api/v1/system/...`, all `admin`; the
 ///    restart and the runner and backup logs destructive); the `host.*` audit actions; the query name `lines`.
-pub const API_MINOR: u32 = 50;
+/// 51: the App's runner, Home and Add-device screens (N17-N19, N9, N14): `Runner` gains `os`, `os_pretty`,
+///    `runs_as`, `sandbox`, `connected_since`, `update_available`, `accounts`, `slots`, `tools` and `built_in`;
+///    `getCoreHealth` (`GET /core/health`, `read`); `createInvite` takes `kind` (`runner`: 15 minutes, scope
+///    `runner`) and answers `kind`, `expires_at` and `token`; `ProviderAccount` gains `month_spend_usd_micros`
+///    and `month_limit_usd_micros`.
+pub const API_MINOR: u32 = 51;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
