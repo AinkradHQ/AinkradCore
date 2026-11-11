@@ -25,8 +25,11 @@ use crate::exec::Launch;
 use crate::proc::Proc;
 use crate::{Decision, Harness, HarnessEvent, RateWindow, Spec, TurnOutcome, Usage, sum_tokens};
 
-/// The Claude Code version this adapter was written and recorded against (E3.6 probes it).
-pub const VERSION: &str = "2.1.306";
+/// The one pinned Claude Code version: the adapter is recorded against it (E3.6 probes it, the
+/// compat matrix's `tested_up_to`) and the plan sign-in (`ainkrad_runner::v2::login::PINNED`) accepts it.
+pub const VERSION: &str = "2.1.318";
+/// The oldest version the adapter's protocol handling is still verified against.
+pub const MIN_VERSION: &str = "2.1.306";
 
 /// Variables Claude authenticates with, for a runner's env allowlist.
 pub const AUTH_ENV: &[&str] = &["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];

@@ -307,6 +307,22 @@ pub async fn body(body: Body, limit: usize) -> Result<Bytes, Refusal> {
         .map_err(|_| Box::new(crate::gateway::preauth::too_large()))
 }
 
+/// A terminal signal the user can already type at the keyboard (Ctrl-C, Ctrl-Z, `fg`): INT, TSTP
+/// and CONT on `POST /api/v1/terminals/{id}/signal` need the `terminal` scope but no step-up. Every
+/// other signal (KILL, ...) keeps it. The route stays in `DESTRUCTIVE`; this is its one exception.
+fn plain_signal(method: &axum::http::Method, path: &str, body: &[u8]) -> bool {
+    let sig_route = method == axum::http::Method::POST
+        && path
+            .strip_prefix("/api/v1/terminals/")
+            .and_then(|r| r.strip_suffix("/signal"))
+            .is_some_and(|id| !id.is_empty() && !id.contains('/'));
+    sig_route
+        && serde_json::from_slice::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| v.get("signal")?.as_str().map(str::to_owned))
+            .is_some_and(|s| matches!(s.as_str(), "INT" | "TSTP" | "CONT"))
+}
+
 /// The gate every route but the pre-auth ones passes. It runs before routing, as the outer
 /// layer `gateway::preauth::gate`, so an unknown path without a valid signature is the same 401
 /// as a known one.
@@ -342,6 +358,7 @@ pub(crate) async fn client_gate(State(app): State<App>, req: Request, next: Next
     }
     let session = v.session.expect("Mode::Session has one");
     if super::scopes::destructive(&parts.method, parts.uri.path(), &app.modules)
+        && !plain_signal(&parts.method, parts.uri.path(), &v.body)
         && !session.elevated(app.clock.unix())
     {
         tracing::warn!(

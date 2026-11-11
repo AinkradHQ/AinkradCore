@@ -87,7 +87,14 @@ async fn a_phone_reads_prices_only_and_the_ledger_and_usage_need_admin_and_name_
     .await;
     assert_eq!(none, json!([]));
     let (_, prices) = call(&fx, &phone, Method::GET, "/api/v1/prices", Value::Null).await;
-    assert_eq!(prices[0]["model"], "claude-x");
+    assert!(
+        prices
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["model"] == "claude-x"),
+        "the set price is listed beside the shipped ones"
+    );
 
     let (st, usage) = call(
         &fx,

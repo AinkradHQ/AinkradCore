@@ -44,7 +44,7 @@ impl Compat {
 pub const COMPAT: &[Compat] = &[
     Compat {
         harness: "claude",
-        min_version: claude::VERSION,
+        min_version: claude::MIN_VERSION,
         tested: &[claude::VERSION],
         known_bad: &[],
     },

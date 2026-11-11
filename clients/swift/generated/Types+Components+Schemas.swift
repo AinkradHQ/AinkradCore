@@ -12,6 +12,14 @@ extension Components {
         public struct AccountDetail: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/AccountDetail/account`.
             public var account: Components.Schemas.ProviderAccount
+            /// The chain that holds the pool (set by `createAccount`).
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountDetail/chain`.
+            public var chain: Swift.Int64?
+            /// The pool the account joined (set by `createAccount`).
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountDetail/pool`.
+            public var pool: Swift.Int64?
             /// Runner device ids, explicit (never a wildcard).
             ///
             /// - Remark: Generated from `#/components/schemas/AccountDetail/runners`.
@@ -20,16 +28,24 @@ extension Components {
             ///
             /// - Parameters:
             ///   - account:
+            ///   - chain: The chain that holds the pool (set by `createAccount`).
+            ///   - pool: The pool the account joined (set by `createAccount`).
             ///   - runners: Runner device ids, explicit (never a wildcard).
             public init(
                 account: Components.Schemas.ProviderAccount,
+                chain: Swift.Int64? = nil,
+                pool: Swift.Int64? = nil,
                 runners: [Swift.String]
             ) {
                 self.account = account
+                self.chain = chain
+                self.pool = pool
                 self.runners = runners
             }
             public enum CodingKeys: String, CodingKey {
                 case account
+                case chain
+                case pool
                 case runners
             }
         }
@@ -4081,8 +4097,24 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/NewProviderAccount/cap`.
             public var cap: Swift.Int64?
+            /// An existing chain to put the pool in; default: the user's default chain (made if missing).
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProviderAccount/chain`.
+            public var chain: Swift.Int64?
             /// - Remark: Generated from `#/components/schemas/NewProviderAccount/label`.
             public var label: Swift.String
+            /// The monthly dollar limit in micro-dollars; default 20000000 ($20); 0 is no limit.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProviderAccount/monthly_limit_usd_micros`.
+            public var monthlyLimitUsdMicros: Swift.Int64?
+            /// An existing pool of the provider to join; default: the provider's default pool (made if missing).
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProviderAccount/pool`.
+            public var pool: Swift.Int64?
+            /// 0-based seat of the pool in the chain; default: last.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProviderAccount/position`.
+            public var position: Swift.Int32?
             /// - Remark: Generated from `#/components/schemas/NewProviderAccount/provider`.
             public var provider: Swift.String
             /// Runner device ids it may be leased to; default none.
@@ -4097,26 +4129,42 @@ extension Components {
             ///
             /// - Parameters:
             ///   - cap: Default 4; 0 is no cap.
+            ///   - chain: An existing chain to put the pool in; default: the user's default chain (made if missing).
             ///   - label:
+            ///   - monthlyLimitUsdMicros: The monthly dollar limit in micro-dollars; default 20000000 ($20); 0 is no limit.
+            ///   - pool: An existing pool of the provider to join; default: the provider's default pool (made if missing).
+            ///   - position: 0-based seat of the pool in the chain; default: last.
             ///   - provider:
             ///   - runners: Runner device ids it may be leased to; default none.
             ///   - value: The API key; written, never read back.
             public init(
                 cap: Swift.Int64? = nil,
+                chain: Swift.Int64? = nil,
                 label: Swift.String,
+                monthlyLimitUsdMicros: Swift.Int64? = nil,
+                pool: Swift.Int64? = nil,
+                position: Swift.Int32? = nil,
                 provider: Swift.String,
                 runners: [Swift.String]? = nil,
                 value: Swift.String
             ) {
                 self.cap = cap
+                self.chain = chain
                 self.label = label
+                self.monthlyLimitUsdMicros = monthlyLimitUsdMicros
+                self.pool = pool
+                self.position = position
                 self.provider = provider
                 self.runners = runners
                 self.value = value
             }
             public enum CodingKeys: String, CodingKey {
                 case cap
+                case chain
                 case label
+                case monthlyLimitUsdMicros = "monthly_limit_usd_micros"
+                case pool
+                case position
                 case provider
                 case runners
                 case value

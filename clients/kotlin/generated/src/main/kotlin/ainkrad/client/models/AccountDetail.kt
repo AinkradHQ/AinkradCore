@@ -26,6 +26,8 @@ import kotlinx.serialization.Contextual
  *
  * @param account 
  * @param runners Runner device ids, explicit (never a wildcard).
+ * @param chain The chain that holds the pool (set by `createAccount`).
+ * @param pool The pool the account joined (set by `createAccount`).
  */
 @Serializable
 
@@ -36,7 +38,15 @@ data class AccountDetail (
 
     /* Runner device ids, explicit (never a wildcard). */
     @SerialName(value = "runners")
-    val runners: kotlin.collections.List<kotlin.String>
+    val runners: kotlin.collections.List<kotlin.String>,
+
+    /* The chain that holds the pool (set by `createAccount`). */
+    @SerialName(value = "chain")
+    val chain: kotlin.Long? = null,
+
+    /* The pool the account joined (set by `createAccount`). */
+    @SerialName(value = "pool")
+    val pool: kotlin.Long? = null
 
 ) {
 

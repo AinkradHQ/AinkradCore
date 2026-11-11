@@ -179,6 +179,9 @@ pub(super) async fn create_named(
         None => {
             agents::validate_new(new, admin).map_err(invalid)?;
             agents::admit_holding(app, new.runner, new.harness, new.policy, new.secrets).await?;
+            if let Some(e) = no_account(new) {
+                return Err(e);
+            }
         }
         Some(entries) => {
             // The store refuses these too and leaves no row; said here, they come first.
@@ -252,4 +255,29 @@ impl From<Refusal> for ApiError {
             Refusal::Db(e) => e.into(),
         }
     }
+}
+
+/// N29: a plain session of a harness that signs in with an account, naming no account and no
+/// secret that is the harness's own credential variable, would start and answer "Not logged in".
+pub(super) fn no_account(new: &NewSession<'_>) -> Option<ApiError> {
+    const OWN: [&str; 6] = [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "CODEX_API_KEY",
+        "OPENAI_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+    ];
+    let needs = matches!(new.harness, "claude" | "codex" | "agy");
+    let holds = new
+        .secrets
+        .iter()
+        .any(|s| s.name.starts_with(ACCOUNT_PREFIX) || OWN.contains(&s.var.as_str()));
+    (needs && !holds).then(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "no_account",
+            "No account can serve this agent. Add an account and make its pool the default.",
+        )
+    })
 }

@@ -90,6 +90,7 @@ mod pairing;
 mod pairing_abuse;
 mod pairing_invite;
 mod passkeys;
+mod placement;
 mod pools;
 mod preauth;
 mod providers;

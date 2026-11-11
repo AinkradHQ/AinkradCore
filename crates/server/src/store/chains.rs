@@ -138,7 +138,7 @@ pub async fn load(conn: &mut SqliteConnection, chain_id: i64) -> Result<Vec<Chai
 }
 
 /// Checks `specs` (see the module doc) and resolves them.
-async fn check_entries(
+pub(super) async fn check_entries(
     conn: &mut SqliteConnection,
     user: i64,
     specs: &[EntrySpec<'_>],
@@ -191,7 +191,7 @@ async fn check_entries(
     Ok(out)
 }
 
-async fn write_entries(
+pub(super) async fn write_entries(
     conn: &mut SqliteConnection,
     chain: i64,
     user: i64,
