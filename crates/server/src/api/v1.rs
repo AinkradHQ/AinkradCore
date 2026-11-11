@@ -32,6 +32,7 @@ mod audit;
 mod budgets;
 mod chains;
 mod connections;
+mod corehealth;
 mod costs;
 mod deprecation;
 mod devices;
@@ -192,6 +193,7 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/terminals/{id}/signal", post(terminals::signal))
         .route("/api/v1/terminals/{id}/ws", get(terminals::attach))
         .route("/api/v1/system/host", get(system::host))
+        .route("/api/v1/core/health", get(corehealth::get))
         .route("/api/v1/system/restart", post(system::restart))
         .route("/api/v1/system/logs/core", get(system::logs_core))
         .route("/api/v1/system/logs/helper", get(system::logs_helper))

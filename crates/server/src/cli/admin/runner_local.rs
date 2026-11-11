@@ -84,7 +84,7 @@ pub async fn enrol_local(db: &Path, out: &Path, url: &str) -> Result_ {
     let pairing = gov::get_pairing(&pool, &created.id)
         .await?
         .ok_or("the pairing is gone")?;
-    let sas = "LOCALENROL";
+    let sas = gov::LOCAL_ENROL_SAS;
     let claim = gov::Claim {
         pairing: &pairing,
         device_id: &device_id,

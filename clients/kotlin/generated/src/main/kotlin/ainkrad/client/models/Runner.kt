@@ -15,9 +15,12 @@
 
 package ainkrad.client.models
 
+import ainkrad.client.models.RunnerAccounts
 import ainkrad.client.models.RunnerDriver
 import ainkrad.client.models.RunnerHostLoad
 import ainkrad.client.models.RunnerIsolation
+import ainkrad.client.models.RunnerRunsAs
+import ainkrad.client.models.RunnerSlots
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
@@ -28,8 +31,11 @@ import kotlinx.serialization.Contextual
  *
  * @param id The runner's device id, `d_…`.
  * @param name 
+ * @param accounts Whether it can serve the accounts' kinds of key, with the reason when it cannot.
  * @param arch The CPU architecture it reported (`aarch64`, `x86_64`), once connected.
+ * @param builtIn The runner `runner-enroll-local` made on the Core's own machine (the installer's).
  * @param capacity Commands it takes at once.
+ * @param connectedSince RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param degraded Connected but silent past two heartbeats.
  * @param drivers What it last advertised (empty until it first connected since the Core started).
  * @param hostLoad The host's load as its runner last reported it (E2-15.2), if it has.
@@ -37,6 +43,13 @@ import kotlinx.serialization.Contextual
  * @param lastSeen RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param load Commands in flight.
  * @param online Connected to this Core now.
+ * @param os `linux` or `macos`, once connected.
+ * @param osPretty The system as a person names it, `Ubuntu 26.04`, as the runner reported it.
+ * @param runsAs The user the runner process runs as, and whether that is root.
+ * @param sandbox `process` when the runner offers a process sandbox for agents, else `none`; absent when it did not report (agents off).
+ * @param slots Sessions and terminals running now, and how many it takes.
+ * @param tools Agent harnesses it found, name to version (`claude` to `2.1.318`); empty when agents are off.
+ * @param updateAvailable This Core's own version is newer than the runner's `version`. Absent until it connected.
  * @param version Its `ainkrad-runner` version, once connected.
  */
 @Serializable
@@ -50,13 +63,25 @@ data class Runner (
     @SerialName(value = "name")
     val name: kotlin.String,
 
+    /* Whether it can serve the accounts' kinds of key, with the reason when it cannot. */
+    @SerialName(value = "accounts")
+    val accounts: RunnerAccounts? = null,
+
     /* The CPU architecture it reported (`aarch64`, `x86_64`), once connected. */
     @SerialName(value = "arch")
     val arch: kotlin.String? = null,
 
+    /* The runner `runner-enroll-local` made on the Core's own machine (the installer's). */
+    @SerialName(value = "built_in")
+    val builtIn: kotlin.Boolean? = null,
+
     /* Commands it takes at once. */
     @SerialName(value = "capacity")
     val capacity: kotlin.Int? = null,
+
+    /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
+    @Contextual @SerialName(value = "connected_since")
+    val connectedSince: java.time.OffsetDateTime? = null,
 
     /* Connected but silent past two heartbeats. */
     @SerialName(value = "degraded")
@@ -85,6 +110,34 @@ data class Runner (
     /* Connected to this Core now. */
     @SerialName(value = "online")
     val online: kotlin.Boolean? = null,
+
+    /* `linux` or `macos`, once connected. */
+    @SerialName(value = "os")
+    val os: kotlin.String? = null,
+
+    /* The system as a person names it, `Ubuntu 26.04`, as the runner reported it. */
+    @SerialName(value = "os_pretty")
+    val osPretty: kotlin.String? = null,
+
+    /* The user the runner process runs as, and whether that is root. */
+    @SerialName(value = "runs_as")
+    val runsAs: RunnerRunsAs? = null,
+
+    /* `process` when the runner offers a process sandbox for agents, else `none`; absent when it did not report (agents off). */
+    @SerialName(value = "sandbox")
+    val sandbox: kotlin.String? = null,
+
+    /* Sessions and terminals running now, and how many it takes. */
+    @SerialName(value = "slots")
+    val slots: RunnerSlots? = null,
+
+    /* Agent harnesses it found, name to version (`claude` to `2.1.318`); empty when agents are off. */
+    @SerialName(value = "tools")
+    val tools: kotlin.collections.Map<kotlin.String, kotlin.String>? = null,
+
+    /* This Core's own version is newer than the runner's `version`. Absent until it connected. */
+    @SerialName(value = "update_available")
+    val updateAvailable: kotlin.Boolean? = null,
 
     /* Its `ainkrad-runner` version, once connected. */
     @SerialName(value = "version")

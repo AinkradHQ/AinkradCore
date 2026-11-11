@@ -197,6 +197,13 @@ impl Session {
                 .collect(),
             boot: Some(self.boot.clone()),
             isolation: self.agent.as_ref().map(|a| a.isolation()),
+            facts: Some(Box::new(super::facts::gather(
+                &self
+                    .agent
+                    .as_ref()
+                    .map(|a| a.versions().clone())
+                    .unwrap_or_default(),
+            ))),
             streams: held,
             terminals,
             load: host_load().map(|l| HostLoad {

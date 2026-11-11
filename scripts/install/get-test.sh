@@ -70,6 +70,16 @@ PY
   runget "$t/get-a.sh" "$t/r/9.9.9" AINKRAD_MIN_VERSION=9.9.9 && ok || bad "get.sh: AINKRAD_MIN_VERSION equal to the release was refused"
   mkrel "$t/r"; refused "a malformed AINKRAD_MIN_VERSION" "$t/get-a.sh" "$t/r/9.9.9" AINKRAD_MIN_VERSION=latest
   mkrel "$t/r"; mkget "$t/get-hi.sh" 9.9.10; refused "AINKRAD_MIN_VERSION lower than the stamped floor must not lower it" "$t/get-hi.sh" "$t/r/9.9.9" AINKRAD_MIN_VERSION=0.0.1
+  # --runner (N17) needs a well-formed runner invite and --invite is for --runner only: refused before anything is changed
+  mkrel "$t/r"
+  for bad_args in "--runner" "--runner --invite nope" "--runner --invite a/b.c;d" "--invite x/y.z"; do
+    # shellcheck disable=SC2086 # the words are separate arguments on purpose
+    if ( cd "$t" && env AINKRAD_GET_VERIFY_ONLY=1 AINKRAD_RELEASE_URL="$t/r/9.9.9" NO_COLOR=1 sh "$t/get-a.sh" $bad_args ) >"$t/gout" 2>&1 </dev/null; then bad "get.sh accepted: $bad_args"; else ok; fi
+  done
+  INV="core.example.com/$(printf 'A%.0s' $(seq 43)).$(printf 'B%.0s' $(seq 22))"
+  ( cd "$t" && env AINKRAD_GET_VERIFY_ONLY=1 AINKRAD_RELEASE_URL="$t/r/9.9.9" NO_COLOR=1 sh "$t/get-a.sh" --runner --invite "$INV" ) >"$t/gout" 2>&1 </dev/null &&
+    grep -q 'verify-only: release 9.9.9 verified' "$t/gout" && ok || bad "get.sh refused a well-formed --runner --invite"
+  grep -q "$INV" "$t/gout" && bad "get.sh printed the invite" || ok
   # exactly one installer bundle
   mkrel "$t/r"; cp "$t/r/9.9.9/ainkrad-core-installer-9.9.9.tar.gz" "$t/r/9.9.9/ainkrad-core-installer-9.9.8.tar.gz"
   bash "$ROOT/scripts/release/sign.sh" "$t/r/9.9.9" "$t/a.key" >/dev/null; refused "two installer bundles" "$t/get-a.sh" "$t/r/9.9.9"

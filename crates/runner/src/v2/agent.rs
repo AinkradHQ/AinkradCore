@@ -288,6 +288,8 @@ pub struct AgentDriver {
     /// Woken on every new entry or state change, for reads.
     changed: Notify,
     next_run: Mutex<i64>,
+    /// Harness name to version, as probed at start; reported to the Core as `RunnerFacts.tools`.
+    versions: BTreeMap<String, String>,
 }
 
 fn refuse(code: ErrorCode, why: impl Into<String>) -> StreamError {
@@ -322,6 +324,7 @@ impl AgentDriver {
             // Unique across runner processes: a harness names its scratch dirs `run-<id>`, and a
             // run after a restart must never land in a dead session's.
             next_run: Mutex::new(now_ms()),
+            versions: BTreeMap::new(),
         })
     }
 
@@ -329,6 +332,15 @@ impl AgentDriver {
     pub fn with_redeem(mut self, redeem: Redeem) -> Self {
         self.redeem = Some(redeem);
         self
+    }
+
+    pub fn with_versions(mut self, versions: BTreeMap<String, String>) -> Self {
+        self.versions = versions;
+        self
+    }
+
+    pub fn versions(&self) -> &BTreeMap<String, String> {
+        &self.versions
     }
 
     pub fn with_sandbox(mut self, sandbox: Arc<dyn Sandbox>) -> Self {

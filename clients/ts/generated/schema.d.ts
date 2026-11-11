@@ -871,6 +871,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/core/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getCoreHealth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/costs": {
         parameters: {
             query?: never;
@@ -2336,6 +2352,33 @@ export interface components {
             seq: number;
             session?: string | null;
         };
+        /**
+         * @description What the Core can say about itself. A field it cannot know (no certificate on a loopback
+         *     Core, no backup yet) is absent.
+         */
+        CoreHealth: {
+            /**
+             * Format: int64
+             * @description Whole days until then; negative once it has ended.
+             */
+            cert_days_left?: number | null;
+            /** @description When the public certificate ends. */
+            cert_not_after?: components["schemas"]["Timestamp"];
+            /** @description When the newest backup (`<home>/backups/*.age`) was written. */
+            last_backup_at?: components["schemas"]["Timestamp"];
+            /**
+             * Format: int64
+             * @description That backup's size in bytes.
+             */
+            last_backup_bytes?: number | null;
+            /**
+             * Format: int64
+             * @description Seconds since this Core process started.
+             */
+            uptime_secs: number;
+            /** @description The server's crate version. */
+            version: string;
+        };
         CostEvent: {
             /**
              * Format: int64
@@ -2584,12 +2627,21 @@ export interface components {
             runner?: components["schemas"]["HostUnit"];
         };
         InviteCreated: {
+            /** @description A runner invite's end (15 minutes); absent for a device invite, which never expires. */
+            expires_at?: components["schemas"]["Timestamp"];
+            /** @description `device` or `runner`. */
+            kind?: string | null;
             /** @description `ainkrad://connect?host=…&fp=<core_fp>&secret=…`, for a QR code: shown once. */
             link?: string | null;
             /** @description `p_…`: reject it to withdraw the invite. */
             pairing_id?: string | null;
             /** @description The QR secret, base64url: shown once. */
             secret?: string | null;
+            /**
+             * @description A runner invite only, shown once: `<host>/<core_fp>.<secret>` (`host` as clients address
+             *     the Core), what `ainkrad-runner pair --invite` and `get.sh --runner --invite` take.
+             */
+            token?: string | null;
         };
         /** @description One way to sign in to a kind, easiest first. */
         KindAuthMethod: {
@@ -2846,10 +2898,18 @@ export interface components {
             token?: string | null;
         };
         NewInviteBody: {
+            /**
+             * @description `device` (the default) or `runner`: a runner invite is single use, lasts 15 minutes, is
+             *     active at the claim with the `runner` scope, and needs no check code.
+             */
+            kind?: string | null;
             /** @description What to call the device that claims it. */
             name: string;
-            /** @description What it may do: within the creator's own scopes. */
-            scopes: string[];
+            /**
+             * @description What it may do: within the creator's own scopes. A `runner` invite gets exactly `runner`
+             *     (this may be left out).
+             */
+            scopes?: string[];
         };
         /** @description A lease to grant. */
         NewLease: {
@@ -3133,6 +3193,17 @@ export interface components {
             live?: number | null;
             /** @description The key's last four characters; empty for a key too short to show any. */
             masked_tail: string;
+            /**
+             * Format: int64
+             * @description The account's monthly dollar budget cap, when one is set; absent when it has none.
+             */
+            month_limit_usd_micros?: number | null;
+            /**
+             * Format: int64
+             * @description What the account cost this calendar month (UTC), in millionths of a US dollar, from the
+             *     cost ledger. Only the reads say it, and only to an `admin` device.
+             */
+            month_spend_usd_micros?: number | null;
             /** @description `anthropic`, `openai`, `google` or a user definition's id. */
             provider: string;
             /** @description What one session may spend through this account; absent when only the budgets limit it. */
@@ -3202,13 +3273,19 @@ export interface components {
         };
         /** @description A paired runner and its live state. */
         Runner: {
+            /** @description Whether it can serve the accounts' kinds of key, with the reason when it cannot. */
+            accounts?: components["schemas"]["RunnerAccounts"];
             /** @description The CPU architecture it reported (`aarch64`, `x86_64`), once connected. */
             arch?: string | null;
+            /** @description The runner `runner-enroll-local` made on the Core's own machine (the installer's). */
+            built_in?: boolean | null;
             /**
              * Format: int32
              * @description Commands it takes at once.
              */
             capacity?: number | null;
+            /** @description When its current connection began; absent when it is offline. */
+            connected_since?: components["schemas"]["Timestamp"];
             /** @description Connected but silent past two heartbeats. */
             degraded?: boolean | null;
             /** @description What it last advertised (empty until it first connected since the Core started). */
@@ -3232,8 +3309,42 @@ export interface components {
             name: string;
             /** @description Connected to this Core now. */
             online?: boolean | null;
+            /** @description `linux` or `macos`, once connected. */
+            os?: string | null;
+            /** @description The system as a person names it, `Ubuntu 26.04`, as the runner reported it. */
+            os_pretty?: string | null;
+            /** @description The user the runner process runs as, and whether that is root. */
+            runs_as?: components["schemas"]["RunnerRunsAs"];
+            /**
+             * @description `process` when the runner offers a process sandbox for agents, else `none`; absent when it
+             *     did not report (agents off).
+             */
+            sandbox?: string | null;
+            /** @description Sessions and terminals running now, and how many it takes. */
+            slots?: components["schemas"]["RunnerSlots"];
+            /** @description Agent harnesses it found, name to version (`claude` to `2.1.318`); empty when agents are off. */
+            tools?: {
+                [key: string]: string;
+            } | null;
+            /** @description This Core's own version is newer than the runner's `version`. Absent until it connected. */
+            update_available?: boolean | null;
             /** @description Its `ainkrad-runner` version, once connected. */
             version?: string | null;
+        };
+        /** @description What a runner can do for accounts: each answer, and why not when it is `false`. */
+        RunnerAccounts: {
+            /** @description Sessions' network is filtered by an allow list. */
+            egress_filter: boolean;
+            egress_filter_reason?: string | null;
+            /** @description API-key accounts through the auth gateway. */
+            gateway: boolean;
+            gateway_reason?: string | null;
+            /**
+             * @description A subscription's token handed to a session as an environment variable (needs the sandbox
+             *     and a proven egress filter).
+             */
+            subscription_env: boolean;
+            subscription_env_reason?: string | null;
         };
         /** @description A driver a runner offers, as it advertised it. */
         RunnerDriver: {
@@ -3270,6 +3381,34 @@ export interface components {
             kvm?: string | null;
             /** @description Tiers offered now, by name: `none`, `process`, `microvm`. */
             tiers?: string[] | null;
+        };
+        /** @description Who the runner process is. */
+        RunnerRunsAs: {
+            root?: boolean | null;
+            user?: string | null;
+        };
+        /** @description A runner's work, split by kind. */
+        RunnerSlots: {
+            /**
+             * Format: int32
+             * @description How many agent sessions it takes at once; absent when agents are off or it is unknown.
+             */
+            agents_capacity?: number | null;
+            /**
+             * Format: int32
+             * @description Agent sessions starting, running or interrupted on it.
+             */
+            agents_used: number;
+            /**
+             * Format: int32
+             * @description How many terminals it takes at once; absent when terminals are off or it is unknown.
+             */
+            terminals_capacity?: number | null;
+            /**
+             * Format: int32
+             * @description Terminals created or running on it.
+             */
+            terminals_used: number;
         };
         /** @description What a delete answers. */
         SecretDeleted: {
@@ -3750,7 +3889,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every account: its key's last four characters, never the key, its secret's name or its runner scope; with its `live` session count and `health` (`admin` devices only) */
+            /** @description Every account: its key's last four characters, never the key, its secret's name or its runner scope; with its `live` session count and `health`, `month_spend_usd_micros` and `month_limit_usd_micros` (`admin` devices only) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6042,6 +6181,33 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    getCoreHealth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Core's version, uptime, certificate end and newest backup, as of at most five seconds ago. Needs `read` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoreHealth"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listCosts: {
         parameters: {
             query?: {
@@ -6425,7 +6591,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description An invite: one device claims it over the network with the link's secret alone and is active at once with these scopes, with no SAS or approval. It never expires; reject it to withdraw it. The secret and link are shown only now (audited as `pairing.created`, without them). Needs `admin` and a step-up; the scopes are within the caller's (403 otherwise); 409 with ten live already */
+            /** @description An invite: one device claims it over the network with the link's secret alone and is active at once with these scopes, with no SAS or approval. A device invite never expires; a `runner` invite (`kind`, scope `runner` only) lasts 15 minutes and comes with a `token` for the runner's command. Reject it to withdraw it. The secret and link are shown only now (audited as `pairing.created`, without them). Needs `admin` and a step-up; the scopes are within the caller's (403 otherwise); 409 with ten live already */
             200: {
                 headers: {
                     [name: string]: unknown;

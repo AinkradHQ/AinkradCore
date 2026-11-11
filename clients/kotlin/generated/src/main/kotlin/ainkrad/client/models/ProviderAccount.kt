@@ -39,6 +39,8 @@ import kotlinx.serialization.Contextual
  * @param lastTest The last one-shot test of the key; absent when it was never tested.
  * @param lastUsedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param live Sessions that hold a slot of its cap now (`starting`, `running`, `interrupted`). Only the reads (`listAccounts`, `getAccount`) say it.
+ * @param monthLimitUsdMicros The account's monthly dollar budget cap, when one is set; absent when it has none.
+ * @param monthSpendUsdMicros What the account cost this calendar month (UTC), in millionths of a US dollar, from the cost ledger. Only the reads say it, and only to an `admin` device.
  * @param sessionLimits What one session may spend through this account; absent when only the budgets limit it.
  * @param stateReason 
  * @param stateUntil RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
@@ -96,6 +98,14 @@ data class ProviderAccount (
     /* Sessions that hold a slot of its cap now (`starting`, `running`, `interrupted`). Only the reads (`listAccounts`, `getAccount`) say it. */
     @SerialName(value = "live")
     val live: kotlin.Long? = null,
+
+    /* The account's monthly dollar budget cap, when one is set; absent when it has none. */
+    @SerialName(value = "month_limit_usd_micros")
+    val monthLimitUsdMicros: kotlin.Long? = null,
+
+    /* What the account cost this calendar month (UTC), in millionths of a US dollar, from the cost ledger. Only the reads say it, and only to an `admin` device. */
+    @SerialName(value = "month_spend_usd_micros")
+    val monthSpendUsdMicros: kotlin.Long? = null,
 
     /* What one session may spend through this account; absent when only the budgets limit it. */
     @SerialName(value = "session_limits")

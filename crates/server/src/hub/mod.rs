@@ -166,6 +166,8 @@ struct Runner {
     degraded: bool,
     /// The host's load as last reported (hello or heartbeat); `None` until one.
     load: Option<HostLoad>,
+    /// Unix seconds of the latest connection.
+    since: i64,
 }
 
 /// Whether a driver's command `listed` offers `op`: itself, or (KAN-435) the `gateway` capability
@@ -547,6 +549,15 @@ impl Hub {
             .collect()
     }
 
+    /// What each runner said about its host in its hello, and when its connection began (unix
+    /// seconds), by device id. Display only; `runners` is what placement reads.
+    pub fn facts(&self) -> HashMap<String, (Option<ainkrad_proto::v2::RunnerFacts>, i64)> {
+        let all = self.runners.lock().unwrap();
+        all.iter()
+            .map(|(id, r)| (id.clone(), (r.hello.facts.as_deref().cloned(), r.since)))
+            .collect()
+    }
+
     /// Makes `out` the live connection of `device` (named `name`); an older one is told to
     /// close (4009). The same runner process resumes its streams: the Core frames it did not
     /// receive are queued on `out`. Another process's streams are lost. Returns this
@@ -571,6 +582,7 @@ impl Hub {
             last_seen: now,
             degraded: false,
             load: None,
+            since: now,
         });
         if let Some(old) = r.conn.take() {
             old.replaced.notify_one();
@@ -623,6 +635,7 @@ impl Hub {
         r.hello = hello;
         r.epoch += 1;
         r.last_seen = now;
+        r.since = now;
         r.degraded = false;
         r.conn = Some(Conn {
             generation,

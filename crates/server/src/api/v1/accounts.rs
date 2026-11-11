@@ -127,24 +127,64 @@ async fn statuses_for(
     }
 }
 
+/// Every account's spend this calendar month (UTC) from the cost ledger, and its monthly dollar
+/// budget cap (`core_budgets`, subject `account`, period `month`); for an `admin` device only.
+async fn month_spend(
+    app: &App,
+    me: &Caller,
+) -> Result<Option<std::collections::HashMap<i64, (i64, Option<i64>)>>, ApiError> {
+    if !me.device.scopes.iter().any(|s| s == "admin") {
+        return Ok(None);
+    }
+    // Text compare on the ISO time: `2026-11-01T00:00:00` is a prefix of, and below, every
+    // instant of that month.
+    let start = format!("{}-01T00:00:00", &app.clock.now()[..7]);
+    let mut all: std::collections::HashMap<i64, (i64, Option<i64>)> = Default::default();
+    let spent: Vec<(i64, i64)> = sqlx::query_as(
+        "SELECT account_id, COALESCE(SUM(cost_usd_micros), 0) FROM core_cost_events \
+         WHERE account_id IS NOT NULL AND occurred_at >= ? GROUP BY account_id",
+    )
+    .bind(&start)
+    .fetch_all(&app.pool)
+    .await?;
+    for (id, usd) in spent {
+        all.entry(id).or_default().0 = usd;
+    }
+    let caps: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT subject_id, usd_cap_micros FROM core_budgets \
+         WHERE subject_kind = 'account' AND period = 'month' AND usd_cap_micros IS NOT NULL",
+    )
+    .fetch_all(&app.pool)
+    .await?;
+    for (id, cap) in caps {
+        if let Ok(id) = id.parse() {
+            all.entry(id).or_default().1 = Some(cap);
+        }
+    }
+    Ok(Some(all))
+}
+
 // ----- accounts ---------------------------------------------------------------------------
 
 #[utoipa::path(get, path = "/api/v1/accounts", operation_id = "listAccounts", tag = "accounts",
     responses((status = 200, description = "Every account: its key's last four characters, \
         never the key, its secret's name or its runner scope; with its `live` session count and \
-        `health` (`admin` devices only)", body = Vec<ProviderAccount>)))]
+        `health`, `month_spend_usd_micros` and `month_limit_usd_micros` (`admin` devices only)", body = Vec<ProviderAccount>)))]
 pub async fn list(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
 ) -> ApiResult<Vec<ProviderAccount>> {
     let status = statuses_for(&app, &me).await?;
+    let spend = month_spend(&app, &me).await?;
     Ok(Json(
         acc::list(&app.pool)
             .await?
             .into_iter()
             .map(|a| {
                 let st = status.get(&a.id);
-                ProviderAccount::from(a).with_status(st)
+                ProviderAccount::from(a)
+                    .with_status(st)
+                    .with_spend(spend.as_ref())
             })
             .collect(),
     ))
@@ -164,7 +204,12 @@ pub async fn get(
         .map_err(err)?;
     let status = statuses_for(&app, &me).await?;
     let st = status.get(&a.id);
-    Ok(Json(ProviderAccount::from(a).with_status(st)))
+    let spend = month_spend(&app, &me).await?;
+    Ok(Json(
+        ProviderAccount::from(a)
+            .with_status(st)
+            .with_spend(spend.as_ref()),
+    ))
 }
 
 #[utoipa::path(post, path = "/api/v1/accounts", operation_id = "createAccount", tag = "accounts",

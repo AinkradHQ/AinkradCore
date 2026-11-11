@@ -21,6 +21,7 @@ async fn pool() -> (SqlitePool, PathBuf) {
 fn fine() -> Readings {
     Readings {
         backup_at: Some(T0 - 3_600),
+        backup_bytes: None,
         db_created: Some(T0 - 86_400 * 100),
         cert_not_after: Some(T0 + 60 * 86_400),
         disk_free_bytes: Some(50),
@@ -155,6 +156,7 @@ async fn a_full_disk_raises_and_clears() {
 async fn no_backup_ever_counts_from_the_database_and_unknown_readings_change_nothing() {
     let r = Readings {
         backup_at: None,
+        backup_bytes: None,
         db_created: Some(T0 - 3 * 86_400),
         ..Readings::default()
     };

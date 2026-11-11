@@ -10,16 +10,20 @@ use rustls::pki_types::pem::PemObject;
 
 use super::client::Client;
 use super::key::State;
-use super::pair::{Credential, pair, parse_qr};
+use super::pair::{Credential, pair, parse_invite, parse_qr};
 
 pub const PAIR_USAGE: &str = "usage:
   ainkrad-runner pair <core-url> --code <ABCDE-FGHJK> [--state <dir>] [--ca <pem>]
   ainkrad-runner pair --qr '<ainkrad-pair:v1?…>' [--state <dir>] [--ca <pem>]
+  ainkrad-runner pair [<core-url>] --invite [<host>/]<fingerprint.secret> [--state <dir>] [--ca <pem>]
 
 Enrols this runner with the Core as a `runner` device (one-time code or QR from an approver),
 pins the Core's identity, and keeps its key and enrolment in <dir> (default
 $HOME/.ainkrad-runner/core; both files mode 0600). <core-url> is https://<host>[:port]
 (http:// only to a loopback host). Compare the SAS it prints with the approver's screen.
+--invite takes a runner invite (single use, 15 minutes) that an admin made: the Core's
+fingerprint and a secret joined by a dot, with the Core's host and a slash before them
+(then <core-url> is not needed). It is its own approval, so there is no SAS to compare.
 --ca trusts that PEM certificate instead of the public roots (a test Core).";
 
 /// The runner's state directory: `--state`, else `$HOME/.ainkrad-runner/core`.
@@ -66,6 +70,19 @@ pub async fn pair_main(args: &[&str]) -> ExitCode {
         (Some(url), Some(code), None) if !url.starts_with("--") => {
             ((*url).to_owned(), Credential::Code(code.to_owned()))
         }
+        (_, None, None) if flag(args, "--invite").is_some() => {
+            let url = args
+                .first()
+                .filter(|u| !u.starts_with("--"))
+                .map(|u| (*u).to_owned());
+            match flag(args, "--invite").and_then(parse_invite) {
+                Some((host, core_fp, secret)) => match host.or(url) {
+                    Some(base) => (base, Credential::Qr { secret, core_fp }),
+                    None => return usage(),
+                },
+                None => return usage(),
+            }
+        }
         (_, None, Some(qr)) => match parse_qr(qr) {
             Some((base, core_fp, secret)) => (base, Credential::Qr { secret, core_fp }),
             None => return usage(),
@@ -87,7 +104,11 @@ pub async fn pair_main(args: &[&str]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let invited = flag(args, "--invite").is_some();
     let show = |sas: &str| {
+        if invited {
+            return; // an invite is its own approval: no code to compare
+        }
         println!("Claimed. Check that the approving device shows this code, then approve:");
         println!("    {sas}");
     };
@@ -529,7 +550,9 @@ async fn agents(
         .unwrap_or_default();
     executor.check_roots(&home)?;
     let mut config = super::agent::AgentConfig::new(state.join("agents"), secrets.clone());
+    let mut found = std::collections::BTreeMap::new();
     for (name, version) in executor.probe(Duration::from_secs(10)).await {
+        found.insert(name.clone(), version.clone());
         let verdict = ainkrad_harness::compat::check(&name, Some(&version), &Default::default());
         if !verdict.refused {
             config.slots.insert(name, config.capacity);
@@ -540,7 +563,7 @@ async fn agents(
     }
     super::agent::AgentDriver::new(config, executor)
         .map(|d| {
-            let d = d.with_tools(tools);
+            let d = d.with_tools(tools).with_versions(found);
             let sandbox = super::sandbox::ProcessSandbox::new(state.to_path_buf(), secrets)
                 .with_network(std::env::var("AINKRAD_AGENT_NETWORK").ok());
             let sandbox = if egress_ready {

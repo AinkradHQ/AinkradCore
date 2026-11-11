@@ -95,6 +95,8 @@ impl Thresholds {
 pub struct Readings {
     /// Unix seconds of the newest `*.age` file in `<home>/backups/`.
     pub backup_at: Option<i64>,
+    /// That newest backup's size in bytes.
+    pub backup_bytes: Option<u64>,
     /// When the database file was created: the clock of "never backed up".
     pub db_created: Option<i64>,
     /// Unix seconds of the public certificate's end.
@@ -165,13 +167,18 @@ impl Readings {
                 .and_then(unix),
             ..Self::default()
         };
-        r.backup_at = std::fs::read_dir(home.join("backups"))
+        let newest = std::fs::read_dir(home.join("backups"))
             .into_iter()
             .flatten()
             .flatten()
             .filter(|e| e.path().extension().is_some_and(|x| x == "age"))
-            .filter_map(|e| e.metadata().ok()?.modified().ok().and_then(unix))
+            .filter_map(|e| {
+                let m = e.metadata().ok()?;
+                Some((m.modified().ok().and_then(unix)?, m.len()))
+            })
             .max();
+        r.backup_at = newest.map(|n| n.0);
+        r.backup_bytes = newest.map(|n| n.1);
         let tls = home.join("tls");
         r.cert_not_after = std::fs::read_to_string(tls.join("cert.pem"))
             .ok()

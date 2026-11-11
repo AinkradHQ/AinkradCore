@@ -21,6 +21,12 @@ pub const PAIRING_SECS: i64 = 300;
 pub const MAX_LIVE: i64 = 3;
 /// Live invites at once (they have no expiry, so they are counted apart from `MAX_LIVE`).
 pub const MAX_INVITES: i64 = 10;
+/// The check code `runner-enroll-local` claims with: it marks the built-in runner (`GET /api/v1/runners`
+/// `built_in`), because no person ever sees or types it.
+pub const LOCAL_ENROL_SAS: &str = "LOCALENROL";
+/// How long a runner invite lives (N17, E2): the time to install the runner on its machine. Other
+/// invites never expire.
+pub const RUNNER_INVITE_SECS: i64 = 900;
 /// An invite's `expires_at`: ISO strings compare as text, so it is after every `now` and the
 /// scheduler's sweep (`expires_at <= now`) never reaches it.
 pub const NEVER: &str = "9999-12-31T23:59:59.999Z";
@@ -146,7 +152,7 @@ pub struct Created {
     pub code: String,
     /// The QR secret, base64url.
     pub secret: String,
-    /// Unix seconds; 0 for an invite, which never expires.
+    /// Unix seconds; 0 for an invite that never expires (a runner's lasts [`RUNNER_INVITE_SECS`]).
     pub expires: i64,
 }
 
@@ -160,7 +166,13 @@ pub async fn create_pairing(
 ) -> Result<Created, Error> {
     let refuse = |why: &str| Err(Error::InvalidArgument(why.to_owned()));
     let mut tx = begin_write(pool).await?;
-    let (now_at, expires) = (iso_of_unix(now), now + PAIRING_SECS);
+    // An invite of a runner lives 15 minutes; any other never expires.
+    let expires = match (p.invite, p.kind) {
+        (true, "runner") => Some(now + RUNNER_INVITE_SECS),
+        (true, _) => None,
+        _ => Some(now + PAIRING_SECS),
+    };
+    let now_at = iso_of_unix(now);
     if p.invite && p.recovery {
         return refuse("a recovery is not an invite");
     }
@@ -211,11 +223,7 @@ pub async fn create_pairing(
     })
     .bind(i64::from(p.invite))
     .bind(&now_at)
-    .bind(if p.invite {
-        NEVER.to_owned()
-    } else {
-        iso_of_unix(expires)
-    })
+    .bind(expires.map_or_else(|| NEVER.to_owned(), iso_of_unix))
     .execute(&mut *tx)
     .await?;
     let details = json!({"pairing": id, "kind": p.kind, "name": p.name.trim(),
@@ -227,7 +235,7 @@ pub async fn create_pairing(
         id,
         code,
         secret,
-        expires: if p.invite { 0 } else { expires },
+        expires: expires.unwrap_or(0),
     })
 }
 

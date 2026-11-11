@@ -24,7 +24,8 @@ import kotlinx.serialization.Contextual
  * 
  *
  * @param name What to call the device that claims it.
- * @param scopes What it may do: within the creator's own scopes.
+ * @param kind `device` (the default) or `runner`: a runner invite is single use, lasts 15 minutes, is active at the claim with the `runner` scope, and needs no check code.
+ * @param scopes What it may do: within the creator's own scopes. A `runner` invite gets exactly `runner` (this may be left out).
  */
 @Serializable
 
@@ -34,9 +35,13 @@ data class NewInviteBody (
     @SerialName(value = "name")
     val name: kotlin.String,
 
-    /* What it may do: within the creator's own scopes. */
+    /* `device` (the default) or `runner`: a runner invite is single use, lasts 15 minutes, is active at the claim with the `runner` scope, and needs no check code. */
+    @SerialName(value = "kind")
+    val kind: kotlin.String? = null,
+
+    /* What it may do: within the creator's own scopes. A `runner` invite gets exactly `runner` (this may be left out). */
     @SerialName(value = "scopes")
-    val scopes: kotlin.collections.List<kotlin.String>
+    val scopes: kotlin.collections.List<kotlin.String>? = null
 
 ) {
 

@@ -10,6 +10,11 @@
 # The Core also gets a built-in runner on this machine (terminals and agents, unprivileged user, sandboxed). `sh get.sh --no-local-runner`
 # (after the `sh` in the command above) skips it: then no work runs on the Core machine until you add a runner elsewhere.
 #
+# A runner on ANOTHER machine, nothing of a Core: `sh get.sh --runner --invite <invite>` (the App's Add device shows the whole command;
+# the invite is single use and lasts 15 minutes). It checks the machine, installs the prerequisites, verifies the same signed release,
+# then installs only a runner (unprivileged user, sandbox, terminals and agents on, egress filter on, base tools) and pairs it.
+# No questions, no port 443, no check code.
+#
 # Optional, to skip the two questions (the Mac app can put them in the command):
 #   sudo AINKRAD_HOSTNAME=core.example.com AINKRAD_ACME_EMAIL=you@example.com sh -c "$(curl -fsSL URL)"
 #
@@ -438,7 +443,13 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     done
     _fl=${RERUN_FLOOR:-${AINKRAD_MIN_VERSION:-}}
     case $_fl in '' | 0 | 0.0.0 | *[!0-9.]*) ;; *) _env="$_env AINKRAD_MIN_VERSION=$_fl" ;; esac
-    for _a in "$@"; do if _q=$(shq "$_a"); then _args="$_args $_q"; fi; done
+    _prev=''
+    for _a in "$@"; do
+      # a runner invite works once: it is not echoed back, the App makes a new one
+      if [ "$_prev" = --invite ]; then _a='<a new invite from the App>'; fi
+      _prev=$_a
+      if _q=$(shq "$_a"); then _args="$_args $_q"; fi
+    done
     echo "sudo$_env sh -c \"\$(curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh)\"${_args:+ sh$_args}"
   }
   UI_RERUN=$(rerun_cmd "$@")
@@ -475,6 +486,19 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     printf '   A piped script cannot ask you questions through sudo (the terminal is not handed to it), so it would hang at the\n   first question. Nothing was changed. Run this instead:\n\n     %s\n\n' "$UI_RERUN" >&2
     exit 2
   fi
+  runner=0 invite='' _prev=''
+  for a in "$@"; do
+    [ "$a" != --runner ] || runner=1
+    [ "$_prev" != --invite ] || invite=$a
+    _prev=$a
+  done
+  if [ "$runner" = 1 ]; then
+    case $invite in
+      */?*.?*) ;;
+      *) die "--runner needs --invite <invite> (single use, 15 minutes): make one in the App, Add device, a runner" ;;
+    esac
+    case $invite in *[!A-Za-z0-9_./:-]*) die "--invite is a runner invite from the App: <host>/<fingerprint>.<secret>" ;; esac
+  elif [ -n "$invite" ]; then die "--invite is for --runner (an invite for a runner on this machine)"; fi
   harden=0
   case ${AINKRAD_HARDEN:-} in '' | no) ;; yes) harden=1 ;; *) die "AINKRAD_HARDEN must be yes or no (got '$AINKRAD_HARDEN')" ;; esac
   for a in "$@"; do [ "$a" != --harden ] || harden=1; done
@@ -493,8 +517,10 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     command -v apt-get >/dev/null || die "apt-get not found: only Debian and Ubuntu are supported by this installer"
     ui_ok "This is Linux $(uname -m) with systemd and apt, and you are root: supported"
     # Everything this machine can tell about itself comes BEFORE anything is installed (N6): a busy or closed port 443 stops here.
-    ui_status "Checking that port 443 is free and that this machine's firewall lets it in"
-    pc_checks 443 || ui_stopped "$PC_WHAT" "$PC_TODO"
+    if [ "$runner" = 0 ]; then # a runner only dials out: it needs no port
+      ui_status "Checking that port 443 is free and that this machine's firewall lets it in"
+      pc_checks 443 || ui_stopped "$PC_WHAT" "$PC_TODO"
+    fi
 
     pkgs='ca-certificates curl minisign bubblewrap qrencode openssl iproute2 git unzip jq ripgrep build-essential xz-utils' persist=''
     # Firewall tooling only when hardening was asked for. iptables-persistent clashes with ufw: with ufw installed nothing is
@@ -567,7 +593,9 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   export AINKRAD_FROM_GET=1 AINKRAD_STEP_BASE=0 AINKRAD_STEP_TOTAL=8 AINKRAD_T0="$UI_T0" AINKRAD_RERUN="$UI_RERUN"
   if [ "$UI_FANCY" = 1 ] && [ "$UI_LIVE" = 1 ]; then printf '\r\033[K'; export AINKRAD_UI_LIVE=1; UI_LIVE=0; fi # install.sh carries on from this progress line
   trap 'got=130' INT; trap 'got=143' TERM
-  if ( : </dev/tty ) 2>/dev/null; then bash "$INST/scripts/install.sh" --binary /usr/local/bin "$@" </dev/tty || rc=$?
+  if [ "$runner" = 1 ]; then # only a runner: no Core, no questions
+    bash "$INST/scripts/install/runner-only.sh" --binary /usr/local/bin --invite "$invite" </dev/null || rc=$?
+  elif ( : </dev/tty ) 2>/dev/null; then bash "$INST/scripts/install.sh" --binary /usr/local/bin "$@" </dev/tty || rc=$?
   else bash "$INST/scripts/install.sh" --binary /usr/local/bin "$@" </dev/null || rc=$?; fi
   trap 'ui_int 130' INT; trap 'ui_int 143' TERM
   if [ "$rc" = 0 ] && [ "$got" != 0 ]; then rc=$got; fi

@@ -153,6 +153,19 @@ bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --pair https://core.
 bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --pty --pair https://core.example.com --code ABCDE-FGHJK --dry-run >"$t/out5" 2>&1 &&
   grep -q 'runuser -u ainkrad-runner -- /usr/local/bin/ainkrad-runner pair https://core.example.com --code ABCDE-FGHJK --state /var/lib/ainkrad-runner/core' "$t/out5" &&
   pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: --pair dry run" >&2; }
+# A runner invite (N17): the host comes from the invite, no --pair and no code; pairs with `--invite`, never `--code`.
+INV="core.example.com/$(printf 'A%.0s' $(seq 43)).$(printf 'B%.0s' $(seq 22))"
+bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --pty --agents --invite "$INV" --dry-run >"$t/out6" 2>&1 &&
+  grep -q "runuser -u ainkrad-runner -- /usr/local/bin/ainkrad-runner pair https://core.example.com --invite $INV --state /var/lib/ainkrad-runner/core" "$t/out6" &&
+  grep -q 'RUNNER_ARGS=--enable-pty --enable-agents (+ AINKRAD_AGENT_NETWORK=filtered' "$t/out6" &&
+  pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: --invite dry run" >&2; }
+bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --invite "$INV" --code ABCDE-FGHJK --dry-run >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: --invite with --code accepted" >&2; } || pass=$((pass + 1))
+bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --invite 'x;rm -rf' --dry-run >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: a bad --invite accepted" >&2; } || pass=$((pass + 1))
+# The runner-only installer: dry run shows the tools, the pairing and the sandboxed unit; no Core anywhere in it.
+bash "$D/../scripts/install/runner-only.sh" --binary "$t/bin" --invite "$INV" --dry-run >"$t/out7" 2>&1 &&
+  grep -q 'install Node' "$t/out7" && grep -q -- '--invite' "$t/out7" && ! grep -qi 'ainkrad-core-server' "$t/out7" &&
+  pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: runner-only dry run" >&2; }
+bash "$D/../scripts/install/runner-only.sh" --binary "$t/bin" --invite nothing --dry-run >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: runner-only accepted a bad invite" >&2; } || pass=$((pass + 1))
 
 # The units: terminal hosts must outlive a runner stop; exec.run and pty are never switched on by the unit itself.
 U=$D/systemd/ainkrad-runner.service

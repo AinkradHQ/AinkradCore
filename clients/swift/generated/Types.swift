@@ -227,6 +227,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/connections/{id}/test`.
     /// - Remark: Generated from `#/paths//api/v1/connections/{id}/test/post(testConnection)`.
     func testConnection(_ input: Operations.TestConnection.Input) async throws -> Operations.TestConnection.Output
+    /// - Remark: HTTP `GET /api/v1/core/health`.
+    /// - Remark: Generated from `#/paths//api/v1/core/health/get(getCoreHealth)`.
+    func getCoreHealth(_ input: Operations.GetCoreHealth.Input) async throws -> Operations.GetCoreHealth.Output
     /// - Remark: HTTP `GET /api/v1/costs`.
     /// - Remark: Generated from `#/paths//api/v1/costs/get(listCosts)`.
     func listCosts(_ input: Operations.ListCosts.Input) async throws -> Operations.ListCosts.Output
@@ -1220,6 +1223,11 @@ extension APIProtocol {
             path: path,
             headers: headers
         ))
+    }
+    /// - Remark: HTTP `GET /api/v1/core/health`.
+    /// - Remark: Generated from `#/paths//api/v1/core/health/get(getCoreHealth)`.
+    public func getCoreHealth(headers: Operations.GetCoreHealth.Input.Headers = .init()) async throws -> Operations.GetCoreHealth.Output {
+        try await getCoreHealth(Operations.GetCoreHealth.Input(headers: headers))
     }
     /// - Remark: HTTP `GET /api/v1/costs`.
     /// - Remark: Generated from `#/paths//api/v1/costs/get(listCosts)`.

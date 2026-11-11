@@ -2,7 +2,8 @@
 # Installs the ainkrad-runner systemd unit (E1-12.3; protocol v2 since E1-14.5; terminals and pairing E2-15).
 # Idempotent; does not start unless --start or --pair. Works on the Core's own host and on a remote Linux host.
 #   install-linux.sh [--binary PATH] [--ptyhost PATH] [--pty] [--ca PEM]
-#                    [--agents] [--exec] [--root] [--pair https://<core> --code <CODE>] [--start] [--prefix DIR] [--dry-run]
+#                    [--agents] [--exec] [--root] [--pair https://<core> --code <CODE> | --invite <invite>] [--start]
+#                    [--prefix DIR] [--dry-run]
 # --pty      offer terminals (--enable-pty); needs ainkrad-ptyhost (--ptyhost, default: beside --binary). The shell
 #            runs as the unprivileged ainkrad-runner user inside the unit's sandbox. Off unless asked.
 # --agents   offer agent sessions (--enable-agents) with the egress filter on: sessions reach only api.anthropic.com
@@ -10,6 +11,8 @@
 #            (claude) on PATH. Off unless asked.
 # --ca       a PEM the runner trusts instead of the system roots (a test Core's CA only).
 # --pair     pair as the service user now (waits for the approver; compare the SAS it prints), then start.
+# --invite   pair with a runner invite (`<host>/<fingerprint>.<secret>`, from the App's Add device or `POST /api/v1/pairings/invites`
+#            with kind runner): single use, 15 minutes, no code and no SAS; then start. Takes the place of --pair and --code.
 # --exec     turn exec.run on (--enable-exec). WARNING: opt-in only; a compromised Core can then run any program as
 #            the runner's user (as root with --root). The guided installer never passes it.
 # --root     WARNING: opt-in only, never the default. Runs the unit as root with no unit sandbox (drop-in
@@ -20,7 +23,7 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-binary="$HERE/../target/release/ainkrad-runner" ptyhost='' pty=0 agents=0 ca='' pair='' code='' prefix='' start=0 dry=0 exec_on=0 root=0
+binary="$HERE/../target/release/ainkrad-runner" ptyhost='' pty=0 agents=0 ca='' pair='' code='' invite='' prefix='' start=0 dry=0 exec_on=0 root=0
 run() { printf '+ %s\n' "$*"; [ "$dry" = 1 ] || "$@"; }
 WAS_ACTIVE=1
 # Demoting a root runner: its terminal hosts (ptyhosts, started as root; KillMode=process keeps them alive across a restart)
@@ -58,6 +61,7 @@ while [ $# -gt 0 ]; do
     --ca) ca=${2:?}; shift 2 ;;
     --pair) pair=${2:?}; shift 2 ;;
     --code) code=${2:?}; shift 2 ;;
+    --invite) invite=${2:?}; shift 2 ;;
     --prefix) prefix=${2:?}; shift 2 ;;
     --start) start=1; shift ;;
     --dry-run) dry=1; shift ;;
@@ -66,9 +70,13 @@ while [ $# -gt 0 ]; do
 done
 [ "$dry" = 1 ] || [ "$(id -u)" = 0 ] || [ -n "$prefix" ] || { echo "run as root (or --prefix/--dry-run)" >&2; exit 1; }
 [ "$dry" = 1 ] || [ -x "$binary" ] || { echo "no runner binary at $binary (cargo build --release -p ainkrad-runner, or --binary)" >&2; exit 1; }
-[ -z "$pair" ] || [ -n "$code" ] || { echo "--pair needs --code" >&2; exit 2; }
+[ -z "$invite" ] || [ -z "$code" ] || { echo "--invite and --code are two ways to pair: give one" >&2; exit 2; }
+case $invite in '') ;; *[!A-Za-z0-9_./:-]*) echo "--invite is a runner invite: <host>/<fingerprint>.<secret>" >&2; exit 2 ;; esac
+# A runner invite names its Core: `<host>/<fp>.<secret>`.
+[ -z "$invite" ] || [ -n "$pair" ] || case $invite in */*) pair=https://${invite%%/*} ;; *) echo "--invite without a host needs --pair https://<core>" >&2; exit 2 ;; esac
+[ -z "$pair" ] || [ -n "$code$invite" ] || { echo "--pair needs --code or --invite" >&2; exit 2; }
 case $pair in '' | https://*) ;; *) echo "--pair takes an https:// URL" >&2; exit 2 ;; esac
-case $code$ca in *[[:space:]]*) echo "--code/--ca must not contain spaces (systemd splits RUNNER_ARGS on them)" >&2; exit 2 ;; esac
+case $code$ca$invite in *[[:space:]]*) echo "--code/--ca must not contain spaces (systemd splits RUNNER_ARGS on them)" >&2; exit 2 ;; esac
 if [ "$pty" = 1 ]; then
   ptyhost=${ptyhost:-$(dirname "$binary")/ainkrad-ptyhost}
   [ "$dry" = 1 ] || [ -x "$ptyhost" ] || { echo "--pty needs ainkrad-ptyhost at $ptyhost (cargo build --release -p ainkrad-ptyhost, or --ptyhost)" >&2; exit 1; }
@@ -143,7 +151,8 @@ if [ -z "$prefix" ]; then
   run systemctl daemon-reload
   if [ -n "$pair" ]; then
     # Blocks until the approver confirms the SAS (or the code expires); the Core's identity is pinned here.
-    pa=(pair "$pair" --code "$code" --state /var/lib/ainkrad-runner/core)
+    if [ -n "$invite" ]; then pa=(pair "$pair" --invite "$invite" --state /var/lib/ainkrad-runner/core)
+    else pa=(pair "$pair" --code "$code" --state /var/lib/ainkrad-runner/core); fi
     [ -z "$ca" ] || pa+=(--ca "$ca")
     run runuser -u ainkrad-runner -- /usr/local/bin/ainkrad-runner "${pa[@]}"
     start=1

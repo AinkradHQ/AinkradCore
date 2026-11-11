@@ -2498,6 +2498,40 @@
       "description": "A run token on the wire. Its `Debug` is redacted, so logging a message never logs it;\n`expose` is the one way to read it.",
       "type": "string"
     },
+    "RunnerFacts": {
+      "description": "Facts a runner reports about itself in its hello (display only: the Core decides nothing by\nthem).",
+      "properties": {
+        "os_pretty": {
+          "description": "The system as a person names it, `Ubuntu 26.04` or `macOS 15.1`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root": {
+          "description": "That user is root (uid 0).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "tools": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Agent harnesses found on this host, name to version (`claude` to `2.1.318`); empty when\nagents are off.",
+          "type": "object"
+        },
+        "user": {
+          "description": "The user the runner process runs as.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "RunnerHello": {
       "properties": {
         "arch": {
@@ -2526,6 +2560,17 @@
             "$ref": "#/$defs/DriverInfo"
           },
           "type": "array"
+        },
+        "facts": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunnerFacts"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the host and the runner process are, for the App's runner page. Absent from a runner\nthat does not report it."
         },
         "isolation": {
           "anyOf": [

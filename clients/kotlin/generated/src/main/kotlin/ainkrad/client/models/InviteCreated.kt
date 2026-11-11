@@ -23,13 +23,24 @@ import kotlinx.serialization.Contextual
 /**
  * 
  *
+ * @param expiresAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param kind `device` or `runner`.
  * @param link `ainkrad://connect?host=…&fp=<core_fp>&secret=…`, for a QR code: shown once.
  * @param pairingId `p_…`: reject it to withdraw the invite.
  * @param secret The QR secret, base64url: shown once.
+ * @param token A runner invite only, shown once: `<host>/<core_fp>.<secret>` (`host` as clients address the Core), what `ainkrad-runner pair --invite` and `get.sh --runner --invite` take.
  */
 @Serializable
 
 data class InviteCreated (
+
+    /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
+    @Contextual @SerialName(value = "expires_at")
+    val expiresAt: java.time.OffsetDateTime? = null,
+
+    /* `device` or `runner`. */
+    @SerialName(value = "kind")
+    val kind: kotlin.String? = null,
 
     /* `ainkrad://connect?host=…&fp=<core_fp>&secret=…`, for a QR code: shown once. */
     @SerialName(value = "link")
@@ -41,7 +52,11 @@ data class InviteCreated (
 
     /* The QR secret, base64url: shown once. */
     @SerialName(value = "secret")
-    val secret: kotlin.String? = null
+    val secret: kotlin.String? = null,
+
+    /* A runner invite only, shown once: `<host>/<core_fp>.<secret>` (`host` as clients address the Core), what `ainkrad-runner pair --invite` and `get.sh --runner --invite` take. */
+    @SerialName(value = "token")
+    val token: kotlin.String? = null
 
 ) {
 

@@ -76,6 +76,7 @@ src/main/kotlin/ainkrad/client/models/ConnectionFlowSite.kt
 src/main/kotlin/ainkrad/client/models/ConnectionGrant.kt
 src/main/kotlin/ainkrad/client/models/ConnectionKind.kt
 src/main/kotlin/ainkrad/client/models/ConnectionUse.kt
+src/main/kotlin/ainkrad/client/models/CoreHealth.kt
 src/main/kotlin/ainkrad/client/models/CostEvent.kt
 src/main/kotlin/ainkrad/client/models/DefaultConnection.kt
 src/main/kotlin/ainkrad/client/models/Device.kt
@@ -147,9 +148,12 @@ src/main/kotlin/ainkrad/client/models/RestartBody.kt
 src/main/kotlin/ainkrad/client/models/Restarted.kt
 src/main/kotlin/ainkrad/client/models/RotateSecret.kt
 src/main/kotlin/ainkrad/client/models/Runner.kt
+src/main/kotlin/ainkrad/client/models/RunnerAccounts.kt
 src/main/kotlin/ainkrad/client/models/RunnerDriver.kt
 src/main/kotlin/ainkrad/client/models/RunnerHostLoad.kt
 src/main/kotlin/ainkrad/client/models/RunnerIsolation.kt
+src/main/kotlin/ainkrad/client/models/RunnerRunsAs.kt
+src/main/kotlin/ainkrad/client/models/RunnerSlots.kt
 src/main/kotlin/ainkrad/client/models/SecretDeleted.kt
 src/main/kotlin/ainkrad/client/models/SecretInfo.kt
 src/main/kotlin/ainkrad/client/models/SessionGrant.kt

@@ -32,9 +32,9 @@ use crate::module::Module;
 use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{
-    accounts, agents, audit, budgets, chains, connections, costs, devices, events, handshake,
-    lockouts, me, pair, pairing, passkey, runners, secrets, session, settings, stepup, system,
-    terminals, ticket, types, websession,
+    accounts, agents, audit, budgets, chains, connections, corehealth, costs, devices, events,
+    handshake, lockouts, me, pair, pairing, passkey, runners, secrets, session, settings, stepup,
+    system, terminals, ticket, types, websession,
 };
 
 #[derive(OpenApi)]
@@ -72,6 +72,7 @@ use super::{
         me::me,
         audit::list,
         system::host,
+        corehealth::get,
         system::restart,
         system::logs_core,
         system::logs_helper,

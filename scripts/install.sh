@@ -33,11 +33,12 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 . "$ROOT/scripts/install/precheck.sh"
 # shellcheck source=scripts/install/guided.sh
 . "$ROOT/scripts/install/guided.sh"
+# shellcheck source=scripts/install/agent-tools.sh
+. "$ROOT/scripts/install/agent-tools.sh"
 
 CORE_HOME=/var/lib/ainkrad/core ETC=/etc/ainkrad BIN=/usr/local/bin UNITS=/etc/systemd/system
 STAGING_DIR=https://acme-staging-v02.api.letsencrypt.org/directory
-NO_LOCAL_RUNNER=0 NODE_VERSION=22.22.1 CLAUDE_VERSION=2.1.318 RUNNER_STATE=/var/lib/ainkrad-runner/core
-NODE_SHA_X64=9a6bc82f9b491279147219f6a18add1e18424dce90d41d2a5fcd69d4924ba3aa NODE_SHA_ARM64=0f3550d58d45e5d3cf7103d9e3f69937f09fe82fb5dd474c66a5d816fa58c9ee
+NO_LOCAL_RUNNER=0 RUNNER_STATE=/var/lib/ainkrad-runner/core
 DEMO='' HARDEN_REQ='' HARDEN_WARN='' HARDEN_STATE='' FW_CHOICE=yes MODE=install GUIDED=0 CONFIG='' DRY=0 PURGE=0 CHECK_BACKUP=no CLI_BINARY='' STAGE=''
 
 # say: a line that stays on the screen (in the guided install above the live progress line, so the two live lines stay at the bottom)
@@ -385,25 +386,6 @@ health() { # healthz on this host, by name (no hairpin NAT); a staging certifica
   curl -fsS --max-time 5 ${k[@]+"${k[@]}"} --resolve "$A_HOSTNAME:443:127.0.0.1" "https://$A_HOSTNAME/healthz"
 }
 
-# The tools agents need on the built-in runner (N8, N39): Node 22 (pinned, checksum-verified tarball) and Claude Code at the pinned
-# version with auto-update off. They live under /usr/local, which the agent sandbox binds read-only.
-install_agent_tools() { local t rc=0; t=$(mktemp -d); install_agent_tools_in "$t" || rc=$?; rm -rf "$t"; return "$rc"; }
-install_agent_tools_in() {
-  umask 022
-  local t=$1 arch sha node=/usr/local/lib/ainkrad-node
-  case $(uname -m) in x86_64 | amd64) arch=x64 sha=$NODE_SHA_X64 ;; aarch64 | arm64) arch=arm64 sha=$NODE_SHA_ARM64 ;; *) echo "no Node build for $(uname -m)" >&2; return 1 ;; esac
-  curl -fsSL --proto '=https' --tlsv1.3 -o "$t/node.tar.xz" "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-$arch.tar.xz" || return 1
-  [ "$(sha "$t/node.tar.xz")" = "$sha" ] || { echo "the Node download does not match the checksum pinned in this installer" >&2; return 1; }
-  rm -rf "$node" && mkdir -p "$node" && tar -xJf "$t/node.tar.xz" -C "$node" --strip-components=1 || return 1
-  ln -sf "$node/bin/node" /usr/local/bin/node
-  PATH="$node/bin:$PATH" npm install -g --prefix "$node" --no-audit --no-fund "@anthropic-ai/claude-code@$CLAUDE_VERSION" || return 1
-  ln -sf "$node/bin/claude" /usr/local/bin/claude
-  mkdir -p /etc/claude-code
-  printf '%s\n' '{"env":{"DISABLE_AUTOUPDATER":"1"}}' >/etc/claude-code/managed-settings.json
-  chmod 0644 /etc/claude-code/managed-settings.json
-  HOME=$t "$node/bin/node" --version | grep -q "^v22\." || { echo "Node 22 did not install" >&2; return 1; }
-  HOME=$t /usr/local/bin/claude --version | grep -q "^$CLAUDE_VERSION" || { echo "claude $CLAUDE_VERSION did not install" >&2; return 1; }
-}
 # Enrols this Core's own runner without a code (the Core makes the device itself, scope runner only) and puts its key and
 # enrolment where the unprivileged runner user reads them. Runs as root; the Core command runs as the database's owner.
 enrol_local_runner() {

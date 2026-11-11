@@ -84,6 +84,7 @@ src/Ainkrad.Client/Model/ConnectionFlowSite.cs
 src/Ainkrad.Client/Model/ConnectionGrant.cs
 src/Ainkrad.Client/Model/ConnectionKind.cs
 src/Ainkrad.Client/Model/ConnectionUse.cs
+src/Ainkrad.Client/Model/CoreHealth.cs
 src/Ainkrad.Client/Model/CostEvent.cs
 src/Ainkrad.Client/Model/DefaultConnection.cs
 src/Ainkrad.Client/Model/Device.cs
@@ -155,9 +156,12 @@ src/Ainkrad.Client/Model/RestartBody.cs
 src/Ainkrad.Client/Model/Restarted.cs
 src/Ainkrad.Client/Model/RotateSecret.cs
 src/Ainkrad.Client/Model/Runner.cs
+src/Ainkrad.Client/Model/RunnerAccounts.cs
 src/Ainkrad.Client/Model/RunnerDriver.cs
 src/Ainkrad.Client/Model/RunnerHostLoad.cs
 src/Ainkrad.Client/Model/RunnerIsolation.cs
+src/Ainkrad.Client/Model/RunnerRunsAs.cs
+src/Ainkrad.Client/Model/RunnerSlots.cs
 src/Ainkrad.Client/Model/SecretDeleted.cs
 src/Ainkrad.Client/Model/SecretInfo.cs
 src/Ainkrad.Client/Model/SessionGrant.cs

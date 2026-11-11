@@ -326,6 +326,7 @@ impl Fake {
             terminals: vec![],
             load: self.load,
             isolation: self.isolation.clone(),
+            facts: None,
         };
         self.send(CONTROL_STREAM, Body::Control(Control::Hello(hello)))
             .await;
