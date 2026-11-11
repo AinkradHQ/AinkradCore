@@ -85,10 +85,14 @@ pub struct Runner {
     pub accounts: Option<RunnerAccounts>,
     /// Sessions and terminals running now, and how many it takes.
     pub slots: Option<RunnerSlots>,
-    /// Agent harnesses it found, name to version (`claude` to `2.1.318`); empty when agents are off.
+    /// Tools it found on its host, name to version (`claude` to `2.1.318`, `git`, `node`, `python`,
+    /// `go`, `rust`, `docker`, `codex`); a tool that is not installed is not listed.
     pub tools: Option<std::collections::BTreeMap<String, String>>,
     /// The runner `runner-enroll-local` made on the Core's own machine (the installer's).
     pub built_in: Option<bool>,
+    /// What the runner offers now: terminals, agents, agent capacity (`PUT /runners/{id}/policy`
+    /// sets it). Absent until a runner of this version connected.
+    pub policy: Option<super::runner_control::RunnerPolicyBody>,
 }
 
 /// Who the runner process is.
@@ -277,6 +281,7 @@ fn of(d: gov::Device, live: Option<&RunnerState>, x: &Extra) -> Runner {
             .zip(semver(env!("CARGO_PKG_VERSION")))
             .map(|(runner, core)| core > runner),
         built_in: Some(x.built_in),
+        policy: facts.and_then(|f| f.policy).map(Into::into),
         id: d.id,
         name: d.name,
         online: Some(live.is_some_and(|s| s.online)),
@@ -356,7 +361,7 @@ pub async fn list(State(app): State<App>) -> ApiResult<Vec<Runner>> {
     ))
 }
 
-async fn one(app: &App, id: &str) -> Result<gov::Device, ApiError> {
+pub(super) async fn one(app: &App, id: &str) -> Result<gov::Device, ApiError> {
     let found = match is_id(id, "d_") {
         true => gov::get_device(&app.pool, id).await?,
         false => None,

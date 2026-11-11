@@ -27,6 +27,7 @@ mod proof;
 mod resume;
 mod routing;
 mod runner;
+mod runner_control;
 mod sandbox;
 mod subscription;
 mod subscription_gone;

@@ -168,6 +168,7 @@ pub(super) async fn run_runner(core: &Core, base: &str, st: &State, exec: Script
         pty: None,
         agents: Some(Arc::new(agents)),
         login: None,
+        control: None,
         tls: None,
         backoff: Backoff {
             min: Duration::from_millis(50),

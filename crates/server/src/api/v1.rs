@@ -44,6 +44,7 @@ mod me;
 pub mod pair;
 mod pairing;
 pub mod passkey;
+mod runner_control;
 mod runners;
 pub mod scopes;
 mod secrets;
@@ -55,6 +56,7 @@ mod system;
 mod terminals;
 pub mod ticket;
 mod trace;
+pub use runner_control::ToolOps;
 pub use terminals::{
     Rooms, reconcile as reconcile_terminals, sweep as sweep_terminals,
     sweep_loop as terminal_sweep_loop,
@@ -182,6 +184,18 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/runners", get(runners::list))
         .route("/api/v1/runners/{id}", get(runners::get))
         .route("/api/v1/runners/{id}/noop", post(runners::noop))
+        .route(
+            "/api/v1/runners/{id}/policy",
+            put(runner_control::set_policy),
+        )
+        .route(
+            "/api/v1/runners/{id}/tools",
+            post(runner_control::install_tool),
+        )
+        .route(
+            "/api/v1/runners/{id}/tools/operations/{op}",
+            get(runner_control::get_operation),
+        )
         .route(
             "/api/v1/terminals",
             post(terminals::create).get(terminals::list),

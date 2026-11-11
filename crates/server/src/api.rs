@@ -88,6 +88,8 @@ pub struct App {
     pub conn_pace: Arc<crate::connections::pace::Pace>,
     /// The root host helper's socket (`crate::host`), for `/api/v1/system`.
     pub host_helper: Arc<crate::host::Client>,
+    /// Tool installs on runners, in flight and the last ones (`v1::runner_control`).
+    pub tool_ops: Arc<v1::ToolOps>,
 }
 
 /// Resolves once serve is stopping (`App::closing`).
@@ -129,6 +131,7 @@ impl App {
             conn_flows: Arc::default(),
             conn_pace: Arc::default(),
             host_helper: Arc::default(),
+            tool_ops: Arc::default(),
         }
     }
 }

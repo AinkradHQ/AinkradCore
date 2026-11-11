@@ -33,8 +33,8 @@ use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{
     accounts, agents, audit, budgets, chains, connections, corehealth, costs, devices, events,
-    handshake, lockouts, me, pair, pairing, passkey, runners, secrets, session, settings, stepup,
-    system, terminals, ticket, types, websession,
+    handshake, lockouts, me, pair, pairing, passkey, runner_control, runners, secrets, session,
+    settings, stepup, system, terminals, ticket, types, websession,
 };
 
 #[derive(OpenApi)]
@@ -82,6 +82,9 @@ use super::{
         runners::list,
         runners::get,
         runners::noop,
+        runner_control::set_policy,
+        runner_control::install_tool,
+        runner_control::get_operation,
         terminals::create,
         terminals::list,
         terminals::get,
