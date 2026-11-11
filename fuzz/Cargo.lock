@@ -91,7 +91,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-core"
-version = "0.2.1"
+version = "0.2.2"
 
 [[package]]
 name = "ainkrad-core-fuzz"
@@ -107,13 +107,16 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-core-server"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "age",
  "ainkrad-core",
  "ainkrad-proto",
+ "ainkrad-providers",
+ "ainkrad-sys",
  "axum",
  "base64 0.22.1",
+ "futures-util",
  "getrandom 0.4.3",
  "hyper",
  "hyper-util",
@@ -142,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-proto"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "schemars",
  "serde",
@@ -150,8 +153,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ainkrad-providers"
+version = "0.2.2"
+dependencies = [
+ "reqwest 0.12.28",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "ainkrad-sys"
+version = "0.2.2"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "ainkrad-term"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "vt100",
 ]
