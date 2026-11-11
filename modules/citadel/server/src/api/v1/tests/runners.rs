@@ -129,7 +129,7 @@ async fn a_runner_shows_what_it_reported_with_its_accounts_logins() {
         power_nap: Some(true),
     };
     let harnesses = BTreeMap::from([
-        ("claude".to_owned(), "2.1.306".to_owned()),
+        ("claude".to_owned(), "2.1.318".to_owned()),
         ("codex".to_owned(), "9.0.0".to_owned()),
         ("opencode".to_owned(), "0.1.0".to_owned()),
     ]);
@@ -138,7 +138,7 @@ async fn a_runner_shows_what_it_reported_with_its_accounts_logins() {
         .unwrap();
     let all = fx.ok("/api/v1/runners").await;
     let r = &all[0];
-    assert_eq!(r["harnesses"]["claude"], "2.1.306");
+    assert_eq!(r["harnesses"]["claude"], "2.1.318");
     assert_eq!(
         (r["slots"].clone(), r["last_slept_secs"].clone()),
         (json!(1), json!(7200))
@@ -169,7 +169,7 @@ async fn a_runner_shows_what_it_reported_with_its_accounts_logins() {
     assert_eq!(status("opencode").0, "too_old");
     assert_eq!(status("opencode").1, false);
     assert_eq!(status("agy"), (json!("missing"), json!(false), Value::Null));
-    assert_eq!(r["harness_status"][0]["tested_up_to"], "2.1.306");
+    assert_eq!(r["harness_status"][0]["tested_up_to"], "2.1.318");
 }
 
 #[tokio::test]
