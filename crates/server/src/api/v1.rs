@@ -47,6 +47,7 @@ pub mod passkey;
 mod runner_control;
 mod runners;
 pub mod scopes;
+mod secret_groups;
 mod secrets;
 pub mod session;
 mod settings;
@@ -280,6 +281,7 @@ pub fn router(app: App) -> Router {
             put(accounts::set_session_limits),
         )
         .route("/api/v1/accounts/{id}/test", post(accounts::test_account))
+        .route("/api/v1/accounts/{id}/check", post(accounts::check_account))
         .route(
             "/api/v1/pools",
             get(accounts::list_pools).post(accounts::create_pool),
@@ -373,6 +375,18 @@ pub fn router(app: App) -> Router {
         )
         .route("/api/v1/secrets/{id}/leases", post(secrets::lease))
         .route("/api/v1/secret-leases/redeem", post(secrets::redeem))
+        .route(
+            "/api/v1/secret-groups",
+            get(secret_groups::list).post(secret_groups::create),
+        )
+        .route(
+            "/api/v1/secret-groups/{id}",
+            put(secret_groups::update).delete(secret_groups::delete),
+        )
+        .route(
+            "/api/v1/secret-groups/{id}/leases",
+            post(secret_groups::lease),
+        )
         .route(
             "/api/v1/agent-sessions",
             get(agents::list).post(agents::create),

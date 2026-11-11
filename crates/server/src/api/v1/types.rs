@@ -157,7 +157,13 @@
 ///    host's tools (git, node, python, go, rust, docker, codex) beside the harnesses; the events
 ///    `runner.policy` and `runner.tool_install`; the audit actions `runner.policy_set` and `runner.tool_install`;
 ///    the runner protocol gains the `control` driver (`runner.policy`, `tools.install`, `tools.status`).
-pub const API_MINOR: u32 = 53;
+/// 54: secrets kinds and groups (N24): `SecretInfo` gains `kind`, `description`, `file_name`, `file_mode`, `group`,
+///    `effective_runners`, `last_used_at` and `use_count`; `createSecret`/`rotateSecret` take them (a `file` secret is
+///    base64, at most 1 MiB; `env_bundle`); `LeasedSecret` gains `kind`, `file_name`, `file_mode`;
+///    `listSecretGroups`, `createSecretGroup`, `updateSecretGroup`, `deleteSecretGroup`, `leaseSecretGroup`
+///    (`/secret-groups`, `admin`, writes destructive); `ClaimBody.device_name` (N11); `checkAccount`
+///    (`POST /accounts/{id}/check`, Claude plan check, N36); the `plan.check` runner op; the `secret_group.*` audit actions.
+pub const API_MINOR: u32 = 54;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

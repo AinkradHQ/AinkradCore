@@ -103,6 +103,7 @@ mod scheduler_failover;
 mod scheduler_sessions;
 mod scoped;
 mod scopes;
+mod secret_kinds;
 mod secrets;
 mod sessions;
 mod settings;

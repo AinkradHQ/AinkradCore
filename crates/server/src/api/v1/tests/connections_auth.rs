@@ -176,7 +176,7 @@ async fn a_non_admin_is_refused_everywhere_and_a_write_needs_a_step_up() {
     let app = cx
         .ok(Method::GET, "/api/v1/connection-apps/github", Value::Null)
         .await;
-    assert_eq!(app["configured"], false);
+    assert_eq!(app["configured"], true, "Ainkrad's built-in GitHub app");
     cx.assert_clean().await;
 }
 

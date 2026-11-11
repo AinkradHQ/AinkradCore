@@ -42,6 +42,9 @@ use crate::store::gov::{self, ADDRESS, ADDRESS_DEVICE, Device};
 /// The largest body a signed request may carry (the gateway's own cap is the same).
 pub const SIGNED_BODY: usize = 1024 * 1024;
 
+/// The secrets routes take more: a 1 MiB file secret travels as about 1.4 MiB of base64.
+pub const SECRET_BODY: usize = 2 * 1024 * 1024;
+
 /// The least time a refusal at steps 5 to 7 takes (§14: timing equalised). Far above the
 /// lookup and verify differences it hides, and it slows a guesser too.
 // ponytail: a fixed floor; a store slower than this leaks its own jitter, never the reason.
@@ -339,7 +342,14 @@ pub(crate) async fn client_gate(State(app): State<App>, req: Request, next: Next
     // A browser's event socket brings a one-time ticket instead of a signature (§10).
     let v = match super::ticket::offered(&parts) {
         Some(t) => super::ticket::redeem(&app, &t, &addr).await,
-        None => verify(&app, &parts, raw, SIGNED_BODY, &addr, Mode::Session).await,
+        None => {
+            // A file secret of 1 MiB is a third longer in base64 (decision G1).
+            let cap = match parts.uri.path().starts_with("/api/v1/secrets") {
+                true => SECRET_BODY,
+                false => SIGNED_BODY,
+            };
+            verify(&app, &parts, raw, cap, &addr, Mode::Session).await
+        }
     };
     let v = match v {
         Ok(v) => v,

@@ -41,7 +41,7 @@ async fn the_kinds_say_what_a_screen_needs_and_what_is_not_set_up_yet() {
             })
             .collect()
     };
-    let want = [("oauth", false), ("app_install", false), ("token", true)];
+    let want = [("oauth", true), ("app_install", false), ("token", true)];
     let got = methods(&gh);
     assert_eq!(
         got.iter()
@@ -49,7 +49,7 @@ async fn the_kinds_say_what_a_screen_needs_and_what_is_not_set_up_yet() {
             .collect::<Vec<_>>(),
         want
     );
-    assert_eq!(gh["configured"], false);
+    assert_eq!(gh["configured"], true, "the built-in GitHub app");
     let class = |d: &Value, cap: &str| {
         let caps = d["capabilities"].as_array().unwrap();
         caps.iter().find(|c| c["name"] == cap).unwrap()["class"].clone()

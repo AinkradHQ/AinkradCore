@@ -259,6 +259,17 @@ impl Hub {
         self.send_command(runner, Command::GatewayTest(test))
     }
 
+    /// The plan check (N36): it builds the one op itself, so the route can send `plan.check` and
+    /// nothing else, and no `Elevated` is minted. The runner runs one fixed `claude -p ok` in its
+    /// sandbox on the leased token; the caller names no program, argument or path.
+    pub(crate) fn dispatch_plan_check(
+        self: &Arc<Self>,
+        runner: &str,
+        check: ainkrad_proto::v2::PlanCheck,
+    ) -> Result<Dispatched, StreamError> {
+        self.send_command(runner, Command::PlanCheck(check))
+    }
+
     /// The only way a subscription sign-in reaches a runner (KAN-441): `login.start`, `login.code`
     /// and `login.cancel` and nothing else. The Core's start route is a step-up (`DESTRUCTIVE`) and
     /// the other two act on a sign-in that route began, so no `Elevated` is minted. The ops run

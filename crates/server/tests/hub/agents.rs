@@ -236,6 +236,7 @@ pub(super) async fn secret(core: &Core, name: &str, runners: &[String], delivery
         value: VALUE,
         runners: Some(runners),
         delivery: Some(delivery),
+        ..Default::default()
     };
     let now = core.app.clock.now();
     broker::create(

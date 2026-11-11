@@ -27,6 +27,10 @@ use crate::store::secrets::Error;
 
 /// The user whose rows hold the Core's app config.
 pub const OWNER: i64 = 1;
+/// Ainkrad's own public GitHub OAuth app (device flow: no secret exists). A Core uses it when the
+/// database holds no GitHub app of its own, so a user only connects (N23); an admin can still
+/// replace it by writing the `github` app config.
+pub const BUILT_IN_GITHUB_CLIENT_ID: &str = "Ov23litUTAjReYNz80Fy";
 /// The loopback port the Mac app's catcher listens on (registered with Atlassian), unless set.
 pub const DEFAULT_PORT: u16 = 47613;
 
@@ -192,13 +196,17 @@ pub struct Apps {
 }
 
 impl Apps {
-    /// The device flow's client id, when set.
+    /// The device flow's client id: the admin's own app when one is set, else Ainkrad's built-in
+    /// one. Always `Some`.
     pub fn github_client_id(&self) -> Option<String> {
         let held = self
             .github_client_id
             .read()
             .unwrap_or_else(|e| e.into_inner());
-        held.as_ref().map(|c| c.to_string())
+        Some(
+            held.as_ref()
+                .map_or_else(|| BUILT_IN_GITHUB_CLIENT_ID.to_owned(), |c| c.to_string()),
+        )
     }
 
     /// The GitHub App's name in its URL (`github.com/apps/<slug>/installations/new`), when set.

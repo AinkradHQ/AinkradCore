@@ -21,7 +21,8 @@ fn whoami() -> &'static str {
 #[tokio::test]
 async fn without_the_app_set_up_a_sign_in_says_so_plainly() {
     let cx = cx().await;
-    for kind in ["github", "jira"] {
+    // GitHub has Ainkrad's built-in app (N23); Jira still needs the sign-in service.
+    for kind in ["jira"] {
         let r = start(&cx, kind, json!({})).await;
         assert_eq!(code(&r), (409, "not_configured".to_owned()), "{}", r.1);
         assert!(

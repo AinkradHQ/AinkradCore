@@ -61,6 +61,10 @@ pub struct ClaimBody {
     /// The step-up key over the same string, with `stepup_spki`.
     #[serde(default)]
     pub pop_stepup: Option<String>,
+    /// What to call this device: 1 to 64 characters of plain text, no control characters. It
+    /// becomes the device's name in place of the pairing's (an invite's is `owner`).
+    #[serde(default)]
+    pub device_name: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -315,6 +319,12 @@ async fn evaluate(
     {
         return Ok(bad("unknown key_storage, or a platform over 64 bytes"));
     }
+    let device_name = b.device_name.as_deref().map(str::trim);
+    if device_name
+        .is_some_and(|n| n.is_empty() || n.chars().count() > 64 || n.chars().any(char::is_control))
+    {
+        return Ok(bad("device_name is 1 to 64 characters of plain text"));
+    }
     let stepup_fp = stepup.as_deref().map(fingerprint);
     let message = pop_message(
         &app.auth.identity.fp,
@@ -343,6 +353,7 @@ async fn evaluate(
         platform: b.platform.as_deref(),
         key_storage: b.key_storage.as_deref(),
         sas: &sas,
+        device_name,
         passkey: None,
     };
     match gov::claim_pairing(&app.pool, &claim, now).await {

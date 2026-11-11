@@ -23,6 +23,7 @@ mod isolation;
 mod login;
 mod login_pool;
 mod neg_failover;
+mod plan_check;
 mod proof;
 mod resume;
 mod routing;

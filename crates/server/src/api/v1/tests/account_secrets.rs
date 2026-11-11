@@ -242,6 +242,7 @@ async fn masking_an_account_secret_fails_closed_after_a_rotation_or_a_deletion()
         value: V2,
         runners: None,
         delivery: None,
+        ..Default::default()
     };
     st::rotate(
         &fx.app.pool,

@@ -281,8 +281,8 @@ async fn the_github_app_mints_and_renews_installation_tokens_before_they_end() {
         .await;
     assert_eq!(set["app_install_configured"], true);
     assert_eq!(
-        set["configured"], false,
-        "the device flow needs its client id"
+        set["configured"], true,
+        "the device flow works with Ainkrad's built-in client id (N23)"
     );
     let key_field = set["fields"]
         .as_array()
@@ -416,4 +416,61 @@ async fn the_github_app_mints_and_renews_installation_tokens_before_they_end() {
         &mark(&key),
     ])
     .await;
+}
+
+/// N23: a Core with no GitHub app in its database signs in with Ainkrad's own public app (device
+/// flow, no secret); an admin's own client id replaces it, and clearing it brings the built-in back.
+#[tokio::test]
+async fn github_signs_in_with_the_built_in_app_until_an_admin_sets_one() {
+    let cx = cx().await;
+    let id = |c: &Cx| c.fx.app.conn_apps.github_client_id();
+    assert_eq!(
+        id(&cx).as_deref(),
+        Some(crate::connections::apps::BUILT_IN_GITHUB_CLIENT_ID)
+    );
+    assert_eq!(
+        crate::connections::apps::BUILT_IN_GITHUB_CLIENT_ID,
+        "Ov23litUTAjReYNz80Fy"
+    );
+    let kinds = cx
+        .ok(Method::GET, "/api/v1/connection-kinds", Value::Null)
+        .await;
+    let github = kinds
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["kind"] == "github")
+        .unwrap();
+    assert_eq!(github["configured"], true, "{github}");
+    let oauth = github["auth_methods"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "oauth")
+        .unwrap();
+    assert_eq!(oauth["available"], true, "{oauth}");
+    let own = cx
+        .ok(
+            Method::PUT,
+            &format!("{APPS}/github"),
+            json!({"fields": {"client_id": "Iv1.own-company-app"}}),
+        )
+        .await;
+    assert_eq!(own["configured"], true);
+    assert_eq!(id(&cx).as_deref(), Some("Iv1.own-company-app"));
+    // The built-in id is not a database row: the app config shows the field as not set.
+    let fresh = super::connections_fx::cx().await;
+    let got = fresh
+        .ok(Method::GET, &format!("{APPS}/github"), Value::Null)
+        .await;
+    let field = got["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "client_id")
+        .unwrap();
+    assert_eq!(
+        field["set"], false,
+        "the built-in app is not shown as the admin's: {field}"
+    );
 }

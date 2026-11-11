@@ -542,6 +542,7 @@ async fn a_secret_name_cannot_borrow_another_accounts_host() {
         value: key,
         runners: Some(&[]),
         delivery: Some("env"),
+        ..Default::default()
     };
     let r = crate::store::secrets::create(p, &s, &name, &new, &fx.dev.id, BY, NOW).await;
     assert_eq!(code(r), "bad_request");
