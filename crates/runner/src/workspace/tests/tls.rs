@@ -62,6 +62,7 @@ impl Rig {
                     name: "git".into(),
                     delivery: "askpass".into(),
                     value: TOKEN.to_owned().into(),
+                    form: Default::default(),
                 },
             )],
         )

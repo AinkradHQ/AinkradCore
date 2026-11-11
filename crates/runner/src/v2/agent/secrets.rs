@@ -32,6 +32,19 @@ pub struct Leased {
     /// `env`, `file` or `askpass`.
     pub delivery: String,
     pub value: Zeroizing<String>,
+    pub form: Form,
+}
+
+/// What a leased value is (N24).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Form {
+    /// Text or multi-line text: the value as it is.
+    #[default]
+    Text,
+    /// A file: the value is its bytes in base64; written as `name` with `mode`.
+    File { name: String, mode: u32 },
+    /// A `.env` bundle: `NAME=value` lines, each a variable (or, delivered as a file, the text).
+    Bundle,
 }
 
 /// Redeems a lease: the secret, or why not (never holding the lease or a value).
@@ -236,7 +249,10 @@ pub fn deliver(root: &Path, session: &str, leased: Vec<(String, Leased)>) -> io:
             env: vec![],
         });
     }
-    if leased.iter().any(|(_, s)| s.delivery != "env") {
+    if leased
+        .iter()
+        .any(|(_, s)| s.delivery != "env" || matches!(s.form, Form::File { .. }))
+    {
         verify_memory_fs(root)?;
     }
     let dir = root.join(session);
@@ -252,6 +268,28 @@ pub fn deliver(root: &Path, session: &str, leased: Vec<(String, Leased)>) -> io:
     for (i, (var, secret)) in leased.into_iter().enumerate() {
         // Named by position: a secret's name never becomes a path.
         let file = dir.join(format!("s{i}"));
+        if let Form::File { name, mode } = &secret.form {
+            use base64::Engine;
+            let bytes = Zeroizing::new(
+                base64::engine::general_purpose::STANDARD
+                    .decode(secret.value.as_bytes())
+                    .map_err(|_| io::Error::other("a file secret's value is not base64"))?,
+            );
+            // `s<i>/<name>`: the name is a validated plain component, the dir is by position.
+            private_dir(&file)?;
+            let path = file.join(name);
+            write_new(&path, &bytes, *mode)?;
+            // `create_new` obeys the umask; the mode the owner chose is the mode it gets.
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(*mode))?;
+            out.env.push((var, path_str(&path)?));
+            continue;
+        }
+        if secret.form == Form::Bundle && secret.delivery == "env" {
+            let pairs =
+                ainkrad_proto::v2::parse_env_bundle(&secret.value).map_err(io::Error::other)?;
+            out.env.extend(pairs);
+            continue;
+        }
         match secret.delivery.as_str() {
             "env" => out.env.push((var, secret.value.to_string())),
             "file" => {
@@ -323,10 +361,26 @@ pub fn http_redeem(client: Arc<Client>, key: Arc<Key>, enrolment: Arc<Mutex<Enro
                 _ => return Err("the Core's answer has no value".to_owned()),
             };
             let text = |k: &str| v[k].as_str().unwrap_or_default().to_owned();
+            let form = match v["kind"].as_str() {
+                Some("file") => {
+                    let mode = v["file_mode"]
+                        .as_str()
+                        .and_then(|m| u32::from_str_radix(m, 8).ok())
+                        .unwrap_or(0o600);
+                    let name = text("file_name");
+                    if !ainkrad_proto::v2::valid_secret_file_name(&name) {
+                        return Err("the Core's file secret has no usable file name".to_owned());
+                    }
+                    Form::File { name, mode }
+                }
+                Some("env_bundle") => Form::Bundle,
+                _ => Form::Text,
+            };
             Ok(Leased {
                 name: text("name"),
                 delivery: text("delivery"),
                 value,
+                form,
             })
         })
     })
@@ -343,6 +397,7 @@ mod tests {
             name: "fake".into(),
             delivery: "file".into(),
             value: Zeroizing::new("canary-value".into()),
+            form: Form::Text,
         };
         assert!(
             deliver(
@@ -353,6 +408,51 @@ mod tests {
             .is_err()
         );
         assert!(!Path::new("must-not-create").exists());
+    }
+    #[test]
+    fn an_env_bundle_becomes_one_variable_per_line() {
+        let root = std::env::temp_dir().join(format!("bundle-{}", std::process::id()));
+        let leased = Leased {
+            name: "dotenv".into(),
+            delivery: "env".into(),
+            value: Zeroizing::new("# c\nA_1=one\nB=\"two words\"\n".into()),
+            form: Form::Bundle,
+        };
+        let got = deliver(&root, "s1", vec![("IGNORED".into(), leased)]).unwrap();
+        assert_eq!(
+            got.env,
+            [
+                ("A_1".into(), "one".into()),
+                ("B".into(), "two words".into())
+            ]
+        );
+        drop(got);
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn a_file_secret_is_written_with_its_name_and_mode() {
+        let root = std::env::temp_dir().join(format!("filesecret-{}", std::process::id()));
+        let leased = Leased {
+            name: "svc".into(),
+            delivery: "file".into(),
+            value: Zeroizing::new("aGk=".into()),
+            form: Form::File {
+                name: "svc.json".into(),
+                mode: 0o440,
+            },
+        };
+        // Written only on a verified RAM filesystem: here the refusal is the behaviour.
+        match deliver(&root, "s1", vec![("SVC_FILE".into(), leased)]) {
+            Err(e) => assert_eq!(e.kind(), io::ErrorKind::PermissionDenied),
+            Ok(got) => {
+                let path = std::path::PathBuf::from(&got.env[0].1);
+                assert_eq!(path.file_name().unwrap(), "svc.json");
+                assert_eq!(std::fs::read(&path).unwrap(), b"hi");
+                let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode, 0o440);
+            }
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
     #[test]
     fn a_symlink_cannot_be_a_private_directory() {

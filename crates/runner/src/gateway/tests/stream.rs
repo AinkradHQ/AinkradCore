@@ -275,6 +275,7 @@ async fn a_lease_becomes_a_gateway_whose_slot_names_a_socket_and_never_the_key()
                 name: "acct.anthropic.1".to_owned(),
                 delivery: "gateway".to_owned(),
                 value: Zeroizing::new(value),
+                form: Default::default(),
             })
         })
     });

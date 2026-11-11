@@ -41,6 +41,11 @@ pub fn hidden_paths(state: &Path, extra: &[PathBuf]) -> Vec<PathBuf> {
 pub fn readonly_paths(host: &Path) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = std::env::current_exe().into_iter().collect();
     v.push(host.to_path_buf());
+    // The Ainkrad shell profile (N20): a shell reads it, and cannot change what every later shell starts with.
+    let shell = Path::new(super::pty::SHELL_DIR);
+    if shell.is_dir() {
+        v.push(shell.to_path_buf());
+    }
     for d in launcher_dirs() {
         // Created if missing, so the shell cannot plant a unit or agent in a dir that did not
         // exist yet; read-only inside the sandbox from then on.

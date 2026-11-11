@@ -173,6 +173,8 @@ pub async fn advertise(
     // This runner applies the subscription rules before it redeems a lease (KAN-434).
     info.commands
         .push(ainkrad_proto::v2::CAP_SUBSCRIPTION_ENV.to_owned());
+    info.commands
+        .push(ainkrad_proto::v2::CAP_PLAN_CHECK.to_owned());
     if let Some(l) = login {
         match l.supported().await {
             Ok(_) => info.commands.push(CAP_LOGIN.to_owned()),

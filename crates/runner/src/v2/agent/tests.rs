@@ -190,6 +190,7 @@ fn leases() -> Redeem {
                 name: format!("test.{delivery}"),
                 delivery: delivery.to_owned(),
                 value: Zeroizing::new(value.to_owned()),
+                form: Default::default(),
             })
         })
     })
@@ -1202,6 +1203,7 @@ async fn the_runner_refuses_an_account_secret_in_the_wrong_variable() {
                 name: name.to_owned(),
                 delivery: "env".to_owned(),
                 value: Zeroizing::new(format!("v-{name}")),
+                form: Default::default(),
             })
         })
     });
@@ -1301,6 +1303,7 @@ async fn an_account_secret_marks_its_session_and_no_other_secret_does() {
                 name: name.to_owned(),
                 delivery: "env".to_owned(),
                 value: Zeroizing::new(format!("v-{name}")),
+                form: Default::default(),
             })
         })
     });
@@ -1352,6 +1355,7 @@ async fn a_gateway_grant_gives_the_harness_a_socket_not_a_key_and_a_stop_closes_
                 name: "acct.anthropic.1".to_owned(),
                 delivery: "gateway".to_owned(),
                 value: Zeroizing::new(value),
+                form: Default::default(),
             })
         })
     });

@@ -61,6 +61,50 @@ pub fn valid_secret_var(var: &str) -> bool {
         && !var.starts_with("DYLD_")
 }
 
+/// A file secret's name on the runner: `[A-Za-z0-9._-]{1,64}`, never `.` or `..` (it becomes a
+/// path component under the session's secrets dir, so no separator can be in it).
+pub fn valid_secret_file_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name != "."
+        && name != ".."
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+}
+
+/// A `.env` bundle's `NAME=value` pairs: one per line, blank lines and `#` comments skipped, one
+/// pair of matching quotes around a value stripped. Every name passes [`valid_secret_var`]; a
+/// bundle with no pair, or a line that is none, is an error (a line number, never the text).
+pub fn parse_env_bundle(text: &str) -> Result<Vec<(String, String)>, String> {
+    let mut out = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else {
+            return Err(format!("line {} is not NAME=value", i + 1));
+        };
+        let k = k.trim();
+        if !valid_secret_var(k) {
+            return Err(format!(
+                "line {}: {k:?} is not an allowed variable name",
+                i + 1
+            ));
+        }
+        let v = v.trim();
+        let v = ["\"", "'"]
+            .iter()
+            .find_map(|q| v.strip_prefix(q)?.strip_suffix(q))
+            .unwrap_or(v);
+        out.push((k.to_owned(), v.to_owned()));
+    }
+    match out.is_empty() {
+        true => Err("the bundle has no NAME=value line".to_owned()),
+        false => Ok(out),
+    }
+}
+
 /// Names under this prefix are provider-account secrets: `acct.<provider>.<label>`.
 pub const ACCOUNT_PREFIX: &str = "acct.";
 
@@ -339,4 +383,48 @@ pub struct AgentEvents {
     /// forge the harness's own output), so it is a hint: cool an account from it, never disable one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_limit: Option<super::PlanLimit>,
+}
+
+#[cfg(test)]
+mod bundle_tests {
+    use super::*;
+
+    #[test]
+    fn an_env_bundle_parses_lines_and_refuses_the_rest() {
+        let got = parse_env_bundle("# c\nA=1\n B = \"two words\" \nC='x'\nD=\n").unwrap();
+        let want = [("A", "1"), ("B", "two words"), ("C", "x"), ("D", "")];
+        assert_eq!(
+            got.iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect::<Vec<_>>(),
+            want
+        );
+        for bad in [
+            "",
+            "# only\n",
+            "x",
+            "a=1",
+            "PATH=/bin",
+            "LD_PRELOAD=x",
+            "OK=1\nbroken",
+        ] {
+            assert!(parse_env_bundle(bad).is_err(), "{bad:?}");
+        }
+        assert!(
+            parse_env_bundle("PATH=/bin")
+                .unwrap_err()
+                .find("/bin")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_file_name_is_one_plain_component() {
+        for ok in ["a", ".env", "svc.json", "AuthKey_X1.p8"] {
+            assert!(valid_secret_file_name(ok), "{ok}");
+        }
+        for bad in ["", ".", "..", "a/b", "a b", "é", &"x".repeat(65)] {
+            assert!(!valid_secret_file_name(bad), "{bad}");
+        }
+    }
 }
