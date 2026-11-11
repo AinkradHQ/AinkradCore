@@ -128,6 +128,7 @@ async fn create_inner(
         value: key,
         runners: Some(new.runners),
         delivery: Some("env"),
+        ..Default::default()
     };
     secrets::create_in(&mut tx, sealer, &name, &value, owner, actor, now).await?;
     sqlx::query("UPDATE core_accounts SET secret_name = ? WHERE id = ?")

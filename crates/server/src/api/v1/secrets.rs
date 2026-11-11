@@ -41,6 +41,21 @@ pub struct SecretInfo {
     pub key_id: String,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// `text`, `multiline`, `file` or `env_bundle`. `size` is a file's decoded length.
+    pub kind: Option<String>,
+    /// One line: what it is for.
+    pub description: Option<String>,
+    /// A `file` secret's name on the runner, and its octal mode (`0600`).
+    pub file_name: Option<String>,
+    pub file_mode: Option<String>,
+    /// The group it belongs to (`/api/v1/secret-groups`); none for no group.
+    pub group: Option<String>,
+    /// The runners a lease may go to: its own, else its group's.
+    pub effective_runners: Option<Vec<String>>,
+    /// When a runner last redeemed it; none before the first redemption.
+    pub last_used_at: Option<Timestamp>,
+    /// How many redemptions.
+    pub use_count: Option<i64>,
 }
 
 impl From<Meta> for SecretInfo {
@@ -55,6 +70,14 @@ impl From<Meta> for SecretInfo {
             key_id: m.key_id,
             created_at: ts(&m.created_at),
             updated_at: ts(&m.updated_at),
+            kind: Some(m.kind),
+            description: Some(m.description),
+            file_name: m.file_name,
+            file_mode: m.file_mode.map(|m| format!("{m:04o}")),
+            group: m.group,
+            effective_runners: Some(m.effective_runners),
+            last_used_at: super::types::opt_ts(m.last_used_at.as_deref()),
+            use_count: Some(m.use_count),
         }
     }
 }
@@ -63,13 +86,24 @@ impl From<Meta> for SecretInfo {
 #[derive(Deserialize, ToSchema)]
 pub struct NewSecret {
     pub name: String,
-    /// UTF-8 text, at most `secrets.max_bytes`; written, never read back.
+    /// UTF-8 text, at most `secrets.max_bytes`; for kind `file` the file's bytes in standard
+    /// base64 (at most 1 MiB decoded); written, never read back.
     #[schema(value_type = String)]
     pub value: Zeroizing<String>,
-    /// Runner device ids it may be leased to; default none.
+    /// Runner device ids it may be leased to; default none (a group's runners then apply).
     pub runners: Option<Vec<String>>,
     /// `env` (the default), `file` or `askpass`.
     pub delivery: Option<String>,
+    /// `text` (the default), `multiline`, `file` or `env_bundle` (`NAME=value` lines).
+    pub kind: Option<String>,
+    /// One line, at most 200 characters.
+    pub description: Option<String>,
+    /// Required for kind `file`: `[A-Za-z0-9._-]{1,64}`.
+    pub file_name: Option<String>,
+    /// Kind `file`: an octal mode the owner can read, `0400` to `0777`; default `0600`.
+    pub file_mode: Option<String>,
+    /// The name of a group made with `createSecretGroup`; one level.
+    pub group: Option<String>,
 }
 
 /// A rotation: the new value, and optionally a new scope or delivery. No `Debug`.
@@ -79,6 +113,13 @@ pub struct RotateSecret {
     pub value: Zeroizing<String>,
     pub runners: Option<Vec<String>>,
     pub delivery: Option<String>,
+    /// Omitted keeps the kind; the other fields are those of `createSecret`, omitted keeps them.
+    pub kind: Option<String>,
+    pub description: Option<String>,
+    pub file_name: Option<String>,
+    pub file_mode: Option<String>,
+    /// An empty string leaves the group.
+    pub group: Option<String>,
 }
 
 /// A lease to grant.
@@ -115,11 +156,27 @@ pub struct LeasedSecret {
     pub value: Zeroizing<String>,
     /// Drop it by then, or at the session's end.
     pub expires_at: Timestamp,
+    /// `text`, `multiline`, `file` (the value is base64: decode it, write it as `file_name`
+    /// with `file_mode`) or `env_bundle` (the value is `NAME=value` lines).
+    pub kind: Option<String>,
+    pub file_name: Option<String>,
+    pub file_mode: Option<String>,
 }
 
 fn parse<T: DeserializeOwned>(body: &[u8]) -> Result<T, ApiError> {
     serde_json::from_slice(body)
         .map_err(|_| ApiError::bad_request("the body is not a valid request for this route"))
+}
+
+/// An octal mode, `600` or `0600`.
+fn mode(m: Option<&str>) -> Result<Option<i64>, ApiError> {
+    m.map(|m| {
+        i64::from_str_radix(m, 8)
+            .ok()
+            .filter(|_| (3..=4).contains(&m.len()))
+            .ok_or_else(|| ApiError::bad_request("file_mode is an octal mode such as 0600"))
+    })
+    .transpose()
 }
 
 fn sealer(app: &App) -> Result<&SecretBox, ApiError> {
@@ -201,6 +258,11 @@ pub async fn create(
         value: &b.value,
         runners: b.runners.as_deref(),
         delivery: b.delivery.as_deref(),
+        kind: b.kind.as_deref(),
+        description: b.description.as_deref(),
+        file_name: b.file_name.as_deref(),
+        file_mode: mode(b.file_mode.as_deref())?,
+        group: b.group.as_deref(),
     };
     let m = store::create(
         &app.pool,
@@ -233,6 +295,11 @@ pub async fn rotate(
         value: &b.value,
         runners: b.runners.as_deref(),
         delivery: b.delivery.as_deref(),
+        kind: b.kind.as_deref(),
+        description: b.description.as_deref(),
+        file_name: b.file_name.as_deref(),
+        file_mode: mode(b.file_mode.as_deref())?,
+        group: b.group.as_deref(),
     };
     let m = store::rotate(
         &app.pool,
@@ -340,6 +407,9 @@ pub async fn redeem(
             delivery: "env".to_owned(),
             value: e.value,
             expires_at: ts(&iso_of_unix(e.expires)),
+            kind: None,
+            file_name: None,
+            file_mode: None,
         }));
     }
     let r = store::redeem(
@@ -358,5 +428,8 @@ pub async fn redeem(
         delivery: r.delivery,
         value: r.value,
         expires_at: ts(&iso_of_unix(r.expires_at)),
+        kind: Some(r.kind),
+        file_name: r.file_name,
+        file_mode: r.file_mode.map(|m| format!("{m:04o}")),
     }))
 }

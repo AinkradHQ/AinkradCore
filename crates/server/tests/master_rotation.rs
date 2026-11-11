@@ -126,6 +126,7 @@ async fn home(root: &Path, n: usize, versions: usize) -> Home {
                 value: &val,
                 runners: Some(&scope),
                 delivery: None,
+                ..Default::default()
             };
             match v {
                 1 => secrets::create(

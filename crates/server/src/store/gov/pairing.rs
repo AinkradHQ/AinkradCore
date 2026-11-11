@@ -267,6 +267,8 @@ pub struct Claim<'a> {
     pub platform: Option<&'a str>,
     pub key_storage: Option<&'a str>,
     pub sas: &'a str,
+    /// The name the device asked for (N11); `None` keeps the pairing's own.
+    pub device_name: Option<&'a str>,
     /// A passkey's credential, stored with its device (kind `passkey` only).
     pub passkey: Option<super::NewCredential<'a>>,
 }
@@ -302,7 +304,7 @@ pub async fn claim_pairing(pool: &SqlitePool, c: &Claim<'_>, now: i64) -> Result
     let new = NewDevice {
         id: c.device_id,
         kind: &c.pairing.kind,
-        name: &c.pairing.name,
+        name: c.device_name.unwrap_or(&c.pairing.name),
         routine_spki: c.routine_spki,
         stepup_spki: c.stepup_spki,
         platform: c.platform,

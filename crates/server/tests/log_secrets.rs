@@ -393,6 +393,7 @@ async fn rotation_flow(
         value: VALUE,
         runners: None,
         delivery: None,
+        ..Default::default()
     };
     secrets::create(
         pool,
