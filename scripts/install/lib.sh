@@ -181,13 +181,16 @@ check_answers() {
 # REAL_CREDENTIALS=yes (the default; the owner's single-user production decision of 2026-11-09): after the Core is up,
 # the broker is turned on in mode 1 and the two narrow real-credential gates are lifted (provider account keys and
 # subscription tokens; connection tokens). Only a setting still at its default is set, so a re-run never undoes an
-# operator's own value (secrets.mode 0 is the kill switch). no: nothing is set. Mode 2 is never set here.
+# operator's own value (secrets.mode 0 is the kill switch). no: only secrets.connections is set, because the Core's
+# built-in GitHub app (N23) signs users in and its token must be accepted. Mode 2 is never set here.
 CRED_GATES="secrets.mode secrets.provider_accounts secrets.connections"
 real_credentials() {
-  local k src cli=(runuser -u ainkrad -- "$BIN/ainkrad-core-server" setting)
-  if [ "$A_REAL_CREDENTIALS" != yes ]; then step "Real credentials: off (secrets.* keep their defaults)"; return 0; fi
-  step "Real credentials: on ($CRED_GATES at 1 unless already set)"
-  for k in $CRED_GATES; do
+  local k src gates=$CRED_GATES cli=(runuser -u ainkrad -- "$BIN/ainkrad-core-server" setting)
+  if [ "$A_REAL_CREDENTIALS" != yes ]; then
+    gates=secrets.connections
+    step "Real credentials: off (secrets.mode and secrets.provider_accounts keep their defaults; secrets.connections at 1 for the built-in sign-in apps)"
+  else step "Real credentials: on ($CRED_GATES at 1 unless already set)"; fi
+  for k in $gates; do
     if [ "$DRY" = 0 ]; then
       src=$("${cli[@]}" get "$CORE_HOME/core.db" "$k" | cut -f4)
       [ "$src" = default ] || { say "  $k: kept (set at $src)"; continue; }

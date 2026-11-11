@@ -1,6 +1,7 @@
 # shellcheck shell=sh
-# The checks that must pass BEFORE anything is installed (N6): the ports the Core needs are free and this machine's own firewall
-# does not turn inbound TCP 443 (and 80 for http-01) away. POSIX sh. The block between the markers is copied verbatim into
+# The checks that must pass BEFORE anything is installed (N6): the two answers (the DNS name and the email), the ports the Core needs
+# are free, this machine's own firewall does not turn inbound TCP 443 (and 80 for http-01) away, and the DNS name points at this
+# machine (pc_dns, blocking). POSIX sh. The block between the markers is copied verbatim into
 # scripts/get.sh (which cannot source anything before the download): scripts/install/ui-test.sh fails when the two differ.
 # Sourced by scripts/install.sh for the standalone checks. Needs the ui-core block (ui_tty_fg) in the same shell.
 # The tools it asks (ss, iptables, ufw, nft) are looked up on PATH, so tests put stubs first.
@@ -104,5 +105,69 @@ pc_checks() { # pc_checks "443 80": 0 when all is well; else 1 with PC_WHAT (wha
     fi
     ui_ok "Port $_p is free and this machine's firewall lets it in"
   done
+}
+pc_valid_hostname() { # a DNS name of two or more labels; not an IP address
+  _h=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  case $_h in '' | *'
+'*) return 1 ;; esac
+  [ "${#_h}" -le 253 ] && printf '%s' "$_h" | grep -Eq '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$'
+}
+pc_valid_email() { # name@a.dns.name
+  case $1 in *@* | '') ;; *) return 1 ;; esac
+  case $1 in *'
+'*) return 1 ;; esac
+  printf '%s' "${1%@*}" | grep -Eq '^[A-Za-z0-9._%+-]+$' && pc_valid_hostname "${1##*@}"
+}
+pc_ask() { # pc_ask VAR "question" "example" VALIDATOR: VAR from the environment when valid, else asked on the terminal until it is; exported
+  eval "_v=\${$1:-}"
+  if [ -n "$_v" ]; then
+    if "$4" "$_v"; then ui_keep "$1 = $_v (given up front)"; export "$1"; return 0; fi
+    ui_warn "$1 is not valid, so it is asked again"
+  fi
+  { ( : </dev/tty ) 2>/dev/null && ui_tty_fg; } || ui_stopped "no terminal to ask on, and $1 is not set" "set AINKRAD_HOSTNAME=<dns name> and AINKRAD_ACME_EMAIL=<email> and run the command again. Nothing was installed."
+  while :; do
+    [ "$UI_FANCY" != 1 ] || printf '\r\033[K'
+    printf '\n %s\n   Example: %s\n > ' "$2" "$3" >/dev/tty
+    _v=''; read -r _v </dev/tty || ui_stopped "no answer for $1 (the input ended)" "run the command again. Nothing was installed."
+    if "$4" "$_v"; then break; fi
+    printf '   That is not valid. Try again.\n' >/dev/tty
+  done
+  eval "$1=\$_v"; export "$1"
+}
+pc_dns_probe() { # pc_dns_probe NAME OUTFILE: "A ip" / "AAAA ip" lines (dig when there is one, else getent); never fails
+  { if command -v dig >/dev/null 2>&1; then
+      dig +short +time=3 +tries=1 A "$1" 2>/dev/null | grep -E '^[0-9.]+$' | sed 's/^/A /' || true
+      dig +short +time=3 +tries=1 AAAA "$1" 2>/dev/null | grep -E '^[0-9a-fA-F:]+$' | sed 's/^/AAAA /' || true
+    else
+      getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' | sort -u | sed 's/^/A /' || true
+      getent ahostsv6 "$1" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9a-fA-F:]+$' | sort -u | sed 's/^/AAAA /' || true
+    fi; } >"$2"
+}
+pc_pub_probe() { # pc_pub_probe OUTFILE: this machine's public IPv4 from a third party (api.ipify.org); never fails
+  { curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS4 --max-time 5 https://checkip.amazonaws.com 2>/dev/null || true; } >"$1"
+}
+pc_dns() { # pc_dns NAME: the A record is this machine's public address and any AAAA record is on it; else the red card (blocking)
+  ui_logopen || { ui_warn "cannot create a log directory, so the DNS check is skipped"; return 0; }
+  _f=$UI_LOGDIR/dns
+  UI_QUIET=1 ui_run "Looking up this machine's public address (a request to api.ipify.org)" pc_pub_probe "$_f.pub" || true
+  _pub=$(tr -cd '0-9.' <"$_f.pub" 2>/dev/null | head -c 15)
+  printf '%s' "$_pub" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || _pub=''
+  UI_QUIET=1 ui_run "Checking that $1 points at ${_pub:-this machine}" pc_dns_probe "$1" "$_f.dns" || true
+  _a=$(sed -n 's/^A //p' "$_f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+  _aaaa=$(sed -n 's/^AAAA //p' "$_f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+  if [ -z "$_a" ]; then
+    ui_stopped "$1 has no DNS A record yet, so Let's Encrypt cannot issue the certificate" "at your DNS provider add an A record  $1 -> ${_pub:-<this machine public IP>}  (TTL 300), wait a minute, then run the command again. Nothing was installed."
+  elif [ -z "$_pub" ]; then
+    ui_warn "$1 points at $_a, but this machine's public address could not be looked up, so I cannot compare. Make sure that is this machine."
+  elif printf ' %s ' "$_a" | grep -q " $_pub "; then ui_keep "$1 points at $_pub: this machine"
+  else
+    ui_stopped "$1 points at $_a, but this machine is $_pub, so Let's Encrypt would validate the wrong machine" "change the A record to $_pub (or run this installer on $_a), wait a minute, then run the command again. Nothing was installed."
+  fi
+  _bad6=''
+  for _x in $_aaaa; do
+    printf '%s' "$_x" | grep -Eq '^[0-9a-fA-F:]{2,45}$' || continue
+    ip -6 addr 2>/dev/null | grep -q " $_x/" || _bad6="${_bad6:+$_bad6 }$_x"
+  done
+  [ -z "$_bad6" ] || ui_stopped "$1 also has an IPv6 (AAAA) record ($_bad6) that is not on this machine, and Let's Encrypt tries IPv6 first" "remove the AAAA record, or point it at this machine, then run the command again. Nothing was installed."
 }
 # --- precheck end ---

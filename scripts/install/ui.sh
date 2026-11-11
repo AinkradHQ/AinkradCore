@@ -125,7 +125,7 @@ ui_int() { # INT/TERM: stop the job and its children FIRST, then say honestly wh
 ui_traps() { trap ui_exit EXIT; trap 'ui_int 130' INT; trap 'ui_int 143' TERM; }
 ui_rname() { # the roadmap
   case $1 in
-    1) echo "Check this machine" ;; 2) echo "Install prerequisites" ;; 3) echo "Download and verify" ;; 4) echo "Install the programs" ;;
+    1) echo "Check this machine and your DNS name" ;; 2) echo "Install prerequisites" ;; 3) echo "Download and verify" ;; 4) echo "Install the programs" ;;
     5) echo "Your 2 answers" ;; 6) echo "Set up the Core" ;; 7) echo "Start and get the certificate" ;; 8) echo "Your connect link" ;;
   esac
 }

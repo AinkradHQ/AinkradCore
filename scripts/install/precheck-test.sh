@@ -109,6 +109,30 @@ l_chk=$(grep -n 'pc_checks 443 ||' "$gs" | head -1 | cut -d: -f1);  l_apt=$(grep
 for pkg in git curl unzip jq ripgrep build-essential; do grep -q "^    pkgs='.*[ ']${pkg}[ ']" "$gs" && ok || bad "get.sh does not install $pkg with the prerequisites"; done
 grep -q 'ui_stopped "\$PC_WHAT" "\$PC_TODO"' "$gs" && ok || bad "get.sh does not stop with the red card when a check fails"
 
+# --- N6: the two questions and the DNS check come BEFORE anything is installed, and the DNS check blocks ---
+l_ask=$(grep -n 'pc_ask AINKRAD_HOSTNAME' "$gs" | head -1 | cut -d: -f1); l_mail=$(grep -n 'pc_ask AINKRAD_ACME_EMAIL' "$gs" | head -1 | cut -d: -f1); l_dns=$(grep -n 'pc_dns "\$AINKRAD_HOSTNAME"' "$gs" | head -1 | cut -d: -f1)
+{ [ -n "$l_ask" ] && [ -n "$l_mail" ] && [ -n "$l_dns" ] && [ "$l_ask" -lt "$l_apt" ] && [ "$l_mail" -lt "$l_apt" ] && [ "$l_dns" -lt "$l_apt" ]; } && ok || bad "get.sh does not ask both questions and check DNS before the apt step ($l_ask $l_mail $l_dns vs $l_apt)"
+{ [ "$l_ask" -lt "$l_dns" ] && [ "$l_chk" -lt "$l_dns" ]; } && ok || bad "get.sh checks DNS before it has the name or the ports"
+grep -q 'ui_step 1 "\$(ui_rname 1)" "Needs Linux.*DNS name and email' "$gs" && grep -q '1) echo "Check this machine and your DNS name"' "$gs" && ok || bad "the roadmap text of step 1 does not say it asks for the DNS name and checks it"
+for h in core.example.com a.b.c.example.org; do run "pc_valid_hostname $h" >/dev/null && ok || bad "$h refused as a DNS name"; done
+for h in localhost 203.0.113.7 'bad_name.example.com' '-x.example.com' ''; do run "pc_valid_hostname '$h'" >/dev/null && bad "'$h' accepted as a DNS name" || ok; done
+run 'pc_valid_email ops@example.com' >/dev/null && ok || bad "a plain email was refused"
+for e in 'ops' 'ops@' '@example.com' 'a b@example.com' 'ops@localhost'; do run "pc_valid_email '$e'" >/dev/null && bad "'$e' accepted as an email" || ok; done
+# a given-up-front answer is used as it is; an invalid one with no terminal stops with nothing installed
+o=$(AINKRAD_HOSTNAME=core.example.com run 'pc_ask AINKRAD_HOSTNAME "q" "e" pc_valid_hostname; echo "got=$AINKRAD_HOSTNAME"'); grep -qx 'got=core.example.com' <<<"$o" && grep -q 'given up front' <<<"$o" && ok || bad "an answer from the environment was not taken: $o"
+o=$(AINKRAD_HOSTNAME='not a name' PATH="$t/bin:$t/base" NO_COLOR=1 "$PY" -I -c 'import os,sys; os.setsid(); os.execvp("sh", ["sh","-c",". \"$1\"; . \"$2\"; ui_init; pc_ask AINKRAD_HOSTNAME q e pc_valid_hostname; echo NOT-STOPPED","_",sys.argv[1],sys.argv[2]])' "$ROOT/scripts/install/ui.sh" "$ROOT/scripts/install/precheck.sh" </dev/null 2>&1 || true)
+{ grep -q 'no terminal to ask on' <<<"$o" && grep -q 'Nothing was installed' <<<"$o" && ! grep -q NOT-STOPPED <<<"$o"; } && ok || bad "a bad answer with no terminal did not stop the installer: $o"
+# the DNS check: the A record must be this machine's public address (stubbed dig / curl)
+dnsstub() { rm -f "$t/bin/"*; stub dig "case \"\$*\" in *' AAAA '*) printf '%s\n' \"\${AAAA:-}\" ;; *) printf '%s\n' \"\${A:-}\" ;; esac"; stub curl 'echo "${PUB-203.0.113.7}"'; stub ip 'exit 0'; stub getent 'exit 0'; }
+dnsstub
+o=$(A=203.0.113.7 run 'pc_dns core.example.com; echo "rc=$?"'); { grep -qx 'rc=0' <<<"$o" && grep -q 'points at 203.0.113.7: this machine' <<<"$o"; } && ok || bad "a name pointing at this machine was not accepted: $o"
+o=$(A=198.51.100.9 run 'pc_dns core.example.com; echo "rc=$?"'); { ! grep -qx 'rc=0' <<<"$o" && grep -q 'validate the wrong machine' <<<"$o" && grep -q 'Nothing was installed' <<<"$o"; } && ok || bad "a name pointing elsewhere did not stop the installer: $o"
+o=$(A= run 'pc_dns core.example.com; echo "rc=$?"'); { ! grep -qx 'rc=0' <<<"$o" && grep -q 'no DNS A record' <<<"$o"; } && ok || bad "a name with no A record did not stop the installer: $o"
+o=$(A=203.0.113.7 AAAA=2001:db8::1 run 'pc_dns core.example.com; echo "rc=$?"'); { ! grep -qx 'rc=0' <<<"$o" && grep -q 'IPv6 (AAAA) record' <<<"$o"; } && ok || bad "a foreign AAAA record did not stop the installer: $o"
+o=$(A=203.0.113.7 PUB= run 'pc_dns core.example.com; echo "rc=$?"'); { grep -qx 'rc=0' <<<"$o" && grep -q 'cannot compare' <<<"$o"; } && ok || bad "an unknown public address must warn, not block: $o"
+# install.sh does not look the name up a second time when get.sh has
+grep -q 'AINKRAD_DNS_CHECKED' "$ROOT/scripts/install/guided.sh" && grep -q 'export AINKRAD_DNS_CHECKED=1' "$gs" && ok || bad "install.sh would check DNS twice, or get.sh does not say it checked"
+
 # --- N27: the runner unit's TMPDIR leaves room for the gateway and tools self-test sockets (computed from the real unit and sources) ---
 unit=$ROOT/deploy/systemd/ainkrad-runner.service
 tmpdir=$(sed -n 's/^Environment=TMPDIR=//p' "$unit")
@@ -139,6 +163,36 @@ mkdir -p "$t/dd"; for n in ainkrad-core-server ainkradctl ainkrad-runner ainkrad
 run_i() { AINKRAD_HOSTNAME=core.example.com AINKRAD_ACME_EMAIL=ops@example.com NO_COLOR=1 bash "$ROOT/scripts/install.sh" --dry-run --binary "$t/dd" "$@" 2>&1 </dev/null; }
 o=$(run_i); { grep -q 'runner-enroll-local' <<<"$o" && grep -q 'Node 22.22.1' <<<"$o" && grep -q 'RUNNER_ARGS=--enable-pty --enable-agents' <<<"$o"; } && ok || bad "the default guided dry run does not plan the built-in runner: $(grep -i runner <<<"$o" | head -5)"
 o=$(run_i --no-local-runner); { ! grep -q 'runner-enroll-local' <<<"$o" && grep -q 'no-local-runner' <<<"$o"; } && ok || bad "--no-local-runner still plans a runner, or does not say so: $(grep -i runner <<<"$o" | head -5)"
+
+# --- N20: the Ainkrad shell: zsh and a pinned, read-only profile in every runner install ---
+sh_dir=$ROOT/deploy/shell
+( . "$sh_dir/pins.sh"
+  for v in OMZ P10K AUTOSUGGESTIONS SYNTAX_HIGHLIGHTING; do
+    eval "c=\$${v}_COMMIT s=\$${v}_SHA256"
+    printf '%s' "$c" | grep -Eq '^[0-9a-f]{40}$' && printf '%s' "$s" | grep -Eq '^[0-9a-f]{64}$' || exit 1
+  done
+  printf '%s' "$GITSTATUSD_SHA256_x86_64$GITSTATUSD_SHA256_aarch64" | grep -Eq '^[0-9a-f]{128}$' ) && ok || bad "deploy/shell/pins.sh does not pin every part to a full commit and a SHA-256"
+if command -v zsh >/dev/null; then zsh -n "$sh_dir/zshrc" && zsh -n "$sh_dir/p10k.zsh" && ok || bad "the Ainkrad shell profile is not valid zsh"; fi
+grep -qiE 'ahmed|melhalaby|/Users/|/home/|oh-my-zsh|@gmail' "$sh_dir/p10k.zsh" && bad "the p10k look holds a personal path, name or tool" || ok
+grep -q 'plugins=(git zsh-autosuggestions zsh-syntax-highlighting)' "$sh_dir/zshrc" && grep -q 'zshrc.local' "$sh_dir/zshrc" && grep -q 'GITSTATUS_AUTO_INSTALL=0' "$sh_dir/zshrc" && ok || bad "the zshrc lacks the three plugins, ~/.zshrc.local or the no-download setting"
+tail -n 3 "$sh_dir/zshrc" | grep -q 'zshrc.local' && ok || bad "~/.zshrc.local is not sourced last"
+d2=$t/prefix2; mkdir -p "$d2"
+bash "$ROOT/deploy/install-linux.sh" --binary "$t/rb" --ptyhost "$t/ph" --pty --agents --prefix "$d2" --dry-run >"$t/sh.out" 2>&1
+{ grep -q 'apt-get install -y -q --no-install-recommends zsh' "$t/sh.out" && grep -q 'unpack to /usr/local/share/ainkrad/shell/ohmyzsh' "$t/sh.out" && grep -q 'powerlevel10k' "$t/sh.out" && grep -q 'zsh-autosuggestions' "$t/sh.out" && grep -q 'zsh-syntax-highlighting' "$t/sh.out" && grep -q 'as /usr/local/share/ainkrad/shell/.zshrc' "$t/sh.out"; } && ok || bad "install-linux.sh --pty does not plan zsh and the profile: $(cat "$t/sh.out")"
+bash "$ROOT/deploy/install-linux.sh" --binary "$t/rb" --prefix "$d2" --dry-run >"$t/sh2.out" 2>&1
+grep -q 'ainkrad/shell' "$t/sh2.out" && bad "a runner without terminals still plans the shell profile" || ok
+bash "$ROOT/scripts/install/runner-only.sh" --binary "$t/dd" --invite core.example.com/abc.def --dry-run >"$t/sh3.out" 2>&1
+grep -q 'ainkrad/shell/.zshrc' "$t/sh3.out" && ok || bad "the runner-only dry run does not plan the Ainkrad shell profile: $(cat "$t/sh3.out")"
+o=$(run_i); grep -q 'ainkrad/shell/.zshrc' <<<"$o" && ok || bad "the guided dry run does not plan the Ainkrad shell profile for the built-in runner"
+grep -q "xz-utils zsh'" "$gs" && ok || bad "get.sh does not install zsh with the prerequisites"
+grep -q 'deploy/shell' "$ROOT/scripts/release/dry.sh" && ok || bad "the installer bundle does not carry deploy/shell"
+# a download that does not match its pin installs nothing
+mkdir -p "$t/badfrom"; . "$sh_dir/pins.sh"
+for c in $OMZ_COMMIT $P10K_COMMIT $AUTOSUGGESTIONS_COMMIT $SYNTAX_HIGHLIGHTING_COMMIT; do echo junk >"$t/badfrom/$c.tar.gz"; done
+if AINKRAD_SHELL_NOT_ROOT=1 bash "$sh_dir/install-shell.sh" --dest "$t/shdest/shell" --from "$t/badfrom" >"$t/sh4.out" 2>&1; then bad "a mismatching archive was installed"
+else { grep -q 'does not match its pinned SHA-256' "$t/sh4.out" && [ ! -e "$t/shdest/shell" ]; } && ok || bad "a mismatch did not stop cleanly: $(cat "$t/sh4.out")"; fi
+# the terminal start: zsh -l with ZDOTDIR, the profile read-only in the sandbox, ZDOTDIR on the allow-list, a logged fallback
+grep -q 'spec.env.insert("ZDOTDIR"' "$ROOT/crates/runner/src/v2/pty.rs" && grep -q '"ZDOTDIR"' "$ROOT/crates/runner/src/v2/pty.rs" && grep -q 'SHELL_DIR' "$ROOT/crates/runner/src/v2/termbox.rs" && grep -q 'starting the login shell' "$ROOT/crates/runner/src/v2/pty.rs" && ok || bad "the runner does not start zsh -l with ZDOTDIR, bind the profile read-only and log the fallback"
 
 echo "precheck tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]

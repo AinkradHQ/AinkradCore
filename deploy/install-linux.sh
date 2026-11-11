@@ -5,7 +5,9 @@
 #                    [--agents] [--exec] [--root] [--pair https://<core> --code <CODE> | --invite <invite>] [--start]
 #                    [--prefix DIR] [--dry-run]
 # --pty      offer terminals (--enable-pty); needs ainkrad-ptyhost (--ptyhost, default: beside --binary). The shell
-#            runs as the unprivileged ainkrad-runner user inside the unit's sandbox. Off unless asked.
+#            runs as the unprivileged ainkrad-runner user inside the unit's sandbox. Off unless asked. Also installs zsh
+#            and the read-only Ainkrad shell profile (deploy/shell) in /usr/local/share/ainkrad/shell: every terminal
+#            then starts `zsh -l` with that profile, the same on every runner. Without zsh the runner starts the login shell.
 # --agents   offer agent sessions (--enable-agents) with the egress filter on: sessions reach only api.anthropic.com
 #            (AINKRAD_AGENT_NETWORK=filtered, AINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com in runner.env). Needs the harness
 #            (claude) on PATH. Off unless asked.
@@ -19,7 +21,7 @@
 #            ainkrad-runner.service.d/authority.conf). A compromised Core is then root on this host, root terminals
 #            can overwrite /usr/local/bin and /etc/systemd/system, and agent sessions are refused at uid 0. The
 #            guided installer never passes it. A re-run without it removes that one file.
-# --prefix installs under DIR (a throwaway root, for tests): no user creation, no systemctl.
+# --prefix installs under DIR (a throwaway root, for tests): no user creation, no systemctl, no shell profile download.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -150,6 +152,21 @@ if [ "$dry" = 0 ]; then
   chmod 0640 "$envfile"; [ -n "$prefix" ] || chown root:ainkrad-runner "$envfile"
 fi
 runner_demote_kill
+# The Ainkrad shell (N20): zsh and the pinned profile, read-only, for the terminals this runner offers. A failure here
+# never stops the runner: its terminals then start the login shell (the runner logs that).
+if [ "$pty" = 1 ]; then
+  shell_dest=/usr/local/share/ainkrad/shell
+  if [ -n "$prefix" ] && [ "$dry" = 0 ]; then echo "+ skipped under --prefix: zsh and the Ainkrad shell profile"
+  else
+    if [ "$dry" = 1 ] || ! command -v zsh >/dev/null 2>&1; then
+      if [ "$dry" = 1 ] || command -v apt-get >/dev/null 2>&1; then
+        run env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends zsh || echo "WARNING: zsh did not install; terminals start the login shell" >&2
+      else echo "WARNING: zsh is not installed and there is no apt-get: terminals start the login shell" >&2; fi
+    fi
+    if [ "$dry" = 1 ]; then bash "$HERE/shell/install-shell.sh" --dest "$shell_dest" --dry-run
+    else run bash "$HERE/shell/install-shell.sh" --dest "$shell_dest" || echo "WARNING: the Ainkrad shell profile did not install; terminals start the login shell" >&2; fi
+  fi
+fi
 if [ -z "$prefix" ]; then
   run systemctl daemon-reload
   run systemctl enable --now ainkrad-runner-tools.socket

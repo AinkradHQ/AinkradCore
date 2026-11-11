@@ -315,6 +315,9 @@ for f in apt-get curl minisign tar dpkg systemctl sudo; do printf '#!/bin/sh\nec
 o=$( cd "$t/gd/cwd" && PATH="$t/gd/shim:$PATH" TMPDIR="$t/gd/tmp" NO_COLOR=1 sh "$ROOT/scripts/get.sh" --demo 2>&1 </dev/null ); rc=$?
 { [ "$rc" = 3 ] && grep -q 'DEMO' <<<"$o" && grep -q 'nothing was downloaded, installed or changed' <<<"$o"; } && ok || bad "get.sh --demo: rc=$rc or missing the DEMO labels"
 [ ! -s "$t/gd/viol" ] && ok || bad "get.sh --demo ran a real command: $(cat "$t/gd/viol")"
+# N6: the roadmap and the demo say that step 1 asks for the DNS name and email and checks the name, before anything is installed
+{ grep -q '^   1  Check this machine and your DNS name$' <(u 'ui_roadmap') && grep -q 'Asks your DNS name and email, then checks port 443 and that the name points here' <<<"$o"; } && ok || bad "the roadmap or the get.sh demo does not say step 1 asks for the DNS name and checks it: $(grep -n 'step 1\|^   1 ' <<<"$o" | head -3)"
+
 [ -z "$(find "$t/gd/cwd" "$t/gd/tmp" -mindepth 1 | head -1)" ] && ok || bad "get.sh --demo left files behind: $(find "$t/gd/cwd" "$t/gd/tmp" -mindepth 1)"
 
 # --- (3) the Re-run line is the real invocation ---
