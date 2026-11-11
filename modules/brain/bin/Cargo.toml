@@ -1,0 +1,13 @@
+[package]
+name = "ainkrad-core-brain"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ainkrad-core-server = { path = "../../../crates/server" }
+brain-module = { path = "../module" }
+tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }

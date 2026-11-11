@@ -1,6 +1,6 @@
 CARGO ?= cargo
 
-.PHONY: check-env install-test perf test-web e1-exit e1-exit-faults e2-exit e2-exit-faults e2-soak soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel build-toy test-toy release-dry release-repro release-test fuzz-smoke audit-fuzz
+.PHONY: build-brain test-brain test-brain-linux check-env install-test perf test-web e1-exit e1-exit-faults e2-exit e2-exit-faults e2-soak soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel build-toy test-toy release-dry release-repro release-test fuzz-smoke audit-fuzz
 build: lint ; $(CARGO) build --workspace
 test: lint ; $(CARGO) test --workspace
 lint: format-check check-env ; scripts/api-minor-check.sh && $(CARGO) clippy --workspace --all-targets -- -D warnings
@@ -62,6 +62,11 @@ test-citadel: ; $(CARGO) test $(CITADEL)
 TOY = --manifest-path modules/toy/Cargo.toml
 build-toy: ; $(CARGO) build $(TOY)
 test-toy: ; $(CARGO) test $(TOY)
+# The Brain module (KAN-476): its own workspace, SQLCipher and OpenSSL vendored (E0-1). Linux arm64 runs in Docker.
+BRAIN = --manifest-path modules/brain/Cargo.toml --workspace
+build-brain: ; $(CARGO) build $(BRAIN)
+test-brain: ; $(CARGO) test $(BRAIN)
+test-brain-linux: ; $(call DOCKER_RUN,arm64) --platform linux/arm64 $(RUST_IMAGE) sh -c 'rustup show >/dev/null && cargo test $(BRAIN)'
 # Local run (E1-01.5): state in ./state (gitignored); `Run/run.sh run` comes here. The default listener is a
 # Unix socket (state/core.sock); for HTTP on loopback use `make run LISTEN=loopback:7700`.
 LISTEN ?= unix:state/core.sock
