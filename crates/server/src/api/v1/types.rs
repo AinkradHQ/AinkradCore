@@ -157,7 +157,7 @@
 ///    host's tools (git, node, python, go, rust, docker, codex) beside the harnesses; the events
 ///    `runner.policy` and `runner.tool_install`; the audit actions `runner.policy_set` and `runner.tool_install`;
 ///    the runner protocol gains the `control` driver (`runner.policy`, `tools.install`, `tools.status`).
-pub const API_MINOR: u32 = 52;
+pub const API_MINOR: u32 = 53;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

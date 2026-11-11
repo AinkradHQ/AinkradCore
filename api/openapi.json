@@ -4176,6 +4176,16 @@
               "null"
             ]
           },
+          "own_logins": {
+            "description": "Harnesses with a login of their own on its host (`claude`, `codex`, ...); a plain session\nof one is not refused as `no_account`. Absent until a runner of this version connected.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "policy": {
             "$ref": "#/components/schemas/RunnerPolicyBody",
             "description": "What the runner offers now: terminals, agents, agent capacity (`PUT /runners/{id}/policy`\nsets it). Absent until a runner of this version connected."
@@ -5552,7 +5562,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.52.0"
+    "version": "1.53.0"
   },
   "openapi": "3.1.0",
   "paths": {
