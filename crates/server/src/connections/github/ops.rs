@@ -91,6 +91,12 @@ pub const OPS: &[Op] = &[
         "read_repo",
     ),
     op(
+        "github.list_pr_reviews",
+        Get,
+        "/repos/{owner}/{repo}/pulls/{number}/reviews",
+        "read_repo",
+    ),
+    op(
         "github.create_issue",
         Post,
         "/repos/{owner}/{repo}/issues",

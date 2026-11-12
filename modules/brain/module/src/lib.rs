@@ -25,6 +25,7 @@ mod answer;
 pub mod cipher;
 mod claim;
 pub mod clean;
+pub mod collectors;
 mod commit;
 mod distil;
 pub mod files;
@@ -107,6 +108,8 @@ struct Inner {
     rooms: rooms::Rooms,
     syncing: AtomicBool,
     distilling: AtomicBool,
+    #[cfg(feature = "test-support")]
+    fetch: Mutex<Option<Arc<dyn collectors::Fetch>>>,
 }
 
 /// The module. Cheap to clone: handlers reach it as an `Extension`.
@@ -168,6 +171,34 @@ impl Brain {
         })?;
         *self.inner.key.lock().unwrap_or_else(|e| e.into_inner()) = Some(Zeroizing::new(*k));
         Ok(k)
+    }
+
+    /// A build whose connection reads are `fetch` (canned data), never the Core's broker.
+    #[cfg(feature = "test-support")]
+    pub fn with_fetch(fetch: Arc<dyn collectors::Fetch>) -> Self {
+        let b = Self::default();
+        *b.inner.fetch.lock().unwrap_or_else(|e| e.into_inner()) = Some(fetch);
+        b
+    }
+
+    /// Where connection reads go: the Core's broker for the owner (the device's user, else the
+    /// first user), or the test build's canned fetch.
+    pub(crate) fn fetcher(&self, app: &App, device: Option<&str>) -> Arc<dyn collectors::Fetch> {
+        #[cfg(feature = "test-support")]
+        if let Some(f) = self
+            .inner
+            .fetch
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            return f.clone();
+        }
+        Arc::new(collectors::Live {
+            app: app.clone(),
+            user: 1,
+            device: device.unwrap_or("brain").to_owned(),
+        })
     }
 
     /// Moves every open distillation one step (the `brain_distil` job does this every minute).

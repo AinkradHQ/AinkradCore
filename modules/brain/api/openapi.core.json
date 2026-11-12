@@ -6645,6 +6645,13 @@
               "string",
               "null"
             ]
+          },
+          "source": {
+            "description": "Sync one source of the Core's: `core_transcript` (the default), `jira` or `github`.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "type": "object"
