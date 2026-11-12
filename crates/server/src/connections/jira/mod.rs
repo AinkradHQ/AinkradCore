@@ -14,11 +14,12 @@
 
 mod answer;
 mod cred;
-mod http;
+pub(crate) mod http;
 mod jql;
 mod oauth;
 mod ops;
 mod renew;
+pub(crate) mod service;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -34,7 +35,7 @@ pub use cred::{
     Cred, issue_key, oauth_material, project_key, site_host, site_host_of, token_material, unpack,
 };
 pub use http::CallError;
-pub use oauth::{Finished, FlowError, OAuthApp, SCOPES, Site, Started};
+pub use oauth::{BUILT_IN_CLIENT_ID, Finished, FlowError, OAuthApp, SCOPES, Site, Started};
 pub use ops::{Limit, Plan, resource_of};
 
 use super::adapter::{
@@ -137,6 +138,8 @@ pub struct Jira {
     /// Ainkrad's Atlassian app. Swapped in place by [`Jira::set_app`] (the API's config change):
     /// the server has ONE `Jira`, shared by the registry, the broker and the API.
     app: std::sync::RwLock<Option<OAuthApp>>,
+    /// The Core's identity key, which signs the calls to the sign-in service (`service`).
+    signer: std::sync::RwLock<Option<Arc<crate::auth::Identity>>>,
     flows: Mutex<oauth::Flows>,
     locks: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
     /// When each connection's token was last renewed (see `oauth::Job::run`).
@@ -162,10 +165,23 @@ impl Jira {
         Self {
             http,
             app: std::sync::RwLock::new(app),
+            signer: std::sync::RwLock::default(),
             flows: Mutex::default(),
             locks: Mutex::default(),
             recent: Arc::default(),
         }
+    }
+
+    /// Gives this Jira the Core's identity key, for the sign-in service.
+    pub fn set_signer(&self, identity: Arc<crate::auth::Identity>) {
+        *self.signer.write().unwrap_or_else(|e| e.into_inner()) = Some(identity);
+    }
+
+    pub(super) fn signer(&self) -> Option<Arc<crate::auth::Identity>> {
+        self.signer
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// A copy of the OAuth app in force (it holds no token).

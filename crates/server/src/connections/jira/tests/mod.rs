@@ -31,6 +31,7 @@ mod oauth;
 mod ops;
 mod renew;
 mod safety;
+mod service;
 
 pub const NOW: &str = "2026-11-06T10:00:00.000Z";
 pub const CLOUD: &str = "1324a887-451d-4b3e-b3a5-0bfbb4c7d8f1";
@@ -80,6 +81,9 @@ pub struct Seen {
     pub query: String,
     pub auth: Option<String>,
     pub body: Value,
+    /// The exact bytes and the headers, for the signature checks.
+    pub raw: Vec<u8>,
+    pub headers: HashMap<String, String>,
 }
 
 type Handler = Arc<dyn Fn(&Seen) -> Reply + Send + Sync>;
@@ -128,6 +132,12 @@ async fn handle(State(f): State<Fake>, req: Request) -> Response {
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned),
         body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        raw: bytes.to_vec(),
+        headers: parts
+            .headers
+            .iter()
+            .filter_map(|(k, v)| Some((k.to_string(), v.to_str().ok()?.to_owned())))
+            .collect(),
     };
     let key = format!("{} {}", seen.method, seen.path);
     let (handler, scoped) = {
@@ -244,6 +254,16 @@ impl Drop for Fx {
 
 /// A database, a fake Atlassian and a Jira adapter pointed at it; with an OAuth app when `app`.
 pub async fn fx(app: bool) -> Fx {
+    build(app.then(|| OAuthApp::new("client-id-8c41", CLIENT_SECRET, &[REDIRECT]).unwrap())).await
+}
+
+/// Like [`fx`], with Ainkrad's own app: no secret here, the exchange goes to the sign-in service
+/// (the same fake answers `/v1/jira/...`).
+pub async fn fx_hosted() -> Fx {
+    build(Some(OAuthApp::hosted(&[REDIRECT]).unwrap())).await
+}
+
+async fn build(app: Option<OAuthApp>) -> Fx {
     static N: AtomicUsize = AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("core-jira-{}-{n}", std::process::id()));
@@ -269,8 +289,8 @@ pub async fn fx(app: bool) -> Fx {
         200,
         json!([{"id": CLOUD, "url": SITE, "name": "Acme", "scopes": ["read:jira-work"]}]),
     );
-    let app = app.then(|| OAuthApp::new("client-id-8c41", CLIENT_SECRET, &[REDIRECT]).unwrap());
     let jira = Arc::new(Jira::loopback(app, addr));
+    jira.set_signer(Arc::new(crate::auth::Identity::ephemeral()));
     let mut reg = Registry::new();
     reg.register(jira.clone()).unwrap();
     Fx {

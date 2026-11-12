@@ -27,10 +27,15 @@ use crate::store::secrets::Error;
 
 /// The user whose rows hold the Core's app config.
 pub const OWNER: i64 = 1;
-/// Ainkrad's own public GitHub OAuth app (device flow: no secret exists). A Core uses it when the
+/// Ainkrad's own public GitHub App `ainkradhq` (its client id; device flow: no secret exists). Its
+/// user tokens are what the sign-in service needs to prove an installation is the person's. A Core uses it when the
 /// database holds no GitHub app of its own, so a user only connects (N23); an admin can still
 /// replace it by writing the `github` app config.
-pub const BUILT_IN_GITHUB_CLIENT_ID: &str = "Ov23litUTAjReYNz80Fy";
+pub const BUILT_IN_GITHUB_CLIENT_ID: &str = "Iv23licvgHhiqi2dQX3y";
+/// Ainkrad's own GitHub App (public ids; its private key lives only in the sign-in service, S1).
+/// A Core uses it when the database holds no App of its own, so `app_install` works out of the box.
+pub const BUILT_IN_GITHUB_APP_ID: &str = "5725874";
+pub const BUILT_IN_GITHUB_SLUG: &str = "ainkradhq";
 /// The loopback port the Mac app's catcher listens on (registered with Atlassian), unless set.
 pub const DEFAULT_PORT: u16 = 47613;
 
@@ -248,9 +253,14 @@ impl Apps {
             *held = client;
             !same
         };
-        *self.github_slug.write().unwrap_or_else(|e| e.into_inner()) =
-            g.get("app_slug").map(|s| s.to_string());
-        github.installer().set_key(app_key(&g));
+        let own_key = app_key(&g);
+        let slug = match g.get("app_slug") {
+            Some(s) => Some(s.to_string()),
+            None if own_key.is_none() => Some(BUILT_IN_GITHUB_SLUG.to_owned()),
+            None => None,
+        };
+        *self.github_slug.write().unwrap_or_else(|e| e.into_inner()) = slug;
+        github.installer().set_key(own_key);
         let jira_changed = jira.set_app(jira_app(&j));
         let linear_changed = linear.set_app(linear_app(&l));
         let slack_changed = slack.set_app(slack_app(&s));
@@ -285,7 +295,14 @@ fn jira_app(j: &BTreeMap<String, Zeroizing<String>>) -> Option<OAuthApp> {
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(DEFAULT_PORT);
     let redirect = Apps::redirect(port);
-    OAuthApp::new(j.get("client_id")?, j.get("client_secret")?, &[&redirect])
+    // An admin's own app (id AND secret) is exchanged directly; with neither set, Ainkrad's own
+    // app goes through the sign-in service and the Core holds no secret (N23). One without the
+    // other is half-edited config: off.
+    match (j.get("client_id"), j.get("client_secret")) {
+        (Some(id), Some(secret)) => OAuthApp::new(id, secret, &[&redirect]),
+        (None, None) => OAuthApp::hosted(&[&redirect]),
+        _ => None,
+    }
 }
 
 /// The Slack app in force. Add to Slack signs in only when the https redirect page exists
@@ -320,6 +337,8 @@ fn linear_app(l: &BTreeMap<String, Zeroizing<String>>) -> Option<LinearApp> {
 /// Puts the sealed config into force for `app`'s shared adapters (at start, and after a write).
 /// Nothing to do without a master key.
 pub async fn reload(app: &crate::api::App) -> Result<(), Error> {
+    // Signs the calls to the sign-in service; needs no master key.
+    app.connections.jira().set_signer(app.auth.identity.clone());
     let Some(sealer) = app.secrets.as_ref() else {
         return Ok(());
     };

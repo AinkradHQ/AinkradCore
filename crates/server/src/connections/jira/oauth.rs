@@ -25,6 +25,7 @@ use super::Jira;
 use super::cred::{Cred, oauth_material, unpack};
 use super::http::CallError;
 use super::renew::token_call;
+use super::service;
 use crate::connections::material::Material;
 use crate::scheduler::unix_secs;
 
@@ -39,11 +40,15 @@ const MAX_FLOWS_PER_USER: usize = 8;
 pub(super) const SKEW_SECS: i64 = 120;
 const MAX_SITES: usize = 50;
 
+/// Ainkrad's own Atlassian app (public; its secret lives only in the sign-in service).
+pub const BUILT_IN_CLIENT_ID: &str = "Urm5kksbNCe08MZyAja61yFkb0E1OpJo";
+
 /// Ainkrad's registered Atlassian app. Ahmed registers it; Core takes the values at start.
 #[derive(Clone)]
 pub struct OAuthApp {
     pub(super) client_id: String,
-    pub(super) client_secret: Zeroizing<String>,
+    /// `None`: the Core holds no secret and goes through Ainkrad's sign-in service (`service`).
+    pub(super) client_secret: Option<Zeroizing<String>>,
     /// The redirect URIs registered with Atlassian, exactly. A sign-in may use only these.
     redirects: Vec<String>,
 }
@@ -62,9 +67,16 @@ impl OAuthApp {
         let ok = |s: &str| (1..=512).contains(&s.len()) && !s.chars().any(char::is_control);
         (ok(id) && ok(secret)).then(|| Self {
             client_id: id.to_owned(),
-            client_secret: Zeroizing::new(secret.to_owned()),
+            client_secret: Some(Zeroizing::new(secret.to_owned())),
             redirects: redirects.iter().map(|r| (*r).to_owned()).collect(),
         })
+    }
+
+    /// Ainkrad's own app, exchanged through the sign-in service: no secret on this Core (N23).
+    pub fn hosted(redirects: &[&str]) -> Option<Self> {
+        let mut app = Self::new(BUILT_IN_CLIENT_ID, "-", redirects)?;
+        app.client_secret = None;
+        Some(app)
     }
 }
 
@@ -72,7 +84,8 @@ impl OAuthApp {
     /// Whether `other` is the same registration (client id, secret and redirects).
     pub(super) fn same(&self, other: &Self) -> bool {
         self.client_id == other.client_id
-            && self.client_secret.as_str() == other.client_secret.as_str()
+            && self.client_secret.as_ref().map(|s| s.as_str())
+                == other.client_secret.as_ref().map(|s| s.as_str())
             && self.redirects == other.redirects
     }
 
@@ -123,6 +136,7 @@ impl fmt::Display for FlowError {
             Self::BadCode => "the authorization code is not valid text",
             Self::BadVerifier => "the PKCE verifier does not match",
             Self::NoRefreshToken => "Atlassian issued no refresh token; sign in again and allow it",
+            Self::Exchange(CallError::SignIn(why)) => why,
             Self::Exchange(_) => "Atlassian did not complete the sign-in",
         })
     }
@@ -337,12 +351,23 @@ impl Jira {
             (None, Some(v)) if s256(v) == flow.challenge => Zeroizing::new(v.to_owned()),
             (None, _) => return Err(FlowError::BadVerifier),
         };
-        let body = json!({"grant_type": "authorization_code", "client_id": app.client_id,
-            "client_secret": app.client_secret.as_str(), "code": code,
-            "redirect_uri": flow.redirect, "code_verifier": verifier.as_str()});
-        let tokens = token_call(&self.http, &body, now)
-            .await
-            .map_err(FlowError::Exchange)?;
+        let tokens = match &app.client_secret {
+            // An admin's own app (self-hosted): the direct exchange.
+            Some(secret) => {
+                let body = json!({"grant_type": "authorization_code",
+                    "client_id": app.client_id, "client_secret": secret.as_str(),
+                    "code": code, "redirect_uri": flow.redirect,
+                    "code_verifier": verifier.as_str()});
+                token_call(&self.http, &body, now).await
+            }
+            None => {
+                let body = json!({"code": code, "redirect_uri": flow.redirect,
+                    "code_verifier": verifier.as_str()});
+                let signer = self.signer();
+                service::call(&self.http, signer.as_deref(), "/v1/jira/token", &body, now).await
+            }
+        }
+        .map_err(FlowError::Exchange)?;
         let (access, Some(refresh), expires_at, _) = tokens else {
             return Err(FlowError::NoRefreshToken);
         };

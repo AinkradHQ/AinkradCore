@@ -57,6 +57,9 @@ pub enum CallError {
     /// Atlassian app registration or its secret is wrong. No connection's credential is at fault,
     /// so there is no per-connection health signal.
     AppConfig,
+    /// The Ainkrad sign-in service (`signin.ainkrad.io`) could not do it. Fixed, user-readable
+    /// text; no verdict on any connection's credential.
+    SignIn(&'static str),
     /// An OAuth token is expired or refused and this Core has no Atlassian app configured, so it
     /// cannot be renewed. Our own state, no verdict on the connection: a plain refusal.
     OAuthNotConfigured,
@@ -80,6 +83,7 @@ impl fmt::Display for CallError {
             Self::AppConfig => f.write_str(
                 "Atlassian refused this Core's app registration: check the client id and secret",
             ),
+            Self::SignIn(why) => f.write_str(why),
             Self::OAuthNotConfigured => f.write_str(
                 "Sign in with Atlassian is not set up on this Core, so an expired token cannot be renewed",
             ),
@@ -125,6 +129,7 @@ impl CallError {
             Self::Refused(_) => "refused",
             Self::Internal(_) => "internal",
             Self::AppConfig => "app_config",
+            Self::SignIn(_) => "signin_service",
             Self::OAuthNotConfigured => "not_configured",
         }
     }
@@ -177,19 +182,29 @@ pub struct Http {
     per_site: bool,
     pub api: String,
     pub auth: String,
+    /// The Ainkrad sign-in service's origin (`service`).
+    pub signin: String,
     site: Option<String>,
     timeout: Duration,
 }
 
 impl Http {
     pub fn production() -> Self {
-        let policy = Policy::new([API_HOST.to_owned(), AUTH_HOST.to_owned()]);
+        let signin = super::service::base();
+        let mut hosts = vec![API_HOST.to_owned(), AUTH_HOST.to_owned()];
+        hosts.extend(
+            reqwest::Url::parse(&signin)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_owned)),
+        );
+        let policy = Policy::new(hosts);
         let client = policy.client();
         Self {
             fixed: (policy, client),
             per_site: true,
             api: format!("https://{API_HOST}"),
             auth: format!("https://{AUTH_HOST}"),
+            signin,
             site: None,
             timeout: Duration::from_secs(20),
         }
@@ -206,6 +221,7 @@ impl Http {
             per_site: false,
             api: origin.clone(),
             auth: origin.clone(),
+            signin: origin.clone(),
             site: Some(origin),
             timeout: Duration::from_secs(20),
         }
@@ -255,6 +271,33 @@ impl Http {
         if let Some(j) = json {
             req = req.json(j);
         }
+        self.run(req).await
+    }
+
+    /// POST of exactly `body` (the bytes that were signed) with `headers`, to the fixed origins.
+    pub async fn post_bytes(
+        &self,
+        url: &str,
+        body: Vec<u8>,
+        headers: &[(&'static str, String)],
+    ) -> Result<Resp, CallError> {
+        let (policy, client) = self.fixed.clone();
+        policy.check_url(url).map_err(|_| {
+            CallError::Refused("the address is not one Jira may be called at".into())
+        })?;
+        let mut req = client
+            .post(url)
+            .header(ACCEPT, "application/json")
+            .header("content-type", "application/json")
+            .timeout(self.timeout)
+            .body(body);
+        for (k, v) in headers {
+            req = req.header(*k, v.as_str());
+        }
+        self.run(req).await
+    }
+
+    async fn run(&self, req: reqwest::RequestBuilder) -> Result<Resp, CallError> {
         let mut res = req.send().await.map_err(|e| net(&e))?;
         let status = res.status().as_u16();
         let retry_after = res

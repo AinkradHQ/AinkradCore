@@ -199,6 +199,8 @@ checks() { # ports and the host firewall first (before anything is installed), t
   [ "$A_ACME_CHALLENGE" = http-01 ] && ports="443 80"
   if ! pc_checks "$ports"; then
     if [ "$DRY" = 1 ]; then warn "$PC_WHAT (dry run continues)"; else die "$PC_WHAT. What to do: $PC_TODO"; fi
+  elif [ "$DRY" = 0 ] && ! pc_probe "$ports"; then # from outside, through Ainkrad's sign-in service (N6)
+    die "$PC_WHAT. What to do: $PC_TODO"
   fi
   if ! command -v getent >/dev/null; then warn "no getent here: DNS not checked"; return 0; fi
   addrs=$(getent ahosts "$A_HOSTNAME" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true) # pipefail: an unresolved name must reach the message below, not kill the script

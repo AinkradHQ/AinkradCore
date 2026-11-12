@@ -14,6 +14,7 @@ use zeroize::Zeroizing;
 use super::cred::{Cred, oauth_material, unpack};
 use super::http::{CallError, Http, classify};
 use super::oauth::{OAuthApp, SKEW_SECS, due};
+use super::service;
 use super::{Ctx, Jira};
 use crate::connections::material::Material;
 use crate::ops::secretbox::SecretBox;
@@ -98,6 +99,7 @@ impl Jira {
             id,
             rejected: rejected.map(|r| Zeroizing::new(r.to_owned())),
             recent: self.recent.clone(),
+            signer: self.signer(),
         };
         let task = tokio::spawn(async move {
             let _held = lock.lock_owned().await;
@@ -126,6 +128,7 @@ struct Job {
     id: i64,
     rejected: Option<Zeroizing<String>>,
     recent: Recent,
+    signer: Option<Arc<crate::auth::Identity>>,
 }
 
 impl Job {
@@ -170,9 +173,20 @@ impl Job {
         let Some(old) = m.refresh() else {
             return (version, Err(CallError::AuthFailed));
         };
-        let body = json!({"grant_type": "refresh_token", "client_id": self.app.client_id,
-            "client_secret": self.app.client_secret.as_str(), "refresh_token": old});
-        let issued = match token_call(&self.http, &body, &self.now).await {
+        let called = match &self.app.client_secret {
+            Some(secret) => {
+                let body = json!({"grant_type": "refresh_token",
+                    "client_id": self.app.client_id, "client_secret": secret.as_str(),
+                    "refresh_token": old});
+                token_call(&self.http, &body, &self.now).await
+            }
+            None => {
+                let body = json!({"refresh_token": old});
+                let (signer, path) = (self.signer.as_deref(), "/v1/jira/refresh");
+                service::call(&self.http, signer, path, &body, &self.now).await
+            }
+        };
+        let issued = match called {
             Ok(t) => t,
             Err(e) => return (version, Err(e)),
         };
@@ -225,7 +239,7 @@ impl Job {
 }
 
 /// What the token endpoint said: (access, refresh if issued, expiry, lifetime in seconds).
-type Issued = (Zeroizing<String>, Option<Zeroizing<String>>, String, i64);
+pub(super) type Issued = (Zeroizing<String>, Option<Zeroizing<String>>, String, i64);
 
 /// POSTs the token endpoint. Only a JSON body `error` of `invalid_grant` says THIS credential
 /// (a refresh token or a code) is dead ([`CallError::AuthFailed`], whatever the status: Atlassian
@@ -247,7 +261,11 @@ pub(super) async fn token_call(http: &Http, body: &Value, now: &str) -> Result<I
             (s, _) => classify(s, res.retry_after),
         });
     }
-    let v = res.body;
+    issued(res.body, status, now)
+}
+
+/// The tokens in a 2xx token answer (Atlassian's, or the sign-in service's: same shape).
+pub(super) fn issued(v: Value, status: u16, now: &str) -> Result<Issued, CallError> {
     let text = |k: &str| {
         v.get(k)
             .and_then(Value::as_str)

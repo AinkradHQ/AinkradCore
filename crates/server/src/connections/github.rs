@@ -183,6 +183,20 @@ impl Github {
         }
     }
 
+    /// Tests: the sign-in service is the loopback `service`.
+    #[cfg(test)]
+    pub(crate) fn with_service(
+        transport: Arc<Transport>,
+        service: super::jira::http::Http,
+    ) -> Self {
+        let mut installer = install::Installer::default();
+        installer.set_service(service);
+        Self {
+            transport,
+            installer: Arc::new(installer),
+        }
+    }
+
     pub fn strict() -> Self {
         Self::new(Arc::new(Transport::strict()))
     }
