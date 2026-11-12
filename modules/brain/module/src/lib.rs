@@ -110,6 +110,8 @@ struct Inner {
     distilling: AtomicBool,
     #[cfg(feature = "test-support")]
     fetch: Mutex<Option<Arc<dyn collectors::Fetch>>>,
+    #[cfg(feature = "test-support")]
+    history: Mutex<Option<Arc<dyn collectors::RunnerHistory>>>,
 }
 
 /// The module. Cheap to clone: handlers reach it as an `Extension`.
@@ -179,6 +181,29 @@ impl Brain {
         let b = Self::default();
         *b.inner.fetch.lock().unwrap_or_else(|e| e.into_inner()) = Some(fetch);
         b
+    }
+
+    /// A build whose runner history reads are `history` (canned chunks), never the Core's hub.
+    #[cfg(feature = "test-support")]
+    pub fn with_history(history: Arc<dyn collectors::RunnerHistory>) -> Self {
+        let b = Self::default();
+        *b.inner.history.lock().unwrap_or_else(|e| e.into_inner()) = Some(history);
+        b
+    }
+
+    /// Where a runner's history is read: the Core's hub, or the test build's canned chunks.
+    pub(crate) fn history_reader(&self, app: &App) -> Arc<dyn collectors::RunnerHistory> {
+        #[cfg(feature = "test-support")]
+        if let Some(h) = self
+            .inner
+            .history
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            return h.clone();
+        }
+        Arc::new(collectors::LiveHistory { app: app.clone() })
     }
 
     /// Where connection reads go: the Core's broker for the owner (the device's user, else the

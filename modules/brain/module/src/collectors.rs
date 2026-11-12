@@ -11,9 +11,11 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use ainkrad_core_server::agents::history::read_history;
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::connections::broker::Env;
 use ainkrad_core_server::scheduler::{iso_of_unix, unix_secs};
+use ainkrad_proto::v2::{HistoryChunk, HistoryRead, MAX_HISTORY_BYTES};
 use brain_model::item::{Author, AuthorKind, Item, Origin, SourceKind, hash_of};
 use serde_json::{Value, json};
 
@@ -60,6 +62,33 @@ impl Fetch for Live {
     }
 }
 
+/// A source id that names a runner: `runner-<runner id>`, the runner's own harness history.
+pub const RUNNER_PREFIX: &str = "runner-";
+/// Chunks one sync asks of a runner; the rest waits for the next sync (the cursor is per session).
+const MAX_CHUNKS: usize = 3;
+
+pub type HistFut<'a> = Pin<Box<dyn Future<Output = Result<HistoryChunk, String>> + Send + 'a>>;
+
+/// One `history.read` of a runner: the Core's hub in production, canned chunks in tests. The
+/// error is a plain code (`not_offered` when the runner did not switch sharing on).
+pub trait RunnerHistory: Send + Sync {
+    fn read<'a>(&'a self, runner: &'a str, req: HistoryRead) -> HistFut<'a>;
+}
+
+pub(crate) struct LiveHistory {
+    pub app: App,
+}
+
+impl RunnerHistory for LiveHistory {
+    fn read<'a>(&'a self, runner: &'a str, req: HistoryRead) -> HistFut<'a> {
+        Box::pin(async move {
+            read_history(&self.app, runner, req)
+                .await
+                .map_err(|e| e.0.to_owned())
+        })
+    }
+}
+
 /// Whether a read's refusal means "no connection to use" (nothing to collect, not a failure).
 pub(crate) fn no_connection(e: &str) -> bool {
     [
@@ -69,6 +98,7 @@ pub(crate) fn no_connection(e: &str) -> bool {
         "secrets_unavailable",
         "ambiguous",
         "disabled",
+        "not_offered",
     ]
     .iter()
     .any(|c| e.starts_with(c))
@@ -367,9 +397,97 @@ fn pr_item(repo: &str, pr: &Value, reviews: &Value, updated: i64, now_ms: u64) -
     )
 }
 
+/// Claude Code names a project folder for the path it ran in (`-Users-x-contracts-nda`). The origin
+/// path shows it as the path, so the Core's rules (restricted folders, deprecated projects) match
+/// its components; a real dash in a name only costs display fidelity.
+fn decode_dirs(path: &str) -> String {
+    match path
+        .split_once('/')
+        .and_then(|(h, r)| r.rsplit_once('/').map(|(d, f)| (h, d, f)))
+    {
+        Some((harness, dir, file)) => format!(
+            "{harness}/{}/{file}",
+            dir.trim_start_matches('-').replace('-', "/")
+        ),
+        None => path.to_owned(),
+    }
+}
+
+/// The new parts of a runner's harness history (E5-3), in the one item format. The runner read
+/// only what it may and redacted it; the Core's intake cleans it again and applies the rules.
+pub async fn collect_runner(
+    h: &dyn RunnerHistory,
+    runner: &str,
+    cursor: &Value,
+    now_ms: u64,
+) -> Result<Taken, String> {
+    let mut sessions: std::collections::BTreeMap<String, u64> = cursor["sessions"]
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| Some((k.clone(), v.as_u64()?)))
+                .collect()
+        })
+        .unwrap_or_default();
+    let (mut items, mut next) = (vec![], json!({"sessions": {}}));
+    for _ in 0..MAX_CHUNKS {
+        let req = HistoryRead {
+            harness: "claude".to_owned(),
+            cursor: sessions.clone(),
+            max_bytes: MAX_HISTORY_BYTES,
+        };
+        let chunk = h.read(runner, req).await?;
+        for (id, line) in &chunk.cursor {
+            sessions.insert(id.clone(), *line);
+            next["sessions"][id.as_str()] = json!(line);
+        }
+        for it in chunk.items {
+            let i = Item {
+                item_id: ulid(now_ms),
+                source_kind: SourceKind::ClaudeCode,
+                content_hash: hash_of(&it.text),
+                origin: Origin {
+                    device: runner.to_owned(),
+                    path: format!("runner://{runner}/{}", decode_dirs(&it.path)),
+                    range: Some((it.first, it.last)),
+                },
+                project_hint: it.project,
+                author: Author {
+                    kind: AuthorKind::Agent,
+                    name: "claude".to_owned(),
+                },
+                title: it.title.chars().take(200).collect(),
+                text: it.text,
+                links: vec![],
+                started_at: it.started_at,
+                ended_at: it.ended_at,
+            };
+            if i.validate().is_ok() {
+                items.push(i);
+            }
+        }
+        if !chunk.more {
+            break;
+        }
+    }
+    Ok(Taken {
+        items,
+        cursor: next,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_project_folder_name_is_shown_as_the_path_it_stands_for() {
+        assert_eq!(
+            decode_dirs("claude/-Users-x-contracts-nda/s9.jsonl"),
+            "claude/Users/x/contracts/nda/s9.jsonl"
+        );
+        assert_eq!(decode_dirs("odd"), "odd");
+    }
 
     #[test]
     fn jira_times_with_and_without_a_colon_agree() {

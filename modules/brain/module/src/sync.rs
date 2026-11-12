@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use sqlx::Row;
 use utoipa::ToSchema;
 
-use crate::collectors::{self, GITHUB_SOURCE, JIRA_SOURCE};
+use crate::collectors::{self, GITHUB_SOURCE, JIRA_SOURCE, RUNNER_PREFIX};
 use crate::commit::{close_run, commit_room};
 use crate::imports::{mark_done, run_state, stage_items, staging, start_run};
 use crate::review::{mixed, room_id};
@@ -107,7 +107,7 @@ async fn ensure_core_source(app: &App) -> Result<(), sqlx::Error> {
 
 /// A source the Core collects itself: its device and kind are not the caller's to set.
 fn core_owned(id: &str) -> bool {
-    [CORE_SOURCE, JIRA_SOURCE, GITHUB_SOURCE].contains(&id)
+    [CORE_SOURCE, JIRA_SOURCE, GITHUB_SOURCE].contains(&id) || id.starts_with(RUNNER_PREFIX)
 }
 
 #[utoipa::path(get, path = "/sources", operation_id = "brainSources", tag = "brain",
@@ -150,14 +150,17 @@ pub(crate) async fn put_source(
         ));
     }
     // The Core's own collector is always the Core's: only its switch and cursor can change.
-    let (device, kind) = if core_owned(&id) {
+    // A runner's history source belongs to that runner and reads Claude Code sessions.
+    let (device, kind) = if let Some(runner) = id.strip_prefix(RUNNER_PREFIX) {
+        (runner.to_owned(), "claude_code".to_owned())
+    } else if core_owned(&id) {
         ("core".to_owned(), id.clone())
     } else {
         (req.device, req.kind)
     };
     let mut tx = begin_write(&app.pool).await?;
     sqlx::query(
-        "INSERT INTO brain_sources (id, device, kind, enabled, roots, cursor) VALUES (?, ?, ?, coalesce(?, 1), coalesce(?, '[]'), coalesce(?, '{}')) \
+        "INSERT INTO brain_sources (id, device, kind, enabled, roots, cursor) VALUES (?, ?, ?, coalesce(?, ?), coalesce(?, '[]'), coalesce(?, '{}')) \
          ON CONFLICT(id) DO UPDATE SET device = excluded.device, kind = excluded.kind, \
          enabled = coalesce(?, enabled), roots = coalesce(?, roots), cursor = coalesce(?, cursor)",
     )
@@ -165,6 +168,8 @@ pub(crate) async fn put_source(
     .bind(&device)
     .bind(&kind)
     .bind(req.enabled.map(i64::from))
+    // Reading a third party's data or a runner's history is opt-in: new rows start off.
+    .bind(i64::from(!core_owned(&id) || id == CORE_SOURCE))
     .bind(req.roots.as_ref().map(|r| json!(r).to_string()))
     .bind(&cursor)
     .bind(req.enabled.map(i64::from))
@@ -519,8 +524,9 @@ pub(crate) async fn sync_connection(
     ensure_core_source(app).await?;
     let row = sqlx::query("SELECT enabled, roots, cursor FROM brain_sources WHERE id = ?")
         .bind(source)
-        .fetch_one(&app.pool)
-        .await?;
+        .fetch_optional(&app.pool)
+        .await?
+        .ok_or_else(|| ApiError::not_found("no such source"))?;
     if row.try_get::<i64, _>("enabled")? != 1 {
         return Ok(SyncResult::idle("disabled"));
     }
@@ -548,7 +554,12 @@ pub(crate) async fn sync_connection(
     let now_ms = u64::try_from(app.clock.unix()).unwrap_or(0) * 1000;
     let taken = match source {
         JIRA_SOURCE => collectors::collect_jira(fetch.as_ref(), &roots, &cursor, now_ms).await,
-        _ => collectors::collect_github(fetch.as_ref(), &roots, &cursor, now_ms).await,
+        GITHUB_SOURCE => collectors::collect_github(fetch.as_ref(), &roots, &cursor, now_ms).await,
+        _ => {
+            let runner = source.strip_prefix(RUNNER_PREFIX).unwrap_or(source);
+            let history = b.history_reader(app);
+            collectors::collect_runner(history.as_ref(), runner, &cursor, now_ms).await
+        }
     };
     let taken = match taken {
         Ok(t) => t,
@@ -693,10 +704,12 @@ pub(crate) async fn sync_now(
     let owner = Some(me.device.id.as_str());
     Ok(Json(match req.source.as_deref() {
         None | Some(CORE_SOURCE) => sync_core(&app, &b, owner, req.run.as_deref()).await?,
-        Some(s @ (JIRA_SOURCE | GITHUB_SOURCE)) => sync_connection(&app, &b, owner, s).await?,
+        Some(s) if s == JIRA_SOURCE || s == GITHUB_SOURCE || s.starts_with(RUNNER_PREFIX) => {
+            sync_connection(&app, &b, owner, s).await?
+        }
         Some(_) => {
             return Err(ApiError::bad_request(
-                "source is `core_transcript`, `jira` or `github`",
+                "source is `core_transcript`, `jira`, `github` or `runner-<id>`",
             ));
         }
     }))
@@ -711,7 +724,19 @@ impl JobHandler for SyncJob {
                 return Err("the Core is still starting".to_owned());
             };
             let mut worked = false;
-            for source in [CORE_SOURCE, JIRA_SOURCE, GITHUB_SOURCE] {
+            let mut all = vec![
+                CORE_SOURCE.to_owned(),
+                JIRA_SOURCE.to_owned(),
+                GITHUB_SOURCE.to_owned(),
+            ];
+            let runners: Vec<String> = sqlx::query_scalar(
+                "SELECT id FROM brain_sources WHERE enabled = 1 AND id LIKE 'runner-%' ORDER BY id",
+            )
+            .fetch_all(&app.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+            all.extend(runners);
+            for source in all.iter().map(String::as_str) {
                 let r = if source == CORE_SOURCE {
                     sync_core(app, &self.0, None, None).await
                 } else {

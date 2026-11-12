@@ -463,6 +463,7 @@ impl Session {
             | Command::AgentLimit(_)
             | Command::AgentTools(_)
             | Command::PlanCheck(_)
+            | Command::HistoryRead(_)
             | Command::GatewayTest(_) => self.start_agent(stream, command),
             Command::RunnerPolicy(_) | Command::ToolsInstall(_) | Command::ToolsStatus(_) => {
                 self.start_control(stream, command)
@@ -584,6 +585,7 @@ impl Session {
                 Command::AgentTools(req) => agent.tools(&req).await.map(Reply::AgentTools),
                 Command::GatewayTest(req) => agent.gateway_test(req).await.map(Reply::GatewayTest),
                 Command::PlanCheck(req) => agent.plan_check(req).await.map(Reply::PlanCheck),
+                Command::HistoryRead(req) => agent.history_read(req).await.map(Reply::HistoryRead),
                 _ => return,
             };
             let body = match answer {

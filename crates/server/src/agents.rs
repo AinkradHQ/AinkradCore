@@ -28,6 +28,7 @@ mod allocate;
 mod ending;
 mod failover;
 pub mod gateway;
+pub mod history;
 mod launch;
 pub(crate) mod live;
 pub mod login;

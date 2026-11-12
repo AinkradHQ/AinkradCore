@@ -659,6 +659,19 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/HistoryRead",
+          "properties": {
+            "op": {
+              "const": "history.read",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An op from a newer Core: answered `unsupported_command`. Never sent.",
           "properties": {
             "op": {
@@ -1534,6 +1547,144 @@
           "description": "The host's load when the heartbeat was sent; absent when the runner has no measure."
         }
       },
+      "type": "object"
+    },
+    "HistoryChunk": {
+      "description": "Runner to Core: the new parts, the cursor after them (only sessions that moved), what was\nskipped, and whether more waits.",
+      "properties": {
+        "cursor": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/HistoryItem"
+          },
+          "type": "array"
+        },
+        "more": {
+          "type": "boolean"
+        },
+        "skipped": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/HistorySkip"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items",
+        "cursor",
+        "more"
+      ],
+      "type": "object"
+    },
+    "HistoryItem": {
+      "description": "One part of one session: the text said in its entries `first` to `last`.",
+      "properties": {
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "first": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "last": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "Where it came from, relative to the harness's history folder.",
+          "type": "string"
+        },
+        "project": {
+          "description": "The working folder the session ran in, as the harness recorded it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "text": {
+          "description": "`User: ...` and `Assistant: ...` blocks, redacted by the runner.",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "path",
+        "title",
+        "text",
+        "started_at",
+        "first",
+        "last"
+      ],
+      "type": "object"
+    },
+    "HistoryRead": {
+      "description": "Core to runner: the new entries of `harness`'s sessions after `cursor`.",
+      "properties": {
+        "cursor": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "default": {},
+          "description": "Per session id, the last entry (line) already taken.",
+          "type": "object"
+        },
+        "harness": {
+          "description": "The harness whose history to read: `claude` (the others are not readable yet).",
+          "type": "string"
+        },
+        "max_bytes": {
+          "description": "The most text the answer may carry, up to [`MAX_HISTORY_BYTES`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "harness",
+        "max_bytes"
+      ],
+      "type": "object"
+    },
+    "HistorySkip": {
+      "description": "What was not read, and why (`restricted_path`, `unreadable`, `no_time`).",
+      "properties": {
+        "count": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason",
+        "count"
+      ],
       "type": "object"
     },
     "HostLoad": {
@@ -2459,6 +2610,20 @@
           "properties": {
             "op": {
               "const": "plan.check",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/HistoryChunk",
+          "description": "The answer to `history.read`.",
+          "properties": {
+            "op": {
+              "const": "history.read",
               "type": "string"
             }
           },

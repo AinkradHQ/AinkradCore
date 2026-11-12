@@ -46,6 +46,7 @@ pub mod secrets;
 use secrets::{Delivered, Redeem};
 mod front;
 mod gw;
+mod history;
 mod plan;
 mod signals;
 mod sub;
@@ -83,6 +84,12 @@ pub struct AgentConfig {
     /// Report the harness's plan limits (`AgentEvents::plan_limit`), and say so: the driver lists
     /// `CAP_PLAN_LIMIT`. Off, the field is never sent.
     pub plan_limit: bool,
+    /// Answer `history.read` (E5-3) and say so: the driver lists `CAP_HISTORY_READ`. Off by
+    /// default: the user switches it on per runner (`--share-history`).
+    pub history_read: bool,
+    /// Where the claude harness keeps its sessions (`~/.claude/projects`); the one folder
+    /// `history.read` may read.
+    pub history_root: Option<PathBuf>,
 }
 
 /// `slots` for `harness`, cut to one where its runs share state. agy reads its MCP config
@@ -108,6 +115,8 @@ impl AgentConfig {
             max_entries: 10_000,
             stop_grace: Duration::from_secs(30),
             plan_limit: true,
+            history_read: false,
+            history_root: None,
         }
     }
 }
@@ -378,6 +387,10 @@ impl AgentDriver {
                     self.config
                         .plan_limit
                         .then_some(&ainkrad_proto::v2::CAP_PLAN_LIMIT),
+                )
+                .chain(
+                    (self.config.history_read && self.config.history_root.is_some())
+                        .then_some(&ainkrad_proto::v2::CAP_HISTORY_READ),
                 )
                 .map(|o| (*o).to_owned())
                 .collect(),

@@ -270,6 +270,16 @@ impl Hub {
         self.send_command(runner, Command::PlanCheck(check))
     }
 
+    /// The history read (E5-3): it builds the one op itself, so a module can send `history.read` and
+    /// nothing else. The runner reads its own harness's session files, only when it was switched on.
+    pub(crate) fn dispatch_history_read(
+        self: &Arc<Self>,
+        runner: &str,
+        read: ainkrad_proto::v2::HistoryRead,
+    ) -> Result<Dispatched, StreamError> {
+        self.send_command(runner, Command::HistoryRead(read))
+    }
+
     /// The only way a subscription sign-in reaches a runner (KAN-441): `login.start`, `login.code`
     /// and `login.cancel` and nothing else. The Core's start route is a step-up (`DESTRUCTIVE`) and
     /// the other two act on a sign-in that route began, so no `Elevated` is minted. The ops run

@@ -75,7 +75,7 @@ impl Broker {
         out.map(|(v, _)| v).map_err(|(f, _)| f.into())
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::result_large_err)]
     async fn read_in(
         &self,
         env: &Env<'_>,
