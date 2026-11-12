@@ -93,6 +93,7 @@ pub async fn enrol_local(db: &Path, out: &Path, url: &str) -> Result_ {
         platform: Some("linux"),
         key_storage: Some("software"),
         sas,
+        device_name: None,
         passkey: None,
     };
     if !gov::claim_pairing(&pool, &claim, now).await? {

@@ -23,6 +23,7 @@ mod failover;
 pub mod gateway;
 mod launch;
 pub mod login;
+pub mod plan_check;
 pub mod subscription;
 mod topup;
 pub mod wake;

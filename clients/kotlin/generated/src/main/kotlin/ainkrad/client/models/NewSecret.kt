@@ -24,9 +24,14 @@ import kotlinx.serialization.Contextual
  * A new secret. Deliberately no `Debug`.
  *
  * @param name 
- * @param `value` UTF-8 text, at most `secrets.max_bytes`; written, never read back.
+ * @param `value` UTF-8 text, at most `secrets.max_bytes`; for kind `file` the file's bytes in standard base64 (at most 1 MiB decoded); written, never read back.
  * @param delivery `env` (the default), `file` or `askpass`.
- * @param runners Runner device ids it may be leased to; default none.
+ * @param description One line, at most 200 characters.
+ * @param fileMode Kind `file`: an octal mode the owner can read, `0400` to `0777`; default `0600`.
+ * @param fileName Required for kind `file`: `[A-Za-z0-9._-]{1,64}`.
+ * @param group The name of a group made with `createSecretGroup`; one level.
+ * @param kind `text` (the default), `multiline`, `file` or `env_bundle` (`NAME=value` lines).
+ * @param runners Runner device ids it may be leased to; default none (a group's runners then apply).
  */
 @Serializable
 
@@ -35,7 +40,7 @@ data class NewSecret (
     @SerialName(value = "name")
     val name: kotlin.String,
 
-    /* UTF-8 text, at most `secrets.max_bytes`; written, never read back. */
+    /* UTF-8 text, at most `secrets.max_bytes`; for kind `file` the file's bytes in standard base64 (at most 1 MiB decoded); written, never read back. */
     @SerialName(value = "value")
     val `value`: kotlin.String,
 
@@ -43,7 +48,27 @@ data class NewSecret (
     @SerialName(value = "delivery")
     val delivery: kotlin.String? = null,
 
-    /* Runner device ids it may be leased to; default none. */
+    /* One line, at most 200 characters. */
+    @SerialName(value = "description")
+    val description: kotlin.String? = null,
+
+    /* Kind `file`: an octal mode the owner can read, `0400` to `0777`; default `0600`. */
+    @SerialName(value = "file_mode")
+    val fileMode: kotlin.String? = null,
+
+    /* Required for kind `file`: `[A-Za-z0-9._-]{1,64}`. */
+    @SerialName(value = "file_name")
+    val fileName: kotlin.String? = null,
+
+    /* The name of a group made with `createSecretGroup`; one level. */
+    @SerialName(value = "group")
+    val group: kotlin.String? = null,
+
+    /* `text` (the default), `multiline`, `file` or `env_bundle` (`NAME=value` lines). */
+    @SerialName(value = "kind")
+    val kind: kotlin.String? = null,
+
+    /* Runner device ids it may be leased to; default none (a group's runners then apply). */
     @SerialName(value = "runners")
     val runners: kotlin.collections.List<kotlin.String>? = null
 

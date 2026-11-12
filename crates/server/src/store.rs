@@ -39,6 +39,7 @@ pub mod provider_rules;
 mod provider_url;
 pub mod providers;
 pub mod redact;
+pub mod secret_groups;
 pub mod secrets;
 mod secrets_user;
 pub mod settings;

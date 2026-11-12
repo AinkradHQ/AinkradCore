@@ -51,6 +51,16 @@ use crate::ops::secretbox::SecretBox;
 /// How a runner hands a secret to a session (E2-07.2).
 pub const DELIVERY: [&str; 3] = ["env", "file", "askpass"];
 
+/// What a value is (N24): `text`, `multiline` (a PEM key), `file` (bytes, base64 in transit) or
+/// `env_bundle` (`NAME=value` lines).
+pub const KINDS: [&str; 4] = ["text", "multiline", "file", "env_bundle"];
+
+/// The most a `file` secret holds, decoded (decision G1).
+pub const FILE_MAX: i64 = 1024 * 1024;
+
+/// How a runner writes a `file` secret when none is given.
+pub const FILE_MODE: i64 = 0o600;
+
 /// A secret as it is listed: everything but its value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Meta {
@@ -69,15 +79,35 @@ pub struct Meta {
     pub key_id: String,
     pub created_at: String,
     pub updated_at: String,
+    pub kind: String,
+    pub description: String,
+    /// A `file` secret's name on the runner, and its mode.
+    pub file_name: Option<String>,
+    pub file_mode: Option<i64>,
+    /// The group's name, one level.
+    pub group: Option<String>,
+    /// Its own runners, else its group's: who a lease may go to.
+    pub effective_runners: Vec<String>,
+    pub last_used_at: Option<String>,
+    pub use_count: i64,
 }
 
 /// A value to store, with its scope. No `Debug`: nothing may print it.
+#[derive(Default)]
 pub struct NewValue<'a> {
     pub value: &'a str,
     /// `None` keeps what it was (an empty scope for a new secret).
     pub runners: Option<&'a [String]>,
     /// `None` keeps what it was (`env` for a new secret).
     pub delivery: Option<&'a str>,
+    /// `None` keeps what it was (`text` for a new secret).
+    pub kind: Option<&'a str>,
+    pub description: Option<&'a str>,
+    /// A `file` secret's name (required for one) and mode (default 0600).
+    pub file_name: Option<&'a str>,
+    pub file_mode: Option<i64>,
+    /// `None` keeps what it was; an empty name leaves the group.
+    pub group: Option<&'a str>,
 }
 
 /// A redeemed lease: the value and how to deliver it. No `Debug`.
@@ -88,6 +118,9 @@ pub struct Redeemed {
     pub value: Zeroizing<String>,
     /// The lease's end, unix seconds: the runner drops the value by then or at session end.
     pub expires_at: i64,
+    pub kind: String,
+    pub file_name: Option<String>,
+    pub file_mode: Option<i64>,
 }
 
 /// Why the broker refused, with a stable code. The message never holds a value.
@@ -234,6 +267,7 @@ async fn check_value(
     name: &str,
     value: &str,
     delivery: &str,
+    form: &Form,
 ) -> Result<bool, Error> {
     let mode = enabled(conn).await?;
     // Fail closed on an unknown `acct.` name, but only below mode 2 (which is unchanged).
@@ -255,13 +289,22 @@ async fn check_value(
     if value.is_empty() {
         return refused("bad_request", "the value is empty");
     }
-    if value.len() as i64 > max {
-        return refused(
-            "too_large",
-            format!("the value is over secrets.max_bytes ({max} bytes)"),
-        );
+    match form.kind {
+        "file" if form.size > FILE_MAX => {
+            return refused("too_large", "a file secret is at most 1 MiB");
+        }
+        "file" => {}
+        _ if form.size > max => {
+            return refused(
+                "too_large",
+                format!("the value is over secrets.max_bytes ({max} bytes)"),
+            );
+        }
+        _ => {}
     }
     super::secrets_user::bind(conn, name, value).await?;
+    // A file's shape is judged on its bytes, not on their base64.
+    let value = form.plain.as_deref().map_or(value, String::as_str);
     // Before G-SEC only throwaway values: one the redactor recognises as a real key shape is
     // refused. ponytail: shapes only, as the redactor; a real value with no known prefix gets
     // through, which is why mode 1 is a guard rail and the gate itself is mode 2.
@@ -294,7 +337,10 @@ async fn check_value(
 }
 
 /// The scope, checked: each an active runner device, no repeats.
-async fn check_runners(conn: &mut SqliteConnection, runners: &[String]) -> Result<(), Error> {
+pub(super) async fn check_runners(
+    conn: &mut SqliteConnection,
+    runners: &[String],
+) -> Result<(), Error> {
     for (i, id) in runners.iter().enumerate() {
         if runners[..i].contains(id) || !active_runner(conn, id).await? {
             return refused(
@@ -317,6 +363,101 @@ async fn active_runner(conn: &mut SqliteConnection, id: &str) -> Result<bool, Er
     Ok(n == 1)
 }
 
+/// A value, checked for its kind: its length in bytes (a file's decoded), and for a file its
+/// plain text for the shape check.
+pub struct Form {
+    pub kind: &'static str,
+    pub size: i64,
+    plain: Option<Zeroizing<String>>,
+}
+
+/// Checks `value` is a well-formed `kind` and sizes it.
+fn check_form(kind: &str, value: &str) -> Result<Form, Error> {
+    let kind = KINDS.iter().copied().find(|k| *k == kind);
+    let Some(kind) = kind else {
+        return refused("bad_request", "kind is text, multiline, file or env_bundle");
+    };
+    let size = value.len() as i64;
+    match kind {
+        "env_bundle" => {
+            ainkrad_proto::v2::parse_env_bundle(value).map_err(|m| Error::Refused {
+                code: "bad_request",
+                message: m,
+            })?;
+        }
+        "file" => {
+            use base64::Engine;
+            // Decoded length first: a base64 of 1 MiB is a third longer than the file.
+            if value.len() as i64 > FILE_MAX / 3 * 4 + 4 {
+                return refused("too_large", "a file secret is at most 1 MiB");
+            }
+            let bytes = Zeroizing::new(
+                base64::engine::general_purpose::STANDARD
+                    .decode(value)
+                    .or_else(|_| refused("bad_request", "a file's value is standard base64"))?,
+            );
+            let plain = Zeroizing::new(String::from_utf8_lossy(&bytes).into_owned());
+            return Ok(Form {
+                kind,
+                size: bytes.len() as i64,
+                plain: Some(plain),
+            });
+        }
+        _ => {}
+    }
+    Ok(Form {
+        kind,
+        size,
+        plain: None,
+    })
+}
+
+/// The file name and mode a `file` secret is stored with; none for any other kind.
+fn file_meta(
+    kind: &str,
+    name: Option<&str>,
+    mode: Option<i64>,
+    old: Option<&Meta>,
+) -> Result<(Option<String>, Option<i64>), Error> {
+    if kind != "file" {
+        return match name.is_some() || mode.is_some() {
+            true => refused(
+                "bad_request",
+                "file_name and file_mode belong to a file secret",
+            ),
+            false => Ok((None, None)),
+        };
+    }
+    let name = name
+        .map(str::to_owned)
+        .or_else(|| old.and_then(|o| o.file_name.clone()));
+    let Some(name) = name.filter(|n| ainkrad_proto::v2::valid_secret_file_name(n)) else {
+        return refused(
+            "bad_request",
+            "a file secret needs a file_name of [A-Za-z0-9._-]{1,64}",
+        );
+    };
+    let mode = mode.or(old.and_then(|o| o.file_mode)).unwrap_or(FILE_MODE);
+    if mode & !0o777 != 0 || mode & 0o400 == 0 {
+        return refused(
+            "bad_request",
+            "file_mode is an octal mode up to 0777 that the owner can read",
+        );
+    }
+    Ok((Some(name), Some(mode)))
+}
+
+/// A description: one line, at most 200 characters.
+fn check_description(d: &str) -> Result<(), Error> {
+    match d.chars().count() <= 200 && !d.contains(['\n', '\r']) {
+        true => Ok(()),
+        false => refused(
+            "bad_request",
+            "a description is one line of at most 200 characters",
+        ),
+    }
+}
+
 fn check_delivery(delivery: &str) -> Result<(), Error> {
     match DELIVERY.contains(&delivery) {
         true => Ok(()),
@@ -337,14 +478,34 @@ fn meta(row: sqlx::sqlite::SqliteRow) -> Result<Meta, sqlx::Error> {
         key_id: row.try_get("key_id")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
+        kind: row.try_get("kind")?,
+        description: row.try_get("description")?,
+        file_name: row.try_get("file_name")?,
+        file_mode: row.try_get("file_mode")?,
+        group: row.try_get("group_name")?,
+        effective_runners: effective(row.try_get("runners")?, row.try_get("group_runners")?),
+        last_used_at: row.try_get("last_used_at")?,
+        use_count: row.try_get("use_count")?,
     })
 }
 
-const META: &str = "SELECT id, name, owner, runners, delivery, version, size, key_id, \
-                    created_at, updated_at FROM core_secrets";
+/// A secret's own runners, else its group's.
+fn effective(own: String, group: Option<String>) -> Vec<String> {
+    let own: Vec<String> = serde_json::from_str(&own).unwrap_or_default();
+    match (own.is_empty(), group) {
+        (true, Some(g)) => serde_json::from_str(&g).unwrap_or_default(),
+        _ => own,
+    }
+}
+
+const META: &str = "SELECT s.id, s.name, s.owner, s.runners, s.delivery, s.version, s.size, \
+                    s.key_id, s.created_at, s.updated_at, s.kind, s.description, s.file_name, \
+                    s.file_mode, s.last_used_at, s.use_count, g.name AS group_name, \
+                    g.runners AS group_runners FROM core_secrets s \
+                    LEFT JOIN core_secret_groups g ON g.id = s.group_id";
 
 async fn find(conn: &mut SqliteConnection, name: &str) -> Result<Meta, Error> {
-    let row = sqlx::query(sqlx::AssertSqlSafe(format!("{META} WHERE name = ?")))
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!("{META} WHERE s.name = ?")))
         .bind(name)
         .fetch_optional(&mut *conn)
         .await?;
@@ -376,7 +537,7 @@ async fn audit(
 
 /// Every secret, by name; never a value.
 pub async fn list(pool: &SqlitePool) -> Result<Vec<Meta>, sqlx::Error> {
-    sqlx::query(sqlx::AssertSqlSafe(format!("{META} ORDER BY name")))
+    sqlx::query(sqlx::AssertSqlSafe(format!("{META} ORDER BY s.name")))
         .fetch_all(pool)
         .await?
         .into_iter()
@@ -417,7 +578,15 @@ pub async fn create_in(
     let delivery = new.delivery.unwrap_or("env");
     check_delivery(delivery)?;
     let runners = new.runners.unwrap_or_default();
-    let lifted = check_value(&mut *tx, name, new.value, delivery).await?;
+    let form = check_form(new.kind.unwrap_or("text"), new.value)?;
+    let (file_name, file_mode) = file_meta(form.kind, new.file_name, new.file_mode, None)?;
+    let description = new.description.unwrap_or_default();
+    check_description(description)?;
+    let group = match new.group.filter(|g| !g.is_empty()) {
+        Some(g) => Some(super::secret_groups::id_of(&mut *tx, g).await?),
+        None => None,
+    };
+    let lifted = check_value(&mut *tx, name, new.value, delivery, &form).await?;
     check_runners(&mut *tx, runners).await?;
     let max = setting(&mut *tx, Key::SecretsMaxCount).await?;
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM core_secrets")
@@ -442,7 +611,8 @@ pub async fn create_in(
     let runners_json = json!(runners).to_string();
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO core_secrets (name, owner, runners, delivery, version, key_id, sealed, \
-         size, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?) RETURNING id",
+         size, created_at, updated_at, kind, description, file_name, file_mode, group_id) \
+         VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(name)
     .bind(owner)
@@ -450,13 +620,19 @@ pub async fn create_in(
     .bind(delivery)
     .bind(sealer.key_id())
     .bind(&sealed)
-    .bind(new.value.len() as i64)
+    .bind(form.size)
     .bind(now)
     .bind(now)
+    .bind(form.kind)
+    .bind(description)
+    .bind(&file_name)
+    .bind(file_mode)
+    .bind(group)
     .fetch_one(&mut *tx)
     .await?;
     let mut details = json!({"name": name, "version": 1, "runners": runners, "delivery": delivery,
-                         "size": new.value.len(), "key_id": sealer.key_id(), "by_device": owner});
+                         "size": form.size, "key_id": sealer.key_id(), "by_device": owner,
+                         "kind": form.kind});
     tag_account(&mut details, name, lifted);
     audit(&mut *tx, actor, "secret.created", id, details).await?;
     let m = find(&mut *tx, name).await?;
@@ -494,7 +670,21 @@ pub async fn rotate_in(
     let old = find(&mut *tx, name).await?;
     let delivery = new.delivery.unwrap_or(&old.delivery);
     check_delivery(delivery)?;
-    let lifted = check_value(&mut *tx, name, new.value, delivery).await?;
+    let form = check_form(new.kind.unwrap_or(&old.kind), new.value)?;
+    let (file_name, file_mode) = file_meta(form.kind, new.file_name, new.file_mode, Some(&old))?;
+    let description = new.description.unwrap_or(&old.description);
+    check_description(description)?;
+    let group = match new.group {
+        None => {
+            sqlx::query_scalar("SELECT group_id FROM core_secrets WHERE id = ?")
+                .bind(old.id)
+                .fetch_one(&mut *tx)
+                .await?
+        }
+        Some("") => None,
+        Some(g) => Some(super::secret_groups::id_of(&mut *tx, g).await?),
+    };
+    let lifted = check_value(&mut *tx, name, new.value, delivery, &form).await?;
     let runners = new.runners.unwrap_or(&old.runners);
     check_runners(&mut *tx, runners).await?;
     let version = old.version + 1;
@@ -503,15 +693,21 @@ pub async fn rotate_in(
         .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
     sqlx::query(
         "UPDATE core_secrets SET runners = ?, delivery = ?, version = ?, key_id = ?, sealed = ?, \
-         size = ?, updated_at = ? WHERE id = ?",
+         size = ?, updated_at = ?, kind = ?, description = ?, file_name = ?, file_mode = ?, \
+         group_id = ? WHERE id = ?",
     )
     .bind(json!(runners).to_string())
     .bind(delivery)
     .bind(version)
     .bind(sealer.key_id())
     .bind(&sealed)
-    .bind(new.value.len() as i64)
+    .bind(form.size)
     .bind(now)
+    .bind(form.kind)
+    .bind(description)
+    .bind(&file_name)
+    .bind(file_mode)
+    .bind(group)
     .bind(old.id)
     .execute(&mut *tx)
     .await?;
@@ -521,7 +717,7 @@ pub async fn rotate_in(
         .await?
         .rows_affected();
     let mut details = json!({"name": name, "version": version, "runners": runners,
-                         "delivery": delivery, "size": new.value.len(),
+                         "delivery": delivery, "size": form.size,
                          "key_id": sealer.key_id(), "leases_revoked": dropped,
                          "by_device": by_device});
     tag_account(&mut details, name, lifted);
@@ -597,7 +793,7 @@ pub async fn lease_to(
     let mut tx = super::begin_write(pool).await?;
     enabled(&mut tx).await?;
     let s = find(&mut tx, name).await?;
-    if !s.runners.iter().any(|r| r == runner) || !active_runner(&mut tx, runner).await? {
+    if !s.effective_runners.iter().any(|r| r == runner) || !active_runner(&mut tx, runner).await? {
         return refused(
             "bad_request",
             "the runner is not an active runner in this secret's scope",
@@ -683,8 +879,10 @@ pub async fn redeem(
     enabled(&mut tx).await?;
     let row = sqlx::query(
         "SELECT l.runner, l.expires_at, l.used_at, s.id, s.name, s.runners, s.delivery, \
-         s.version, s.key_id, s.sealed FROM core_secret_leases l \
-         JOIN core_secrets s ON s.id = l.secret_id WHERE l.hash = ?",
+         s.version, s.key_id, s.sealed, s.kind, s.file_name, s.file_mode, \
+         g.runners AS group_runners FROM core_secret_leases l \
+         JOIN core_secrets s ON s.id = l.secret_id \
+         LEFT JOIN core_secret_groups g ON g.id = s.group_id WHERE l.hash = ?",
     )
     .bind(hash.as_ref())
     .fetch_optional(&mut *tx)
@@ -699,8 +897,7 @@ pub async fn redeem(
     if used.is_some() || expires_at <= now_unix {
         return refused("lease_expired", "the lease is spent or expired");
     }
-    let scope: Vec<String> =
-        serde_json::from_str(&row.try_get::<String, _>("runners")?).unwrap_or_default();
+    let scope = effective(row.try_get("runners")?, row.try_get("group_runners")?);
     if !scope.iter().any(|r| r == runner) || !active_runner(&mut tx, runner).await? {
         return refused("not_found", "no such lease");
     }
@@ -744,6 +941,11 @@ pub async fn redeem(
         .bind(hash.as_ref())
         .execute(&mut *tx)
         .await?;
+    sqlx::query("UPDATE core_secrets SET last_used_at = ?, use_count = use_count + 1 WHERE id = ?")
+        .bind(now)
+        .bind(secret)
+        .execute(&mut *tx)
+        .await?;
     let delivery: String = row.try_get("delivery")?;
     let details = json!({"name": name, "version": version, "runner": runner,
                          "lease": hex8(hash.as_ref()), "delivery": delivery,
@@ -756,6 +958,9 @@ pub async fn redeem(
         delivery,
         value,
         expires_at,
+        kind: row.try_get("kind")?,
+        file_name: row.try_get("file_name")?,
+        file_mode: row.try_get("file_mode")?,
     })
 }
 

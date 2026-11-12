@@ -5,7 +5,7 @@
 # SC2034: the A_* answers and the colours are read by install.sh, which sources this file.
 # shellcheck disable=SC2034
 # bash 3.2-safe, like lib.sh.
-#   AINKRAD_HOSTNAME, AINKRAD_ACME_EMAIL  answer those two questions up front (no TTY is then needed)
+#   AINKRAD_HOSTNAME, AINKRAD_ACME_EMAIL  answer those two questions up front (no TTY is then needed); get.sh asks them in its step 1 and exports them
 #   AINKRAD_ACME_ENV=staging              a test certificate instead of a production one
 
 INVITE='' BACKUP_IDENTITY=''
@@ -83,7 +83,8 @@ guided_answers() {
     [ -n "$A_HOSTNAME" ] || ask HOSTNAME "What is the public DNS name of this Core?"
     [ -n "$A_ACME_CONTACT" ] || ask ACME_CONTACT "What email should Let's Encrypt use for expiry notices?"
   fi
-  if [ -n "$pre_host" ]; then ui_ok "HOSTNAME = $A_HOSTNAME (given up front)"; ui_after_answer HOSTNAME "$A_HOSTNAME"; fi
+  # get.sh asks both questions and checks the name in its step 1, before it installs anything (N6): not looked up again here.
+  if [ -n "$pre_host" ]; then ui_ok "HOSTNAME = $A_HOSTNAME (given up front)"; [ "${AINKRAD_DNS_CHECKED:-}" = 1 ] || ui_after_answer HOSTNAME "$A_HOSTNAME"; fi
   if [ -n "$pre_mail" ]; then ui_ok "ACME_CONTACT = $A_ACME_CONTACT (given up front)"; fi
   if [ "$A_ACME_ENV" = staging ]; then ui_note "Certificate: staging (a test certificate: not trusted by browsers, no rate limits). Production is the default."
   else ui_note "Certificate: production Let's Encrypt (trusted by browsers). AINKRAD_ACME_ENV=staging asks for a test certificate instead (not trusted, no rate limits)."; fi

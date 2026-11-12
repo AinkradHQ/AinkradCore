@@ -568,6 +568,7 @@ async fn an_export_never_carries_secrets_and_a_backup_does() {
         value: VALUE,
         runners: Some(&scope),
         delivery: None,
+        ..Default::default()
     };
     secrets::create(
         &pool,

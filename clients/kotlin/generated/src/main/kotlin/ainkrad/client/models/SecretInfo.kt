@@ -32,6 +32,14 @@ import kotlinx.serialization.Contextual
  * @param propertySize The value's length in bytes.
  * @param updatedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param version 1 when stored, one more per rotation.
+ * @param description One line: what it is for.
+ * @param effectiveRunners The runners a lease may go to: its own, else its group's.
+ * @param fileMode 
+ * @param fileName A `file` secret's name on the runner, and its octal mode (`0600`).
+ * @param group The group it belongs to (`/api/v1/secret-groups`); none for no group.
+ * @param kind `text`, `multiline`, `file` or `env_bundle`. `size` is a file's decoded length.
+ * @param lastUsedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param useCount How many redemptions.
  */
 @Serializable
 
@@ -71,7 +79,38 @@ data class SecretInfo (
 
     /* 1 when stored, one more per rotation. */
     @SerialName(value = "version")
-    val version: kotlin.Long
+    val version: kotlin.Long,
+
+    /* One line: what it is for. */
+    @SerialName(value = "description")
+    val description: kotlin.String? = null,
+
+    /* The runners a lease may go to: its own, else its group's. */
+    @SerialName(value = "effective_runners")
+    val effectiveRunners: kotlin.collections.List<kotlin.String>? = null,
+
+    @SerialName(value = "file_mode")
+    val fileMode: kotlin.String? = null,
+
+    /* A `file` secret's name on the runner, and its octal mode (`0600`). */
+    @SerialName(value = "file_name")
+    val fileName: kotlin.String? = null,
+
+    /* The group it belongs to (`/api/v1/secret-groups`); none for no group. */
+    @SerialName(value = "group")
+    val group: kotlin.String? = null,
+
+    /* `text`, `multiline`, `file` or `env_bundle`. `size` is a file's decoded length. */
+    @SerialName(value = "kind")
+    val kind: kotlin.String? = null,
+
+    /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
+    @Contextual @SerialName(value = "last_used_at")
+    val lastUsedAt: java.time.OffsetDateTime? = null,
+
+    /* How many redemptions. */
+    @SerialName(value = "use_count")
+    val useCount: kotlin.Long? = null
 
 ) {
 

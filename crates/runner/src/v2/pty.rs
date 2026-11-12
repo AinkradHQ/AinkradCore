@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -62,7 +62,13 @@ pub struct PtyConfig {
     pub user: Option<String>,
     /// `--terminal-network` (KAN-416): the network every shell gets. Needs the sandbox.
     pub net: super::termbox::Net,
+    /// The Ainkrad shell profile (N20): a read-only zsh configuration installed with the runner.
+    /// A terminal with no program of its own starts `zsh -l` with `ZDOTDIR` set to it.
+    pub shell_dir: PathBuf,
 }
+
+/// Where the runner installers put the Ainkrad shell profile.
+pub const SHELL_DIR: &str = "/usr/local/share/ainkrad/shell";
 
 impl PtyConfig {
     /// Off, with the defaults for `dir` (`<state>/terminals`).
@@ -73,7 +79,9 @@ impl PtyConfig {
             host: ainkrad_ptyhost::client::find_host_binary()
                 .unwrap_or_else(|| PathBuf::from("ainkrad-ptyhost")),
             dir,
-            env_allow: ["LC_ALL", "LC_CTYPE", "TZ"].map(str::to_owned).to_vec(),
+            env_allow: ["LC_ALL", "LC_CTYPE", "TZ", "ZDOTDIR"]
+                .map(str::to_owned)
+                .to_vec(),
             env: std::env::vars_os().collect(),
             grace: Duration::from_secs(2),
             // On by default: a terminal is a shell as the runner's user.
@@ -81,6 +89,7 @@ impl PtyConfig {
             readonly: Vec::new(),
             user: None,
             net: super::termbox::Net::Host,
+            shell_dir: PathBuf::from(SHELL_DIR),
         }
     }
 }
@@ -335,6 +344,15 @@ impl PtyDriver {
             size: req.size,
             scrollback_bytes: req.scrollback_bytes.map(|b| clamp(SCROLLBACK_BYTES, b)),
         };
+        // No program asked for: the Ainkrad shell, so a terminal looks the same on every runner (N20).
+        if req.program.is_none()
+            && req.args.is_empty()
+            && let Some((zsh, dir)) = self.ainkrad_shell()
+        {
+            spec.program = Some(zsh);
+            spec.args = vec!["-l".to_owned()];
+            spec.env.insert("ZDOTDIR".to_owned(), dir);
+        }
         if let Some(b) = req.scrollback_budget {
             self.set_budget(b);
         }
@@ -402,6 +420,39 @@ impl PtyDriver {
             return Err(err(ErrorCode::SpawnFailed, e.to_string()));
         }
         Ok(id)
+    }
+
+    /// `zsh` and the profile dir when the Ainkrad shell can start here; otherwise (zsh missing, or
+    /// no profile installed) the login shell is used and the reason is logged.
+    fn ainkrad_shell(&self) -> Option<(String, String)> {
+        let dir = &self.config.shell_dir;
+        if !dir.join(".zshrc").is_file() {
+            tracing::warn!(dir = %dir.display(), "no Ainkrad shell profile here: starting the login shell");
+            return None;
+        }
+        let path = self
+            .config
+            .env
+            .iter()
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| v.to_string_lossy().into_owned());
+        let found = super::termbox::resolve("zsh", path.as_deref());
+        let zsh = found.starts_with('/').then_some(found).or_else(|| {
+            [
+                "/usr/bin/zsh",
+                "/bin/zsh",
+                "/usr/local/bin/zsh",
+                "/opt/homebrew/bin/zsh",
+            ]
+            .into_iter()
+            .find(|p| Path::new(p).is_file())
+            .map(str::to_owned)
+        });
+        let Some(zsh) = zsh else {
+            tracing::warn!("zsh is not installed here: starting the login shell");
+            return None;
+        };
+        Some((zsh, dir.to_string_lossy().into_owned()))
     }
 
     /// Where the per-shell network records live: beside the terminals' dir, in the runner's
@@ -641,5 +692,50 @@ impl PtyDriver {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod shell_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn dirs(tag: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("ainkrad-shell-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::create_dir_all(root.join("shell")).unwrap();
+        (root.join("bin"), root.join("shell"))
+    }
+
+    fn driver(bin: &Path, shell: PathBuf) -> PtyDriver {
+        let mut config = PtyConfig::new(std::env::temp_dir().join("unused-terminals"));
+        config.env = vec![("PATH".into(), bin.into())];
+        config.shell_dir = shell;
+        PtyDriver::new(config)
+    }
+
+    #[test]
+    fn a_terminal_without_a_program_starts_the_ainkrad_shell_when_it_is_installed() {
+        let (bin, shell) = dirs("on");
+        let zsh = bin.join("zsh");
+        std::fs::write(&zsh, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&zsh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let d = driver(&bin, shell.clone());
+        // No profile yet: the login shell, as before.
+        assert_eq!(d.ainkrad_shell(), None);
+        std::fs::write(shell.join(".zshrc"), "# profile\n").unwrap();
+        let got = d.ainkrad_shell().expect("the profile and zsh are here");
+        assert_eq!(got.0, zsh.to_string_lossy());
+        assert_eq!(got.1, shell.to_string_lossy());
+    }
+
+    #[test]
+    fn zdotdir_may_pass_through_the_runners_allow_list() {
+        assert!(
+            PtyConfig::new(PathBuf::from("/x"))
+                .env_allow
+                .contains(&"ZDOTDIR".to_owned())
+        );
     }
 }

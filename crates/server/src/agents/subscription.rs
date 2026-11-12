@@ -158,7 +158,7 @@ pub async fn mint_for_tests(
 /// Whether `runner` lists the `subscription-env` command beside its agent driver's ops: it applies
 /// the subscription rules before it redeems a lease. An older runner does not, and is never sent
 /// the token.
-fn lists_cap(runner: &RunnerState) -> bool {
+pub(super) fn lists_cap(runner: &RunnerState) -> bool {
     runner
         .drivers
         .iter()

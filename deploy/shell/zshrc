@@ -1,0 +1,22 @@
+# The Ainkrad shell (N20): the same zsh on every runner, so a terminal looks the same wherever it opens.
+# Read-only: this file lives in /usr/local/share/ainkrad/shell and is replaced by every runner install.
+# Put your own settings in ~/.zshrc.local; it is read last, on that runner only.
+#
+# oh-my-zsh, powerlevel10k and the plugins are pinned (deploy/shell/pins.sh) and checked at install time:
+# nothing is downloaded or updated when a shell starts.
+export ZDOTDIR=${ZDOTDIR:-${${(%):-%x}:A:h}}
+export ZSH=$ZDOTDIR/ohmyzsh
+export ZSH_CUSTOM=$ZDOTDIR/custom
+# The profile is read-only, so what oh-my-zsh and zsh write goes to the user's cache.
+export ZSH_CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/ainkrad-zsh
+export ZSH_COMPDUMP=$ZSH_CACHE_DIR/zcompdump-$ZSH_VERSION
+[[ -d $ZSH_CACHE_DIR/completions ]] || mkdir -p -- $ZSH_CACHE_DIR/completions 2>/dev/null
+# No self-update, and no gitstatusd download at the first prompt (the installer put the pinned binary in place).
+zstyle ':omz:update' mode disabled
+export DISABLE_AUTO_UPDATE=true DISABLE_UPDATE_PROMPT=true GITSTATUS_AUTO_INSTALL=0
+ZSH_THEME=powerlevel10k/powerlevel10k
+plugins=(git zsh-autosuggestions zsh-syntax-highlighting)
+source $ZSH/oh-my-zsh.sh
+[[ -r $ZDOTDIR/.p10k.zsh ]] && source $ZDOTDIR/.p10k.zsh
+[[ -r $HOME/.zshrc.local ]] && source $HOME/.zshrc.local
+true

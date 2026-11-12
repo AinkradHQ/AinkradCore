@@ -282,6 +282,7 @@ async fn broker_credentials_are_host_scoped_and_clone_uses_only_helper_path() {
                 name: "git".into(),
                 delivery: "askpass".into(),
                 value: "broker-token".to_owned().into(),
+                form: Default::default(),
             },
         )],
     )

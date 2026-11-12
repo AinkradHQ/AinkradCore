@@ -10,10 +10,10 @@ use serde_json::json;
 use super::*;
 use crate::ops::secretbox::SecretBox;
 
-const V1: &str = "throwaway-value-one-7f3a9c";
-const V2: &str = "throwaway-value-two-1b8e4d";
+pub(super) const V1: &str = "throwaway-value-one-7f3a9c";
+pub(super) const V2: &str = "throwaway-value-two-1b8e4d";
 
-async fn set(fx: &Fx, key: Key, value: i64) {
+pub(super) async fn set(fx: &Fx, key: Key, value: i64) {
     let by = super::super::BY;
     crate::store::settings::set(
         &fx.app.pool,
@@ -29,7 +29,7 @@ async fn set(fx: &Fx, key: Key, value: i64) {
 
 /// A fixture with a master key and the broker in throwaway mode (1), and a runner with a
 /// session.
-async fn broker() -> (Fx, TestDevice) {
+pub(super) async fn broker() -> (Fx, TestDevice) {
     let mut fx = fx().await;
     fx.app.secrets = Some(Arc::new(SecretBox::new(&[7; 32])));
     set(&fx, Key::SecretsMode, 1).await;
@@ -52,12 +52,23 @@ pub(super) async fn runner(fx: &Fx, name: &str) -> TestDevice {
     r
 }
 
-async fn call(fx: &Fx, dev: &TestDevice, m: Method, uri: &str, body: Value) -> (StatusCode, Value) {
+pub(super) async fn call(
+    fx: &Fx,
+    dev: &TestDevice,
+    m: Method,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, Value) {
     let body = (!body.is_null()).then_some(body);
     send(&fx.app, req(m, uri, Some(dev), body)).await
 }
 
-async fn create(fx: &Fx, name: &str, value: &str, runners: &[&str]) -> (StatusCode, Value) {
+pub(super) async fn create(
+    fx: &Fx,
+    name: &str,
+    value: &str,
+    runners: &[&str],
+) -> (StatusCode, Value) {
     let body = json!({"name": name, "value": value, "runners": runners});
     post_secret(fx, body).await
 }
@@ -92,6 +103,7 @@ async fn via_store(fx: &Fx, name: &str, body: &Value, create: bool) -> (StatusCo
         value: body["value"].as_str().unwrap_or_default(),
         runners: runners.as_deref(),
         delivery: body["delivery"].as_str(),
+        ..Default::default()
     };
     let sealer = fx.app.secrets.clone().unwrap();
     let by = super::super::BY;
@@ -111,13 +123,18 @@ async fn via_store(fx: &Fx, name: &str, body: &Value, create: bool) -> (StatusCo
     }
 }
 
-async fn lease(fx: &Fx, name: &str, runner: &str, ttl: Option<i64>) -> (StatusCode, Value) {
+pub(super) async fn lease(
+    fx: &Fx,
+    name: &str,
+    runner: &str,
+    ttl: Option<i64>,
+) -> (StatusCode, Value) {
     let uri = format!("/api/v1/secrets/{name}/leases");
     let body = json!({"runner": runner, "ttl_secs": ttl});
     call(fx, &fx.dev, Method::POST, &uri, body).await
 }
 
-async fn redeem(fx: &Fx, runner: &TestDevice, lease: &Value) -> (StatusCode, Value) {
+pub(super) async fn redeem(fx: &Fx, runner: &TestDevice, lease: &Value) -> (StatusCode, Value) {
     let body = json!({"lease": lease["lease"]});
     call(
         fx,
@@ -129,12 +146,12 @@ async fn redeem(fx: &Fx, runner: &TestDevice, lease: &Value) -> (StatusCode, Val
     .await
 }
 
-fn code(r: &(StatusCode, Value)) -> (StatusCode, &str) {
+pub(super) fn code(r: &(StatusCode, Value)) -> (StatusCode, &str) {
     (r.0, r.1["code"].as_str().unwrap_or(""))
 }
 
 /// Every text the store holds about secrets outside the sealed column: audit rows, events.
-async fn trail(fx: &Fx) -> String {
+pub(super) async fn trail(fx: &Fx) -> String {
     let audit: Vec<String> = sqlx::query_scalar("SELECT details FROM audit_events")
         .fetch_all(&fx.app.pool)
         .await
@@ -771,6 +788,7 @@ async fn stored(fx: &Fx, name: &str, value: &str, rotate: bool) -> Result<(), &'
         value,
         runners: None,
         delivery: None,
+        ..Default::default()
     };
     let sealer = fx.app.secrets.clone().unwrap();
     let by = super::super::BY;

@@ -191,4 +191,10 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0031_pairing_invite.up.sql"),
         down: include_str!("../../../migrations/0031_pairing_invite.down.sql"),
     },
+    Migration {
+        version: 32,
+        name: "secret_kinds_groups",
+        up: include_str!("../../../migrations/0032_secret_kinds_groups.up.sql"),
+        down: include_str!("../../../migrations/0032_secret_kinds_groups.down.sql"),
+    },
 ];

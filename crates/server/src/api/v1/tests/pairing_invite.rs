@@ -493,3 +493,58 @@ async fn a_claim_refuses_an_invite_whose_creator_no_longer_stands_behind_it() {
         "no claimant enrolled"
     );
 }
+
+/// N11: a claim may name the device; without a name the invite's own is kept; a bad name is
+/// refused and spends nothing.
+#[tokio::test]
+async fn a_claim_may_name_its_device() {
+    let fx = fx().await;
+    let (_, made) = invite(&fx, &fx.dev, &["read"]).await;
+    let secret = made["secret"].as_str().unwrap();
+    let named = |dev: &TestDevice, name: Value| {
+        let mut body = dev.claim_body(None, Some(secret));
+        body["device_name"] = name;
+        send(
+            &fx.app,
+            from(
+                "203.0.113.9",
+                req(Method::POST, "/pair/claim", None, Some(body)),
+            ),
+        )
+    };
+    for bad in [
+        json!(""),
+        json!("   "),
+        json!("x".repeat(65)),
+        json!("a\nb"),
+    ] {
+        let (s, got) = named(&newcomer(&fx), bad.clone()).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}: {got}");
+    }
+    let (s, got) = named(&newcomer(&fx), json!("  Ahmed's MacBook ")).await;
+    assert_eq!(
+        s,
+        StatusCode::ACCEPTED,
+        "the bad names spent nothing: {got}"
+    );
+    let row = gov::get_device(&fx.app.pool, got["device_id"].as_str().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.name, "Ahmed's MacBook");
+    // No name: the invite's own.
+    let (_, made) = invite(&fx, &fx.dev, &["read"]).await;
+    let (s, got) = claim(
+        &fx,
+        &newcomer(&fx),
+        made["secret"].as_str().unwrap(),
+        "203.0.113.9",
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{got}");
+    let row = gov::get_device(&fx.app.pool, got["device_id"].as_str().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.name, "Phone");
+}

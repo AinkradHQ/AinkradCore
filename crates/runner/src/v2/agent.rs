@@ -46,6 +46,7 @@ pub mod secrets;
 use secrets::{Delivered, Redeem};
 mod front;
 mod gw;
+mod plan;
 mod signals;
 mod sub;
 pub mod tools;

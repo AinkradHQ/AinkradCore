@@ -235,6 +235,7 @@ pub async fn replace_secret(
         value,
         runners,
         delivery: Some("env"),
+        ..Default::default()
     };
     // A restored backup or an import can leave the row without its broker secret: the new key
     // then creates it, so the account is never stuck.

@@ -15,10 +15,10 @@
 # then installs only a runner (unprivileged user, sandbox, terminals and agents on, egress filter on, base tools) and pairs it.
 # No questions, no port 443, no check code.
 #
-# Optional, to skip the two questions (the Mac app can put them in the command):
+# Optional, to skip the two questions (asked in step 1, before anything is installed; the Mac app can put them in the command):
 #   sudo AINKRAD_HOSTNAME=core.example.com AINKRAD_ACME_EMAIL=you@example.com sh -c "$(curl -fsSL URL)"
 #
-# What it does, in order: checks the machine (root, systemd, apt, port 443 free and not blocked by the firewall), installs what the Core and its runner need (curl, minisign, bubblewrap, qrencode, git, unzip, jq, ripgrep, build-essential) with apt, downloads the signed release, VERIFIES the minisign signature over SHA256SUMS against the
+# What it does, in order: checks the machine and asks the two questions (root, systemd, apt, your DNS name and email, port 443 free and not blocked by the firewall, the name pointing here), installs what the Core and its runner need (curl, minisign, bubblewrap, qrencode, git, unzip, jq, ripgrep, build-essential, zsh) with apt, downloads the signed release, VERIFIES the minisign signature over SHA256SUMS against the
 # release key pinned below (any mismatch stops everything; nothing of the release is installed), checks every file
 # against the signed sums, installs the Core and runs the guided installer.
 # Host hardening (SSH config, firewall, unattended updates, no swap) is OPT-IN and experimental: the default install does not
@@ -164,7 +164,7 @@ ui_int() { # INT/TERM: stop the job and its children FIRST, then say honestly wh
 ui_traps() { trap ui_exit EXIT; trap 'ui_int 130' INT; trap 'ui_int 143' TERM; }
 ui_rname() { # the roadmap
   case $1 in
-    1) echo "Check this machine" ;; 2) echo "Install prerequisites" ;; 3) echo "Download and verify" ;; 4) echo "Install the programs" ;;
+    1) echo "Check this machine and your DNS name" ;; 2) echo "Install prerequisites" ;; 3) echo "Download and verify" ;; 4) echo "Install the programs" ;;
     5) echo "Your 2 answers" ;; 6) echo "Set up the Core" ;; 7) echo "Start and get the certificate" ;; 8) echo "Your connect link" ;;
   esac
 }
@@ -418,6 +418,70 @@ pc_checks() { # pc_checks "443 80": 0 when all is well; else 1 with PC_WHAT (wha
     ui_ok "Port $_p is free and this machine's firewall lets it in"
   done
 }
+pc_valid_hostname() { # a DNS name of two or more labels; not an IP address
+  _h=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  case $_h in '' | *'
+'*) return 1 ;; esac
+  [ "${#_h}" -le 253 ] && printf '%s' "$_h" | grep -Eq '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$'
+}
+pc_valid_email() { # name@example.com
+  case $1 in *@* | '') ;; *) return 1 ;; esac
+  case $1 in *'
+'*) return 1 ;; esac
+  printf '%s' "${1%@*}" | grep -Eq '^[A-Za-z0-9._%+-]+$' && pc_valid_hostname "${1##*@}"
+}
+pc_ask() { # pc_ask VAR "question" "example" VALIDATOR: VAR from the environment when valid, else asked on the terminal until it is; exported
+  eval "_v=\${$1:-}"
+  if [ -n "$_v" ]; then
+    if "$4" "$_v"; then ui_keep "$1 = $_v (given up front)"; export "${1?}"; return 0; fi
+    ui_warn "$1 is not valid, so it is asked again"
+  fi
+  { ( : </dev/tty ) 2>/dev/null && ui_tty_fg; } || ui_stopped "no terminal to ask on, and $1 is not set" "set AINKRAD_HOSTNAME=<dns name> and AINKRAD_ACME_EMAIL=<email> and run the command again. Nothing was installed."
+  while :; do
+    [ "$UI_FANCY" != 1 ] || printf '\r\033[K'
+    printf '\n %s\n   Example: %s\n > ' "$2" "$3" >/dev/tty
+    _v=''; read -r _v </dev/tty || ui_stopped "no answer for $1 (the input ended)" "run the command again. Nothing was installed."
+    if "$4" "$_v"; then break; fi
+    printf '   That is not valid. Try again.\n' >/dev/tty
+  done
+  eval "$1=\$_v"; export "${1?}"
+}
+pc_dns_probe() { # pc_dns_probe NAME OUTFILE: "A ip" / "AAAA ip" lines (dig when there is one, else getent); never fails
+  { if command -v dig >/dev/null 2>&1; then
+      dig +short +time=3 +tries=1 A "$1" 2>/dev/null | grep -E '^[0-9.]+$' | sed 's/^/A /' || true
+      dig +short +time=3 +tries=1 AAAA "$1" 2>/dev/null | grep -E '^[0-9a-fA-F:]+$' | sed 's/^/AAAA /' || true
+    else
+      getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' | sort -u | sed 's/^/A /' || true
+      getent ahostsv6 "$1" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9a-fA-F:]+$' | sort -u | sed 's/^/AAAA /' || true
+    fi; } >"$2"
+}
+pc_pub_probe() { # pc_pub_probe OUTFILE: this machine's public IPv4 from a third party (api.ipify.org); never fails
+  { curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS4 --max-time 5 https://checkip.amazonaws.com 2>/dev/null || true; } >"$1"
+}
+pc_dns() { # pc_dns NAME: the A record is this machine's public address and any AAAA record is on it; else the red card (blocking)
+  ui_logopen || { ui_warn "cannot create a log directory, so the DNS check is skipped"; return 0; }
+  _f=$UI_LOGDIR/dns
+  UI_QUIET=1 ui_run "Looking up this machine's public address (a request to api.ipify.org)" pc_pub_probe "$_f.pub" || true
+  _pub=$(tr -cd '0-9.' <"$_f.pub" 2>/dev/null | head -c 15)
+  printf '%s' "$_pub" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || _pub=''
+  UI_QUIET=1 ui_run "Checking that $1 points at ${_pub:-this machine}" pc_dns_probe "$1" "$_f.dns" || true
+  _a=$(sed -n 's/^A //p' "$_f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+  _aaaa=$(sed -n 's/^AAAA //p' "$_f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+  if [ -z "$_a" ]; then
+    ui_stopped "$1 has no DNS A record yet, so Let's Encrypt cannot issue the certificate" "at your DNS provider add an A record  $1 -> ${_pub:-<this machine public IP>}  (TTL 300), wait a minute, then run the command again. Nothing was installed."
+  elif [ -z "$_pub" ]; then
+    ui_warn "$1 points at $_a, but this machine's public address could not be looked up, so I cannot compare. Make sure that is this machine."
+  elif printf ' %s ' "$_a" | grep -q " $_pub "; then ui_keep "$1 points at $_pub: this machine"
+  else
+    ui_stopped "$1 points at $_a, but this machine is $_pub, so Let's Encrypt would validate the wrong machine" "change the A record to $_pub (or run this installer on $_a), wait a minute, then run the command again. Nothing was installed."
+  fi
+  _bad6=''
+  for _x in $_aaaa; do
+    printf '%s' "$_x" | grep -Eq '^[0-9a-fA-F:]{2,45}$' || continue
+    ip -6 addr 2>/dev/null | grep -q " $_x/" || _bad6="${_bad6:+$_bad6 }$_x"
+  done
+  [ -z "$_bad6" ] || ui_stopped "$1 also has an IPv6 (AAAA) record ($_bad6) that is not on this machine, and Let's Encrypt tries IPv6 first" "remove the AAAA record, or point it at this machine, then run the command again. Nothing was installed."
+}
 # --- precheck end ---
 
 main() {
@@ -466,7 +530,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     # end screens: scripts/install.sh --demo from a checkout. It exits 3 so that no script can mistake it for an install.
     UI_DEMO=1; UI_RERUN='sudo sh -c "$(curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh)" sh --demo'
     ui_roadmap
-    ui_step 1 "$(ui_rname 1)" "Needs Linux with systemd, root, and Debian or Ubuntu (apt)."
+    ui_step 1 "$(ui_rname 1)" "Asks your DNS name and email, then checks port 443 and that the name points here (demo: nothing is asked or checked)."
     ui_run "Looking at this machine (demo)" sleep 1
     ui_step 2 "$(ui_rname 2)" "curl, minisign, bubblewrap, qrencode (demo: nothing is installed)."
     ui_run "Installing the prerequisite packages with apt (demo: not done)" sleep 2
@@ -510,23 +574,30 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     *) die "no build for $(uname -m) (x86_64 and arm64 only)" ;;
   esac
   if [ "${AINKRAD_GET_VERIFY_ONLY:-}" != 1 ]; then
-    ui_step 1 "Check this machine" "Needs Linux with systemd, root, and Debian or Ubuntu (apt)."
+    ui_step 1 "$(ui_rname 1)" "Needs Linux with systemd, root, and Debian or Ubuntu (apt). Asks your DNS name and email, then checks port 443 and that the name points here. Nothing is installed yet."
     [ "$(uname -s)" = Linux ] || die "this is $(uname -s); Core installs on Linux only"
     [ "$(id -u)" = 0 ] || die "run it as root: sudo sh -c \"\$(curl -fsSL ...)\" (see the command printed below)"
     [ -d /run/systemd/system ] || die "systemd is not running here (a container without systemd?)"
     command -v apt-get >/dev/null || die "apt-get not found: only Debian and Ubuntu are supported by this installer"
     ui_ok "This is Linux $(uname -m) with systemd and apt, and you are root: supported"
-    # Everything this machine can tell about itself comes BEFORE anything is installed (N6): a busy or closed port 443 stops here.
-    if [ "$runner" = 0 ]; then # a runner only dials out: it needs no port
+    # The two questions and everything this machine can tell about itself come BEFORE anything is installed (N6): a busy or
+    # closed port 443, or a DNS name that does not point here, stops here, with nothing installed.
+    if [ "$runner" = 0 ]; then # a runner only dials out: it needs no port and no name
+      ui_note "The Core is served over HTTPS with a free Let's Encrypt certificate, so it needs a public DNS name that points at this machine."
+      ui_note "There is no IP-only or self-signed mode yet. No name? Any free dynamic-DNS name works: create it first, then answer."
+      pc_ask AINKRAD_HOSTNAME "What is the public DNS name of this Core?" "core.yourdomain.com" pc_valid_hostname
+      pc_ask AINKRAD_ACME_EMAIL "What email should Let's Encrypt use for expiry notices?" "you@example.com" pc_valid_email
       ui_status "Checking that port 443 is free and that this machine's firewall lets it in"
       pc_checks 443 || ui_stopped "$PC_WHAT" "$PC_TODO"
+      pc_dns "$AINKRAD_HOSTNAME"
+      export AINKRAD_DNS_CHECKED=1 # install.sh does not look it up a second time
     fi
 
-    pkgs='ca-certificates curl minisign bubblewrap qrencode openssl iproute2 git unzip jq ripgrep build-essential xz-utils' persist=''
+    pkgs='ca-certificates curl minisign bubblewrap qrencode openssl iproute2 git unzip jq ripgrep build-essential xz-utils zsh' persist=''
     # Firewall tooling only when hardening was asked for. iptables-persistent clashes with ufw: with ufw installed nothing is
     # added that could remove it; APT::Get::Remove=false makes apt refuse any removal instead of doing it.
     if [ "$harden" = 1 ]; then pkgs="$pkgs iptables"; dpkg -s ufw >/dev/null 2>&1 || persist=iptables-persistent; fi
-    ui_step 2 "Install prerequisites" "curl, minisign (checks the release signature), bubblewrap (agent sandbox), qrencode (QR code), and the base tools git, unzip, jq, ripgrep, build-essential (xz-utils unpacks Node)$([ "$harden" = 1 ] && echo ', iptables (firewall, --harden)')."
+    ui_step 2 "Install prerequisites" "curl, minisign (checks the release signature), bubblewrap (agent sandbox), qrencode (QR code), and the base tools git, unzip, jq, ripgrep, build-essential (xz-utils unpacks Node), zsh (the terminals' shell)$([ "$harden" = 1 ] && echo ', iptables (firewall, --harden)')."
     export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
     UI_STATE="Nothing of the Core is installed. Some apt packages may be partly installed; if apt complains, run: sudo dpkg --configure -a"
     # shellcheck disable=SC2086 # $pkgs and $persist are plain package names

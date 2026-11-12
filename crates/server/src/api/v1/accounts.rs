@@ -418,6 +418,67 @@ pub async fn test_account(
     }
 }
 
+#[utoipa::path(post, path = "/api/v1/accounts/{id}/check", operation_id = "checkAccount",
+    tag = "accounts", params(("id" = String, Path, description = "The account's id")),
+    responses((status = 200, description = "Whether the account works. A Claude plan account: \
+        the token is leased to a runner that offers `subscription-env` and `plan-check`, which \
+        runs `claude -p` with a one-word prompt in its sandbox; it answers `ok` or the reason \
+        (`token_expired`, `no_runner`, `egress_not_proven`, ...). It uses a little of the plan's \
+        quota, never money. Any other account keeps its key test (`testAccount`'s answer, with \
+        `no_runner` as a result). Stored on the account and audited as `account.tested`. 429 when \
+        the account was checked within a minute or a check is running", body = AccountChecked)))]
+pub async fn check_account(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<AccountChecked> {
+    use crate::agents::gateway::test as key;
+    use crate::agents::plan_check as plan;
+    let id = num(&id, "account")?;
+    let soon = |why| {
+        ApiError::new(
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            why,
+        )
+    };
+    let key_test = || async {
+        match key::run(&app, &me, id).await {
+            Ok(t) => Ok(AccountChecked {
+                result: t.result,
+                latency_ms: Some(t.latency_ms),
+                runner: Some(t.runner).filter(|r| !r.is_empty()),
+            }),
+            Err(key::Failed::NoRunner) => Ok(AccountChecked {
+                result: "no_runner".to_owned(),
+                latency_ms: None,
+                runner: None,
+            }),
+            Err(key::Failed::Gone) => Err(ApiError::not_found("no such account")),
+            Err(key::Failed::Soon(why)) => Err(soon(why)),
+            Err(key::Failed::Refused(why)) => Err(ApiError::conflict(why)),
+            Err(key::Failed::Runner(why)) => Err(ApiError::new(
+                axum::http::StatusCode::BAD_GATEWAY,
+                "runner_failed",
+                why,
+            )),
+            Err(key::Failed::Db(e)) => Err(e.into()),
+        }
+    };
+    let checked = match plan::run(&app, &me, id).await {
+        Ok(c) => AccountChecked {
+            result: c.result,
+            latency_ms: Some(c.latency_ms),
+            runner: Some(c.runner).filter(|r| !r.is_empty()),
+        },
+        Err(plan::Failed::NotPlan) => key_test().await?,
+        Err(plan::Failed::Gone) => return Err(ApiError::not_found("no such account")),
+        Err(plan::Failed::Soon(why)) => return Err(soon(why)),
+        Err(plan::Failed::Db(e)) => return Err(e.into()),
+    };
+    Ok(Json(checked))
+}
+
 #[utoipa::path(delete, path = "/api/v1/accounts/{id}", operation_id = "deleteAccount",
     tag = "accounts", params(("id" = String, Path, description = "The account's id")),
     responses((status = 200, description = "Deleted with its key, its leases and its pool \

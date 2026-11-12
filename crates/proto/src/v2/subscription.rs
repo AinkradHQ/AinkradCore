@@ -79,6 +79,36 @@ pub fn subscription_problem<'a>(
     None
 }
 
+/// The op that checks a subscription plan with one tiny `claude -p` run (N36).
+pub const OP_PLAN_CHECK: &str = "plan.check";
+/// The capability a runner lists when it answers [`OP_PLAN_CHECK`].
+pub const CAP_PLAN_CHECK: &str = "plan-check";
+
+/// Core to runner: redeem `lease` (a subscription token, env), run `claude -p` with a one-word
+/// prompt in the sandbox, and answer what happened.
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct PlanCheck {
+    pub lease: String,
+}
+
+// No `Debug` that prints a lease (secrets review L4).
+impl std::fmt::Debug for PlanCheck {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlanCheck").finish_non_exhaustive()
+    }
+}
+
+/// Runner to Core: how the check ended. Never the CLI's text.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct PlanChecked {
+    /// `ok`, or why not: `token_expired`, `limit_reached`, `egress_not_proven`,
+    /// `sandbox_unavailable`, `runner_busy`, `unreachable`, `timeout` or `failed`.
+    pub result: String,
+    pub latency_ms: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

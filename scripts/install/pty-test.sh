@@ -128,5 +128,22 @@ reads=$(grep -c '</dev/tty' "$ROOT/scripts/install.sh"); guarded=$(grep '</dev/t
 unguarded=$(awk '/read .*<\/dev\/tty/ && !/need_terminal/ { print FILENAME": "FNR": "$0 }' "$ROOT/scripts/install.sh" | grep -v 'ui_read()' | grep -v 'yes_no()' | grep -v 'uninstall' | head -3)
 { grep -q '^ui_read() { need_terminal' "$ROOT/scripts/install.sh" && grep -q '^yes_no() { local a; need_terminal' "$ROOT/scripts/install.sh" && [ -z "$unguarded" ]; } && ok || bad "a read from the terminal is not preceded by need_terminal ($reads reads, $guarded guarded): $unguarded"
 
+# 8. N6: get.sh asks its two questions (pc_ask) in step 1, before anything is installed: a typed answer is read in a real
+#    foreground pty (an invalid one is asked again), then the DNS check (stubbed) runs on it
+cat >"$t/ask-step1.sh" <<EOF
+PATH="$t/shim:\$PATH"; . "$ROOT/scripts/install/ui.sh"; . "$ROOT/scripts/install/precheck.sh"
+ui_init; ui_traps
+pc_ask AINKRAD_HOSTNAME "What is the public DNS name of this Core?" core.yourdomain.com pc_valid_hostname
+pc_ask AINKRAD_ACME_EMAIL "What email should Let's Encrypt use for expiry notices?" you@example.com pc_valid_email
+pc_dns "\$AINKRAD_HOSTNAME"
+echo "ANSWERS:\$AINKRAD_HOSTNAME:\$AINKRAD_ACME_EMAIL"
+EOF
+r=$(run fg 40 '{"steps":[{"wait":"What is the public DNS name","send":"not a name\\n","delay":0.5},{"wait":"That is not valid","send":"core.example.com\\n","delay":0.5},{"wait":"What email should","send":"ops@example.com\\n","delay":0.5}]}' sh "$t/ask-step1.sh")
+o=$(field out <<<"$r")
+{ grep -q 'That is not valid' <<<"$o" && grep -q 'core.example.com points at 203.0.113.7: this machine' <<<"$o" && grep -q 'ANSWERS:core.example.com:ops@example.com' <<<"$o"; } && ok || bad "the step 1 questions were not read in a real pty, or the DNS check did not run on the answer: $(tail -c 400 <<<"$o")"
+l_q=$(grep -n 'What is the public DNS name' <<<"$o" | head -1 | cut -d: -f1); l_d=$(grep -n 'points at 203.0.113.7' <<<"$o" | head -1 | cut -d: -f1)
+{ [ -n "$l_q" ] && [ -n "$l_d" ] && [ "$l_q" -lt "$l_d" ]; } && ok || bad "the DNS check ran before the question was asked"
+sleep 0.5; [ -z "$(survivors)" ] && ok || bad "a process survived the step 1 questions: $(survivors)"
+
 echo "pty tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]

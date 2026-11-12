@@ -4,6 +4,7 @@
 //! writes. Throwaway values only: no real token, no real claude.
 
 use super::*;
+use ainkrad_proto::v2::PlanCheck;
 
 const TOKEN: &str = "sk-ant-oat01-TESTONLY0123456789abcdefghijklmnop";
 const VAR: &str = "CLAUDE_CODE_OAUTH_TOKEN";
@@ -50,6 +51,7 @@ fn counted(calls: Arc<std::sync::atomic::AtomicUsize>) -> Redeem {
                 } else {
                     "throwaway-api-key-value-31f9".to_owned()
                 }),
+                form: Default::default(),
             })
         })
     })
@@ -231,4 +233,74 @@ async fn the_token_is_masked_in_output_and_in_the_failure_reason_for_the_whole_s
     );
     assert!(!all.contains(TOKEN), "{all}");
     assert!(all.contains("[redacted"), "{all}");
+}
+
+/// N36: `plan.check` runs an ordinary sandboxed session on the leased token and forgets it.
+#[tokio::test]
+async fn a_plan_check_runs_the_token_in_a_session_it_then_forgets() {
+    let (_root, config) = dirs("plan-check");
+    let d = Arc::new(
+        AgentDriver::new(
+            config,
+            script("echo \"tok=${CLAUDE_CODE_OAUTH_TOKEN:-none}\""),
+        )
+        .unwrap()
+        .with_redeem(redeem())
+        .with_sandbox(Arc::new(Proven(true))),
+    );
+    let got = d
+        .plan_check(PlanCheck {
+            lease: "l_sub".to_owned(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(got.result, "ok");
+    assert!(d.states().is_empty(), "the check's session is forgotten");
+    // A harness that fails is `failed`, and is forgotten as well.
+    let bad = Arc::new(
+        AgentDriver::new(dirs("plan-check-bad").1, script("echo no; exit 1"))
+            .unwrap()
+            .with_redeem(redeem())
+            .with_sandbox(Arc::new(Proven(true))),
+    );
+    let got = bad
+        .plan_check(PlanCheck {
+            lease: "l_sub".to_owned(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(got.result, "failed");
+    assert!(bad.states().is_empty());
+}
+
+#[tokio::test]
+async fn a_plan_check_needs_the_sandbox_and_a_proven_egress_filter() {
+    let (_root, config) = dirs("plan-check-no");
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::default());
+    let d = Arc::new(
+        AgentDriver::new(config, script("true"))
+            .unwrap()
+            .with_redeem(counted(calls.clone()))
+            .with_sandbox(Arc::new(Proven(false))),
+    );
+    let got = d
+        .plan_check(PlanCheck {
+            lease: "l_sub".to_owned(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(got.result, "egress_not_proven");
+    let plain = Arc::new(AgentDriver::new(dirs("plan-check-no2").1, script("true")).unwrap());
+    let got = plain
+        .plan_check(PlanCheck {
+            lease: "l_sub".to_owned(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(got.result, "egress_not_proven");
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the token was never redeemed"
+    );
 }

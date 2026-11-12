@@ -16,14 +16,20 @@
 package ainkrad.client.apis
 
 import ainkrad.client.models.ErrorBody
+import ainkrad.client.models.GroupLeaseGrant
 import ainkrad.client.models.LeaseGrant
 import ainkrad.client.models.LeasedSecret
+import ainkrad.client.models.NewGroupLease
 import ainkrad.client.models.NewLease
 import ainkrad.client.models.NewSecret
+import ainkrad.client.models.NewSecretGroup
 import ainkrad.client.models.RedeemLease
 import ainkrad.client.models.RotateSecret
 import ainkrad.client.models.SecretDeleted
+import ainkrad.client.models.SecretGroupDeleted
+import ainkrad.client.models.SecretGroupInfo
 import ainkrad.client.models.SecretInfo
+import ainkrad.client.models.UpdateSecretGroup
 
 import ainkrad.client.infrastructure.*
 import io.ktor.client.HttpClientConfig
@@ -75,6 +81,39 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * POST /api/v1/secret-groups
+        * 
+        * 
+         * @param newSecretGroup  
+         * @return SecretGroupInfo
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun createSecretGroup(newSecretGroup: NewSecretGroup): HttpResponse<SecretGroupInfo> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = newSecretGroup
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/secret-groups",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * DELETE /api/v1/secrets/{id}
         * 
         * 
@@ -96,6 +135,40 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.DELETE,
             "/api/v1/secrets/{id}".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * DELETE /api/v1/secret-groups/{id}
+        * 
+        * 
+         * @param id The group&#39;s name 
+         * @return SecretGroupDeleted
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun deleteSecretGroup(id: kotlin.String): HttpResponse<SecretGroupDeleted> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.DELETE,
+            "/api/v1/secret-groups/{id}".replace("{" + "id" + "}", "$id"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,
@@ -136,6 +209,73 @@ import io.ktor.http.ParametersBuilder
             )
 
             return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/secret-groups/{id}/leases
+        * 
+        * 
+         * @param id The group&#39;s name 
+         * @param newGroupLease  
+         * @return GroupLeaseGrant
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun leaseSecretGroup(id: kotlin.String, newGroupLease: NewGroupLease): HttpResponse<GroupLeaseGrant> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = newGroupLease
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/secret-groups/{id}/leases".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/secret-groups
+        * 
+        * 
+         * @return kotlin.collections.List<SecretGroupInfo>
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun listSecretGroups(): HttpResponse<kotlin.collections.List<SecretGroupInfo>> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/secret-groups",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames
@@ -230,6 +370,40 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.PUT,
             "/api/v1/secrets/{id}".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * PUT /api/v1/secret-groups/{id}
+        * 
+        * 
+         * @param id The group&#39;s name 
+         * @param updateSecretGroup  
+         * @return SecretGroupInfo
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun updateSecretGroup(id: kotlin.String, updateSecretGroup: UpdateSecretGroup): HttpResponse<SecretGroupInfo> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = updateSecretGroup
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.PUT,
+            "/api/v1/secret-groups/{id}".replace("{" + "id" + "}", "$id"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

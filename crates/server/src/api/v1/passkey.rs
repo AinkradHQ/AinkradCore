@@ -198,6 +198,7 @@ pub(super) async fn claim(
         platform: b.platform.as_deref(),
         key_storage: None,
         sas: &sas,
+        device_name: None,
         passkey: Some(NewCredential {
             credential_id: passkey.cred_id(),
             passkey: &record,

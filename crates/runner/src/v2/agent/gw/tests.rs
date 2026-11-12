@@ -120,6 +120,7 @@ fn redeem(gate: Arc<Notify>, asked: Arc<AtomicBool>) -> Redeem {
                 delivery: "gateway".to_owned(),
                 // Built at runtime from a shape prefix and a filler.
                 value: zeroize::Zeroizing::new(format!("sk-ant-{}", "k9".repeat(12))),
+                form: Default::default(),
             })
         })
     })

@@ -27,6 +27,11 @@ pub(super) struct S {
 }
 
 pub(super) async fn up(name: &str) -> S {
+    up_with(name, true).await
+}
+
+/// `plan_check`: the runner lists `plan-check` (a current one), or not (an older one).
+pub(super) async fn up_with(name: &str, plan_check: bool) -> S {
     let core = Core::start_agents(name, quick(), agents::quick()).await;
     let dev = core.runner().await;
     let mut fake = Fake::plain(&core, &dev).await;
@@ -35,6 +40,9 @@ pub(super) async fn up(name: &str) -> S {
     let mut commands: Vec<String> = AGENT_OPS.iter().map(|o| (*o).to_owned()).collect();
     commands.push("egress-filter".to_owned());
     commands.push(CAP_SUBSCRIPTION_ENV.to_owned());
+    if plan_check {
+        commands.push(CAP_PLAN_CHECK.to_owned());
+    }
     let driver = DriverInfo {
         name: AGENT_DRIVER.to_owned(),
         commands,

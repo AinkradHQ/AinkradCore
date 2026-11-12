@@ -33,8 +33,8 @@ use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{
     accounts, agents, audit, budgets, chains, connections, corehealth, costs, devices, events,
-    handshake, lockouts, me, pair, pairing, passkey, runner_control, runners, secrets, session,
-    settings, stepup, system, terminals, ticket, types, websession,
+    handshake, lockouts, me, pair, pairing, passkey, runner_control, runners, secret_groups,
+    secrets, session, settings, stepup, system, terminals, ticket, types, websession,
 };
 
 #[derive(OpenApi)]
@@ -110,6 +110,7 @@ use super::{
         accounts::set_cap,
         accounts::set_session_limits,
         accounts::test_account,
+        accounts::check_account,
         accounts::start_login,
         accounts::get_login,
         accounts::send_login_code,
@@ -152,6 +153,11 @@ use super::{
         secrets::delete,
         secrets::lease,
         secrets::redeem,
+        secret_groups::list,
+        secret_groups::create,
+        secret_groups::update,
+        secret_groups::delete,
+        secret_groups::lease,
         agents::create,
         agents::list,
         agents::get,

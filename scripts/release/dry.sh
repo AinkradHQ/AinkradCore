@@ -19,7 +19,7 @@ done
 # The installer bundle scripts/get.sh runs after it has verified it against the signed sums, and get.sh itself (the
 # one-line install fetches it from the release: .../releases/latest/download/get.sh; it carries the pinned key and is in the signed sums).
 git archive --format=tar.gz --prefix="ainkrad-core-installer-$ver/" -o "$out/ainkrad-core-installer-$ver.tar.gz" HEAD \
-  scripts/install.sh scripts/install scripts/host scripts/release/install.sh deploy/install-core-linux.sh deploy/install-linux.sh deploy/systemd
+  scripts/install.sh scripts/install scripts/host scripts/release/install.sh deploy/install-core-linux.sh deploy/install-linux.sh deploy/systemd deploy/shell
 # From the same commit as the bundle, stamped with this version as the floor against downgrades; signed with the sums.
 git show HEAD:scripts/get.sh | sed "s/^\( *\)MIN_VERSION=[0-9.]*/\1MIN_VERSION=$ver/" > "$out/get.sh"; chmod 755 "$out/get.sh"
 grep -q "^ *MIN_VERSION=$ver " "$out/get.sh" || { echo "release-dry: get.sh was not stamped with $ver" >&2; exit 1; }

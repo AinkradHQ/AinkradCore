@@ -25,6 +25,11 @@ import kotlinx.serialization.Contextual
  *
  * @param `value` 
  * @param delivery 
+ * @param description 
+ * @param fileMode 
+ * @param fileName 
+ * @param group An empty string leaves the group.
+ * @param kind Omitted keeps the kind; the other fields are those of `createSecret`, omitted keeps them.
  * @param runners 
  */
 @Serializable
@@ -36,6 +41,23 @@ data class RotateSecret (
 
     @SerialName(value = "delivery")
     val delivery: kotlin.String? = null,
+
+    @SerialName(value = "description")
+    val description: kotlin.String? = null,
+
+    @SerialName(value = "file_mode")
+    val fileMode: kotlin.String? = null,
+
+    @SerialName(value = "file_name")
+    val fileName: kotlin.String? = null,
+
+    /* An empty string leaves the group. */
+    @SerialName(value = "group")
+    val group: kotlin.String? = null,
+
+    /* Omitted keeps the kind; the other fields are those of `createSecret`, omitted keeps them. */
+    @SerialName(value = "kind")
+    val kind: kotlin.String? = null,
 
     @SerialName(value = "runners")
     val runners: kotlin.collections.List<kotlin.String>? = null

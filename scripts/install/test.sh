@@ -120,7 +120,8 @@ grep -qF 'secrets.mode 2' "$t/out" && { fail=$((fail + 1)); echo "FAIL: the inst
 [ "$(default_of REAL_CREDENTIALS)" = yes ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: REAL_CREDENTIALS default" >&2; }
 { answers; echo REAL_CREDENTIALS=no; } >"$t/nocreds"
 bash "$HERE/../install.sh" --config "$t/nocreds" --dry-run >"$t/outn" 2>&1 && grep -qF 'Real credentials: off' "$t/outn" &&
-  ! grep -q 'setting set' "$t/outn" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: REAL_CREDENTIALS=no still sets a gate" >&2; }
+  [ "$(grep -c 'setting set' "$t/outn")" = 1 ] && grep -qF 'setting set /var/lib/ainkrad/core/core.db secrets.connections 1' "$t/outn" &&
+  pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: REAL_CREDENTIALS=no sets more than secrets.connections" >&2; }
 { answers; echo REAL_CREDENTIALS=maybe; } >"$t/credsbad"
 bash "$HERE/../install.sh" --config "$t/credsbad" --dry-run >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: REAL_CREDENTIALS=maybe accepted" >&2; } || pass=$((pass + 1))
 # Unattended with keys missing: refused, naming them.

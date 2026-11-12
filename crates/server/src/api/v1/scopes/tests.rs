@@ -42,6 +42,10 @@ fn every_state_changing_privileged_route_is_destructive_or_excepted() {
         // a runner in the key's scope (design 2026-11-04 section 5.2 says it is not
         // destructive); its only effect is the account's last-test record.
         ("POST", "/api/v1/accounts/{id}/test"),
+        // The Claude plan check (N36): one fixed `claude -p ok` in a runner's sandbox on the plan's own
+        // token, in the account's scope; its only effect is the account's last-test record and a little
+        // of the plan's quota. A plan's key test, answered truthfully.
+        ("POST", "/api/v1/accounts/{id}/check"),
         // The caller's own sign-in: a cancel grants nothing, a code acts once on one a step-up began.
         ("DELETE", "/api/v1/accounts/logins/{id}"),
         ("POST", "/api/v1/accounts/logins/{id}/code"),
