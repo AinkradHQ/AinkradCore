@@ -42,12 +42,14 @@ namespace Ainkrad.Client.Model
         /// </summary>
         /// <param name="agentCapacity">How many agent sessions run at once, 1 to 8. (required).</param>
         /// <param name="agents">Agent sessions are offered. Refused (409 &#x60;policy_refused&#x60;, with the reason) when the runner cannot run them: no process sandbox, no proven egress filter, or no agent tool installed. (required).</param>
+        /// <param name="shareHistory">The runner lets the Brain read its Claude Code history (&#x60;- -share-history&#x60;). Off when omitted..</param>
         /// <param name="terminals">Terminals are offered on the runner. (required).</param>
-        public RunnerPolicyBody(int agentCapacity = default, bool agents = default, bool terminals = default)
+        public RunnerPolicyBody(int agentCapacity = default, bool agents = default, bool shareHistory = default, bool terminals = default)
         {
             this.AgentCapacity = agentCapacity;
             this.Agents = agents;
             this.Terminals = terminals;
+            this.ShareHistory = shareHistory;
         }
 
         /// <summary>
@@ -63,6 +65,13 @@ namespace Ainkrad.Client.Model
         /// <value>Agent sessions are offered. Refused (409 &#x60;policy_refused&#x60;, with the reason) when the runner cannot run them: no process sandbox, no proven egress filter, or no agent tool installed.</value>
         [DataMember(Name = "agents", IsRequired = true, EmitDefaultValue = true)]
         public bool Agents { get; set; }
+
+        /// <summary>
+        /// The runner lets the Brain read its Claude Code history (&#x60;- -share-history&#x60;). Off when omitted.
+        /// </summary>
+        /// <value>The runner lets the Brain read its Claude Code history (&#x60;- -share-history&#x60;). Off when omitted.</value>
+        [DataMember(Name = "share_history", EmitDefaultValue = true)]
+        public bool ShareHistory { get; set; }
 
         /// <summary>
         /// Terminals are offered on the runner.
@@ -81,6 +90,7 @@ namespace Ainkrad.Client.Model
             sb.Append("class RunnerPolicyBody {\n");
             sb.Append("  AgentCapacity: ").Append(AgentCapacity).Append("\n");
             sb.Append("  Agents: ").Append(Agents).Append("\n");
+            sb.Append("  ShareHistory: ").Append(ShareHistory).Append("\n");
             sb.Append("  Terminals: ").Append(Terminals).Append("\n");
             sb.Append("}\n");
             return sb.ToString();

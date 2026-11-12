@@ -3654,6 +3654,8 @@ export interface components {
              *     runner cannot run them: no process sandbox, no proven egress filter, or no agent tool installed.
              */
             agents: boolean;
+            /** @description The runner lets the Brain read its Claude Code history (`--share-history`). Off when omitted. */
+            share_history?: boolean;
             /** @description Terminals are offered on the runner. */
             terminals: boolean;
         };

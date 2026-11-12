@@ -124,11 +124,13 @@ async fn a_policy_reaches_the_runner_is_audited_and_announced() {
         admin,
     } = up("rc-policy", true).await;
     let uri = format!("/api/v1/runners/{runner}/policy");
-    let want = json!({"terminals": true, "agents": false, "agent_capacity": 3});
+    let want =
+        json!({"terminals": true, "agents": false, "agent_capacity": 3, "share_history": true});
     let policy = RunnerPolicy {
         terminals: true,
         agents: false,
         agent_capacity: 3,
+        share_history: true,
     };
     let ((s, b), ()) = tokio::join!(
         call(&core, &admin, "PUT", &uri, Some(want.clone())),

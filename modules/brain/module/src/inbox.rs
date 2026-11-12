@@ -34,11 +34,36 @@ pub struct InboxRecord {
     pub status: String,
     pub body: String,
     pub tags: Vec<String>,
-    /// Item ids of the sources it came from; each is a source in the same room.
-    pub sources: Vec<String>,
-    pub created_at: String,
+    /// The sources it came from, each a source stored in the same room.
+    pub sources: Vec<SourceRef>,
+    /// When it was distilled (RFC 3339).
+    pub distilled_at: String,
+    /// The provider and account name the distilling AI session ran on; none for a record made by hand.
+    pub distilled_by: Option<DistilledBy>,
+    /// The tool (harness) the AI session ran, such as `claude`.
+    pub tool: Option<String>,
     /// `auto`, or the device that decided; none while it waits.
     pub decided_by: Option<String>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct SourceRef {
+    pub item_id: String,
+    /// `claude_code`, `codex`, `doc`, `jira`, `github`, ...
+    pub source_kind: String,
+    pub title: String,
+    /// The start of the source's text, at most 240 characters.
+    pub quote: String,
+    pub started_at: String,
+    /// The room that holds the source.
+    pub room: Option<String>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct DistilledBy {
+    pub provider: String,
+    /// The account's name.
+    pub account: String,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -91,20 +116,67 @@ async fn open_room(app: &App, b: &Brain, room: &str) -> Result<RoomAccess, ApiEr
         })
 }
 
-fn candidate(r: &sqlx::sqlite::SqliteRow) -> Result<InboxRecord, sqlx::Error> {
+/// The record without its source details, and the item ids to fill them from.
+fn candidate(r: &sqlx::sqlite::SqliteRow) -> Result<(InboxRecord, Vec<String>), sqlx::Error> {
     let list = |c: &str| -> Result<Vec<String>, sqlx::Error> {
         Ok(serde_json::from_str(&r.try_get::<String, _>(c)?).unwrap_or_default())
     };
-    Ok(InboxRecord {
+    let by = match (
+        r.try_get::<Option<String>, _>("provider")?,
+        r.try_get::<Option<String>, _>("account")?,
+    ) {
+        (Some(provider), Some(account)) => Some(DistilledBy { provider, account }),
+        _ => None,
+    };
+    let rec = InboxRecord {
         id: r.try_get("id")?,
         kind: r.try_get("type")?,
         status: r.try_get("status")?,
         body: r.try_get("body")?,
         tags: list("tags")?,
-        sources: list("source_ids")?,
-        created_at: r.try_get("created_at")?,
+        sources: vec![],
+        distilled_at: r.try_get("created_at")?,
+        distilled_by: by,
+        tool: r.try_get("tool")?,
         decided_by: r.try_get("decided_by")?,
-    })
+    };
+    Ok((rec, list("source_ids")?))
+}
+
+/// Fills each record's sources from the room's own `sources` table.
+async fn fill(
+    pool: &sqlx::SqlitePool,
+    room: &str,
+    recs: Vec<(InboxRecord, Vec<String>)>,
+) -> Result<Vec<InboxRecord>, sqlx::Error> {
+    let mut out = Vec::with_capacity(recs.len());
+    for (mut rec, ids) in recs {
+        for id in ids {
+            let row = sqlx::query(
+                "SELECT item_id, source_kind, title, text, started_at FROM sources WHERE item_id = ?",
+            )
+            .bind(&id)
+            .fetch_optional(pool)
+            .await?;
+            if let Some(r) = row {
+                rec.sources.push(SourceRef {
+                    item_id: r.try_get("item_id")?,
+                    source_kind: r.try_get("source_kind")?,
+                    title: r.try_get("title")?,
+                    quote: r
+                        .try_get::<String, _>("text")?
+                        .trim()
+                        .chars()
+                        .take(240)
+                        .collect(),
+                    started_at: r.try_get("started_at")?,
+                    room: Some(room.to_owned()),
+                });
+            }
+        }
+        out.push(rec);
+    }
+    Ok(out)
 }
 
 #[utoipa::path(get, path = "/rooms/{room}/inbox", operation_id = "brainInbox", tag = "brain",
@@ -133,7 +205,8 @@ pub(crate) async fn list(
         sqlx::query_scalar("SELECT count(*) FROM records WHERE status = 'candidate'")
             .fetch_one(access.pool())
             .await?;
-    let items = rows.iter().map(candidate).collect::<Result<_, _>>()?;
+    let raw = rows.iter().map(candidate).collect::<Result<Vec<_>, _>>()?;
+    let items = fill(access.pool(), &room, raw).await?;
     access.pool().close().await;
     Ok(Json(InboxPage { items, waiting }))
 }
@@ -227,12 +300,16 @@ pub(crate) async fn decide(
         .bind(&id)
         .fetch_one(&mut *tx)
         .await?;
-    let out = candidate(&row)?;
+    let raw = candidate(&row)?;
     let waiting: i64 =
         sqlx::query_scalar("SELECT count(*) FROM records WHERE status = 'candidate'")
             .fetch_one(&mut *tx)
             .await?;
     tx.commit().await?;
+    let out = fill(access.pool(), &room, vec![raw])
+        .await?
+        .pop()
+        .expect("one record");
     access.pool().close().await;
     // Ids and counts only (Q-15).
     let mut ctl = begin_write(&app.pool).await?;

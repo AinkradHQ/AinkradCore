@@ -10445,6 +10445,10 @@
             "description": "Agent sessions are offered. Refused (409 `policy_refused`, with the reason) when the\nrunner cannot run them: no process sandbox, no proven egress filter, or no agent tool installed.",
             "type": "boolean"
           },
+          "share_history": {
+            "description": "The runner lets the Brain read its Claude Code history (`--share-history`). Off when omitted.",
+            "type": "boolean"
+          },
           "terminals": {
             "description": "Terminals are offered on the runner.",
             "type": "boolean"

@@ -3072,6 +3072,11 @@
           "description": "Agent sessions are offered.",
           "type": "boolean"
         },
+        "share_history": {
+          "default": false,
+          "description": "The runner answers `history.read` (the Brain reads its Claude Code history): `--share-history`.\nOff by default; an older Core's policy without it reads as off.",
+          "type": "boolean"
+        },
         "terminals": {
           "description": "Terminals (`pty`) are offered.",
           "type": "boolean"

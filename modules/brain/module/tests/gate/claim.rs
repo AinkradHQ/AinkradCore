@@ -145,14 +145,23 @@ async fn a_started_session_cannot_claim_and_policy_defaults_are_off() {
         (st, v["code"].as_str()),
         (StatusCode::CONFLICT, Some("session_started"))
     );
-    // Policy widening and unknown kinds are refused.
+    // A word that is not a record type is refused (a landmine is a `rule` tagged landmine).
     let (st, _) = call(
         &fx,
         &fx.admin,
         Method::PATCH,
         &format!("/rooms/{room}/policy"),
-        Some(json!({"auto_accept": ["decision"]})),
+        Some(json!({"auto_accept": ["landmine"]})),
     )
     .await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
+    // Every record type may be named, and the policy hands back the same words the Inbox uses.
+    let v = ok(
+        &fx,
+        Method::PATCH,
+        &format!("/rooms/{room}/policy"),
+        Some(json!({"auto_accept": ["task", "rule", "decision"]})),
+    )
+    .await;
+    assert_eq!(v["auto_accept"], json!(["decision", "rule", "task"]));
 }

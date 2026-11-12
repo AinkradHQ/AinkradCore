@@ -196,6 +196,7 @@ mod tests {
         terminals: false,
         agents: false,
         agent_capacity: 2,
+        share_history: false,
     };
 
     #[test]
@@ -207,6 +208,7 @@ mod tests {
             terminals: true,
             agents: false,
             agent_capacity: 5,
+            share_history: false,
         };
         save(&d, &p).unwrap();
         assert_eq!(load(&d), Some(p));

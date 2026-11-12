@@ -66,6 +66,40 @@ pub struct SourceView {
     pub cursor: Value,
     /// When the source last synced (RFC 3339).
     pub last_run: Option<String>,
+    /// Items this source has delivered to the Brain so far.
+    pub items: i64,
+    /// For a `runner-<id>` source: the runner now. None for any other source.
+    pub runner: Option<RunnerNow>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct RunnerNow {
+    pub online: bool,
+    /// The harness tools the runner offers for AI sessions (`claude`, `codex`, ...).
+    pub tools: Vec<String>,
+    /// The runner was started with `--share-history`, so it can answer a history read.
+    pub history_offered: bool,
+}
+
+/// The live state of a runner source's runner, from the hub.
+fn runner_now(app: &App, v: &SourceView) -> Option<RunnerNow> {
+    v.id.strip_prefix(RUNNER_PREFIX)?;
+    let all = app.hub.runners();
+    let r = all.get(&v.device);
+    let agent = r.and_then(|r| {
+        r.drivers
+            .iter()
+            .find(|d| d.name == ainkrad_proto::v2::AGENT_DRIVER)
+    });
+    Some(RunnerNow {
+        online: r.is_some_and(|r| r.online),
+        tools: agent.map_or_else(Vec::new, |d| d.slots.keys().cloned().collect()),
+        history_offered: agent.is_some_and(|d| {
+            d.commands
+                .iter()
+                .any(|c| c == ainkrad_proto::v2::CAP_HISTORY_READ)
+        }),
+    })
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -88,6 +122,8 @@ fn view(r: &sqlx::sqlite::SqliteRow) -> Result<SourceView, sqlx::Error> {
         roots: serde_json::from_str(&roots).unwrap_or_default(),
         cursor: serde_json::from_str(&cursor).unwrap_or(json!({})),
         last_run: r.try_get("last_run")?,
+        items: r.try_get("items")?,
+        runner: None,
     })
 }
 
@@ -117,7 +153,11 @@ pub(crate) async fn sources(State(app): State<App>) -> ApiResult<Vec<SourceView>
     let rows = sqlx::query("SELECT * FROM brain_sources ORDER BY id")
         .fetch_all(&app.pool)
         .await?;
-    Ok(Json(rows.iter().map(view).collect::<Result<_, _>>()?))
+    let mut out = rows.iter().map(view).collect::<Result<Vec<_>, _>>()?;
+    for v in &mut out {
+        v.runner = runner_now(&app, v);
+    }
+    Ok(Json(out))
 }
 
 #[utoipa::path(put, path = "/sources/{id}", operation_id = "brainPutSource", tag = "brain",
@@ -189,7 +229,9 @@ pub(crate) async fn put_source(
         .bind(&id)
         .fetch_one(&app.pool)
         .await?;
-    Ok(Json(view(&row)?))
+    let mut v = view(&row)?;
+    v.runner = runner_now(&app, &v);
+    Ok(Json(v))
 }
 
 #[derive(Default, Deserialize, ToSchema)]

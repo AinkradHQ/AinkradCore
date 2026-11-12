@@ -58,6 +58,9 @@ pub struct RunnerPolicyBody {
     pub agents: bool,
     /// How many agent sessions run at once, 1 to 8.
     pub agent_capacity: u32,
+    /// The runner lets the Brain read its Claude Code history (`--share-history`). Off when omitted.
+    #[serde(default)]
+    pub share_history: bool,
 }
 
 impl From<RunnerPolicy> for RunnerPolicyBody {
@@ -66,6 +69,7 @@ impl From<RunnerPolicy> for RunnerPolicyBody {
             terminals: p.terminals,
             agents: p.agents,
             agent_capacity: p.agent_capacity,
+            share_history: p.share_history,
         }
     }
 }
@@ -260,6 +264,7 @@ pub async fn set_policy(
         terminals: b.terminals,
         agents: b.agents,
         agent_capacity: b.agent_capacity,
+        share_history: b.share_history,
     };
     let proof = app.hub.admin_elevation(&me);
     let applied = match ask(&app, &id, Command::RunnerPolicy(policy), proof, POLICY_WAIT).await {
@@ -287,14 +292,14 @@ pub async fn set_policy(
         d.seq,
         POLICY_SET,
         json!({"runner": id, "terminals": body.terminals, "agents": body.agents,
-            "agent_capacity": body.agent_capacity, "restarting": applied.restarting}),
+            "agent_capacity": body.agent_capacity, "share_history": body.share_history, "restarting": applied.restarting}),
     )
     .await?;
     emit(
         &app,
         POLICY_EVENT,
         json!({"runner": id, "terminals": body.terminals, "agents": body.agents,
-            "agent_capacity": body.agent_capacity, "restarting": applied.restarting}),
+            "agent_capacity": body.agent_capacity, "share_history": body.share_history, "restarting": applied.restarting}),
     )
     .await;
     Ok(Json(PolicyResult {

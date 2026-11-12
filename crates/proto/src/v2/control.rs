@@ -34,6 +34,10 @@ pub struct RunnerPolicy {
     pub agents: bool,
     /// How many agent sessions run at once, 1 to [`MAX_AGENT_CAPACITY`].
     pub agent_capacity: u32,
+    /// The runner answers `history.read` (the Brain reads its Claude Code history): `--share-history`.
+    /// Off by default; an older Core's policy without it reads as off.
+    #[serde(default)]
+    pub share_history: bool,
 }
 
 impl RunnerPolicy {

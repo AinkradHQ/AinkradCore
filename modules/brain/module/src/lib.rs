@@ -61,6 +61,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0003_brain_claims.up.sql"),
         down: include_str!("../migrations/0003_brain_claims.down.sql"),
     },
+    Migration {
+        version: 4,
+        name: "brain_ui",
+        up: include_str!("../migrations/0004_brain_ui.up.sql"),
+        down: include_str!("../migrations/0004_brain_ui.down.sql"),
+    },
 ];
 
 /// Employer and client rooms are discovered and reviewed in M1 but committed only after the import
@@ -358,6 +364,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         rooms::Opened,
         sync::SourceView,
         sync::SourcePut,
+        sync::RunnerNow,
         sync::SyncRequest,
         sync::SyncResult,
         sync::Routed,
@@ -372,7 +379,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         inbox::InboxPage,
         inbox::Decision,
         policy::PolicyView,
-        policy::PolicyPatch
+        policy::PolicyPatch,
+        policy::PolicyAccount
     ))
 )]
 struct Doc;

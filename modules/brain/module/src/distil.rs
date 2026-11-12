@@ -462,8 +462,8 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
         Ok(c) => c,
     };
     let p = policy::load(app, &d.room).await?;
-    let (n, accepted) =
-        store_candidates(&pool, &d.id, &out, &p.auto_accept, &app.clock.now()).await?;
+    let by = distilled_by(app, &s).await;
+    let (n, accepted) = store_candidates(&pool, &d.id, &out, &p, &by, &app.clock.now()).await?;
     // The transcript's answer goes into the room (C-08); the Core keeps a placeholder.
     sqlx::query("INSERT INTO room_audit (action, detail, at) VALUES ('distil.answer', ?, ?)")
         .bind(json!({"distil": d.id, "session": s.id, "answer": output}).to_string())
@@ -490,13 +490,40 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
     Ok(set_state(app, &d.id, "done", "", Some(("candidates", n))).await?)
 }
 
+/// Who distilled: the provider and account name the session ran on, and its tool (harness).
+#[derive(Default)]
+pub(crate) struct DistilledBy {
+    pub provider: Option<String>,
+    pub account: Option<String>,
+    pub tool: Option<String>,
+}
+
+async fn distilled_by(app: &App, s: &ainkrad_core_server::store::agents::Session) -> DistilledBy {
+    let account = match alloc::view(&app.pool, &s.id).await {
+        Ok(Some(v)) => v.account,
+        _ => None,
+    };
+    let acct = match account {
+        Some(id) => ainkrad_core_server::store::accounts::get(&app.pool, id)
+            .await
+            .ok(),
+        None => None,
+    };
+    DistilledBy {
+        provider: acct.as_ref().map(|a| a.provider.clone()),
+        account: acct.map(|a| a.label),
+        tool: (!s.harness.is_empty()).then(|| s.harness.clone()),
+    }
+}
+
 /// Writes the candidates into the room as `records`, with their op-log and outbox rows, in one
 /// transaction; kinds the room auto-accepts go straight to `accepted`. Returns (stored, auto-accepted).
 pub(crate) async fn store_candidates(
     pool: &SqlitePool,
     distil: &str,
     out: &[Candidate],
-    auto: &[String],
+    policy: &policy::Policy,
+    by: &DistilledBy,
     now: &str,
 ) -> Result<(i64, i64), sqlx::Error> {
     let redactor = Redactor::new();
@@ -504,10 +531,12 @@ pub(crate) async fn store_candidates(
     let mut tx = pool.begin().await?;
     for c in out {
         let id = rand_id("rec-");
-        let auto_ok = AUTO_KINDS.contains(&c.kind.as_str()) && auto.contains(&c.kind);
+        let auto_ok = AUTO_KINDS.contains(&c.kind.as_str())
+            && policy.auto_accept.contains(&c.kind)
+            && c.sources.len() >= policy.min_sources;
         sqlx::query(
-            "INSERT INTO records (id, type, status, body, tags, source_ids, created_at, reviewed_at, decided_by, distil) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO records (id, type, status, body, tags, source_ids, created_at, reviewed_at, decided_by, distil, provider, account, tool) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&c.kind)
@@ -519,6 +548,9 @@ pub(crate) async fn store_candidates(
         .bind(auto_ok.then_some(now))
         .bind(auto_ok.then_some("auto"))
         .bind(distil)
+        .bind(&by.provider)
+        .bind(&by.account)
+        .bind(&by.tool)
         .execute(&mut *tx)
         .await?;
         log_op(

@@ -2316,6 +2316,22 @@
         ],
         "type": "object"
       },
+      "DistilledBy": {
+        "properties": {
+          "account": {
+            "description": "The account's name.",
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "account"
+        ],
+        "type": "object"
+      },
       "Elevation": {
         "properties": {
           "elevated_until": {
@@ -2875,9 +2891,6 @@
           "body": {
             "type": "string"
           },
-          "created_at": {
-            "type": "string"
-          },
           "decided_by": {
             "description": "`auto`, or the device that decided; none while it waits.",
             "type": [
@@ -2885,13 +2898,21 @@
               "null"
             ]
           },
+          "distilled_at": {
+            "description": "When it was distilled (RFC 3339).",
+            "type": "string"
+          },
+          "distilled_by": {
+            "$ref": "#/components/schemas/DistilledBy",
+            "description": "The provider and account name the distilling AI session ran on; none for a record made by hand."
+          },
           "id": {
             "type": "string"
           },
           "sources": {
-            "description": "Item ids of the sources it came from; each is a source in the same room.",
+            "description": "The sources it came from, each a source stored in the same room.",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/SourceRef"
             },
             "type": "array"
           },
@@ -2905,6 +2926,13 @@
             },
             "type": "array"
           },
+          "tool": {
+            "description": "The tool (harness) the AI session ran, such as `claude`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "type": {
             "description": "`decision`, `fact`, `preference`, `rule`, `project-state`, `task` or `summary`.",
             "type": "string"
@@ -2917,7 +2945,7 @@
           "body",
           "tags",
           "sources",
-          "created_at"
+          "distilled_at"
         ],
         "type": "object"
       },
@@ -4406,15 +4434,50 @@
         ],
         "type": "object"
       },
+      "PolicyAccount": {
+        "properties": {
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "description": "The account's name.",
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "state": {
+            "description": "`active` or why not.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "name",
+          "state"
+        ],
+        "type": "object"
+      },
       "PolicyPatch": {
         "properties": {
           "auto_accept": {
-            "description": "Kinds to accept without a review: `fact`, `preference`, `summary`. An empty list turns it off.",
+            "description": "Record types to accept without a review: any of `decision`, `fact`, `preference`, `rule`, `project-state`, `task`, `summary`. An empty list turns it off.",
             "items": {
               "type": "string"
             },
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "min_sources": {
+            "description": "1 to 20: the fewest sources an auto-accepted candidate must cite.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -4447,6 +4510,13 @@
       },
       "PolicyView": {
         "properties": {
+          "accounts": {
+            "description": "The accounts the room's model policy lets distillation use (none for a local-only room).",
+            "items": {
+              "$ref": "#/components/schemas/PolicyAccount"
+            },
+            "type": "array"
+          },
           "allowed_providers": {
             "items": {
               "type": "string"
@@ -4462,6 +4532,19 @@
           },
           "lease_hours": {
             "format": "int64",
+            "type": "integer"
+          },
+          "local_models": {
+            "description": "Local models a runner declares (none are declared yet).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "min_sources": {
+            "description": "An auto-accepted candidate must cite at least this many sources (1 to 20; default 1).",
+            "format": "int32",
+            "minimum": 0,
             "type": "integer"
           },
           "model": {
@@ -4481,6 +4564,9 @@
           "model",
           "allowed_providers",
           "auto_accept",
+          "min_sources",
+          "accounts",
+          "local_models",
           "lease_hours",
           "review_days"
         ],
@@ -5628,6 +5714,30 @@
         },
         "type": "object"
       },
+      "RunnerNow": {
+        "properties": {
+          "history_offered": {
+            "description": "The runner was started with `--share-history`, so it can answer a history read.",
+            "type": "boolean"
+          },
+          "online": {
+            "type": "boolean"
+          },
+          "tools": {
+            "description": "The harness tools the runner offers for AI sessions (`claude`, `codex`, ...).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "online",
+          "tools",
+          "history_offered"
+        ],
+        "type": "object"
+      },
       "RunnerPolicyBody": {
         "additionalProperties": false,
         "description": "What a runner offers: terminals, agents, and how many agent sessions at once.",
@@ -5640,6 +5750,10 @@
           },
           "agents": {
             "description": "Agent sessions are offered. Refused (409 `policy_refused`, with the reason) when the\nrunner cannot run them: no process sandbox, no proven egress filter, or no agent tool installed.",
+            "type": "boolean"
+          },
+          "share_history": {
+            "description": "The runner lets the Brain read its Claude Code history (`--share-history`). Off when omitted.",
             "type": "boolean"
           },
           "terminals": {
@@ -6380,6 +6494,42 @@
         ],
         "type": "object"
       },
+      "SourceRef": {
+        "properties": {
+          "item_id": {
+            "type": "string"
+          },
+          "quote": {
+            "description": "The start of the source's text, at most 240 characters.",
+            "type": "string"
+          },
+          "room": {
+            "description": "The room that holds the source.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_kind": {
+            "description": "`claude_code`, `codex`, `doc`, `jira`, `github`, ...",
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item_id",
+          "source_kind",
+          "title",
+          "quote",
+          "started_at"
+        ],
+        "type": "object"
+      },
       "SourceView": {
         "properties": {
           "cursor": {
@@ -6396,6 +6546,11 @@
           "id": {
             "type": "string"
           },
+          "items": {
+            "description": "Items this source has delivered to the Brain so far.",
+            "format": "int64",
+            "type": "integer"
+          },
           "kind": {
             "type": "string"
           },
@@ -6411,6 +6566,10 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "runner": {
+            "$ref": "#/components/schemas/RunnerNow",
+            "description": "For a `runner-<id>` source: the runner now. None for any other source."
           }
         },
         "required": [
@@ -6419,7 +6578,8 @@
           "kind",
           "enabled",
           "roots",
-          "cursor"
+          "cursor",
+          "items"
         ],
         "type": "object"
       },

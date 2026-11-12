@@ -410,6 +410,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     let (pty_enabled, agents_enabled) =
         policy.map_or((pty_enabled, agents_enabled), |p| (p.terminals, p.agents));
     let agent_capacity = policy.map_or(2, |p| p.agent_capacity);
+    let share_history = policy.map_or(share_history, |p| p.share_history);
     // Agents a policy asked for must not keep the runner from starting when they cannot run.
     let agents_may_fail = agents_enabled && !agents_flag;
     let exec = Arc::new(super::ExecDriver::new(
@@ -546,6 +547,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             terminals: pty.is_some(),
             agents: agents.is_some(),
             agent_capacity,
+            share_history,
         },
         tools: super::tools::ToolsDriver::new(super::tools::HELPER_SOCKET),
         pty: pty.clone(),

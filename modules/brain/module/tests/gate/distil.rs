@@ -334,11 +334,37 @@ async fn the_inbox_accepts_edits_and_rejects_and_auto_accept_is_off_until_set() 
         ok(&fx, Method::GET, &format!("/rooms/{room2}/policy"), None).await["auto_accept"],
         json!([])
     );
+    let pol = ok(&fx, Method::GET, &format!("/rooms/{room2}/policy"), None).await;
+    assert_eq!(
+        (pol["min_sources"].as_u64(), pol["local_models"].clone()),
+        (Some(1), json!([]))
+    );
+    assert!(pol["accounts"].is_array());
+    // Needing two sources keeps a one-source preference waiting; the default of one lets it through.
     ok(
         &fx,
         Method::PATCH,
         &format!("/rooms/{room2}/policy"),
-        Some(json!({"auto_accept": ["preference"]})),
+        Some(json!({"auto_accept": ["preference"], "min_sources": 2})),
+    )
+    .await;
+    assert_eq!(
+        call(
+            &fx,
+            &fx.admin,
+            Method::PATCH,
+            &format!("/rooms/{room2}/policy"),
+            Some(json!({"min_sources": 0}))
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    ok(
+        &fx,
+        Method::PATCH,
+        &format!("/rooms/{room2}/policy"),
+        Some(json!({"min_sources": 1})),
     )
     .await;
     let ids2 = item_ids(&fx, &room2).await;
@@ -356,4 +382,29 @@ async fn the_inbox_accepts_edits_and_rejects_and_auto_accept_is_off_until_set() 
             .unwrap();
     p.close().await;
     assert_eq!(auto, "auto");
+}
+
+#[tokio::test]
+async fn auto_accept_needs_the_minimum_number_of_sources() {
+    let fx = fx().await;
+    let room = committed_room(&fx, DOCS).await;
+    ok(
+        &fx,
+        Method::PATCH,
+        &format!("/rooms/{room}/policy"),
+        Some(json!({"auto_accept": ["decision", "preference"], "min_sources": 2})),
+    )
+    .await;
+    let ids = item_ids(&fx, &room).await;
+    let a = json!({"candidates": [
+        {"type": "decision", "body": "Export as CSV.", "sources": [ids[0], ids[1]]},
+        {"type": "preference", "body": "Fridays only.", "sources": [ids[1]]},
+    ]})
+    .to_string();
+    ended_distil(&fx, &room, &a).await;
+    fx.brain.distil_step().await.unwrap();
+    ok(&fx, Method::POST, &format!("/rooms/{room}/open"), None).await;
+    let waiting = ok(&fx, Method::GET, &format!("/rooms/{room}/inbox"), None).await;
+    assert_eq!(waiting["waiting"], 1);
+    assert_eq!(waiting["items"][0]["type"], "preference");
 }

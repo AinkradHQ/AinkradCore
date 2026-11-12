@@ -101,6 +101,11 @@ async fn a_runners_history_is_off_until_switched_on_and_its_cursor_moves_on_comm
         ),
         (Some(false), Some("d_abc"), Some("claude_code"))
     );
+    // The screen's runner sheet: offline here (no runner is connected), no tools, history not offered.
+    assert_eq!(
+        v["runner"],
+        json!({"online": false, "tools": [], "history_offered": false})
+    );
     assert_eq!(sync(&fx).await["idle"], "disabled");
     assert!(
         fake.asked.lock().unwrap().is_empty(),

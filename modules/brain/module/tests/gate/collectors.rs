@@ -131,6 +131,17 @@ async fn jira_issues_become_items_with_tracker_signals_and_the_cursor_moves_on_c
         "{p:?}"
     );
     assert_eq!(fake.seen.lock().unwrap()[0].1["project"], "KAN");
+    let list = ok(&fx, Method::GET, "/sources", None).await;
+    let jira = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == "jira")
+        .unwrap();
+    assert_eq!(
+        (jira["items"].as_i64(), jira["runner"].is_null()),
+        (Some(2), true)
+    );
     // Until the run is committed the source's cursor stays; a second sync takes nothing twice.
     assert_eq!(cursor(&fx, "jira").await, json!({}));
     assert_eq!(sync(&fx, "jira").await["idle"], "nothing_new");

@@ -322,6 +322,11 @@ pub(crate) async fn stage_items(
             e => e.into(),
         })?;
         counts.stored += 1;
+        sqlx::query("UPDATE brain_sources SET items = items + 1 WHERE device = ? AND kind = ?")
+            .bind(&item.origin.device)
+            .bind(item.source_kind.as_str())
+            .execute(&mut *seen_tx)
+            .await?;
         if c.pointer {
             counts.pointers += 1;
         }

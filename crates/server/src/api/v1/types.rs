@@ -173,6 +173,7 @@
 /// 56: `AgentSession.workspace`, the repo and worktree a session was created with (N41), so a client can group by project.
 /// 57: the runner op `history.read` (a runner's own harness history for the Brain, off unless the runner
 ///    lists the `history-read` capability) and its `HistoryRead`, `HistoryChunk`, `HistoryItem` and `HistorySkip`.
+///    `RunnerPolicyBody` and the runner's policy also gain `share_history` (the runner lets the Brain read its history).
 pub const API_MINOR: u32 = 57;
 
 use serde::{Deserialize, Serialize};
