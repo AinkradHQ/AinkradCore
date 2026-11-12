@@ -192,7 +192,13 @@ fn a_real_runner_is_listed_runs_the_noop_and_its_events_show() {
     let o = ctl(&args(&[&a, &s(&["runner", "ls"])]));
     let ls = stdout(&o);
     assert!(
-        ls.contains(&format!("{id}\tvm\tonline\t0/")) && ls.contains("\tnoop\t"),
+        // The commands column lists every op the runner offers (noop, plus runner.policy and the
+        // tool ops since #191); noop must be one of them.
+        ls.contains(&format!("{id}\tvm\tonline\t0/"))
+            && ls
+                .lines()
+                .filter(|l| l.starts_with(id.as_str()))
+                .any(|l| l.split('\t').any(|c| c.split(',').any(|op| op == "noop"))),
         "{ls}"
     );
 
