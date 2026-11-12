@@ -7,7 +7,8 @@
 #   install.sh uninstall [--purge] [--dry-run]    --purge also deletes the enrolment (device key) and terminals
 # `install` puts ainkrad-runner and ainkrad-ptyhost in ~/.local/bin and writes the agent; it loads it only when
 # the runner is already paired (otherwise it would exit and respawn every 30 s). --pty offers terminals: a shell as
-# this user, with no sandbox. exec.run stays off unless you pass --enable-exec after `--`.
+# this user, with no sandbox. Agent sessions are always offered (--enable-agents) with the egress filter on: sessions
+# reach only api.anthropic.com (AINKRAD_AGENT_NETWORK/AINKRAD_AGENT_EGRESS_HOSTS in the plist). exec.run stays off unless you pass --enable-exec after `--`.
 # SC2015: `test && shift || usage` is meant (shift cannot fail after the test).
 # shellcheck disable=SC2015
 set -euo pipefail
@@ -59,6 +60,7 @@ install)
   # Replace, not overwrite: a running binary is never written into (the new file is a new inode).
   run install -m 0755 "$srcdir/ainkrad-runner" "$BINDIR/ainkrad-runner"
   [ ! -x "$srcdir/ainkrad-ptyhost" ] || run install -m 0755 "$srcdir/ainkrad-ptyhost" "$BINDIR/ainkrad-ptyhost"
+  extra=(--enable-agents ${extra[@]+"${extra[@]}"})
   [ "$pty" = 0 ] || extra=(--enable-pty ${extra[@]+"${extra[@]}"})
   if [ "$dry" = 1 ]; then
     echo "+ render $tmpl -> $AGENT (extra args: ${extra[*]:-none})"
@@ -89,6 +91,7 @@ status)
   paired && echo "paired: yes ($STATE/core)" || echo "paired: no"
   launchctl print "$DOMAIN/$LABEL" 2>/dev/null | grep -E 'state =|pid =|last exit' || echo "launchd: not loaded"
   grep -q -- --enable-pty "$AGENT" 2>/dev/null && echo "pty: ON (shells as $USER)" || echo "pty: off"
+  grep -q -- --enable-agents "$AGENT" 2>/dev/null && echo "agents: ON (egress filtered)" || echo "agents: off"
   grep -q -- --enable-exec "$AGENT" 2>/dev/null && echo "exec: ON" || echo "exec: off"
   ;;
 uninstall)
