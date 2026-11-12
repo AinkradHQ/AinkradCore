@@ -18,6 +18,10 @@ pub const INVENTORY: &[(&str, &str)] = &[
     ),
     ("getuid", "libc::getuid: no arguments, cannot fail"),
     (
+        "redirect_output",
+        "libc::dup2 of a descriptor we own onto 1 and 2: integers only",
+    ),
+    (
         "peer_uid",
         "libc::getsockopt(SO_PEERCRED) into a ucred we own, on a borrowed descriptor",
     ),
@@ -38,6 +42,20 @@ pub fn setsid() -> io::Result<()> {
     let r = unsafe { libc::setsid() };
     if r == -1 {
         return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Points this process's stdout and stderr at `file` (a launchd agent has no log of its own).
+#[allow(unsafe_code)]
+pub fn redirect_output(file: &std::fs::File) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    for target in [1, 2] {
+        // SAFETY: dup2(2) with a descriptor `file` keeps open and a standard descriptor number;
+        // it touches no memory of ours and failure is reported.
+        if unsafe { libc::dup2(file.as_raw_fd(), target) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
     }
     Ok(())
 }
