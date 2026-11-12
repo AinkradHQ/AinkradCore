@@ -6,7 +6,9 @@
 # 3. Only then install all four (ainkrad-core-server, ainkrad-runner, ainkradctl, ainkrad-ptyhost) into <prefix>/bin as one set:
 #    stage them in a temp dir inside <prefix>/bin (same filesystem), then rename into place in that order, keeping each previous
 #    binary as <name>.old until all four are in; any failure restores the originals (or removes the new ones on a fresh prefix) and
-#    exits non-zero. ainkrad-ptyhost sits beside ainkrad-runner, where the runner looks for it. Needs `minisign` (brew/apt install minisign).
+#    exits non-zero. The macos-arm64 release is ONE zip (ainkrad-runner-<ver>-macos-arm64.zip: ainkrad-runner + ainkrad-ptyhost, unsigned
+#    by Apple: the Mac app re-signs them): when a target has no four-binary set but has that zip, the zip is verified against the signed
+#    sums, then those two are installed the same way. ainkrad-ptyhost sits beside ainkrad-runner, where the runner looks for it. Needs `minisign` (brew/apt install minisign).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 from= prefix=${HOME}/.local pub=${AINKRAD_RELEASE_PUBKEY:-$here/ainkrad-release.pub} target= only=
@@ -32,23 +34,33 @@ if [ -z "$target" ]; then
   case "$(uname -s)-$(uname -m)" in Linux-aarch64) target=linux-arm64 ;; Linux-x86_64) target=linux-x86_64 ;; Darwin-arm64) target=macos-arm64 ;; *) die "no build for $(uname -sm)" ;; esac
 fi
 names=$(awk -v t="-$target" '{ n=$2; if (substr(n, length(n)-length(t)+1) == t) print n }' "$tmp/SHA256SUMS")
-[ -n "$names" ] || die "no artefact for $target in the signed sums"
-# A release is all four: a set without the CLI (first-device step) or ptyhost (terminals) is refused, not half-installed.
-for b in ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost; do
-  echo "$names" | grep -qx "$b-[0-9].*-$target" || die "the signed sums have no $b for $target"
-done
-for n in $names; do
-  fetch "$n"
-  want=$(awk -v n="$n" '$2 == n { print $1 }' "$tmp/SHA256SUMS")
-  [ "$(sha "$tmp/$n")" = "$want" ] || die "$n does not match its signed checksum"
-done
+zipname=$(awk -v t="-$target.zip" '{ n=$2; if (n ~ /^ainkrad-runner-[0-9]/ && substr(n, length(n)-length(t)+1) == t) print n }' "$tmp/SHA256SUMS")
+[ -n "$names" ] || [ -n "$zipname" ] || die "no artefact for $target in the signed sums"
+verify() {  # verify NAME: fetch it and hold it to its signed checksum
+  fetch "$1"
+  [ "$(sha "$tmp/$1")" = "$(awk -v n="$1" '$2 == n { print $1 }' "$tmp/SHA256SUMS")" ] || die "$1 does not match its signed checksum"
+}
+order="ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost"; mkdir "$tmp/z"
+if [ -z "$names" ]; then
+  # Zip mode: only the two named members are taken out (no path from the archive is ever used).
+  order="ainkrad-runner ainkrad-ptyhost"
+  verify "$zipname"
+  command -v unzip >/dev/null || die "unzip is not installed"
+  # shellcheck disable=SC2086  # $order is two words
+  unzip -q -j "$tmp/$zipname" $order -d "$tmp/z" 2>/dev/null || die "$zipname does not hold $order"
+else
+  # A release is all four: a set without the CLI (first-device step) or ptyhost (terminals) is refused, not half-installed.
+  for b in $order; do
+    echo "$names" | grep -qx "$b-[0-9].*-$target" || die "the signed sums have no $b for $target"
+  done
+  for n in $names; do verify "$n"; done
+  for b in $order; do cp "$tmp/$(echo "$names" | grep -x "$b-[0-9].*-$target" | head -1)" "$tmp/z/$b"; done
+fi
 bindir=$prefix/bin
 mkdir -p "$bindir"
 stage=$(mktemp -d "$bindir/.stage.XXXXXX") || die "cannot stage in $bindir"
-order="ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost"
 for b in $order; do
-  n=$(echo "$names" | grep -x "$b-[0-9].*-$target" | head -1)   # ainkrad-runner-0.1.0-linux-arm64 -> ainkrad-runner
-  install -m 755 "$tmp/$n" "$stage/$b" || die "cannot stage $b in $bindir"
+  install -m 755 "$tmp/z/$b" "$stage/$b" || die "cannot stage $b in $bindir"
 done
 placed= moved=
 rollback() {

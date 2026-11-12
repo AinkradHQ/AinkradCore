@@ -10,6 +10,9 @@ mkdir -p "$w/dist/9.9.9"
 for b in ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost; do printf '#!/bin/sh\necho %s\n' "$b" > "$w/dist/9.9.9/$b-9.9.9-$t"; done
 printf 'x' > "$w/dist/9.9.9/ainkrad-runner-9.9.9-other-target"
 printf '#!/bin/sh\n' > "$w/dist/9.9.9/get.sh" # get.sh ships in the signed sums since the guided installer
+# The macOS runner zip: sign.sh requires it. Built by the real mac-zip.sh from stub binaries.
+mkdir -p "$w/macbin"; for b in ainkrad-runner ainkrad-ptyhost; do printf '#!/bin/sh\necho mac-%s\n' "$b" > "$w/macbin/$b"; done
+SOURCE_DATE_EPOCH=1700000000 "$here/mac-zip.sh" "$w/macbin" "$w/dist/9.9.9" 9.9.9 >/dev/null
 "$here/sign.sh" "$w/dist/9.9.9" "$w/a.key" >/dev/null
 fresh() { rm -rf "$w/run" "$w/prefix"; cp -R "$w/dist/9.9.9" "$w/run"; }
 inst() { "$here/install.sh" --from "$w/run" --pubkey "${1:-$w/a.pub}" --prefix "$w/prefix" >"$w/out" 2>&1; }
@@ -24,9 +27,34 @@ fresh; inst && [ -x "$w/prefix/bin/ainkrad-runner" ] && [ -x "$w/prefix/bin/aink
 fresh; printf 'Z' | dd of="$w/run/ainkrad-runner-9.9.9-$t" bs=1 seek=5 conv=notrunc 2>/dev/null; refused "flipped artefact byte" "" "ainkrad-runner-9.9.9-.* does not match its signed checksum"
 fresh; printf 'Z' | dd of="$w/run/ainkradctl-9.9.9-$t" bs=1 seek=5 conv=notrunc 2>/dev/null; refused "flipped ainkradctl byte" "" "ainkradctl-9.9.9-.* does not match its signed checksum"
 fresh; printf 'Z' | dd of="$w/run/ainkrad-ptyhost-9.9.9-$t" bs=1 seek=5 conv=notrunc 2>/dev/null; refused "flipped ainkrad-ptyhost byte" "" "ainkrad-ptyhost-9.9.9-.* does not match its signed checksum"
+# macOS: the zip alone is the target (a dir with only the zip + sums): installs runner + ptyhost; any tamper or a wrong member is refused, prefix empty.
+mz=ainkrad-runner-9.9.9-macos-arm64.zip
+minst() { "$here/install.sh" --from "$w/m/9.9.9" --pubkey "${1:-$w/a.pub}" --prefix "$w/prefix" --target macos-arm64 >"$w/out" 2>&1; }
+mfresh() { rm -rf "$w/m" "$w/prefix"; mkdir -p "$w/m/9.9.9"; cp "$w/dist/9.9.9/$mz" "$w/dist/9.9.9/get.sh" "$w/m/9.9.9/"; "$here/sign.sh" "$w/m/9.9.9" "$w/a.key" >/dev/null; }
+mrefused() {
+  if minst; then echo "FAIL $1: installed"; fail=1
+  elif [ -e "$w/prefix" ] && [ -n "$(ls -A "$w/prefix" 2>/dev/null)" ]; then echo "FAIL $1: prefix not empty"; fail=1
+  elif ! tail -1 "$w/out" | grep -qE "$2"; then echo "FAIL $1: wrong reason: $(tail -1 "$w/out") (wanted: $2)"; fail=1
+  else echo "ok   $1: refused"; fi; }
+if command -v unzip >/dev/null && command -v zip >/dev/null; then
+  mfresh; minst && [ "$(ls "$w/prefix/bin" | tr '\n' ' ')" = "ainkrad-ptyhost ainkrad-runner " ] && [ "$("$w/prefix/bin/ainkrad-runner")" = mac-ainkrad-runner ] \
+    && echo "ok   macos zip installs runner + ptyhost only" || { echo "FAIL macos zip install"; cat "$w/out"; fail=1; }
+  mfresh; printf 'Z' | dd of="$w/m/9.9.9/$mz" bs=1 seek=40 conv=notrunc 2>/dev/null; mrefused "flipped zip byte" "$mz does not match its signed checksum"
+  mfresh; rm "$w/m/9.9.9/$mz"; mrefused "zip listed in the sums but missing" "no $mz in"
+  mfresh; sed -i.bak '1s/^./0/' "$w/m/9.9.9/SHA256SUMS"; mrefused "edited SHA256SUMS (zip)" "SHA256SUMS signature does not verify"
+  mfresh; if minst "$w/b.pub"; then echo "FAIL foreign key (zip): installed"; fail=1; else echo "ok   foreign key refused (zip)"; fi
+  # A correctly signed zip that lacks ptyhost is refused whole.
+  rm -rf "$w/bad"; mkdir "$w/bad"; cp "$w/macbin/ainkrad-runner" "$w/bad/"; (cd "$w/bad" && zip -q "$w/dist/$mz.bad" ainkrad-runner)
+  mfresh; cp "$w/dist/$mz.bad" "$w/m/9.9.9/$mz"; "$here/sign.sh" "$w/m/9.9.9" "$w/a.key" >/dev/null; mrefused "signed zip without ptyhost" "does not hold"
+  # sign.sh refuses a set without the zip unless the partial-dry-run waiver is set.
+  rm -rf "$w/nozip"; cp -R "$w/dist/9.9.9" "$w/nozip"; rm "$w/nozip/$mz"
+  if "$here/sign.sh" "$w/nozip" "$w/a.key" >"$w/out" 2>&1; then echo "FAIL sign without zip: signed"; fail=1; else echo "ok   sign.sh refuses a set without the macos zip"; fi
+  # Same inputs, same bytes.
+  SOURCE_DATE_EPOCH=1700000000 "$here/mac-zip.sh" "$w/macbin" "$w/zz" 9.9.9 >/dev/null; cmp -s "$w/zz/$mz" "$w/dist/9.9.9/$mz" && echo "ok   mac-zip.sh is reproducible" || { echo "FAIL mac-zip.sh not reproducible"; fail=1; }
+else echo "skip macos zip tests (no zip/unzip)"; fi
 # A release without the CLI or ptyhost, even if correctly signed, is refused whole (nothing half-installed).
 for gone in ainkradctl ainkrad-ptyhost; do
-  rm -rf "$w/short"; cp -R "$w/dist/9.9.9" "$w/short"; rm "$w/short/$gone-9.9.9-$t"; "$here/sign.sh" "$w/short" "$w/a.key" >/dev/null
+  rm -rf "$w/short"; cp -R "$w/dist/9.9.9" "$w/short"; rm "$w/short/$gone-9.9.9-$t"; AINKRAD_RELEASE_NO_MAC=1 "$here/sign.sh" "$w/short" "$w/a.key" >/dev/null
   rm -rf "$w/run" "$w/prefix"; cp -R "$w/short" "$w/run"; refused "signed set without $gone" "" "the signed sums have no $gone for $t"
 done
 # Atomic set: a failure at any step leaves the complete OLD set (or nothing on a fresh prefix), exit != 0, no .old/.stage litter.
