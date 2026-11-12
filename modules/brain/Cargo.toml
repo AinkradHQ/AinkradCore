@@ -14,3 +14,13 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# The shipped binary (scripts/release/build.sh): same profile and age fork as the root workspace, so the
+# release is reproducible like the other three.
+[profile.dist]
+inherits = "release"
+codegen-units = 1
+strip = true
+
+[patch.crates-io]
+age = { git = "https://github.com/AinkradHQ/rage", rev = "794958a40fd3471e8ea75be0acdf9761191b2a46" }

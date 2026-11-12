@@ -222,8 +222,11 @@ stage_binaries() {
   local src n citadel_src=''
   if [ "${A_BUILD:-no}" = yes ]; then
     command -v cargo >/dev/null || die "BUILD=yes needs cargo on this host"
-    run nice -n 19 cargo build --release --manifest-path "$ROOT/Cargo.toml" -p ainkrad-core-server -p ainkrad-ctl -p ainkrad-runner -p ainkrad-ptyhost
+    run nice -n 19 cargo build --release --manifest-path "$ROOT/Cargo.toml" -p ainkrad-ctl -p ainkrad-runner -p ainkrad-ptyhost
+    # ainkrad-core-server is the Brain-carrying build (its own cargo workspace), like a release's.
+    run nice -n 19 cargo build --release --manifest-path "$ROOT/modules/brain/Cargo.toml" -p ainkrad-core-brain
     src=$ROOT/target/release
+    [ "$DRY" = 1 ] || cp "$ROOT/modules/brain/target/release/ainkrad-core-brain" "$src/ainkrad-core-server"
     if [ "$A_ENABLE_CITADEL" = yes ]; then # the composed binary is its own cargo workspace
       run nice -n 19 cargo build --release --manifest-path "$ROOT/modules/citadel/Cargo.toml" -p ainkrad-core-citadel
       citadel_src=$ROOT/modules/citadel/target/release
@@ -499,6 +502,20 @@ citadel_selftest() {
     t FAIL "citadel read route, unsigned: got ${code:-no answer}, want 401"
 }
 
+# The Brain is carried by the shipped ainkrad-core-server and mounted by default. Unsigned, the gate answers 401 for any
+# /modules path (mounted or not), so the carrying is proven by a Brain-only route string in the installed binary, and the
+# 401 shows the Core is up and gated. The composed binary's own serve test proves the mount.
+brain_selftest() {
+  local code k=()
+  grep -qa '/rooms/{room}/claims' "$BIN/ainkrad-core-server" 2>/dev/null &&
+    t PASS "brain module: carried by ainkrad-core-server (mounted by default)" ||
+    t FAIL "brain module: $BIN/ainkrad-core-server does not carry the Brain (a plain build; install the release's)"
+  [ "${A_ACME_ENV:-}" = staging ] && k=(-k)
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 ${k[@]+"${k[@]}"} --resolve "$A_HOSTNAME:443:127.0.0.1" \
+    "https://$A_HOSTNAME/modules/brain/v1/status" 2>/dev/null || true)
+  [ "$code" = 401 ] && t PASS "brain read route, unsigned: 401" || t FAIL "brain read route, unsigned: got ${code:-no answer}, want 401"
+}
+
 selftest() { # PASS/FAIL lines; returns 1 on any FAIL
   step "Self-test"
   local fail=0 out cert
@@ -516,6 +533,7 @@ selftest() { # PASS/FAIL lines; returns 1 on any FAIL
   else t FAIL "ainkrad-backup.timer not enabled"; fi
   runner_selftest
   citadel_selftest
+  brain_selftest
   case ${1:-no} in
     local)
       out=$(runuser -u ainkrad -- bash -c "set -a; . $ETC/core.env; set +a; exec $BIN/ainkrad-core-server backup --config $CORE_HOME/config.toml --local-only" 2>&1) &&
