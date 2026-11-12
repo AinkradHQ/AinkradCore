@@ -54,6 +54,7 @@ impl AgentDriver {
             }],
             gateway: None,
             epoch: 0,
+            live: false,
         };
         match self.start(start) {
             Ok(_) => {}

@@ -260,6 +260,7 @@ pub(super) async fn enforce(
         Command::AgentStop(AgentStop {
             session: s.id.clone(),
             kill,
+            turn: false,
         })
     };
     let answers = match s.gw_stopped_at {

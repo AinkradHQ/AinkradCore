@@ -77,6 +77,7 @@ mod gateway_negative;
 mod gateway_store;
 mod health;
 mod health_harness;
+mod live;
 mod me;
 mod metrics;
 mod modules;

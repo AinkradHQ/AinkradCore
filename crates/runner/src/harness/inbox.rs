@@ -14,6 +14,10 @@ use crate::Control;
 #[derive(Default)]
 pub(super) struct Inbox {
     pause: AtomicBool,
+    /// The run is a live conversation (`Control::Live`).
+    live: AtomicBool,
+    /// The running turn is to be stopped (`Control::Interrupt`).
+    interrupt: AtomicBool,
     messages: Mutex<VecDeque<(i64, String)>>,
     /// The run's policy since the admin changed it; `None`, its `Assign`'s.
     policy: Mutex<Option<Policy>>,
@@ -26,6 +30,8 @@ impl Inbox {
         match control {
             Control::Policy(policy) => *self.policy.lock().expect("inbox lock") = Some(policy),
             Control::Pause => self.pause.store(true, Ordering::SeqCst),
+            Control::Live => self.live.store(true, Ordering::SeqCst),
+            Control::Interrupt => self.interrupt.store(true, Ordering::SeqCst),
             Control::Message { id, text } => {
                 let mut messages = self.messages.lock().expect("inbox lock");
                 if !messages.iter().any(|(seen, _)| *seen == id) {
@@ -38,6 +44,15 @@ impl Inbox {
 
     pub fn paused(&self) -> bool {
         self.pause.load(Ordering::SeqCst)
+    }
+
+    pub fn live(&self) -> bool {
+        self.live.load(Ordering::SeqCst)
+    }
+
+    /// Whether a turn stop was asked since the last call (and forgets it).
+    pub fn take_interrupt(&self) -> bool {
+        self.interrupt.swap(false, Ordering::SeqCst)
     }
 
     /// The run's policy now: the latest update, else `assigned`.

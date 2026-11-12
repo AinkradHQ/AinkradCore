@@ -113,7 +113,7 @@ turns=0
 while :; do
   n=\$((n+1)); say "TICK-\$n"; echo \$n > "\$cnt"; echo "tick \$n" > "tick-\$n"
   # The soak queues a message, then drops turn-<k> in this directory (the sandbox hides the rig's own dir): a turn ends
-  # only when one is waiting (a result with none ends the session), as a real session's turns do (KAN-419).
+  # only when one is waiting, as a real session's turns do (KAN-419); the live session is then waiting for the next.
   if [ -e "turn-\$((turns+1))" ]; then turns=\$((turns+1)); printf '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}\n'; fi
   sleep ${E2_AGENT_TICK:-1}
 done
@@ -249,13 +249,17 @@ step3() {
     [ "$(sed -n 6p "$W/post.screen")" = "    row five" ] && [ "$(sed -n 8p "$W/post.screen")" = "         BOLD" ] &&
     [ "$(sed -n 25p "$W/post.screen")" = status ] || { EV="screen is not the golden one: $(head -n8 "$W/post.screen" | tr '\n' '|')"; return 1; }
   grep -aq "MARK-$NONCE" "$W/post.bin" || { EV="no MARK-$NONCE after the restarts"; return 1; }
-  wait_for 90 test "$(agent_state "$AS")" = running || { EV="agent is $(agent_state "$AS"), not resumed"; return 1; }
+  # A live session (the default) comes back waiting for its user: the runner restart took its harness, and the next
+  # message starts it again with the harness's own resume (--resume), as a CLI session continues.
+  wait_for 90 test "$(agent_state "$AS")" = waiting || { EV="agent is $(agent_state "$AS"), not waiting after the restart"; return 1; }
+  a agent send "$AS" "carry on" >/dev/null || { EV="the message to the restarted agent failed"; return 1; }
+  wait_for 30 test "$(agent_state "$AS")" = running || { EV="agent is $(agent_state "$AS"), not running after the message"; return 1; }
   wait_for 30 test "$(ticks "$AS" | wc -l)" -gt "$(ticks_before)" || { EV="agent did not continue"; return 1; }
   transcript "$AS" >"$W/post-tr.jsonl"
   jq -s -e '[.[].seq] as $s | $s == [range(1; ($s|length)+1)]' "$W/post-tr.jsonl" >/dev/null || { EV="transcript seqs have a gap"; return 1; }
   ticks "$AS" | contiguous || { EV="tick numbers have a gap: $(ticks "$AS" | tr '\n' ' ')"; return 1; }
   head -n "$(wc -l <"$W/pre-tr.jsonl")" "$W/post-tr.jsonl" | cmp -s - "$W/pre-tr.jsonl" || { EV="the transcript's earlier entries changed"; return 1; }
-  EV="device B: snapshot screen = pre-kill screen = golden rows (alt-screen), MARK-$NONCE present; agent running again, transcript 1..$(tail -n1 "$W/post-tr.jsonl" | jq .seq) gap-free, ticks contiguous"
+  EV="device B: snapshot screen = pre-kill screen = golden rows (alt-screen), MARK-$NONCE present; agent waiting after the restart, running again on its next message, transcript 1..$(tail -n1 "$W/post-tr.jsonl" | jq .seq) gap-free, ticks contiguous"
 }
 ticks_before() { grep -o 'TICK-[0-9]*' "$W/pre-tr.jsonl" | tail -n1 | cut -d- -f2; }
 
@@ -423,8 +427,8 @@ run_soak() {
   cp "$csv" "${E2_REPORT%.md}.csv" 2>/dev/null || true
   local bad=
   for i in "${terms[@]}"; do [ "$(term_status "$i")" = running ] || bad+="$i "; done
-  for i in "$ag1" "$ag2"; do [ "$(agent_state "$i")" = running ] && ticks "$i" | contiguous || bad+="$i "; done
-  [ -z "$bad" ] && record "soak end state" PASS "all 5 terminals running, both agents running with gap-free transcripts" ||
+  for i in "$ag1" "$ag2"; do case "$(agent_state "$i")" in running|waiting) ticks "$i" | contiguous ;; *) false ;; esac || bad+="$i "; done
+  [ -z "$bad" ] && record "soak end state" PASS "all 5 terminals running, both agents running or waiting with gap-free transcripts" ||
     record "soak end state" FAIL "not healthy: $bad"
   # A child still being reaped shows as Z for a moment: bounded wait, as in step 5.
   zs() { ps -axo pid=,ppid=,stat= | awk -v r="$RPID" '$2==r && $3 ~ /^Z/ {print $1}'; }

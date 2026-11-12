@@ -163,7 +163,14 @@
 ///    `listSecretGroups`, `createSecretGroup`, `updateSecretGroup`, `deleteSecretGroup`, `leaseSecretGroup`
 ///    (`/secret-groups`, `admin`, writes destructive); `ClaimBody.device_name` (N11); `checkAccount`
 ///    (`POST /accounts/{id}/check`, Claude plan check, N36); the `plan.check` runner op; the `secret_group.*` audit actions.
-pub const API_MINOR: u32 = 54;
+/// 55: live AI sessions (N41, N42): `AgentSession.state` is also `waiting` (a live session between answers),
+///    and gains `live`, `idle_since` and `title`; `createAgentSession` takes `live` (default true) and
+///    accepts no `prompt`; `sendAgentMessage` also restarts a live session whose harness is gone;
+///    `interruptAgentSession` (`POST /agent-sessions/{id}/interrupt`, destructive) and `titleAgentSession`
+///    (`PATCH /agent-sessions/{id}`); the audit actions `agent.interrupted` and `agent.renamed`; the
+///    `agents.idle_end_secs` setting; the runner protocol gains `AgentState::waiting`, `AgentStart.live`,
+///    `AgentStop.turn` and the `live` capability.
+pub const API_MINOR: u32 = 55;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

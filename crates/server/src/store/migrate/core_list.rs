@@ -197,4 +197,10 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0032_secret_kinds_groups.up.sql"),
         down: include_str!("../../../migrations/0032_secret_kinds_groups.down.sql"),
     },
+    Migration {
+        version: 33,
+        name: "live_sessions",
+        up: include_str!("../../../migrations/0033_live_sessions.up.sql"),
+        down: include_str!("../../../migrations/0033_live_sessions.down.sql"),
+    },
 ];

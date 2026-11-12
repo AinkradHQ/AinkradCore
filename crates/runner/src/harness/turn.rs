@@ -47,8 +47,22 @@ impl HarnessExecutor {
         // A new session, unless the server named one to continue (E15.5); on a warm server
         // of this agent's when one is idle (E15.6).
         let isolated = spec.env.iter().any(|(n, _)| n == "AINKRAD_SANDBOX");
-        let warm =
-            !isolated && H::LONG_LIVED && limits.warm_max > 0 && job.resume_session.is_none();
+        let inbox = self.inbox(job.run);
+        // A live conversation keeps its own process for as long as it lasts, and a Core that
+        // restarts one (a resume) has no turn to run: it waits for the user's next message, and
+        // the harness is started, with its own resume, only then.
+        let live = inbox.live();
+        let resumed_idle = live && job.resume_session.is_some();
+        // A live session started with no first message (like opening the CLI) has its harness up
+        // and waits for the first one; a resumed one waits for the next. Either says so.
+        let mut announce =
+            resumed_idle || (live && job.prompt.as_deref().is_none_or(str::is_empty));
+        let mut idle = announce;
+        let warm = !isolated
+            && !live
+            && H::LONG_LIVED
+            && limits.warm_max > 0
+            && job.resume_session.is_none();
         // A server kept warm outlives this run's worktree: it works from the work root (E15.9).
         let spec = Spec {
             process_dir: warm.then(|| self.work_root.clone()),
@@ -56,12 +70,16 @@ impl HarnessExecutor {
         };
         let key = warm.then(|| super::warm::key(job, &spec));
         let started = match (&job.resume_session, &key) {
-            (Some(id), _) => H::resume(&spec, id).await,
-            (None, Some(key)) => self.warm_start::<H>(job, key, &spec, &reports).await,
-            (None, None) => H::start(&spec).await,
+            _ if resumed_idle => Ok(None),
+            (Some(id), _) => H::resume(&spec, id).await.map(Some),
+            (None, Some(key)) => self
+                .warm_start::<H>(job, key, &spec, &reports)
+                .await
+                .map(Some),
+            (None, None) => H::start(&spec).await.map(Some),
         };
         let mut harness = match started {
-            Ok(harness) => Some(harness),
+            Ok(harness) => harness,
             Err(e) => return failed(format!("starting {name}: {e}"), "harness_start"),
         };
         let mut prompting = match &job.resume_session {
@@ -71,9 +89,53 @@ impl HarnessExecutor {
         let session = job.resume_session.clone().or(spec.session_id.clone());
         let (mut session, mut drops, mut reported) = (session, 0, Instant::now());
         let mut watch = Watch::new(limits.stall_after, spec.cwd.clone());
+        // Whether the turn that just ended was stopped by the user: its process may be gone.
+        let mut stopped = false;
         let outcome = loop {
+            if announce {
+                announce = false;
+                let event = json!({"type": "waiting", "outcome": "ready"});
+                let _ = reports.send(Report::Event(event)).await;
+            }
+            if idle {
+                match self
+                    .idle(job, &reports, &inbox, &mut harness, &mut session, stopped)
+                    .await
+                {
+                    Idle::Message(id, text) => {
+                        let event = json!({"type": "user_message", "id": id, "text": text});
+                        let _ = reports.send(Report::Event(event)).await;
+                        prompting = text;
+                        idle = false;
+                    }
+                    Idle::End(outcome) => break outcome,
+                }
+            }
+            if harness.is_none() {
+                // The process is gone (a restart, a crash, or a harness that exits when its
+                // turn is stopped): the conversation goes on in a new one, by the harness's own
+                // resume.
+                let Some(id) = session.clone() else {
+                    break failed(
+                        format!("{name} has no session to continue"),
+                        "harness_start",
+                    );
+                };
+                match H::resume(&spec, &id).await {
+                    Ok(h) => harness = Some(h),
+                    Err(e) => break failed(format!("resuming {name}: {e}"), "harness_start"),
+                }
+            }
             let Some(h) = harness.as_mut() else {
                 unreachable!("a harness runs until the loop ends");
+            };
+            // A stop meant for an earlier turn, and the quiet since, are not this turn's.
+            inbox.take_interrupt();
+            watch.progress();
+            let base = if live {
+                meter.total()
+            } else {
+                Usage::default()
             };
             // A broken pipe means the child already exited: the turn's events say how, with
             // its stderr tail (`with_stderr`), so the result does not depend on timing.
@@ -90,23 +152,47 @@ impl HarnessExecutor {
                 caps,
                 approval_timeout: limits.approval_timeout,
                 tool_output: limits.tool_output,
+                base,
             };
-            let why = match self
+            let done = self
                 .attempt(&turn, h, meter, &mut watch, &mut reported, &mut session)
-                .await
-            {
-                Attempt::Done(Outcome::Succeeded) => match self.inbox(job.run).take_message() {
-                    // The admin's message is the next turn (1.19); the run goes on.
-                    Some((id, text)) => {
-                        let event = json!({"type": "user_message", "id": id, "text": text});
-                        let _ = reports.send(Report::Event(event)).await;
-                        prompting = text;
-                        continue;
+                .await;
+            // A turn that ended well, or that the user stopped in a live session, is over; the
+            // run goes on when a message waits (1.19) or the session is live.
+            let over = match &done {
+                Attempt::Done(Outcome::Succeeded) => Some("success"),
+                Attempt::Done(Outcome::Cancelled { reason }) if live && reason == INTERRUPTED => {
+                    Some("interrupted")
+                }
+                _ => None,
+            };
+            stopped = over == Some("interrupted");
+            let why = match (done, over) {
+                (Attempt::Done(outcome), Some(how)) => {
+                    if live {
+                        // The session's cost so far, per turn: the Core keeps it between turns.
+                        meter.close_turn();
+                        let _ = reports.send(Report::Usage(wire(meter))).await;
                     }
-                    None => break Outcome::Succeeded,
-                },
-                Attempt::Done(outcome) => break outcome,
-                Attempt::Dropped(why) => why,
+                    match inbox.take_message() {
+                        // The admin's message is the next turn (1.19); the run goes on.
+                        Some((id, text)) => {
+                            let event = json!({"type": "user_message", "id": id, "text": text});
+                            let _ = reports.send(Report::Event(event)).await;
+                            prompting = text;
+                            continue;
+                        }
+                        None if live => {
+                            let event = json!({"type": "waiting", "outcome": how});
+                            let _ = reports.send(Report::Event(event)).await;
+                            idle = true;
+                            continue;
+                        }
+                        None => break outcome,
+                    }
+                }
+                (Attempt::Done(outcome), None) => break outcome,
+                (Attempt::Dropped(why), _) => why,
             };
             if let Some(h) = harness.take() {
                 h.stop().await;
@@ -239,6 +325,9 @@ impl HarnessExecutor {
                             if inbox.paused() && tools.0.is_empty() {
                                 break Next::Paused;
                             }
+                            if inbox.take_interrupt() {
+                                break Next::Interrupt;
+                            }
                         }
                     }
                 }
@@ -247,6 +336,13 @@ impl HarnessExecutor {
                 Next::Event(next) => next,
                 Next::Stalled => return self.stall(job, harness).await,
                 Next::Paused => return self.pause(job, harness).await,
+                // Esc: the harness ends the turn (`TurnEnded`, interrupted) and the loop reads it.
+                Next::Interrupt => {
+                    if let Err(e) = harness.interrupt().await {
+                        tracing::warn!(run = job.run, error = %e, "interrupting a turn failed");
+                    }
+                    continue;
+                }
             };
             let Some(event) = next else {
                 let why = with_stderr(format!("{name} ended without a result"), &*harness);
@@ -285,7 +381,9 @@ impl HarnessExecutor {
             }
             if counted {
                 let total = meter.total();
-                if matches!(event, HarnessEvent::UsageSoFar(_)) && reached(&caps, &total) {
+                if matches!(event, HarnessEvent::UsageSoFar(_))
+                    && reached(&caps, &since(&total, &turn.base))
+                {
                     tracing::warn!(
                         run = job.run,
                         spent = tokens(&total),
@@ -338,7 +436,7 @@ impl HarnessExecutor {
                     return Attempt::Done(match outcome {
                         TurnOutcome::Success => Outcome::Succeeded,
                         TurnOutcome::Interrupted => Outcome::Cancelled {
-                            reason: "interrupted".to_owned(),
+                            reason: INTERRUPTED.to_owned(),
                         },
                         TurnOutcome::Failed { reason, code } => {
                             if classify(&code, &reason) == ErrorClass::Transient {
@@ -368,6 +466,73 @@ impl HarnessExecutor {
 }
 
 impl HarnessExecutor {
+    /// A live session between two turns: waits for the user's next message, a pause (the end of
+    /// the session) or the harness leaving. A process that exits on its own with success is
+    /// the CLI ending the session (unless the user just stopped its turn, which some harnesses
+    /// answer by exiting); one that dies otherwise is only gone, and `harness` is left empty
+    /// for the next message to start again by the harness's own resume.
+    async fn idle<H: Harness>(
+        &self,
+        job: &Job,
+        reports: &mpsc::Sender<Report>,
+        inbox: &super::inbox::Inbox,
+        harness: &mut Option<H>,
+        session: &mut Option<String>,
+        stopped: bool,
+    ) -> Idle {
+        loop {
+            if inbox.paused() {
+                return Idle::End(Outcome::Cancelled {
+                    reason: PAUSED.to_owned(),
+                });
+            }
+            if let Some((id, text)) = inbox.take_message() {
+                return Idle::Message(id, text);
+            }
+            // Nothing runs to stop.
+            inbox.take_interrupt();
+            let woke = {
+                let event = async {
+                    match harness.as_mut() {
+                        Some(h) => h.next().await,
+                        None => std::future::pending().await,
+                    }
+                };
+                tokio::pin!(event);
+                tokio::select! {
+                    () = inbox.arrived.notified() => None,
+                    event = &mut event => Some(event),
+                }
+            };
+            match woke {
+                None => {}
+                Some(Some(HarnessEvent::Exited { code })) => {
+                    if code == Some(0) && !stopped {
+                        tracing::info!(
+                            run = job.run,
+                            "the harness exited by itself; the session ends"
+                        );
+                        return Idle::End(Outcome::Succeeded);
+                    }
+                    tracing::info!(
+                        run = job.run,
+                        ?code,
+                        "the harness is gone; the next message restarts it"
+                    );
+                    *harness = None;
+                }
+                Some(None) => *harness = None,
+                Some(Some(event)) => {
+                    if let HarnessEvent::SessionStarted { id } = &event {
+                        *session = Some(id.clone());
+                    }
+                    let event = serde_json::to_value(&event).expect("events serialise");
+                    let _ = reports.send(Report::Event(event)).await;
+                }
+            }
+        }
+    }
+
     /// Looks at the run's working dir (a change is progress): `true` when the run is stalled.
     async fn look(&self, watch: &mut Watch, job: &Job, reports: &mpsc::Sender<Report>) -> bool {
         if watch.files_changed().await {
@@ -434,6 +599,9 @@ struct Turn<'a> {
     approval_timeout: Duration,
     /// The most of a tool's output its `tool_result` event carries.
     tool_output: usize,
+    /// The run's tokens when the turn began, in a live session: its caps count per turn there,
+    /// a conversation having no end to cap.
+    base: Usage,
 }
 
 /// What woke a turn's wait for the harness.
@@ -441,6 +609,7 @@ enum Next {
     Event(Option<HarnessEvent>),
     Stalled,
     Paused,
+    Interrupt,
 }
 
 /// How one harness process's turn ended.
@@ -455,6 +624,26 @@ fn dropped_or(began: bool, why: String) -> Attempt {
     match began {
         true => Attempt::Dropped(why),
         false => Attempt::Done(failed(why, "harness_exit")),
+    }
+}
+
+/// How a turn stopped by the user ends (`TurnOutcome::Interrupted`).
+const INTERRUPTED: &str = "interrupted";
+
+/// What a live session did while it waited for its next message.
+enum Idle {
+    Message(i64, String),
+    End(Outcome),
+}
+
+/// `total` less `base`, field by field.
+fn since(total: &Usage, base: &Usage) -> Usage {
+    Usage {
+        input: total.input.saturating_sub(base.input),
+        output: total.output.saturating_sub(base.output),
+        cache_read: total.cache_read.saturating_sub(base.cache_read),
+        cache_write: total.cache_write.saturating_sub(base.cache_write),
+        cost_usd: None,
     }
 }
 

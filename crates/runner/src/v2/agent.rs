@@ -33,7 +33,7 @@ use ainkrad_proto::redact::Redactor;
 use ainkrad_proto::runner::{Isolation, Outcome, RunToken, Tokens, Workspace};
 use ainkrad_proto::v2::{
     AGENT_DRIVER, AGENT_OPS, AgentDecide, AgentEvents, AgentRead, AgentStart, AgentState,
-    AgentStop, CAP_GATEWAY, DriverInfo, ErrorCode, IsolationCaps, Kvm, StreamError,
+    AgentStop, CAP_GATEWAY, CAP_LIVE, DriverInfo, ErrorCode, IsolationCaps, Kvm, StreamError,
     TranscriptEntry,
 };
 use serde::{Deserialize, Serialize};
@@ -373,6 +373,7 @@ impl AgentDriver {
             commands: AGENT_OPS
                 .iter()
                 .chain(self.sandbox.capabilities())
+                .chain([&CAP_LIVE])
                 .chain(
                     self.config
                         .plan_limit
@@ -403,7 +404,10 @@ impl AgentDriver {
                 // Reports the Core has not been shown yet end the wait too; ones it was shown and
                 // has not acknowledged do not, or an unacknowledging Core would spin.
                 let fresh = live.reports.fresh();
-                if !events.entries.is_empty() || events.state != AgentState::Running || fresh {
+                if !events.entries.is_empty()
+                    || !matches!(events.state, AgentState::Running | AgentState::Waiting)
+                    || fresh
+                {
                     live.reports.mark_shown();
                     return Ok(events);
                 }
@@ -476,10 +480,7 @@ impl AgentDriver {
         {
             return Ok(events(&req.session, live, live.meta.last_seq));
         }
-        let running: Vec<&Live> = all
-            .values()
-            .filter(|l| l.meta.state == AgentState::Running)
-            .collect();
+        let running: Vec<&Live> = all.values().filter(|l| holds_slot(l.meta.state)).collect();
         let of_harness = running
             .iter()
             .filter(|l| l.meta.harness == req.harness)
@@ -697,6 +698,9 @@ impl AgentDriver {
             }
             push(cfg, s, live, entry);
         });
+        if req.live {
+            self.harness.control(run, Control::Live);
+        }
         let (tx, mut rx) = mpsc::channel(64);
         let outcome = {
             let run = self.harness.run(&job, RunToken::new(run_token), tx);
@@ -778,6 +782,18 @@ impl AgentDriver {
         self.with(session, |live, cfg, s| {
             let body = match report {
                 Report::Event(v) => {
+                    // A live session's answer is over (`waiting`), or its next one began.
+                    match (v["type"].as_str(), live.meta.state) {
+                        (Some("waiting"), AgentState::Running) => {
+                            live.meta.state = AgentState::Waiting;
+                            save_meta(cfg, s, &live.meta);
+                        }
+                        (Some("user_message"), AgentState::Waiting) => {
+                            live.meta.state = AgentState::Running;
+                            save_meta(cfg, s, &live.meta);
+                        }
+                        _ => {}
+                    }
                     if v["type"] == "session_started"
                         && let Some(id) = v["id"].as_str()
                     {
@@ -851,6 +867,10 @@ impl AgentDriver {
             self.harness
                 .control(live.run, Control::Message { id, text });
             push(cfg, session, live, entry);
+            if live.meta.state == AgentState::Waiting {
+                live.meta.state = AgentState::Running;
+                save_meta(cfg, session, &live.meta);
+            }
             Ok(())
         })
     }
@@ -878,7 +898,21 @@ impl AgentDriver {
         let run = {
             let mut all = self.sessions.lock().unwrap();
             let live = all.get_mut(&req.session).ok_or_else(no_session)?;
-            if live.meta.state != AgentState::Running {
+            if !holds_slot(live.meta.state) {
+                return Ok(events(&req.session, live, live.meta.last_seq));
+            }
+            // Esc: only the running answer stops; a tool call waiting on a reviewer is denied
+            // so the harness is free to read the stop. A waiting session has none to stop.
+            if req.turn {
+                if live.meta.state == AgentState::Running {
+                    for (_, reply) in live.approvals.drain() {
+                        reply.send(Answer {
+                            approved: false,
+                            reply: Some("the turn was stopped".to_owned()),
+                        });
+                    }
+                    self.harness.control(live.run, Control::Interrupt);
+                }
                 return Ok(events(&req.session, live, live.meta.last_seq));
             }
             // Closed before the harness is signalled: a stopped session can spend nothing more.
@@ -917,7 +951,7 @@ impl AgentDriver {
         let task = {
             let mut all = self.sessions.lock().unwrap();
             match all.get_mut(session) {
-                Some(l) if l.run == run && l.meta.state == AgentState::Running => {
+                Some(l) if l.run == run && holds_slot(l.meta.state) => {
                     // The gateway goes before the harness is killed, as on a stop.
                     l.stopped = true;
                     l.gateway = None;
@@ -953,7 +987,7 @@ impl AgentDriver {
         let lost: Vec<(String, i64, Isolation)> = {
             let all = self.sessions.lock().unwrap();
             all.iter()
-                .filter(|(_, l)| l.meta.state == AgentState::Running)
+                .filter(|(_, l)| holds_slot(l.meta.state))
                 .filter_map(|(s, l)| Some((s.clone(), l.run, l.required?)))
                 .filter(|(_, _, required)| !offered.satisfies(*required))
                 .collect()
@@ -990,7 +1024,7 @@ impl AgentDriver {
         let answer = {
             let mut all = self.sessions.lock().unwrap();
             let live = all.get_mut(session).ok_or_else(no_session)?;
-            if live.meta.state != AgentState::Running {
+            if !holds_slot(live.meta.state) {
                 return Err(refuse(ErrorCode::InvalidArgs, "the session is not running"));
             }
             f(live, &self.config)?;
@@ -1022,6 +1056,11 @@ fn reap_orphans(dir: &std::path::Path) {
         ainkrad_harness::reap_group(&text);
         let _ = std::fs::remove_file(path);
     }
+}
+
+/// A session whose harness runs or waits for its user: it holds one of the driver's slots.
+fn holds_slot(state: AgentState) -> bool {
+    matches!(state, AgentState::Running | AgentState::Waiting)
 }
 
 fn no_session() -> StreamError {
@@ -1210,7 +1249,7 @@ fn reload(cfg: &AgentConfig) -> HashMap<String, Live> {
         live.reports = gw::Reports::load(cfg, &session, &live.meta);
         // A socket a dead runner left is no gateway: nothing listens on it.
         let _ = std::fs::remove_file(crate::gateway::socket_in(&d.path()));
-        if live.meta.state == AgentState::Running {
+        if holds_slot(live.meta.state) {
             tracing::warn!(
                 session,
                 "a session's harness went with the last runner process"
@@ -1229,5 +1268,7 @@ fn reload(cfg: &AgentConfig) -> HashMap<String, Live> {
     out
 }
 
+#[cfg(test)]
+mod live_tests;
 #[cfg(test)]
 mod tests;

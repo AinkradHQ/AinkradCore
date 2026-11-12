@@ -239,6 +239,7 @@ async fn a_forged_advertisement_is_caught_by_the_runner_itself() {
         secrets: vec![],
         gateway: None,
         epoch: 0,
+        live: false,
     };
     start.policy.min_isolation = Some(Isolation::Microvm);
     let why = r.driver.start(start).unwrap_err();

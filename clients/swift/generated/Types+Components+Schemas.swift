@@ -539,6 +539,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/id`.
             public var id: Swift.String
+            /// While `waiting`: since when.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/idle_since`.
+            public var idleSince: Components.Schemas.Timestamp?
             /// Its row: page `listAgentSessions` with `before`.
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/index`.
@@ -547,6 +551,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/last_seq`.
             public var lastSeq: Swift.Int64
+            /// A live conversation (`createAgentSession`'s `live`): the state is `waiting` between answers.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/live`.
+            public var live: Swift.Bool?
             /// - Remark: Generated from `#/components/schemas/AgentSession/model`.
             public var model: Swift.String?
             /// Once over: `{"kind": "succeeded" | "failed" | "cancelled" | "token_cap" | "stalled" |
@@ -579,11 +587,16 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/skip_pools`.
             public var skipPools: [Swift.Int64]?
-            /// `starting`, `running`, `interrupted` (its runner restarted; it is resumed), `ended`,
-            /// `lost`.
+            /// `starting`, `running` (working), `waiting` (a live session finished its answer and waits
+            /// for the user's next message; it still holds its runner slot), `interrupted` (its runner
+            /// restarted; it is resumed), `ended`, `lost`.
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/state`.
             public var state: Swift.String
+            /// A short name: the first message's start, or the one `titleAgentSession` set.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/title`.
+            public var title: Swift.String?
             /// - Remark: Generated from `#/components/schemas/AgentSession/updated_at`.
             public var updatedAt: Components.Schemas.Timestamp
             /// The last status class its own gateway reported: `ok`, `rate_limited`, `quota`,
@@ -616,8 +629,10 @@ extension Components {
             ///   - harness:
             ///   - harnessSession: The harness's own session id, what a resume continues.
             ///   - id: `as_…`.
+            ///   - idleSince: While `waiting`: since when.
             ///   - index: Its row: page `listAgentSessions` with `before`.
             ///   - lastSeq: The newest transcript `seq` stored.
+            ///   - live: A live conversation (`createAgentSession`'s `live`): the state is `waiting` between answers.
             ///   - model:
             ///   - outcome: Once over: `{"kind": "succeeded" | "failed" | "cancelled" | "token_cap" | "stalled" |
             ///   - repicked: How many accounts a launch refused after the pick before the one it holds (at most 2).
@@ -626,7 +641,8 @@ extension Components {
             ///   - runner: The runner's device id, `d_…`.
             ///   - secrets: The secrets it is leased at each start, by name.
             ///   - skipPools: The pools a budget stop took out of the run's chain. Admin only.
-            ///   - state: `starting`, `running`, `interrupted` (its runner restarted; it is resumed), `ended`,
+            ///   - state: `starting`, `running` (working), `waiting` (a live session finished its answer and waits
+            ///   - title: A short name: the first message's start, or the one `titleAgentSession` set.
             ///   - updatedAt:
             ///   - upstreamClass: The last status class its own gateway reported: `ok`, `rate_limited`, `quota`,
             ///   - usage:
@@ -647,8 +663,10 @@ extension Components {
                 harness: Swift.String,
                 harnessSession: Swift.String? = nil,
                 id: Swift.String,
+                idleSince: Components.Schemas.Timestamp? = nil,
                 index: Swift.Int64? = nil,
                 lastSeq: Swift.Int64,
+                live: Swift.Bool? = nil,
                 model: Swift.String? = nil,
                 outcome: OpenAPIRuntime.OpenAPIObjectContainer? = nil,
                 repicked: Swift.Int64? = nil,
@@ -658,6 +676,7 @@ extension Components {
                 secrets: [Swift.String]? = nil,
                 skipPools: [Swift.Int64]? = nil,
                 state: Swift.String,
+                title: Swift.String? = nil,
                 updatedAt: Components.Schemas.Timestamp,
                 upstreamClass: Swift.String? = nil,
                 usage: Components.Schemas.AgentUsage? = nil,
@@ -678,8 +697,10 @@ extension Components {
                 self.harness = harness
                 self.harnessSession = harnessSession
                 self.id = id
+                self.idleSince = idleSince
                 self.index = index
                 self.lastSeq = lastSeq
+                self.live = live
                 self.model = model
                 self.outcome = outcome
                 self.repicked = repicked
@@ -689,6 +710,7 @@ extension Components {
                 self.secrets = secrets
                 self.skipPools = skipPools
                 self.state = state
+                self.title = title
                 self.updatedAt = updatedAt
                 self.upstreamClass = upstreamClass
                 self.usage = usage
@@ -710,8 +732,10 @@ extension Components {
                 case harness
                 case harnessSession = "harness_session"
                 case id
+                case idleSince = "idle_since"
                 case index
                 case lastSeq = "last_seq"
+                case live
                 case model
                 case outcome
                 case repicked
@@ -721,10 +745,30 @@ extension Components {
                 case secrets
                 case skipPools = "skip_pools"
                 case state
+                case title
                 case updatedAt = "updated_at"
                 case upstreamClass = "upstream_class"
                 case usage
                 case waiting
+            }
+        }
+        /// A new title for a session.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AgentTitle`.
+        public struct AgentTitle: Codable, Hashable, Sendable {
+            /// At most 60 characters; empty clears it (the list then shows the session's harness).
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentTitle/title`.
+            public var title: Swift.String
+            /// Creates a new `AgentTitle`.
+            ///
+            /// - Parameters:
+            ///   - title: At most 60 characters; empty clears it (the list then shows the session's harness).
+            public init(title: Swift.String) {
+                self.title = title
+            }
+            public enum CodingKeys: String, CodingKey {
+                case title
             }
         }
         /// - Remark: Generated from `#/components/schemas/AgentTranscript`.
@@ -2608,7 +2652,10 @@ extension Components {
             /// `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;
             /// a device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a
             /// module writes. The registered kinds are listed in `x-event-kinds`. The payload of
-            /// `agent.state` is `{session, state, reason, …}`: a chain session that waits for an account
+            /// `agent.state` is `{session, state, reason, …}`: a live session that finished its answer is
+            /// `state: "waiting"` with `reason: "turn_ended"` (its transcript has the harness's
+            /// `turn_ended` and a `waiting` entry), and `state: "running"` with `reason: "message"` when
+            /// the next message starts an answer. A chain session that waits for an account
             /// says `reason: "waiting"` and `waiting: {until, why, since}` (`until` an RFC 3339 time, `since`
             /// the first wait in unix seconds), and one whose launch refused its account, so another was
             /// picked across a provider or harness, says `reason: "repicked"`, and a run a failover moved across
@@ -3851,6 +3898,13 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/harness`.
             public var harness: Swift.String?
+            /// One live conversation (default `true`): the harness stays up after each answer, the state
+            /// is `waiting` until the next `sendAgentMessage`, and the session ends only on `cancel`,
+            /// `kill`, the idle end (`agents.idle_end_secs`) or when the CLI exits by itself. `false`, or
+            /// a runner that does not offer it (the answer's `live` says), runs one answer and ends.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewAgentSession/live`.
+            public var live: Swift.Bool?
             /// The model id as the provider names it. For a session served by the auth gateway it must be
             /// one of the ids priced for its provider, exactly: the gateway resolves no alias.
             ///
@@ -3860,6 +3914,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/policy`.
             public var policy: OpenAPIRuntime.OpenAPIObjectContainer?
+            /// The first message. Absent or empty: the session starts with no message, like opening the
+            /// CLI: its harness is up, the state is `waiting`, and the first message comes through
+            /// `sendAgentMessage`. A message gives the session its `title` (its first 60 characters).
+            ///
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/prompt`.
             public var prompt: Swift.String?
             /// The runner's device id, `d_…`.
@@ -3882,9 +3940,10 @@ extension Components {
             ///   - chain: A fallback chain's id: the session draws its account from it, one at a time. Needs
             ///   - connectionAccess: Capability names the session may call through its connections (`read_repo`,
             ///   - harness: `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it
+            ///   - live: One live conversation (default `true`): the harness stays up after each answer, the state
             ///   - model: The model id as the provider names it. For a session served by the auth gateway it must be
             ///   - policy: `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`.
-            ///   - prompt:
+            ///   - prompt: The first message. Absent or empty: the session starts with no message, like opening the
             ///   - runner: The runner's device id, `d_…`.
             ///   - secrets: At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).
             ///   - workspace: The repo and worktree to work in (`{"repo_url", "base_branch", "branch", …}`); absent, a
@@ -3893,6 +3952,7 @@ extension Components {
                 chain: Swift.Int64? = nil,
                 connectionAccess: [Swift.String]? = nil,
                 harness: Swift.String? = nil,
+                live: Swift.Bool? = nil,
                 model: Swift.String? = nil,
                 policy: OpenAPIRuntime.OpenAPIObjectContainer? = nil,
                 prompt: Swift.String? = nil,
@@ -3904,6 +3964,7 @@ extension Components {
                 self.chain = chain
                 self.connectionAccess = connectionAccess
                 self.harness = harness
+                self.live = live
                 self.model = model
                 self.policy = policy
                 self.prompt = prompt
@@ -3916,6 +3977,7 @@ extension Components {
                 case chain
                 case connectionAccess = "connection_access"
                 case harness
+                case live
                 case model
                 case policy
                 case prompt

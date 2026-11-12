@@ -228,6 +228,10 @@
         "harness": {
           "type": "string"
         },
+        "live": {
+          "description": "One live conversation (`CAP_LIVE`): the harness stays up after an answer and the session\nis `waiting` until the next `agent.send`; it ends only on `agent.stop` or when the CLI\nexits by itself. A resume (`resume`) of a live session starts no turn: it waits for the\nnext message, which restarts the harness with its own resume. Without it the session\nends with its first answer.",
+          "type": "boolean"
+        },
         "model": {
           "type": [
             "string",
@@ -294,6 +298,11 @@
           "type": "string"
         },
         {
+          "const": "waiting",
+          "description": "A live session (`AgentStart::live`) whose harness finished its answer and waits for the\nnext `agent.send`. It still holds its slot. A runner sends it only for a live session.",
+          "type": "string"
+        },
+        {
           "const": "ended",
           "description": "Its harness ended (`outcome`).",
           "type": "string"
@@ -319,6 +328,10 @@
         },
         "session": {
           "type": "string"
+        },
+        "turn": {
+          "description": "Only a live session's running answer is stopped (like Esc in the CLI): the session goes\non, `waiting`. A runner that lists `CAP_LIVE` honours it; the Core sends it to no other.\nNothing happens when no answer runs. Overrides `kill`.",
+          "type": "boolean"
         }
       },
       "required": [

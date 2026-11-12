@@ -147,7 +147,12 @@ fn agent_config(dir: &Path) -> AgentConfig {
     }
 }
 
-pub(super) async fn run_runner(core: &Core, base: &str, st: &State, exec: Script) -> Runner {
+pub(super) async fn run_runner<E: Executor>(
+    core: &Core,
+    base: &str,
+    st: &State,
+    exec: E,
+) -> Runner {
     let key = Arc::new(Key::load(&st.key()).unwrap());
     let enrolment = Arc::new(Mutex::new(Enrolment::load(&st.enrolment()).unwrap()));
     let id = enrolment.lock().unwrap().device_id.clone();

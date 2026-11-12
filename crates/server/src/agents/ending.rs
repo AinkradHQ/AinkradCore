@@ -25,6 +25,7 @@ pub(super) async fn stop_for_end(app: &App, s: &Session) -> Result<Option<u64>, 
     let stop = Command::AgentStop(ainkrad_proto::v2::AgentStop {
         session: s.id.clone(),
         kill: true,
+        turn: false,
     });
     match ask(app, &s.runner, stop, app.agents.config.answer, Some(proof)).await {
         Ok(ev) => match store::apply(&app.pool, &s.id, &ev, &app.clock.now()).await {

@@ -91,6 +91,7 @@ pub async fn load_or_create(
                 value: &hex,
                 runners: None,
                 delivery: None,
+                ..NewValue::default()
             },
             owner,
             AuditActor::System,

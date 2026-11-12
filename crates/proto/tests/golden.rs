@@ -571,6 +571,7 @@ fn v2_agent_frames_are_pinned() {
             }],
             gateway: None,
             epoch: 0,
+            live: false,
         })),
     );
     // A policy with every isolation field set (E8a-08); the frame above pins the unchanged shape.
@@ -602,6 +603,7 @@ fn v2_agent_frames_are_pinned() {
             secrets: vec![],
             gateway: None,
             epoch: 0,
+            live: false,
         })),
     );
     v2(
@@ -791,6 +793,7 @@ fn v2_agent_frames_are_pinned() {
         Body::Command(Command::AgentStop(AgentStop {
             session: "as_a".to_owned(),
             kill: true,
+            turn: false,
         })),
     );
     let upstream = Upstream {
@@ -839,6 +842,7 @@ fn v2_agent_frames_are_pinned() {
                 },
             })),
             epoch: 0,
+            live: false,
         })),
     );
     v2(

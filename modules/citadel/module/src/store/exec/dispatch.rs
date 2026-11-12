@@ -165,7 +165,7 @@ impl Host for Platform {
         use ainkrad_core_server::agents::describe;
         let id = session.to_owned();
         let command = match what {
-            Instruction::Stop { kill } => Command::AgentStop(AgentStop { session: id, kill }),
+            Instruction::Stop { kill } => Command::AgentStop(AgentStop { session: id, kill, turn: false }),
             Instruction::Send(text) => Command::AgentSend(AgentSend { session: id, text }),
             Instruction::Decide {
                 request,

@@ -29,9 +29,10 @@ import kotlinx.serialization.Contextual
  * @param chain A fallback chain's id: the session draws its account from it, one at a time. Needs `admin`. It must not come with a harness, a model or an `acct.*` secret.
  * @param connectionAccess Capability names the session may call through its connections (`read_repo`, `issues_write`, `read_issues`, ...; see `listConnectionKinds`). Needs `admin`. Absent: the default, read-class capabilities only (write is an explicit grant); an agent's session with none has no connection tools. An empty list is refused (400 `empty_allowlist`), and so are operation names and `*` (400).
  * @param harness `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it (and `model`) when the session draws from a chain: the account the allocator picks sets them.
+ * @param live One live conversation (default `true`): the harness stays up after each answer, the state is `waiting` until the next `sendAgentMessage`, and the session ends only on `cancel`, `kill`, the idle end (`agents.idle_end_secs`) or when the CLI exits by itself. `false`, or a runner that does not offer it (the answer's `live` says), runs one answer and ends.
  * @param model The model id as the provider names it. For a session served by the auth gateway it must be one of the ids priced for its provider, exactly: the gateway resolves no alias.
  * @param policy `{\"mode\": \"ask\" | \"accept_edits\" | \"sandboxed\", \"allow\": […]}`; default `ask`.
- * @param prompt 
+ * @param prompt The first message. Absent or empty: the session starts with no message, like opening the CLI: its harness is up, the state is `waiting`, and the first message comes through `sendAgentMessage`. A message gives the session its `title` (its first 60 characters).
  * @param secrets At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).
  * @param workspace The repo and worktree to work in (`{\"repo_url\", \"base_branch\", \"branch\", …}`); absent, a scratch dir.
  */
@@ -59,6 +60,10 @@ data class NewAgentSession (
     @SerialName(value = "harness")
     val harness: kotlin.String? = null,
 
+    /* One live conversation (default `true`): the harness stays up after each answer, the state is `waiting` until the next `sendAgentMessage`, and the session ends only on `cancel`, `kill`, the idle end (`agents.idle_end_secs`) or when the CLI exits by itself. `false`, or a runner that does not offer it (the answer's `live` says), runs one answer and ends. */
+    @SerialName(value = "live")
+    val live: kotlin.Boolean? = null,
+
     /* The model id as the provider names it. For a session served by the auth gateway it must be one of the ids priced for its provider, exactly: the gateway resolves no alias. */
     @SerialName(value = "model")
     val model: kotlin.String? = null,
@@ -67,6 +72,7 @@ data class NewAgentSession (
     @Contextual @SerialName(value = "policy")
     val policy: kotlin.Any? = null,
 
+    /* The first message. Absent or empty: the session starts with no message, like opening the CLI: its harness is up, the state is `waiting`, and the first message comes through `sendAgentMessage`. A message gives the session its `title` (its first 60 characters). */
     @SerialName(value = "prompt")
     val prompt: kotlin.String? = null,
 

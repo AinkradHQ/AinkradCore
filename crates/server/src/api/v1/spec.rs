@@ -164,6 +164,8 @@ use super::{
         agents::transcript,
         agents::message,
         agents::decide,
+        agents::interrupt,
+        agents::title,
         agents::cancel,
         agents::kill,
         agents::resume,

@@ -455,6 +455,7 @@ async fn a_wake_does_not_resend_the_last_runs_snapshot() {
     // run's; the answer to the start itself and every read after carry none until it reports.
     let wake = AgentStart {
         epoch: 1,
+        live: false,
         resume: Some("h-1".to_owned()),
         ..start(SESSION, "claude")
     };

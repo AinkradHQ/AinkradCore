@@ -110,7 +110,9 @@ fn start_command(
         session: s.id.clone(),
         harness: s.harness.clone(),
         model: s.model.clone(),
-        prompt: s.prompt.clone(),
+        // A live session restarted by a resume starts no turn: its next message is delivered by
+        // the supervisor (`live::before_read`), and its first prompt is never sent twice.
+        prompt: s.prompt.clone().filter(|_| !(resume && s.conversation)),
         workspace,
         policy,
         resume: resume.then(|| s.harness_session.clone()).flatten(),
@@ -121,6 +123,7 @@ fn start_command(
         } else {
             0
         },
+        live: s.conversation,
     }))
 }
 

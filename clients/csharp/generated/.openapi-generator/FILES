@@ -53,6 +53,7 @@ src/Ainkrad.Client/Model/AgentDecision.cs
 src/Ainkrad.Client/Model/AgentMessage.cs
 src/Ainkrad.Client/Model/AgentSecret.cs
 src/Ainkrad.Client/Model/AgentSession.cs
+src/Ainkrad.Client/Model/AgentTitle.cs
 src/Ainkrad.Client/Model/AgentTranscript.cs
 src/Ainkrad.Client/Model/AgentTranscriptEntry.cs
 src/Ainkrad.Client/Model/AgentUsage.cs

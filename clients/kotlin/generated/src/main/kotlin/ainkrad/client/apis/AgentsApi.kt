@@ -18,6 +18,7 @@ package ainkrad.client.apis
 import ainkrad.client.models.AgentDecision
 import ainkrad.client.models.AgentMessage
 import ainkrad.client.models.AgentSession
+import ainkrad.client.models.AgentTitle
 import ainkrad.client.models.AgentTranscript
 import ainkrad.client.models.AgentWake
 import ainkrad.client.models.AgentWakeRequest
@@ -215,6 +216,40 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * POST /api/v1/agent-sessions/{id}/interrupt
+        * 
+        * 
+         * @param id The session&#39;s id, &#x60;as_…&#x60; 
+         * @return AgentSession
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun interruptAgentSession(id: kotlin.String): HttpResponse<AgentSession> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/agent-sessions/{id}/interrupt".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * POST /api/v1/agent-sessions/{id}/kill
         * 
         * 
@@ -343,6 +378,40 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.POST,
             "/api/v1/agent-sessions/{id}/messages".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * PATCH /api/v1/agent-sessions/{id}
+        * 
+        * 
+         * @param id The session&#39;s id, &#x60;as_…&#x60; 
+         * @param agentTitle  
+         * @return AgentSession
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun titleAgentSession(id: kotlin.String, agentTitle: AgentTitle): HttpResponse<AgentSession> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = agentTitle
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.PATCH,
+            "/api/v1/agent-sessions/{id}".replace("{" + "id" + "}", "$id"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

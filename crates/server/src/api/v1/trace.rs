@@ -159,6 +159,7 @@ pub const AGGREGATED: &[(&str, &str)] = &[
     ("POST", "/api/v1/agent-sessions"),
     ("POST", "/api/v1/agent-sessions/{id}/messages"),
     ("POST", "/api/v1/agent-sessions/{id}/approvals/{request}"),
+    ("POST", "/api/v1/agent-sessions/{id}/interrupt"),
     ("POST", "/api/v1/agent-sessions/{id}/cancel"),
     ("POST", "/api/v1/agent-sessions/{id}/kill"),
     ("POST", "/api/v1/agent-sessions/{id}/resume"),

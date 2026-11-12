@@ -289,7 +289,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        patch: operations["titleAgentSession"];
         trace?: never;
     };
     "/api/v1/agent-sessions/{id}/approvals/{request}": {
@@ -318,6 +318,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["cancelAgentSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-sessions/{id}/interrupt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["interruptAgentSession"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2029,6 +2045,8 @@ export interface components {
             harness_session?: string | null;
             /** @description `as_…`. */
             id: string;
+            /** @description While `waiting`: since when. */
+            idle_since?: components["schemas"]["Timestamp"];
             /**
              * Format: int64
              * @description Its row: page `listAgentSessions` with `before`.
@@ -2039,6 +2057,8 @@ export interface components {
              * @description The newest transcript `seq` stored.
              */
             last_seq: number;
+            /** @description A live conversation (`createAgentSession`'s `live`): the state is `waiting` between answers. */
+            live?: boolean | null;
             model?: string | null;
             /**
              * @description Once over: `{"kind": "succeeded" | "failed" | "cancelled" | "token_cap" | "stalled" |
@@ -2067,10 +2087,13 @@ export interface components {
             /** @description The pools a budget stop took out of the run's chain. Admin only. */
             skip_pools?: number[] | null;
             /**
-             * @description `starting`, `running`, `interrupted` (its runner restarted; it is resumed), `ended`,
-             *     `lost`.
+             * @description `starting`, `running` (working), `waiting` (a live session finished its answer and waits
+             *     for the user's next message; it still holds its runner slot), `interrupted` (its runner
+             *     restarted; it is resumed), `ended`, `lost`.
              */
             state: string;
+            /** @description A short name: the first message's start, or the one `titleAgentSession` set. */
+            title?: string | null;
             updated_at: components["schemas"]["Timestamp"];
             /**
              * @description The last status class its own gateway reported: `ok`, `rate_limited`, `quota`,
@@ -2083,6 +2106,11 @@ export interface components {
              *     until `scheduler.wait_max_secs` ends the run.
              */
             waiting?: components["schemas"]["AgentWaiting"];
+        };
+        /** @description A new title for a session. */
+        AgentTitle: {
+            /** @description At most 60 characters; empty clears it (the list then shows the session's harness). */
+            title: string;
         };
         AgentTranscript: {
             entries: components["schemas"]["AgentTranscriptEntry"][];
@@ -2614,7 +2642,10 @@ export interface components {
              *     `action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;
              *     a device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a
              *     module writes. The registered kinds are listed in `x-event-kinds`. The payload of
-             *     `agent.state` is `{session, state, reason, …}`: a chain session that waits for an account
+             *     `agent.state` is `{session, state, reason, …}`: a live session that finished its answer is
+             *     `state: "waiting"` with `reason: "turn_ended"` (its transcript has the harness's
+             *     `turn_ended` and a `waiting` entry), and `state: "running"` with `reason: "message"` when
+             *     the next message starts an answer. A chain session that waits for an account
              *     says `reason: "waiting"` and `waiting: {until, why, since}` (`until` an RFC 3339 time, `since`
              *     the first wait in unix seconds), and one whose launch refused its account, so another was
              *     picked across a provider or harness, says `reason: "repicked"`, and a run a failover moved across
@@ -2976,12 +3007,24 @@ export interface components {
              */
             harness?: string;
             /**
+             * @description One live conversation (default `true`): the harness stays up after each answer, the state
+             *     is `waiting` until the next `sendAgentMessage`, and the session ends only on `cancel`,
+             *     `kill`, the idle end (`agents.idle_end_secs`) or when the CLI exits by itself. `false`, or
+             *     a runner that does not offer it (the answer's `live` says), runs one answer and ends.
+             */
+            live?: boolean | null;
+            /**
              * @description The model id as the provider names it. For a session served by the auth gateway it must be
              *     one of the ids priced for its provider, exactly: the gateway resolves no alias.
              */
             model?: string | null;
             /** @description `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`. */
             policy?: Record<string, never> | null;
+            /**
+             * @description The first message. Absent or empty: the session starts with no message, like opening the
+             *     CLI: its harness is up, the state is `waiting`, and the first message comes through
+             *     `sendAgentMessage`. A message gives the session its `title` (its first 60 characters).
+             */
             prompt?: string | null;
             /** @description The runner's device id, `d_…`. */
             runner: string;
@@ -4927,6 +4970,40 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    titleAgentSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's id, `as_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentTitle"];
+            };
+        };
+        responses: {
+            /** @description Sets the session's short `title` (at most 60 characters, trimmed; empty clears it; audited as `agent.renamed`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     decideAgentApproval: {
         parameters: {
             query?: never;
@@ -4993,6 +5070,36 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    interruptAgentSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's id, `as_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stops the running answer of a live session, like Esc in the CLI (audited as `agent.interrupted`): a tool call waiting for approval is denied, the session goes on and becomes `waiting` (a message queued behind the answer is taken next). Nothing happens while it waits. 409 `not_live` for a session that is not a live conversation, `session_over`; `cancel` ends the session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     killAgentSession: {
         parameters: {
             query?: never;
@@ -5039,7 +5146,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Given to the harness as its next turn (audited as `agent.messaged`, its length only). 409 `session_over`, 502 `runner_failed` when it is not running */
+            /** @description Given to the harness as its next turn (audited as `agent.messaged`, its length only). A live session takes it in its running process: `waiting` becomes `running`, and a message sent while an answer runs is queued behind it. A live session whose process is gone (a runner restart, a lost runner, an idle end) is started again with the harness's own resume in the same folder and gets it there, so the conversation goes on. A first message gives an untitled session its `title`. 409 `session_over`, `session_starting` (not on its runner yet), 502 `runner_failed` when it is not running */
             200: {
                 headers: {
                     [name: string]: unknown;

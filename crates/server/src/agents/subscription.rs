@@ -237,6 +237,7 @@ async fn stop_live(app: &App, secret_name: &str, why: &str) {
         let stop = Command::AgentStop(ainkrad_proto::v2::AgentStop {
             session: s.id.clone(),
             kill: true,
+            turn: false,
         });
         match ask(app, &s.runner, stop, app.agents.config.answer, proof).await {
             Ok(ev) => {

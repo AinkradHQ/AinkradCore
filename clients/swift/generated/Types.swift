@@ -77,12 +77,18 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/agent-sessions/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/get(getAgentSession)`.
     func getAgentSession(_ input: Operations.GetAgentSession.Input) async throws -> Operations.GetAgentSession.Output
+    /// - Remark: HTTP `PATCH /api/v1/agent-sessions/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/patch(titleAgentSession)`.
+    func titleAgentSession(_ input: Operations.TitleAgentSession.Input) async throws -> Operations.TitleAgentSession.Output
     /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/approvals/{request}`.
     /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/approvals/{request}/post(decideAgentApproval)`.
     func decideAgentApproval(_ input: Operations.DecideAgentApproval.Input) async throws -> Operations.DecideAgentApproval.Output
     /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/cancel`.
     /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/cancel/post(cancelAgentSession)`.
     func cancelAgentSession(_ input: Operations.CancelAgentSession.Input) async throws -> Operations.CancelAgentSession.Output
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/interrupt`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/interrupt/post(interruptAgentSession)`.
+    func interruptAgentSession(_ input: Operations.InterruptAgentSession.Input) async throws -> Operations.InterruptAgentSession.Output
     /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/kill`.
     /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/kill/post(killAgentSession)`.
     func killAgentSession(_ input: Operations.KillAgentSession.Input) async throws -> Operations.KillAgentSession.Output
@@ -721,6 +727,19 @@ extension APIProtocol {
             headers: headers
         ))
     }
+    /// - Remark: HTTP `PATCH /api/v1/agent-sessions/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/patch(titleAgentSession)`.
+    public func titleAgentSession(
+        path: Operations.TitleAgentSession.Input.Path,
+        headers: Operations.TitleAgentSession.Input.Headers = .init(),
+        body: Operations.TitleAgentSession.Input.Body
+    ) async throws -> Operations.TitleAgentSession.Output {
+        try await titleAgentSession(Operations.TitleAgentSession.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
     /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/approvals/{request}`.
     /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/approvals/{request}/post(decideAgentApproval)`.
     public func decideAgentApproval(
@@ -741,6 +760,17 @@ extension APIProtocol {
         headers: Operations.CancelAgentSession.Input.Headers = .init()
     ) async throws -> Operations.CancelAgentSession.Output {
         try await cancelAgentSession(Operations.CancelAgentSession.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/interrupt`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/interrupt/post(interruptAgentSession)`.
+    public func interruptAgentSession(
+        path: Operations.InterruptAgentSession.Input.Path,
+        headers: Operations.InterruptAgentSession.Input.Headers = .init()
+    ) async throws -> Operations.InterruptAgentSession.Output {
+        try await interruptAgentSession(Operations.InterruptAgentSession.Input(
             path: path,
             headers: headers
         ))

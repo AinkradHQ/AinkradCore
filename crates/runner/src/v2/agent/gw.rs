@@ -267,7 +267,7 @@ impl AgentDriver {
         let answer = {
             let mut all = self.sessions.lock().unwrap();
             let live = all.get_mut(&req.session).ok_or_else(no_session)?;
-            if live.meta.state != AgentState::Running {
+            if !super::holds_slot(live.meta.state) {
                 return Err(refuse(ErrorCode::InvalidArgs, "the session is not running"));
             }
             match live.gateway.as_ref() {
