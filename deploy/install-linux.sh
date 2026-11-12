@@ -2,7 +2,7 @@
 # Installs the ainkrad-runner systemd unit (E1-12.3; protocol v2 since E1-14.5; terminals and pairing E2-15).
 # Idempotent; does not start unless --start or --pair. Works on the Core's own host and on a remote Linux host.
 #   install-linux.sh [--binary PATH] [--ptyhost PATH] [--pty] [--ca PEM]
-#                    [--agents] [--exec] [--root] [--pair https://<core> --code <CODE> | --invite <invite>] [--start]
+#                    [--agents] [--exec] [--root] [--pair https://<core> --code - | --invite -] [--start]
 #                    [--prefix DIR] [--dry-run]
 # --pty      offer terminals (--enable-pty); needs ainkrad-ptyhost (--ptyhost, default: beside --binary). The shell
 #            runs as the unprivileged ainkrad-runner user inside the unit's sandbox. Off unless asked. Also installs zsh
@@ -52,6 +52,14 @@ runner_restart_if_needed() {
 }
 [ "${AINKRAD_INSTALL_SOURCE_ONLY:-}" != 1 ] || [ "${BASH_SOURCE[0]}" = "$0" ] || return 0
 usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+# A secret flag's value: `-` reads it from the terminal (no echo) or stdin; a literal still works, with a warning (argv shows in `ps`).
+secret_arg() {
+  local v
+  if [ "$2" = - ]; then
+    if [ -t 0 ]; then IFS= read -rsp "${1#--}: " v; echo >&2; else IFS= read -r v; fi
+  else echo "WARNING: $1 <value> puts the secret in argv (visible in ps and shell history); use '$1 -' or AINKRAD_PAIR_CODE or AINKRAD_PAIR_INVITE in the environment" >&2; v=$2; fi
+  printf '%s' "$v"
+}
 while [ $# -gt 0 ]; do
   case $1 in
     --binary) binary=${2:?}; shift 2 ;;
@@ -62,8 +70,8 @@ while [ $# -gt 0 ]; do
     --root) root=1; shift ;;
     --ca) ca=${2:?}; shift 2 ;;
     --pair) pair=${2:?}; shift 2 ;;
-    --code) code=${2:?}; shift 2 ;;
-    --invite) invite=${2:?}; shift 2 ;;
+    --code) code=$(secret_arg --code "${2:?}"); shift 2 ;;
+    --invite) invite=$(secret_arg --invite "${2:?}"); shift 2 ;;
     --prefix) prefix=${2:?}; shift 2 ;;
     --start) start=1; shift ;;
     --dry-run) dry=1; shift ;;
@@ -72,6 +80,7 @@ while [ $# -gt 0 ]; do
 done
 [ "$dry" = 1 ] || [ "$(id -u)" = 0 ] || [ -n "$prefix" ] || { echo "run as root (or --prefix/--dry-run)" >&2; exit 1; }
 [ "$dry" = 1 ] || [ -x "$binary" ] || { echo "no runner binary at $binary (cargo build --release -p ainkrad-runner, or --binary)" >&2; exit 1; }
+code=${code:-${AINKRAD_PAIR_CODE:-}} invite=${invite:-${AINKRAD_PAIR_INVITE:-}}
 [ -z "$invite" ] || [ -z "$code" ] || { echo "--invite and --code are two ways to pair: give one" >&2; exit 2; }
 case $invite in '') ;; *[!A-Za-z0-9_./:-]*) echo "--invite is a runner invite: <host>/<fingerprint>.<secret>" >&2; exit 2 ;; esac
 # A runner invite names its Core: `<host>/<fp>.<secret>`.
@@ -172,14 +181,15 @@ if [ -z "$prefix" ]; then
   run systemctl enable --now ainkrad-runner-tools.socket
   if [ -n "$pair" ]; then
     # Blocks until the approver confirms the SAS (or the code expires); the Core's identity is pinned here.
-    if [ -n "$invite" ]; then pa=(pair "$pair" --invite "$invite" --state /var/lib/ainkrad-runner/core)
-    else pa=(pair "$pair" --code "$code" --state /var/lib/ainkrad-runner/core); fi
+    # The secret goes to the runner on stdin, never in argv.
+    if [ -n "$invite" ]; then pa=(pair "$pair" --invite - --state /var/lib/ainkrad-runner/core); sec=$invite
+    else pa=(pair "$pair" --code - --state /var/lib/ainkrad-runner/core); sec=$code; fi
     [ -z "$ca" ] || pa+=(--ca "$ca")
-    run runuser -u ainkrad-runner -- /usr/local/bin/ainkrad-runner "${pa[@]}"
+    printf '%s\n' "$sec" | run runuser -u ainkrad-runner -- /usr/local/bin/ainkrad-runner "${pa[@]}"
     start=1
   fi
   if [ "$start" = 1 ]; then
-    [ "$dry" = 1 ] || [ -e /var/lib/ainkrad-runner/core/enrolment.json ] || { echo "pair it first: sudo -u ainkrad-runner ainkrad-runner pair https://<core> --code <CODE> --state /var/lib/ainkrad-runner/core" >&2; exit 1; }
+    [ "$dry" = 1 ] || [ -e /var/lib/ainkrad-runner/core/enrolment.json ] || { echo "pair it first: sudo -u ainkrad-runner ainkrad-runner pair https://<core> --code - --state /var/lib/ainkrad-runner/core" >&2; exit 1; }
     run systemctl enable ainkrad-runner.service
     # restart: a running runner picks up new flags; its terminal hosts keep running (KillMode=process).
     run systemctl restart ainkrad-runner.service

@@ -295,6 +295,14 @@ pub(crate) fn command(program: &OsStr, args: &[String], spec: &Spec) -> Command 
         }
     }
 }
+/// [`command`] for a caller that expects the refusal (the runner's self-test negative control):
+/// the same fail-closed command, logged at DEBUG instead of ERROR.
+pub(crate) fn command_expecting_refusal(program: &OsStr, args: &[String], spec: &Spec) -> Command {
+    compile(program, args, spec).unwrap_or_else(|e| {
+        tracing::debug!(error = %e, "sandbox compilation refused, as the self-test expects");
+        Command::new("/nonexistent/ainkrad-sandbox-refused")
+    })
+}
 fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command> {
     for path in [
         &spec.cwd,

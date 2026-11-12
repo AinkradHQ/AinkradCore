@@ -452,11 +452,11 @@ extras() {
   if [ -n "$code" ]; then
     if [ "$A_ACME_ENV" = staging ]; then
       warn "the Core serves a staging certificate the runner does not trust: pair by hand with --ca (below)"; code=''
-    else a+=(--pair "https://$A_HOSTNAME" --code "$code"); fi
+    else a+=(--pair "https://$A_HOSTNAME"); fi
   fi
-  bash "$ROOT/deploy/install-linux.sh" "${a[@]}" || { warn "runner install/pairing did not complete; pair it by hand (below)"; code=''; }
+  AINKRAD_PAIR_CODE=$code bash "$ROOT/deploy/install-linux.sh" "${a[@]}" || { warn "runner install/pairing did not complete; pair it by hand (below)"; code=''; }
   [ -n "$code" ] || say "  Pair it once your first device is paired: on that device \`ainkradctl device add $(hostname -s 2>/dev/null || echo runner) --kind runner\`, then here:
-    sudo $ROOT/deploy/install-linux.sh --binary $BIN/ainkrad-runner$([ "$A_RUNNER_PTY" = yes ] && echo ' --pty') --pair https://$A_HOSTNAME --code <CODE>
+    sudo $ROOT/deploy/install-linux.sh --binary $BIN/ainkrad-runner$([ "$A_RUNNER_PTY" = yes ] && echo ' --pty') --pair https://$A_HOSTNAME --code -
   compare the SAS it prints with the approver's, approve it; the runner then starts. (--ca <pem> for a staging Core.)"
 }
 

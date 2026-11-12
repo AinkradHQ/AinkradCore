@@ -558,6 +558,11 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   done
   if [ "$runner" = 1 ]; then
     case $invite in
+      -) printf 'runner invite: ' >&2; stty -echo </dev/tty 2>/dev/null; IFS= read -r invite </dev/tty || invite=''; stty echo </dev/tty 2>/dev/null; echo >&2 ;;
+      '') invite=${AINKRAD_PAIR_INVITE:-} ;;
+      *) printf 'get.sh: WARNING: --invite <value> puts the invite in argv (visible in ps and shell history); use --invite - (asks on the terminal, no echo) or AINKRAD_PAIR_INVITE\n' >&2 ;;
+    esac
+    case $invite in
       */?*.?*) ;;
       *) die "--runner needs --invite <invite> (single use, 15 minutes): make one in the App, Add device, a runner" ;;
     esac
@@ -665,7 +670,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   if [ "$UI_FANCY" = 1 ] && [ "$UI_LIVE" = 1 ]; then printf '\r\033[K'; export AINKRAD_UI_LIVE=1; UI_LIVE=0; fi # install.sh carries on from this progress line
   trap 'got=130' INT; trap 'got=143' TERM
   if [ "$runner" = 1 ]; then # only a runner: no Core, no questions
-    bash "$INST/scripts/install/runner-only.sh" --binary /usr/local/bin --invite "$invite" </dev/null || rc=$?
+    AINKRAD_PAIR_INVITE=$invite bash "$INST/scripts/install/runner-only.sh" --binary /usr/local/bin </dev/null || rc=$?
   elif ( : </dev/tty ) 2>/dev/null; then bash "$INST/scripts/install.sh" --binary /usr/local/bin "$@" </dev/tty || rc=$?
   else bash "$INST/scripts/install.sh" --binary /usr/local/bin "$@" </dev/null || rc=$?; fi
   trap 'ui_int 130' INT; trap 'ui_int 143' TERM

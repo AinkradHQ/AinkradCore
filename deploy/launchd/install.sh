@@ -2,7 +2,7 @@
 # Installs / pairs / removes the ainkrad-runner LaunchAgent for the current user (E1-12.3; protocol v2, terminals,
 # pairing: E2-15). Run it from a source checkout or from the unpacked package (scripts/release/mac-package.sh):
 #   install.sh install [--binary-dir DIR] [--pty] [--dry-run] [-- extra runner flags]
-#   install.sh pair <https://core> --code <CODE> [--ca PEM] [--dry-run]   pair, then load the agent
+#   install.sh pair <https://core> --code - [--ca PEM] [--dry-run]   pair, then load the agent
 #   install.sh status
 #   install.sh uninstall [--purge] [--dry-run]    --purge also deletes the enrolment (device key) and terminals
 # `install` puts ainkrad-runner and ainkrad-ptyhost in ~/.local/bin and writes the agent; it loads it only when
@@ -28,7 +28,11 @@ while [ $# -gt 0 ]; do
   case $1 in
     --binary-dir) srcdir=${2:?}; shift 2 ;;
     --pty) pty=1; shift ;;
-    --code) code=${2:?}; shift 2 ;;
+    --code)
+      if [ "${2:?}" = - ]; then
+        if [ -t 0 ]; then IFS= read -rsp "code: " code; echo >&2; else IFS= read -r code; fi
+      else echo "WARNING: --code <value> puts the code in argv (visible in ps and shell history); use '--code -' or AINKRAD_PAIR_CODE in the environment" >&2; code=$2; fi
+      shift 2 ;;
     --ca) ca=${2:?}; shift 2 ;;
     --purge) purge=1; shift ;;
     --dry-run) dry=1; shift ;;
@@ -74,16 +78,17 @@ install)
     mv "$AGENT.tmp" "$AGENT"
   fi
   if paired || [ "$dry" = 1 ]; then load
-  else echo "installed, not loaded: pair it first: $0 pair https://<core> --code <CODE>"; fi
+  else echo "installed, not loaded: pair it first: $0 pair https://<core> --code -"; fi
   ;;
 pair)
+  code=${code:-${AINKRAD_PAIR_CODE:-}}
   [ -n "$url" ] && [ -n "$code" ] || usage
   [ -x "$BINDIR/ainkrad-runner" ] || { echo "run '$0 install' first" >&2; exit 1; }
   [ -f "$AGENT" ] || [ "$dry" = 1 ] || { echo "run '$0 install' first" >&2; exit 1; }
-  pa=(pair "$url" --code "$code" --state "$STATE/core")
+  pa=(pair "$url" --code - --state "$STATE/core")
   [ -z "$ca" ] || pa+=(--ca "$ca")
   # Waits for the approver to confirm the SAS it prints (compare it with theirs); pins the Core's identity.
-  run "$BINDIR/ainkrad-runner" "${pa[@]}"
+  printf '%s\n' "$code" | run "$BINDIR/ainkrad-runner" "${pa[@]}"
   load
   ;;
 status)
