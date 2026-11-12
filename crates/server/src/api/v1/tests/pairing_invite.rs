@@ -294,6 +294,29 @@ async fn an_invite_is_never_swept() {
     assert_eq!(s, StatusCode::ACCEPTED);
 }
 
+/// The installer enrols the built-in runner before it makes the first owner's link: a runner
+/// (runner scope only) never stands in the way of the host's invite, and the owner still claims it.
+#[tokio::test]
+async fn a_runner_does_not_block_the_first_owner() {
+    let fx = fx().await;
+    sqlx::query("DELETE FROM core_devices")
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    let _runner = fx.enroll("built-in runner", &["runner"]).await;
+    sqlx::query("UPDATE core_devices SET kind = 'runner'")
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    let link = host_invite(&fx)
+        .await
+        .expect("a runner alone does not block the owner");
+    let (s, got) = claim(&fx, &newcomer(&fx), &link.secret, "10.9.6.9").await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{got}");
+    // Once an app device exists, the host's invite is refused again.
+    assert!(host_invite(&fx).await.is_err(), "the owner now exists");
+}
+
 /// The host's invite: refused beside a device; with none, claimed from the network with every
 /// scope; a new one burns the unclaimed old one; a device enrolled meanwhile stops the claim.
 #[tokio::test]
