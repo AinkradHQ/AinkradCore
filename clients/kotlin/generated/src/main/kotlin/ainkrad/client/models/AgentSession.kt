@@ -59,6 +59,7 @@ import kotlinx.serialization.Contextual
  * @param upstreamClass The last status class its own gateway reported: `ok`, `rate_limited`, `quota`, `server_error`, `auth_failed`, …
  * @param usage 
  * @param waiting Set while a chain session waits for an account: it stays `starting` until `until`, or until `scheduler.wait_max_secs` ends the run.
+ * @param workspace The repo and worktree it works in, as the create sent it (`{\"repo\", \"base\", \"branch\", …}`); absent for a scratch dir.
  */
 @Serializable
 
@@ -190,7 +191,11 @@ data class AgentSession (
 
     /* Set while a chain session waits for an account: it stays `starting` until `until`, or until `scheduler.wait_max_secs` ends the run. */
     @SerialName(value = "waiting")
-    val waiting: AgentWaiting? = null
+    val waiting: AgentWaiting? = null,
+
+    /* The repo and worktree it works in, as the create sent it (`{\"repo\", \"base\", \"branch\", …}`); absent for a scratch dir. */
+    @Contextual @SerialName(value = "workspace")
+    val workspace: kotlin.Any? = null
 
 ) {
 
