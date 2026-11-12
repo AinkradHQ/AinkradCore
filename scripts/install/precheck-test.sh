@@ -197,5 +197,68 @@ else { grep -q 'does not match its pinned SHA-256' "$t/sh4.out" && [ ! -e "$t/sh
 # the terminal start: zsh -l with ZDOTDIR, the profile read-only in the sandbox, ZDOTDIR on the allow-list, a logged fallback
 grep -q 'spec.env.insert("ZDOTDIR"' "$ROOT/crates/runner/src/v2/pty.rs" && grep -q '"ZDOTDIR"' "$ROOT/crates/runner/src/v2/pty.rs" && grep -q 'SHELL_DIR' "$ROOT/crates/runner/src/v2/termbox.rs" && grep -q 'starting the login shell' "$ROOT/crates/runner/src/v2/pty.rs" && ok || bad "the runner does not start zsh -l with ZDOTDIR, bind the profile read-only and log the fallback"
 
+# --- the outside port probe (N6): a signed POST /v1/probe to the sign-in service; a fake service verifies the signature with openssl ---
+if command -v openssl >/dev/null && command -v curl >/dev/null; then
+cat >"$t/fake-signin.py" <<'PYEOF'
+import base64, hashlib, http.server, json, subprocess, sys, tempfile, os
+mode, port_file, log = sys.argv[1], sys.argv[2], sys.argv[3]
+def ub(s): return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+def der_int(b):
+    b = b.lstrip(b"\0") or b"\0"
+    if b[0] & 0x80: b = b"\0" + b
+    return b"\x02" + bytes([len(b)]) + b
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        h = self.headers
+        spki = ub(h["Ainkrad-Key"]); sig = ub(h["Ainkrad-Signature"])
+        ok = (self.path == "/v1/probe" and len(spki) == 91 and len(sig) == 64 and h["Ainkrad-Alg"] == "ES256"
+              and h["Ainkrad-Core"] == base64.urlsafe_b64encode(hashlib.sha256(spki).digest()).decode().rstrip("=")
+              and len(ub(h["Ainkrad-Nonce"])) == 16 and h["Content-Type"] == "application/json")
+        msg = "\n".join(["AINKRAD-SVC-V1", h["Ainkrad-Core"], "ES256", "POST", self.path, h["Ainkrad-Timestamp"], h["Ainkrad-Nonce"],
+                         base64.urlsafe_b64encode(hashlib.sha256(body).digest()).decode().rstrip("=")])
+        d = tempfile.mkdtemp()
+        seq = der_int(sig[:32]) + der_int(sig[32:])
+        open(d + "/sig", "wb").write(b"\x30" + bytes([len(seq)]) + seq)
+        open(d + "/msg", "wb").write(msg.encode())
+        pem = "-----BEGIN PUBLIC KEY-----\n" + base64.encodebytes(spki).decode() + "-----END PUBLIC KEY-----\n"
+        open(d + "/pub", "w").write(pem)
+        ok = ok and subprocess.run(["openssl", "dgst", "-sha256", "-verify", d + "/pub", "-signature", d + "/sig", d + "/msg"], capture_output=True).returncode == 0
+        open(log, "a").write(("signed-ok " if ok else "signed-BAD ") + body.decode() + "\n")
+        ports = json.loads(body)["ports"]
+        if not ok: out, code = {"error": {"code": "bad_signature"}}, 401
+        elif mode == "down": out, code = {"error": {"code": "internal"}}, 500
+        else:
+            res = []
+            for p in ports:
+                closed = mode == "closed443" and p == 443
+                res.append({"port": p, "open": False, "ms": 4001, "reason": "timeout"} if closed else
+                           {"port": p, "open": False, "ms": 3, "reason": "refused_or_unreachable"} if mode == "refused" else {"port": p, "open": True, "ms": 30})
+            out, code = {"ip": "203.0.113.7", "results": res}, 200
+        data = json.dumps(out).encode()
+        self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(port_file, "w").write(str(s.server_port))
+s.serve_forever()
+PYEOF
+probe() { # MODE: runs pc_probe "443 80" against the fake service in MODE (plain output)
+  rm -f "$t/port" "$t/plog"; "$PY" "$t/fake-signin.py" "$1" "$t/port" "$t/plog" & _pid=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$t/port" ] && break; sleep 0.2; done
+  PATH="$t/base:$(dirname "$(command -v openssl)"):$(dirname "$(command -v curl)")" NO_COLOR=1 AINKRAD_SIGNIN_URL="http://127.0.0.1:$(cat "$t/port")" \
+    sh -c '. "$1"; . "$2"; ui_init; pc_probe "443 80"; echo "rc=$?"; echo "WHAT=$PC_WHAT"; echo "TODO=$PC_TODO"' _ "$ROOT/scripts/install/ui.sh" "$ROOT/scripts/install/precheck.sh" 2>&1
+  kill "$_pid" 2>/dev/null; wait "$_pid" 2>/dev/null
+}
+for c in mktemp date sleep openssl; do p=$(command -v "$c") && ln -sf "$p" "$t/base/$c"; done
+o=$(probe open); { grep -qx 'rc=0' <<<"$o" && grep -q 'signed-ok {"ports":\[443,80\]}' "$t/plog"; } && ok || bad "an open port was not passed with a verifying signature: $o $(cat "$t/plog" 2>/dev/null)"
+o=$(probe refused); grep -qx 'rc=0' <<<"$o" && ok || bad "a refusal (it reached this machine, nothing listens yet) blocked the install: $o"
+o=$(probe closed443)
+{ grep -qx 'rc=1' <<<"$o" && grep -q 'WHAT=port 443 is closed from the internet' <<<"$o" && grep -q 'TODO=open it in your cloud firewall (OCI: security list / NSG' <<<"$o"; } && ok || bad "a closed 443 was not reported with the cloud-firewall advice: $o"
+o=$(probe down); { grep -qx 'rc=0' <<<"$o" && grep -q 'WARNING' <<<"$o"; } && ok || bad "a failing service blocked the install or was silent: $o"
+o=$(PATH="$t/base:$(dirname "$(command -v openssl)"):$(dirname "$(command -v curl)")" NO_COLOR=1 AINKRAD_SIGNIN_URL=http://127.0.0.1:9 sh -c '. "$1"; . "$2"; ui_init; pc_probe "443"; echo "rc=$?"' _ "$ROOT/scripts/install/ui.sh" "$ROOT/scripts/install/precheck.sh" 2>&1)
+{ grep -qx 'rc=0' <<<"$o" && grep -q 'unreachable' <<<"$o"; } && ok || bad "an unreachable service blocked the install or was silent: $o"
+o=$(AINKRAD_SKIP_PROBE=1 PATH="$t/base" NO_COLOR=1 sh -c '. "$1"; . "$2"; ui_init; pc_probe "443"; echo "rc=$?"' _ "$ROOT/scripts/install/ui.sh" "$ROOT/scripts/install/precheck.sh" 2>&1); grep -qx 'rc=0' <<<"$o" && ok || bad "AINKRAD_SKIP_PROBE did not skip: $o"
+fi
+
 echo "precheck tests: $pass passed, $fail failed"
 [ "$fail" = 0 ]

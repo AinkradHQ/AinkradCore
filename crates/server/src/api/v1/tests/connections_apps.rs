@@ -430,7 +430,7 @@ async fn github_signs_in_with_the_built_in_app_until_an_admin_sets_one() {
     );
     assert_eq!(
         crate::connections::apps::BUILT_IN_GITHUB_CLIENT_ID,
-        "Ov23litUTAjReYNz80Fy"
+        "Iv23licvgHhiqi2dQX3y"
     );
     let kinds = cx
         .ok(Method::GET, "/api/v1/connection-kinds", Value::Null)

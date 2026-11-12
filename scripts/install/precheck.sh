@@ -106,6 +106,55 @@ pc_checks() { # pc_checks "443 80": 0 when all is well; else 1 with PC_WHAT (wha
     ui_ok "Port $_p is free and this machine's firewall lets it in"
   done
 }
+pc_urlb() { # stdin -> base64url without padding
+  openssl base64 -A | tr '+/' '-_' | tr -d '='
+}
+pc_probe_call() { # pc_probe_call PORTS OUTFILE: POST /v1/probe to the sign-in service, signed AINKRAD-SVC-V1 with a throw-away ES256 key; 0 on a 2xx
+  command -v openssl >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 || return 1
+  _d=$(mktemp -d) || return 1
+  _body="{\"ports\":[$(printf '%s' "$1" | tr ' ' ',')]}"
+  printf '%s' "$_body" >"$_d/body"
+  openssl ecparam -name prime256v1 -genkey -noout -out "$_d/k" 2>/dev/null || { rm -rf "$_d"; return 1; }
+  openssl ec -in "$_d/k" -pubout -outform DER >"$_d/spki" 2>/dev/null || { rm -rf "$_d"; return 1; }
+  _fp=$(openssl dgst -sha256 -binary <"$_d/spki" | pc_urlb)
+  _ts=$(date +%s); _nonce=$(openssl rand 16 | pc_urlb)
+  printf 'AINKRAD-SVC-V1\n%s\nES256\nPOST\n/v1/probe\n%s\n%s\n%s' "$_fp" "$_ts" "$_nonce" "$(openssl dgst -sha256 -binary <"$_d/body" | pc_urlb)" >"$_d/msg"
+  openssl dgst -sha256 -sign "$_d/k" -out "$_d/sig.der" "$_d/msg" 2>/dev/null || { rm -rf "$_d"; return 1; }
+  : >"$_d/sig.raw"; _hex=''
+  for _i in $(openssl asn1parse -inform DER -in "$_d/sig.der" 2>/dev/null | sed -n 's/.*INTEGER *://p'); do # DER r, s -> 32 bytes each
+    _i=$(printf '%s' "$_i" | sed 's/^0*//')
+    while [ "${#_i}" -lt 64 ]; do _i=0$_i; done
+    _hex=$_hex$_i
+  done
+  [ "${#_hex}" -eq 128 ] || { rm -rf "$_d"; return 1; }
+  # shellcheck disable=SC2059 # the octal escape is the format: a raw byte for the signature file
+  while [ -n "$_hex" ]; do _x=${_hex%"${_hex#??}"}; _hex=${_hex#??}; printf "\\$(printf %03o "0x$_x")" >>"$_d/sig.raw"; done
+  _sig=$(pc_urlb <"$_d/sig.raw")
+  curl -fsS --max-time 15 -X POST "${AINKRAD_SIGNIN_URL:-https://signin.ainkrad.io}/v1/probe" \
+    -H 'Content-Type: application/json' -H "Ainkrad-Core: $_fp" -H "Ainkrad-Key: $(pc_urlb <"$_d/spki")" -H 'Ainkrad-Alg: ES256' \
+    -H "Ainkrad-Timestamp: $_ts" -H "Ainkrad-Nonce: $_nonce" -H "Ainkrad-Signature: $_sig" \
+    --data-binary "@$_d/body" -o "$2" 2>/dev/null
+  _rc=$?; rm -rf "$_d"; return "$_rc"
+}
+pc_probe() { # pc_probe "443 80": 0 when the ports reach this machine from the internet, or the check could not run (the service being down never blocks); else 1 with PC_WHAT and PC_TODO set (N6)
+  [ -z "${AINKRAD_SKIP_PROBE:-}" ] || { ui_keep "outside port check skipped (AINKRAD_SKIP_PROBE)"; return 0; }
+  _o=$(mktemp) || return 0
+  if ! pc_probe_call "$1" "$_o"; then
+    rm -f "$_o"; ui_warn "Could not check the ports from the internet (Ainkrad's check service is unreachable). Continuing; make sure inbound TCP $1 is open."
+    return 0
+  fi
+  for _p in $1; do
+    # a closed port is a timeout: the cloud firewall drops the packet. A refusal reached this machine (nothing listens before the install).
+    if tr '{' '\n' <"$_o" | grep -E "\"port\" *: *${_p}[,}]" | grep -Eq '"open" *: *false.*"reason" *: *"timeout"|"reason" *: *"timeout".*"open" *: *false'; then
+      rm -f "$_o"
+      PC_WHAT="port $_p is closed from the internet"
+      PC_TODO="open it in your cloud firewall (OCI: security list / NSG; Azure: network security group; AWS: security group) for inbound TCP $_p, then run the command again. Nothing was installed."
+      return 1
+    fi
+    ui_ok "Port $_p is reachable from the internet"
+  done
+  rm -f "$_o"
+}
 pc_valid_hostname() { # a DNS name of two or more labels; not an IP address
   _h=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
   case $_h in '' | *'

@@ -39,6 +39,17 @@ fn install_error(e: InstallError) -> ApiError {
             ),
         ),
         InstallError::Store(e) => e.into(),
+        InstallError::Service(why) => {
+            ApiError::new(StatusCode::BAD_GATEWAY, "signin_service", why.to_owned())
+        }
+        InstallError::NotYours => ApiError::new(
+            StatusCode::FORBIDDEN,
+            "installation_not_yours",
+            "This GitHub install isn't yours".to_owned(),
+        ),
+        InstallError::NoUserToken => {
+            ApiError::conflict("sign in to GitHub first (Sign in with GitHub), then add the App")
+        }
     }
 }
 
@@ -119,6 +130,18 @@ async fn material_of(
                 ));
             }
             let github = app.connections.github();
+            if !github.installer().has_own_key() {
+                // Ainkrad's App: the sign-in service mints, after checking the install is this
+                // person's.
+                let sealer = sealer(app)?;
+                let now = app.clock.now();
+                let (m, account) = github
+                    .mint_hosted(&app.pool, sealer, user, id, &now)
+                    .await
+                    .map_err(install_error)?;
+                let account = account.unwrap_or_else(|| format!("installation-{id}"));
+                return Ok((m, Some((id, account))));
+            }
             let account = github
                 .installation_account(id)
                 .await
