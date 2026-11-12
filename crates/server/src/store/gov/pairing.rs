@@ -109,10 +109,13 @@ async fn append(
 /// Whether a device stands in the way of a bootstrap (§7.3): one that is pending, active or
 /// locked, or was ever revoked. A claimant the host declined (`rejected`) or let lapse
 /// (`expired`) never was a device, so a failed bootstrap can simply be run again (review H2).
+/// Runners never count: they hold the runner scope only and cannot own the Core, and the
+/// installer enrols the built-in runner before it makes the first owner's link.
 pub async fn any_device(conn: &mut SqliteConnection) -> Result<bool, Error> {
     sqlx::query_scalar(
         "SELECT count(*) > 0 FROM core_devices \
-         WHERE status IN ('pending', 'active', 'locked') OR revoked_at IS NOT NULL",
+         WHERE kind != 'runner' \
+         AND (status IN ('pending', 'active', 'locked') OR revoked_at IS NOT NULL)",
     )
     .fetch_one(conn)
     .await
