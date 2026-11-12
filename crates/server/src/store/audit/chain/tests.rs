@@ -45,9 +45,20 @@ fn row(i: i64) -> NewAuditEvent {
     }
 }
 
+/// Runs `sql` on one pooled connection. SQLite checks a DDL statement (`DROP`/`CREATE TRIGGER`)
+/// against the connection's cached schema, which goes stale when another pool connection
+/// changed the schema (the test's own earlier DDL): "trigger ... already exists" or "no such
+/// trigger" on a loaded machine, where the pool hands out a different connection each time.
+/// Reading `sqlite_master` first makes the connection reload its schema; no other connection
+/// changes it in between, as each test owns its database.
 async fn sql(pool: &SqlitePool, sql: &str) {
+    let mut conn = pool.acquire().await.unwrap();
+    sqlx::query("SELECT count(*) FROM sqlite_master")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
     sqlx::raw_sql(AssertSqlSafe(sql.to_owned()))
-        .execute(pool)
+        .execute(&mut *conn)
         .await
         .unwrap();
 }
