@@ -39,12 +39,10 @@
 	     every terminal. -->
 	<key>AbandonProcessGroup</key>
 	<true/>
+	<!-- Standard, not Background: shells and AI sessions inherit this, and Background puts them on the
+	     efficiency cores at priority 4 with throttled I/O and timers (slow terminals, slow sessions). -->
 	<key>ProcessType</key>
-	<string>Background</string>
-	<key>Nice</key>
-	<integer>5</integer>
-	<key>LowPriorityIO</key>
-	<true/>
+	<string>Standard</string>
 	<key>ExitTimeOut</key>
 	<integer>20</integer>
 	<key>StandardOutPath</key>
