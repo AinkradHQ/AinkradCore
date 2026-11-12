@@ -611,6 +611,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/waiting`.
             public var waiting: Components.Schemas.AgentWaiting?
+            /// The repo and worktree it works in, as the create sent it (`{"repo", "base", "branch", …}`);
+            /// absent for a scratch dir.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/workspace`.
+            public var workspace: OpenAPIRuntime.OpenAPIObjectContainer?
             /// Creates a new `AgentSession`.
             ///
             /// - Parameters:
@@ -647,6 +652,7 @@ extension Components {
             ///   - upstreamClass: The last status class its own gateway reported: `ok`, `rate_limited`, `quota`,
             ///   - usage:
             ///   - waiting: Set while a chain session waits for an account: it stays `starting` until `until`, or
+            ///   - workspace: The repo and worktree it works in, as the create sent it (`{"repo", "base", "branch", …}`);
             public init(
                 account: Swift.Int64? = nil,
                 agent: Swift.String? = nil,
@@ -680,7 +686,8 @@ extension Components {
                 updatedAt: Components.Schemas.Timestamp,
                 upstreamClass: Swift.String? = nil,
                 usage: Components.Schemas.AgentUsage? = nil,
-                waiting: Components.Schemas.AgentWaiting? = nil
+                waiting: Components.Schemas.AgentWaiting? = nil,
+                workspace: OpenAPIRuntime.OpenAPIObjectContainer? = nil
             ) {
                 self.account = account
                 self.agent = agent
@@ -715,6 +722,7 @@ extension Components {
                 self.upstreamClass = upstreamClass
                 self.usage = usage
                 self.waiting = waiting
+                self.workspace = workspace
             }
             public enum CodingKeys: String, CodingKey {
                 case account
@@ -750,6 +758,7 @@ extension Components {
                 case upstreamClass = "upstream_class"
                 case usage
                 case waiting
+                case workspace
             }
         }
         /// A new title for a session.

@@ -2106,6 +2106,11 @@ export interface components {
              *     until `scheduler.wait_max_secs` ends the run.
              */
             waiting?: components["schemas"]["AgentWaiting"];
+            /**
+             * @description The repo and worktree it works in, as the create sent it (`{"repo", "base", "branch", …}`);
+             *     absent for a scratch dir.
+             */
+            workspace?: Record<string, never> | null;
         };
         /** @description A new title for a session. */
         AgentTitle: {
