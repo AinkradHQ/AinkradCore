@@ -52,6 +52,8 @@ impl Executor for Obeys {
                             "allow": policy.allow});
                         let _ = reports.send(Report::Event(chunk)).await;
                     }
+                    // Live-session controls (AI sessions) never reach a Citadel run.
+                    _ => {}
                 }
             }
             self.arrived.notified().await;
