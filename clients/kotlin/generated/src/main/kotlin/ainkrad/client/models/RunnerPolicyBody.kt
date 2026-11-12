@@ -26,7 +26,7 @@ import kotlinx.serialization.Contextual
  * @param agentCapacity How many agent sessions run at once, 1 to 8.
  * @param agents Agent sessions are offered. Refused (409 `policy_refused`, with the reason) when the runner cannot run them: no process sandbox, no proven egress filter, or no agent tool installed.
  * @param terminals Terminals are offered on the runner.
- * @param shareHistory The runner lets the Brain read its Claude Code history (`--share-history`). Off when omitted.
+ * @param shareHistory The runner lets the Brain read its Claude Code history (`--share-history`). Omitted: the runner's current setting stays; `false` turns it off.
  */
 @Serializable
 
@@ -44,7 +44,7 @@ data class RunnerPolicyBody (
     @SerialName(value = "terminals")
     val terminals: kotlin.Boolean,
 
-    /* The runner lets the Brain read its Claude Code history (`--share-history`). Off when omitted. */
+    /* The runner lets the Brain read its Claude Code history (`--share-history`). Omitted: the runner's current setting stays; `false` turns it off. */
     @SerialName(value = "share_history")
     val shareHistory: kotlin.Boolean? = null
 

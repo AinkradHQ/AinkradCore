@@ -58,9 +58,10 @@ pub struct RunnerPolicyBody {
     pub agents: bool,
     /// How many agent sessions run at once, 1 to 8.
     pub agent_capacity: u32,
-    /// The runner lets the Brain read its Claude Code history (`--share-history`). Off when omitted.
+    /// The runner lets the Brain read its Claude Code history (`--share-history`). Omitted: the
+    /// runner's current setting stays; `false` turns it off.
     #[serde(default)]
-    pub share_history: bool,
+    pub share_history: Option<bool>,
 }
 
 impl From<RunnerPolicy> for RunnerPolicyBody {
@@ -69,7 +70,7 @@ impl From<RunnerPolicy> for RunnerPolicyBody {
             terminals: p.terminals,
             agents: p.agents,
             agent_capacity: p.agent_capacity,
-            share_history: p.share_history,
+            share_history: Some(p.share_history),
         }
     }
 }
@@ -264,7 +265,14 @@ pub async fn set_policy(
         terminals: b.terminals,
         agents: b.agents,
         agent_capacity: b.agent_capacity,
-        share_history: b.share_history,
+        // Unchanged when absent: the App's other runner edits send no such field.
+        share_history: b.share_history.unwrap_or_else(|| {
+            app.hub
+                .facts()
+                .get(&id)
+                .and_then(|(f, _)| f.as_ref().and_then(|f| f.policy))
+                .is_some_and(|p| p.share_history)
+        }),
     };
     let proof = app.hub.admin_elevation(&me);
     let applied = match ask(&app, &id, Command::RunnerPolicy(policy), proof, POLICY_WAIT).await {

@@ -6195,7 +6195,8 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/RunnerPolicyBody/agents`.
             public var agents: Swift.Bool
-            /// The runner lets the Brain read its Claude Code history (`--share-history`). Off when omitted.
+            /// The runner lets the Brain read its Claude Code history (`--share-history`). Omitted: the
+            /// runner's current setting stays; `false` turns it off.
             ///
             /// - Remark: Generated from `#/components/schemas/RunnerPolicyBody/share_history`.
             public var shareHistory: Swift.Bool?
@@ -6208,7 +6209,7 @@ extension Components {
             /// - Parameters:
             ///   - agentCapacity: How many agent sessions run at once, 1 to 8.
             ///   - agents: Agent sessions are offered. Refused (409 `policy_refused`, with the reason) when the
-            ///   - shareHistory: The runner lets the Brain read its Claude Code history (`--share-history`). Off when omitted.
+            ///   - shareHistory: The runner lets the Brain read its Claude Code history (`--share-history`). Omitted: the
             ///   - terminals: Terminals are offered on the runner.
             public init(
                 agentCapacity: Swift.Int32,

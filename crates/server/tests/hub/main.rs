@@ -255,6 +255,8 @@ pub struct Fake {
     /// reports a sandbox).
     pub os: Option<String>,
     pub isolation: Option<IsolationCaps>,
+    /// The facts its hello reports (the policy it runs with).
+    pub facts: Option<Box<RunnerFacts>>,
 }
 
 pub fn exec_driver(commands: &[&str], capacity: u32) -> DriverInfo {
@@ -286,6 +288,7 @@ impl Fake {
             load: None,
             os: None,
             isolation: None,
+            facts: None,
         }
     }
 
@@ -330,7 +333,7 @@ impl Fake {
             terminals: vec![],
             load: self.load,
             isolation: self.isolation.clone(),
-            facts: None,
+            facts: self.facts.clone(),
         };
         self.send(CONTROL_STREAM, Body::Control(Control::Hello(hello)))
             .await;

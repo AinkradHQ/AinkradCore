@@ -10446,8 +10446,11 @@
             "type": "boolean"
           },
           "share_history": {
-            "description": "The runner lets the Brain read its Claude Code history (`--share-history`). Off when omitted.",
-            "type": "boolean"
+            "description": "The runner lets the Brain read its Claude Code history (`--share-history`). Omitted: the\nrunner's current setting stays; `false` turns it off.",
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "terminals": {
             "description": "Terminals are offered on the runner.",
