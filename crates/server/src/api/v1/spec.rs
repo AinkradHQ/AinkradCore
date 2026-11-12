@@ -350,6 +350,7 @@ pub fn normalise(spec: &mut Value) {
         dedupe(path.1, &components, "", true);
     }
     open_enums(spec);
+    forward::open_responses(spec);
     security_and_errors(spec);
     // OpenAPI cannot describe a socket's frames; this names their schema for any client.
     if let Some(op) = spec
@@ -539,5 +540,6 @@ fn security_and_errors(spec: &mut Value) {
     }
 }
 
+mod forward;
 #[cfg(test)]
 mod tests;
