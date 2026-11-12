@@ -1,4 +1,4 @@
-# shellcheck shell=sh
+# shellcheck shell=sh disable=SC2034
 # The pinned parts of the Ainkrad shell (N20). Each is a GitHub commit archive with its SHA-256; install-shell.sh refuses a
 # download that does not match. To update one: change the commit, download
 #   https://github.com/<repo>/archive/<commit>.tar.gz

@@ -112,7 +112,7 @@ pc_valid_hostname() { # a DNS name of two or more labels; not an IP address
 '*) return 1 ;; esac
   [ "${#_h}" -le 253 ] && printf '%s' "$_h" | grep -Eq '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$'
 }
-pc_valid_email() { # name@a.dns.name
+pc_valid_email() { # name@example.com
   case $1 in *@* | '') ;; *) return 1 ;; esac
   case $1 in *'
 '*) return 1 ;; esac
@@ -121,7 +121,7 @@ pc_valid_email() { # name@a.dns.name
 pc_ask() { # pc_ask VAR "question" "example" VALIDATOR: VAR from the environment when valid, else asked on the terminal until it is; exported
   eval "_v=\${$1:-}"
   if [ -n "$_v" ]; then
-    if "$4" "$_v"; then ui_keep "$1 = $_v (given up front)"; export "$1"; return 0; fi
+    if "$4" "$_v"; then ui_keep "$1 = $_v (given up front)"; export "${1?}"; return 0; fi
     ui_warn "$1 is not valid, so it is asked again"
   fi
   { ( : </dev/tty ) 2>/dev/null && ui_tty_fg; } || ui_stopped "no terminal to ask on, and $1 is not set" "set AINKRAD_HOSTNAME=<dns name> and AINKRAD_ACME_EMAIL=<email> and run the command again. Nothing was installed."
@@ -132,7 +132,7 @@ pc_ask() { # pc_ask VAR "question" "example" VALIDATOR: VAR from the environment
     if "$4" "$_v"; then break; fi
     printf '   That is not valid. Try again.\n' >/dev/tty
   done
-  eval "$1=\$_v"; export "$1"
+  eval "$1=\$_v"; export "${1?}"
 }
 pc_dns_probe() { # pc_dns_probe NAME OUTFILE: "A ip" / "AAAA ip" lines (dig when there is one, else getent); never fails
   { if command -v dig >/dev/null 2>&1; then
