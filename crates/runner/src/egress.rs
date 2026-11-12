@@ -46,6 +46,35 @@ pub use selftest::selftest;
 /// the MCP route is on `FORWARD_PORT`, this is the next one.
 pub const EGRESS_PORT: u16 = 47832;
 
+/// The loopback port a session's forwarder listens on. Linux: `fixed`, since each sandbox has a
+/// network namespace of its own. macOS has none, so every session shares the host's loopback and
+/// takes a free port of its own (never one handed out earlier by this runner, so the gateway's and
+/// the proxy's never collide). A port that turns out taken makes the forwarder fail to bind, and
+/// the sandbox then has no route: closed, never open.
+pub fn forward_port(fixed: u16) -> u16 {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static GIVEN: Mutex<Option<HashSet<u16>>> = Mutex::new(None);
+    if !cfg!(target_os = "macos") {
+        return fixed;
+    }
+    let mut given = GIVEN.lock().unwrap_or_else(|e| e.into_inner());
+    let given = given.get_or_insert_with(HashSet::new);
+    if given.len() > 4096 {
+        given.clear();
+    }
+    for _ in 0..16 {
+        let Ok(l) = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) else {
+            break;
+        };
+        let Ok(a) = l.local_addr() else { break };
+        if given.insert(a.port()) {
+            return a.port();
+        }
+    }
+    fixed
+}
+
 /// Open connections per run, and across every run of this runner.
 const PER_RUN: usize = 32;
 const GLOBAL: usize = 256;
@@ -184,7 +213,7 @@ pub fn sandbox_env(sock: &Path, exe: &Path) -> Vec<(String, std::ffi::OsString)>
         ("AINKRAD_SANDBOX_EGRESS_FWD".to_owned(), exe.into()),
         (
             "AINKRAD_SANDBOX_EGRESS_PORT".to_owned(),
-            EGRESS_PORT.to_string().into(),
+            forward_port(EGRESS_PORT).to_string().into(),
         ),
     ]
 }

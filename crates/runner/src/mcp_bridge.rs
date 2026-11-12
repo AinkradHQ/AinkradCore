@@ -220,11 +220,23 @@ fn start_with(
     })))
 }
 
-/// `ainkrad-runner mcp-forward <port> <sock>`: runs inside the sandbox, loopback to the socket.
-pub async fn forward_main(port: &str, sock: &str) -> ExitCode {
+/// `ainkrad-runner mcp-forward <port> <sock> [--with-parent]`: runs inside the sandbox, loopback
+/// to the socket. With `with_parent` it also ends when the process that started it does (the
+/// harness: the launch script `exec`s into it), since the forwarder of a macOS sandbox has no
+/// namespace to die with.
+pub async fn forward_main(port: &str, sock: &str, with_parent: bool) -> ExitCode {
     let Ok(port) = port.parse::<u16>() else {
         return ExitCode::from(2);
     };
+    if with_parent {
+        let parent = std::os::unix::process::parent_id();
+        tokio::spawn(async move {
+            while std::os::unix::process::parent_id() == parent {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            std::process::exit(0);
+        });
+    }
     let Ok(listener) = TcpListener::bind(("127.0.0.1", port)).await else {
         return ExitCode::FAILURE;
     };

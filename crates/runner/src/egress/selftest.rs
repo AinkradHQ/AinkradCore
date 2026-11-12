@@ -45,15 +45,34 @@ async fn status(sock: &Path, target: &str) -> Result<String, String> {
         .map_err(|e| format!("the proxy: {e}"))
 }
 
-/// Run from inside the sandbox: wait for the forwarder, then three attempts, one result per line.
-fn probe(port: u16) -> String {
+/// Run from inside the sandbox: wait for the forwarder (on `fwd`), then the attempts, one result
+/// per line. `direct` is the shell that tries a connection around the proxy to the host listener.
+fn probe(port: u16, fwd: u16) -> String {
+    // Linux: the namespace has no route, so a direct connection fails or hangs; `timeout` ends
+    // it. macOS has no `timeout`, and Seatbelt refuses the connect at once (EPERM), so a plain
+    // attempt answers; an attempt that is still running after a second was not refused.
+    let direct = if cfg!(target_os = "macos") {
+        format!(
+            r#"(exec 3<>/dev/tcp/127.0.0.1/{port}) 2>/dev/null & p=$!; sleep 1
+if kill -0 $p 2>/dev/null; then kill $p; echo direct=hung; elif wait $p; then echo direct=reached; else echo direct=none; fi
+(exec 3<>/dev/tcp/192.0.2.1/443) 2>/dev/null & p=$!; sleep 1
+if kill -0 $p 2>/dev/null; then kill $p; echo outside=hung; elif wait $p; then echo outside=reached; else echo outside=none; fi"#
+        )
+    } else {
+        format!(
+            r#"if timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/{port}' 2>/dev/null; then echo direct=reached; else echo direct=none; fi
+echo outside=none"#
+        )
+    };
     format!(
-        r#"for i in $(seq 100); do exec 3<>/dev/tcp/127.0.0.1/47832 2>/dev/null && break; sleep 0.1; done
+        r#"for i in $(seq 100); do exec 3<>/dev/tcp/127.0.0.1/{fwd} 2>/dev/null && break; sleep 0.1; done
 ask() {{ printf 'CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n' "$1" "$1" >&3; read -r -t 5 l <&3; echo "${{l%$'\r'}}"; exec 3>&-; }}
 echo "via=$(ask 127.0.0.1:{port})"
-exec 3<>/dev/tcp/127.0.0.1/47832 2>/dev/null
+exec 3<>/dev/tcp/127.0.0.1/{fwd} 2>/dev/null
 echo "meta=$(ask 169.254.169.254:80)"
-if timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/{port}' 2>/dev/null; then echo direct=reached; else echo direct=none; fi
+exec 3<>/dev/tcp/127.0.0.1/{fwd} 2>/dev/null
+echo "named=$(ask example.com:443)"
+{direct}
 "#
     )
 }
@@ -65,12 +84,13 @@ pub async fn selftest(policy: &Policy, forwarder: &Path) -> Result<(), String> {
     if policy.check_ip(metadata, false).is_ok() || policy.check_ip(metadata, true).is_ok() {
         return Err("the egress policy would allow the metadata address".into());
     }
+    // Short: a unix socket path is at most 104 bytes, and macOS's temp dir is already about 50.
     let dir = std::env::temp_dir().join(format!(
-        "ainkrad-egress-selftest-{}-{}",
+        "ainkrad-eg-{}-{:x}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos())
+            .map_or(0, |d| d.subsec_nanos())
     ));
     let made = std::fs::create_dir(&dir)
         .and_then(|()| {
@@ -121,6 +141,9 @@ async fn checks(
         ("AINKRAD_SANDBOX_NETWORK".into(), "filtered".into()),
     ];
     env.extend(sandbox_env(&sock, forwarder));
+    let fwd = ainkrad_harness::last_env(&env, "AINKRAD_SANDBOX_EGRESS_PORT")
+        .and_then(|v| v.to_str()?.parse::<u16>().ok())
+        .ok_or("the egress forwarder has no port")?;
     let spec = ainkrad_harness::Spec {
         cwd: dir.join("work"),
         config_dir: dir.join("config"),
@@ -129,7 +152,7 @@ async fn checks(
     };
     let mut cmd = ainkrad_harness::sandbox_command(
         std::ffi::OsStr::new("/bin/bash"),
-        &["-c".into(), probe(port)],
+        &["-c".into(), probe(port, fwd)],
         &spec,
     );
     cmd.env("PATH", "/usr/bin:/bin")
@@ -137,9 +160,9 @@ async fn checks(
     let out = timeout(STEP, cmd.output())
         .await
         .map_err(|_| "the sandbox probe did not finish".to_owned())?
-        .map_err(|_| "bubblewrap cannot be run".to_owned())?;
+        .map_err(|_| "the sandbox program cannot be run".to_owned())?;
     if !out.status.success() {
-        return Err("bubblewrap cannot create the filtered sandbox here".into());
+        return Err("the sandbox program cannot create the filtered sandbox here".into());
     }
     let said = String::from_utf8_lossy(&out.stdout).into_owned();
     let line = |key: &str| {
@@ -153,6 +176,12 @@ async fn checks(
     }
     if !line("meta=").contains(" 403 ") {
         return Err("the egress proxy does not refuse the metadata address".into());
+    }
+    if !line("named=").contains(" 403 ") {
+        return Err("the egress proxy does not refuse a host its policy does not list".into());
+    }
+    if line("outside=") != "none" {
+        return Err("a filtered sandbox reached an outside address around the proxy".into());
     }
     if line("direct=") != "none" {
         return Err("a sandbox without a network reached a host listener directly".into());
