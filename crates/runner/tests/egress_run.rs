@@ -125,6 +125,7 @@ fn start_request() -> AgentStart {
         secrets: vec![],
         gateway: None,
         epoch: 0,
+        live: false,
     }
 }
 

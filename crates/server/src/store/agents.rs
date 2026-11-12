@@ -71,11 +71,36 @@ pub struct Session {
     pub gw_stop: Option<String>,
     /// When (unix seconds) the Core told the runner to refuse and cancel it.
     pub gw_stopped_at: Option<i64>,
+    /// A live conversation (N41): the harness stays up after an answer.
+    pub conversation: bool,
+    /// Since when (unix seconds) a `running` live session waits for its user; none while it works.
+    pub waiting_since: Option<i64>,
+    /// A message waiting for the supervisor to deliver once the runner runs the session again.
+    pub pending: Option<String>,
+    /// A short name: the first message's start until someone sets one.
+    pub title: Option<String>,
+}
+
+/// The longest title, in characters.
+pub const MAX_TITLE: usize = 60;
+
+/// The title a first message gives: its first line, cut to [`MAX_TITLE`] characters.
+pub fn title_of(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    Some(line.chars().take(MAX_TITLE).collect())
 }
 
 impl Session {
     pub fn live(&self) -> bool {
         !matches!(self.state.as_str(), "ended" | "lost")
+    }
+
+    /// The state clients see: a live session idle between answers is `waiting` (stored `running`).
+    pub fn api_state(&self) -> &str {
+        match (self.state.as_str(), self.waiting_since) {
+            ("running", Some(_)) => "waiting",
+            (state, _) => state,
+        }
     }
 }
 
@@ -94,7 +119,7 @@ pub struct NewSession<'a> {
 const COLUMNS: &str = "n, id, runner, harness, model, prompt, workspace, policy, secrets, state, \
     harness_session, outcome, last_seq, tokens_in, tokens_out, cache_read, cache_write, \
     cost_usd_micros, resumes, created_by, owner_module, owner_ref, created_at, updated_at, ended_at, \
-    gateway_account_id, gw_seq, gw_epoch, gw_stop, gw_stopped_at";
+    gateway_account_id, gw_seq, gw_epoch, gw_stop, gw_stopped_at, live, waiting_since, pending, title";
 
 fn of(r: &sqlx::sqlite::SqliteRow) -> Result<Session, sqlx::Error> {
     let json = |col: &str| -> Result<Option<Value>, sqlx::Error> {
@@ -141,6 +166,10 @@ fn of(r: &sqlx::sqlite::SqliteRow) -> Result<Session, sqlx::Error> {
         gw_epoch: r.try_get("gw_epoch")?,
         gw_stop: r.try_get("gw_stop")?,
         gw_stopped_at: r.try_get("gw_stopped_at")?,
+        conversation: r.try_get::<i64, _>("live")? != 0,
+        waiting_since: r.try_get("waiting_since")?,
+        pending: r.try_get("pending")?,
+        title: r.try_get("title")?,
     })
 }
 
@@ -328,7 +357,7 @@ pub async fn set_state(
     let mut tx = super::begin_write(pool).await?;
     let changed = sqlx::query(
         "UPDATE core_agent_sessions SET state = ?, resumes = resumes + ?, updated_at = ?, \
-         upstream_class = iif(? != 0, NULL, upstream_class) \
+         waiting_since = NULL, upstream_class = iif(? != 0, NULL, upstream_class) \
          WHERE id = ? AND state NOT IN ('ended', 'lost') AND state != ?",
     )
     .bind(state)
@@ -366,8 +395,8 @@ pub async fn end(
     let outcome = &outcome;
     let mut tx = super::begin_write(pool).await?;
     let changed = sqlx::query(
-        "UPDATE core_agent_sessions SET state = ?, outcome = ?, updated_at = ?, ended_at = ? \
-         WHERE id = ? AND state NOT IN ('ended', 'lost')",
+        "UPDATE core_agent_sessions SET state = ?, outcome = ?, updated_at = ?, ended_at = ?, \
+         waiting_since = NULL, pending = NULL WHERE id = ? AND state NOT IN ('ended', 'lost')",
     )
     .bind(state)
     .bind(outcome.to_string())
@@ -418,6 +447,7 @@ pub async fn apply(
     let gateway =
         gateway || super::usage_meter::record(&mut tx, id, ev.usage, gateway, now).await?;
     let mut last = u64::try_from(last).unwrap_or(0);
+    let stored = last;
     let from = last + 1;
     for e in &ev.entries {
         if e.seq <= last {
@@ -443,6 +473,11 @@ pub async fn apply(
             json!({"session": id, "from": from, "to": last}),
         )
         .await?;
+    }
+    // A live session's idle state, as the runner says it: every change comes with an entry (`waiting`,
+    // `message`), so an answer older than what is stored (a late read) never turns it back.
+    if ev.last_seq >= stored {
+        set_idle(&mut tx, id, ev.state, now).await?;
     }
     // A ledger-written session's usage columns (gateway, meter) are the ledger's: its harness's
     // own meter is display-only, and nothing here may overwrite them.
@@ -472,6 +507,43 @@ pub async fn apply(
     .await?;
     tx.commit().await?;
     Ok(last)
+}
+
+/// Moves a `running` live session between working and `waiting` (`agent.state` says so).
+async fn set_idle(
+    tx: &mut SqliteConnection,
+    id: &str,
+    state: AgentState,
+    now: &str,
+) -> Result<(), sqlx::Error> {
+    let (query, name, why) = match state {
+        AgentState::Waiting => (
+            sqlx::query(
+                "UPDATE core_agent_sessions SET waiting_since = CAST(strftime('%s', ?) AS INTEGER) \
+                 WHERE id = ? AND state = 'running' AND live = 1 AND waiting_since IS NULL",
+            )
+            .bind(now)
+            .bind(id),
+            "waiting",
+            "turn_ended",
+        ),
+        AgentState::Running => (
+            sqlx::query(
+                "UPDATE core_agent_sessions SET waiting_since = NULL \
+                 WHERE id = ? AND state = 'running' AND waiting_since IS NOT NULL",
+            )
+            .bind(id),
+            "running",
+            "message",
+        ),
+        _ => return Ok(()),
+    };
+    let changed = query.execute(&mut *tx).await?.rows_affected();
+    if changed > 0 {
+        let payload = json!({"session": id, "state": name, "reason": why});
+        emit(tx, "agent.state", payload).await?;
+    }
+    Ok(())
 }
 
 async fn insert(
@@ -527,7 +599,7 @@ pub async fn transcript(
 /// `state` as the runner reports it, as stored.
 pub fn runner_state(s: AgentState) -> &'static str {
     match s {
-        AgentState::Running => "running",
+        AgentState::Running | AgentState::Waiting => "running",
         AgentState::Ended => "ended",
         AgentState::Interrupted => "interrupted",
         AgentState::Unknown => "running",
@@ -643,10 +715,14 @@ pub async fn wake(
         return Ok(Woken::Busy);
     }
     super::alloc::stamp_account_in(&mut tx, id).await?;
+    // A live session's text is its next message, delivered once the runner runs it again; the
+    // session's own first prompt is never sent twice.
     sqlx::query(
         "UPDATE core_agent_sessions SET state = 'interrupted', outcome = NULL, ended_at = NULL, \
-         failover_done = 0, failover_class = NULL, upstream_class = NULL, prompt = coalesce(?, prompt), updated_at = ? \
-         WHERE id = ?",
+         failover_done = 0, failover_class = NULL, upstream_class = NULL, waiting_since = NULL, \
+         prompt = iif(live = 1, prompt, coalesce(?1, prompt)), \
+         pending = iif(live = 1, coalesce(?1, pending), pending), updated_at = ?2 \
+         WHERE id = ?3",
     )
     .bind(text)
     .bind(now)
@@ -659,4 +735,58 @@ pub async fn wake(
     }
     tx.commit().await?;
     Ok(Woken::Reopened)
+}
+
+/// Marks a just-created client session as a live conversation and gives it its title.
+pub async fn configure(
+    pool: &SqlitePool,
+    id: &str,
+    live: bool,
+    title: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE core_agent_sessions SET live = ?, title = ? WHERE id = ?")
+        .bind(i64::from(live))
+        .bind(title)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map(drop)
+}
+
+/// Sets the title; whether the session exists. An empty title clears it.
+pub async fn set_title(pool: &SqlitePool, id: &str, title: &str) -> Result<bool, sqlx::Error> {
+    let title = Some(title.trim()).filter(|t| !t.is_empty());
+    sqlx::query("UPDATE core_agent_sessions SET title = ? WHERE id = ?")
+        .bind(title)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map(|r| r.rows_affected() > 0)
+}
+
+/// Gives a session with no title the start of its first message.
+pub async fn title_from_first_message(
+    pool: &SqlitePool,
+    id: &str,
+    text: &str,
+) -> Result<(), sqlx::Error> {
+    let Some(title) = title_of(text) else {
+        return Ok(());
+    };
+    sqlx::query("UPDATE core_agent_sessions SET title = ? WHERE id = ? AND title IS NULL")
+        .bind(title)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map(drop)
+}
+
+/// Forgets the pending message `text` once it is delivered.
+pub async fn clear_pending(pool: &SqlitePool, id: &str, text: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE core_agent_sessions SET pending = NULL WHERE id = ? AND pending = ?")
+        .bind(id)
+        .bind(text)
+        .execute(pool)
+        .await
+        .map(drop)
 }

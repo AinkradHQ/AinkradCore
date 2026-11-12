@@ -41,8 +41,9 @@ pub struct AgentSession {
     pub runner: String,
     pub harness: String,
     pub model: Option<String>,
-    /// `starting`, `running`, `interrupted` (its runner restarted; it is resumed), `ended`,
-    /// `lost`.
+    /// `starting`, `running` (working), `waiting` (a live session finished its answer and waits
+    /// for the user's next message; it still holds its runner slot), `interrupted` (its runner
+    /// restarted; it is resumed), `ended`, `lost`.
     pub state: String,
     /// The harness's own session id, what a resume continues.
     pub harness_session: Option<String>,
@@ -97,16 +98,29 @@ pub struct AgentSession {
     pub failover_class: Option<String>,
     /// The pools a budget stop took out of the run's chain. Admin only.
     pub skip_pools: Option<Vec<i64>>,
+    /// A live conversation (`createAgentSession`'s `live`): the state is `waiting` between answers.
+    pub live: Option<bool>,
+    /// While `waiting`: since when.
+    pub idle_since: Option<Timestamp>,
+    /// A short name: the first message's start, or the one `titleAgentSession` set.
+    pub title: Option<String>,
 }
 
 impl From<Session> for AgentSession {
     fn from(s: Session) -> Self {
+        let state = s.api_state().to_owned();
         Self {
+            live: Some(s.conversation),
+            idle_since: s
+                .waiting_since
+                .filter(|_| s.state == "running")
+                .map(|t| ts(&crate::scheduler::iso_of_unix(t))),
+            title: s.title,
             id: s.id,
             runner: s.runner,
             harness: s.harness,
             model: s.model,
-            state: s.state,
+            state,
             harness_session: s.harness_session,
             last_seq: s.last_seq,
             outcome: s.outcome,
@@ -229,7 +243,8 @@ pub async fn create(
         runner: &b.runner,
         harness: &b.harness,
         model: b.model.as_deref(),
-        prompt: b.prompt.as_deref(),
+        // No first message (absent or empty): the session starts waiting for one.
+        prompt: b.prompt.as_deref().filter(|p| !p.is_empty()),
         workspace: b.workspace.as_ref(),
         policy: &policy,
         secrets: &secrets,
@@ -251,6 +266,15 @@ pub async fn create(
             return Err(e);
         }
         store::create(&app.pool, &new, BY, &app.clock.now()).await?
+    };
+    // A live conversation, where the runner offers it; titled by its first message.
+    let live = b.live.unwrap_or(true) && agents::offers_live(&app, &s.runner);
+    let title = s.prompt.as_deref().and_then(store::title_of);
+    store::configure(&app.pool, &s.id, live, title.as_deref()).await?;
+    let s = Session {
+        conversation: live,
+        title,
+        ..s
     };
     access::apply(&app, &s.id, &access).await?;
     agents::authorize_create(&app, &me, &s.id);
@@ -309,8 +333,8 @@ pub async fn transcript(
     let limit = p.limit.unwrap_or(500).clamp(1, 1000);
     let entries = store::transcript(&app.pool, &s.id, p.after.unwrap_or(0), limit).await?;
     Ok(Json(AgentTranscript {
+        state: s.api_state().to_owned(),
         session: s.id,
-        state: s.state,
         last_seq: s.last_seq,
         entries: entries
             .into_iter()
@@ -356,7 +380,12 @@ async fn send(app: &App, s: &Session, command: Command, caller: &Caller) -> Resu
     params(("id" = String, Path, description = "The session's id, `as_…`")),
     request_body = AgentMessage,
     responses((status = 200, description = "Given to the harness as its next turn (audited as \
-        `agent.messaged`, its length only). 409 `session_over`, 502 `runner_failed` when it \
+        `agent.messaged`, its length only). A live session takes it in its running process: \
+        `waiting` becomes `running`, and a message sent while an answer runs is queued behind \
+        it. A live session whose process is gone (a runner restart, a lost runner, an idle end) \
+        is started again with the harness's own resume in the same folder and gets it there, so \
+        the conversation goes on. A first message gives an untitled session its `title`. 409 \
+        `session_over`, `session_starting` (not on its runner yet), 502 `runner_failed` when it \
         is not running", body = AgentSession)))]
 pub async fn message(
     State(app): State<App>,
@@ -370,16 +399,17 @@ pub async fn message(
         return Err(ApiError::bad_request("a message is 1 byte to 16 KiB"));
     }
     let bytes = b.text.len();
-    tell(
-        &app,
-        &s,
-        Command::AgentSend(AgentSend {
+    let text = b.text;
+    store::title_from_first_message(&app.pool, &s.id, &text).await?;
+    if s.conversation && s.state != "running" {
+        restart_with(&app, &s, &me, &text).await?;
+    } else {
+        let send = Command::AgentSend(AgentSend {
             session: s.id.clone(),
-            text: b.text,
-        }),
-        &me,
-    )
-    .await?;
+            text,
+        });
+        tell(&app, &s, send, &me).await?;
+    }
     let details = json!({"bytes": bytes});
     store::action(
         &app.pool,
@@ -387,6 +417,100 @@ pub async fn message(
         BY,
         "agent.messaged",
         Some("agent.message"),
+        details,
+        &me.device.id,
+    )
+    .await?;
+    shown(&app, &me, &id).await
+}
+
+/// A message for a live session that is not on its runner: kept as `pending` and delivered by its
+/// supervisor once the harness runs again (resumed by its own session id, in the session's folder).
+async fn restart_with(app: &App, s: &Session, me: &Caller, text: &str) -> Result<(), ApiError> {
+    not_a_modules(s)?;
+    owns_secrets(s, me)?;
+    let conflict =
+        |code: &'static str, why: &'static str| Err(ApiError::new(StatusCode::CONFLICT, code, why));
+    if s.state == "starting" {
+        return conflict("session_starting", "the session is not on its runner yet");
+    }
+    let over = matches!(s.state.as_str(), "ended" | "lost");
+    if over && agents::supervised(app).contains(&s.id) {
+        return conflict("session_busy", "the session is still finishing: try again");
+    }
+    match store::wake(&app.pool, &s.id, Some(text), &app.clock.now()).await? {
+        store::Woken::Reopened => {
+            agents::authorize_message(app, me, &s.id);
+            agents::supervise(app, &s.id);
+            Ok(())
+        }
+        store::Woken::Busy => conflict(
+            "account_full",
+            "the session's account is full: send again when one of its sessions ends",
+        ),
+        store::Woken::Gone => conflict("session_over", "the session is over"),
+    }
+}
+
+#[utoipa::path(post, path = "/api/v1/agent-sessions/{id}/interrupt",
+    operation_id = "interruptAgentSession", tag = "agents",
+    params(("id" = String, Path, description = "The session's id, `as_…`")),
+    responses((status = 200, description = "Stops the running answer of a live session, like Esc \
+        in the CLI (audited as `agent.interrupted`): a tool call waiting for approval is denied, \
+        the session goes on and becomes `waiting` (a message queued behind the answer is taken \
+        next). Nothing happens while it waits. 409 `not_live` for a session that is not a live \
+        conversation, `session_over`; `cancel` ends the session", body = AgentSession)))]
+pub async fn interrupt(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<AgentSession> {
+    let s = one(&app, &me, &id).await?;
+    if !s.conversation {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "not_live",
+            "only a live session has an answer to stop: use cancel",
+        ));
+    }
+    let stop = Command::AgentStop(AgentStop {
+        session: s.id.clone(),
+        kill: false,
+        turn: true,
+    });
+    tell(&app, &s, stop, &me).await?;
+    let action = "agent.interrupted";
+    store::action(&app.pool, &s, BY, action, None, json!({}), &me.device.id).await?;
+    shown(&app, &me, &id).await
+}
+
+#[utoipa::path(patch, path = "/api/v1/agent-sessions/{id}",
+    operation_id = "titleAgentSession", tag = "agents",
+    params(("id" = String, Path, description = "The session's id, `as_…`")),
+    request_body = AgentTitle,
+    responses((status = 200, description = "Sets the session's short `title` (at most 60 \
+        characters, trimmed; empty clears it; audited as `agent.renamed`)", body = AgentSession)))]
+pub async fn title(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> ApiResult<AgentSession> {
+    let s = one(&app, &me, &id).await?;
+    let b: AgentTitle = parse(&body)?;
+    if b.title.chars().count() > store::MAX_TITLE {
+        return Err(ApiError::bad_request("a title is at most 60 characters"));
+    }
+    not_a_modules(&s)?;
+    owns_secrets(&s, &me)?;
+    store::set_title(&app.pool, &s.id, &b.title).await?;
+    let details = json!({"chars": b.title.chars().count()});
+    store::action(
+        &app.pool,
+        &s,
+        BY,
+        "agent.renamed",
+        None,
         details,
         &me.device.id,
     )
@@ -448,6 +572,7 @@ async fn stop(app: App, me: Caller, id: String, kill: bool) -> ApiResult<AgentSe
         Command::AgentStop(AgentStop {
             session: s.id.clone(),
             kill,
+            turn: false,
         })
     };
     if s.owner_module.is_some() && kill {

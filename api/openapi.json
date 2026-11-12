@@ -507,6 +507,10 @@
             "description": "`as_…`.",
             "type": "string"
           },
+          "idle_since": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "While `waiting`: since when."
+          },
           "index": {
             "description": "Its row: page `listAgentSessions` with `before`.",
             "format": "int64",
@@ -519,6 +523,13 @@
             "description": "The newest transcript `seq` stored.",
             "format": "int64",
             "type": "integer"
+          },
+          "live": {
+            "description": "A live conversation (`createAgentSession`'s `live`): the state is `waiting` between answers.",
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "model": {
             "type": [
@@ -582,8 +593,15 @@
             ]
           },
           "state": {
-            "description": "`starting`, `running`, `interrupted` (its runner restarted; it is resumed), `ended`,\n`lost`.",
+            "description": "`starting`, `running` (working), `waiting` (a live session finished its answer and waits\nfor the user's next message; it still holds its runner slot), `interrupted` (its runner\nrestarted; it is resumed), `ended`, `lost`.",
             "type": "string"
+          },
+          "title": {
+            "description": "A short name: the first message's start, or the one `titleAgentSession` set.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "updated_at": {
             "$ref": "#/components/schemas/Timestamp"
@@ -612,6 +630,19 @@
           "created_by",
           "created_at",
           "updated_at"
+        ],
+        "type": "object"
+      },
+      "AgentTitle": {
+        "description": "A new title for a session.",
+        "properties": {
+          "title": {
+            "description": "At most 60 characters; empty clears it (the list then shows the session's harness).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
         ],
         "type": "object"
       },
@@ -883,8 +914,10 @@
           "agent.cancelled",
           "agent.created",
           "agent.decided",
+          "agent.interrupted",
           "agent.killed",
           "agent.messaged",
+          "agent.renamed",
           "agent.resumed",
           "agent.wake_dropped",
           "agent.wake_queued",
@@ -2052,7 +2085,7 @@
             "$ref": "#/components/schemas/Timestamp"
           },
           "kind": {
-            "description": "What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,\n`action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;\na device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a\nmodule writes. The registered kinds are listed in `x-event-kinds`. The payload of\n`agent.state` is `{session, state, reason, …}`: a chain session that waits for an account\nsays `reason: \"waiting\"` and `waiting: {until, why, since}` (`until` an RFC 3339 time, `since`\nthe first wait in unix seconds), and one whose launch refused its account, so another was\npicked across a provider or harness, says `reason: \"repicked\"`, and a run a failover moved across\nthem says `reason: \"failover\"`, both with `from` and `to` (each `{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account\ncooled or limited until `until` (`class` `rate_limited`, `quota` or `plan_limit`; `source`\n`gateway` or `harness`). `account.health` is `{account, user, state, reason}`: an account went\n`unhealthy` (`reason` `upstream_errors` or `auth_suspected`). `account.failover` is `{run,\nuser, from_session, to_session, from_account, to_account, from_pool, to_pool, class, hop}`: a\nrun moved to `to_session`, or ended (`to_session` null: its chain has nothing left, the hop cap\nor the storm guard; `to_account` is null while the successor waits for one). `account.budget` is\n`{subject_kind, subject, state}` for an account's or a pool's budget (`state` `warning` or\n`exhausted`). `account.expired` is `{account, user, reason}`: a key the provider refused was\nconfirmed and the account disabled. `alarm.raised` with `alarm` `failover_storm` and a\n`user` says the bound on that user's failovers stopped a run of theirs from moving (once per\nwindow and user). `connection.health` is `{connection, user, kind, state, reason}`: a connection's\nhealth changed (`state` `active`, `cooling`, `limited`, `unhealthy` or `disabled`; `reason` a fixed\ncode: `rate_limited`, `quota`, `upstream_errors`, `auth_suspected`, `auth_failed`, `recovered`,\n`auth_cleared`). It is visible to `admin` devices only (`x-event-scopes`), never to a `read` device;\nthe push for it goes to the owning user's admin devices only. No payload holds a key, a token or an\nupstream's own words.",
+            "description": "What happened: `audit` (an audited change; the payload is the audit row: `audit_seq`,\n`action`, `actor_kind`, `actor_id`, `entity_kind`, `entity_id`, `entity_ref`, `details`;\na device is named by its `d_…` id in `entity_ref`, with `entity_id` null), or a kind a\nmodule writes. The registered kinds are listed in `x-event-kinds`. The payload of\n`agent.state` is `{session, state, reason, …}`: a live session that finished its answer is\n`state: \"waiting\"` with `reason: \"turn_ended\"` (its transcript has the harness's\n`turn_ended` and a `waiting` entry), and `state: \"running\"` with `reason: \"message\"` when\nthe next message starts an answer. A chain session that waits for an account\nsays `reason: \"waiting\"` and `waiting: {until, why, since}` (`until` an RFC 3339 time, `since`\nthe first wait in unix seconds), and one whose launch refused its account, so another was\npicked across a provider or harness, says `reason: \"repicked\"`, and a run a failover moved across\nthem says `reason: \"failover\"`, both with `from` and `to` (each `{provider, harness}`). `account.limited` is `{account, class, until, source}`: an account\ncooled or limited until `until` (`class` `rate_limited`, `quota` or `plan_limit`; `source`\n`gateway` or `harness`). `account.health` is `{account, user, state, reason}`: an account went\n`unhealthy` (`reason` `upstream_errors` or `auth_suspected`). `account.failover` is `{run,\nuser, from_session, to_session, from_account, to_account, from_pool, to_pool, class, hop}`: a\nrun moved to `to_session`, or ended (`to_session` null: its chain has nothing left, the hop cap\nor the storm guard; `to_account` is null while the successor waits for one). `account.budget` is\n`{subject_kind, subject, state}` for an account's or a pool's budget (`state` `warning` or\n`exhausted`). `account.expired` is `{account, user, reason}`: a key the provider refused was\nconfirmed and the account disabled. `alarm.raised` with `alarm` `failover_storm` and a\n`user` says the bound on that user's failovers stopped a run of theirs from moving (once per\nwindow and user). `connection.health` is `{connection, user, kind, state, reason}`: a connection's\nhealth changed (`state` `active`, `cooling`, `limited`, `unhealthy` or `disabled`; `reason` a fixed\ncode: `rate_limited`, `quota`, `upstream_errors`, `auth_suspected`, `auth_failed`, `recovered`,\n`auth_cleared`). It is visible to `admin` devices only (`x-event-scopes`), never to a `read` device;\nthe push for it goes to the owning user's admin devices only. No payload holds a key, a token or an\nupstream's own words.",
             "type": "string"
           },
           "payload": {
@@ -2990,6 +3023,13 @@
             "description": "`claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it\n(and `model`) when the session draws from a chain: the account the allocator picks sets them.",
             "type": "string"
           },
+          "live": {
+            "description": "One live conversation (default `true`): the harness stays up after each answer, the state\nis `waiting` until the next `sendAgentMessage`, and the session ends only on `cancel`,\n`kill`, the idle end (`agents.idle_end_secs`) or when the CLI exits by itself. `false`, or\na runner that does not offer it (the answer's `live` says), runs one answer and ends.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "model": {
             "description": "The model id as the provider names it. For a session served by the auth gateway it must be\none of the ids priced for its provider, exactly: the gateway resolves no alias.",
             "type": [
@@ -3005,6 +3045,7 @@
             ]
           },
           "prompt": {
+            "description": "The first message. Absent or empty: the session starts with no message, like opening the\nCLI: its harness is up, the state is `waiting`, and the first message comes through\n`sendAgentMessage`. A message gives the session its `title` (its first 60 characters).",
             "type": [
               "string",
               "null"
@@ -5900,7 +5941,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.54.0"
+    "version": "1.55.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -7262,6 +7303,67 @@
           "agents"
         ],
         "x-ainkrad-scope": "agent"
+      },
+      "patch": {
+        "operationId": "titleAgentSession",
+        "parameters": [
+          {
+            "description": "The session's id, `as_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentTitle"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSession"
+                }
+              }
+            },
+            "description": "Sets the session's short `title` (at most 60 characters, trimmed; empty clears it; audited as `agent.renamed`)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "agents"
+        ],
+        "x-ainkrad-scope": "agent"
       }
     },
     "/api/v1/agent-sessions/{id}/approvals/{request}": {
@@ -7391,6 +7493,60 @@
         "x-ainkrad-scope": "agent"
       }
     },
+    "/api/v1/agent-sessions/{id}/interrupt": {
+      "post": {
+        "operationId": "interruptAgentSession",
+        "parameters": [
+          {
+            "description": "The session's id, `as_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSession"
+                }
+              }
+            },
+            "description": "Stops the running answer of a live session, like Esc in the CLI (audited as `agent.interrupted`): a tool call waiting for approval is denied, the session goes on and becomes `waiting` (a message queued behind the answer is taken next). Nothing happens while it waits. 409 `not_live` for a session that is not a live conversation, `session_over`; `cancel` ends the session"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "agents"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "agent"
+      }
+    },
     "/api/v1/agent-sessions/{id}/kill": {
       "post": {
         "operationId": "killAgentSession",
@@ -7478,7 +7634,7 @@
                 }
               }
             },
-            "description": "Given to the harness as its next turn (audited as `agent.messaged`, its length only). 409 `session_over`, 502 `runner_failed` when it is not running"
+            "description": "Given to the harness as its next turn (audited as `agent.messaged`, its length only). A live session takes it in its running process: `waiting` becomes `running`, and a message sent while an answer runs is queued behind it. A live session whose process is gone (a runner restart, a lost runner, an idle end) is started again with the harness's own resume in the same folder and gets it there, so the conversation goes on. A first message gives an untitled session its `title`. 409 `session_over`, `session_starting` (not on its runner yet), 502 `runner_failed` when it is not running"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

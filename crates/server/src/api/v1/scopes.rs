@@ -191,6 +191,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
         "/api/v1/agent-sessions/{id}/approvals/{request}",
         "approve",
     ),
+    ("PATCH", "/api/v1/agent-sessions/{id}", "agent"),
+    ("POST", "/api/v1/agent-sessions/{id}/interrupt", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/cancel", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/kill", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/resume", "agent"),
@@ -300,6 +302,7 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     // a runner and lease it secrets; cancelling and killing stop someone's work.
     ("POST", "/api/v1/agent-sessions"),
     ("POST", "/api/v1/agent-sessions/{id}/messages"),
+    ("POST", "/api/v1/agent-sessions/{id}/interrupt"),
     ("POST", "/api/v1/agent-sessions/{id}/cancel"),
     ("POST", "/api/v1/agent-sessions/{id}/kill"),
     ("POST", "/api/v1/agent-sessions/{id}/resume"),

@@ -173,6 +173,7 @@ pub(super) fn start(session: &str, harness: &str) -> AgentStart {
         secrets: vec![],
         gateway: None,
         epoch: 0,
+        live: false,
     }
 }
 
@@ -362,6 +363,7 @@ async fn two_agy_runs_never_share_the_one_mcp_link() {
         d.stop(AgentStop {
             session: s.to_owned(),
             kill: true,
+            turn: false,
         })
         .unwrap();
     }
@@ -383,6 +385,7 @@ async fn slots_split_the_capacity_per_harness() {
         d.stop(AgentStop {
             session: s.to_owned(),
             kill: true,
+            turn: false,
         })
         .unwrap();
     }
@@ -509,12 +512,14 @@ async fn cancel_ends_after_the_grace_and_kill_at_once() {
     d.stop(AgentStop {
         session: "as_a".into(),
         kill: true,
+        turn: false,
     })
     .unwrap();
     until("kill teardown", || d.states()["as_a"] == AgentState::Ended).await;
     d.stop(AgentStop {
         session: "as_b".into(),
         kill: false,
+        turn: false,
     })
     .unwrap();
     until("the grace", || d.states()["as_b"] == AgentState::Ended).await;
@@ -530,7 +535,8 @@ async fn cancel_ends_after_the_grace_and_kill_at_once() {
     assert_eq!(
         d.stop(AgentStop {
             session: "as_a".into(),
-            kill: true
+            kill: true,
+            turn: false,
         })
         .unwrap()
         .state,
@@ -612,6 +618,7 @@ async fn a_new_driver_reloads_a_running_session_as_interrupted_and_resumes_it() 
         .stop(AgentStop {
             session: "as_a".into(),
             kill: true,
+            turn: false,
         })
         .unwrap();
     let _ = std::fs::remove_dir_all(root);
@@ -818,6 +825,7 @@ async fn a_kill_removes_the_secrets_and_a_reserved_variable_is_refused() {
     d.stop(AgentStop {
         session: "as_a".into(),
         kill: true,
+        turn: false,
     })
     .unwrap();
     until("removal", || !dir.exists()).await;
@@ -1135,6 +1143,7 @@ async fn a_running_session_is_ended_loudly_when_its_tier_goes_away_and_others_ar
     d.stop(AgentStop {
         session: "as_plain".into(),
         kill: true,
+        turn: false,
     })
     .unwrap();
     let _ = std::fs::remove_dir_all(root);
@@ -1180,6 +1189,7 @@ async fn a_session_that_needs_the_tier_only_through_a_field_or_the_legacy_flag_e
     d.stop(AgentStop {
         session: "as_plain".into(),
         kill: true,
+        turn: false,
     })
     .unwrap();
     let _ = std::fs::remove_dir_all(root);
@@ -1432,6 +1442,7 @@ async fn a_gateway_grant_gives_the_harness_a_socket_not_a_key_and_a_stop_closes_
     d.stop(AgentStop {
         session: "as_gw".into(),
         kill: false,
+        turn: false,
     })
     .unwrap();
     // The gateway is closed by the stop itself, before the harness has been signalled or ended.

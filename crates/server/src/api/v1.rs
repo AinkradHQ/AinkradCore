@@ -391,7 +391,10 @@ pub fn router(app: App) -> Router {
             "/api/v1/agent-sessions",
             get(agents::list).post(agents::create),
         )
-        .route("/api/v1/agent-sessions/{id}", get(agents::get))
+        .route(
+            "/api/v1/agent-sessions/{id}",
+            get(agents::get).patch(agents::title),
+        )
         .route(
             "/api/v1/agent-sessions/{id}/transcript",
             get(agents::transcript),
@@ -403,6 +406,10 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/agent-sessions/{id}/approvals/{request}",
             post(agents::decide),
+        )
+        .route(
+            "/api/v1/agent-sessions/{id}/interrupt",
+            post(agents::interrupt),
         )
         .route("/api/v1/agent-sessions/{id}/cancel", post(agents::cancel))
         .route("/api/v1/agent-sessions/{id}/kill", post(agents::kill))

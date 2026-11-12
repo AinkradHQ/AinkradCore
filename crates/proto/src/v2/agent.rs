@@ -16,7 +16,13 @@
 //!
 //! Capacity: the driver's `capacity` is how many sessions run at once, `slots` splits it per
 //! harness, and `streams` is how many of its commands may be in flight (reads included), which
-//! the hub counts per driver.
+//! the hub counts per driver. A `waiting` session still holds its slot.
+//!
+//! A live session (`AgentStart::live`, `CAP_LIVE`) is one conversation: after each answer it is
+//! `waiting` (a `waiting` transcript entry marks the boundary, after the harness's own
+//! `turn_ended`), `agent.send` is the next message (queued if an answer is still running), and
+//! it ends only on `agent.stop` or when the harness exits by itself. A harness process that is
+//! gone (a crash) is started again with the harness's own resume at the next message.
 
 use super::subscription::is_subscription_secret;
 use serde::{Deserialize, Serialize};
@@ -30,6 +36,12 @@ pub const OP_AGENT_READ: &str = "agent.read";
 pub const OP_AGENT_SEND: &str = "agent.send";
 pub const OP_AGENT_DECIDE: &str = "agent.decide";
 pub const OP_AGENT_STOP: &str = "agent.stop";
+
+/// The command an agent driver lists when it keeps a session's harness alive between answers: an
+/// `agent.start` with `live` then runs one conversation (state `waiting` after each answer, each
+/// `agent.send` is the next message, `agent.stop` with `turn` stops only the running answer). A
+/// runner that does not list it ends a session at its first answer, as before.
+pub const CAP_LIVE: &str = "live";
 
 /// Every op of the `agent` driver.
 pub const AGENT_OPS: [&str; 5] = [
@@ -259,6 +271,13 @@ pub struct AgentStart {
     /// same one again is a resent start and is answered, never run twice.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub epoch: u32,
+    /// One live conversation (`CAP_LIVE`): the harness stays up after an answer and the session
+    /// is `waiting` until the next `agent.send`; it ends only on `agent.stop` or when the CLI
+    /// exits by itself. A resume (`resume`) of a live session starts no turn: it waits for the
+    /// next message, which restarts the harness with its own resume. Without it the session
+    /// ends with its first answer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live: bool,
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -329,6 +348,11 @@ pub struct AgentStop {
     /// Kill the harness now; otherwise let its tool call in flight finish, then end it.
     #[serde(default)]
     pub kill: bool,
+    /// Only a live session's running answer is stopped (like Esc in the CLI): the session goes
+    /// on, `waiting`. A runner that lists `CAP_LIVE` honours it; the Core sends it to no other.
+    /// Nothing happens when no answer runs. Overrides `kill`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub turn: bool,
 }
 
 /// Where a session is, as its runner sees it.
@@ -336,6 +360,9 @@ pub struct AgentStop {
 #[serde(rename_all = "snake_case")]
 pub enum AgentState {
     Running,
+    /// A live session (`AgentStart::live`) whose harness finished its answer and waits for the
+    /// next `agent.send`. It still holds its slot. A runner sends it only for a live session.
+    Waiting,
     /// Its harness ended (`outcome`).
     Ended,
     /// Its harness went with a runner restart; the transcript is kept. The Core resumes it.

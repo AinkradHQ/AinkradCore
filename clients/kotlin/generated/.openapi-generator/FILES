@@ -45,6 +45,7 @@ src/main/kotlin/ainkrad/client/models/AgentDecision.kt
 src/main/kotlin/ainkrad/client/models/AgentMessage.kt
 src/main/kotlin/ainkrad/client/models/AgentSecret.kt
 src/main/kotlin/ainkrad/client/models/AgentSession.kt
+src/main/kotlin/ainkrad/client/models/AgentTitle.kt
 src/main/kotlin/ainkrad/client/models/AgentTranscript.kt
 src/main/kotlin/ainkrad/client/models/AgentTranscriptEntry.kt
 src/main/kotlin/ainkrad/client/models/AgentUsage.kt

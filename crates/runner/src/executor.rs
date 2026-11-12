@@ -117,6 +117,11 @@ pub enum Control {
     Message { id: i64, text: String },
     /// The run's new permission policy (1.24): its next tool calls are decided by it.
     Policy(Policy),
+    /// The run is one live conversation (an agent session started `live`): a turn that ends well
+    /// does not end the run, it waits for the next `Message` (or a `Pause`, which ends it).
+    Live,
+    /// Stops the running turn only (Esc in the CLI); the run goes on, waiting if it is live.
+    Interrupt,
 }
 
 /// A reviewer's answer to an escalated tool call.

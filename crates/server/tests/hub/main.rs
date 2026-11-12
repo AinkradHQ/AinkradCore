@@ -20,6 +20,7 @@ mod gateway_more;
 mod gateway_test_route;
 mod health;
 mod isolation;
+mod live;
 mod login;
 mod login_pool;
 mod neg_failover;

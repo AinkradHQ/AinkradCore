@@ -97,6 +97,12 @@ registry! {
          token shapes like any other secret. It lifts nothing for provider accounts, user \
          providers or other secrets, and secrets.mode 2 is unchanged. Setting it needs admin and \
          a step-up and is audited.";
+    AgentsIdleEndSecs "agents.idle_end_secs" Seconds 7_200, 60, 2_592_000, SO,
+        "How long a live AI session may wait for its user's next message (state `waiting`) before \
+         the Core ends it (outcome `succeeded`, reason `idle_timeout`). A waiting session holds \
+         its runner slot and its account's cap, so this bounds that. An ended one is resumed by \
+         sending it a message. Read at each supervisor pass, so a change applies to sessions \
+         already waiting.";
     SchedulerWaitMaxSecs "scheduler.wait_max_secs" Seconds 900, 1, 86_400, SO,
         "How long a chain session waits in all for an account that is cooling or at its cap \
          (counted from its first wait) before the run ends with `no account is available`. \

@@ -324,6 +324,7 @@ async fn a_module_stops_its_own_unstarted_session_and_never_owns_a_chain_one() {
         Command::AgentStop(AgentStop {
             session: id.to_owned(),
             kill: false,
+            turn: false,
         })
     };
     let state = |id: String| {

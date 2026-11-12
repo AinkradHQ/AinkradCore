@@ -14,6 +14,13 @@
 //!   runner away past `lost_after`, or one that no longer knows the session, loses it.
 //! - **Leases** (E2-07.2) are granted by the Core at each start, for the session's runner only,
 //!   and travel only in the `agent.start` command: never in a response, an event or a row.
+//! - **Live sessions** (N41): a client session is one live conversation by default (`agent_sessions.live`).
+//!   Its harness stays up after an answer and the runner reports `waiting`: the stored `state` stays
+//!   `running` and `waiting_since` says it is idle, so the API shows `waiting` and the events say
+//!   `agent.state` `waiting` / `running`. A `waiting` session **still holds its runner slot and its
+//!   account's cap**; `agents.idle_end_secs` (default 2 h) ends one nobody comes back to (`succeeded`,
+//!   `idle_timeout`), and a later message starts it again with the harness's own resume. A message for a
+//!   session whose harness is gone is kept as `pending` and delivered by the supervisor (`live`).
 //! - **Capacity** (E2-08.1): a create is refused `runner_busy` when the runner's `agent`
 //!   driver, or the harness's slot on it, is full (the runner refuses it too).
 
@@ -22,6 +29,7 @@ mod ending;
 mod failover;
 pub mod gateway;
 mod launch;
+pub(crate) mod live;
 pub mod login;
 pub mod plan_check;
 pub mod subscription;
@@ -524,6 +532,26 @@ pub fn authorize_for_tests(app: &App, session: &str) {
         .insert(session.to_owned(), Elevated::for_tests());
 }
 
+/// Keeps the caller's proof for a message that restarts a live session (its supervisor sends the
+/// runner commands with it).
+pub fn authorize_message(app: &App, caller: &Caller, session: &str) {
+    app.agents
+        .elevated
+        .lock()
+        .unwrap()
+        .insert(session.to_owned(), app.hub.agent_elevation(caller));
+}
+
+/// Whether `runner`'s agent driver keeps a harness alive between answers (`CAP_LIVE`).
+pub fn offers_live(app: &App, runner: &str) -> bool {
+    app.hub.runners().get(runner).is_some_and(|r| {
+        r.drivers
+            .iter()
+            .filter(|d| d.name == AGENT_DRIVER)
+            .any(|d| d.commands.iter().any(|c| c == ainkrad_proto::v2::CAP_LIVE))
+    })
+}
+
 pub(crate) const MAX_PROMPT: usize = 64 * 1024;
 pub(crate) const MAX_SECRETS: usize = 16;
 
@@ -824,7 +852,11 @@ async fn run(app: &App, id: &str) {
                 Err(e) => Err(e),
             },
             "interrupted" => launch(app, &s, true).await.map(drop),
-            _ => read(app, &s, &cfg).await,
+            _ => match live::before_read(app, &s).await {
+                Ok(true) => continue,
+                Ok(false) => read(app, &s, &cfg).await,
+                Err(e) => Err(e),
+            },
         };
         match step {
             Ok(()) => away = None,
@@ -904,6 +936,7 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
         let stop = Command::AgentStop(ainkrad_proto::v2::AgentStop {
             session: s.id.clone(),
             kill: true,
+            turn: false,
         });
         let proof = app.agents.elevated.lock().unwrap().get(&s.id).copied();
         let why = format!("the transcript reached {} entries", store::MAX_TRANSCRIPT);
@@ -945,7 +978,7 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
             )
             .await?;
         }
-        AgentState::Running | AgentState::Unknown => {}
+        AgentState::Running | AgentState::Waiting | AgentState::Unknown => {}
     }
     Ok(())
 }

@@ -23,7 +23,7 @@ impl AgentDriver {
             .lock()
             .unwrap()
             .get(&req.session)
-            .is_some_and(|l| l.meta.state == AgentState::Running);
+            .is_some_and(|l| super::holds_slot(l.meta.state));
         if !running {
             return Err(no_session());
         }

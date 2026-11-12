@@ -210,6 +210,7 @@ async fn stopping_closes_the_gateway_before_the_harness_is_signalled() {
     r.d.stop(AgentStop {
         session: SESSION.to_owned(),
         kill: false,
+        turn: false,
     })
     .unwrap();
     // `control` ran after the stop closed the gateway: the socket was already gone.
@@ -229,6 +230,7 @@ async fn a_stop_during_lease_redemption_never_starts_the_harness() {
     r.d.stop(AgentStop {
         session: SESSION.to_owned(),
         kill: false,
+        turn: false,
     })
     .unwrap();
     r.gate.notify_one(); // the redemption completes after the stop

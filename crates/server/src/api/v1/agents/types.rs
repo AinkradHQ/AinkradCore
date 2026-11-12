@@ -27,6 +27,13 @@ pub struct AgentDecision {
     pub reply: Option<String>,
 }
 
+/// A new title for a session.
+#[derive(Deserialize, ToSchema)]
+pub struct AgentTitle {
+    /// At most 60 characters; empty clears it (the list then shows the session's harness).
+    pub title: String,
+}
+
 /// A wake for an idle session.
 #[derive(Deserialize, ToSchema)]
 pub struct AgentWakeRequest {
@@ -99,7 +106,15 @@ pub struct NewAgentSession {
     /// The model id as the provider names it. For a session served by the auth gateway it must be
     /// one of the ids priced for its provider, exactly: the gateway resolves no alias.
     pub model: Option<String>,
+    /// The first message. Absent or empty: the session starts with no message, like opening the
+    /// CLI: its harness is up, the state is `waiting`, and the first message comes through
+    /// `sendAgentMessage`. A message gives the session its `title` (its first 60 characters).
     pub prompt: Option<String>,
+    /// One live conversation (default `true`): the harness stays up after each answer, the state
+    /// is `waiting` until the next `sendAgentMessage`, and the session ends only on `cancel`,
+    /// `kill`, the idle end (`agents.idle_end_secs`) or when the CLI exits by itself. `false`, or
+    /// a runner that does not offer it (the answer's `live` says), runs one answer and ends.
+    pub live: Option<bool>,
     /// The repo and worktree to work in (`{"repo_url", "base_branch", "branch", …}`); absent, a
     /// scratch dir.
     #[schema(value_type = Option<Object>)]

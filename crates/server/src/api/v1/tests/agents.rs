@@ -350,6 +350,7 @@ async fn a_module_drives_only_its_own_live_sessions() {
         Command::AgentStop(AgentStop {
             session: s.id.clone(),
             kill: true,
+            turn: false,
         })
     };
     let why = |r: Result<(), Refusal>| match r {

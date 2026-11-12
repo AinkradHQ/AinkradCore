@@ -187,6 +187,7 @@ async fn the_engine_cannot_drive_a_session_it_does_not_own() {
         Command::AgentStop(AgentStop {
             session: id.to_owned(),
             kill: true,
+            turn: false,
         })
     };
     for id in [&clients.id, &theirs.id] {

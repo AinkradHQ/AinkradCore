@@ -32,7 +32,7 @@ import kotlinx.serialization.Contextual
  * @param id `as_…`.
  * @param lastSeq The newest transcript `seq` stored.
  * @param runner The runner's device id, `d_…`.
- * @param state `starting`, `running`, `interrupted` (its runner restarted; it is resumed), `ended`, `lost`.
+ * @param state `starting`, `running` (working), `waiting` (a live session finished its answer and waits for the user's next message; it still holds its runner slot), `interrupted` (its runner restarted; it is resumed), `ended`, `lost`.
  * @param updatedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param account The account the session holds, whatever its delivery (an API key or a subscription).
  * @param agent The opaque agent id the create named (the key of its chain binding).
@@ -45,7 +45,9 @@ import kotlinx.serialization.Contextual
  * @param failoverClass Why the run was moved off this attempt (`rate_limited`, `quota`, `auth`, `budget_pool`, …). An ended run's last attempt says in `outcome.failover` (`{result, why, reasons}`) why it could not move on. Admin only.
  * @param failoverOf The attempt this one replaced.
  * @param harnessSession The harness's own session id, what a resume continues.
+ * @param idleSince RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param index Its row: page `listAgentSessions` with `before`.
+ * @param live A live conversation (`createAgentSession`'s `live`): the state is `waiting` between answers.
  * @param model 
  * @param outcome Once over: `{\"kind\": \"succeeded\" | \"failed\" | \"cancelled\" | \"token_cap\" | \"stalled\" | \"lost\", \"reason\": …}`.
  * @param repicked How many accounts a launch refused after the pick before the one it holds (at most 2).
@@ -53,6 +55,7 @@ import kotlinx.serialization.Contextual
  * @param run The run it belongs to: its first attempt's id. A failover is a new session (an attempt) of the same run; filter `listAgentSessions` with `run`.
  * @param secrets The secrets it is leased at each start, by name.
  * @param skipPools The pools a budget stop took out of the run's chain. Admin only.
+ * @param title A short name: the first message's start, or the one `titleAgentSession` set.
  * @param upstreamClass The last status class its own gateway reported: `ok`, `rate_limited`, `quota`, `server_error`, `auth_failed`, …
  * @param usage 
  * @param waiting Set while a chain session waits for an account: it stays `starting` until `until`, or until `scheduler.wait_max_secs` ends the run.
@@ -83,7 +86,7 @@ data class AgentSession (
     @SerialName(value = "runner")
     val runner: kotlin.String,
 
-    /* `starting`, `running`, `interrupted` (its runner restarted; it is resumed), `ended`, `lost`. */
+    /* `starting`, `running` (working), `waiting` (a live session finished its answer and waits for the user's next message; it still holds its runner slot), `interrupted` (its runner restarted; it is resumed), `ended`, `lost`. */
     @SerialName(value = "state")
     val state: kotlin.String,
 
@@ -135,9 +138,17 @@ data class AgentSession (
     @SerialName(value = "harness_session")
     val harnessSession: kotlin.String? = null,
 
+    /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
+    @Contextual @SerialName(value = "idle_since")
+    val idleSince: java.time.OffsetDateTime? = null,
+
     /* Its row: page `listAgentSessions` with `before`. */
     @SerialName(value = "index")
     val index: kotlin.Long? = null,
+
+    /* A live conversation (`createAgentSession`'s `live`): the state is `waiting` between answers. */
+    @SerialName(value = "live")
+    val live: kotlin.Boolean? = null,
 
     @SerialName(value = "model")
     val model: kotlin.String? = null,
@@ -165,6 +176,10 @@ data class AgentSession (
     /* The pools a budget stop took out of the run's chain. Admin only. */
     @SerialName(value = "skip_pools")
     val skipPools: kotlin.collections.List<kotlin.Long>? = null,
+
+    /* A short name: the first message's start, or the one `titleAgentSession` set. */
+    @SerialName(value = "title")
+    val title: kotlin.String? = null,
 
     /* The last status class its own gateway reported: `ok`, `rate_limited`, `quota`, `server_error`, `auth_failed`, … */
     @SerialName(value = "upstream_class")
