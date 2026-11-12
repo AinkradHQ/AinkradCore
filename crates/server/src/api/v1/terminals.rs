@@ -26,6 +26,9 @@ use std::time::Duration;
 use std::time::Instant;
 use utoipa::ToSchema;
 
+mod local;
+pub use local::*;
+
 const MAX_INPUT: usize = 64 * 1024;
 /// One WebSocket message: base64 of the largest input, with its frame around it.
 const MAX_WS_MESSAGE: usize = 128 * 1024;
@@ -59,6 +62,9 @@ pub struct Rooms {
     /// Per terminal: the client that typed last, and how many clients are attached.
     rooms: Mutex<HashMap<String, (Option<u64>, u32)>>,
     next_client: AtomicU64,
+    /// Local-path attaches (`local`): (terminal, device) -> the unix time the lease ends. They
+    /// count as attached clients, so a terminal someone types in locally is not idle.
+    leases: Mutex<HashMap<(String, String), i64>>,
     /// Attach slots in use, per terminal and per device (`reserve`).
     slots: Mutex<(HashMap<String, u32>, HashMap<String, u32>)>,
     /// Exited terminals whose host this Core already told to go (`ack_exited`).
@@ -156,7 +162,7 @@ impl Rooms {
     }
 
     fn attached(&self, terminal: &str) -> u32 {
-        self.rooms.lock().unwrap().get(terminal).map_or(0, |r| r.1)
+        self.rooms.lock().unwrap().get(terminal).map_or(0, |r| r.1) + self.leased(terminal)
     }
     fn typed(&self, terminal: &str, client: u64) {
         if let Some(r) = self.rooms.lock().unwrap().get_mut(terminal) {
@@ -589,6 +595,7 @@ async fn touch(app: &App, id: &str) {
 /// Closes every running terminal nobody has been attached to for `terminal.idle_secs`
 /// (0 turns it off). A runner that is offline is tried again at the next pass.
 pub async fn sweep(app: &App) {
+    local::lapse(app).await;
     ack_exited(app).await;
     sweep_orphans(app).await;
     // A revoked device's terminals are closed: its streams already ended with the revoke, and

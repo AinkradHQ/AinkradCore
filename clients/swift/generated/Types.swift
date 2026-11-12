@@ -424,6 +424,12 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `DELETE /api/v1/terminals/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/delete(closeTerminal)`.
     func closeTerminal(_ input: Operations.CloseTerminal.Input) async throws -> Operations.CloseTerminal.Output
+    /// - Remark: HTTP `POST /api/v1/terminals/{id}/local`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/local/post(grantLocalTerminal)`.
+    func grantLocalTerminal(_ input: Operations.GrantLocalTerminal.Input) async throws -> Operations.GrantLocalTerminal.Output
+    /// - Remark: HTTP `DELETE /api/v1/terminals/{id}/local`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/local/delete(releaseLocalTerminal)`.
+    func releaseLocalTerminal(_ input: Operations.ReleaseLocalTerminal.Input) async throws -> Operations.ReleaseLocalTerminal.Output
     /// - Remark: HTTP `POST /api/v1/terminals/{id}/signal`.
     /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/signal/post(signalTerminal)`.
     func signalTerminal(_ input: Operations.SignalTerminal.Input) async throws -> Operations.SignalTerminal.Output
@@ -1896,6 +1902,28 @@ extension APIProtocol {
         headers: Operations.CloseTerminal.Input.Headers = .init()
     ) async throws -> Operations.CloseTerminal.Output {
         try await closeTerminal(Operations.CloseTerminal.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/terminals/{id}/local`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/local/post(grantLocalTerminal)`.
+    public func grantLocalTerminal(
+        path: Operations.GrantLocalTerminal.Input.Path,
+        headers: Operations.GrantLocalTerminal.Input.Headers = .init()
+    ) async throws -> Operations.GrantLocalTerminal.Output {
+        try await grantLocalTerminal(Operations.GrantLocalTerminal.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `DELETE /api/v1/terminals/{id}/local`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/local/delete(releaseLocalTerminal)`.
+    public func releaseLocalTerminal(
+        path: Operations.ReleaseLocalTerminal.Input.Path,
+        headers: Operations.ReleaseLocalTerminal.Input.Headers = .init()
+    ) async throws -> Operations.ReleaseLocalTerminal.Output {
+        try await releaseLocalTerminal(Operations.ReleaseLocalTerminal.Input(
             path: path,
             headers: headers
         ))

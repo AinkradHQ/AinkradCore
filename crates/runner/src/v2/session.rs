@@ -237,6 +237,11 @@ impl Session {
             ..RunnerHello::default()
         };
         let (welcome, core_spki) = handshake(&mut sink, &mut source, link, hello).await?;
+        // The Core is proven: hosts may trust grants it signs (the local terminal path).
+        if let Some(pty) = &self.pty {
+            let runner = link.enrolment.lock().unwrap().device_id.clone();
+            pty.trust(&core_spki, &runner);
+        }
         if welcome.boot.is_none() || welcome.boot != self.core_boot {
             if self.core_boot.is_some() {
                 tracing::info!("the Core restarted: every held stream is gone");

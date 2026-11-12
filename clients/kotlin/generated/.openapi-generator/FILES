@@ -109,6 +109,7 @@ src/main/kotlin/ainkrad/client/models/LeasedSecret.kt
 src/main/kotlin/ainkrad/client/models/LimitCleared.kt
 src/main/kotlin/ainkrad/client/models/LimitSet.kt
 src/main/kotlin/ainkrad/client/models/LimitStanding.kt
+src/main/kotlin/ainkrad/client/models/LocalTerminalGrant.kt
 src/main/kotlin/ainkrad/client/models/Lockout.kt
 src/main/kotlin/ainkrad/client/models/LogLine.kt
 src/main/kotlin/ainkrad/client/models/LogPage.kt

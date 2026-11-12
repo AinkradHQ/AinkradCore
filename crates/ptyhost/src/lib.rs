@@ -8,6 +8,7 @@
 
 pub mod client;
 pub mod host;
+pub mod local;
 pub mod pty;
 pub mod screen;
 pub mod store;

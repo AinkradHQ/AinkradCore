@@ -16,6 +16,7 @@
 package ainkrad.client.apis
 
 import ainkrad.client.models.ErrorBody
+import ainkrad.client.models.LocalTerminalGrant
 import ainkrad.client.models.NewTerminal
 import ainkrad.client.models.Terminal
 import ainkrad.client.models.TerminalSignal
@@ -173,6 +174,40 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * POST /api/v1/terminals/{id}/local
+        * 
+        * 
+         * @param id  
+         * @return LocalTerminalGrant
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun grantLocalTerminal(id: kotlin.String): HttpResponse<LocalTerminalGrant> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/terminals/{id}/local".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * GET /api/v1/terminals
         * 
         * 
@@ -193,6 +228,39 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.GET,
             "/api/v1/terminals",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * DELETE /api/v1/terminals/{id}/local
+        * 
+        * 
+         * @param id  
+         * @return void
+        */
+        open suspend fun releaseLocalTerminal(id: kotlin.String): HttpResponse<Unit> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.DELETE,
+            "/api/v1/terminals/{id}/local".replace("{" + "id" + "}", "$id"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

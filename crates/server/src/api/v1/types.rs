@@ -174,7 +174,11 @@
 /// 57: the runner op `history.read` (a runner's own harness history for the Brain, off unless the runner
 ///    lists the `history-read` capability) and its `HistoryRead`, `HistoryChunk`, `HistoryItem` and `HistorySkip`.
 ///    `RunnerPolicyBody` and the runner's policy also gain `share_history` (the runner lets the Brain read its history).
-pub const API_MINOR: u32 = 57;
+/// 58: the local terminal path: `grantLocalTerminal` (`POST /terminals/{id}/local`, `terminal`, destructive: the
+///    attach's step-up) answers a Core-signed, single-use grant for the runner host's Unix socket, and
+///    `releaseLocalTerminal` (`DELETE`, `terminal`) is its detach. A grant lasts a lease of 45 s and is renewed by
+///    asking again. `terminal.attached` / `.detached` events and audit rows carry `local`.
+pub const API_MINOR: u32 = 58;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

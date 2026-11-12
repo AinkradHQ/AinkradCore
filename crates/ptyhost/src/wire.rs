@@ -97,6 +97,19 @@ pub enum ToHost {
     /// Free scrollback disk (the runner's budget, E2-06.2): drop the older half of the disk
     /// ring, or all of it if only one half is held. An older host skips it (and keeps none).
     Shed,
+    /// From the runner: the Core key and runner id the local socket checks grants against
+    /// (`crate::local`). Ignored on the local socket itself; an older host skips it.
+    Trust {
+        /// The Core's identity key, SPKI as base64url.
+        core_spki: String,
+        runner: String,
+    },
+    /// Local socket only: a grant the Core signed, and the device key's signature over the
+    /// host's last challenge. Sent first, and again before the lease ends to renew.
+    Auth {
+        grant: String,
+        sig: String,
+    },
     /// From a newer client: ignored.
     #[serde(other)]
     Unknown,
@@ -123,6 +136,16 @@ pub enum FromHost {
     },
     Error {
         message: String,
+    },
+    /// Local socket only, first: the connection must answer with `Auth` signing `nonce`.
+    Challenge {
+        nonce: String,
+    },
+    /// Local socket only: the grant was accepted. The connection stays open `lease_ms`; sign
+    /// `challenge` with the next grant to renew.
+    Authed {
+        lease_ms: u64,
+        challenge: String,
     },
     /// From a newer host: ignored.
     #[serde(other)]

@@ -10,7 +10,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
-use crate::host::{owned_dir, random_hex, record_path, scrollback_dir, socket_path};
+use crate::host::{
+    local_socket_path, owned_dir, random_hex, record_path, scrollback_dir, socket_path,
+};
 use crate::pty::Spec;
 use crate::store;
 use crate::wire::{FromHost, HOST_PROTOCOL, HostInfo, HostRecord, ToHost, read_line, valid_id};
@@ -192,6 +194,7 @@ pub async fn scan_report(dir: &Path) -> ScanReport {
                 orphaned.push(id.clone());
                 let _ = std::fs::remove_file(record_path(dir, &id));
                 let _ = std::fs::remove_file(socket_path(dir, &id));
+                let _ = std::fs::remove_file(local_socket_path(dir, &id));
                 // Its scrollback goes too: nobody can read it any more.
                 store::remove_all(&scrollback_dir(dir), &id);
             }

@@ -207,6 +207,10 @@ pub fn router(app: App) -> Router {
         )
         .route("/api/v1/terminals/{id}/signal", post(terminals::signal))
         .route("/api/v1/terminals/{id}/ws", get(terminals::attach))
+        .route(
+            "/api/v1/terminals/{id}/local",
+            post(terminals::grant).delete(terminals::release),
+        )
         .route("/api/v1/system/host", get(system::host))
         .route("/api/v1/core/health", get(corehealth::get))
         .route("/api/v1/system/restart", post(system::restart))
