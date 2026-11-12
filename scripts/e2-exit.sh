@@ -174,6 +174,9 @@ host_pid() { local p; p=$(jq -r .pid "$RSTATE/terminals/$1.json" 2>/dev/null) ||
 # A host and every process under it. The shells' own `$$` is in the terminal sandbox's PID namespace (Linux).
 tree() { local c; echo "$1"; for c in $(pgrep -P "$1"); do tree "$c"; done; }
 agent_state() { a --json agent show "$1" | jq -r .state; }
+# Polled by wait_for, which runs its arguments again each time: a `$(...)` in its own arguments would be read once.
+state_is() { [ "$(agent_state "$AS")" = "$1" ]; }
+ticks_over() { [ "$(ticks "$AS" | wc -l)" -gt "$1" ]; }
 expect_lines() { seq 1 "$1" | awk '{printf "L%05d\n",$1}'; }
 # stream <name> <action>: a gated 3000-line producer, attached through the proxy; the action hits mid-stream;
 # the captured L-lines must be exactly L00001..L03000, each once, in order.
@@ -217,7 +220,7 @@ step1() {
   sleep 2
   attach a "$W/pre.bin" 4 "$T1" >/dev/null || true
   render "$W/pre.bin" >"$W/pre.screen"
-  wait_for 30 test "$(ticks "$AS" | wc -l)" -ge 3 || { EV="agent produced no ticks: $(agent_state "$AS")"; return 1; }
+  wait_for 30 ticks_over 2 || { EV="agent produced no ticks: $(agent_state "$AS")"; return 1; }
   transcript "$AS" >"$W/pre-tr.jsonl"; PRE_SEQ=$(tail -n1 "$W/pre-tr.jsonl" | jq .seq)
   grep -aq "MARK-$NONCE" "$W/pre.bin" || { EV="pre-kill screen lacks the MARK"; return 1; }
   [ "$(sed -n 1p "$W/pre.screen")" = ALT=true ] || { EV="pre-kill screen is not the alt-screen app"; return 1; }
@@ -251,10 +254,10 @@ step3() {
   grep -aq "MARK-$NONCE" "$W/post.bin" || { EV="no MARK-$NONCE after the restarts"; return 1; }
   # A live session (the default) comes back waiting for its user: the runner restart took its harness, and the next
   # message starts it again with the harness's own resume (--resume), as a CLI session continues.
-  wait_for 90 test "$(agent_state "$AS")" = waiting || { EV="agent is $(agent_state "$AS"), not waiting after the restart"; return 1; }
+  wait_for 90 state_is waiting || { EV="agent is $(agent_state "$AS"), not waiting after the restart"; return 1; }
   a agent send "$AS" "carry on" >/dev/null || { EV="the message to the restarted agent failed"; return 1; }
-  wait_for 30 test "$(agent_state "$AS")" = running || { EV="agent is $(agent_state "$AS"), not running after the message"; return 1; }
-  wait_for 30 test "$(ticks "$AS" | wc -l)" -gt "$(ticks_before)" || { EV="agent did not continue"; return 1; }
+  wait_for 30 state_is running || { EV="agent is $(agent_state "$AS"), not running after the message"; return 1; }
+  wait_for 30 ticks_over "$(ticks_before)" || { EV="agent did not continue"; return 1; }
   transcript "$AS" >"$W/post-tr.jsonl"
   jq -s -e '[.[].seq] as $s | $s == [range(1; ($s|length)+1)]' "$W/post-tr.jsonl" >/dev/null || { EV="transcript seqs have a gap"; return 1; }
   ticks "$AS" | contiguous || { EV="tick numbers have a gap: $(ticks "$AS" | tr '\n' ' ')"; return 1; }
