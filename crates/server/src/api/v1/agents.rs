@@ -104,6 +104,10 @@ pub struct AgentSession {
     pub idle_since: Option<Timestamp>,
     /// A short name: the first message's start, or the one `titleAgentSession` set.
     pub title: Option<String>,
+    /// The repo and worktree it works in, as the create sent it (`{"repo", "base", "branch", …}`);
+    /// absent for a scratch dir.
+    #[schema(value_type = Option<Object>)]
+    pub workspace: Option<Value>,
 }
 
 impl From<Session> for AgentSession {
@@ -116,6 +120,7 @@ impl From<Session> for AgentSession {
                 .filter(|_| s.state == "running")
                 .map(|t| ts(&crate::scheduler::iso_of_unix(t))),
             title: s.title,
+            workspace: s.workspace,
             id: s.id,
             runner: s.runner,
             harness: s.harness,
