@@ -126,6 +126,16 @@ pub fn room_path(root: &Path, room: &str) -> PathBuf {
     root.join("rooms").join(room).join("canon.db")
 }
 
+pub fn index_path(root: &Path, room: &str) -> PathBuf {
+    root.join("rooms").join(room).join("index.db")
+}
+
+pub static INDEX: &[FileMigration] = &[FileMigration {
+    version: 1,
+    name: "index_0001",
+    up: include_str!("../migrations/index_0001.sql"),
+}];
+
 pub static STAGING: &[FileMigration] = &[FileMigration {
     version: 1,
     name: "staging_0001",

@@ -938,11 +938,13 @@
           "brain.import.committed",
           "brain.import.discovered",
           "brain.import.started",
+          "brain.inbox.notice",
           "brain.room.created",
           "brain.room.opened",
           "brain.room.refused",
           "brain.rule.changed",
           "brain.rule.created",
+          "brain.source.changed",
           "budget.created",
           "budget.deleted",
           "budget.exhausted",
@@ -2298,6 +2300,7 @@
           "audit",
           "brain.alarm",
           "brain.import",
+          "brain.inbox",
           "brain.room",
           "connection.health",
           "notify.delivery",
@@ -2335,6 +2338,7 @@
           "audit": "admin",
           "brain.alarm": "read",
           "brain.import": "read",
+          "brain.inbox": "read",
           "brain.room": "read",
           "connection.health": "admin",
           "notify.delivery": "admin",
@@ -2566,6 +2570,48 @@
         "required": [
           "core_spki",
           "core_sig"
+        ],
+        "type": "object"
+      },
+      "Hit": {
+        "properties": {
+          "item_id": {
+            "type": "string"
+          },
+          "snippet": {
+            "description": "The matching text, the words between « and ».",
+            "type": "string"
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item_id",
+          "source_kind",
+          "title",
+          "snippet",
+          "started_at"
+        ],
+        "type": "object"
+      },
+      "Hits": {
+        "properties": {
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/Hit"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "hits"
         ],
         "type": "object"
       },
@@ -4906,6 +4952,23 @@
         ],
         "type": "object"
       },
+      "Routed": {
+        "properties": {
+          "room": {
+            "type": "string"
+          },
+          "sources": {
+            "description": "Sources added to that room.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "room",
+          "sources"
+        ],
+        "type": "object"
+      },
       "RulePatch": {
         "properties": {
           "enabled": {
@@ -6025,6 +6088,85 @@
           }
         ]
       },
+      "SourcePut": {
+        "properties": {
+          "cursor": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "device": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "roots": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "device",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "SourceView": {
+        "properties": {
+          "cursor": {
+            "description": "What the collector has taken so far; opaque to the Core, owned by the collector.",
+            "type": "object"
+          },
+          "device": {
+            "description": "`core` for the Core's own collector, else the device that collects.",
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "last_run": {
+            "description": "When the source last synced (RFC 3339).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "roots": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "device",
+          "kind",
+          "enabled",
+          "roots",
+          "cursor"
+        ],
+        "type": "object"
+      },
       "SplitItems": {
         "properties": {
           "item_ids": {
@@ -6236,6 +6378,154 @@
           "exhausted",
           "created_at",
           "updated_at"
+        ],
+        "type": "object"
+      },
+      "SyncRequest": {
+        "properties": {
+          "run": {
+            "description": "A full run that is collecting and lists `core_transcript`: take the Core's AI sessions into\nit instead of starting an incremental run.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SyncResult": {
+        "properties": {
+          "duplicate": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "found": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "idle": {
+            "description": "Why nothing ran: `nothing_new`, `disabled` or `running`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "new_rooms": {
+            "description": "Proposed rooms that do not exist yet, left for review.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "notice": {
+            "description": "True when this sync raised the Inbox notice (`brain.inbox`).",
+            "type": "boolean"
+          },
+          "refused": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rejected": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "routed": {
+            "description": "Rooms the user already accepted that took their new items without a review.",
+            "items": {
+              "$ref": "#/components/schemas/Routed"
+            },
+            "type": "array"
+          },
+          "run": {
+            "description": "The run that took the new items; none when there was nothing new.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stored": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unsorted": {
+            "description": "Items left in Unsorted for review.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "found",
+          "stored",
+          "duplicate",
+          "refused",
+          "rejected",
+          "routed",
+          "unsorted",
+          "new_rooms",
+          "notice"
+        ],
+        "type": "object"
+      },
+      "SyncSource": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "last_run": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "SyncStatus": {
+        "properties": {
+          "every_secs": {
+            "description": "Seconds between scheduled syncs of the Core's own sources.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "review": {
+            "description": "Runs waiting for a review (new rooms or Unsorted items), oldest first.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SyncSource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "every_secs",
+          "sources",
+          "review"
         ],
         "type": "object"
       },
@@ -15786,6 +16076,79 @@
         "x-ainkrad-scope": "admin"
       }
     },
+    "/modules/brain/v1/rooms/{room}/search": {
+      "get": {
+        "operationId": "brainRoomSearch",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Words to find; all must appear.",
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "At most this many hits (default 20, most 100).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Hits"
+                }
+              }
+            },
+            "description": "Full-text hits in an open room, best first"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
     "/modules/brain/v1/rules": {
       "get": {
         "operationId": "brainRules",
@@ -15946,6 +16309,114 @@
         "x-ainkrad-scope": "admin"
       }
     },
+    "/modules/brain/v1/sources": {
+      "get": {
+        "operationId": "brainSources",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SourceView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Every collector: its switch, roots and cursor"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/sources/{id}": {
+      "put": {
+        "operationId": "brainPutSource",
+        "parameters": [
+          {
+            "description": "Source id: lowercase letters, digits, `_` and `-`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourcePut"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceView"
+                }
+              }
+            },
+            "description": "The source, made or changed; a missing field keeps its value"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/modules/brain/v1/status": {
       "get": {
         "operationId": "brainStatus",
@@ -15986,6 +16457,98 @@
           "brain"
         ],
         "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/brain/v1/sync": {
+      "get": {
+        "operationId": "brainSyncStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncStatus"
+                }
+              }
+            },
+            "description": "The schedule, the last sync per source and runs waiting for review"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "post": {
+        "operationId": "brainSyncNow",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncResult"
+                }
+              }
+            },
+            "description": "Sync now: the Core's AI sessions since the last sync, routed into known rooms"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
       }
     },
     "/pair/claim": {

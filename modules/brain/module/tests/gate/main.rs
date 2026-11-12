@@ -2,7 +2,9 @@
 //! the migration guard and the registries are the Core's own code. Every item here is synthetic.
 
 mod common;
+mod index;
 mod intake;
 mod keys;
 mod review;
 mod rooms;
+mod sync;

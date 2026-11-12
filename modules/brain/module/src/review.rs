@@ -148,7 +148,11 @@ pub(crate) fn item_of(r: &SqliteRow) -> Result<Item, sqlx::Error> {
 }
 
 /// Runs discovery over the run's staged items and moves the run to `review`.
-pub(crate) async fn discover(app: &App, b: &Brain, run: &str) -> Result<(), ApiError> {
+pub(crate) async fn discover(
+    app: &App,
+    b: &Brain,
+    run: &str,
+) -> Result<Option<crate::sync::Outcome>, ApiError> {
     let mut tx = begin_write(&app.pool).await?;
     sqlx::query(
         "UPDATE brain_import_runs SET state = 'discovering', stage = 'discover' WHERE id = ?",
@@ -200,7 +204,15 @@ pub(crate) async fn discover(app: &App, b: &Brain, run: &str) -> Result<(), ApiE
     .await?;
     record_progress(&mut tx, run, "review", &counts).await?;
     tx.commit().await?;
-    Ok(())
+    // A later run of an already-reviewed source needs no review for rooms the user accepted.
+    let kind: String = sqlx::query_scalar("SELECT kind FROM brain_import_runs WHERE id = ?")
+        .bind(run)
+        .fetch_one(&app.pool)
+        .await?;
+    if kind == "incremental" {
+        return Ok(Some(crate::sync::route_known(app, b, run).await?));
+    }
+    Ok(None)
 }
 
 /// The run must be in review: nothing is edited while collecting or after commit.
