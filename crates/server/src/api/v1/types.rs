@@ -170,7 +170,8 @@
 ///    (`PATCH /agent-sessions/{id}`); the audit actions `agent.interrupted` and `agent.renamed`; the
 ///    `agents.idle_end_secs` setting; the runner protocol gains `AgentState::waiting`, `AgentStart.live`,
 ///    `AgentStop.turn` and the `live` capability.
-pub const API_MINOR: u32 = 55;
+/// 56: `AgentSession.workspace`, the repo and worktree a session was created with (N41), so a client can group by project.
+pub const API_MINOR: u32 = 56;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
