@@ -20,7 +20,7 @@ const DEFAULT_PROCESSES: u32 = 64;
 /// macOS Seatbelt limits egress to TCP 443, DNS and loopback. Without secrets the default is
 /// `allow` on macOS; on Linux it is `deny` too, unless an admin sets `allow` for a stage-1 host.
 ///
-/// `filtered` (Linux, E8a-01) is the enforceable middle: the sandbox has no network interface and
+/// `filtered` (E8a-01; Linux, and macOS since N16) is the enforceable middle: the sandbox has no network interface and
 /// reaches only the destinations the runner's egress policy lists, through a proxy outside it.
 /// It is offered only by a runner whose start-up self-test passed (`ready`), never maps to
 /// `allow`, and is refused (not downgraded) anywhere else.
@@ -31,8 +31,8 @@ fn network_for(
     ready: bool,
 ) -> Result<&'static str, String> {
     match (requested, holds) {
-        (Some("filtered"), _) if linux && ready => Ok("filtered"),
-        (Some("filtered"), _) => Err("AINKRAD_AGENT_NETWORK=filtered needs a Linux runner whose \
+        (Some("filtered"), _) if ready => Ok("filtered"),
+        (Some("filtered"), _) => Err("AINKRAD_AGENT_NETWORK=filtered needs a runner whose \
             egress filter passed its start-up check"
             .into()),
         (None, true) | (Some("deny"), _) => Ok("deny"),
@@ -188,9 +188,10 @@ impl ProcessSandbox {
         self
     }
 
-    /// Marks the auth gateway as proven on this host (Linux only: the slot is a bubblewrap one).
+    /// Marks the auth gateway as proven on this host (its self-test passed: bubblewrap's slot on
+    /// Linux, Seatbelt's on macOS).
     pub fn with_gateway_ready(mut self) -> Self {
-        self.gateway_ready = cfg!(target_os = "linux");
+        self.gateway_ready = true;
         self
     }
 
@@ -357,6 +358,9 @@ impl Sandbox for ProcessSandbox {
             cfg!(target_os = "linux"),
             self.egress_ready,
         )?;
+        if network == "allow" && start.gateway.is_some() {
+            return Err("a gateway session cannot have the host network".to_owned());
+        }
         if network == "allow" && requested.is_some() {
             tracing::warn!(session = %session, holds, "AINKRAD_AGENT_NETWORK=allow: this agent session has the host network");
         }
@@ -409,15 +413,19 @@ mod tests {
     }
 
     #[test]
-    fn filtered_is_offered_only_on_a_proven_linux_runner_and_never_becomes_allow() {
+    fn filtered_is_offered_only_on_a_proven_runner_and_never_becomes_allow() {
         for holds in [true, false] {
             assert_eq!(
                 network_for(Some("filtered"), holds, true, true),
                 Ok("filtered")
             );
-            // Not proven, or not Linux: refused, never downgraded to deny or allow.
+            // Offered on macOS too once proven (Seatbelt rules, see the harness's profile).
+            assert_eq!(
+                network_for(Some("filtered"), holds, false, true),
+                Ok("filtered")
+            );
+            // Not proven: refused, never downgraded to deny or allow.
             assert!(network_for(Some("filtered"), holds, true, false).is_err());
-            assert!(network_for(Some("filtered"), holds, false, true).is_err());
             assert!(network_for(Some("filtered"), holds, false, false).is_err());
         }
         // The default stays `deny` even on a proven runner: filtered is an explicit choice.
@@ -433,22 +441,15 @@ mod tests {
             sandbox.with_egress_ready().capabilities(),
             ["egress-filter"]
         );
-        // The gateway capability follows its own proof (Linux only), alone or with the egress one.
+        // The gateway capability follows its own proof (any host that passed it), alone or with
+        // the egress one.
         let sandbox = ProcessSandbox::new("/state".into(), "/secrets".into());
-        let want: &[&str] = if cfg!(target_os = "linux") {
-            &["gateway"]
-        } else {
-            &[]
-        };
-        assert_eq!(sandbox.with_gateway_ready().capabilities(), want);
+        assert_eq!(sandbox.with_gateway_ready().capabilities(), ["gateway"]);
         let both = ProcessSandbox::new("/state".into(), "/secrets".into())
             .with_egress_ready()
             .with_gateway_ready();
         assert!(both.capabilities().contains(&"egress-filter"));
-        assert_eq!(
-            both.capabilities().contains(&"gateway"),
-            cfg!(target_os = "linux")
-        );
+        assert!(both.capabilities().contains(&"gateway"));
     }
 
     fn runner_env() -> Vec<(String, String)> {

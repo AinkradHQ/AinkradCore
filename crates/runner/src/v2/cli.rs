@@ -490,8 +490,8 @@ pub(super) async fn egress_filter(executor: &mut crate::HarnessExecutor) -> Resu
             false => Ok(false),
         };
     }
-    if !cfg!(target_os = "linux") {
-        return Err("AINKRAD_AGENT_NETWORK=filtered is Linux only".into());
+    if !cfg!(any(target_os = "linux", target_os = "macos")) {
+        return Err("AINKRAD_AGENT_NETWORK=filtered is Linux and macOS only".into());
     }
     let policy =
         crate::egress::Policy::from_env()?.with_host_addresses(crate::egress::host_addresses()?);
@@ -511,7 +511,7 @@ pub(super) async fn egress_filter(executor: &mut crate::HarnessExecutor) -> Resu
     Ok(true)
 }
 
-/// The auth gateway's start-up check (Linux): a request from inside a real sandbox, to the real
+/// The auth gateway's start-up check: a request from inside a real sandbox, to the real
 /// forwarder port, under a socket path of a session's length, must be answered with the refusal.
 async fn gateway_selftest(agents: &std::path::Path) -> Result<(), String> {
     let exe =

@@ -208,7 +208,11 @@ async fn main() -> ExitCode {
         // The root side of one-click tool install (systemd socket activation, see `toolhelper`).
         ["tools-helper"] => return ainkrad_runner::toolhelper::main(),
         ["mcp-forward", port, sock] => {
-            return ainkrad_runner::mcp_bridge::forward_main(port, sock).await;
+            return ainkrad_runner::mcp_bridge::forward_main(port, sock, false).await;
+        }
+        // macOS: no namespace ends the forwarder with its sandbox, so it ends with its parent.
+        ["mcp-forward", port, sock, "--with-parent"] => {
+            return ainkrad_runner::mcp_bridge::forward_main(port, sock, true).await;
         }
         // The harness's MCP server for the connection tools (C4b): stdio to the session's socket.
         ["mcp-stdio", sock] => {

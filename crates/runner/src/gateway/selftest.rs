@@ -20,7 +20,7 @@ use tokio::time::timeout;
 use zeroize::Zeroizing;
 
 use super::dial::Dialer;
-use super::{Config, GW_PORT, Key, MAX_SOCK_PATH, sandbox_env, socket_in, start};
+use super::{Config, Key, MAX_SOCK_PATH, sandbox_env, socket_in, start};
 
 const STEP: Duration = Duration::from_secs(20);
 /// The length of a session id (`as_` and 26 characters), which the socket path is checked for.
@@ -52,11 +52,11 @@ fn private_dir(path: &Path, recursive: bool) -> Result<(), String> {
         .map_err(|e| format!("self-test directory: {e}"))
 }
 
-/// What the harness inside runs: wait for the forwarder, ask for a path the gateway refuses, and
-/// print the status line.
-fn probe() -> String {
+/// What the harness inside runs: wait for the forwarder (on `port`), ask for a path the gateway
+/// refuses, and print the status line.
+fn probe(port: u16) -> String {
     format!(
-        r#"for i in $(seq 100); do exec 3<>/dev/tcp/127.0.0.1/{GW_PORT} 2>/dev/null && break; sleep 0.1; done
+        r#"for i in $(seq 100); do exec 3<>/dev/tcp/127.0.0.1/{port} 2>/dev/null && break; sleep 0.1; done
 printf 'GET /selftest HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n' >&3
 read -r -t 5 l <&3
 echo "gw=${{l%$'\r'}}"
@@ -68,9 +68,6 @@ echo "gw=${{l%$'\r'}}"
 /// `forwarder` the runner executable the sandbox runs as its in-sandbox forwarder. The error is
 /// a reason fit for the operator's log.
 pub async fn selftest(agents: &Path, forwarder: &Path) -> Result<(), String> {
-    if !cfg!(target_os = "linux") {
-        return Err("the gateway's sandbox slot is Linux only".to_owned());
-    }
     let id = sample_session()?;
     // A real session's socket must fit, whatever this check's own directory is.
     let real = socket_in(&agents.join(&id));
@@ -81,9 +78,21 @@ pub async fn selftest(agents: &Path, forwarder: &Path) -> Result<(), String> {
             agents.display()
         ));
     }
-    let root = std::env::temp_dir().join(format!(
-        "ainkrad-gw-{}",
-        random(8)?
+    // macOS's temp dir is long (about 50 bytes), which no session-shaped socket path fits under:
+    // work beside the sessions' own directory instead, which is private to the runner.
+    let base = match agents.parent() {
+        Some(state) if cfg!(target_os = "macos") => state.to_path_buf(),
+        _ => std::env::temp_dir(),
+    };
+    // Short on macOS: the socket path under it must fit a unix socket's limit.
+    let (name, bytes) = if cfg!(target_os = "macos") {
+        ("g", 3)
+    } else {
+        ("ainkrad-gw-", 8)
+    };
+    let root = base.join(format!(
+        "{name}{}",
+        random(bytes)?
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect::<String>()
@@ -153,6 +162,9 @@ async fn run(root: &Path, dir: &Path, forwarder: &Path) -> Result<(), String> {
         ("AINKRAD_SANDBOX_NETWORK".into(), "deny".into()),
     ];
     env.extend(sandbox_env(&sock, forwarder));
+    let port = ainkrad_harness::last_env(&env, "AINKRAD_SANDBOX_GW_PORT")
+        .and_then(|v| v.to_str()?.parse::<u16>().ok())
+        .ok_or("the gateway forwarder has no port")?;
     let spec = ainkrad_harness::Spec {
         cwd: root.join("work"),
         config_dir: root.join("config"),
@@ -161,7 +173,7 @@ async fn run(root: &Path, dir: &Path, forwarder: &Path) -> Result<(), String> {
     };
     let mut cmd = ainkrad_harness::sandbox_command(
         std::ffi::OsStr::new("/bin/bash"),
-        &["-c".into(), probe()],
+        &["-c".into(), probe(port)],
         &spec,
     );
     cmd.env("PATH", "/usr/bin:/bin")
@@ -169,9 +181,9 @@ async fn run(root: &Path, dir: &Path, forwarder: &Path) -> Result<(), String> {
     let out = timeout(STEP, cmd.output())
         .await
         .map_err(|_| "the sandbox probe did not finish".to_owned())?
-        .map_err(|_| "bubblewrap cannot be run".to_owned())?;
+        .map_err(|_| "the sandbox program cannot be run".to_owned())?;
     if !out.status.success() {
-        return Err("bubblewrap cannot create the gateway's sandbox here".to_owned());
+        return Err("the sandbox program cannot create the gateway's sandbox here".to_owned());
     }
     let said = String::from_utf8_lossy(&out.stdout).into_owned();
     let line = said

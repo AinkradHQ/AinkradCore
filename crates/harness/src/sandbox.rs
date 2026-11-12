@@ -149,6 +149,94 @@ pub(crate) fn profile(spec: &Spec, program: &OsStr) -> String {
             "(allow mach-lookup (global-name \"com.apple.dnssd.service\") (global-name \"com.apple.SystemConfiguration.DNSConfiguration\"))\n",
         ));
     }
+    // The runner's forwarder slots (macOS has no network namespace, so these are Seatbelt rules):
+    // the sandbox may talk to the runner's unix socket (the forwarder inside copies loopback to it)
+    // and to its own forwarder's loopback port, and to nothing else. See [`slots`].
+    let mode = env(spec, "AINKRAD_SANDBOX_NETWORK");
+    if mode != "allow" {
+        for slot in slots(spec) {
+            let (sock, fwd, port) = (quote(&slot.sock), quote(&slot.fwd), slot.port);
+            s.push_str(&format!(
+                "(allow network-outbound (remote unix-socket (path-literal \"{sock}\")))\n\
+                 (allow file-read* file-write* (literal \"{sock}\"))\n\
+                 (allow file-read* file-map-executable (literal \"{fwd}\"))\n\
+                 (allow network-bind (local ip \"localhost:{port}\"))\n\
+                 (allow network-inbound (local ip \"localhost:{port}\"))\n\
+                 (allow network-outbound (remote ip \"localhost:{port}\"))\n"
+            ));
+            // Path resolution stats each ancestor of the forwarder and the socket.
+            for p in slot.fwd.ancestors().chain(slot.sock.ancestors()) {
+                s.push_str(&format!(
+                    "(allow file-read-metadata (literal \"{}\"))\n",
+                    quote(p)
+                ));
+            }
+        }
+    }
+    s
+}
+
+/// One forwarder slot of a macOS sandbox: the runner's unix socket, the executable run inside as
+/// the forwarder (`mcp-forward`) and the loopback port it listens on.
+struct Slot {
+    name: &'static str,
+    sock: PathBuf,
+    fwd: PathBuf,
+    port: u16,
+}
+
+/// The slots this session has: the auth gateway's (`AINKRAD_SANDBOX_GW_*`) and, only in the
+/// `filtered` mode, the egress proxy's (`AINKRAD_SANDBOX_EGRESS_*`). A slot counts only when all
+/// three variables are set, the paths are absolute and the port is a port: anything else is no
+/// slot, so the sandbox has no route (fail closed). The MCP slot is not carried on macOS.
+fn slots(spec: &Spec) -> Vec<Slot> {
+    let filtered = env(spec, "AINKRAD_SANDBOX_NETWORK") == "filtered";
+    [("GW", "gateway", false), ("EGRESS", "egress", true)]
+        .into_iter()
+        .filter(|(_, _, only_filtered)| filtered || !only_filtered)
+        .filter_map(|(var, name, _)| {
+            let get = |part: &str| env(spec, &format!("AINKRAD_SANDBOX_{var}_{part}"));
+            let (sock, fwd) = (PathBuf::from(get("SOCK")), PathBuf::from(get("FWD")));
+            let port = get("PORT")
+                .to_str()?
+                .parse::<u16>()
+                .ok()
+                .filter(|p| *p > 0)?;
+            (sock.is_absolute() && fwd.is_absolute()).then_some(Slot {
+                name,
+                sock,
+                fwd,
+                port,
+            })
+        })
+        .collect()
+}
+
+/// `'…'`, safe as one shell word.
+fn sh_quote(p: &Path) -> String {
+    format!("'{}'", p.to_string_lossy().replace('\'', "'\\''"))
+}
+
+/// What the macOS launch script runs before the harness: each slot's forwarder in the
+/// background, and for the egress slot the proxy variables (the namespace-less twin of bwrap's
+/// `--setenv`; the runner clears the environment after building the command, so they go here).
+fn mac_prelude(spec: &Spec) -> String {
+    let mut s = String::new();
+    for slot in slots(spec) {
+        s.push_str(&format!(
+            "{} mcp-forward {} {} --with-parent </dev/null >/dev/null 2>&1 & ",
+            sh_quote(&slot.fwd),
+            slot.port,
+            sh_quote(&slot.sock)
+        ));
+        if slot.name == "egress" {
+            let proxy = format!("http://127.0.0.1:{}", slot.port);
+            for k in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+                s.push_str(&format!("export {k}={proxy}; "));
+            }
+            s.push_str("export NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost NODE_USE_ENV_PROXY=1; ");
+        }
+    }
     s
 }
 
@@ -227,6 +315,24 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
             "sandbox requires an unprivileged runner uid for fork limits",
         ));
     }
+    // A gateway session never has the host network, on either OS: the harness would otherwise
+    // reach the provider (and the host) around the gateway.
+    if env(spec, "AINKRAD_SANDBOX_NETWORK") == "allow"
+        && !env(spec, "AINKRAD_SANDBOX_GW_SOCK").is_empty()
+    {
+        return Err(io::Error::other(
+            "a gateway session cannot have the host network",
+        ));
+    }
+    // `filtered` without its egress socket is refused, never run with less than it names.
+    if cfg!(target_os = "macos")
+        && env(spec, "AINKRAD_SANDBOX_NETWORK") == "filtered"
+        && !slots(spec).iter().any(|s| s.name == "egress")
+    {
+        return Err(io::Error::other(
+            "a filtered sandbox needs its egress socket",
+        ));
+    }
     let mut c;
     if cfg!(target_os = "macos") {
         // The profile contains paths, never values. Passing it directly also prevents a
@@ -297,13 +403,6 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
         // never mapped to `allow`, and a filtered sandbox without its egress socket is refused.
         // A gateway session never has the host network: its slot lives in a namespace of its own,
         // and the harness would otherwise reach the provider (and the host) around the gateway.
-        if env(spec, "AINKRAD_SANDBOX_NETWORK") == "allow"
-            && !env(spec, "AINKRAD_SANDBOX_GW_SOCK").is_empty()
-        {
-            return Err(io::Error::other(
-                "a gateway session cannot have the host network",
-            ));
-        }
         // The forwarder executable, bound once however many slots use it.
         let mut bound: Vec<&OsStr> = Vec::new();
         if env(spec, "AINKRAD_SANDBOX_NETWORK") != "allow" {
@@ -407,11 +506,13 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
     // socket inherited from the host is not reachable from inside.
     const FORWARDER: &str = "for f in /proc/$$/fd/*; do n=${f##*/}; [ \"$n\" -gt 2 ] 2>/dev/null && eval \"exec $n>&-\"; done; if [ -n \"$AINKRAD_MCP_FWD\" ]; then \"$AINKRAD_MCP_FWD\" mcp-forward \"$AINKRAD_MCP_PORT\" \"$AINKRAD_MCP_SOCK\" </dev/null >/dev/null 2>&1 & fi; if [ -n \"$AINKRAD_EGRESS_SOCK\" ]; then \"$AINKRAD_EGRESS_FWD\" mcp-forward \"$AINKRAD_EGRESS_PORT\" \"$AINKRAD_EGRESS_SOCK\" </dev/null >/dev/null 2>&1 & fi; if [ -n \"$AINKRAD_GW_SOCK\" ]; then \"$AINKRAD_GW_FWD\" mcp-forward \"$AINKRAD_GW_PORT\" \"$AINKRAD_GW_SOCK\" </dev/null >/dev/null 2>&1 & fi; ";
     let script = if cfg!(target_os = "macos") {
-        "ulimit -S -u \"$1\" && ulimit -H -u \"$1\" && ulimit -S -t \"$2\" && ulimit -H -t \"$2\" && ulimit -S -f \"$3\" && ulimit -H -f \"$3\" || exit 125; shift 4; exec \"$@\""
+        "ulimit -S -u \"$1\" && ulimit -H -u \"$1\" && ulimit -S -t \"$2\" && ulimit -H -t \"$2\" && ulimit -S -f \"$3\" && ulimit -H -f \"$3\" || exit 125; shift 4; MAC_PRELUDE exec \"$@\""
     } else {
         "ulimit -S -u \"$1\" && ulimit -H -u \"$1\" && ulimit -S -t \"$2\" && ulimit -H -t \"$2\" && ulimit -S -f \"$3\" && ulimit -H -f \"$3\" && ulimit -S -v \"$4\" && ulimit -H -v \"$4\" || exit 125; shift 4; FORWARDER_HERE exec \"$@\""
     };
     let script = script.replace("FORWARDER_HERE ", FORWARDER);
+    // macOS: the forwarders and proxy variables go where `FORWARDER_HERE` is on Linux.
+    let script = script.replace("MAC_PRELUDE ", &mac_prelude(spec));
     let mut processes = limits("AINKRAD_SANDBOX_PROCESSES", "64")?
         .parse::<u64>()
         .map_err(io::Error::other)?;

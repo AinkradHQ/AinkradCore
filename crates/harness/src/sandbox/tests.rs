@@ -554,3 +554,162 @@ fn missing_or_unknown_network_value_grants_no_network() {
     }
     let _ = std::fs::remove_dir_all(root);
 }
+
+mod mac_slots {
+    //! The macOS profile's forwarder slots (N16): what the sandbox may reach to use the runner's
+    //! gateway and egress proxy, and nothing more. Text checks; the real Seatbelt is exercised by
+    //! `crates/runner/tests/macos_accounts.rs`.
+    use super::*;
+
+    const GW: [(&str, &str); 3] = [
+        ("AINKRAD_SANDBOX_GW_SOCK", "/s/agents/as_x/gateway.sock"),
+        ("AINKRAD_SANDBOX_GW_FWD", "/opt/ainkrad/ainkrad-runner"),
+        ("AINKRAD_SANDBOX_GW_PORT", "50123"),
+    ];
+    const EGRESS: [(&str, &str); 3] = [
+        ("AINKRAD_SANDBOX_EGRESS_SOCK", "/s/agents/as_x/egress.sock"),
+        ("AINKRAD_SANDBOX_EGRESS_FWD", "/opt/ainkrad/ainkrad-runner"),
+        ("AINKRAD_SANDBOX_EGRESS_PORT", "50124"),
+    ];
+
+    fn text(mode: &str, vars: &[(&str, &str)]) -> String {
+        // One directory per call: tests run in parallel and the fixture deletes its own first.
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let (root, mut spec) = fixture(&format!("macslots{n}"));
+        spec.env.retain(|(n, _)| n != "AINKRAD_SANDBOX_NETWORK");
+        spec.env
+            .push(("AINKRAD_SANDBOX_NETWORK".into(), mode.into()));
+        spec.env
+            .extend(vars.iter().map(|(k, v)| ((*k).into(), (*v).into())));
+        let t = profile(&spec, OsStr::new("/bin/true"));
+        let _ = std::fs::remove_dir_all(root);
+        t
+    }
+
+    #[test]
+    fn a_deny_gateway_session_may_reach_its_socket_and_its_own_port_only() {
+        let t = text("deny", &GW);
+        for rule in [
+            "(remote unix-socket (path-literal \"/s/agents/as_x/gateway.sock\"))",
+            "(allow network-bind (local ip \"localhost:50123\"))",
+            "(allow network-inbound (local ip \"localhost:50123\"))",
+            "(allow network-outbound (remote ip \"localhost:50123\"))",
+            "(allow file-read* file-map-executable (literal \"/opt/ainkrad/ainkrad-runner\"))",
+        ] {
+            assert!(t.contains(rule), "missing {rule}");
+        }
+        // Nothing else: no blanket network, no 443, no DNS, no other loopback port.
+        assert!(!t.contains("network*") && !t.contains("*:443") && !t.contains("*:53"));
+        assert!(!t.contains("localhost:*"));
+        assert_eq!(t.matches("localhost:").count(), 3);
+        assert!(t.contains("(deny network-outbound (remote unix-socket))"));
+    }
+
+    #[test]
+    fn the_egress_slot_is_only_for_filtered_and_the_two_never_widen_each_other() {
+        let both: Vec<_> = GW.iter().chain(EGRESS.iter()).copied().collect();
+        let t = text("filtered", &both);
+        assert!(t.contains("localhost:50123") && t.contains("localhost:50124"));
+        assert!(t.contains("gateway.sock") && t.contains("egress.sock"));
+        assert!(!t.contains("*:443") && !t.contains("localhost:*"));
+        // `deny` takes no egress slot, however it is set.
+        let t = text("deny", &both);
+        assert!(
+            t.contains("localhost:50123") && !t.contains("50124") && !t.contains("egress.sock")
+        );
+        // `allow` and an unknown mode: allow has its own rules (no slots), the other nothing.
+        assert!(!text("allow", &both).contains("50123"));
+        let t = text("lan", &both);
+        assert!(
+            t.contains("50123") && !t.contains("*:443"),
+            "an unknown mode is a deny"
+        );
+    }
+
+    #[test]
+    fn a_slot_that_is_not_whole_or_not_absolute_is_no_slot() {
+        for bad in [
+            [GW[0], GW[1], ("AINKRAD_SANDBOX_GW_PORT", "0")],
+            [GW[0], GW[1], ("AINKRAD_SANDBOX_GW_PORT", "99999")],
+            [GW[0], GW[1], ("AINKRAD_SANDBOX_GW_PORT", "80;")],
+            [("AINKRAD_SANDBOX_GW_SOCK", "rel.sock"), GW[1], GW[2]],
+            [GW[0], ("AINKRAD_SANDBOX_GW_FWD", "ainkrad-runner"), GW[2]],
+        ] {
+            let t = text("deny", &bad);
+            assert!(
+                !t.contains("localhost:") && !t.contains("path-literal"),
+                "{bad:?}"
+            );
+        }
+        // A missing variable too.
+        let t = text("deny", &GW[..2]);
+        assert!(!t.contains("localhost:"));
+        // No slot at all: nothing, as before.
+        assert!(!text("deny", &[]).contains("localhost:"));
+    }
+
+    #[test]
+    fn a_hostile_path_cannot_break_out_of_the_profile_or_the_launch_script() {
+        let evil = "/s/a\"))(allow network*)(\"/gateway.sock";
+        let t = text("deny", &[("AINKRAD_SANDBOX_GW_SOCK", evil), GW[1], GW[2]]);
+        // The quote is escaped, so the text stays inside its string literal.
+        assert!(
+            t.contains("a\\\"))(allow network*)(\\\"/gateway.sock"),
+            "escaped in the profile"
+        );
+        let (root, mut spec) = fixture("macslots-sh");
+        spec.env.extend([
+            (
+                "AINKRAD_SANDBOX_GW_SOCK".into(),
+                "/s/it's $(x) `y`.sock".into(),
+            ),
+            ("AINKRAD_SANDBOX_GW_FWD".into(), "/opt/runner".into()),
+            ("AINKRAD_SANDBOX_GW_PORT".into(), "50123".into()),
+        ]);
+        let script = mac_prelude(&spec);
+        assert!(script.contains("'/s/it'\\''s $(x) `y`.sock'"), "{script}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_launch_script_starts_each_forwarder_and_wires_only_the_egress_proxy() {
+        let (root, mut spec) = fixture("macslots-script");
+        spec.env.retain(|(n, _)| n != "AINKRAD_SANDBOX_NETWORK");
+        spec.env
+            .push(("AINKRAD_SANDBOX_NETWORK".into(), "filtered".into()));
+        spec.env.extend(
+            GW.iter()
+                .chain(EGRESS.iter())
+                .map(|(k, v)| ((*k).into(), (*v).into())),
+        );
+        let s = mac_prelude(&spec);
+        assert!(s.contains("'/opt/ainkrad/ainkrad-runner' mcp-forward 50123 '/s/agents/as_x/gateway.sock' --with-parent"));
+        assert!(s.contains("mcp-forward 50124 '/s/agents/as_x/egress.sock'"));
+        assert!(s.contains("export HTTPS_PROXY=http://127.0.0.1:50124;"));
+        assert!(!s.contains("50123;"), "the gateway port is not a proxy");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_gateway_session_is_never_built_with_the_host_network() {
+        let (root, mut spec) = fixture("macslots-allow");
+        spec.env.retain(|(n, _)| n != "AINKRAD_SANDBOX_NETWORK");
+        spec.env
+            .push(("AINKRAD_SANDBOX_NETWORK".into(), "allow".into()));
+        spec.env
+            .extend(GW.iter().map(|(k, v)| ((*k).into(), (*v).into())));
+        let err = compile(OsStr::new("/bin/true"), &[], &spec).unwrap_err();
+        assert!(err.to_string().contains("host network"), "{err}");
+        // `filtered` with no egress socket is refused on macOS (Linux has its own check).
+        spec.env
+            .retain(|(n, _)| !n.contains("GW") && n != "AINKRAD_SANDBOX_NETWORK");
+        spec.env
+            .push(("AINKRAD_SANDBOX_NETWORK".into(), "filtered".into()));
+        if cfg!(target_os = "macos") {
+            let err = compile(OsStr::new("/bin/true"), &[], &spec).unwrap_err();
+            assert!(err.to_string().contains("egress socket"), "{err}");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+}

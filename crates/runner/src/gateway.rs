@@ -245,7 +245,7 @@ pub fn sandbox_env(sock: &Path, exe: &Path) -> Vec<(String, std::ffi::OsString)>
         ("AINKRAD_SANDBOX_GW_FWD".to_owned(), exe.into()),
         (
             "AINKRAD_SANDBOX_GW_PORT".to_owned(),
-            GW_PORT.to_string().into(),
+            crate::egress::forward_port(GW_PORT).to_string().into(),
         ),
     ]
 }

@@ -1,5 +1,6 @@
 //! Forced filtered placement for a session holding a provider-account secret (KAN-433): the
-//! policy must ask for a sandbox, and the runner must be Linux with a proven egress filter.
+//! policy must ask for a sandbox, and the runner must be Linux with a proven egress filter, or
+//! macOS with both proofs (the auth gateway and the egress filter).
 
 use ainkrad_core_server::agents::{
     Invalid, account_refusal, placement_refusal, placement_refusal_with, validate_new,
@@ -90,9 +91,15 @@ fn an_account_session_must_ask_for_a_sandbox_whoever_creates_it() {
 #[test]
 fn an_account_session_is_placed_only_on_a_linux_runner_with_a_proven_filter() {
     let key = [secret("acct.openai.main")];
-    // macOS, with the filter: refused (Seatbelt is not an egress filter we rely on).
+    // macOS with the filter but no gateway proof: refused, the reason names both proofs.
     let why = placement_refusal(&runner(Some("macos"), true), &key, &sandboxed()).unwrap();
-    assert!(why.contains("Linux") && why.contains("macos"), "{why}");
+    assert!(why.contains("macOS") && why.contains("both"), "{why}");
+    // Any other OS: refused.
+    let why = placement_refusal(&runner(Some("windows"), true), &key, &sandboxed()).unwrap();
+    assert!(
+        why.contains("Linux or macOS") && why.contains("windows"),
+        "{why}"
+    );
     // A runner that never said its OS: refused.
     let why = placement_refusal(&runner(None, true), &key, &sandboxed()).unwrap();
     assert!(why.contains("unreported"), "{why}");
@@ -139,9 +146,9 @@ fn a_gateway_session_is_placed_only_on_a_linux_runner_that_offers_the_gateway() 
     // An old runner (no `gateway`): refused.
     let why = gw(&gw_runner(Some("linux"), false), &sandboxed()).unwrap();
     assert!(why.contains("offers the gateway"), "{why}");
-    // macOS and an unreported OS: refused even with the capability (decision 6).
+    // macOS with the capability but no proven egress filter, and an unreported OS: refused.
     let why = gw(&gw_runner(Some("macos"), true), &sandboxed()).unwrap();
-    assert!(why.contains("Linux") && why.contains("macos"), "{why}");
+    assert!(why.contains("macOS") && why.contains("both"), "{why}");
     assert!(
         gw(&gw_runner(None, true), &sandboxed())
             .unwrap()
@@ -196,9 +203,9 @@ fn an_api_key_account_session_is_placed_through_the_gateway_and_not_the_env_filt
     // A runner without the gateway is refused, though it has the egress filter an env key needs.
     let why = placement_refusal(&runner(Some("linux"), true), &key, &sandboxed()).unwrap();
     assert!(why.contains("offers the gateway"), "{why}");
-    // macOS and an unreported OS are refused even with the capability (decision 6).
+    // macOS with the capability but no egress filter, and an unreported OS: refused.
     let why = placement_refusal(&gw_runner(Some("macos"), true), &key, &sandboxed()).unwrap();
-    assert!(why.contains("Linux") && why.contains("macos"), "{why}");
+    assert!(why.contains("macOS") && why.contains("both"), "{why}");
     assert!(placement_refusal(&gw_runner(None, true), &key, &sandboxed()).is_some());
     // Unsandboxed, or an unreadable policy: refused.
     let ok = gw_runner(Some("linux"), true);
@@ -223,4 +230,44 @@ fn a_session_names_at_most_one_api_key_account() {
     assert!(why.contains("at most one"), "{why}");
     // An API-key account still needs the sandbox, as any account does.
     assert!(checked(&[secret("acct.anthropic.7")], &json!({"mode": "ask"})).is_err());
+}
+
+/// A macOS runner that lists the proofs given: `gateway`, `egress-filter`.
+fn mac_runner(gateway: bool, filter: bool) -> RunnerState {
+    let mut r = gw_runner(Some("macos"), gateway);
+    if filter {
+        r.drivers[0].commands.push("egress-filter".to_owned());
+    }
+    r
+}
+
+#[test]
+fn a_macos_runner_takes_account_sessions_only_with_both_proofs() {
+    let api_key = [secret("acct.anthropic.7")];
+    let env_key = [secret("acct.anthropic.main")];
+    let gw = |r: &RunnerState| placement_refusal_with(r, &[], &sandboxed(), true);
+    for (gateway, filter) in [(false, false), (true, false), (false, true)] {
+        let r = mac_runner(gateway, filter);
+        for secrets in [&api_key[..], &env_key[..]] {
+            let why = placement_refusal(&r, secrets, &sandboxed()).unwrap();
+            assert!(why.contains("macOS") && why.contains("both"), "{why}");
+        }
+        assert!(gw(&r).unwrap().contains("both"));
+        assert!(account_refusal(&r).is_some());
+    }
+    // Both proofs: placed, the same rules as Linux (an API key by the gateway, an env key by the
+    // filter, an unsandboxed policy refused).
+    let both = mac_runner(true, true);
+    assert_eq!(placement_refusal(&both, &api_key, &sandboxed()), None);
+    assert_eq!(placement_refusal(&both, &env_key, &sandboxed()), None);
+    assert_eq!(gw(&both), None);
+    assert_eq!(account_refusal(&both), None);
+    let why = placement_refusal(&both, &api_key, &json!({"mode": "ask"})).unwrap();
+    assert!(why.contains("sandboxed"), "{why}");
+    assert!(placement_refusal(&both, &api_key, &json!({"x": 1})).is_some());
+    // The gateway proof alone is not enough for a gateway session on macOS, unlike Linux.
+    assert_eq!(
+        placement_refusal_with(&gw_runner(Some("linux"), true), &[], &sandboxed(), true),
+        None
+    );
 }
