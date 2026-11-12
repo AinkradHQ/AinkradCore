@@ -47,9 +47,11 @@ fn install_error(e: InstallError) -> ApiError {
             "installation_not_yours",
             "This GitHub install isn't yours".to_owned(),
         ),
-        InstallError::NoUserToken => {
-            ApiError::conflict("sign in to GitHub first (Sign in with GitHub), then add the App")
-        }
+        InstallError::NoUserToken => ApiError::new(
+            StatusCode::CONFLICT,
+            "github_sign_in_needed",
+            "sign in to GitHub first (Sign in with GitHub), then add the App".to_owned(),
+        ),
     }
 }
 
