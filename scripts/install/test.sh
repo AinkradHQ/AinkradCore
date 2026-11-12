@@ -151,13 +151,13 @@ rm "$t/bin/ainkrad-ptyhost"
 bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --pty --prefix "$t/p4" >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: --pty without a ptyhost accepted" >&2; } || pass=$((pass + 1))
 bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --pair http://core.example.com --code X --dry-run >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: --pair over http accepted" >&2; } || pass=$((pass + 1))
 bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --pair https://core.example.com --dry-run >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: --pair without a code accepted" >&2; } || pass=$((pass + 1))
-bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --pty --pair https://core.example.com --code ABCDE-FGHJK --dry-run >"$t/out5" 2>&1 &&
-  grep -q 'runuser -u ainkrad-runner -- /usr/local/bin/ainkrad-runner pair https://core.example.com --code ABCDE-FGHJK --state /var/lib/ainkrad-runner/core' "$t/out5" &&
+printf 'ABCDE-FGHJK\n' | bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --pty --pair https://core.example.com --code - --dry-run >"$t/out5" 2>&1 &&
+  grep -q 'runuser -u ainkrad-runner -- /usr/local/bin/ainkrad-runner pair https://core.example.com --code - --state /var/lib/ainkrad-runner/core' "$t/out5" && ! grep -q ABCDE "$t/out5" &&
   pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: --pair dry run" >&2; }
 # A runner invite (N17): the host comes from the invite, no --pair and no code; pairs with `--invite`, never `--code`.
 INV="core.example.com/$(printf 'A%.0s' $(seq 43)).$(printf 'B%.0s' $(seq 22))"
-bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --pty --agents --invite "$INV" --dry-run >"$t/out6" 2>&1 &&
-  grep -q "runuser -u ainkrad-runner -- /usr/local/bin/ainkrad-runner pair https://core.example.com --invite $INV --state /var/lib/ainkrad-runner/core" "$t/out6" &&
+AINKRAD_PAIR_INVITE="$INV" bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --pty --agents --dry-run >"$t/out6" 2>&1 &&
+  grep -q "runuser -u ainkrad-runner -- /usr/local/bin/ainkrad-runner pair https://core.example.com --invite - --state /var/lib/ainkrad-runner/core" "$t/out6" && ! grep -q "$INV" "$t/out6" &&
   grep -q 'RUNNER_ARGS=--enable-pty --enable-agents (+ AINKRAD_AGENT_NETWORK=filtered' "$t/out6" &&
   pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: --invite dry run" >&2; }
 bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --invite "$INV" --code ABCDE-FGHJK --dry-run >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: --invite with --code accepted" >&2; } || pass=$((pass + 1))

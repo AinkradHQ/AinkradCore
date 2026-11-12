@@ -171,7 +171,8 @@ echo "peek=$(printf '%s\n' "$q" | "{fwd}" mcp-stdio "{sb_s}" 2>/dev/null)"
     // builder must refuse; a runner whose builder runs that is not offered the capability.
     let prog = root.join("prog");
     std::fs::copy("/bin/true", &prog).map_err(|e| format!("self-test program: {e}"))?;
-    let mut leaky = ainkrad_harness::sandbox_command(prog.as_os_str(), &[], &spec);
+    let mut leaky =
+        ainkrad_harness::sandbox_command_expecting_refusal(prog.as_os_str(), &[], &spec);
     leaky.stdin(std::process::Stdio::null());
     if timeout(STEP, leaky.output()).await.is_ok_and(|r| r.is_ok()) {
         return Err("a sandbox that binds the state dir was built: other sessions' sockets would be reachable".to_owned());

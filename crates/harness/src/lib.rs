@@ -39,6 +39,16 @@ pub fn sandbox_command(
     sandbox::command(program, args, spec)
 }
 
+/// [`sandbox_command`] for a negative control that must be refused: the refusal is logged at DEBUG, not ERROR.
+#[doc(hidden)]
+pub fn sandbox_command_expecting_refusal(
+    program: &std::ffi::OsStr,
+    args: &[String],
+    spec: &Spec,
+) -> tokio::process::Command {
+    sandbox::command_expecting_refusal(program, args, spec)
+}
+
 /// The value of `key` in an environment list that may repeat a name: the LAST one, which is what
 /// `Command::envs` gives the child. The sandbox builder and the runner both read the network mode
 /// through this, so they can never disagree about it.

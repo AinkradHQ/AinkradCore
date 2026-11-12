@@ -24,7 +24,11 @@ $HOME/.ainkrad-runner/core; both files mode 0600). <core-url> is https://<host>[
 --invite takes a runner invite (single use, 15 minutes) that an admin made: the Core's
 fingerprint and a secret joined by a dot, with the Core's host and a slash before them
 (then <core-url> is not needed). It is its own approval, so there is no SAS to compare.
---ca trusts that PEM certificate instead of the public roots (a test Core).";
+--ca trusts that PEM certificate instead of the public roots (a test Core).
+
+Keep the code or invite out of argv (`ps` and shell history show it): write `--code -` to read it
+from stdin, give the flag no value to be asked on the terminal (no echo), or set AINKRAD_PAIR_CODE,
+AINKRAD_PAIR_INVITE or AINKRAD_PAIR_QR. A value on the command line still works, with a warning.";
 
 /// The runner's state directory: `--state`, else `$HOME/.ainkrad-runner/core`.
 pub fn state_dir(flag: Option<&str>) -> State {
@@ -61,21 +65,129 @@ pub fn flag<'a>(args: &[&'a str], name: &str) -> Option<&'a str> {
     args.windows(2).find(|w| w[0] == name).map(|w| w[1])
 }
 
+/// How a secret flag (`--code`, `--invite`, `--qr`) was given.
+#[derive(Debug, PartialEq)]
+enum Given<'a> {
+    Absent,
+    /// `--flag -`: one line from stdin (or a no-echo prompt when stdin is a terminal).
+    Stdin,
+    /// `--flag` with no value: a no-echo prompt on /dev/tty.
+    Prompt,
+    /// `--flag <value>`: the secret sits in argv, where `ps` and shell history show it.
+    Literal(&'a str),
+}
+
+fn classify<'a>(args: &[&'a str], name: &str) -> Given<'a> {
+    match args.iter().position(|a| *a == name) {
+        None => Given::Absent,
+        Some(i) => match args.get(i + 1) {
+            Some(&"-") => Given::Stdin,
+            Some(v) if !v.starts_with("--") => Given::Literal(v),
+            _ => Given::Prompt,
+        },
+    }
+}
+
+/// One line from /dev/tty with echo off (via `stty`), so it never reaches the screen or a log.
+fn prompt_tty(label: &str) -> Result<String, String> {
+    use std::io::{BufRead, Write};
+    let tty = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .map_err(|e| {
+            format!("no terminal to read the {label} from ({e}); use --{label} - with stdin")
+        })?;
+    let stty = |arg: &str| {
+        let stdin = tty
+            .try_clone()
+            .map_or_else(|_| std::process::Stdio::null(), Into::into);
+        std::process::Command::new("stty")
+            .arg(arg)
+            .stdin(stdin)
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    let _ = write!(&tty, "{label}: ");
+    let quiet = stty("-echo");
+    let mut line = String::new();
+    let read = std::io::BufReader::new(&tty).read_line(&mut line);
+    if quiet {
+        stty("echo");
+    }
+    let _ = writeln!(&tty);
+    read.map_err(|e| e.to_string())?;
+    Ok(line.trim().to_owned())
+}
+
+/// The secret behind `name`, if given: stdin, a prompt, argv (with a warning) or `$env`.
+fn secret(args: &[&str], name: &str) -> Result<Option<String>, String> {
+    use std::io::{BufRead, IsTerminal};
+    let label = name.trim_start_matches('-');
+    let got = match classify(args, name) {
+        Given::Absent => return Ok(None),
+        Given::Literal(v) => {
+            eprintln!(
+                "ainkrad-runner: WARNING: {name} <value> puts the secret in argv, visible in `ps` and shell history; use `{name} -` (stdin), `{name}` (prompt) or ${}",
+                env_name(name)
+            );
+            v.to_owned()
+        }
+        Given::Prompt => prompt_tty(label)?,
+        Given::Stdin if std::io::stdin().is_terminal() => prompt_tty(label)?,
+        Given::Stdin => {
+            let mut line = String::new();
+            std::io::stdin()
+                .lock()
+                .read_line(&mut line)
+                .map_err(|e| e.to_string())?;
+            line.trim().to_owned()
+        }
+    };
+    if got.is_empty() {
+        Err(format!("no {label} given"))
+    } else {
+        Ok(Some(got))
+    }
+}
+
+fn env_name(flag: &str) -> String {
+    format!(
+        "AINKRAD_PAIR_{}",
+        flag.trim_start_matches('-').to_uppercase()
+    )
+}
+
 pub async fn pair_main(args: &[&str]) -> ExitCode {
     let usage = || {
         eprintln!("{PAIR_USAGE}");
         ExitCode::from(2)
     };
-    let (base, credential) = match (args.first(), flag(args, "--code"), flag(args, "--qr")) {
-        (Some(url), Some(code), None) if !url.starts_with("--") => {
-            ((*url).to_owned(), Credential::Code(code.to_owned()))
+    let mut got = Vec::new();
+    for name in ["--code", "--qr", "--invite"] {
+        match secret(args, name) {
+            Ok(v) => got.push(v),
+            Err(e) => {
+                eprintln!("ainkrad-runner: {e}");
+                return ExitCode::FAILURE;
+            }
         }
-        (_, None, None) if flag(args, "--invite").is_some() => {
+    }
+    let [mut code, mut qr, mut invite]: [Option<String>; 3] = got.try_into().unwrap_or_default();
+    if (&code, &qr, &invite) == (&None, &None, &None) {
+        let env = |f: &str| std::env::var(env_name(f)).ok().filter(|v| !v.is_empty());
+        (code, qr, invite) = (env("--code"), env("--qr"), env("--invite"));
+    }
+    let (base, credential) = match (args.first(), code, qr) {
+        (Some(url), Some(code), None) if !url.starts_with("--") => {
+            ((*url).to_owned(), Credential::Code(code))
+        }
+        (_, None, None) if invite.is_some() => {
             let url = args
                 .first()
                 .filter(|u| !u.starts_with("--"))
                 .map(|u| (*u).to_owned());
-            match flag(args, "--invite").and_then(parse_invite) {
+            match invite.as_deref().and_then(parse_invite) {
                 Some((host, core_fp, secret)) => match host.or(url) {
                     Some(base) => (base, Credential::Qr { secret, core_fp }),
                     None => return usage(),
@@ -83,7 +195,7 @@ pub async fn pair_main(args: &[&str]) -> ExitCode {
                 None => return usage(),
             }
         }
-        (_, None, Some(qr)) => match parse_qr(qr) {
+        (_, None, Some(qr)) => match parse_qr(&qr) {
             Some((base, core_fp, secret)) => (base, Credential::Qr { secret, core_fp }),
             None => return usage(),
         },
@@ -104,7 +216,7 @@ pub async fn pair_main(args: &[&str]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let invited = flag(args, "--invite").is_some();
+    let invited = invite.is_some();
     let show = |sas: &str| {
         if invited {
             return; // an invite is its own approval: no code to compare
@@ -671,5 +783,26 @@ mod tests {
     fn agents_are_off_by_default() {
         assert!(!agents_enabled(&["--state", "/tmp/runner"]));
         assert!(agents_enabled(&["--enable-agents"]));
+    }
+}
+
+#[cfg(test)]
+mod secret_tests {
+    use super::*;
+
+    #[test]
+    fn a_secret_flag_is_stdin_prompt_literal_or_absent() {
+        assert_eq!(classify(&["u", "--code", "-"], "--code"), Given::Stdin);
+        assert_eq!(classify(&["u", "--code"], "--code"), Given::Prompt);
+        assert_eq!(
+            classify(&["u", "--code", "--state", "d"], "--code"),
+            Given::Prompt
+        );
+        assert_eq!(
+            classify(&["u", "--code", "AB-CD"], "--code"),
+            Given::Literal("AB-CD")
+        );
+        assert_eq!(classify(&["u", "--state", "d"], "--code"), Given::Absent);
+        assert_eq!(env_name("--invite"), "AINKRAD_PAIR_INVITE");
     }
 }
